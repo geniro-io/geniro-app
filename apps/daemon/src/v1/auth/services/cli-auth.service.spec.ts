@@ -3,9 +3,12 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentSpawnInfo } from '../../agents/adapters/adapter.types';
+import type {
+  AgentMcpServerStatus,
+  AgentSpawnInfo,
+} from '../../agents/adapters/adapter.types';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
@@ -20,6 +23,7 @@ import { ensureFolderlessDir } from '../../agents/utils/folderless-dir';
 import { AgentKind } from '../../runs/runs.types';
 import {
   LOGIN_OUTPUT_TAIL_CHARS,
+  LOGIN_TIMEOUT_MS,
   SETTLED_LOGIN_RETENTION_MS,
 } from '../auth.types';
 import { CliAuthService } from './cli-auth.service';
@@ -67,6 +71,8 @@ function build(
     loginArgs?: readonly string[] | null;
     logoutArgs?: readonly string[] | null;
     logoutOk?: boolean;
+    /** What each re-check of a signed-in server reads, in order; the last repeats. */
+    recheckStatuses?: readonly (AgentMcpServerStatus | 'throws')[];
   } = {},
 ) {
   const fake = fakeChild();
@@ -180,11 +186,24 @@ function build(
     { clearCache: () => 0 } as unknown as AgentMcpService,
     mirrors.skills as unknown as SkillsService,
   );
+  const statuses = overrides.recheckStatuses ?? ['connected'];
+  let rechecks = 0;
+  const mcp = {
+    recheckServerHealth: vi.fn(() => {
+      const status = statuses[Math.min(rechecks, statuses.length - 1)];
+      rechecks += 1;
+      return status === 'throws'
+        ? Promise.reject(new Error('the dial failed'))
+        : Promise.resolve({ status, detail: null });
+    }),
+    retireSessionsReachedBy: vi.fn(() => Promise.resolve(1)),
+  };
   const service = new CliAuthService(
     registry,
     processes as never,
     sessions,
     caches,
+    mcp as unknown as AgentMcpService,
   );
   return {
     service,
@@ -192,6 +211,7 @@ function build(
     vocabularies,
     mirrors,
     adapter,
+    mcp,
     cleanup: () => rmSync(storeDir, { recursive: true, force: true }),
     fake,
     registered,
@@ -482,65 +502,204 @@ describe('CliAuthService — where a server sign-in runs', () => {
 });
 
 describe('CliAuthService — a server sign-in that landed', () => {
-  it('retires that folder’s agent sessions, so the next turn sees the connector', async () => {
-    // THE REPORTED DEFECT, from the sign-in side: the user connected Linear and
-    // the chat's next turn still had only the servers its CLI process read at
-    // spawn. The agent itself wrote "the connector may need the session
-    // restarted" — this is that restart, deferred to the next turn.
-    const { service, fake, exit, sessions } = build();
-    const marked = vi.spyOn(sessions, 'markStale');
-    const started = service.startMcpLogin({
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Start a sign-in to `linear` and let its CLI exit cleanly. */
+  async function signInAndExit(
+    options: Parameters<typeof build>[0] = {},
+  ): Promise<ReturnType<typeof build> & { id: string }> {
+    const harness = build(options);
+    const started = harness.service.startMcpLogin({
       agent: AgentKind.Claude,
       server: 'linear',
       cwd: process.cwd(),
     });
-    fake.stdout.emit('data', 'visit https://x.test/a\n');
-    await started;
-
-    exit('done');
+    harness.fake.stdout.emit('data', 'visit https://x.test/a\n');
+    const { id } = await started;
+    harness.exit('done');
     await tick();
+    return { ...harness, id };
+  }
 
-    expect(marked).toHaveBeenCalledWith(
+  it('is not succeeded when the CLI exits, only once the server is seen connected', async () => {
+    // claude's claude.ai connectors exit about a second after opening the
+    // browser, before the user has authorized anything.
+    const { service, mcp, id } = await signInAndExit({
+      recheckStatuses: ['needs_auth', 'connected'],
+    });
+
+    expect(mcp.recheckServerHealth).toHaveBeenCalledWith(
       AgentKind.Claude,
-      // The CANONICAL path, which is what a turn records — a raw one would
-      // match nothing on a machine whose tmp dir is behind a symlink.
       realpathSync(process.cwd()),
-      expect.stringContaining('linear'),
+      'linear',
+      { configDir: null },
+    );
+    expect(service.status(id).status).toBe('verifying');
+    expect(mcp.retireSessionsReachedBy).not.toHaveBeenCalled();
+    // Ends the poll this real-timer case left armed.
+    service.cancelLogin(id);
+  });
+
+  it('succeeds and retires the sessions the sign-in reaches once the server connects', async () => {
+    const { service, mcp, id } = await signInAndExit();
+
+    expect(service.status(id).status).toBe('succeeded');
+    expect(mcp.retireSessionsReachedBy).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      'signIn',
+      realpathSync(process.cwd()),
+      null,
+      'you signed in to linear',
     );
   });
 
-  it('retires nothing when the sign-in did NOT complete', async () => {
-    // A failed sign-in changed nothing, and respawning a working chat's CLI
-    // over it costs the user their warm process for no gain.
-    const { service, fake, exit, sessions } = build();
-    const marked = vi.spyOn(sessions, 'markStale');
+  it('keeps re-checking with backoff until the server connects', async () => {
+    // Plain fake timers, so every boundary is exact: at once, then 2s, then
+    // 1.5× that.
+    vi.useFakeTimers();
+    const harness = build({
+      recheckStatuses: ['needs_auth', 'needs_auth', 'connected'],
+    });
+    const { service, mcp, fake, exit } = harness;
     const started = service.startMcpLogin({
       agent: AgentKind.Claude,
       server: 'linear',
       cwd: process.cwd(),
     });
     fake.stdout.emit('data', 'visit https://x.test/a\n');
-    await started;
+    await vi.advanceTimersByTimeAsync(200);
+    const { id } = await started;
+    exit('done');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mcp.recheckServerHealth).toHaveBeenCalledTimes(1);
+    expect(service.status(id).status).toBe('verifying');
+
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(mcp.recheckServerHealth).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mcp.recheckServerHealth).toHaveBeenCalledTimes(2);
+    expect(service.status(id).status).toBe('verifying');
+
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(mcp.recheckServerHealth).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mcp.recheckServerHealth).toHaveBeenCalledTimes(3);
+    expect(service.status(id).status).toBe('succeeded');
+  });
+
+  it('stays cancelled when the sign-in is cancelled while a re-check is out', async () => {
+    const harness = build();
+    const { service, mcp, fake, exit } = harness;
+    let answer: (health: { status: 'connected'; detail: null }) => void = () =>
+      undefined;
+    mcp.recheckServerHealth.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const started = service.startMcpLogin({
+      agent: AgentKind.Claude,
+      server: 'linear',
+      cwd: process.cwd(),
+    });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    const { id } = await started;
+    exit('done');
+    await tick();
+    expect(mcp.recheckServerHealth).toHaveBeenCalledTimes(1);
+
+    service.cancelLogin(id);
+    answer({ status: 'connected', detail: null });
+    await tick();
+
+    expect(service.status(id).status).toBe('cancelled');
+    expect(mcp.retireSessionsReachedBy).not.toHaveBeenCalled();
+  });
+
+  it('fails honestly when the server never connects in time', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { service, mcp, id } = await signInAndExit({
+        recheckStatuses: ['needs_auth'],
+      });
+      await vi.advanceTimersByTimeAsync(LOGIN_TIMEOUT_MS + 20_000);
+
+      const session = service.status(id);
+      expect(session.status).toBe('failed');
+      expect(session.message).toContain('linear');
+      expect(mcp.retireSessionsReachedBy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats a re-check that throws as not connected yet, rather than failing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { service, id } = await signInAndExit({
+        recheckStatuses: ['throws', 'connected'],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(service.status(id).status).toBe('verifying');
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(service.status(id).status).toBe('succeeded');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops re-checking once the sign-in is cancelled', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { service, mcp, id } = await signInAndExit({
+        recheckStatuses: ['needs_auth'],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      service.cancelLogin(id);
+      const calls = mcp.recheckServerHealth.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mcp.recheckServerHealth).toHaveBeenCalledTimes(calls);
+      expect(service.status(id).status).toBe('cancelled');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-checks nothing and retires nothing when the sign-in did NOT complete', async () => {
+    const { service, fake, exit, mcp } = build();
+    const started = service.startMcpLogin({
+      agent: AgentKind.Claude,
+      server: 'linear',
+      cwd: process.cwd(),
+    });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    const { id } = await started;
 
     exit(null);
     await tick();
 
-    expect(marked).not.toHaveBeenCalled();
+    expect(service.status(id).status).toBe('failed');
+    expect(mcp.recheckServerHealth).not.toHaveBeenCalled();
+    expect(mcp.retireSessionsReachedBy).not.toHaveBeenCalled();
   });
 
-  it('retires nothing for an ACCOUNT sign-in, which is not folder-scoped', async () => {
-    // `cwd` is null there, and marking every folder would respawn chats whose
-    // MCP configuration did not move.
-    const { service, fake, exit, sessions } = build();
-    const marked = vi.spyOn(sessions, 'markStale');
+  it('re-checks nothing for an ACCOUNT sign-in, which is not about a server', async () => {
+    const { service, fake, exit, mcp } = build();
     const started = service.startLogin({ agent: AgentKind.Claude });
     fake.stdout.emit('data', 'visit https://x.test/a\n');
-    await started;
+    const { id } = await started;
 
     exit('done');
     await tick();
 
-    expect(marked).not.toHaveBeenCalled();
+    expect(service.status(id).status).toBe('succeeded');
+    expect(mcp.recheckServerHealth).not.toHaveBeenCalled();
   });
 });
 

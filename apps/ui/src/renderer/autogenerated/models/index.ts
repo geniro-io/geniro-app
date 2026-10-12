@@ -3737,6 +3737,7 @@ export interface LoginSessionDto {
 export const LoginSessionDtoStatusEnum = {
     Waiting: 'waiting',
     NeedsCode: 'needs_code',
+    Verifying: 'verifying',
     Succeeded: 'succeeded',
     Failed: 'failed',
     Cancelled: 'cancelled'

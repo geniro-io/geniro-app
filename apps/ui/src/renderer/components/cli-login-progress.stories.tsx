@@ -119,13 +119,20 @@ export const NeedsCode: Story = {
   args: { session: session({ status: 'needs_code' }) },
 };
 
-export const ServerHandoff: Story = {
+export const ServerVerifying: Story = {
   args: {
     session: session({
-      status: 'succeeded',
+      status: 'verifying',
       message:
-        'The connector will be available the next time you start Claude Code.',
+        'Finish signing in to claude.ai Figma in your browser — geniro is checking the connection.',
     }),
+    scope: 'server',
+  },
+};
+
+export const ServerConnected: Story = {
+  args: {
+    session: session({ status: 'succeeded', message: null }),
     scope: 'server',
   },
 };

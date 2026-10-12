@@ -5191,3 +5191,30 @@ describe('CursorAcpAdapter.deleteSessionTranscript', () => {
     ).resolves.toMatchObject({ deleted: false });
   });
 });
+
+describe('CursorAcpAdapter — reading a server sign-in’s verdict', () => {
+  // Captured verbatim from 2026.10.01-e373342 under a pty (ANSI stripped).
+  const FAILED = [
+    'MCP Login',
+    'Preparing login...',
+    "Loading MCP server 'probedead' from .cursor/mcp.json or ~/.cursor/mcp.json...",
+    '✗ MCP login failed',
+    'Unexpected error during MCP login: fetch failed',
+  ].join('\n');
+
+  it('reads the CLI’s own failure line as a sign-in that did not complete', () => {
+    expect(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).mcpLoginFailed(FAILED),
+    ).toBe(true);
+  });
+
+  it('does not read the CLI’s progress lines alone as a failure', () => {
+    expect(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).mcpLoginFailed('MCP Login\nPreparing login...\nChecking status...'),
+    ).toBe(false);
+  });
+});

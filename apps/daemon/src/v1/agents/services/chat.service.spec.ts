@@ -79,6 +79,7 @@ import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import type { AgentMcpService } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ApprovalRegistry } from './approval-registry';
@@ -895,6 +896,8 @@ function setup(
     cliSessions?: Partial<
       Pick<CliSessionsService, 'prepare' | 'importHistory'>
     >;
+    /** The MCP service a turn's server report is checked against, when a test needs one. */
+    agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
   } = {},
 ) {
   const runDao = new FakeRunDao();
@@ -1113,9 +1116,7 @@ function setup(
       startedAt: 0,
       port: opts.port === undefined ? 4870 : opts.port,
     },
-    // Most tests toggle nothing, so the default points at a path that never
-    // exists — a mkdtemp per setup() would leak one directory per TEST. The
-    // tests that DO exercise the switch pass a real file.
+    opts.agentMcp as AgentMcpService | undefined,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -4819,6 +4820,108 @@ describe('ChatService', () => {
     // carries the harvested names.
     expect(
       itemDao.items.filter((item) => item.payload.includes('compact')),
+    ).toEqual([]);
+  });
+
+  it('notes in the transcript a server the turn started without though it showed as connected', async () => {
+    const turnMismatchNotice = vi.fn(() =>
+      Promise.resolve(
+        'figma showed as connected but was not loaded in this turn',
+      ),
+    );
+    const { service, itemDao, claude } = setup({
+      agentMcp: { turnMismatchNotice },
+    });
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const figma = {
+      name: 'figma',
+      target: null,
+      transport: null,
+      status: 'needs_auth' as const,
+      detail: null,
+    };
+
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'mcp_servers', servers: [figma] });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    expect(turnMismatchNotice).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      null,
+      [figma],
+    );
+    const notes = itemDao.items.filter(
+      (item) =>
+        item.kind === 'system' &&
+        item.payload.includes('figma showed as connected'),
+    );
+    expect(notes).toHaveLength(1);
+  });
+
+  it('writes no MCP mismatch note on a chat whose delete is in flight', async () => {
+    // The note lands after its turn's own rows; a run being torn down by then
+    // must not get a row its purge would orphan.
+    let answer: (message: string) => void = () => undefined;
+    const turnMismatchNotice = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { service, claude, runDao } = setup({
+      agentMcp: { turnMismatchNotice },
+    });
+    const persist = vi.spyOn(
+      service as unknown as {
+        persist: (...args: unknown[]) => Promise<unknown>;
+      },
+      'persist',
+    );
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.emit({
+      type: 'mcp_servers',
+      servers: [
+        {
+          name: 'figma',
+          target: null,
+          transport: null,
+          status: 'needs_auth',
+          detail: null,
+        },
+      ],
+    });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    let releasePurge = (): void => {};
+    runDao.purgeGate = new Promise<void>((resolve) => {
+      releasePurge = resolve;
+    });
+    const deleted = service.delete(run.id);
+    await drain();
+    answer('figma showed as connected but was not loaded');
+    await drain();
+    releasePurge();
+    await deleted;
+
+    expect(turnMismatchNotice).toHaveBeenCalledTimes(1);
+    expect(
+      persist.mock.calls.filter(([, , , kind]) => kind === 'system'),
     ).toEqual([]);
   });
 
@@ -10222,6 +10325,50 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
 
     expect(nodeDao.saved).toContain('sid-after-the-turn');
+  });
+
+  it('notes off-turn a server the CLI started without though it showed as connected', async () => {
+    const turnMismatchNotice = vi.fn(() =>
+      Promise.resolve(
+        'figma showed as connected but was not loaded in this turn',
+      ),
+    );
+    const { service, claude, itemDao } = setup({
+      agentMcp: { turnMismatchNotice },
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const figma = {
+      name: 'figma',
+      target: null,
+      transport: null,
+      status: 'needs_auth' as const,
+      detail: null,
+    };
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'mcp_servers',
+      servers: [figma],
+    });
+    await drain();
+
+    expect(turnMismatchNotice).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(process.cwd()),
+      null,
+      [figma],
+    );
+    expect(
+      itemDao.items.filter(
+        (item) =>
+          item.kind === 'system' &&
+          item.payload.includes('figma showed as connected'),
+      ),
+    ).toHaveLength(1);
   });
 
   it('files what the CLI reports about itself off-turn under the same folder', async () => {

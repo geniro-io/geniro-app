@@ -22,6 +22,7 @@ import {
   validateOllamaModel,
 } from '../utils/ollama';
 import { listProcesses, type ProcessRow } from '../utils/process-descendants';
+import { repositoryRootOf } from '../utils/repository-root';
 import {
   type BetweenTurnApproval,
   type CliSession,
@@ -1013,6 +1014,16 @@ export abstract class AgentAdapter {
     configDir: string | null;
   }): Promise<readonly string[]> {
     return Promise.resolve([]);
+  }
+
+  /**
+   * The repository a folder belongs to, as this CLI keys the MCP state that
+   * reaches a whole repository (`mcp.changeReach.where: 'repository'`). The
+   * default is the nearest `.git`, a worktree followed back to its main
+   * repository; a CLI that keys it another way overrides this.
+   */
+  mcpRepositoryKey(cwd: string): Promise<string> {
+    return repositoryRootOf(cwd);
   }
 
   /**

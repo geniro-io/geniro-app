@@ -51,6 +51,7 @@ import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-con
 import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import type { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
@@ -838,6 +839,8 @@ function setup(
     mergeImpl?: () => Promise<unknown>;
     /** The group a claiming rule would file this run's workflow under. */
     autoGroupId?: string | null;
+    /** The MCP service a node turn's server report is checked against. */
+    agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -1181,6 +1184,7 @@ function setup(
     // A pinned width: the queueing cases below count slots, and the
     // machine-derived default differs by host.
     4,
+    opts.agentMcp as AgentMcpService | undefined,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -2243,6 +2247,116 @@ describe('GraphExecutorService', () => {
     expect(
       itemDao.items.filter((item) => item.payload.includes('compact')),
     ).toEqual([]);
+  });
+
+  it('notes on the node a server its turn started without though it showed as connected', async () => {
+    const turnMismatchNotice = vi.fn(() =>
+      Promise.resolve(
+        'figma showed as connected but was not loaded in this turn',
+      ),
+    );
+    const { service, claude, itemDao } = setup(4870, {
+      agentMcp: { turnMismatchNotice },
+    });
+    const figma = {
+      name: 'figma',
+      target: null,
+      transport: null,
+      status: 'needs_auth' as const,
+      detail: null,
+    };
+    await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    claude.starts[0]!.emit({ type: 'mcp_servers', servers: [figma] });
+    claude.starts[0]!.finish();
+    await drain();
+
+    expect(turnMismatchNotice).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      null,
+      [figma],
+    );
+    const notes = itemDao.items.filter(
+      (item) =>
+        item.kind === 'system' &&
+        item.nodeId === 'a' &&
+        item.payload.includes('figma showed as connected'),
+    );
+    expect(notes).toHaveLength(1);
+  });
+
+  it('writes no MCP mismatch note on a run whose delete is in flight', async () => {
+    // The note lands after its turn's own rows; a run being torn down by then
+    // must not get a row its purge would orphan.
+    let answer: (message: string) => void = () => undefined;
+    const turnMismatchNotice = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const ctx = setup(4870, { agentMcp: { turnMismatchNotice } });
+    const { service, claude, runDao } = ctx;
+    const note = vi.spyOn(
+      service as unknown as {
+        noteOnRun: (...args: unknown[]) => Promise<void>;
+      },
+      'noteOnRun',
+    );
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({
+      type: 'mcp_servers',
+      servers: [
+        {
+          name: 'figma',
+          target: null,
+          transport: null,
+          status: 'needs_auth',
+          detail: null,
+        },
+      ],
+    });
+    claude.starts[0]!.finish();
+    await drain();
+
+    let releasePurge = (): void => {};
+    runDao.purgeGate = new Promise<void>((resolve) => {
+      releasePurge = resolve;
+    });
+    const deleted = service.deleteRun(run.id);
+    await drain();
+    answer('figma showed as connected but was not loaded');
+    await drain();
+    releasePurge();
+    await deleted;
+
+    expect(turnMismatchNotice).toHaveBeenCalledTimes(1);
+    expect(note).not.toHaveBeenCalledWith(
+      run.id,
+      'a',
+      expect.objectContaining({ message: expect.stringContaining('figma') }),
+    );
   });
 
   it("harvests a node turn's mcp_servers under the node's CANONICAL plugin dir", async () => {
@@ -3801,6 +3915,54 @@ describe('GraphExecutorService — agent calls', () => {
     expect(note.mock.calls.every(([, callId]) => callId === 'call-1')).toBe(
       true,
     );
+  });
+
+  it("files a callee turn's MCP mismatch note in that call's block", async () => {
+    // A row lands in a call block by its payload's `callId`; a note without
+    // one is drawn in the main flow, away from the turn it is about.
+    const turnMismatchNotice = vi.fn(() =>
+      Promise.resolve('figma showed as connected but was not loaded'),
+    );
+    const { service, claude, callBroker, itemDao } = setup(4870, {
+      agentMcp: { turnMismatchNotice },
+    });
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+
+    const callee = claude.starts[1]!;
+    callee.emit({
+      type: 'mcp_servers',
+      servers: [
+        {
+          name: 'figma',
+          target: null,
+          transport: null,
+          status: 'needs_auth',
+          detail: null,
+        },
+      ],
+    });
+    await drain();
+    completeTurn(callee, 'helped');
+    await envelope;
+    await drain();
+
+    const note = itemDao.items.find(
+      (item) => item.kind === 'system' && item.payload.includes('figma showed'),
+    );
+    expect(note?.nodeId).toBe('helper');
+    expect(JSON.parse(note!.payload)).toMatchObject({ callId: 'call-1' });
   });
 
   it('a follow-up handed to a caller that is waiting on its call releases that wait', async () => {

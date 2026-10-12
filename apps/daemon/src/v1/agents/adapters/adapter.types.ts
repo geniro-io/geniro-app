@@ -2094,6 +2094,20 @@ export interface AgentGeniroCommand {
 }
 
 /**
+ * Where one MCP change reaches — see `AdapterConfig.mcp.changeReach`.
+ *
+ * `where`: only the folder it was made in, every folder of the same repository
+ * (`AgentAdapter.mcpRepositoryKey` says which repository a folder belongs to),
+ * or every folder. `perProfile`: whether only sessions under the same config
+ * directory are reached — false for a CLI that keeps the state outside any
+ * profile.
+ */
+export interface McpChangeReach {
+  readonly where: 'folder' | 'repository' | 'everywhere';
+  readonly perProfile: boolean;
+}
+
+/**
  * Health of one MCP server as the CLI itself reports it.
  *
  * `unknown` is for a row that IS recognisably a row but whose health wording
@@ -4444,6 +4458,17 @@ export interface AdapterConfig {
      * question.
      */
     readonly loginUnavailableReason: string | null;
+    /**
+     * How far one MCP change of this CLI reaches — which kept sessions a
+     * switched server (`toggle`) or a completed sign-in (`signIn`) made stale,
+     * so geniro retires exactly those. Each answer is a fact about where the
+     * CLI keeps that state: a per-repository file, a per-profile file, or one
+     * shared by every profile on the machine.
+     */
+    readonly changeReach: {
+      readonly toggle: McpChangeReach;
+      readonly signIn: McpChangeReach;
+    };
     /**
      * Why an UNAPPROVED server of this CLI cannot be approved from here, or
      * null when it can.

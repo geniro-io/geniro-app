@@ -12266,22 +12266,18 @@ describe('Chats — signing a server in', () => {
     ).not.toBeNull();
   });
 
-  it('re-checks THAT SERVER when the window comes back mid sign-in', async () => {
-    // The BACKSTOP for the other half of the report — "the status only updated
-    // after 30 seconds, probably". The settle is the primary mechanism and it
-    // fires when the CLI PROCESS EXITS, so a CLI that lingers after the browser
-    // round-trip leaves the row stale for as long as it lingers. Coming back to
-    // the window is exactly the moment the answer may have changed, because
-    // leaving for a browser tab and returning IS the shape of this flow.
-    //
-    // It re-dials that ONE server rather than the folder, which is the rest of
-    // the same report: "we dont need to update all list of mcps". A full
-    // re-read here costs ~30s on a large profile to answer a question about one
-    // row — so the narrow route is asserted, and the broad one asserted absent.
+  it('leaves a sign-in in flight to the daemon — coming back to the window re-checks nothing', async () => {
+    // The daemon keeps a server sign-in `verifying` and re-checks the server
+    // itself until it connects, so the renderer's own focus re-check — the
+    // backstop for a settle that used to fire at CLI exit — is gone, and with
+    // it a second poll of the same server from every open window.
     api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
     agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
     agentsApi.recheckAgentMcpServer.mockResolvedValue(needsAuth);
-    cliAuthApi.startMcpLogin.mockResolvedValue(waitingSession);
+    cliAuthApi.startMcpLogin.mockResolvedValue({
+      ...waitingSession,
+      status: 'verifying' as const,
+    });
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'First chat');
@@ -12297,20 +12293,12 @@ describe('Chats — signing a server in', () => {
       await Promise.resolve();
     });
 
-    expect(agentsApi.recheckAgentMcpServer.mock.calls.length).toBeGreaterThan(
-      rechecked,
-    );
-    expect(agentsApi.recheckAgentMcpServer).toHaveBeenLastCalledWith(
-      {
-        recheckMcpServerDto: {
-          agent: 'claude',
-          cwd: '/proj-a',
-          server: 'linear',
-        },
-      },
-      expect.anything(),
-    );
+    expect(agentsApi.recheckAgentMcpServer.mock.calls.length).toBe(rechecked);
     expect(agentsApi.listAgentMcpServers.mock.calls.length).toBe(listedBefore);
+    // Still mid-flow: `verifying` is not over, so the panel stays up.
+    expect(
+      container.querySelector('[data-slot="cli-login-progress"]'),
+    ).not.toBeNull();
   });
 
   it('does NOT re-dial every server just because the window was clicked', async () => {

@@ -4400,6 +4400,7 @@ describe('Chats workflow runs', () => {
     // `call_started` time, which for a call older than the window is a guess.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4408,6 +4409,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-5',
             contextTokens: null,
             contextWindowTokens: null,
@@ -4674,6 +4676,7 @@ describe('Chats workflow runs', () => {
     // no instance. The daemon still holds each call's reading.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4682,6 +4685,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-4',
             contextTokens: 201_788,
             contextWindowTokens: 256_000,
@@ -4714,6 +4718,52 @@ describe('Chats workflow runs', () => {
     ).toContain('201.8k of 256k');
   });
 
+  it('puts the daemon’s prompt-cache expiry on the call’s instance row', async () => {
+    // The badge reads the conversation's expiry off the nodes route; a call
+    // whose cache lapsed over a window more than half full says start fresh.
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        promptCacheExpiresAt: null,
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'running',
+        contextTokens: 201_788,
+        contextWindowTokens: 256_000,
+        model: null,
+        calls: [
+          {
+            promptCacheExpiresAt: '2020-01-01T00:00:00.000Z',
+            callId: 'call-4',
+            contextTokens: 201_788,
+            contextWindowTokens: 256_000,
+            totals: NO_TOTALS,
+            start: null,
+          },
+        ],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
+        workedMs: null,
+        toolCalls: 106,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const instance = container.querySelector<HTMLElement>(
+      '[data-slot="agent-instance"][data-instance-id="call-4"]',
+    );
+    expect(
+      instance
+        ?.querySelector('[data-slot="prompt-cache-badge"]')
+        ?.getAttribute('data-state'),
+    ).toBe('start-fresh');
+  });
+
   it('draws a CONVERSATION older than the window as one instance, not one per call', async () => {
     // A call continued with `thread` is the same callee session, so calls
     // older than the window group into conversations as the window's own do.
@@ -4730,6 +4780,7 @@ describe('Chats workflow runs', () => {
     // names the helper at all.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4775,6 +4826,7 @@ describe('Chats workflow runs', () => {
     // a fraction of the run and must not stand in for it.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4837,6 +4889,7 @@ describe('Chats workflow runs', () => {
     // older than it showed no spend at all and the card a fraction of its cost.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4845,6 +4898,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-4',
             contextTokens: null,
             contextWindowTokens: null,
@@ -4900,6 +4954,7 @@ describe('Chats workflow runs', () => {
     // five Engineers and the head's whole-run spend double-counted theirs.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'completed',
@@ -4908,6 +4963,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-1',
             contextTokens: null,
             contextWindowTokens: null,
@@ -4915,6 +4971,7 @@ describe('Chats workflow runs', () => {
             start: null,
           },
           {
+            promptCacheExpiresAt: null,
             callId: 'call-2',
             contextTokens: null,
             contextWindowTokens: null,
@@ -4979,6 +5036,7 @@ describe('Chats workflow runs', () => {
     // node's own reading would show.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4987,6 +5045,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-5',
             contextTokens: 47_200,
             contextWindowTokens: 200_000,
@@ -6992,6 +7051,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: 'look at this',
         images: [{ mediaType: 'image/png', data: PNG_BASE64 }],
       },
@@ -7058,6 +7118,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: '',
         images: [{ mediaType: 'image/png', data: PNG_BASE64 }],
       },
@@ -7813,7 +7874,10 @@ describe('Chats queued messages', () => {
     });
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'queued question' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'queued question',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -7855,7 +7919,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'create pr' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'create pr',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -7899,7 +7966,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'change the plan' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'change the plan',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -7941,7 +8011,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'one more thing' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'one more thing',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -8014,7 +8087,7 @@ describe('Chats queued messages', () => {
     });
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: '/compact' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: '/compact' },
     });
   });
 
@@ -8152,7 +8225,7 @@ describe('Chats queued messages', () => {
     // idle run kicks the drain, since there is no turn whose ending would.
     expect(api.sendChatMessage).toHaveBeenNthCalledWith(1, {
       runId: 'r1',
-      sendMessageDto: { text: 'first' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'first' },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
@@ -8165,7 +8238,7 @@ describe('Chats queued messages', () => {
     });
     expect(api.sendChatMessage).toHaveBeenNthCalledWith(2, {
       runId: 'r1',
-      sendMessageDto: { text: 'second' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'second' },
     });
   });
 
@@ -8427,7 +8500,10 @@ describe('Chats queued messages', () => {
     await clickStripControl(container, 'Resume');
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'held back' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'held back',
+      },
     });
     expect(strip()).toBeNull();
   });
@@ -8458,7 +8534,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'first' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'first' },
     });
 
     // The turn that press started now ends — and 'second' STAYS, which is what
@@ -8492,7 +8568,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'first' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'first' },
     });
     // 'second' still waits its turn.
     expect(
@@ -8505,7 +8581,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'second' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'second' },
     });
   });
 
@@ -8602,7 +8678,10 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r2',
-      sendMessageDto: { text: 'second run' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'second run',
+      },
     });
     await act(async () => {
       settleFirst(msg(10, 'user', 'first run'));
@@ -8723,6 +8802,11 @@ describe('Chats queued messages', () => {
         await vi.advanceTimersByTimeAsync(600);
       });
       expect(api.sendChatMessage).toHaveBeenCalledTimes(3);
+      const ids = api.sendChatMessage.mock.calls.map(
+        ([request]) => request.sendMessageDto.clientMessageId,
+      );
+      expect(ids[0]).toEqual(expect.any(String));
+      expect(new Set(ids).size).toBe(1);
 
       // Third attempt succeeded: no error line, nothing left queued.
       expect(container.textContent).not.toContain('RUN_BUSY');
@@ -8845,7 +8929,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'the second\nthought' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'the second\nthought',
+      },
     });
   });
 
@@ -8867,7 +8954,7 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'urgent' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'urgent' },
     });
     // It left the queue, so the drain cannot send it a second time.
     expect(
@@ -8985,9 +9072,18 @@ describe('Chats queued messages', () => {
       });
 
       expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+      expect(
+        api.sendChatMessage.mock.calls[1]![0].sendMessageDto.clientMessageId,
+      ).not.toBe(
+        api.sendChatMessage.mock.calls[0]![0].sendMessageDto.clientMessageId,
+      );
+
       expect(api.sendChatMessage).toHaveBeenLastCalledWith({
         runId: 'r1',
-        sendMessageDto: { text: 'second draft' },
+        sendMessageDto: {
+          clientMessageId: expect.any(String),
+          text: 'second draft',
+        },
       });
     } finally {
       vi.useRealTimers();
@@ -9309,7 +9405,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'later message' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'later message',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -9529,7 +9628,10 @@ describe('Chats run composer chips', () => {
 
     expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledWith({
       runId: 'w1',
-      sendMessageDto: { text: 'and the tests too' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'and the tests too',
+      },
     });
     expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
@@ -9619,7 +9721,10 @@ describe('Chats queued messages — a workflow run', () => {
 
     expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledWith({
       runId: 'w1',
-      sendMessageDto: { text: 'collect my feedback first' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'collect my feedback first',
+      },
     });
   });
 
@@ -11229,6 +11334,7 @@ describe('Chats sidebar list', () => {
     });
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'w-a',
         status: 'running',
@@ -11331,6 +11437,7 @@ describe('Chats sidebar list', () => {
     });
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'w-a',
         status: 'running',
@@ -11413,6 +11520,7 @@ describe('Chats sidebar list', () => {
     });
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'w-a',
         status: 'running',
@@ -12204,22 +12312,18 @@ describe('Chats — signing a server in', () => {
     ).not.toBeNull();
   });
 
-  it('re-checks THAT SERVER when the window comes back mid sign-in', async () => {
-    // The BACKSTOP for the other half of the report — "the status only updated
-    // after 30 seconds, probably". The settle is the primary mechanism and it
-    // fires when the CLI PROCESS EXITS, so a CLI that lingers after the browser
-    // round-trip leaves the row stale for as long as it lingers. Coming back to
-    // the window is exactly the moment the answer may have changed, because
-    // leaving for a browser tab and returning IS the shape of this flow.
-    //
-    // It re-dials that ONE server rather than the folder, which is the rest of
-    // the same report: "we dont need to update all list of mcps". A full
-    // re-read here costs ~30s on a large profile to answer a question about one
-    // row — so the narrow route is asserted, and the broad one asserted absent.
+  it('leaves a sign-in in flight to the daemon — coming back to the window re-checks nothing', async () => {
+    // The daemon keeps a server sign-in `verifying` and re-checks the server
+    // itself until it connects, so the renderer's own focus re-check — the
+    // backstop for a settle that used to fire at CLI exit — is gone, and with
+    // it a second poll of the same server from every open window.
     api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
     agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
     agentsApi.recheckAgentMcpServer.mockResolvedValue(needsAuth);
-    cliAuthApi.startMcpLogin.mockResolvedValue(waitingSession);
+    cliAuthApi.startMcpLogin.mockResolvedValue({
+      ...waitingSession,
+      status: 'verifying' as const,
+    });
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'First chat');
@@ -12235,20 +12339,12 @@ describe('Chats — signing a server in', () => {
       await Promise.resolve();
     });
 
-    expect(agentsApi.recheckAgentMcpServer.mock.calls.length).toBeGreaterThan(
-      rechecked,
-    );
-    expect(agentsApi.recheckAgentMcpServer).toHaveBeenLastCalledWith(
-      {
-        recheckMcpServerDto: {
-          agent: 'claude',
-          cwd: '/proj-a',
-          server: 'linear',
-        },
-      },
-      expect.anything(),
-    );
+    expect(agentsApi.recheckAgentMcpServer.mock.calls.length).toBe(rechecked);
     expect(agentsApi.listAgentMcpServers.mock.calls.length).toBe(listedBefore);
+    // Still mid-flow: `verifying` is not over, so the panel stays up.
+    expect(
+      container.querySelector('[data-slot="cli-login-progress"]'),
+    ).not.toBeNull();
   });
 
   it('does NOT re-dial every server just because the window was clicked', async () => {
@@ -13274,6 +13370,7 @@ describe('Chats — a screenshot pasted into a question answer', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: '',
         images: [{ mediaType: 'image/png', data: PNG_B64 }],
       },
@@ -15198,7 +15295,7 @@ describe('Chats — a queue in a thread you are not watching', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: QUEUED },
+      sendMessageDto: { clientMessageId: expect.any(String), text: QUEUED },
     });
   });
 
@@ -15291,7 +15388,7 @@ describe('Chats — a queue in a thread you are not watching', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: QUEUED },
+      sendMessageDto: { clientMessageId: expect.any(String), text: QUEUED },
     });
   });
 });
@@ -16827,6 +16924,7 @@ describe('Chats — a send and a paste that outlive a thread switch', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: 'what is wrong here',
         images: [{ mediaType: 'image/png', data: READ_BASE64 }],
       },
@@ -16855,6 +16953,7 @@ describe('Chats — a send and a paste that outlive a thread switch', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r-new',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: 'first message',
         images: [{ mediaType: 'image/png', data: READ_BASE64 }],
       },

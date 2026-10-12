@@ -94,6 +94,7 @@ import {
   isRunBusyError,
 } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
 import {
@@ -487,6 +488,7 @@ export function WorkflowChatPanel({
       sendRunId: string,
       text: string,
       images: SendMessageDtoImagesInner[],
+      clientMessageId = randomId(),
     ): Promise<void> => {
       await onBeforeSend();
       if (sendRunId !== runIdRef.current) {
@@ -494,7 +496,7 @@ export function WorkflowChatPanel({
           'This conversation was replaced before the message went out',
         );
       }
-      await chat.post(text, images);
+      await chat.post(text, images, clientMessageId);
     },
     [onBeforeSend, chat],
   );

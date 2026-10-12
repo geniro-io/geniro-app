@@ -22,6 +22,7 @@ import {
   validateOllamaModel,
 } from '../utils/ollama';
 import { listProcesses, type ProcessRow } from '../utils/process-descendants';
+import { repositoryRootOf } from '../utils/repository-root';
 import {
   type BetweenTurnApproval,
   type CliSession,
@@ -991,6 +992,38 @@ export abstract class AgentAdapter {
     _options: AgentCommandOptions = {},
   ): Promise<AgentMcpServerHealth | null> {
     return Promise.resolve(null);
+  }
+
+  /**
+   * Drop this CLI's own record that these servers need signing in, for one
+   * profile — called once a dial has seen them connected — and answer with the
+   * names whose record was actually removed.
+   *
+   * A CLI may remember a sign-in failure and skip the server at every later
+   * start until the record expires, so a server the user has just authorized
+   * goes on being withheld from every new session. Only the caller has seen
+   * the server connect; the CLI's own record never learns it. A non-empty
+   * answer means the kept sessions loaded without those servers and must be
+   * retired.
+   *
+   * May reject when the record cannot be rewritten; the caller treats that as
+   * nothing removed. The default answers none: this CLI keeps no such record.
+   */
+  forgetMcpNeedsAuth(_input: {
+    servers: readonly string[];
+    configDir: string | null;
+  }): Promise<readonly string[]> {
+    return Promise.resolve([]);
+  }
+
+  /**
+   * The repository a folder belongs to, as this CLI keys the MCP state that
+   * reaches a whole repository (`mcp.changeReach.where: 'repository'`). The
+   * default is the nearest `.git`, a worktree followed back to its main
+   * repository; a CLI that keys it another way overrides this.
+   */
+  mcpRepositoryKey(cwd: string): Promise<string> {
+    return repositoryRootOf(cwd);
   }
 
   /**

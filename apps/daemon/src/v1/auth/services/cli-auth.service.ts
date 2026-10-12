@@ -5,6 +5,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { CacheResetService } from '../../agents/services/cache-reset.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
@@ -31,6 +32,14 @@ const URL_WAIT_MS = 4_000;
 const URL_POLL_MS = 100;
 /** A sign-out clears a file and exits; it has no reason to take longer. */
 const LOGOUT_TIMEOUT_MS = 20_000;
+/**
+ * The pause after each re-check of a server whose sign-in is `verifying`: the
+ * first re-check runs at once, since the user may have authorized before the
+ * CLI exited, then it backs off — each re-check is a real dial of the server.
+ */
+const VERIFY_FIRST_DELAY_MS = 2_000;
+const VERIFY_MAX_DELAY_MS = 10_000;
+const VERIFY_BACKOFF = 1.5;
 
 /** One tracked sign-in: its public state plus the child we are watching. */
 interface LoginRun {
@@ -63,12 +72,14 @@ interface LoginRun {
   /**
    * The folder a SERVER sign-in was run in, or null for an account sign-in.
    *
-   * Kept solely to retire that folder's agent sessions once the sign-in lands:
-   * a CLI reads its MCP configuration at spawn, so a connector the user has
-   * just authenticated reaches the config and not the process a chat is
-   * already holding. See `AgentSessionRegistry.markStale`.
+   * Where the server is re-checked until it connects, and where the reach of
+   * the sign-in is measured from when it does: a CLI reads its MCP
+   * configuration at spawn, so a connector the user has just authenticated
+   * reaches the config and not the processes already holding it.
    */
   cwd: string | null;
+  /** The profile a server sign-in ran under — where its re-checks run too. */
+  configDir: string | null;
 }
 
 /**
@@ -104,6 +115,7 @@ export class CliAuthService {
     private readonly processes: ProcessRegistry,
     private readonly sessions: AgentSessionRegistry,
     private readonly caches: CacheResetService,
+    private readonly mcp: AgentMcpService,
   ) {}
 
   /**
@@ -229,6 +241,7 @@ export class CliAuthService {
       evictTimer: null,
       server: null,
       cwd: null,
+      configDir: null,
     };
     this.runs.set(id, run);
 
@@ -302,6 +315,7 @@ export class CliAuthService {
       input.cwd === undefined
         ? ensureFolderlessDir()
         : resolveValidCwd(input.cwd);
+    const configDir = this.resolveConfigDir(input.configDir);
     const id = randomUUID();
     const run: LoginRun = {
       session: {
@@ -320,6 +334,7 @@ export class CliAuthService {
       // retirement below — the registry matches on the string a turn recorded,
       // which is the resolved one.
       cwd: projectDir,
+      configDir,
     };
     this.runs.set(id, run);
 
@@ -329,7 +344,7 @@ export class CliAuthService {
         // Validated here rather than trusted: this becomes a child's cwd, and
         // the CLI resolves the server name against it.
         cwd: projectDir,
-        configDir: this.resolveConfigDir(input.configDir),
+        configDir,
         timeoutMs: LOGIN_TIMEOUT_MS,
         onSpawn: (child, spawnInfo) => {
           run.child = child;
@@ -446,7 +461,7 @@ export class CliAuthService {
     if (run.sinceCode !== null) {
       run.sinceCode = tailOf(run.sinceCode + chunk);
     }
-    if (isOver(run.session.status)) {
+    if (isOver(run.session.status) || run.session.status === 'verifying') {
       return;
     }
     // Stripped from the buffer rather than per chunk, which is the only form
@@ -502,6 +517,18 @@ export class CliAuthService {
         run.server !== null &&
         this.adapters.for(run.session.agent).mcpLoginFailed(text)
       );
+    if (completed && run.server !== null && run.cwd !== null) {
+      // The CLI exiting is not the connector working: claude's claude.ai
+      // connectors exit about a second after opening the browser, before the
+      // user has authorized anything. Only an observed connect ends this.
+      run.session = {
+        ...run.session,
+        status: 'verifying',
+        message: `Finish signing in to ${run.server} in your browser — geniro is checking the connection.`,
+      };
+      this.verify(run, Date.now() + LOGIN_TIMEOUT_MS, 0, VERIFY_FIRST_DELAY_MS);
+      return;
+    }
     run.session = {
       ...run.session,
       status: completed ? 'succeeded' : 'failed',
@@ -514,28 +541,6 @@ export class CliAuthService {
     if (completed && run.server === null) {
       this.accountChanged(run.session.agent, 'signed in to a new account');
     }
-    if (completed && run.cwd !== null) {
-      // A CLI reads its MCP configuration when it STARTS, and geniro keeps that
-      // process alive across a chat's turns — so a connector the user has just
-      // authenticated reaches the config and never reaches the agent already
-      // running in that folder. Reported with the agent's own diagnosis in the
-      // transcript: "the connector may need the session restarted". See
-      // `AgentSessionRegistry.markStale` for why this marks rather than closes.
-      //
-      // Only on the arm that COMPLETED: a sign-in that failed changed nothing,
-      // and respawning a working chat's CLI over it would cost the user their
-      // warm process for no gain.
-      const retired = this.sessions.markStale(
-        run.session.agent,
-        run.cwd,
-        `you signed in to ${run.server}`,
-      );
-      if (retired > 0) {
-        this.logger.log(
-          `${retired} ${run.session.agent} session(s) in ${run.cwd} will restart on their next turn — signed in to ${run.server}`,
-        );
-      }
-    }
     if (!completed) {
       // Logged without the output, for the reason `lastProgressLine` exists: a
       // sign-in's stdout is the one stream here that can hold a one-time code.
@@ -544,6 +549,86 @@ export class CliAuthService {
       );
     }
     this.scheduleEviction(run);
+  }
+
+  /**
+   * Re-check a `verifying` server sign-in after `waitMs`, then after
+   * `nextDelayMs` and longer, until the server is seen connected or `deadline`
+   * passes.
+   *
+   * Through `AgentMcpService.recheckServerHealth`, so each dial also corrects
+   * every cached reading of the server and clears a CLI's own needs-auth record. A
+   * connect retires the kept sessions the sign-in reaches — the ones that
+   * started without the server — and only then is the sign-in `succeeded`.
+   */
+  private verify(
+    run: LoginRun,
+    deadline: number,
+    waitMs: number,
+    nextDelayMs: number,
+  ): void {
+    // Not cleared on a cancel: `verifyOnce` checks the status first, and a
+    // cancelled sign-in is no longer `verifying`.
+    setTimeout(() => {
+      void this.verifyOnce(run, deadline, nextDelayMs);
+    }, waitMs).unref?.();
+  }
+
+  private async verifyOnce(
+    run: LoginRun,
+    deadline: number,
+    nextDelayMs: number,
+  ): Promise<void> {
+    const { server, cwd, configDir } = run;
+    if (run.session.status !== 'verifying' || server === null || cwd === null) {
+      return;
+    }
+    const agent = run.session.agent;
+    // The health-only re-check: one server dialled per tick, never the
+    // folder's whole listing re-read behind it.
+    const status = await this.mcp
+      .recheckServerHealth(agent, cwd, server, { configDir })
+      .then((health) => health?.status ?? null)
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `re-checking ${server} after its sign-in failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return null;
+      });
+    if (run.session.status !== 'verifying') {
+      // Cancelled while the dial ran.
+      return;
+    }
+    if (status === 'connected') {
+      run.session = { ...run.session, status: 'succeeded', message: null };
+      await this.mcp.retireSessionsReachedBy(
+        agent,
+        'signIn',
+        cwd,
+        configDir,
+        `you signed in to ${server}`,
+      );
+      this.scheduleEviction(run);
+      return;
+    }
+    if (Date.now() >= deadline) {
+      run.session = {
+        ...run.session,
+        status: 'failed',
+        message: `${server} still isn't connected. Finish signing in in your browser, then re-check it.`,
+      };
+      this.logger.warn(
+        `${agent} sign-in to ${server} never connected (${run.session.id})`,
+      );
+      this.scheduleEviction(run);
+      return;
+    }
+    this.verify(
+      run,
+      deadline,
+      nextDelayMs,
+      Math.min(nextDelayMs * VERIFY_BACKOFF, VERIFY_MAX_DELAY_MS),
+    );
   }
 
   private async waitForUrl(run: LoginRun): Promise<void> {

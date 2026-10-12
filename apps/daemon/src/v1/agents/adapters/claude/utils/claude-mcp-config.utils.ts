@@ -92,7 +92,7 @@ export function sweepStaleTurnMcpConfigs(dir: string): void {
  * `<userData>/tmp` — long-lived, and 0755 on any install made before this
  * change. The `chmod` is what reaches those.
  */
-function ensurePrivateDir(dir: string): void {
+export function ensurePrivateDir(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
     chmodSync(dir, 0o700);

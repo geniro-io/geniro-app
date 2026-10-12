@@ -241,6 +241,33 @@ export const CURSOR_OWNED_PARAMETER_IDS: readonly string[] = [
 export const CURSOR_MAX_MODE_CONFIG_KEY = 'maxMode';
 
 /**
+ * The `cli-config.json` key that decides which tool calls the CLI asks about,
+ * and the value that makes it ask: `allowlist` | `auto-review` | `unrestricted`
+ * (the CLI's own settings schema, 2026.10.01-e373342).
+ *
+ * MEASURED over ACP on that build, a throwaway profile with only this key
+ * changed and a prompt asking for a shell command off the allowlist:
+ * `unrestricted` ran it with NO `session/request_permission`, while
+ * `allowlist` sent one. `auto-review` asked on the measured account too, but
+ * the bundle lets it decide by itself where the team enables smart auto and a
+ * classifier model is available — so outside `auto` the seed writes
+ * `allowlist`, the one value that always reaches geniro.
+ */
+export const CURSOR_APPROVAL_MODE_CONFIG_KEY = 'approvalMode';
+
+/** See {@link CURSOR_APPROVAL_MODE_CONFIG_KEY}. */
+export const CURSOR_ASKING_APPROVAL_MODE = 'allowlist';
+
+/**
+ * The `cli-config.json` switch that approves every web search without asking,
+ * whatever the approval mode. MEASURED over ACP on 2026.10.01-e373342 under
+ * `allowlist`: with it `true` a web search ran with no
+ * `session/request_permission`, without it the same prompt sent one. So an
+ * asking turn writes it `false` beside the approval mode.
+ */
+export const CURSOR_WEB_SEARCH_AUTO_ACCEPT_CONFIG_KEY = 'autoAcceptWebSearch';
+
+/**
  * The option id behind {@link CURSOR_MAX_MODE_CONFIG_KEY} — declared in
  * `getConfig().options` and read by the turn's profile seed, which is why it is
  * named.

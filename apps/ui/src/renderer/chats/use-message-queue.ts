@@ -27,6 +27,7 @@ export interface MessageQueueHandlers {
     runId: string,
     text: string,
     images: SendMessageDtoImagesInner[],
+    clientMessageId: string,
   ) => Promise<unknown>;
   /** Whether a turn is running right now — read before a Send-now's POST. */
   isWorking: () => boolean;
@@ -248,6 +249,7 @@ export function useMessageQueue({ persist }: { persist: boolean }) {
                 runId,
                 current.text,
                 current.images,
+                current.clientMessageId ?? current.id,
               );
             } finally {
               markPosting(current.id, false);
@@ -302,7 +304,9 @@ export function useMessageQueue({ persist }: { persist: boolean }) {
     setQueues((prev) => ({
       ...prev,
       [runId]: (prev[runId] ?? []).map((message) =>
-        message.id === id ? { ...message, text } : message,
+        message.id === id
+          ? { ...message, text, clientMessageId: randomId() }
+          : message,
       ),
     }));
   }, []);
@@ -392,7 +396,12 @@ export function useMessageQueue({ persist }: { persist: boolean }) {
       try {
         markPosting(id, true);
         try {
-          await handlersRef.current.send(runId, message.text, message.images);
+          await handlersRef.current.send(
+            runId,
+            message.text,
+            message.images,
+            message.clientMessageId ?? message.id,
+          );
         } finally {
           markPosting(id, false);
         }

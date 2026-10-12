@@ -1416,6 +1416,12 @@ export interface CallContextReading {
     totals: ChatTotals;
     /**
      * 
+     * @type {string}
+     * @memberof CallContextReading
+     */
+    promptCacheExpiresAt: string | null;
+    /**
+     * 
      * @type {CallStartReading}
      * @memberof CallContextReading
      */
@@ -3731,6 +3737,7 @@ export interface LoginSessionDto {
 export const LoginSessionDtoStatusEnum = {
     Waiting: 'waiting',
     NeedsCode: 'needs_code',
+    Verifying: 'verifying',
     Succeeded: 'succeeded',
     Failed: 'failed',
     Cancelled: 'cancelled'
@@ -3864,6 +3871,12 @@ export interface NodeStateDto {
      * @memberof NodeStateDto
      */
     mainTotals: ChatTotals;
+    /**
+     * 
+     * @type {string}
+     * @memberof NodeStateDto
+     */
+    promptCacheExpiresAt: string | null;
     /**
      * 
      * @type {number}
@@ -5942,6 +5955,12 @@ export interface SendMessageDto {
      * @memberof SendMessageDto
      */
     images?: Array<SendMessageDtoImagesInner>;
+    /**
+     * ID generated once per send and reused for retries
+     * @type {string}
+     * @memberof SendMessageDto
+     */
+    clientMessageId?: string;
 }
 /**
  * 

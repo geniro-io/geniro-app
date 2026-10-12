@@ -2876,6 +2876,17 @@ export const AgentMcpListingWireSchema = z
 export type AgentMcpListingWire = z.infer<typeof AgentMcpListingWireSchema>;
 
 /**
+ * What a turn's own server report showed against geniro's reading of the same
+ * folder and profile (`AgentMcpService.observeTurnServers`): the servers it
+ * started without although geniro had seen them connected, and which of those
+ * were held back by a needs-auth record the CLI kept and geniro cleared.
+ */
+export interface McpTurnMismatch {
+  readonly missing: readonly string[];
+  readonly cleared: readonly string[];
+}
+
+/**
  * A profile's MCP server definitions by name, in the CLI's own JSON shape —
  * `AgentMcpServerDefinitions` on the wire. Opaque values on purpose: the
  * format is the CLI's, the editor shows the user their own file, and the
@@ -4533,6 +4544,15 @@ export interface CallSeedRecord {
    * written before pools existed.
    */
   member?: number;
+  /**
+   * What the settled call left behind about its conversation's prompt cache —
+   * when its turn ended (the result row's time), the cache lifetime its CLI
+   * reported, and its context reading. Absent when the result recorded none.
+   */
+  endedAt?: number;
+  promptCacheTtlMs?: number;
+  contextTokens?: number;
+  contextWindowTokens?: number;
 }
 
 /**
@@ -4605,6 +4625,11 @@ export interface CallResultPayload {
   sessionId: string | null;
   /** The callee pool member that session belongs to; absent without a pool. */
   member?: number;
+  /** The prompt-cache lifetime the callee's CLI reported; absent when none. */
+  promptCacheTtlMs?: number;
+  /** The callee's last context reading; absent when it reported none. */
+  contextTokens?: number;
+  contextWindowTokens?: number;
 }
 
 /**

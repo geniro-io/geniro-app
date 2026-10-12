@@ -7,10 +7,14 @@ import { asRecord, asString } from '../utils/json-util';
 import { GROUP_KILL_GRACE_MS, killProcessGroup } from '../utils/kill-tree';
 import { persistItemAndEmit } from '../utils/persist-item';
 import {
+  commandNeedles,
+  descendantsOf,
   listProcesses,
   pidsRunningCommand,
+  type ProcessRow,
 } from '../utils/process-descendants';
 import { AgentEventBus } from './agent-events.bus';
+import { AgentSessionRegistry } from './agent-session.registry';
 import { ChatService } from './chat.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 
@@ -48,6 +52,11 @@ export class ChatShellsService {
      * here is how a badge and a list come to disagree.
      */
     private readonly chats: ChatService,
+    /**
+     * The run's own CLI processes — the only place a FOREGROUND command is
+     * looked for. See {@link killForeground}.
+     */
+    private readonly sessions: AgentSessionRegistry,
   ) {}
 
   async read(runId: string): Promise<ChatShellsWire> {
@@ -191,12 +200,9 @@ export class ChatShellsService {
   async kill(runId: string, callId: string): Promise<ShellKillWire> {
     const shell = (await this.fold(runId)).find((row) => row.id === callId);
     if (shell === undefined) {
-      // Already closed, or never open. Not an error: the list a user pressed
-      // from is a snapshot, and a command that finished on its own between the
-      // render and the press is the ordinary race, not a failure. It is also
-      // what scopes a press to its OWN conversation — a call id names nothing
-      // here unless this run opened it.
-      return { killed: false, reason: 'that command is no longer running' };
+      // Not a DETACHED command. The panel also lists a foreground one — a
+      // command call the CLI has not answered yet — so that is asked next.
+      return this.killForeground(runId, callId);
     }
     if (shell.command === null) {
       // The list drew this row under its ID, because the call that started it
@@ -230,6 +236,96 @@ export class ChatShellsService {
       }
     }, GROUP_KILL_GRACE_MS).unref();
     await this.close(runId, shell);
+    return { killed: true, reason: null };
+  }
+
+  /**
+   * Stop a FOREGROUND command — one the agent is still waiting on.
+   *
+   * REPORTED as a Stop on a running terminal answering "that command is no
+   * longer running" over a `pnpm dev` that ran on for twenty minutes. The panel
+   * lists a command call the CLI has not answered as running, while this
+   * service knew only DETACHED commands (`shell_open` rows), so every
+   * foreground row was refused without a look.
+   *
+   * Found by ATTRIBUTION first and matching second. The search is confined to
+   * the processes under this run's own live CLI processes
+   * ({@link AgentSessionRegistry.processRoots}), so the looser needles
+   * {@link commandNeedles} derives — needed because a shell execs the command
+   * and the written text is gone from the table — can never reach the user's
+   * own `pnpm dev` in another terminal. The CLI root itself is never a target.
+   *
+   * The whole TREE is stopped, not a group: a foreground command usually shares
+   * its CLI's process group, so a group kill would fall back to the one pid and
+   * leave everything it started (a dev server's own children) running.
+   *
+   * Nothing is written to the transcript. The CLI is still there, sees its
+   * command exit, and answers the call itself — which is what takes the row
+   * off the list.
+   */
+  private async killForeground(
+    runId: string,
+    callId: string,
+  ): Promise<ShellKillWire> {
+    const rows = await this.itemDao.rowsByPayloadId(
+      runId,
+      ['tool_call', 'tool_result'],
+      [callId],
+      undefined,
+      this.em.fork(),
+    );
+    const call = rows.find((row) => row.kind === 'tool_call');
+    if (call === undefined || rows.some((row) => row.kind === 'tool_result')) {
+      // Answered already, or never this run's. Not an error: the list a user
+      // pressed from is a snapshot, and a command that finished between the
+      // render and the press is the ordinary race. It is also what scopes a
+      // press to its OWN conversation.
+      return { killed: false, reason: 'that command is no longer running' };
+    }
+    const command = asString(
+      asRecord(asRecord(parse(call.payload))?.input)?.command,
+    );
+    if (command === null || command.trim() === '') {
+      return {
+        killed: false,
+        reason:
+          'geniro cannot tell which process this is — the agent did not say what it ran',
+      };
+    }
+    const roots = this.sessions.processRoots(runId);
+    if (roots.length === 0) {
+      return {
+        killed: false,
+        reason:
+          'the agent process that started this command is gone, so geniro cannot tell which process is its own',
+      };
+    }
+    const table = await listProcesses();
+    const owned = roots.flatMap((root) => descendantsOf(table, root.pid));
+    const targets = foregroundTargets(owned, command);
+    if (targets.length === 0) {
+      return {
+        killed: false,
+        reason:
+          'geniro could not find this command among the agent’s processes — stop the turn to end it',
+      };
+    }
+    const pids = [
+      ...new Set(
+        targets.flatMap((pid) => [
+          pid,
+          ...descendantsOf(table, pid).map((row) => row.pid),
+        ]),
+      ),
+    ];
+    for (const pid of pids) {
+      killProcessGroup(pid, 'SIGTERM', () => process.kill(pid, 'SIGTERM'));
+    }
+    setTimeout(() => {
+      for (const pid of pids) {
+        killProcessGroup(pid, 'SIGKILL', () => process.kill(pid, 'SIGKILL'));
+      }
+    }, GROUP_KILL_GRACE_MS).unref();
     return { killed: true, reason: null };
   }
 
@@ -289,6 +385,37 @@ interface FoldedShell {
   workId: string | null;
   /** Started by a delegate rather than by the agent itself. */
   delegate: boolean;
+}
+
+/**
+ * Which of a run's processes ARE this command: the matches of the most specific
+ * needle that matches anything, each kept only when no ancestor of it matched
+ * too — the wrapper and what it wraps are one command, stopped through the top.
+ */
+function foregroundTargets(
+  owned: readonly ProcessRow[],
+  command: string,
+): number[] {
+  for (const needle of commandNeedles(command)) {
+    const matched = new Set(pidsRunningCommand(owned, needle));
+    if (matched.size === 0) {
+      continue;
+    }
+    const parentOf = new Map(owned.map((row) => [row.pid, row.ppid]));
+    return [...matched].filter((pid) => {
+      const seen = new Set<number>([pid]);
+      let parent = parentOf.get(pid);
+      while (parent !== undefined && !seen.has(parent)) {
+        if (matched.has(parent)) {
+          return false;
+        }
+        seen.add(parent);
+        parent = parentOf.get(parent);
+      }
+      return true;
+    });
+  }
+  return [];
 }
 
 /** A payload that will not parse is a row this fold skips, never a throw. */

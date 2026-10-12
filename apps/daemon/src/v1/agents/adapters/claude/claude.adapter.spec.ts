@@ -33,6 +33,8 @@ import type {
 import type { AgentSkillsInput } from '../adapter.types';
 import { ClaudeAdapter } from './claude.adapter';
 import {
+  CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG,
+  CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_ARTIFACT_ENV,
   CLAUDE_BASE_ARGS,
   CLAUDE_BROWSER_TOOLS_ENV,
@@ -48,6 +50,7 @@ import {
   CLAUDE_RESUME_FLAG,
   CLAUDE_SETTINGS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
+  CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES,
   CLAUDE_TODO_TOOLS_ENV,
   GENIRO_MCP_TOOL_TIMEOUT_MS,
 } from './claude.const';
@@ -1144,6 +1147,197 @@ describe('ClaudeAdapter binary override', () => {
       () => {},
     );
     expect(captured.command).toBe('/opt/tools/claude');
+  });
+});
+
+describe('ClaudeAdapter instruction file delivery', () => {
+  const LONG_PROMPT = 'x'.repeat(CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES + 1);
+  const INPUT: AgentTurnInput = {
+    prompt: 'p',
+    cwd: '/proj',
+    internalProbe: true,
+    systemPrompt: LONG_PROMPT,
+  };
+
+  it.each([
+    CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES - 1,
+    CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES,
+  ])('keeps a %i-byte instruction block inline', async (bytes) => {
+    const { spawn, child, captured } = fakeSpawn();
+    const dir = tempDir('claude-instructions-');
+    const prompt = 'x'.repeat(bytes);
+    const handle = new ClaudeAdapter({ spawn, mcpConfigDir: dir }).start(
+      { ...INPUT, systemPrompt: prompt },
+      () => {},
+    );
+
+    const index = captured.args!.indexOf(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG);
+    expect(index).toBeGreaterThan(-1);
+    expect(captured.args![index + 1]).toBe(prompt);
+    expect(captured.args).not.toContain(CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG);
+    expect(readdirSync(dir)).toEqual([]);
+    child.emit('close', 0, null);
+    await handle.done;
+  });
+
+  it.each(['exit', 'cancel'])(
+    'uses a 0600 file above the UTF-8 byte threshold and removes it on %s',
+    async (ending) => {
+      const { spawn, child, captured } = fakeSpawn();
+      const prompt = 'é'.repeat(CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES / 2 + 1);
+      const handle = new ClaudeAdapter({
+        spawn,
+        mcpConfigDir: tempDir('claude-instructions-'),
+      }).start({ ...INPUT, systemPrompt: prompt }, () => {});
+
+      const index = captured.args!.indexOf(
+        CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG,
+      );
+      expect(index).toBeGreaterThan(-1);
+      const path = captured.args![index + 1]!;
+      expect(captured.args).not.toContain(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG);
+      expect(captured.args).not.toContain(prompt);
+      expect(readFileSync(path, 'utf8')).toBe(prompt);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      if (ending === 'cancel') {
+        handle.cancel();
+      }
+      child.emit(
+        'close',
+        ending === 'exit' ? 0 : null,
+        ending === 'exit' ? null : 'SIGTERM',
+      );
+      await handle.done;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(existsSync(path)).toBe(false);
+    },
+  );
+
+  it('writes the composed instructions including the host preamble', async () => {
+    const { spawn, child, captured } = fakeSpawn();
+    const handle = new ClaudeAdapter({
+      spawn,
+      mcpConfigDir: tempDir('claude-instructions-'),
+    }).start(
+      { ...INPUT, internalProbe: false, customInstructions: 'custom' },
+      () => {},
+    );
+
+    const index = captured.args!.indexOf(CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG);
+    const content = readFileSync(captured.args![index + 1]!, 'utf8');
+    expect(content).toBe(`${GENIRO_UI_PREAMBLE}\n\ncustom\n\n${LONG_PROMPT}`);
+    child.emit('close', 0, null);
+    await handle.done;
+  });
+
+  it('keeps the file through turns, reuses content despite different file names, and refuses changed instructions', async () => {
+    class PreparedAdapter extends ClaudeAdapter {
+      prepare(input: AgentTurnInput): (() => void) | undefined {
+        return this.prepareTurn(input);
+      }
+    }
+    const fake = fakeSpawn();
+    const spawn = vi.fn(fake.spawn);
+    const dir = tempDir('claude-instructions-');
+    const adapter = new PreparedAdapter({
+      spawn,
+      mcpConfigDir: dir,
+      waitForMcpServers: false,
+    });
+    const input = { ...INPUT, approvalMode: 'ask' as const };
+    const session = adapter.startSession(input, { runScoped: true });
+    const path =
+      fake.captured.args![
+        fake.captured.args!.indexOf(CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG) + 1
+      ]!;
+    const first = session.startTurn(input, () => {});
+    fake.child.stdout.emitData(
+      '{"type":"result","is_error":false,"result":"ok","stop_reason":"end_turn"}\n',
+    );
+    await first?.done;
+    expect(existsSync(path)).toBe(true);
+
+    const next = { ...input, prompt: 'next' };
+    const discardUnused = adapter.prepare(next);
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(2);
+    const second = session.startTurn(next, () => {});
+    expect(second).not.toBeNull();
+    expect(spawn).toHaveBeenCalledOnce();
+    fake.child.stdout.emitData(
+      '{"type":"result","is_error":false,"result":"ok","stop_reason":"end_turn"}\n',
+    );
+    await second?.done;
+    expect(
+      session.startTurn(
+        { ...next, systemPrompt: `${LONG_PROMPT} changed` },
+        () => {},
+      ),
+    ).toBeNull();
+    discardUnused?.();
+    fake.child.emit('close', 0, null);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('removes the prompt file on a spawn failure', async () => {
+    const dir = tempDir('claude-instructions-');
+    const spawn: SpawnFn = () => {
+      throw new Error('EACCES');
+    };
+    const handle = new ClaudeAdapter({ spawn, mcpConfigDir: dir }).start(
+      INPUT,
+      () => {},
+    );
+    expect(readdirSync(dir)).toHaveLength(1);
+    await handle.done;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('removes the prompt file on a synchronous failure before spawning', () => {
+    class ThrowingArgsAdapter extends ClaudeAdapter {
+      protected override buildArgs(): string[] {
+        throw new Error('bad argv');
+      }
+    }
+    const dir = tempDir('claude-instructions-');
+    expect(() =>
+      new ThrowingArgsAdapter({ mcpConfigDir: dir }).start(INPUT, () => {}),
+    ).toThrow('bad argv');
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('cleans the MCP file if later instruction preparation fails', () => {
+    class ThrowingCompositionAdapter extends ClaudeAdapter {
+      protected override composeSystemPrompt(): string {
+        throw new Error('instructions failed');
+      }
+    }
+    const dir = tempDir('claude-instructions-');
+    expect(() =>
+      new ThrowingCompositionAdapter({ mcpConfigDir: dir }).start(
+        {
+          ...INPUT,
+          mcpEndpoint: {
+            url: 'http://127.0.0.1/mcp',
+            token: 'secret',
+            serverName: 'geniro-test',
+          },
+        },
+        () => {},
+      ),
+    ).toThrow('instructions failed');
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('sweeps prompt and MCP files from a crashed daemon at boot', () => {
+    const dir = tempDir('claude-instructions-');
+    for (const name of ['system-prompt-old.txt', 'mcp-old.json', 'notes.txt']) {
+      writeFileSync(join(dir, name), 'old');
+    }
+    new ClaudeAdapter({ mcpConfigDir: dir }).sweepStaleState();
+    expect(readdirSync(dir)).toEqual(['notes.txt']);
   });
 });
 
@@ -3714,5 +3908,110 @@ describe('ClaudeAdapter — editing the profile’s MCP servers', () => {
       reason: expect.stringMatching(/already exists/),
     });
     expect(exec.calls).toHaveLength(0);
+  });
+});
+
+describe('ClaudeAdapter — forgetting a server’s needs-auth record', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop() as string, { recursive: true, force: true });
+    }
+  });
+  const tempDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-needs-auth-'));
+    dirs.push(dir);
+    return dir;
+  };
+
+  it('reads the default profile’s record from ~/.claude when no config directory is named', async () => {
+    const home = tempDir();
+    mkdirSync(join(home, '.claude'));
+    const file = join(home, '.claude', 'mcp-needs-auth-cache.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        'claude.ai Figma': { timestamp: 1 },
+        other: { timestamp: 2 },
+      }),
+    );
+
+    const forgot = await new ClaudeAdapter({
+      homeDir: home,
+    }).forgetMcpNeedsAuth({
+      servers: ['claude.ai Figma', 'never listed'],
+      configDir: null,
+    });
+
+    expect(forgot).toEqual(['claude.ai Figma']);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+      other: { timestamp: 2 },
+    });
+  });
+
+  it('answers none and writes nothing when the server has no entry', async () => {
+    const profile = tempDir();
+    const file = join(profile, 'mcp-needs-auth-cache.json');
+    const before = JSON.stringify({ other: { timestamp: 2 } }, null, 2);
+    writeFileSync(file, before);
+
+    const forgot = await new ClaudeAdapter().forgetMcpNeedsAuth({
+      servers: ['claude.ai Figma'],
+      configDir: profile,
+    });
+
+    expect(forgot).toEqual([]);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('answers none when the profile has no record at all, creating none', async () => {
+    const profile = tempDir();
+
+    const forgot = await new ClaudeAdapter().forgetMcpNeedsAuth({
+      servers: ['claude.ai Figma'],
+      configDir: profile,
+    });
+
+    expect(forgot).toEqual([]);
+    expect(existsSync(join(profile, 'mcp-needs-auth-cache.json'))).toBe(false);
+  });
+
+  it('keeps both removals when two clears of one record overlap', async () => {
+    const profile = tempDir();
+    const file = join(profile, 'mcp-needs-auth-cache.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        a: { timestamp: 1 },
+        b: { timestamp: 2 },
+        c: { timestamp: 3 },
+      }),
+    );
+    const adapter = new ClaudeAdapter();
+
+    const [first, second] = await Promise.all([
+      adapter.forgetMcpNeedsAuth({ servers: ['a'], configDir: profile }),
+      adapter.forgetMcpNeedsAuth({ servers: ['b'], configDir: profile }),
+    ]);
+
+    expect(first).toEqual(['a']);
+    expect(second).toEqual(['b']);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+      c: { timestamp: 3 },
+    });
+  });
+
+  it('leaves a record it cannot parse untouched rather than replacing it', async () => {
+    const profile = tempDir();
+    const file = join(profile, 'mcp-needs-auth-cache.json');
+    writeFileSync(file, '{"claude.ai Figma": {');
+
+    const forgot = await new ClaudeAdapter().forgetMcpNeedsAuth({
+      servers: ['claude.ai Figma'],
+      configDir: profile,
+    });
+
+    expect(forgot).toEqual([]);
+    expect(readFileSync(file, 'utf8')).toBe('{"claude.ai Figma": {');
   });
 });

@@ -58,6 +58,7 @@ import {
   AGENTS_PANEL_COLLAPSED_FLAG,
   THREAD_PULL_REQUESTS_SETTLED_FLAG,
 } from './panel-flags';
+import { PromptCacheBadge } from './prompt-cache-badge';
 import type { PublishedArtifact } from './published-artifact';
 import { ThreadPullRequestRow } from './pull-request-row';
 import { RunProcesses } from './run-processes';
@@ -469,6 +470,12 @@ function ThreadRow({
         a question put to the run's ONE live process and cannot answer for a
         particular call thread.
       */}
+      <PromptCacheBadge
+        expiresAt={thread.promptCacheExpiresAt}
+        contextTokens={thread.contextTokens}
+        contextWindowTokens={thread.contextWindowTokens}
+        live={thread.status === 'running'}
+      />
       <ContextMeter
         runId={null}
         contextTokens={thread.contextTokens ?? null}

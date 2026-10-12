@@ -26,13 +26,15 @@ describe('queued-message-store', () => {
     // The composer is cleared the moment a message is queued, so a queue held
     // in memory alone would lose it outright on any reload before the drain.
     writeStoredQueueState({
-      queues: { 'run-1': [message()] },
+      queues: { 'run-1': [message({ clientMessageId: 'original-send' })] },
       paused: NONE,
       sending: {},
     });
 
     const restored = readStoredQueueState();
-    expect(restored.queues).toEqual({ 'run-1': [message()] });
+    expect(restored.queues).toEqual({
+      'run-1': [message({ clientMessageId: 'original-send' })],
+    });
     expect([...restored.paused]).toEqual([]);
   });
 

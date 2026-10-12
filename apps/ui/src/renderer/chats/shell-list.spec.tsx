@@ -178,4 +178,31 @@ describe('ShellRows', () => {
       'pnpm dev --filter @geniro/ui',
     );
   });
+
+  it('keeps the stop glyph LEGIBLE once armed, and round on hover', () => {
+    // Reported as an ugly hover: the ghost hover filled a square with the
+    // caramel accent behind a red glyph, and once armed the resting
+    // `text-muted-foreground` beat the variant's white — a grey (hovered, a
+    // red) glyph on a red fill. jsdom computes no cascade, so the pin is the
+    // classes that decide it plus the attribute they key on.
+    const el = render([shell({})], undefined, () => undefined);
+    const button = killButton(el)!;
+    expect(button.className).toContain('rounded-full');
+    expect(button.className).toContain('hover:bg-destructive/10');
+    expect(button.className).not.toContain('hover:bg-accent');
+    expect(button.hasAttribute('data-armed')).toBe(false);
+
+    act(() => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(button.hasAttribute('data-armed')).toBe(true);
+    expect(button.className).toContain('bg-destructive');
+    expect(button.className).toContain(
+      'data-[armed]:text-destructive-foreground',
+    );
+    expect(button.className).toContain(
+      'data-[armed]:hover:text-destructive-foreground',
+    );
+  });
 });

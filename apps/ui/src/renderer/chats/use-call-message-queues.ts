@@ -18,6 +18,7 @@ export interface CallTarget {
 }
 
 export interface QueuedCallMessage extends QueuedStripMessage {
+  clientMessageId?: string;
   images: SendMessageDtoImagesInner[];
 }
 
@@ -54,6 +55,7 @@ export type CallMessageSend = (
   target: CallTarget,
   text: string,
   images: SendMessageDtoImagesInner[],
+  clientMessageId: string,
 ) => Promise<void>;
 
 export interface CallMessageQueues {
@@ -137,7 +139,12 @@ export function useCallMessageQueues(send: CallMessageSend): CallMessageQueues {
             error: null,
           }));
           try {
-            await send(target, head.text, head.images);
+            await send(
+              target,
+              head.text,
+              head.images,
+              head.clientMessageId ?? head.id,
+            );
             attempt = 0;
             if (head.id === forcedId) {
               forcedId = null;
@@ -211,7 +218,9 @@ export function useCallMessageQueues(send: CallMessageSend): CallMessageQueues {
     (target: CallTarget, id: string, text: string) => {
       update(target, (s) => ({
         ...s,
-        messages: s.messages.map((m) => (m.id === id ? { ...m, text } : m)),
+        messages: s.messages.map((m) =>
+          m.id === id ? { ...m, text, clientMessageId: randomId() } : m,
+        ),
       }));
     },
     [update],

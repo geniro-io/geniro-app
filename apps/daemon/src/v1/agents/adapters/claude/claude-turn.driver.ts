@@ -29,6 +29,7 @@ import {
   readMcpReconnectReply,
 } from './utils/claude-mcp-reconnect.utils';
 import { isClaudeApiErrorLine } from './utils/claude-message.utils';
+import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
 import {
   readSessionCostReply,
   usageRequestLine,
@@ -49,6 +50,7 @@ interface CostAsk {
 
 /** What the driver needs from the adapter, injected so a spec needs no process. */
 export interface ClaudeTurnDriverDeps {
+  requestedModel?: string | null;
   mapMessage: (obj: unknown) => AgentEvent[];
   buildApprovalResponse: (
     id: string,
@@ -88,6 +90,7 @@ interface OpenPoll {
  * conversation working around a capability it actually has.
  */
 export class ClaudeTurnDriver implements TurnDriver {
+  private readonly modelMismatch: ClaudeModelMismatchNotice;
   private polls = 0;
   private openPoll: OpenPoll | null = null;
   /**
@@ -120,7 +123,9 @@ export class ClaudeTurnDriver implements TurnDriver {
   private readonly runningHooks = new Set<string>();
   private lastHookSignalAt: number | null = null;
 
-  constructor(private readonly deps: ClaudeTurnDriverDeps) {}
+  constructor(private readonly deps: ClaudeTurnDriverDeps) {
+    this.modelMismatch = new ClaudeModelMismatchNotice(deps.requestedModel);
+  }
 
   /**
    * Held between the child's stdin being wired and the turn's prompt going out.
@@ -301,7 +306,7 @@ export class ClaudeTurnDriver implements TurnDriver {
       .mapMessage(obj)
       .flatMap((event) => this.trackWindow(event))
       .map((event) => this.withFailureDetail(event));
-    return [
+    return this.modelMismatch.onMessage(obj, [
       ...cost,
       ...this.reconcileApiNotice(mapped, isClaudeApiErrorLine(obj)),
       // AFTER the mapped events, so the failed tool row lands before anything
@@ -309,7 +314,7 @@ export class ClaudeTurnDriver implements TurnDriver {
       // its REPLY speaks, since the reply is the half that knows whether the
       // server came back and, when it did not, why (see `readRepairReply`).
       ...this.repairDeadServer(obj),
-    ];
+    ]);
   }
 
   private trackHook(obj: unknown): void {

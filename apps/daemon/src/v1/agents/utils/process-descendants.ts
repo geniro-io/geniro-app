@@ -168,3 +168,116 @@ export function pidsRunningCommand(
 function normalizeCommand(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
+
+/**
+ * Every string a command the agent wrote can appear as in the process table —
+ * the command itself first, then what its shell actually leaves running.
+ *
+ * The command as written is often NOT in the table at all. A CLI hands it to a
+ * shell (codex: `/bin/zsh -lc '<command>'`), and a shell given one simple
+ * command EXECS it rather than forking, as does `env`: measured on macOS,
+ * `/bin/zsh -lc 'env -u FOO BAR=1 sleep 37 > log 2>&1'` is a single row reading
+ * `sleep 37` a second later — no `zsh`, no `env`, no quotes, no redirection.
+ * So matching the written text alone found nothing, and a Stop on such a
+ * command answered "no longer running" over a `pnpm dev` that ran on.
+ *
+ * The derived needles are LOOSER than the written command, which is why they
+ * are for a search the caller has already confined to its own run's process
+ * tree ({@link ChatShellsService.kill}'s foreground arm) and never for the whole
+ * table. Shell builtins (`cd`, `export`, …) leave no process, so a segment
+ * naming one is dropped, and so is anything shorter than
+ * {@link MIN_NEEDLE_CHARS}: a two-letter needle matches half of any tree.
+ *
+ * This is a reading of common shapes, not a shell parser — a needle that
+ * matches nothing costs only the fallback sentence, never a wrong kill outside
+ * the run.
+ */
+export function commandNeedles(command: string): string[] {
+  const written = normalizeCommand(command);
+  const needles = [written];
+  const inner = unwrapShell(written);
+  if (inner !== null) {
+    needles.push(inner);
+  }
+  for (const segment of (inner ?? written).split(SHELL_SEPARATORS)) {
+    const core = commandCore(segment);
+    if (core !== null) {
+      needles.push(core);
+    }
+  }
+  return [...new Set(needles)].filter(
+    (needle) => needle.length >= MIN_NEEDLE_CHARS,
+  );
+}
+
+/** Shorter than this, a needle matches too much of any process tree. */
+const MIN_NEEDLE_CHARS = 6;
+
+/**
+ * `&&`, `||`, `;`, `|` and a backgrounding `&` — where one command ends. The `&`
+ * of a redirection (`2>&1`, `&>`) is not a separator.
+ */
+const SHELL_SEPARATORS = /\s*(?:&&|\|\||;|\||(?<![<>])&(?!>))\s*/;
+
+/** A shell running one `-c` string: `/bin/zsh -lc '…'`, `bash -c "…"`. */
+const SHELL_WRAPPER =
+  /^(?:\S*\/)?(?:ba|z|da|k)?sh\s+-[a-z]*c[a-z]*\s+(['"])([\s\S]*)\1$/;
+
+/** Builtins: they run inside the shell and leave nothing to find. */
+const SHELL_BUILTINS: ReadonlySet<string> = new Set([
+  'cd',
+  'export',
+  'source',
+  '.',
+  'set',
+  'unset',
+  'echo',
+  'printf',
+  'true',
+  'false',
+  'exec',
+]);
+
+function unwrapShell(command: string): string | null {
+  const match = SHELL_WRAPPER.exec(command);
+  if (match === null) {
+    return null;
+  }
+  const [, quote, raw = ''] = match;
+  // `'\''` is how a single quote is written inside a single-quoted string.
+  const body = quote === "'" ? raw.replace(/'\\''/g, "'") : raw;
+  return normalizeCommand(body);
+}
+
+/**
+ * What a segment leaves running once `env` and the shell have exec'd away: the
+ * leading `env [-i] [-u NAME]…` and `NAME=value` assignments dropped, and
+ * everything from the first redirection on cut, since `ps` never shows one.
+ */
+function commandCore(segment: string): string | null {
+  const words = segment.trim().split(' ');
+  if (words[0] === 'env') {
+    words.shift();
+    while (words[0]?.startsWith('-')) {
+      // `-u NAME` takes the next word; `-i` and `-` stand alone.
+      if (words.shift() === '-u') {
+        words.shift();
+      }
+    }
+  }
+  while (/^[A-Za-z_][A-Za-z0-9_]*=\S*$/.test(words[0] ?? '')) {
+    words.shift();
+  }
+  const rest: string[] = [];
+  for (const word of words) {
+    if (/^\d*[<>]/.test(word)) {
+      break;
+    }
+    rest.push(word);
+  }
+  const [program] = rest;
+  if (program === undefined || program === '' || SHELL_BUILTINS.has(program)) {
+    return null;
+  }
+  return rest.join(' ');
+}

@@ -61,6 +61,7 @@ import { GlobalChatSearchService } from './services/global-chat-search.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
+import { MessageSendService } from './services/message-send.service';
 import { MetricsBroker } from './services/metrics.broker';
 import { ModelParametersService } from './services/model-parameters.service';
 import { ModelPriceCatalog } from './services/model-price-catalog.service';
@@ -306,6 +307,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunGroupsService,
     ShellOutputService,
     ItemSeqAllocator,
+    MessageSendService,
     ItemDao,
     NodeStateDao,
     CallContextDao,
@@ -387,6 +389,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // teardown obligation a chat delete does — a run-scoped CLI process is
     // reaped by nothing else.
     AgentSessionRegistry,
+    // Exported so a server sign-in can re-check the server until it SEES it
+    // connected, through the one path that also patches every reading of it.
+    AgentMcpService,
     // Exported for main.ts's boot sweep — it runs before the server listens,
     // beside the other reconciles a crashed launch leaves behind.
     StrandedChildReaper,
@@ -410,6 +415,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // the same allocator a chat's are, since its kept agent processes write
     // between passes.
     ItemSeqAllocator,
+    MessageSendService,
     SkillHarvestStore,
     // Exported for the graph executor's own turn seam: a node's turn reports
     // what it loaded, and that report is what keeps the MCP panel off a cold

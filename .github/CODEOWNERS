@@ -1,0 +1,4 @@
+# Every file is owned by the maintainer. With "Require review from Code Owners"
+# on in the `main` ruleset, a pull request needs @RazumRu's approval to merge,
+# whoever else is later given write access.
+* @RazumRu

@@ -265,6 +265,17 @@ export function cursorAutoDecision(
 }
 
 /**
+ * Whether a turn's permission requests must reach geniro — every mode the
+ * driver does not answer by itself. Such a turn's profile overrides the
+ * user's own approval mode (`CursorProfileSeed.askForApprovals`).
+ */
+export function cursorTurnAsks(
+  approvalMode: AgentTurnInput['approvalMode'],
+): boolean {
+  return cursorAutoDecision(approvalMode) === null;
+}
+
+/**
  * How long a cached handshake reply stays fresh — the same 10-minute window
  * `EffortsService`/`ContextWindowsService` already give the PARSED vocabulary
  * this feeds, so a cold model pays the ~2s handshake once per that window
@@ -2285,6 +2296,20 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
+   * Whether the CLI asks before a tool runs is spawn-time — it reads its
+   * approval mode from the profile `prepareTurn` seeds once per process — so a
+   * process spawned for an `auto` turn, under the user's own (possibly
+   * "run everything") mode, must not serve an `ask` or `plan` turn. Keyed
+   * rather than checked one way, so switching a chat INTO `auto` respawns too.
+   */
+  protected override sessionKey(input: AgentTurnInput): string {
+    return JSON.stringify([
+      super.sessionKey(input),
+      cursorTurnAsks(input.approvalMode),
+    ]);
+  }
+
+  /**
    * Every charge of the asked-about cursor conversations over the window, read
    * from the user's own account — the only place the figure exists
    * (`utils/cursor-usage.utils.ts` carries the evidence).
@@ -2708,6 +2733,7 @@ export class CursorAcpAdapter extends AgentAdapter {
       // untouched key means "however the user's own terminal was last left",
       // so OFF has to be written as much as ON.
       maxMode: this.agentOption(input, CURSOR_MAX_MODE_OPTION),
+      askForApprovals: cursorTurnAsks(input.approvalMode),
     });
     this.turnProfiles.set(input, dir);
     // A workflow node's switched-off MCP servers: this CLI reads which servers

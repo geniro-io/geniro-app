@@ -573,6 +573,7 @@ export function Onboarding({
                             </h2>
                             {reason === null ? (
                               <ConfigProfileList
+                                compact
                                 agent={kind}
                                 profiles={profiles.filter(
                                   (profile) => profile.agent === kind,

@@ -177,6 +177,14 @@ export const CLAUDE_SESSION_SEARCH_FILE_LIMIT = 600;
 /** How much of a matching line a picker row shows before it is elided. */
 export const CLAUDE_SESSION_SNIPPET_MAX_CHARS = 160;
 export const CLAUDE_APPEND_SYSTEM_PROMPT_FLAG = '--append-system-prompt';
+/** Effect-probed on claude 2.1.295: the file's instructions reach the model. */
+export const CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG =
+  '--append-system-prompt-file';
+/** Leave argv and the environment ample room under macOS's shared ARG_MAX. */
+export const CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES = 64 * 1024;
+export const CLAUDE_SYSTEM_PROMPT_FILE_PREFIX = 'system-prompt-';
+export const CLAUDE_SYSTEM_PROMPT_FILE_SUFFIX = '.txt';
+export const CLAUDE_SYSTEM_PROMPT_FILE_MODE = 0o600;
 export const CLAUDE_PERMISSION_MODE_FLAG = '--permission-mode';
 export const CLAUDE_PERMISSION_PROMPT_TOOL_FLAG = '--permission-prompt-tool';
 

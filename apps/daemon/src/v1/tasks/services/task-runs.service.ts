@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@packages/common';
 
+import { interruptedReason } from '../../../utils/stop-cause';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
@@ -691,9 +692,10 @@ export class TaskRunsService {
    * them is how they would be prevented from checking that the thing which
    * broke is fixed before they re-arm.
    *
-   * A card its user STOPPED is refused here too, for the same reason the cap
-   * is: the queue already keeps it out of the handout, and that is the fast
-   * answer rather than the line.
+   * A card its user STOPPED, or an unannounced interruption cut off
+   * (`Task.interruptedBy`), is
+   * refused here too, for the same reason the cap is: the queue already keeps
+   * it out of the handout, and that is the fast answer rather than the line.
    */
   private async assertAutopilotMayStart(
     project: Project,
@@ -702,6 +704,12 @@ export class TaskRunsService {
   ): Promise<void> {
     if ((input.startedBy ?? 'user') !== 'autopilot') {
       return;
+    }
+    if (task.stoppedAt !== null && task.interruptedBy !== null) {
+      throw new ConflictException(
+        'TASK_INTERRUPTED',
+        `task ${task.id}: ${interruptedReason(task.interruptedBy)}`,
+      );
     }
     if (task.stoppedAt !== null) {
       throw new ConflictException(

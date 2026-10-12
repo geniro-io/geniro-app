@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
+import { interruptedReason } from '../../../utils/stop-cause';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { nodesThatAsk } from '../../graphs/utils/unattended';
 import type {
@@ -111,10 +112,14 @@ export class TaskQueueService {
       // while armed, since nothing else would restart it; a Run press clears
       // it.
       if (raw.enabled && stopped.has(task.id)) {
+        const cause = raw.interruptedTasks.get(task.id);
         blocked.push({
           id: task.id,
           title: task.title,
-          reason: STOPPED_BY_USER_REASON,
+          reason:
+            cause === undefined
+              ? STOPPED_BY_USER_REASON
+              : interruptedReason(cause),
         });
         continue;
       }

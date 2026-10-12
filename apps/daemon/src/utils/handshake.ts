@@ -35,6 +35,20 @@ export const DAEMON_PIDFILE_NAME = 'daemon.json';
  */
 export const DAEMON_CRASH_MARK_NAME = 'daemon-crashed';
 
+/**
+ * Written by the UI just before it stops this daemon on purpose — or, for a
+ * crash, before it respawns one — holding WHY: one word of
+ * `DAEMON_STOP_CAUSES`. Read and removed by the next daemon's boot reconcile,
+ * which is the only thing that can tell a quit from a crash once both have
+ * left a turn `running`. No file means nobody announced the stop: a SIGKILL,
+ * an OOM kill, a power cut.
+ *
+ * TWIN PARSER: the UI's `DAEMON_STOP_CAUSE_NAME` and `writeStopCause` in
+ * `apps/ui/src/main/daemon-pidfile.ts` write what `consumeStopCause` in
+ * `./stop-cause.ts` reads.
+ */
+export const DAEMON_STOP_CAUSE_NAME = 'daemon-stop-cause';
+
 /** Highest valid TCP port. */
 export const MAX_TCP_PORT = 65535;
 

@@ -1468,6 +1468,29 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       expect(await stoppedAtOf(task.id)).toBeNull();
     });
 
+    it('holds a card a crash cut off the same way, until a Run press clears it', async () => {
+      const task = await seed();
+      await taskDao.setStoppedAt(task.id, new Date(), em, 'crash');
+
+      await expect(
+        service.start(task.id, { ...start(), startedBy: 'autopilot' }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining(
+          'the daemon crashed while its agent was working',
+        ),
+      });
+      expect(createChat).not.toHaveBeenCalled();
+
+      await service.start(task.id, start());
+
+      const after = await taskDao.getById(
+        task.id,
+        orm.em.fork() as EntityManager,
+      );
+      expect(after?.stoppedAt).toBeNull();
+      expect(after?.interruptedBy).toBeNull();
+    });
+
     it('stays stopped when the press that would have restarted it failed', async () => {
       // Nothing the user asked for has happened yet, so the card is not the
       // autopilot's to take.

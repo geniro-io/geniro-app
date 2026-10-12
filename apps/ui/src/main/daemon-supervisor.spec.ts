@@ -30,7 +30,7 @@ vi.mock('./login-shell-path', () => ({
 }));
 vi.mock('./settings', () => ({ readSettings: mocks.readSettings }));
 
-import type { DaemonInfo } from './daemon-pidfile';
+import type { DaemonInfo, DaemonStopCause } from './daemon-pidfile';
 import {
   DaemonSupervisor,
   type DaemonSupervisorOptions,
@@ -88,6 +88,8 @@ interface Harness {
   spawned: { env?: NodeJS.ProcessEnv; args: string[] }[];
   kills: { pid: number; signal: NodeJS.Signals }[];
   removed: string[];
+  /** Each stop cause recorded, with how many signals the child had seen by then. */
+  causes: { cause: DaemonStopCause; signalsBefore: number }[];
   setPidfile(next: DaemonInfo | null): void;
 }
 
@@ -116,6 +118,7 @@ function harness(opts: {
   const kills: { pid: number; signal: NodeJS.Signals }[] = [];
   const killedPids = new Set<number>();
   const removed: string[] = [];
+  const causes: Harness['causes'] = [];
   const options: DaemonSupervisorOptions = {
     spawn: ((cmd: string, args: string[], o: { env?: NodeJS.ProcessEnv }) => {
       void cmd;
@@ -146,6 +149,11 @@ function harness(opts: {
     resolveEntry: () => '/bundle/daemon/dist/main.js',
     bundledVersion: () => (opts.bundled === undefined ? '0.2.0' : opts.bundled),
     removePidfile: (path) => removed.push(path),
+    writeStopCause: (cause) =>
+      causes.push({
+        cause,
+        signalsBefore: child.signals.length + kills.length,
+      }),
     pollIntervalMs: opts.pollMs ?? 1,
     shutdownGraceMs: opts.graceMs ?? 15,
     ...(opts.startTime ? { readStartTime: opts.startTime } : {}),
@@ -158,6 +166,7 @@ function harness(opts: {
     spawned,
     kills,
     removed,
+    causes,
     setPidfile: (next) => {
       pidfile = next;
     },
@@ -239,6 +248,9 @@ describe('DaemonSupervisor.start', () => {
     // Adopted, not owned: stop() must leave the shared daemon running.
     await h.supervisor.stop();
     expect(h.child.signals).toHaveLength(0);
+    // And say nothing about it: a note for a stop that never happened would
+    // describe that daemon's next SIGKILL as a quit.
+    expect(h.causes).toEqual([]);
   });
 
   it('kills and respawns a healthy daemon left over from another version', async () => {
@@ -262,6 +274,7 @@ describe('DaemonSupervisor.start', () => {
       const handle = await started;
 
       expect(h.kills).toEqual([{ pid: 1111, signal: 'SIGTERM' }]);
+      expect(h.causes).toEqual([{ cause: 'restart', signalsBefore: 0 }]);
       expect(h.removed).toHaveLength(1);
       expect(h.spawned).toHaveLength(1);
       expect(handle.version).toBe('0.2.0');
@@ -517,6 +530,8 @@ describe('DaemonSupervisor.restart', () => {
         { pid: 1111, signal: 'SIGTERM' },
         { pid: 1111, signal: 'SIGKILL' },
       ]);
+      // Recorded before the first signal, so the replacement reads it.
+      expect(h.causes).toEqual([{ cause: 'restart', signalsBefore: 0 }]);
       expect(h.spawned).toHaveLength(1);
       // The supervisor hands the daemon NO credential: cursor-agent carries its
       // own login. Re-adding the Keychain read would put this name back.
@@ -1095,6 +1110,61 @@ describe('DaemonSupervisor — start() is safe to call on a daemon it already ho
     expect(h.spawned).toHaveLength(1);
     expect(started).toEqual([first]);
     expect(h.child.signals[0]).toBe('SIGTERM');
+    expect(h.causes).toEqual([{ cause: 'quit', signalsBefore: 0 }]);
+  });
+
+  it('records no quit for a daemon still booting — the crash note it has not read stays', async () => {
+    // A respawn after a crash is still in its schema sync when the user quits:
+    // a `quit` written now would label that crash's turns as a deliberate
+    // stop, and the autopilot would continue them.
+    const h = harness({ pidfile: null, healthy: false, stopWaitMs: 5 });
+    const starting = h.supervisor.start().catch(() => undefined);
+
+    await h.supervisor.stop();
+    await starting;
+
+    // stop() reached the live child itself (one SIGTERM from it, one from the
+    // aborted start) — so it was the gate that wrote nothing.
+    expect(h.child.signals.filter((s) => s === 'SIGTERM')).toHaveLength(2);
+    expect(h.causes).toEqual([]);
+  });
+
+  it("records an update's relaunch as such, ahead of the signal", async () => {
+    const h = harness({ pidfile: null });
+    await h.supervisor.start();
+
+    await h.supervisor.stop('self-update');
+
+    expect(h.causes).toEqual([{ cause: 'self-update', signalsBefore: 0 }]);
+    expect(h.child.signals[0]).toBe('SIGTERM');
+  });
+
+  it('still stops the daemon when the note cannot be written', async () => {
+    const child = new FakeChild();
+    const logs: string[] = [];
+    const supervisor = new DaemonSupervisor({
+      spawn: (() => child) as unknown as DaemonSupervisorOptions['spawn'],
+      readDaemonInfo: () => info({ pid: child.pid, version: '0.2.0' }),
+      isAlive: () => false,
+      checkHealth: async () => true,
+      resolveEntry: () => '/bundle/daemon/dist/main.js',
+      bundledVersion: () => '0.2.0',
+      removePidfile: () => undefined,
+      writeStopCause: () => {
+        throw new Error('EACCES');
+      },
+      pollIntervalMs: 1,
+      shutdownGraceMs: 15,
+      log: (_level, message) => logs.push(message),
+    });
+    await supervisor.start();
+
+    await supervisor.stop();
+
+    expect(child.signals[0]).toBe('SIGTERM');
+    expect(logs.join('\n')).toMatch(
+      /could not record why the daemon stopped \(quit\): EACCES/,
+    );
   });
 
   it('notices an ADOPTED daemon has died and starts a new one', async () => {
@@ -1226,6 +1296,7 @@ function respawner(
 ): {
   supervisor: DaemonSupervisor;
   children: FakeChild[];
+  causes: DaemonStopCause[];
   started: unknown[];
   logs: string[];
   die: (child: FakeChild) => void;
@@ -1238,6 +1309,7 @@ function respawner(
   const children: FakeChild[] = [];
   const started: unknown[] = [];
   const logs: string[] = [];
+  const causes: DaemonStopCause[] = [];
   let pidfile: DaemonInfo | null = null;
   // Tracked apart from `exitCode`, which a real child leaves null when a
   // SIGNAL ended it.
@@ -1291,6 +1363,7 @@ function respawner(
       pidfile = null;
     },
     consumeCrashMark: (pid) => opts.crashMarks?.delete(pid) ?? false,
+    writeStopCause: (cause) => causes.push(cause),
     pollIntervalMs: 1,
     shutdownGraceMs: 15,
     respawnDelaysMs: opts.delays ?? [5, 5],
@@ -1298,7 +1371,7 @@ function respawner(
     onStarted: (handle) => started.push(handle),
     log: (_level, message) => logs.push(message),
   });
-  return { supervisor, children, started, logs, die, exit };
+  return { supervisor, children, causes, started, logs, die, exit };
 }
 
 /** Lets every pending respawn timer run and its start settle. */
@@ -1333,6 +1406,7 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     expect(r.children).toHaveLength(1);
     expect(r.supervisor.getHandle()).toBeNull();
     expect(r.logs.join('\n')).toMatch(/stopped on request/);
+    expect(r.causes).toEqual([]);
   });
 
   it('IS respawned after a CRASH, though a crash too exits by SIGTERM at its own pid', async () => {
@@ -1350,6 +1424,47 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     expect(r.children).toHaveLength(2);
     expect(r.logs.join('\n')).toMatch(/the daemon crashed/);
     expect(crashMarks.size).toBe(0);
+    // The mark is consumed here, so the next daemon learns of the crash from
+    // this note — or it would continue the turn the crash cut off.
+    expect(r.causes).toEqual(['crash']);
+  });
+
+  it('notes no crash for a daemon that died in its own boot — it reconciled nothing', async () => {
+    // The note on disk is still the one describing the stop before this
+    // daemon; overwriting it would relabel turns this daemon never reached.
+    const child = new FakeChild();
+    const causes: DaemonStopCause[] = [];
+    const crashMarksRead: number[] = [];
+    let spawned = false;
+    const supervisor = new DaemonSupervisor({
+      spawn: (() => {
+        spawned = true;
+        return child;
+      }) as unknown as DaemonSupervisorOptions['spawn'],
+      readDaemonInfo: () =>
+        spawned ? info({ pid: child.pid, version: '0.2.0' }) : null,
+      checkHealth: async () => false,
+      resolveEntry: () => '/bundle/daemon/dist/main.js',
+      bundledVersion: () => '0.2.0',
+      removePidfile: () => undefined,
+      consumeCrashMark: (pid) => {
+        crashMarksRead.push(pid);
+        return true;
+      },
+      writeStopCause: (cause) => causes.push(cause),
+      pollIntervalMs: 1,
+      log: () => undefined,
+    });
+    const starting = supervisor.start();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    child.exitCode = 1;
+    child.emit('exit', null, 'SIGTERM');
+
+    await expect(starting).rejects.toThrow(/exited during startup/);
+    // The exit was seen as a crash — and still noted nothing.
+    expect(crashMarksRead).toEqual([child.pid]);
+    expect(causes).toEqual([]);
   });
 
   it('is NOT respawned after a clean exit either', async () => {

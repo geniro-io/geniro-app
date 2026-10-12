@@ -11,6 +11,10 @@ import { BadRequestException, ConflictException } from '@packages/common';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
+import {
+  type InterruptCause,
+  interruptCauseClause,
+} from '../../../utils/stop-cause';
 import type {
   AgentEvent,
   AgentMcpServer,
@@ -2081,8 +2085,9 @@ export class GraphExecutorService
    * chat service's boot reconcile — see its doc for why this is called from
    * `main.ts` after the schema sync). Stuck `running` nodes go `failed`,
    * never-started `pending` nodes go `skipped`, and the run rolls up `failed`.
+   * `cause` is written onto the run's row as the chat twin's is.
    */
-  async reconcileOrphanedRuns(): Promise<void> {
+  async reconcileOrphanedRuns(cause: InterruptCause): Promise<void> {
     try {
       const em = this.em.fork();
       const stale = await this.runDao.listRunningWorkflowRuns(em);
@@ -2093,10 +2098,10 @@ export class GraphExecutorService
         }
         let seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
         await this.persist(em, run.id, null, seq++, 'error', null, {
-          message:
-            'workflow run interrupted — the daemon stopped before it finished',
+          message: `workflow run interrupted — ${interruptCauseClause(cause)} while it was running`,
           // Written at BOOT — see the chat twin in `ChatService`.
           interrupted: true,
+          interruptCause: cause,
         });
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
@@ -2140,8 +2145,7 @@ export class GraphExecutorService
               calleeNodeId: call.calleeNodeId,
               mode: call.mode,
               status: 'error',
-              error:
-                'CALLEE_FAILED: interrupted — the daemon stopped before the call finished',
+              error: `CALLEE_FAILED: interrupted — ${interruptCauseClause(cause)} before the call finished`,
             },
           );
         }

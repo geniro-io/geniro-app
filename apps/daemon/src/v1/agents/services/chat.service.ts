@@ -18,6 +18,10 @@ import {
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
+import {
+  type InterruptCause,
+  interruptCauseClause,
+} from '../../../utils/stop-cause';
 import { Run } from '../../runs/entity/run.entity';
 import {
   type AgentKind,
@@ -627,8 +631,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * Called from `main.ts` AFTER the schema sync (not via an OnApplicationBootstrap
    * hook, which fires before the additive `schema.update` and would query tables
    * that don't exist yet on a fresh install).
+   *
+   * `cause` is why the previous daemon stopped, as the UI recorded it; the row
+   * carries it so the task board can tell a stop it may continue from a crash it
+   * must not (`TaskSettleService`).
    */
-  async reconcileOrphanedRuns(): Promise<void> {
+  async reconcileOrphanedRuns(cause: InterruptCause): Promise<void> {
     try {
       const em = this.em.fork();
       const stale = await this.runDao.listRunningChats(em);
@@ -644,12 +652,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           'error',
           null,
           {
-            message:
-              'run interrupted — the daemon stopped before this turn finished',
+            message: `run interrupted — ${interruptCauseClause(cause)} while this turn was running`,
             // Written at BOOT, which can be hours after the work stopped — so a
             // clock reading this row as the turn's end must not (the renderer's
             // wall-clock fallback ends such a turn at its last real row).
             interrupted: true,
+            interruptCause: cause,
           },
         );
         // The kill took the in-memory registry with it, so no settle path ever

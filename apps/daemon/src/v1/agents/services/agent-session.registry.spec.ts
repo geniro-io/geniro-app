@@ -1252,7 +1252,9 @@ describe('AgentSessionRegistry — a folder whose MCP servers changed', () => {
   });
 
   it('retires exactly the sessions a reach predicate names, by folder and profile', async () => {
-    const registry = new AgentSessionRegistry();
+    // A pinned ceiling above the three sessions: the default is derived from
+    // the machine's memory, and a CI runner's evicts one and spawns a fifth.
+    const registry = new AgentSessionRegistry(8);
     const { adapter, sessions } = fakeAdapter();
     registry.startTurn('run-1', adapter, { ...INPUT, configDir: '/p/a' }, noop);
     registry.startTurn('run-2', adapter, INPUT, noop);

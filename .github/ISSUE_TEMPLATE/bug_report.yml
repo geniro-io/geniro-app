@@ -1,0 +1,87 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-issue-forms.json
+name: Bug report
+description: Something in Geniro doesn't work the way it should.
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        Please [search the existing issues](https://github.com/geniro-io/geniro-app/issues?q=is%3Aissue) first. If it is already reported, add a 👍 to it instead of opening a new one.
+  - type: input
+    id: version
+    attributes:
+      label: Geniro version
+      description: Shown in the window's title bar. Please update to the newest release first — the bug may already be fixed.
+      placeholder: '1.92.2'
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip
+      placeholder: 'macOS 26.0, Apple M3'
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent was involved?
+      multiple: true
+      options:
+        - claude
+        - cursor-agent
+        - codex
+        - A workflow (several agents)
+        - None / not agent-related
+    validations:
+      required: true
+  - type: input
+    id: agent-version
+    attributes:
+      label: Agent CLI version
+      description: For example the output of `claude --version`, `cursor-agent --version` or `codex --version`.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Step by step, starting from opening Geniro. The more precise, the faster it gets fixed.
+      placeholder: |
+        1. Open a new chat with claude in a git repository
+        2. Send "..."
+        3. Click ...
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened, and what did you expect?
+      description: Screenshots and screen recordings help a lot. Paste error messages as text where you can.
+      placeholder: |
+        What happened: the queued message disappeared after the turn ended.
+        What I expected: it to be sent as the next message.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log
+      description: |
+        Press ⌥⌘L in Geniro to open the debug log and paste the lines around the problem.
+
+        ⚠️ **Read it before posting.** Geniro removes its own tokens, but the log can contain file paths, and with the `agent-stdio` channel on it also holds your conversation with the agent. Redact anything you don't want public.
+      value: |
+        <details><summary>Debug log</summary>
+
+        ```text
+
+        ```
+
+        </details>
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else?
+      description: Workarounds you found, how often it happens, whether it started after an update.

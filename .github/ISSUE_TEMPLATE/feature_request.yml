@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-issue-forms.json
+name: Feature request
+description: Suggest something Geniro should do.
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please [search the existing issues](https://github.com/geniro-io/geniro-app/issues?q=is%3Aissue) first. If someone already asked for it, add a 👍 to that issue instead of opening a new one.
+
+        Geniro is local-first: everything runs on your machine. Requests that need a cloud service, telemetry or an account won't be accepted.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe what you were doing and what got in the way — the problem matters more than a specific solution.
+      placeholder: When I run a workflow overnight, I can't tell in the morning which agent spent most of the money.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: How you imagine it working. Sketches and screenshots of other apps are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+      description: Workarounds, or other tools you use for this.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to work on it?
+      options:
+        - 'No'
+        - Yes, with some guidance
+        - Yes, I can open a pull request

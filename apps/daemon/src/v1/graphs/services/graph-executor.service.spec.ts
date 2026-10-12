@@ -263,10 +263,11 @@ class FakeItemDao {
   }
   async usageRowsWithNode(
     runId: string,
-  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'nodeId' | 'payload' | 'createdAt'>[]> {
     return this.ofKinds(runId, ['turn_complete']).map((i) => ({
       nodeId: i.nodeId,
       payload: i.payload,
+      createdAt: i.createdAt,
     }));
   }
   /** The call-seed read a follow-up folds — same shape rule as the two above. */
@@ -4269,6 +4270,10 @@ describe('GraphExecutorService — agent calls', () => {
     // ...and never how it does it. A callee's role is private, so a caller
     // routes by description alone instead of restating its team in its role.
     expect(caller.input.callSurfacePrompt).not.toContain('SECRET_PLAYBOOK');
+    // ...and the standing rule for choosing between resuming an instance and
+    // starting a fresh one, which only the listing tool can apply live.
+    expect(caller.input.callSurfacePrompt).toContain('list_agent_threads');
+    expect(caller.input.callSurfacePrompt).toContain('start a new instance');
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
       title: 'why',
@@ -10641,6 +10646,8 @@ describe('GraphExecutorService — a node’s context reading', () => {
         contextTokens: 10_000,
         contextWindowTokens: null,
         totals: expect.objectContaining({ turns: 0, costUsd: null }),
+        // No turn has ended yet, so there is no cache to lapse.
+        promptCacheExpiresAt: null,
         // The start row's own words, for a client whose window opens after it.
         start: {
           callerNodeId: 'a',
@@ -10663,6 +10670,104 @@ describe('GraphExecutorService — a node’s context reading', () => {
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });
+  it('states when each call’s and each node’s own prompt cache lapses, carrying a lifetime a cache-only turn did not state', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    claude.starts[1]!.emit({
+      type: 'turn_complete',
+      usage: { ...NO_USAGE, promptCacheTtlMs: 3_600_000 },
+      stopReason: 'end_turn',
+      finalText: 'one done',
+    });
+    claude.starts[1]!.finish();
+    await drain();
+    // A second conversation whose one turn was served wholly from cache, so
+    // it stated no lifetime: it still runs under the one its agent stated.
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'two',
+      mode: 'async',
+    });
+    await drain();
+    completeTurn(claude.starts[2]!, 'two done');
+    await drain();
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: { ...NO_USAGE, promptCacheTtlMs: 300_000 },
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    claude.starts[0]!.finish();
+    await drain();
+
+    const nodes = await service.getNodeStates(run.id);
+    // The fake stamps every row at the epoch, so the lapse is an hour past it.
+    expect(nodes.find((n) => n.nodeId === 'callee')?.calls).toEqual([
+      expect.objectContaining({
+        callId: 'call-1',
+        promptCacheExpiresAt: '1970-01-01T01:00:00.000Z',
+      }),
+      expect.objectContaining({
+        callId: 'call-2',
+        promptCacheExpiresAt: '1970-01-01T01:00:00.000Z',
+      }),
+    ]);
+    expect(
+      nodes.find((n) => n.nodeId === 'a')?.promptCacheExpiresAt,
+      // The caller's own conversation states its own (five-minute) lifetime.
+    ).toBe('1970-01-01T00:05:00.000Z');
+  });
+
+  it('never lends one node’s cache lifetime to another node’s calls', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    // The caller's own turn states a lifetime FIRST...
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: { ...NO_USAGE, promptCacheTtlMs: 300_000 },
+      stopReason: 'end_turn',
+      finalText: 'dispatching',
+    });
+    await drain();
+    // ...and the callee's call states none of its own.
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    completeTurn(claude.starts[1]!, 'one done');
+    await drain();
+    claude.starts[0]!.finish();
+    await drain();
+
+    const nodes = await service.getNodeStates(run.id);
+    expect(nodes.find((n) => n.nodeId === 'callee')?.calls).toEqual([
+      expect.objectContaining({ callId: 'call-1', promptCacheExpiresAt: null }),
+    ]);
+  });
+
   it('sums each node\u2019s, call\u2019s and own conversation\u2019s spend over EVERY turn of the run', async () => {
     // The figures the agents panel draws per instance: summed by the daemon over
     // the whole run, so a call older than the client's loaded window still
@@ -10947,6 +11052,52 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     expect((envelope as { result: { note: string } }).result.note).toContain(
       "thread: 'call-1'",
     );
+  });
+
+  it('hands the broker the callee’s cache lifetime and context, so a caller can judge a resume', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'review it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'session', sessionId: 'sess-callee' });
+    callee.emit({ type: 'text', text: 'done' });
+    callee.emit({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        promptCacheTtlMs: 3_600_000,
+        contextTokens: 640_000,
+        contextWindowTokens: 1_000_000,
+      },
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    callee.finish();
+    await call;
+
+    const listing = callBroker.listThreads(run.id, 'a') as {
+      result: { threads: Record<string, unknown>[] };
+    };
+    expect(listing.result.threads).toEqual([
+      expect.objectContaining({
+        agent: 'callee',
+        thread: 'call-1',
+        context: { tokens: 640_000, window: 1_000_000, percent: 64 },
+        cache: expect.objectContaining({ state: 'warm' }),
+        advice: 'continue',
+      }),
+    ]);
   });
 
   it('adds no warning when every sub-agent the callee launched reported back', async () => {
@@ -11696,6 +11847,41 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(result.status).toBe('ok');
     expect(JSON.stringify(result)).toContain('summary text');
     expect(JSON.stringify(result)).not.toContain('compacted.');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('tells the caller nothing of a compacted callee’s old size, so a resume is not refused on it', async () => {
+    // The reading the call ended with describes the conversation the
+    // compaction then replaced: judged cold-and-large on it, a now-small
+    // conversation would be refused a resume it is cheap to make.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('helper')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'Helper',
+      message: 'summarize',
+    });
+    await drain();
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-helper' });
+    fillAndComplete(claude.starts[1]!, 170_000, 'summary text');
+    await drain();
+    fillAndComplete(claude.starts[2]!, 20_000, 'compacted.');
+    await drain();
+    await envelope;
+
+    const listing = callBroker.listThreads(run.id, 'orch') as {
+      result: { threads: Record<string, unknown>[] };
+    };
+    expect(listing.result.threads).toEqual([
+      expect.objectContaining({ agent: 'helper', context: null }),
+    ]);
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });

@@ -4400,6 +4400,7 @@ describe('Chats workflow runs', () => {
     // `call_started` time, which for a call older than the window is a guess.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4408,6 +4409,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-5',
             contextTokens: null,
             contextWindowTokens: null,
@@ -4674,6 +4676,7 @@ describe('Chats workflow runs', () => {
     // no instance. The daemon still holds each call's reading.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4682,6 +4685,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-4',
             contextTokens: 201_788,
             contextWindowTokens: 256_000,
@@ -4714,6 +4718,52 @@ describe('Chats workflow runs', () => {
     ).toContain('201.8k of 256k');
   });
 
+  it('puts the daemon’s prompt-cache expiry on the call’s instance row', async () => {
+    // The badge reads the conversation's expiry off the nodes route; a call
+    // whose cache lapsed over a window more than half full says start fresh.
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        promptCacheExpiresAt: null,
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'running',
+        contextTokens: 201_788,
+        contextWindowTokens: 256_000,
+        model: null,
+        calls: [
+          {
+            promptCacheExpiresAt: '2020-01-01T00:00:00.000Z',
+            callId: 'call-4',
+            contextTokens: 201_788,
+            contextWindowTokens: 256_000,
+            totals: NO_TOTALS,
+            start: null,
+          },
+        ],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
+        workedMs: null,
+        toolCalls: 106,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const instance = container.querySelector<HTMLElement>(
+      '[data-slot="agent-instance"][data-instance-id="call-4"]',
+    );
+    expect(
+      instance
+        ?.querySelector('[data-slot="prompt-cache-badge"]')
+        ?.getAttribute('data-state'),
+    ).toBe('start-fresh');
+  });
+
   it('draws a CONVERSATION older than the window as one instance, not one per call', async () => {
     // A call continued with `thread` is the same callee session, so calls
     // older than the window group into conversations as the window's own do.
@@ -4730,6 +4780,7 @@ describe('Chats workflow runs', () => {
     // names the helper at all.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4775,6 +4826,7 @@ describe('Chats workflow runs', () => {
     // a fraction of the run and must not stand in for it.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4837,6 +4889,7 @@ describe('Chats workflow runs', () => {
     // older than it showed no spend at all and the card a fraction of its cost.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4845,6 +4898,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-4',
             contextTokens: null,
             contextWindowTokens: null,
@@ -4900,6 +4954,7 @@ describe('Chats workflow runs', () => {
     // five Engineers and the head's whole-run spend double-counted theirs.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'completed',
@@ -4908,6 +4963,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-1',
             contextTokens: null,
             contextWindowTokens: null,
@@ -4915,6 +4971,7 @@ describe('Chats workflow runs', () => {
             start: null,
           },
           {
+            promptCacheExpiresAt: null,
             callId: 'call-2',
             contextTokens: null,
             contextWindowTokens: null,
@@ -4979,6 +5036,7 @@ describe('Chats workflow runs', () => {
     // node's own reading would show.
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'helper',
         status: 'running',
@@ -4987,6 +5045,7 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
+            promptCacheExpiresAt: null,
             callId: 'call-5',
             contextTokens: 47_200,
             contextWindowTokens: 200_000,
@@ -11229,6 +11288,7 @@ describe('Chats sidebar list', () => {
     });
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'w-a',
         status: 'running',
@@ -11331,6 +11391,7 @@ describe('Chats sidebar list', () => {
     });
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'w-a',
         status: 'running',
@@ -11413,6 +11474,7 @@ describe('Chats sidebar list', () => {
     });
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
       {
+        promptCacheExpiresAt: null,
         runId: 'w1',
         nodeId: 'w-a',
         status: 'running',

@@ -239,3 +239,86 @@ describe('callConversation', () => {
     ).toBeNull();
   });
 });
+
+describe('readCallSeed — a settled call’s prompt-cache facts', () => {
+  const started = {
+    kind: 'call_started',
+    payload: {
+      callId: 'call-1',
+      callerNodeId: 'orch',
+      calleeNodeId: 'helper',
+      mode: 'async',
+    },
+  };
+
+  it('reads the lifetime, the context and the result row’s time back onto the record', () => {
+    const seed = readCallSeed([
+      started,
+      {
+        kind: 'call_result',
+        createdAt: new Date(5_000),
+        payload: {
+          callId: 'call-1',
+          callerNodeId: 'orch',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          sessionId: 'sess-1',
+          promptCacheTtlMs: 3_600_000,
+          contextTokens: 700_000,
+          contextWindowTokens: 1_000_000,
+        },
+      },
+    ]);
+    expect(seed.records[0]).toMatchObject({
+      endedAt: 5_000,
+      promptCacheTtlMs: 3_600_000,
+      contextTokens: 700_000,
+      contextWindowTokens: 1_000_000,
+    });
+  });
+
+  it('records nothing a result did not measure — no zeros, no invented time', () => {
+    const seed = readCallSeed([
+      started,
+      {
+        kind: 'call_result',
+        payload: {
+          callId: 'call-1',
+          callerNodeId: 'orch',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          sessionId: 'sess-1',
+          promptCacheTtlMs: 0,
+          contextTokens: 'lots',
+        },
+      },
+    ]);
+    const [record] = seed.records;
+    expect(record).not.toHaveProperty('endedAt');
+    expect(record).not.toHaveProperty('promptCacheTtlMs');
+    expect(record).not.toHaveProperty('contextTokens');
+    expect(record).not.toHaveProperty('contextWindowTokens');
+  });
+
+  it('keeps the facts of a result whose start row is outside the read', () => {
+    const seed = readCallSeed([
+      {
+        kind: 'call_result',
+        createdAt: new Date(7_000),
+        payload: {
+          callId: 'call-3',
+          callerNodeId: 'orch',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          sessionId: 'sess-3',
+          promptCacheTtlMs: 300_000,
+        },
+      },
+    ]);
+    expect(seed.records[0]).toMatchObject({
+      callId: 'call-3',
+      endedAt: 7_000,
+      promptCacheTtlMs: 300_000,
+    });
+  });
+});

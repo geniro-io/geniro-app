@@ -103,3 +103,17 @@ export function msUntilPromptCacheNotice(
   const until = at - PROMPT_CACHE_EXPIRING_MS - now;
   return until > 0 ? until : null;
 }
+
+/** `<1m`, `12m`, `1h 5m` — a span of a prompt cache's life, to the minute. */
+export function formatCacheSpan(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) {
+    return '<1m';
+  }
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}

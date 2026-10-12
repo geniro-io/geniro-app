@@ -2951,6 +2951,162 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(cancel).toContain('discarded');
   });
 
+  it('lists list_agent_threads beside call_agent, and makes each point at the other about resuming', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: { name: string; description: string; _meta?: unknown }[];
+      }
+    ).tools;
+    const listing = find(tools, 'list_agent_threads');
+    // When to use it, what it answers, and when not to.
+    expect(listing).toContain('BEFORE you continue');
+    expect(listing).toContain('start_fresh');
+    expect(listing).toMatch(/expired/i);
+    expect(listing).toContain('Do not use it');
+    expect(listing).toContain('call_agent');
+    const call = tools.find((t) => t.name === 'call_agent')!;
+    expect(call.description).not.toContain('list_agent_threads');
+    expect(JSON.stringify(call)).toContain('list_agent_threads');
+    expect(JSON.stringify(call)).toContain('CACHE_EXPIRED');
+    expect(tools.find((t) => t.name === 'list_agent_threads')?._meta).toEqual(
+      tools.find((t) => t.name === 'await_agent')?._meta,
+    );
+  });
+
+  it('answers list_agent_threads from the broker for THIS conversation', async () => {
+    const callBroker = broker();
+    const spy = vi.spyOn(callBroker, 'listThreads');
+    const { json } = await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', { name: 'list_agent_threads', arguments: {} }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(spy).toHaveBeenCalledWith('run-1', 'orch');
+    // A turn answering a call lists its OWN conversation's threads.
+    await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', { name: 'list_agent_threads', arguments: {} }),
+      'call-1',
+    );
+    expect(spy).toHaveBeenLastCalledWith('run-1', callerKey('orch', 'call-1'));
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+      status: 'ok',
+      result: { threads: [] },
+    });
+
+    const { json: refused } = await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'list_agent_threads',
+        arguments: { agent: 'helper' },
+      }),
+    );
+    expect(
+      (refused().result as { content: { text: string }[] }).content[0]!.text,
+    ).toContain('unknown argument');
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes resume_cold through to the broker, and refuses it without a thread', async () => {
+    const callBroker = broker();
+    const spy = vi.spyOn(callBroker, 'callAgent');
+    const { json: refused } = await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: {
+          agent: 'helper',
+          message: 'm',
+          title: 'T',
+          resume_cold: true,
+        },
+      }),
+    );
+    const refusal = (refused().result as { content: { text: string }[] })
+      .content[0]!.text;
+    expect(refusal).toContain('INVALID_ARGS');
+    expect(refusal).toContain("'resume_cold' only applies with 'thread'");
+    expect(spy).not.toHaveBeenCalled();
+
+    const { json: notBoolean } = await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: {
+          agent: 'helper',
+          message: 'm',
+          title: 'T',
+          thread: 'call-1',
+          resume_cold: 'yes',
+        },
+      }),
+    );
+    expect(
+      (notBoolean().result as { content: { text: string }[] }).content[0]!.text,
+    ).toContain("'resume_cold' must be true or false");
+    expect(spy).not.toHaveBeenCalled();
+
+    // A model filling the optional flag with `false` on a NEW call is not
+    // refused — there is nothing to resume, and nothing it asked for.
+    await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: {
+          agent: 'helper',
+          message: 'm',
+          title: 'T',
+          resume_cold: false,
+        },
+      }),
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: {
+          agent: 'helper',
+          message: 'm',
+          title: 'T',
+          thread: 'call-1',
+          resume_cold: true,
+        },
+      }),
+    );
+    expect(spy).toHaveBeenCalledWith(
+      'run-1',
+      'orch',
+      expect.objectContaining({ thread: 'call-1', resumeCold: true }),
+      expect.anything(),
+    );
+  });
+
   it('makes message_agent and cancel_agent name each other — a correction is not a cancellation', async () => {
     // The pair a caller holding a user's correction must choose between: cancel
     // throws away everything the callee already did right, and message_agent

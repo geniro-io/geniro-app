@@ -6,179 +6,46 @@ paths:
 
 # Renderer components — reuse & structure
 
-## Layers (every styled element goes through them, in order)
+Every styled element goes through the layers in order: token → primitive → shared component → feature screen. Never duplicate a component or pattern.
 
-1. **Token** — its VALUE in `styles/themes/<id>.css` (one file per theme),
-   mapped to a utility by `styles/global.css`'s `@theme inline` (see
-   `renderer-design-system.md`)
-2. **Primitive** in `components/ui/`, token-driven, shadcn-v4 flavour
-   (`data-slot` attribute, `cva` variants, `cn()` composition). Browse the
-   directory (`apps/ui/src/renderer/components/ui/`) for the current set —
-   don't rely on a hand-maintained list here, which decays. Two rules worth
-   stating rather than just browsing:
-   - `chip` is the flat Cursor-style control chip: muted text, tight leading
-     icon, fill only on hover — the SINGLE source of that look, which
-     `select`'s `ghost` variant is built from, so a picker chip and a static
-     chip cannot drift apart; a trailing `ChipChevron` is what marks a chip as
-     a picker, so never put one on a static chip.
-   - **`select` is NOT a native `<select>`**: macOS draws that as an Aqua
-     popup whose menu is an OS surface — it ignores every token, cannot show
-     headers/icons/checkmarks/search, and is invisible to the DOM, so it can be
-     neither screenshotted nor asserted on. Pass `groups`, never `<option>`
-     children; a test opens `[data-menu-trigger]` and reads `[role="option"]`.
-   - **`segmented-control` is the ONE run of mutually exclusive options that
-     are always visible** — the Stats page's period and metric switches. Not
-     `select`, which is the app's one DROPDOWN and would hide two-to-four
-     choices behind a click each time; not `chip`, which states ONE value where
-     this states a set and which of them is current. Reach for the primitive
-     rather than two buttons and an `aria-pressed`. **Always visible is the
-     whole condition, and it is about the SPACE the options are worth:** a run
-     of labelled options is a band of chrome, which a page's own top-level
-     switch earns and a list filter in a 260px column does not (the chat
-     sidebar's archive filter is a `Menu` behind an icon,
-     `chats/chat-scope-filter.tsx`). So put a set here when the choice IS the
-     screen's subject; put it behind a trigger when it only narrows what is
-     already on screen.
-   - **Every image the user can look at goes through `image-viewer`** — the
-     transcript's attachments, the composer's staged strip, an agent's markdown
-     image, and a gallery card's tiles. Those surfaces draw the same picture at
-     different sizes (mostly `object-cover` crops), so "can I see the whole
-     thing" and "can I read the small text in it" are answered once, there. It is built ON
-     `dialog` (Escape, backdrop, focus trap) and PORTALLED, since it opens from inside a
-     transcript where `position: fixed` may be resolved against a transformed
-     ancestor. A bare `<img>` is for chrome the user never inspects (`logo`).
-     `ZoomableImage` is the usual entry point and owns its own open state; a
-     caller that must CONTROL which picture is showing (the gallery, stepping
-     through a set with `onPrev`/`onNext`) renders `ImageViewer` directly and
-     uses `ZOOMABLE_TRIGGER_CLASS` for its own opener, so the trigger's look
-     still has one source. Adding a second lightbox is the duplication this
-     bullet exists to prevent.
-   - **`ansi-text` is the ONE way command output is drawn**, over the pure
-     `ansi.ts` parser beside it. A shell's escape sequences are not plain text:
-     rendered verbatim the escape byte is invisible and its tail is not, so a
-     coloured log reads as corrupted. Colours come from the `--ansi-*` tokens
-     (never from the stream — a terminal palette is built for a black
-     background), and anything that shows command output uses this rather than
-     re-deriving which sequences to honour. The parser reports BRIGHTNESS as a
-     flag beside the colour name and the component resolves it to a
-     `--ansi-bright-*` token: what "brighter" looks like belongs to the theme,
-     so it must not be computed as a lightened value in TypeScript.
-   - `option-list` is the ONE way a set of pickable answer options is drawn,
-     and its `arity` (`many` / `one` / `none`) is what decides the drawing —
-     square boxes in a column for a checklist, round dots in a column for a
-     pick-one (neither framed — the indicator is the affordance), and NO
-     indicator at all where the click is itself the submission, which is
-     why that arity alone keeps an outline and flows in a row. Never reach
-     for `chip` here: chips are `whitespace-nowrap` footer controls, and an
-     option label is routinely a whole sentence.
-   - **Placement internals of `menu`, `popover` and `dialog`** (submenu shift
-     before clamp, popover flip/clamp, Escape handling, `MenuAnchorContext`) are
-     in `renderer-overlay-primitives.md`.
-3. **App-level shared component** in `components/`, composed from primitives.
-   Browse the directory (`apps/ui/src/renderer/components/`) for the current
-   set. Rules worth stating rather than just browsing:
-   - `error-banner` is the dismissible error STRIP: an `error-text` plus a
-     close control and an optional recovery action. `error-text` alone belongs
-     to a form field, where typing clears the message; a strip pinned to a
-     screen needs a way out, because nothing the user can type will ever clear
-     "could not load the workflow".
-   - `copy-button` is the app's ONE clipboard control — it owns the
-     copied-tick feedback and the write itself, so no caller re-implements
-     either.
-   - `mcp-dialog-button` is the ONE way an MCP listing is reached: a trigger
-     (`icon` on a control row, `chip` beside other chips) opening
-     `mcp-section` in a modal `dialog`. Server rows that can each carry a
-     paragraph of connection-failure text do not fit in a panel band or a
-     popover. The OPEN state is the caller's, never
-     the button's: the Agents panel keeps one open at a time across every card.
-   - `use-persisted-flag` is the ONE way a boolean the user SET is remembered
-     — a panel folded shut, a section left open. It reads like `useState`,
-     updater form included, and keeps the value in localStorage beside the
-     widths `panel-resize` already stores there. Reach for it whenever the
-     owning component is remounted by its parent (the builder unmounts on every
-     nav change), which is exactly when `useState` silently forgets. A stored
-     `'0'` is a CHOICE, not an absent key — that distinction is the hook's, so
-     no call site re-derives it. **Inside a chat thread use
-     `chats/thread-ui-memory.ts` instead** (`useThreadFlag` /
-     `useThreadOverride`): a fold in the transcript or the agents panel is a
-     fact about THAT thread, and a global flag makes it follow the user into
-     every other one.
-   - `panel-section` + `panel-link-row` are the side panel's titled block and
-     its outward-link row (Artifacts, Pull requests). The row is a plain
-     anchor opened by the SHELL — main's window-open handler routes https to
-     the browser and denies every other scheme — so a new panel block composes
-     these rather than copying their class strings.
-   - `nav-list-item` is an activatable sidebar row; its `suspendActivation`
-     prop drops the full-row overlay while a nested control — the chat row's
-     inline rename field — owns the row's clicks and focus.
-   - `expandable-textarea` is a `Textarea` whose corner ⤢ opens the field in
-     `markdown-editor-dialog` — use it for any prompt-length field instead of
-     a bare `Textarea`, EXCEPT one whose lifetime the surrounding component
-     owns: the ⤢ modal cannot be dismissed from outside, and the control
-     exposes no `ref` / `onKeyDown` / `onBlur` to commit through.
-     `chats/queued-strip.tsx` is the standing example — the row it edits can
-     be sent out from under the editor by the drain, so the strip has to
-     close the field itself.
-4. **Feature screen**, one directory per screen (`chats/`, `onboarding/`,
-   `settings/`, `workflows/`, `notifications/`, `debug/`, …) — browse
-   `apps/ui/src/renderer/` for the current set. `chats/` also holds its row
-   component, `message-bubble.tsx`. App shell (`App.tsx`, `main.tsx`) and
-   daemon clients live at the renderer root — the REST clients and every
-   daemon wire type are GENERATED into `autogenerated/` (`pnpm generate:api`,
-   never hand-edited) and reached through `createDaemonApis(handle)` in
-   `daemon-api.ts`, which owns the base URL, bearer token, timeout and uniform
-   error shape; WS clients are `daemon-client.ts`.
+## Layers
+
+1. Token — see `renderer-design-system.md`.
+2. Primitive in `components/ui/`: token-driven, shadcn-v4 style (`data-slot`, `cva` variants, `cn()`).
+3. App-level shared component in `components/`, composed from primitives.
+4. Feature screen: one directory per screen (`chats/`, `settings/`, `workflows/`, …). App shell (`App.tsx`, `main.tsx`) and daemon clients sit at the renderer root: REST through `createDaemonApis(handle)` (`daemon-api.ts`) over the generated `autogenerated/`, WS through `daemon-client.ts`.
+
+## Reuse
+
+- Before adding UI, browse `components/ui/` and `components/` for an existing piece.
+- A pattern that appears in a second place becomes a shared component, imported everywhere.
+- New primitive → `components/ui/`; app-specific composition → `components/`; feature-only pieces stay in the feature directory.
+- Import directly (`./ui/button`); no barrel `index.ts` files.
+- Screens are layout + state wiring; visual building blocks come from the shared layers.
+- Every component in `components/` and `components/ui/` gets a co-located `*.stories.tsx` in the same commit (enforced by `components/catalog-coverage.spec.ts`; how to write one is in `renderer-stories.md`).
+
+## The one home for…
+
+- Control-chip look: `chip`. `select`'s `ghost` variant is built from it; a trailing `ChipChevron` marks a picker, so never put one on a static chip.
+- Dropdowns: `select`, never a native `<select>` (its macOS menu ignores tokens and is invisible to the DOM). Pass `groups`, not `<option>` children; tests open `[data-menu-trigger]` and read `[role="option"]`.
+- Always-visible mutually exclusive options: `segmented-control` — only when the choice is the screen's subject. A filter that narrows what is already shown goes behind a trigger (`Menu`).
+- Images the user looks at: `image-viewer` (built on `dialog`, portalled). Use `ZoomableImage`; a caller that controls which picture shows renders `ImageViewer` with `ZOOMABLE_TRIGGER_CLASS` on its opener. A bare `<img>` is only for chrome. Never add a second lightbox.
+- Command output: `ansi-text` over the `ansi.ts` parser. Colours come from `--ansi-*` tokens (brightness → `--ansi-bright-*`), never from the stream or computed in TypeScript.
+- Pickable answer options: `option-list`, whose `arity` (`many` / `one` / `none`) decides the drawing. Never `chip` (labels can be sentences).
+- Dismissible error strip: `error-banner`. `error-text` alone is for a form field, where typing clears it.
+- Clipboard: `copy-button`, which owns the write and the copied feedback.
+- Reaching an MCP listing: `mcp-dialog-button` (opens `mcp-section` in a `dialog`); its open state belongs to the caller.
+- Remembering a boolean the user set: `use-persisted-flag`. Inside a chat thread use `chats/thread-ui-memory.ts` (`useThreadFlag` / `useThreadOverride`) instead, so the choice stays with that thread.
+- Side-panel blocks and outward links: `panel-section` + `panel-link-row`.
+- Sidebar rows: `nav-list-item`; set `suspendActivation` while a nested control owns the row's clicks and focus.
+- Prompt-length fields: `expandable-textarea`, except where the surrounding component must close the field itself (its ⤢ modal cannot be dismissed from outside — see `chats/queued-strip.tsx`).
 
 ## Daemon types
 
-- **Import every daemon wire type from `autogenerated`**, never restate one.
-  `shared/contracts.ts` is Electron-internal (IPC, Settings, CLI detection,
-  `DaemonHandle`) and must not grow daemon shapes.
-- A concept the daemon does not expose over HTTP (the builder's `NodeKind`,
-  `TRIGGER_KINDS`, `WorkflowLayout`) is DERIVED from a generated type where one
-  exists — `WorkflowNode['kind']`, `Object.values(TriggerKind)`,
-  `NonNullable<Workflow['layout']>` — so a daemon change surfaces as a type
-  error rather than silent drift. Those derivations live in
-  `workflows/node-schema.ts` and `workflows/graph-doc.ts`.
-- After changing a daemon route or schema, run `pnpm generate:api` and commit
-  the regenerated client with the change.
+- Never restate a daemon wire type; import it from `autogenerated/`. `shared/contracts.ts` is Electron-internal and holds no daemon shapes.
+- A renderer-only concept over daemon data is derived from a generated type (`WorkflowNode['kind']`, `Object.values(TriggerKind)`), so a daemon change surfaces as a type error. These derivations live in `workflows/node-schema.ts` and `workflows/graph-doc.ts`.
 
-## Reuse rules
+## Test helpers
 
-- **Never duplicate a component or pattern.** Before adding UI, reach for an
-  existing primitive in `components/ui/` or shared component in `components/`.
-- **Promote recurring patterns**: if a pattern (a button, field, status dot,
-  card, error line, empty state…) appears in a second place, it becomes a
-  shared component and is imported everywhere — never re-implemented inline.
-  (Example: `agent-config-list` is shared by Onboarding AND Settings.)
-- A new primitive belongs in `components/ui/`; a new app-specific composition
-  belongs in `components/`; feature-only pieces stay in the feature directory.
-- **Import directly** (`./ui/button`, `../components/field`) — **no barrels**
-  (no `index.ts` re-export files).
-- Keep screens thin: layout + state wiring; visual building blocks come from
-  the shared layers.
-
-## Component stories (the catalog)
-
-- **Every component in `components/` and `components/ui/` has a co-located
-  `*.stories.tsx`, in the same commit that adds the component.** This is
-  mechanized by `components/catalog-coverage.spec.ts`.
-- How to write a story (modal wrappers, document scrolling, the preload stub) is
-  in `renderer-stories.md`.
-
-## Component tests
-
-- Co-located `*.spec.tsx` next to the component.
-- **A helper that exists only for SPECS lives in `renderer/__tests__/`**, never
-  in a production kind-directory — `components/ui/` IS the browsable list of
-  primitives, so a test-only module parked there is one a reader has to open to
-  learn it is not one. Same rule and same reason as the daemon's, which states
-  it in full (`daemon-module-structure.md` §`__tests__/`). Current example:
-  `__tests__/stub-resize-observer.ts`, called by specs because jsdom ships no
-  `ResizeObserver` and both the zoom layer and recharts need one. It is a
-  CALL rather than a setup file on purpose — other specs run against the absent
-  global, and defining one suite-wide would move the ground under them.
-- Line 1 must be `// @vitest-environment jsdom` (the project default is `node`).
-- When a `vi.mock(...)` factory closes over module-scope spies, wrap them in
-  `vi.hoisted(() => ({ … }))`.
-- Run via `pnpm --filter @geniro/ui test:unit` — never call `vitest` directly.
+- A helper only specs use lives in `renderer/__tests__/`, never in a production directory such as `components/ui/`.
+- `__tests__/stub-resize-observer.ts` is called by the specs that need it, not installed suite-wide — other specs rely on the global being absent.

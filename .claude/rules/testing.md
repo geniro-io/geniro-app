@@ -7,18 +7,6 @@ paths:
 
 # Tests — no false pins
 
-- **A test whose name or comment claims to pin a behavior must FAIL when that
-  behavior is reverted.** Before finishing a spec, re-read each title/comment
-  and ask: "which assertion fails if this promise breaks?" If none does, fix
-  the assertion or delete the claim — a false pin is worse than no test: it
-  certifies a behavior nothing verifies.
-- **Assert the real observable, never a proxy the test fabricated.** Asserting
-  on a string the spec itself constructed (instead of one produced by the code
-  under test), or on an outcome that holds with the fix deleted (e.g. "a
-  follow-up create succeeds" when claims are keyed by fresh UUIDs), passes
-  regardless of the code. Observe the actual state: spy the real key, read the
-  produced value, drive the genuine error path.
-- **A defensive branch worth writing is worth a test that enters it.** A
-  try/catch or guard added "for safety" ships unpinned otherwise, and a later
-  "this is dead code" cleanup silently removes the protection with a green
-  suite.
+- A test whose name or comment claims to pin a behavior must fail when that behavior is reverted. For each title and comment, name the assertion that would fail; if none would, fix the assertion or delete the claim.
+- Assert the real observable, never a proxy the test fabricated: not a string the spec built itself, not an outcome that holds with the fix deleted. Spy the real key, read the produced value, drive the genuine error path.
+- A defensive branch (try/catch, guard) gets a test that enters it, or a later cleanup removes it with a green suite.

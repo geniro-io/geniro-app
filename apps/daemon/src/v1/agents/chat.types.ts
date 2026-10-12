@@ -2876,6 +2876,17 @@ export const AgentMcpListingWireSchema = z
 export type AgentMcpListingWire = z.infer<typeof AgentMcpListingWireSchema>;
 
 /**
+ * What a turn's own server report showed against geniro's reading of the same
+ * folder and profile (`AgentMcpService.observeTurnServers`): the servers it
+ * started without although geniro had seen them connected, and which of those
+ * were held back by a needs-auth record the CLI kept and geniro cleared.
+ */
+export interface McpTurnMismatch {
+  readonly missing: readonly string[];
+  readonly cleared: readonly string[];
+}
+
+/**
  * A profile's MCP server definitions by name, in the CLI's own JSON shape —
  * `AgentMcpServerDefinitions` on the wire. Opaque values on purpose: the
  * format is the CLI's, the editor shows the user their own file, and the

@@ -13,6 +13,7 @@ import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import type {
   AgentEvent,
+  AgentMcpServer,
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
@@ -42,6 +43,7 @@ import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
@@ -721,6 +723,7 @@ export class GraphExecutorService
     @Optional() private readonly artifacts?: ArtifactBroker,
     @Optional() private readonly artifactStore?: ArtifactStoreService,
     @Optional() parallelism?: number,
+    @Optional() private readonly agentMcp?: AgentMcpService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -940,6 +943,42 @@ export class GraphExecutorService
       });
   }
 
+  /**
+   * The workflow twin of `ChatService.noteMcpMismatch`: say on the node when its
+   * turn started without servers geniro's own reading says are connected, and
+   * clear the record that held them back.
+   */
+  private noteMcpMismatch(
+    runId: string,
+    nodeId: string,
+    callId: string | null,
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+    servers: readonly AgentMcpServer[],
+  ): void {
+    if (this.agentMcp === undefined) {
+      return;
+    }
+    void this.agentMcp
+      .turnMismatchNotice(agent, cwd, configDir, servers)
+      .then(async (message) => {
+        if (message !== null && !this.deleting.has(runId)) {
+          // A callee's turn files the note in its call block, as its rows are.
+          await this.noteOnRun(runId, nodeId, {
+            message,
+            severity: 'info',
+            ...(callId !== null ? { callId } : {}),
+          });
+        }
+      })
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `run ${runId}: could not note the MCP servers node ${nodeId} started without: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  }
+
   /** A transcript row on a run no pass is writing through right now. */
   private async noteOnRun(
     runId: string,
@@ -959,7 +998,7 @@ export class GraphExecutorService
       );
     } catch (err) {
       this.logger.warn(
-        `run ${runId}: could not write a usage-limit note: ${err instanceof Error ? err.message : String(err)}`,
+        `run ${runId}: could not write a note: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -3689,6 +3728,15 @@ export class GraphExecutorService
             // genuinely different sets, and filing both under the folder alone
             // would serve each the other's answer.
             this.mcpHarvest.record(
+              node.agent,
+              cwd,
+              node.configDir ?? null,
+              event.servers,
+            );
+            this.noteMcpMismatch(
+              runId,
+              node.id,
+              callContext?.callId ?? null,
               node.agent,
               cwd,
               node.configDir ?? null,

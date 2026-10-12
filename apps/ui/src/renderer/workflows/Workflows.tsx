@@ -1139,6 +1139,7 @@ export function Workflows({
         onDismiss={login.dismiss}
         error={login.error}
         variant="inline"
+        scope="server"
       />
     ) : null;
 

@@ -761,17 +761,22 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         loginArgs: ['mcp', 'login'],
         loginUnavailableReason: null,
+        // Both are filed under `~/.cursor/projects/<project root>`, outside any
+        // `CURSOR_CONFIG_DIR` (`cursorProjectRoot`), so every profile working in
+        // that repository shares them.
+        changeReach: {
+          toggle: { where: 'repository', perProfile: false },
+          signIn: { where: 'repository', perProfile: false },
+        },
         /**
-         * EMPTY, and that is a measurement gap rather than a claim: this CLI's
-         * server sign-in has never been observed failing, so there is no
-         * wording to match. Inventing one would be a marker that silently never
-         * fires — the failure this adapter's own `needs_auth` note records
-         * having already made once. The consequence is bounded and stated at
-         * the field: with no marker, an attempt that failed is reported as
-         * having completed, and the LISTING — which is the authority either way
-         * — still shows the server unauthenticated on the re-read that follows.
+         * Measured on 2026.10.01-e373342 under a pty, the way geniro runs it:
+         * an unapproved server, an approved one that cannot be reached and a
+         * name the config does not hold each print `✗ MCP login failed`
+         * followed by the reason (`… has not been approved`, `fetch failed`,
+         * `… not found in config`). The `✗` is left out of the marker so a
+         * re-styled glyph cannot stop it matching.
          */
-        loginFailureMarkers: [],
+        loginFailureMarkers: ['MCP login failed'],
         /**
          * Null: `cursor-agent mcp enable <name>` IS the approval, and the CLI
          * says so in both its help ("Add an MCP server to the local approved
@@ -1842,6 +1847,15 @@ export class CursorAcpAdapter extends AgentAdapter {
       return { ok: false, reason: CURSOR_MCP_LIST_UNREADABLE_MESSAGE };
     }
     return { ok: true, servers };
+  }
+
+  /**
+   * The folder this CLI files a workspace's MCP switches and sign-ins under —
+   * its own git-root walk, which does not follow a worktree to its main
+   * repository (`cursorProjectRoot`).
+   */
+  override mcpRepositoryKey(cwd: string): Promise<string> {
+    return Promise.resolve(cursorProjectRoot(cwd));
   }
 
   /**

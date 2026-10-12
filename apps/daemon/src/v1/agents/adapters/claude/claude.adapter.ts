@@ -585,6 +585,13 @@ export class ClaudeAdapter extends AgentAdapter {
         /** `claude mcp login <name>` — probe-verified on 2.1.223. */
         loginArgs: CLAUDE_MCP_LOGIN_ARGS,
         loginUnavailableReason: null,
+        // The switch is `projects[<repository>]` in the profile's own
+        // `.claude.json` (`claudeProjectKey`); a server's sign-in belongs to the
+        // profile, whatever folder it was made in.
+        changeReach: {
+          toggle: { where: 'repository', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: true },
+        },
         /**
          * The CLI's own failure line, observed verbatim on 2.1.232:
          * `Couldn't complete authentication for "probe": stdin isn't a
@@ -1483,6 +1490,11 @@ export class ClaudeAdapter extends AgentAdapter {
       },
     );
     return parseMcpGetHealth(stdout);
+  }
+
+  /** The key this CLI files a folder's MCP switches under (`claudeProjectKey`). */
+  override mcpRepositoryKey(cwd: string): Promise<string> {
+    return claudeProjectKey(cwd);
   }
 
   /**

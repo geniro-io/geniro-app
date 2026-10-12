@@ -15,15 +15,21 @@ import type {
   AgentMcpServer,
   AgentMcpServerHealth,
   AgentMcpServerSpec,
+  McpChangeReach,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { checkMcpServerDefinitions } from '../adapters/utils/mcp-config.utils';
-import type { AgentMcpConfigWire, AgentMcpListingWire } from '../chat.types';
+import type {
+  AgentMcpConfigWire,
+  AgentMcpListingWire,
+  McpTurnMismatch,
+} from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
 import {
   ensureFolderlessDir,
   folderlessDirPath,
 } from '../utils/folderless-dir';
+import { mcpMismatchNotice } from '../utils/mcp-mismatch-notice';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -111,6 +117,16 @@ function keyOf(
   return `${agent}\u0000${cwd}\u0000${configDir ?? ''}\u0000${version ?? ''}`;
 }
 
+/** {@link keyOf} read back — its one inverse, so no caller re-splits a key. */
+function parseKey(key: string): {
+  agent: string;
+  cwd: string;
+  configDir: string | null;
+} {
+  const [agent = '', cwd = '', configDir = ''] = key.split('\u0000');
+  return { agent, cwd, configDir: configDir === '' ? null : configDir };
+}
+
 /**
  * Whether a cache key belongs to one (agent, PROFILE), whatever folder or
  * binary version produced it — read back out of {@link keyOf}'s own shape, so
@@ -121,8 +137,8 @@ function sameAgentAndProfile(
   agent: AgentKind,
   configDir: string | null,
 ): boolean {
-  const [keyAgent, , keyProfile] = key.split('\u0000');
-  return keyAgent === agent && keyProfile === (configDir ?? '');
+  const parsed = parseKey(key);
+  return parsed.agent === agent && parsed.configDir === (configDir ?? null);
 }
 
 /**
@@ -325,6 +341,9 @@ export class AgentMcpService {
    * rule exists to prevent.
    */
   private readonly deferredFailure = new Map<string, AgentMcpListingResult>();
+
+  /** When each (agent, folder, profile, server) mismatch was last reported — see {@link observeTurnServers}. */
+  private readonly mismatchNoted = new Map<string, number>();
 
   constructor(
     private readonly adapters: AgentAdapterRegistry,
@@ -615,6 +634,7 @@ export class AgentMcpService {
             result.servers
               .filter((row) => row.status === 'connected')
               .map((row) => row.name),
+            projectDir,
             profile,
           );
         }
@@ -812,18 +832,15 @@ export class AgentMcpService {
     // The CLI reads its MCP configuration once, when it starts, and geniro
     // keeps that process alive across a chat's turns — so without this the
     // switch lands in the config and the agent goes on using the servers it
-    // was spawned with. See `AgentSessionRegistry.markStale` for the report
+    // was spawned with. See `AgentSessionRegistry.markStaleWhere` for the report
     // this answers and for why the session is marked rather than closed.
-    const retired = this.sessions.markStale(
+    await this.retireSessionsReachedBy(
       agent,
+      'toggle',
       projectDir,
+      profile,
       'its MCP servers changed',
     );
-    if (retired > 0) {
-      this.logger.log(
-        `${retired} ${agent} session(s) in ${projectDir} will restart on their next turn — MCP servers changed`,
-      );
-    }
     // The cached READING is now about the previous configuration, and for a CLI
     // whose disabled state is only visible IN that reading it is the whole
     // answer: cursor reports a switched-off server as `disabled` in `mcp list`
@@ -874,6 +891,7 @@ export class AgentMcpService {
       adapter,
       agent,
       probed?.status === 'connected' ? [server] : [],
+      projectDir,
       profile,
     );
     // BLOCKING, unlike the panel's read: this route's entire answer is the
@@ -982,18 +1000,18 @@ export class AgentMcpService {
    * every session start (`AgentAdapter.forgetMcpNeedsAuth`). Drop it, and
    * retire the kept sessions that started without those servers.
    *
-   * Agent-wide retirement, as `forgetAgentConfig` does: the record belongs to
-   * the profile rather than to a folder, and the registry knows no profiles.
+   * The sessions retired are the ones a sign-in reaches (`changeReach.signIn`).
    * Never throws — this runs after a reading the caller is about to answer with.
    */
   private async forgetNeedsAuthOnceConnected(
     adapter: AgentAdapter,
     agent: AgentKind,
     connected: readonly string[],
+    cwd: string,
     profile: string | null,
-  ): Promise<void> {
+  ): Promise<readonly string[]> {
     if (connected.length === 0) {
-      return;
+      return [];
     }
     // `Promise.resolve().then(…)` so an adapter that throws synchronously
     // still lands in the `.catch`.
@@ -1008,16 +1026,273 @@ export class AgentMcpService {
         return [];
       });
     if (forgotten.length === 0) {
-      return;
+      return [];
     }
     const names = forgotten.join(', ');
-    const retired = this.sessions.markAgentStale(
+    this.logger.log(`cleared ${agent}'s needs-auth record for ${names}`);
+    await this.retireSessionsReachedBy(
       agent,
+      'signIn',
+      cwd,
+      profile,
       `${names} ${forgotten.length === 1 ? 'is' : 'are'} connected now`,
     );
-    this.logger.log(
-      `cleared ${agent}'s needs-auth record for ${names}; ${retired} session(s) will restart on their next turn`,
+    return forgotten;
+  }
+
+  /**
+   * A turn just reported the servers it started with: answer the ones it
+   * reported as needing sign-in although geniro's own current reading of this
+   * folder, under this profile, says they are connected — the "panel says
+   * Connected, the agent cannot use it" case — and which of those were held
+   * back by a needs-auth record the CLI keeps and geniro just cleared.
+   *
+   * Either way the reporting session is retired, so its next turn starts a
+   * process that dials the server: a cleared record retires everything the
+   * sign-in reaches, and with no record — a process that started before a
+   * sign-in made outside geniro — this folder's sessions under this profile
+   * are retired instead. Never throws.
+   */
+  async observeTurnServers(
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+    reported: readonly AgentMcpServer[],
+  ): Promise<McpTurnMismatch> {
+    const needsAuth = reported
+      .filter((row) => row.status === 'needs_auth')
+      .map((row) => row.name);
+    if (needsAuth.length === 0) {
+      return { missing: [], cleared: [] };
+    }
+    const prefix = keyProfilePrefixOf(agent, cwd, configDir);
+    const connected = new Set<string>();
+    for (const [key, entry] of this.cache) {
+      if (
+        !key.startsWith(prefix) ||
+        this.now() - entry.fetchedAt > this.ttlMs
+      ) {
+        continue;
+      }
+      for (const row of entry.servers) {
+        if (row.status === 'connected') {
+          connected.add(row.name);
+        }
+      }
+    }
+    // Once per server within a reading's lifetime: claude reports its servers
+    // at every turn of a kept process, and one note says it.
+    const now = this.now();
+    const missing = needsAuth.filter((name) => {
+      const at = this.mismatchNoted.get(`${prefix}${name}`);
+      return connected.has(name) && (at === undefined || now - at > this.ttlMs);
+    });
+    if (missing.length === 0) {
+      return { missing: [], cleared: [] };
+    }
+    for (const name of missing) {
+      this.mismatchNoted.set(`${prefix}${name}`, now);
+    }
+    const cleared = await this.forgetNeedsAuthOnceConnected(
+      this.adapters.for(agent),
+      agent,
+      missing,
+      cwd,
+      configDir,
     );
+    if (cleared.length === 0) {
+      // Nothing to clear, so the forget retired nothing. The only evidence is
+      // that THIS folder's process went without the server, so retire this
+      // folder's sessions under this profile — never the sign-in's whole
+      // reach, which would respawn processes that loaded it fine.
+      const retired = this.sessions.markStaleWhere(
+        agent,
+        (session) => session.cwd === cwd && session.configDir === configDir,
+        `${missing.join(', ')} ${missing.length === 1 ? 'was' : 'were'} not loaded`,
+      );
+      if (retired > 0) {
+        this.logger.log(
+          `${retired} ${agent} session(s) in ${cwd} will restart on their next turn — ${missing.join(', ')} not loaded`,
+        );
+      }
+    }
+    return { missing, cleared };
+  }
+
+  /**
+   * The transcript sentence a turn's server report earns, or null — the whole
+   * of {@link observeTurnServers} as the chat and the workflow executor use it,
+   * so each only persists what comes back. Never throws.
+   */
+  async turnMismatchNotice(
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+    reported: readonly AgentMcpServer[],
+  ): Promise<string | null> {
+    return mcpMismatchNotice(
+      await this.observeTurnServers(agent, cwd, configDir, reported),
+    );
+  }
+
+  /**
+   * Retire the kept sessions one MCP change made stale — exactly those its
+   * CLI's `mcp.changeReach` says it reaches from `cwd` under `configDir` — and
+   * answer how many. Never throws: a folder whose repository cannot be read is
+   * matched as itself.
+   */
+  async retireSessionsReachedBy(
+    agent: AgentKind,
+    change: 'toggle' | 'signIn',
+    cwd: string,
+    configDir: string | null,
+    reason: string,
+  ): Promise<number> {
+    const adapter = this.adapters.for(agent);
+    const reach = adapter.getConfig().mcp.changeReach[change];
+    const inReach = await this.folderReach(
+      adapter,
+      reach,
+      cwd,
+      this.sessions.cwdsOf(agent),
+    );
+    const retired = this.sessions.markStaleWhere(
+      agent,
+      (session) =>
+        inReach(session.cwd) &&
+        (!reach.perProfile || session.configDir === configDir),
+      reason,
+    );
+    if (retired > 0) {
+      this.logger.log(
+        `${retired} ${agent} session(s) will restart on their next turn — ${reason}`,
+      );
+    }
+    return retired;
+  }
+
+  /**
+   * Which of `folders` a change made in `cwd` reaches, as `reach.where` says:
+   * the folder alone, every folder of its repository, or all of them.
+   */
+  private async folderReach(
+    adapter: AgentAdapter,
+    reach: McpChangeReach,
+    cwd: string,
+    folders: readonly string[],
+  ): Promise<(folder: string) => boolean> {
+    if (reach.where === 'everywhere') {
+      return () => true;
+    }
+    if (reach.where === 'folder') {
+      return (folder) => folder === cwd;
+    }
+    const repositoryOf = (folder: string): Promise<string> =>
+      Promise.resolve()
+        .then(() => adapter.mcpRepositoryKey(folder))
+        .catch(() => folder);
+    const repository = await repositoryOf(cwd);
+    const repositories = await Promise.all(folders.map(repositoryOf));
+    const reached = new Set(
+      folders.filter((_, i) => repositories[i] === repository),
+    );
+    reached.add(cwd);
+    return (folder) => reached.has(folder);
+  }
+
+  /**
+   * A re-check saw `server` connected in `cwd` under `profile`: carry that to
+   * every other cached reading the sign-in reaches (`changeReach.signIn`) that
+   * still says the server needs signing in, so another folder's panel does not
+   * go on asking for a sign-in that already happened. Only `needs_auth` rows
+   * move, in the cache and in the harvest alike.
+   */
+  private async spreadSignIn(
+    adapter: AgentAdapter,
+    agent: AgentKind,
+    cwd: string,
+    profile: string | null,
+    server: string,
+  ): Promise<void> {
+    const reach = adapter.getConfig().mcp.changeReach.signIn;
+    // A same-named server elsewhere is the same server only when it points at
+    // the same place: a project-scope server can share a name with the one
+    // signed in to here, and marking it connected would be a false reading the
+    // turn-start check then trusts. So nothing spreads unless both ends can
+    // name a target — a row's own, else its folder's cached reading (claude's
+    // turn reports, which feed the harvest, carry none).
+    const target = this.cachedTarget(agent, cwd, profile, server);
+    if (target === null) {
+      return;
+    }
+    const sameServer = (
+      row: AgentMcpServer,
+      folder: string,
+      configDir: string | null,
+    ): boolean =>
+      (row.target ?? this.cachedTarget(agent, folder, configDir, server)) ===
+      target;
+    const cachedFolders = [...this.cache.keys()]
+      .map(parseKey)
+      .filter((key) => key.agent === agent)
+      .map((key) => key.cwd);
+    const inReach = await this.folderReach(adapter, reach, cwd, [
+      ...new Set([...cachedFolders, ...this.harvest.foldersOf(agent)]),
+    ]);
+    const reached = (folder: string, configDir: string | null): boolean =>
+      inReach(folder) && (!reach.perProfile || configDir === profile);
+    for (const [key, entry] of this.cache) {
+      const at = parseKey(key);
+      if (at.agent !== agent || !reached(at.cwd, at.configDir)) {
+        continue;
+      }
+      let touched = false;
+      const servers = entry.servers.map((row) => {
+        if (
+          row.name !== server ||
+          row.status !== 'needs_auth' ||
+          !sameServer(row, at.cwd, at.configDir)
+        ) {
+          return row;
+        }
+        touched = true;
+        return { ...row, status: 'connected' as const, detail: null };
+      });
+      if (touched) {
+        this.cache.set(key, { ...entry, servers });
+      }
+    }
+    this.harvest.patchSignedIn(
+      agent,
+      server,
+      (folder, configDir, row) =>
+        reached(folder, configDir) && sameServer(row, folder, configDir),
+    );
+  }
+
+  /**
+   * Where `server` points in this folder's newest cached reading under this
+   * profile, or null when no reading names it — newest, because an entry from
+   * an older CLI version may predate a changed URL.
+   */
+  private cachedTarget(
+    agent: AgentKind,
+    cwd: string,
+    profile: string | null,
+    server: string,
+  ): string | null {
+    const prefix = keyProfilePrefixOf(agent, cwd, profile);
+    let newest: { at: number; target: string } | null = null;
+    for (const [key, entry] of this.cache) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      const target = entry.servers.find((row) => row.name === server)?.target;
+      if (target && (newest === null || entry.fetchedAt > newest.at)) {
+        newest = { at: entry.fetchedAt, target };
+      }
+    }
+    return newest?.target ?? null;
   }
 
   /**
@@ -1248,6 +1523,50 @@ export class AgentMcpService {
     server: string,
     options: { configDir?: string | null } = {},
   ): Promise<AgentMcpListingWire> {
+    const probed = await this.recheckServerHealth(agent, cwd, server, options);
+    // A PLAIN read afterwards, never a refresh: the dial that mattered has just
+    // happened, and this is the cache hit that re-composes the folder facts
+    // over it. (In the flow this exists for the panel is already open, so a
+    // listing read has happened and the entry is warm.)
+    const listing = await this.list(agent, cwd, {
+      configDir: options.configDir ?? null,
+    });
+    if (probed === null) {
+      return listing;
+    }
+    // The probe is applied to the ANSWER as well as to the cache, and that is
+    // not belt-and-braces: with a cold entry there is nothing for
+    // `patchCachedHealth` to write onto, so the read below falls through to the
+    // harvest paint and the freshly dialled row comes back wearing the status
+    // the LAST TURN reported. Measured exactly that way — a re-check of a
+    // server the CLI had just called `✔ Connected` answered `unknown`, and the
+    // panel's post-sign-in re-check read it as still not authorized.
+    return {
+      ...listing,
+      servers: listing.servers.map((row) =>
+        row.name === server
+          ? { ...row, status: probed.status, detail: probed.detail }
+          : row,
+      ),
+    };
+  }
+
+  /**
+   * The dial half of {@link recheckServer}, without the listing: probe ONE
+   * server's health and apply what it says — to the cache, the harvest, every
+   * other reading the sign-in reaches, and the CLI's needs-auth record — then
+   * answer the health, or null when the CLI could not be asked.
+   *
+   * The sign-in verifier polls this rather than `recheckServer`, because the
+   * listing read behind the latter re-dials the whole folder on a cold cache,
+   * and a poll that ticks every few seconds must cost one server per tick.
+   */
+  async recheckServerHealth(
+    agent: AgentKind,
+    cwd: string,
+    server: string,
+    options: { configDir?: string | null } = {},
+  ): Promise<AgentMcpServerHealth | null> {
     const projectDir = resolveValidCwd(cwd);
     const profile =
       options.configDir === undefined || options.configDir === null
@@ -1278,39 +1597,18 @@ export class AgentMcpService {
       // …and the HARVEST, which a read falls back to once the cache lapses:
       // left alone it put the pre-sign-in status back minutes later.
       this.harvest.patchHealth(agent, projectDir, profile, server, probed);
+      if (probed.status === 'connected') {
+        await this.spreadSignIn(adapter, agent, projectDir, profile, server);
+      }
     }
     await this.forgetNeedsAuthOnceConnected(
       adapter,
       agent,
       probed?.status === 'connected' ? [server] : [],
+      projectDir,
       profile,
     );
-    // A PLAIN read afterwards, never a refresh: the dial that mattered has just
-    // happened, and this is the cache hit that re-composes the folder facts
-    // over it. (In the flow this exists for the panel is already open, so a
-    // listing read has happened and the entry is warm.)
-    const listing = await this.list(agent, cwd, {
-      configDir: options.configDir ?? null,
-    });
-    if (probed === null) {
-      return listing;
-    }
-    // The probe is applied to the ANSWER as well as to the cache, and that is
-    // not belt-and-braces: with a cold entry there is nothing for
-    // `patchCachedHealth` to write onto, so the read below falls through to the
-    // harvest paint and the freshly dialled row comes back wearing the status
-    // the LAST TURN reported. Measured exactly that way — a re-check of a
-    // server the CLI had just called `✔ Connected` answered `unknown`, which
-    // the sign-in watcher would have read as "not authorized yet" and polled
-    // against forever.
-    return {
-      ...listing,
-      servers: listing.servers.map((row) =>
-        row.name === server
-          ? { ...row, status: probed.status, detail: probed.detail }
-          : row,
-      ),
-    };
+    return probed;
   }
 
   /**

@@ -1251,6 +1251,32 @@ describe('AgentSessionRegistry — a folder whose MCP servers changed', () => {
     expect(sessions).toHaveLength(2);
   });
 
+  it('retires exactly the sessions a reach predicate names, by folder and profile', async () => {
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, { ...INPUT, configDir: '/p/a' }, noop);
+    registry.startTurn('run-2', adapter, INPUT, noop);
+    registry.startTurn('run-3', adapter, { ...INPUT, cwd: '/other' }, noop);
+    await at(sessions, 0).endTurn();
+    await at(sessions, 1).endTurn();
+    await at(sessions, 2).endTurn();
+
+    expect(registry.cwdsOf('claude').sort()).toEqual(['/other', '/proj']);
+    expect(
+      registry.markStaleWhere(
+        'claude',
+        (session) => session.cwd === '/proj' && session.configDir === '/p/a',
+        'signed in',
+      ),
+    ).toBe(1);
+    registry.startTurn('run-1', adapter, { ...INPUT, configDir: '/p/a' }, noop);
+    registry.startTurn('run-2', adapter, INPUT, noop);
+
+    expect(sessions).toHaveLength(4);
+    expect(at(sessions, 0).closes).toBe(1);
+    expect(at(sessions, 1).closes).toBe(0);
+  });
+
   it('retires an AGENT’s sessions in every folder when its account changes', async () => {
     // A sign-in or sign-out changes the credentials every process of that CLI
     // started under, whatever folder it runs in.

@@ -316,6 +316,12 @@ interface AgentThreadFields {
    * where there is nothing to choose between.
    */
   member?: number | null;
+  /**
+   * When this conversation's prompt cache lapses (ISO) — what tells the reader
+   * whether continuing this instance is cheap. Null when its CLI reports no
+   * cache lifetime, and absent for a sub-agent.
+   */
+  promptCacheExpiresAt?: string | null;
 }
 
 /**

@@ -61,6 +61,7 @@ import {
 import { readConfigForRewrite } from '../utils/strict-json.utils';
 import { titlePrompt } from '../utils/title-prompt.utils';
 import {
+  CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG,
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_ARTIFACT_ENV,
   CLAUDE_AUTH_EXPIRED_MARKERS,
@@ -104,6 +105,7 @@ import {
   CLAUDE_MCP_LIST_UNREADABLE_MESSAGE,
   CLAUDE_MCP_LOGIN_ARGS,
   CLAUDE_MCP_LOGIN_FAILURE_MARKERS,
+  CLAUDE_MCP_NEEDS_AUTH_CACHE_FILE,
   CLAUDE_MCP_SERVERS_KEY,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
@@ -126,6 +128,7 @@ import {
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
+  CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES,
   CLAUDE_TITLE_ARGS,
   CLAUDE_TITLE_DIR_PREFIX,
   CLAUDE_TITLE_MODEL,
@@ -176,6 +179,7 @@ import {
 } from './utils/claude-mcp-toggle.utils';
 import { claudeDisallowedMcpArgs } from './utils/claude-mcp-tool-name.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
+import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
   readPlanLimitsReply,
@@ -192,6 +196,10 @@ import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
+import {
+  sweepStaleTurnSystemPrompts,
+  writeTurnSystemPrompt,
+} from './utils/claude-system-prompt.utils';
 import { readClaudeTitleReply } from './utils/claude-title.utils';
 import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
 
@@ -584,6 +592,13 @@ export class ClaudeAdapter extends AgentAdapter {
         /** `claude mcp login <name>` — probe-verified on 2.1.223. */
         loginArgs: CLAUDE_MCP_LOGIN_ARGS,
         loginUnavailableReason: null,
+        // The switch is `projects[<repository>]` in the profile's own
+        // `.claude.json` (`claudeProjectKey`); a server's sign-in belongs to the
+        // profile, whatever folder it was made in.
+        changeReach: {
+          toggle: { where: 'repository', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: true },
+        },
         /**
          * The CLI's own failure line, observed verbatim on 2.1.232:
          * `Couldn't complete authentication for "probe": stdin isn't a
@@ -941,6 +956,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
   /** Per-turn `--mcp-config` file paths, written by prepareTurn. */
   private readonly mcpConfigPaths = new WeakMap<AgentTurnInput, string>();
+  private readonly systemPromptPaths = new WeakMap<AgentTurnInput, string>();
 
   /**
    * The `--permission-mode` probe for the installed binary, or null when this
@@ -1010,6 +1026,7 @@ export class ClaudeAdapter extends AgentAdapter {
     const dir = this.claudeOptions.mcpConfigDir;
     if (dir) {
       sweepStaleTurnMcpConfigs(dir);
+      sweepStaleTurnSystemPrompts(dir);
     }
   }
 
@@ -1078,6 +1095,7 @@ export class ClaudeAdapter extends AgentAdapter {
     const written: string[] = [];
     const discard = (): void => {
       this.mcpConfigPaths.delete(input);
+      this.systemPromptPaths.delete(input);
       for (const path of written) {
         rmSync(path, { force: true });
       }
@@ -1090,6 +1108,16 @@ export class ClaudeAdapter extends AgentAdapter {
         // them from, `--strict-mcp-config` not being passed.
         const path = writeTurnMcpConfig(dir, input.mcpEndpoint);
         this.mcpConfigPaths.set(input, path);
+        written.push(path);
+      }
+      const granted = Boolean(input.mcpEndpoint) && !input.isolateMcpServers;
+      const systemPrompt = this.composeSystemPrompt(input, granted);
+      if (
+        Buffer.byteLength(systemPrompt, 'utf8') >
+        CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES
+      ) {
+        const path = writeTurnSystemPrompt(dir, systemPrompt);
+        this.systemPromptPaths.set(input, path);
         written.push(path);
       }
     } catch (err) {
@@ -1484,6 +1512,63 @@ export class ClaudeAdapter extends AgentAdapter {
     return parseMcpGetHealth(stdout);
   }
 
+  /** The key this CLI files a folder's MCP switches under (`claudeProjectKey`). */
+  override mcpRepositoryKey(cwd: string): Promise<string> {
+    return claudeProjectKey(cwd);
+  }
+
+  /**
+   * Delete these servers' entries from the profile's needs-auth record
+   * ({@link CLAUDE_MCP_NEEDS_AUTH_CACHE_FILE}), the one thing that keeps a
+   * connector the user has signed in to out of every new session.
+   *
+   * Only those keys go; every other entry stays, since each still describes a
+   * server that really answered 401. A file that cannot be read or parsed is
+   * left alone and answers none — this is a cache, so a wrong guess about its
+   * shape must not replace it. No lock: the CLI serializes its own writes to
+   * this file in-process only, and it is a cache it rebuilds on the next 401.
+   * The fallback mode never applies: a file must exist to hold an entry, and
+   * `preserveTarget` keeps the mode it already has.
+   */
+  override forgetMcpNeedsAuth(input: {
+    servers: readonly string[];
+    configDir: string | null;
+  }): Promise<readonly string[]> {
+    const next = this.needsAuthWrites.then(() =>
+      this.rewriteNeedsAuthRecord(input.servers, input.configDir),
+    );
+    this.needsAuthWrites = next.catch(() => undefined);
+    return next;
+  }
+
+  private async rewriteNeedsAuthRecord(
+    servers: readonly string[],
+    configDir: string | null,
+  ): Promise<readonly string[]> {
+    const file = join(
+      this.profileDir(configDir),
+      CLAUDE_MCP_NEEDS_AUTH_CACHE_FILE,
+    );
+    const read = await readConfigForRewrite(file);
+    if (!read.ok) {
+      return [];
+    }
+    const forgotten = servers.filter((server) =>
+      Object.hasOwn(read.config, server),
+    );
+    if (forgotten.length === 0) {
+      return [];
+    }
+    const rest = { ...read.config };
+    for (const server of forgotten) {
+      delete rest[server];
+    }
+    await atomicWrite(file, JSON.stringify(rest), {
+      preserveTarget: { fallbackMode: CLAUDE_CONFIG_FILE_FALLBACK_MODE },
+    });
+    return forgotten;
+  }
+
   /**
    * Name the conversation by asking the CLI, since it writes no title itself.
    *
@@ -1854,9 +1939,14 @@ export class ClaudeAdapter extends AgentAdapter {
     // out by name as silent by construction. Nothing sets the two together
     // today; saying so here is what keeps that true if something ever does.
     const granted = Boolean(input.mcpEndpoint) && !input.isolateMcpServers;
-    const systemPrompt = this.composeSystemPrompt(input, granted);
-    if (systemPrompt) {
-      args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, systemPrompt);
+    const systemPromptPath = this.systemPromptPaths.get(input);
+    if (systemPromptPath) {
+      args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG, systemPromptPath);
+    } else {
+      const systemPrompt = this.composeSystemPrompt(input, granted);
+      if (systemPrompt) {
+        args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, systemPrompt);
+      }
     }
     if (this.spawnsOnPermissionDialogue(input)) {
       // acceptEdits/plan map by name. `ask` is the CLI's `default`, and so is
@@ -2174,6 +2264,13 @@ export class ClaudeAdapter extends AgentAdapter {
    */
   private readonly costLedger: ClaudeSessionCostLedger;
 
+  /**
+   * Orders this daemon's own rewrites of the needs-auth record: a re-check, a
+   * switch-on probe and an unawaited listing can each clear one, and two
+   * overlapping read-modify-writes would put back a key the other removed.
+   */
+  private needsAuthWrites: Promise<unknown> = Promise.resolve();
+
   protected mapMessage(obj: unknown): AgentEvent[] {
     return mapClaudeMessage(obj, this.costLedger);
   }
@@ -2242,9 +2339,15 @@ export class ClaudeAdapter extends AgentAdapter {
       // The base's stateless literal, which has no `awaitPromptReady` at all —
       // absence is what keeps the opening write SYNCHRONOUS for a turn with
       // nothing to wait for, rather than a gate that resolves instantly.
-      return super.createTurnDriver(input);
+      const driver = super.createTurnDriver(input);
+      const modelMismatch = new ClaudeModelMismatchNotice(input.model);
+      return {
+        ...driver,
+        onMessage: (obj) => modelMismatch.onMessage(obj, driver.onMessage(obj)),
+      };
     }
     return new ClaudeTurnDriver({
+      requestedModel: input.model,
       mapMessage: (obj) => this.mapMessage(obj),
       buildApprovalResponse: (id, allow, updatedInput) =>
         this.buildApprovalResponse(id, allow, updatedInput),

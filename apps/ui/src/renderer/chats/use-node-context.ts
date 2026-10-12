@@ -30,6 +30,8 @@ export type NodeDurableReading = Pick<
   | 'mainTotals'
   // The model its newest turn named, for a card whose window holds none.
   | 'model'
+  // When the node's own conversation's prompt cache lapses.
+  | 'promptCacheExpiresAt'
 >;
 
 const EMPTY: ReadonlyMap<string, NodeDurableReading> = new Map();
@@ -143,6 +145,7 @@ export function useNodeDurableReadings(
                 totals: node.totals,
                 mainTotals: node.mainTotals,
                 model: node.model,
+                promptCacheExpiresAt: node.promptCacheExpiresAt,
               },
             ]),
           ),

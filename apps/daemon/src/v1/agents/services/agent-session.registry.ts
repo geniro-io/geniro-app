@@ -161,13 +161,15 @@ interface SessionEntry {
   /**
    * The agent and folder this process was spawned for.
    *
-   * Recorded solely so {@link AgentSessionRegistry.markStale} can find the
-   * sessions an MCP change is ABOUT. The registry is keyed by run, and a
+   * Recorded solely so {@link AgentSessionRegistry.markStaleWhere} can find
+   * the sessions an MCP change is ABOUT. The registry is keyed by run, and a
    * change to a folder's servers is about every run working in that folder —
    * a fact neither the run id nor the session itself carries.
    */
   agent: string;
   cwd: string;
+  /** The profile it runs under — null for the CLI's default one. */
+  configDir: string | null;
   /**
    * Why this process can no longer serve a turn, or null.
    *
@@ -449,6 +451,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       session,
       agent: adapter.getConfig().kind,
       cwd: input.cwd,
+      configDir: input.configDir ?? null,
       stale: null,
       lastUsedAt: Date.now(),
       offTurnActiveAt: 0,
@@ -491,7 +494,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
-   * Retire every session of one agent in one folder, from the next turn on.
+   * Retire the sessions of one agent that `reached` says a change affects,
+   * from the next turn on. The caller decides the reach — a folder, a
+   * repository, a profile — and this only applies it.
    *
    * REPORTED against cursor as "usually when I update MCP they are available
    * from the very next turn; here it did not see they were updated" — with the
@@ -513,10 +518,14 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * reading: zero is the ordinary case (a change made with no chat open in that
    * folder) and is not a failure.
    */
-  markStale(agent: string, cwd: string, reason: string): number {
+  markStaleWhere(
+    agent: string,
+    reached: (session: { cwd: string; configDir: string | null }) => boolean,
+    reason: string,
+  ): number {
     let marked = 0;
     for (const entry of this.entries.values()) {
-      if (entry.agent !== agent || entry.cwd !== cwd || entry.stale !== null) {
+      if (entry.agent !== agent || entry.stale !== null || !reached(entry)) {
         continue;
       }
       entry.stale = reason;
@@ -525,9 +534,26 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return marked;
   }
 
+  /** {@link markStaleWhere} for every session of one agent in one folder. */
+  markStale(agent: string, cwd: string, reason: string): number {
+    return this.markStaleWhere(agent, (session) => session.cwd === cwd, reason);
+  }
+
+  /** The folders this agent's kept sessions run in, each once. */
+  cwdsOf(agent: string): string[] {
+    const cwds = new Set<string>();
+    for (const entry of this.entries.values()) {
+      if (entry.agent === agent) {
+        cwds.add(entry.cwd);
+      }
+    }
+    return [...cwds];
+  }
+
   /**
    * Retire every session of one agent, in EVERY folder, from the next turn on —
-   * the account-wide twin of {@link markStale}, and a mark for the same reasons.
+   * the account-wide twin of {@link markStaleWhere}, and a mark for the same
+   * reasons.
    *
    * For a change to the ACCOUNT a CLI runs as: a sign-in or a sign-out through
    * geniro. A kept process started under the previous credentials, and nothing
@@ -540,27 +566,19 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * costs one cold start, a stale process costs the user's retry.
    */
   markAgentStale(agent: string, reason: string): number {
-    let marked = 0;
-    for (const entry of this.entries.values()) {
-      if (entry.agent !== agent || entry.stale !== null) {
-        continue;
-      }
-      entry.stale = reason;
-      marked += 1;
-    }
-    return marked;
+    return this.markStaleWhere(agent, () => true, reason);
   }
 
   /**
    * Retire ONE key's process: its next turn runs on a fresh one — the
-   * single-key twin of {@link markStale}.
+   * single-key twin of {@link markStaleWhere}.
    *
    * For a conversation geniro has REPLACED (a carried compaction, which drops
    * the CLI's session). The kept process still holds that session, and a later
    * turn is opened on it rather than on a new one — an ACP session keeps its
    * session id across turns — so the summary would be sent into the very
    * conversation it replaced and nothing would shrink. A mark rather than a
-   * close for `markStale`'s reasons: whatever the process started in the
+   * close for `markStaleWhere`'s reasons: whatever the process started in the
    * background runs on until the conversation is actually continued.
    *
    * Answers whether there was a process to retire.

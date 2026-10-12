@@ -281,6 +281,12 @@ export class CodexAdapter extends AgentAdapter {
         loginArgs: ['mcp', 'login'],
         loginFailureMarkers: [...CODEX_MCP_LOGIN_FAILURE_MARKERS],
         loginUnavailableReason: null,
+        // Both live in the profile's own `config.toml` and credential store, so
+        // they reach every folder of that profile and no other profile.
+        changeReach: {
+          toggle: { where: 'everywhere', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: true },
+        },
         approveUnavailableReason:
           'codex loads every configured MCP server without asking for approval first',
         /**

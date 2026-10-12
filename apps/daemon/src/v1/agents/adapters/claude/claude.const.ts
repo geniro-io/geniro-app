@@ -177,6 +177,14 @@ export const CLAUDE_SESSION_SEARCH_FILE_LIMIT = 600;
 /** How much of a matching line a picker row shows before it is elided. */
 export const CLAUDE_SESSION_SNIPPET_MAX_CHARS = 160;
 export const CLAUDE_APPEND_SYSTEM_PROMPT_FLAG = '--append-system-prompt';
+/** Effect-probed on claude 2.1.295: the file's instructions reach the model. */
+export const CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG =
+  '--append-system-prompt-file';
+/** Leave argv and the environment ample room under macOS's shared ARG_MAX. */
+export const CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES = 64 * 1024;
+export const CLAUDE_SYSTEM_PROMPT_FILE_PREFIX = 'system-prompt-';
+export const CLAUDE_SYSTEM_PROMPT_FILE_SUFFIX = '.txt';
+export const CLAUDE_SYSTEM_PROMPT_FILE_MODE = 0o600;
 export const CLAUDE_PERMISSION_MODE_FLAG = '--permission-mode';
 export const CLAUDE_PERMISSION_PROMPT_TOOL_FLAG = '--permission-prompt-tool';
 
@@ -1150,6 +1158,30 @@ export const CLAUDE_MCP_PENDING_MARKER = 'Pending approval';
 export const CLAUDE_MCP_NEEDS_AUTH_MARKER = 'Needs authentication';
 
 /**
+ * The CLI's own record of servers that answered a dial with 401, in the
+ * profile root (`CLAUDE_CONFIG_DIR`, else `~/.claude`):
+ * `{"<server>": {"timestamp": <ms>, "id"?: "<claude.ai server id>", "ttlMs"?: <ms>}}`.
+ *
+ * Read out of the 2.1.295 bundle and confirmed on a real profile. At session
+ * start a claude.ai connector with an entry younger than `ttlMs ?? 4h` (15 min
+ * for other remote servers) gets an auth stub and is NEVER dialled. Any 401 —
+ * a session's dial, `claude mcp get`, `claude mcp list` — writes an entry; only
+ * a session's own successful connect, or `claude mcp login`, deletes one. So
+ * a server signed in to in the browser stays withheld from every new session
+ * until the entry expires, while `mcp get` reports it Connected. No flag or env
+ * var skips the record. `claude mcp login` deletes the entry and exits before
+ * the user has authorized, and a re-check polled during the browser flow
+ * writes it back. Each process also keeps its first read of the file and
+ * rewrites that whole copy on its next write, so a session or terminal that
+ * read it before geniro cleared an entry can put the entry back; geniro
+ * clears it again whenever a later dial sees the server connected.
+ *
+ * RE-CHECK IF: the file moves or is renamed, its value shape changes, or a
+ * successful `mcp get` / `mcp list` starts deleting the entry itself.
+ */
+export const CLAUDE_MCP_NEEDS_AUTH_CACHE_FILE = 'mcp-needs-auth-cache.json';
+
+/**
  * Argv that signs the CLI in to one server, with the server name appended.
  *
  * Named rather than written inline because it has the second reader that earns
@@ -2118,3 +2150,8 @@ export const CLAUDE_COMMANDS_CHANGED_KEY = 'commands';
  * recognisable in a stdio log.
  */
 export const CLAUDE_RELOAD_COMMANDS_REQUEST_ID = 'geniro-reload-commands';
+
+// ── Model notices ──────────────────────────────────────────────────────────
+
+export const CLAUDE_MODEL_MISMATCH_MESSAGE =
+  'Claude reported model %served for this turn; requested %requested.';

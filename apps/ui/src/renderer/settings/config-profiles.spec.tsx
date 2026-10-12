@@ -26,6 +26,7 @@ function render(
   profiles: ConfigProfile[],
   pick: () => Promise<string | null> = async () => null,
   agent: CliKind = 'claude',
+  compact = false,
 ): { el: HTMLElement; changes: ConfigProfile[][] } {
   container = document.createElement('div');
   document.body.append(container);
@@ -34,6 +35,7 @@ function render(
   act(() => {
     root.render(
       <ConfigProfileList
+        compact={compact}
         agent={agent}
         profiles={profiles}
         onChange={(next) => changes.push(next)}
@@ -78,6 +80,24 @@ function byLabel(el: HTMLElement, text: string): HTMLElement {
 }
 
 describe('ConfigProfileList', () => {
+  it('keeps the onboarding introduction concise while retaining profile editing', async () => {
+    const { el, changes } = render(
+      [],
+      async () => '/tmp/work-profile',
+      'claude',
+      true,
+    );
+    expect(el.textContent).toContain('No extra profiles yet.');
+    expect(el.textContent).not.toContain('Configurations');
+    expect(el.textContent).not.toContain('Name the config directories');
+    const add = el.querySelector('button')!;
+    expect(add.textContent).toContain('Add profile');
+    await act(async () => add.click());
+    expect(changes).toEqual([
+      [expect.objectContaining({ agent: 'claude', dir: '/tmp/work-profile' })],
+    ]);
+  });
+
   it('says what the feature is FOR when there is nothing in it', () => {
     // Empty is the state most installs are in and will stay in, so the empty
     // case has to explain rather than report a count of zero.

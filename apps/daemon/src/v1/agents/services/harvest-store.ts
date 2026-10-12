@@ -28,6 +28,18 @@ export function harvestKey(agent: AgentKind, ...parts: string[]): string {
 }
 
 /**
+ * {@link harvestKey} read back: the agent and the parts after it, in order —
+ * so no caller re-derives the separator.
+ */
+export function parseHarvestKey(key: string): {
+  agent: string;
+  parts: string[];
+} {
+  const [agent = '', ...parts] = key.split('\u0000');
+  return { agent, parts };
+}
+
+/**
  * The disk-backed store behind every "what did the CLI report about this
  * folder" harvest.
  *
@@ -141,23 +153,36 @@ export abstract class HarvestStore<T> {
    * something changed; a key with no record is a no-op.
    */
   protected patchAt(key: string, patch: (entry: T) => T): void {
+    this.patchWhere((recordKey) => recordKey === key, patch);
+  }
+
+  /** {@link patchAt} for every record whose key `matches`; `patch` is told the key. */
+  protected patchWhere(
+    matches: (key: string) => boolean,
+    patch: (entry: T, key: string) => T,
+  ): void {
     let changed = false;
     for (const [recordKey, record] of this.load()) {
-      if (recordKey !== key) {
+      if (!matches(recordKey)) {
         continue;
       }
       const entries = record.entries.map((entry) => {
-        const next = patch(entry);
+        const next = patch(entry, recordKey);
         if (next !== entry) {
           changed = true;
         }
         return next;
       });
-      this.load().set(key, { ...record, entries });
+      this.load().set(recordKey, { ...record, entries });
     }
     if (changed) {
       this.save();
     }
+  }
+
+  /** Every record key held, whatever its age. */
+  protected recordKeys(): string[] {
+    return [...this.load().keys()];
   }
 
   /**

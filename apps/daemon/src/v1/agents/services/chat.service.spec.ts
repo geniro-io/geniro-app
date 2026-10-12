@@ -79,6 +79,7 @@ import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import type { AgentMcpService } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ApprovalRegistry } from './approval-registry';
@@ -96,6 +97,7 @@ import { FindingsReportBroker } from './findings-report.broker';
 import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
+import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
@@ -402,6 +404,39 @@ class FakeRunDao {
 }
 
 class FakeItemDao {
+  async acknowledgeUserMessage(
+    runId: string,
+    itemId: string,
+    clientMessageId: string,
+  ): Promise<Item> {
+    const item = this.items.find(
+      (row) => row.runId === runId && row.id === itemId,
+    );
+    if (!item) {
+      throw new Error('message missing');
+    }
+    item.payload = JSON.stringify({
+      ...JSON.parse(item.payload),
+      clientMessageId,
+    });
+    return item;
+  }
+
+  async userMessageByClientId(
+    runId: string,
+    clientMessageId: string,
+  ): Promise<Item | null> {
+    return (
+      this.items.find(
+        (item) =>
+          item.runId === runId &&
+          item.kind === 'message' &&
+          item.role === 'user' &&
+          JSON.parse(item.payload).clientMessageId === clientMessageId,
+      ) ?? null
+    );
+  }
+
   readonly items: Item[] = [];
   readonly hardDeleted: unknown[] = [];
   failNextKind: string | null = null;
@@ -895,6 +930,8 @@ function setup(
     cliSessions?: Partial<
       Pick<CliSessionsService, 'prepare' | 'importHistory'>
     >;
+    /** The MCP service a turn's server report is checked against, when a test needs one. */
+    agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
   } = {},
 ) {
   const runDao = new FakeRunDao();
@@ -1044,6 +1081,7 @@ function setup(
     em,
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
+    new MessageSendService(itemDao as unknown as ItemDao),
     nodeDao as unknown as NodeStateDao,
     // Inert: the capture pass reads its own transcript and writes its own
     // column, and no case in this spec is about a pull request. It stays a
@@ -1113,9 +1151,7 @@ function setup(
       startedAt: 0,
       port: opts.port === undefined ? 4870 : opts.port,
     },
-    // Most tests toggle nothing, so the default points at a path that never
-    // exists — a mkdtemp per setup() would leak one directory per TEST. The
-    // tests that DO exercise the switch pass a real file.
+    opts.agentMcp as AgentMcpService | undefined,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -4721,6 +4757,43 @@ describe('ChatService', () => {
     expect(reply).toBeGreaterThan(followUp);
   });
 
+  it('replays concurrent sends without another row, process or live delivery, and refuses changed text', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const send = (text: string, clientMessageId: string) =>
+      service.sendMessage(run.id, text, [], { clientMessageId });
+    const [first, replay] = await Promise.all([
+      send('first', 'phone-1'),
+      send('first', 'phone-1'),
+    ]);
+    expect(replay).toEqual(first);
+    expect(first.payload).toMatchObject({
+      text: 'first',
+      clientMessageId: 'phone-1',
+    });
+    expect(itemDao.items.filter((item) => item.role === 'user')).toHaveLength(
+      1,
+    );
+    expect(claude.handles).toHaveLength(1);
+    await expect(send('changed', 'phone-1')).rejects.toMatchObject({
+      errorCode: 'CLIENT_MESSAGE_ID_CONFLICT',
+      statusCode: 409,
+    });
+    const [live, liveReplay] = await Promise.all([
+      send('also', 'phone-2'),
+      send('also', 'phone-2'),
+    ]);
+    expect(liveReplay).toEqual(live);
+    expect(claude.handles[0]!.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(itemDao.items.filter((item) => item.role === 'user')).toHaveLength(
+      2,
+    );
+    claude.finish();
+    await drain();
+    expect(await send('first', 'phone-1')).toEqual(first);
+    expect(claude.handles).toHaveLength(1);
+  });
+
   it('refuses with RUN_BUSY when the running turn cannot take one', async () => {
     // ACP's `session/prompt` is one request per turn, so its adapter reports
     // false — and the refusal has to be the SAME RUN_BUSY the caller already
@@ -4819,6 +4892,108 @@ describe('ChatService', () => {
     // carries the harvested names.
     expect(
       itemDao.items.filter((item) => item.payload.includes('compact')),
+    ).toEqual([]);
+  });
+
+  it('notes in the transcript a server the turn started without though it showed as connected', async () => {
+    const turnMismatchNotice = vi.fn(() =>
+      Promise.resolve(
+        'figma showed as connected but was not loaded in this turn',
+      ),
+    );
+    const { service, itemDao, claude } = setup({
+      agentMcp: { turnMismatchNotice },
+    });
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const figma = {
+      name: 'figma',
+      target: null,
+      transport: null,
+      status: 'needs_auth' as const,
+      detail: null,
+    };
+
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'mcp_servers', servers: [figma] });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    expect(turnMismatchNotice).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      null,
+      [figma],
+    );
+    const notes = itemDao.items.filter(
+      (item) =>
+        item.kind === 'system' &&
+        item.payload.includes('figma showed as connected'),
+    );
+    expect(notes).toHaveLength(1);
+  });
+
+  it('writes no MCP mismatch note on a chat whose delete is in flight', async () => {
+    // The note lands after its turn's own rows; a run being torn down by then
+    // must not get a row its purge would orphan.
+    let answer: (message: string) => void = () => undefined;
+    const turnMismatchNotice = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { service, claude, runDao } = setup({
+      agentMcp: { turnMismatchNotice },
+    });
+    const persist = vi.spyOn(
+      service as unknown as {
+        persist: (...args: unknown[]) => Promise<unknown>;
+      },
+      'persist',
+    );
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.emit({
+      type: 'mcp_servers',
+      servers: [
+        {
+          name: 'figma',
+          target: null,
+          transport: null,
+          status: 'needs_auth',
+          detail: null,
+        },
+      ],
+    });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    let releasePurge = (): void => {};
+    runDao.purgeGate = new Promise<void>((resolve) => {
+      releasePurge = resolve;
+    });
+    const deleted = service.delete(run.id);
+    await drain();
+    answer('figma showed as connected but was not loaded');
+    await drain();
+    releasePurge();
+    await deleted;
+
+    expect(turnMismatchNotice).toHaveBeenCalledTimes(1);
+    expect(
+      persist.mock.calls.filter(([, , , kind]) => kind === 'system'),
     ).toEqual([]);
   });
 
@@ -8589,8 +8764,8 @@ describe('ChatService — delete is a one-way door', () => {
     }
   });
 
-  it('retains a carried summary when the local model is unavailable', async () => {
-    const { service, runDao, claude } = setup();
+  it('retains a carried summary and retries the same send id after a model preflight failure', async () => {
+    const { service, runDao, itemDao, claude } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
       cwd: process.cwd(),
@@ -8601,13 +8776,42 @@ describe('ChatService — delete is a one-way door', () => {
       .spyOn(globalThis, 'fetch')
       .mockRejectedValue(new Error('Ollama stopped'));
     try {
-      await expect(service.sendMessage(run.id, 'continue')).rejects.toThrow(
-        'Ollama stopped',
-      );
+      await expect(
+        service.sendMessage(run.id, 'continue', [], {
+          clientMessageId: 'phone-recovery',
+        }),
+      ).rejects.toThrow('Ollama stopped');
       expect((await runDao.getById(run.id))?.pendingContext).toBe(
         'we agreed on plan B',
       );
       expect(claude.sessions).toHaveLength(0);
+      expect(
+        await itemDao.userMessageByClientId(run.id, 'phone-recovery'),
+      ).toBeNull();
+      fetcher.mockResolvedValue(
+        new Response(JSON.stringify({ capabilities: ['completion', 'tools'] })),
+      );
+      const accepted = await service.sendMessage(run.id, 'continue', [], {
+        clientMessageId: 'phone-recovery',
+      });
+      expect(accepted.payload).toMatchObject({
+        text: 'continue',
+        clientMessageId: 'phone-recovery',
+      });
+      expect(claude.sessions).toHaveLength(1);
+      expect(
+        await service.sendMessage(run.id, 'continue', [], {
+          clientMessageId: 'phone-recovery',
+        }),
+      ).toEqual(accepted);
+      expect(claude.handles).toHaveLength(1);
+      expect(
+        itemDao.items.filter(
+          (item) =>
+            item.role === 'user' &&
+            JSON.parse(item.payload).clientMessageId === 'phone-recovery',
+        ),
+      ).toHaveLength(1);
     } finally {
       fetcher.mockRestore();
     }
@@ -10222,6 +10426,50 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
 
     expect(nodeDao.saved).toContain('sid-after-the-turn');
+  });
+
+  it('notes off-turn a server the CLI started without though it showed as connected', async () => {
+    const turnMismatchNotice = vi.fn(() =>
+      Promise.resolve(
+        'figma showed as connected but was not loaded in this turn',
+      ),
+    );
+    const { service, claude, itemDao } = setup({
+      agentMcp: { turnMismatchNotice },
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const figma = {
+      name: 'figma',
+      target: null,
+      transport: null,
+      status: 'needs_auth' as const,
+      detail: null,
+    };
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'mcp_servers',
+      servers: [figma],
+    });
+    await drain();
+
+    expect(turnMismatchNotice).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(process.cwd()),
+      null,
+      [figma],
+    );
+    expect(
+      itemDao.items.filter(
+        (item) =>
+          item.kind === 'system' &&
+          item.payload.includes('figma showed as connected'),
+      ),
+    ).toHaveLength(1);
   });
 
   it('files what the CLI reports about itself off-turn under the same folder', async () => {

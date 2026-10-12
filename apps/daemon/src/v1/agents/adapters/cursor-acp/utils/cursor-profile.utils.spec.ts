@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -9,7 +10,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../../__tests__/temp-dir';
 import {
@@ -17,6 +18,23 @@ import {
   seedCursorProfile,
   sweepStaleCursorProfiles,
 } from './cursor-profile.utils';
+
+const fsFaults = vi.hoisted(() => ({ failWrites: false }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (fsFaults.failWrites) {
+        throw Object.assign(new Error('ENOSPC: no space left on device'), {
+          code: 'ENOSPC',
+        });
+      }
+      actual.writeFileSync(...args);
+    },
+  };
+});
 
 /** A fake user home whose `.cursor` holds the two files a real one does. */
 function fakeHome(config = '{"model":{"modelId":"claude-opus-5"}}'): string {
@@ -36,7 +54,7 @@ function fakeHome(config = '{"model":{"modelId":"claude-opus-5"}}'): string {
 describe('seedCursorProfile', () => {
   it("copies the user's cli-config.json, so the turn keeps their settings", () => {
     // The copy is what makes a run that names no model still open on the model
-    // the user chose, and keeps their permissions/approvalMode.
+    // the user chose, and keeps their permissions.
     const base = tempDir('cursor-profiles-');
     const home = fakeHome('{"approvalMode":"allowlist"}');
 
@@ -148,6 +166,119 @@ describe('seedCursorProfile', () => {
     expect(readFileSync(join(dir, 'cli-config.json'), 'utf8')).toBe(
       '{"maxMode":true}',
     );
+  });
+
+  it('writes the asking approval mode over a user who runs everything', () => {
+    // Measured on 2026.10.01-e373342 over ACP: under `unrestricted` a shell
+    // command ran with no `session/request_permission`, so geniro's ask/plan
+    // turn never got to show a card. See CURSOR_APPROVAL_MODE_CONFIG_KEY.
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome(
+      '{"approvalMode":"unrestricted","permissions":{"allow":["Shell(ls)"]}}',
+    );
+
+    const dir = seedCursorProfile({
+      baseDir: base,
+      homeDir: home,
+      askForApprovals: true,
+    });
+
+    expect(
+      JSON.parse(readFileSync(join(dir, 'cli-config.json'), 'utf8')),
+    ).toEqual({
+      approvalMode: 'allowlist',
+      autoAcceptWebSearch: false,
+      // The user's own allowlist still applies — they chose those commands.
+      permissions: { allow: ['Shell(ls)'] },
+    });
+  });
+
+  it('turns off the user’s web-search auto-accept for an asking turn', () => {
+    // Measured on the same build: with it on, a web search ran with no
+    // `session/request_permission` even under `allowlist`.
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome(
+      '{"approvalMode":"allowlist","autoAcceptWebSearch":true}',
+    );
+
+    const dir = seedCursorProfile({
+      baseDir: base,
+      homeDir: home,
+      askForApprovals: true,
+    });
+
+    expect(
+      JSON.parse(readFileSync(join(dir, 'cli-config.json'), 'utf8')),
+    ).toEqual({ approvalMode: 'allowlist', autoAcceptWebSearch: false });
+  });
+
+  it('writes the asking approval mode over a READ-ONLY user config', () => {
+    // `copyFileSync` keeps the source's mode, so writing through the copy
+    // would be refused and leave the user's "run everything" in place.
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome('{"approvalMode":"unrestricted"}');
+    chmodSync(join(home, '.cursor', 'cli-config.json'), 0o444);
+
+    const dir = seedCursorProfile({
+      baseDir: base,
+      homeDir: home,
+      askForApprovals: true,
+    });
+
+    expect(
+      JSON.parse(readFileSync(join(dir, 'cli-config.json'), 'utf8')),
+    ).toMatchObject({ approvalMode: 'allowlist' });
+  });
+
+  it('fails an asking turn whose profile cannot be written, and leaves no profile', () => {
+    // The copy may still say "run everything", so running the turn would show
+    // no card at all. A model-only patch stays best-effort.
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome('{"approvalMode":"unrestricted"}');
+    fsFaults.failWrites = true;
+    try {
+      const modelOnly = seedCursorProfile({
+        baseDir: base,
+        homeDir: home,
+        model: 'grok-4.6',
+      });
+      // …and its failed write leaves the copy as it was, never no config.
+      expect(readFileSync(join(modelOnly, 'cli-config.json'), 'utf8')).toBe(
+        '{"approvalMode":"unrestricted"}',
+      );
+      const before = readdirSync(base).length;
+
+      expect(() =>
+        seedCursorProfile({
+          baseDir: base,
+          homeDir: home,
+          askForApprovals: true,
+        }),
+      ).toThrow(/ask before running tools/);
+      expect(readdirSync(base).length).toBe(before);
+    } finally {
+      fsFaults.failWrites = false;
+    }
+  });
+
+  it('keeps the user’s own approval mode when the turn does not ask', () => {
+    // An `auto` turn approves every request in the driver, and a probe runs no
+    // tools — neither has a reason to rewrite the user's setting.
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome('{"approvalMode":"unrestricted"}');
+
+    for (const askForApprovals of [false, undefined]) {
+      const dir = seedCursorProfile({
+        baseDir: base,
+        homeDir: home,
+        askForApprovals,
+      });
+
+      expect(
+        readFileSync(join(dir, 'cli-config.json'), 'utf8'),
+        String(askForApprovals),
+      ).toBe('{"approvalMode":"unrestricted"}');
+    }
   });
 
   it('still names the model when the user has no config to merge into', () => {

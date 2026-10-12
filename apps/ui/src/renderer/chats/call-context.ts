@@ -289,6 +289,28 @@ export function resolveConversationContext(
 }
 
 /**
+ * When a CONVERSATION's prompt cache lapses (ISO), from the newest of its calls
+ * the daemon stated one for — or null when none did (no call has settled, or
+ * its CLI reports no cache lifetime).
+ */
+export function resolveConversationCacheExpiry(
+  nodeReadings: ReadonlyMap<string, NodeDurableReading>,
+  calleeNodeId: string,
+  callIds: readonly string[],
+): string | null {
+  const calls = nodeReadings.get(calleeNodeId)?.calls ?? [];
+  for (let i = callIds.length - 1; i >= 0; i -= 1) {
+    const expiresAt = calls.find(
+      (call) => call.callId === callIds[i],
+    )?.promptCacheExpiresAt;
+    if (typeof expiresAt === 'string') {
+      return expiresAt;
+    }
+  }
+  return null;
+}
+
+/**
  * Answers {@link resolveConversationContext} for one conversation, bound to the
  * open run — the ONE rule a call card's ring and the agents panel's instance
  * ring both read, so a continuation that has not reported yet cannot draw two

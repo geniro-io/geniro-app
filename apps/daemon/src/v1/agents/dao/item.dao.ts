@@ -4,7 +4,12 @@ import { BaseDao } from '@packages/mikroorm';
 
 import { Item } from '../../runs/entity/item.entity';
 import type { ItemKind } from '../../runs/runs.types';
-import type { HistoryWindow, RunPreview, SeqRange } from '../chat.types';
+import type {
+  ChatTextDatabase,
+  HistoryWindow,
+  RunPreview,
+  SeqRange,
+} from '../chat.types';
 import { messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
@@ -99,6 +104,67 @@ function seqFilter(range: SeqRange | undefined): {
 export class ItemDao extends BaseDao<Item> {
   constructor(em: EntityManager) {
     super(em, Item);
+  }
+
+  async acknowledgeUserMessage(
+    runId: string,
+    itemId: string,
+    clientMessageId: string,
+  ): Promise<Item> {
+    const em = this.em.fork();
+    await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .updateTable('items')
+      .set((eb) => ({
+        payload: eb.fn<string>('json_set', [
+          eb.ref('payload'),
+          eb.val('$.clientMessageId'),
+          eb.val(clientMessageId),
+        ]),
+      }))
+      .where('id', '=', itemId)
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'message')
+      .where('role', '=', 'user')
+      .where('deleted_at', 'is', null)
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    return this.getRepo(em).findOneOrFail({ id: itemId, runId });
+  }
+
+  /** One acknowledged user send, scoped to its run and excluding deleted rows. */
+  async userMessageByClientId(
+    runId: string,
+    clientMessageId: string,
+  ): Promise<Item | null> {
+    const em = this.em.fork();
+    const row = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('id')
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'message')
+      .where('role', '=', 'user')
+      .where('deleted_at', 'is', null)
+      .where(
+        (eb) =>
+          eb.fn<string>('json_extract', [
+            eb
+              .case()
+              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+              .then(eb.ref('payload'))
+              .else(eb.val('{}'))
+              .end(),
+            eb.val('$.clientMessageId'),
+          ]),
+        '=',
+        clientMessageId,
+      )
+      .orderBy('seq', 'asc')
+      .executeTakeFirst();
+    return row === undefined
+      ? null
+      : this.getRepo(em).findOne({ id: row.id, runId });
   }
 
   /**
@@ -551,12 +617,12 @@ export class ItemDao extends BaseDao<Item> {
   async usageRowsWithNode(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'nodeId' | 'payload' | 'createdAt'>[]> {
     return this.getRepo(txEm).find(
       { runId, kind: { $in: [...USAGE_ITEM_KINDS] } },
       {
         orderBy: { seq: 'asc' },
-        fields: ['nodeId', 'payload'],
+        fields: ['nodeId', 'payload', 'createdAt'],
         disableIdentityMap: true,
       },
     );

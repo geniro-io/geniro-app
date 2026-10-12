@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  commandNeedles,
   descendantsOf,
   isCommandRunning,
   parseProcessRows,
@@ -112,5 +113,41 @@ describe('isCommandRunning', () => {
 
   it('refuses an empty command rather than matching everything', () => {
     expect(isCommandRunning(wrapped, '   ')).toBe(false);
+  });
+});
+
+describe('commandNeedles', () => {
+  it("reaches what a shell leaves running once it and `env` have exec'd away", () => {
+    // The reported command, verbatim. Measured: a second after launch the table
+    // holds no `zsh`, no `env` and no redirection — only what `env` exec'd —
+    // so the written text alone matches nothing at all.
+    const needles = commandNeedles(
+      "/bin/zsh -lc 'env -u ELECTRON_RUN_AS_NODE GENIRO_UI_USER_DATA=/tmp/review pnpm dev -- --remoteDebuggingPort 9341 > /tmp/dev.log 2>&1'",
+    );
+
+    expect(needles[0]).toBe(
+      "/bin/zsh -lc 'env -u ELECTRON_RUN_AS_NODE GENIRO_UI_USER_DATA=/tmp/review pnpm dev -- --remoteDebuggingPort 9341 > /tmp/dev.log 2>&1'",
+    );
+    expect(needles).toContain('pnpm dev -- --remoteDebuggingPort 9341');
+    const exec: ProcessRow[] = [
+      {
+        pid: 7,
+        ppid: 1,
+        args: 'node /opt/homebrew/bin/pnpm dev -- --remoteDebuggingPort 9341',
+      },
+    ];
+    expect(isCommandRunning(exec, needles[0] ?? '')).toBe(false);
+    expect(needles.some((needle) => isCommandRunning(exec, needle))).toBe(true);
+  });
+
+  it('splits a chain and drops the builtins that leave no process', () => {
+    expect(commandNeedles('cd apps/ui && PORT=3000 pnpm start')).toEqual([
+      'cd apps/ui && PORT=3000 pnpm start',
+      'pnpm start',
+    ]);
+  });
+
+  it('keeps nothing too short to be specific', () => {
+    expect(commandNeedles('ls')).toEqual([]);
   });
 });

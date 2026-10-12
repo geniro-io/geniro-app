@@ -178,6 +178,7 @@ import {
 } from './utils/claude-mcp-toggle.utils';
 import { claudeDisallowedMcpArgs } from './utils/claude-mcp-tool-name.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
+import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
   readPlanLimitsReply,
@@ -2266,9 +2267,15 @@ export class ClaudeAdapter extends AgentAdapter {
       // The base's stateless literal, which has no `awaitPromptReady` at all —
       // absence is what keeps the opening write SYNCHRONOUS for a turn with
       // nothing to wait for, rather than a gate that resolves instantly.
-      return super.createTurnDriver(input);
+      const driver = super.createTurnDriver(input);
+      const modelMismatch = new ClaudeModelMismatchNotice(input.model);
+      return {
+        ...driver,
+        onMessage: (obj) => modelMismatch.onMessage(obj, driver.onMessage(obj)),
+      };
     }
     return new ClaudeTurnDriver({
+      requestedModel: input.model,
       mapMessage: (obj) => this.mapMessage(obj),
       buildApprovalResponse: (id, allow, updatedInput) =>
         this.buildApprovalResponse(id, allow, updatedInput),

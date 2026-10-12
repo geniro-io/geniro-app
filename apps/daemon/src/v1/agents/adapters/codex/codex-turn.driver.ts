@@ -23,6 +23,7 @@ import {
   CODEX_COMPACT_PROMPT,
   CODEX_DELEGATE_LABEL_MAX_CHARS,
   CODEX_METHODS,
+  CODEX_MODEL_MISMATCH_MESSAGE,
   CODEX_NOTIFICATIONS,
   CODEX_OLLAMA_PROVIDER,
   CODEX_REASONING_SUMMARY,
@@ -113,6 +114,7 @@ const PLAN_STATUS: Readonly<Record<string, AgentTaskStatus>> = {
  * default; surviving a turn is a deliberate move to the session.
  */
 export class CodexTurnDriver {
+  private modelNoticeReported = false;
   /** The turn codex opened for this driver's prompt, once it says which. */
   private turnId: string | null = null;
   /** The newest agent message, carried as the turn's `finalText`. */
@@ -305,6 +307,7 @@ export class CodexTurnDriver {
         const model = asString(record?.model);
         if (model) {
           this.session.threadModel = model;
+          events.push(...this.modelMismatchNotice(model));
         }
         // A resumed thread keeps the mode its last turn ran in — plan mode
         // included, whatever process ran it — and a fresh one starts outside
@@ -336,10 +339,17 @@ export class CodexTurnDriver {
         break;
       }
       case 'turn_start': {
-        const id = asString(asRecord(asRecord(result)?.turn)?.id);
+        const record = asRecord(result);
+        const turn = asRecord(record?.turn);
+        const id = asString(turn?.id);
         if (id !== null && this.turnId === null) {
           this.turnId = id;
         }
+        events.push(
+          ...this.onReportedModel(
+            asString(record?.model) ?? asString(turn?.model),
+          ),
+        );
         if (this.switchesPlanMode) {
           this.session.notePlanMode(this.options.policy.plan);
         }
@@ -626,11 +636,12 @@ export class CodexTurnDriver {
         return [];
       }
       case CODEX_NOTIFICATIONS.turnStarted: {
-        const id = asString(asRecord(record.turn)?.id);
+        const turn = asRecord(record.turn);
+        const id = asString(turn?.id);
         if (id !== null && this.turnId === null) {
           this.turnId = id;
         }
-        return [];
+        return this.onReportedModel(asString(turn?.model));
       }
       case CODEX_NOTIFICATIONS.agentMessageDelta: {
         const delta = asString(record.delta);
@@ -648,7 +659,13 @@ export class CodexTurnDriver {
       case CODEX_NOTIFICATIONS.planUpdated:
         return this.onPlanUpdated(record);
       case CODEX_NOTIFICATIONS.tokenUsageUpdated:
-        return this.onTokenUsage(readTokenUsage(record));
+        return [
+          ...this.onReportedModel(
+            asString(record.model) ??
+              asString(asRecord(record.tokenUsage)?.model),
+          ),
+          ...this.onTokenUsage(readTokenUsage(record)),
+        ];
       case CODEX_NOTIFICATIONS.error:
         return this.onError(record);
       case CODEX_NOTIFICATIONS.modelRerouted:
@@ -1007,17 +1024,57 @@ export class CodexTurnDriver {
     if (!to) {
       return [];
     }
-    const from = asString(record.fromModel);
+    const from = this.input.model ?? asString(record.fromModel);
     const reason = asString(record.reason);
     this.session.threadModel = to;
     this.session.noteFacts({ model: to });
+    const notices: AgentEvent[] = [];
+    if (!this.modelNoticeReported) {
+      this.modelNoticeReported = true;
+      notices.push({
+        type: 'notice',
+        severity: 'info',
+        message: `codex ran this turn on ${to}${from ? ` instead of ${from}` : ''}${reason ? ` (${reason})` : ''}.`,
+      });
+    }
+    return [...notices, { type: 'turn_model', model: to }];
+  }
+
+  private modelMismatchNotice(model: string): AgentEvent[] {
+    const requested = this.input.model?.trim();
+    // Unresolved aliases and custom providers cannot be compared reliably.
+    if (
+      this.modelNoticeReported ||
+      !requested ||
+      !/^(?:gpt-\d|o\d)/.test(requested) ||
+      requested.endsWith('-latest') ||
+      requested === model
+    ) {
+      return [];
+    }
+    this.modelNoticeReported = true;
     return [
       {
         type: 'notice',
         severity: 'info',
-        message: `codex ran this turn on ${to}${from ? ` instead of ${from}` : ''}${reason ? ` (${reason})` : ''}.`,
+        message: CODEX_MODEL_MISMATCH_MESSAGE.replace('%served', model).replace(
+          '%requested',
+          requested,
+        ),
       },
-      { type: 'turn_model', model: to },
+    ];
+  }
+
+  private onReportedModel(model: string | null): AgentEvent[] {
+    if (!model) {
+      return [];
+    }
+    const changed = this.session.threadModel !== model;
+    this.session.threadModel = model;
+    this.session.noteFacts({ model });
+    return [
+      ...this.modelMismatchNotice(model),
+      ...(changed ? [{ type: 'turn_model' as const, model }] : []),
     ];
   }
 
@@ -1027,6 +1084,7 @@ export class CodexTurnDriver {
       return [];
     }
     this.settled = true;
+    const modelEvents = this.onReportedModel(asString(turn?.model));
     const status = asString(turn?.status);
     // Every ending carries what the turn spent: a stopped or failed codex turn
     // has done its requests all the same, and its usage — its own and its
@@ -1034,7 +1092,7 @@ export class CodexTurnDriver {
     // chat 00ffe314 had spent $0.48 that no row carried). The live figure is
     // zeroed FIRST, because from the next event on that money is durable.
     const usage = this.settleUsage(asNumber(turn?.durationMs));
-    const events = this.retireLiveCost();
+    const events = [...modelEvents, ...this.retireLiveCost()];
     if (status === 'interrupted') {
       events.push({
         type: 'turn_cancelled',

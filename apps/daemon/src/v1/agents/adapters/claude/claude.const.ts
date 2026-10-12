@@ -2126,3 +2126,8 @@ export const CLAUDE_COMMANDS_CHANGED_KEY = 'commands';
  * recognisable in a stdio log.
  */
 export const CLAUDE_RELOAD_COMMANDS_REQUEST_ID = 'geniro-reload-commands';
+
+// ── Model notices ──────────────────────────────────────────────────────────
+
+export const CLAUDE_MODEL_MISMATCH_MESSAGE =
+  'Claude reported model %served for this turn; requested %requested.';

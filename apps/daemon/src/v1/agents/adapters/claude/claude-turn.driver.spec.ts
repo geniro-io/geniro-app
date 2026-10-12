@@ -13,6 +13,8 @@ import {
   CLAUDE_MCP_RECONNECTED_MESSAGE,
 } from './claude.const';
 import { ClaudeTurnDriver } from './claude-turn.driver';
+import { mapClaudeMessage } from './utils/claude-message.utils';
+import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
 
 /** One `mcp_status` reading, as the CLI would answer poll `id`. */
 const reply = (
@@ -42,6 +44,98 @@ const hook = (
 const refusal = (id: string): unknown => ({
   type: 'control_response',
   response: { subtype: 'error', request_id: id, error: 'unknown subtype' },
+});
+
+describe('the model this turn served', () => {
+  function driverFor(requestedModel?: string) {
+    const ledger = new ClaudeSessionCostLedger();
+    return new ClaudeTurnDriver({
+      requestedModel,
+      mapMessage: (obj) => mapClaudeMessage(obj, ledger),
+      buildApprovalResponse: () => undefined,
+    });
+  }
+
+  const assistant = (model?: string, parentToolUseId?: string) => ({
+    type: 'assistant',
+    parent_tool_use_id: parentToolUseId ?? null,
+    message: { model, content: [{ type: 'text', text: 'Hello' }] },
+  });
+
+  const result = (model?: string) => ({
+    type: 'result',
+    subtype: 'success',
+    result: 'Hello',
+    ...(model
+      ? { modelUsage: { [model]: { contextWindow: 200_000, inputTokens: 10 } } }
+      : {}),
+  });
+
+  it('posts one notice across assistant and result reports, naming both ids', () => {
+    const driver = driverFor('claude-opus-4-6');
+    const events = [
+      ...driver.onMessage(assistant('claude-sonnet-4-6')),
+      ...driver.onMessage(assistant('claude-sonnet-4-6')),
+      ...driver.onMessage(result('claude-sonnet-4-6')),
+    ];
+    const notices = events.filter((event) => event.type === 'notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.message).toContain('claude-opus-4-6');
+    expect(notices[0]?.message).toContain('claude-sonnet-4-6');
+  });
+
+  it('checks a model reported only on the result', () => {
+    const notices = driverFor('claude-opus-4-6')
+      .onMessage(result('claude-sonnet-4-6'))
+      .filter((event) => event.type === 'notice');
+    expect(notices).toHaveLength(1);
+  });
+
+  it('gives the next turn on the same driver its own notice allowance', () => {
+    const driver = driverFor('claude-opus-4-6');
+    for (let turn = 0; turn < 2; turn += 1) {
+      const events = [
+        ...driver.onMessage(assistant('claude-sonnet-4-6')),
+        ...driver.onMessage(result('claude-sonnet-4-6')),
+      ];
+      expect(events.filter((event) => event.type === 'notice')).toHaveLength(1);
+    }
+  });
+
+  it.each(['opus', 'sonnet', 'opus[1m]', undefined])(
+    'does not guess an id for requested alias %s',
+    (requested) => {
+      const events = driverFor(requested).onMessage(
+        assistant('claude-opus-4-6'),
+      );
+      expect(events.filter((event) => event.type === 'notice')).toEqual([]);
+    },
+  );
+
+  it('recognizes the same explicit id with a context-window suffix', () => {
+    const driver = driverFor('claude-opus-4-6[1m]');
+    const events = [
+      ...driver.onMessage(assistant('claude-opus-4-6')),
+      ...driver.onMessage(result('claude-opus-4-6[1m]')),
+    ];
+    expect(events.filter((event) => event.type === 'notice')).toEqual([]);
+  });
+
+  it('says nothing when the turn reports no model', () => {
+    const driver = driverFor('claude-opus-4-6');
+    const events = [
+      ...driver.onMessage(assistant()),
+      ...driver.onMessage(result()),
+    ];
+    expect(events.filter((event) => event.type === 'notice')).toEqual([]);
+  });
+
+  it('does not compare a sub-agent model to the parent request', () => {
+    const events = driverFor('claude-opus-4-6').onMessage(
+      assistant('claude-sonnet-4-6', 'tool-delegate'),
+    );
+    expect(events.filter((event) => event.type === 'notice')).toEqual([]);
+  });
 });
 
 /**

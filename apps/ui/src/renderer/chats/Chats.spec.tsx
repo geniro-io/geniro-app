@@ -6992,6 +6992,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: 'look at this',
         images: [{ mediaType: 'image/png', data: PNG_BASE64 }],
       },
@@ -7058,6 +7059,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: '',
         images: [{ mediaType: 'image/png', data: PNG_BASE64 }],
       },
@@ -7813,7 +7815,10 @@ describe('Chats queued messages', () => {
     });
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'queued question' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'queued question',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -7855,7 +7860,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'create pr' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'create pr',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -7899,7 +7907,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'change the plan' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'change the plan',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -7941,7 +7952,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'one more thing' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'one more thing',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -8014,7 +8028,7 @@ describe('Chats queued messages', () => {
     });
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: '/compact' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: '/compact' },
     });
   });
 
@@ -8152,7 +8166,7 @@ describe('Chats queued messages', () => {
     // idle run kicks the drain, since there is no turn whose ending would.
     expect(api.sendChatMessage).toHaveBeenNthCalledWith(1, {
       runId: 'r1',
-      sendMessageDto: { text: 'first' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'first' },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
@@ -8165,7 +8179,7 @@ describe('Chats queued messages', () => {
     });
     expect(api.sendChatMessage).toHaveBeenNthCalledWith(2, {
       runId: 'r1',
-      sendMessageDto: { text: 'second' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'second' },
     });
   });
 
@@ -8427,7 +8441,10 @@ describe('Chats queued messages', () => {
     await clickStripControl(container, 'Resume');
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'held back' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'held back',
+      },
     });
     expect(strip()).toBeNull();
   });
@@ -8458,7 +8475,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'first' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'first' },
     });
 
     // The turn that press started now ends — and 'second' STAYS, which is what
@@ -8492,7 +8509,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'first' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'first' },
     });
     // 'second' still waits its turn.
     expect(
@@ -8505,7 +8522,7 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'second' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'second' },
     });
   });
 
@@ -8602,7 +8619,10 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r2',
-      sendMessageDto: { text: 'second run' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'second run',
+      },
     });
     await act(async () => {
       settleFirst(msg(10, 'user', 'first run'));
@@ -8723,6 +8743,11 @@ describe('Chats queued messages', () => {
         await vi.advanceTimersByTimeAsync(600);
       });
       expect(api.sendChatMessage).toHaveBeenCalledTimes(3);
+      const ids = api.sendChatMessage.mock.calls.map(
+        ([request]) => request.sendMessageDto.clientMessageId,
+      );
+      expect(ids[0]).toEqual(expect.any(String));
+      expect(new Set(ids).size).toBe(1);
 
       // Third attempt succeeded: no error line, nothing left queued.
       expect(container.textContent).not.toContain('RUN_BUSY');
@@ -8845,7 +8870,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'the second\nthought' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'the second\nthought',
+      },
     });
   });
 
@@ -8867,7 +8895,7 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'urgent' },
+      sendMessageDto: { clientMessageId: expect.any(String), text: 'urgent' },
     });
     // It left the queue, so the drain cannot send it a second time.
     expect(
@@ -8985,9 +9013,18 @@ describe('Chats queued messages', () => {
       });
 
       expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+      expect(
+        api.sendChatMessage.mock.calls[1]![0].sendMessageDto.clientMessageId,
+      ).not.toBe(
+        api.sendChatMessage.mock.calls[0]![0].sendMessageDto.clientMessageId,
+      );
+
       expect(api.sendChatMessage).toHaveBeenLastCalledWith({
         runId: 'r1',
-        sendMessageDto: { text: 'second draft' },
+        sendMessageDto: {
+          clientMessageId: expect.any(String),
+          text: 'second draft',
+        },
       });
     } finally {
       vi.useRealTimers();
@@ -9309,7 +9346,10 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'later message' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'later message',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
@@ -9529,7 +9569,10 @@ describe('Chats run composer chips', () => {
 
     expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledWith({
       runId: 'w1',
-      sendMessageDto: { text: 'and the tests too' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'and the tests too',
+      },
     });
     expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
@@ -9619,7 +9662,10 @@ describe('Chats queued messages — a workflow run', () => {
 
     expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledWith({
       runId: 'w1',
-      sendMessageDto: { text: 'collect my feedback first' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'collect my feedback first',
+      },
     });
   });
 
@@ -13274,6 +13320,7 @@ describe('Chats — a screenshot pasted into a question answer', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: '',
         images: [{ mediaType: 'image/png', data: PNG_B64 }],
       },
@@ -15198,7 +15245,7 @@ describe('Chats — a queue in a thread you are not watching', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: QUEUED },
+      sendMessageDto: { clientMessageId: expect.any(String), text: QUEUED },
     });
   });
 
@@ -15291,7 +15338,7 @@ describe('Chats — a queue in a thread you are not watching', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: QUEUED },
+      sendMessageDto: { clientMessageId: expect.any(String), text: QUEUED },
     });
   });
 });
@@ -16827,6 +16874,7 @@ describe('Chats — a send and a paste that outlive a thread switch', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: 'what is wrong here',
         images: [{ mediaType: 'image/png', data: READ_BASE64 }],
       },
@@ -16855,6 +16903,7 @@ describe('Chats — a send and a paste that outlive a thread switch', () => {
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r-new',
       sendMessageDto: {
+        clientMessageId: expect.any(String),
         text: 'first message',
         images: [{ mediaType: 'image/png', data: READ_BASE64 }],
       },

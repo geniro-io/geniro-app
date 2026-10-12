@@ -59,6 +59,7 @@ import type { AttachmentStoreService } from '../../agents/services/attachment-st
 import type { ChatUploadStoreService } from '../../agents/services/chat-upload-store.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
+import { MessageSendService } from '../../agents/services/message-send.service';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
@@ -191,6 +192,39 @@ class FakeRunDao {
 }
 
 class FakeItemDao {
+  async acknowledgeUserMessage(
+    runId: string,
+    itemId: string,
+    clientMessageId: string,
+  ): Promise<Item> {
+    const item = this.items.find(
+      (row) => row.runId === runId && row.id === itemId,
+    );
+    if (!item) {
+      throw new Error('message missing');
+    }
+    item.payload = JSON.stringify({
+      ...JSON.parse(item.payload),
+      clientMessageId,
+    });
+    return item;
+  }
+
+  async userMessageByClientId(
+    runId: string,
+    clientMessageId: string,
+  ): Promise<Item | null> {
+    return (
+      this.items.find(
+        (item) =>
+          item.runId === runId &&
+          item.kind === 'message' &&
+          item.role === 'user' &&
+          JSON.parse(item.payload).clientMessageId === clientMessageId,
+      ) ?? null
+    );
+  }
+
   readonly items: Item[] = [];
   /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
   readonly hardDeleted: unknown[] = [];
@@ -1121,6 +1155,7 @@ function setup(
       sync: async () => {},
     } as unknown as PullRequestCaptureService,
     itemDao as unknown as ItemDao,
+    new MessageSendService(itemDao as unknown as ItemDao),
     nodeDao as unknown as NodeStateDao,
     callContextDao as unknown as CallContextDao,
     bus,
@@ -1278,6 +1313,45 @@ const LINEAR: Workflow = {
 };
 
 describe('GraphExecutorService', () => {
+  it('replays workflow sends through both live delivery and a new pass', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'dedupe',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const [first, replay] = await Promise.all([
+      service.sendMessage(run.id, 'more', [], 'root-1'),
+      service.sendMessage(run.id, 'more', [], 'root-1'),
+    ]);
+    expect(replay).toEqual(first);
+    expect(first.payload).toMatchObject({ clientMessageId: 'root-1' });
+    expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(userTexts(itemDao, run.id)).toEqual(['go', 'more']);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    const [next, nextReplay] = await Promise.all([
+      service.sendMessage(run.id, 'next', [], 'root-2'),
+      service.sendMessage(run.id, 'next', [], 'root-2'),
+    ]);
+    await drain();
+    expect(nextReplay).toEqual(next);
+    expect(next.payload).toMatchObject({ clientMessageId: 'root-2' });
+    expect(claude.starts).toHaveLength(2);
+    expect(userTexts(itemDao, run.id)).toEqual(['go', 'more', 'next']);
+    await expect(
+      service.sendMessage(run.id, 'changed', [], 'root-2'),
+    ).rejects.toMatchObject({ errorCode: 'CLIENT_MESSAGE_ID_CONFLICT' });
+    completeTurn(claude.starts[1]!, 'done');
+    await drain();
+  });
+
   it('files the run into the group that claims its WORKFLOW', async () => {
     // A workflow run row is created HERE and nowhere else, so a rule applied
     // only by the chat service would never reach one — which is the whole of
@@ -3994,7 +4068,30 @@ describe('GraphExecutorService — agent calls', () => {
       'helper',
       'call-1',
       'use v2',
+      [],
+      'phone-call',
     );
+    expect(
+      await service.sendCallMessage(
+        run.id,
+        'helper',
+        'call-1',
+        'use v2',
+        [],
+        'phone-call',
+      ),
+    ).toEqual(item);
+    await expect(
+      service.sendCallMessage(
+        run.id,
+        'helper',
+        'call-1',
+        'changed',
+        [],
+        'phone-call',
+      ),
+    ).rejects.toMatchObject({ errorCode: 'CLIENT_MESSAGE_ID_CONFLICT' });
+    expect(callee.sendUserMessage).toHaveBeenCalledTimes(1);
     await drain();
 
     expect(callee.sendUserMessage).toHaveBeenCalledWith({
@@ -4018,6 +4115,17 @@ describe('GraphExecutorService — agent calls', () => {
       result: { call_id: 'call-1', agent: 'helper', text: 'helped' },
     });
     await drain();
+    expect(
+      await service.sendCallMessage(
+        run.id,
+        'helper',
+        'call-1',
+        'use v2',
+        [],
+        'phone-call',
+      ),
+    ).toEqual(item);
+    expect(callee.sendUserMessage).toHaveBeenCalledTimes(1);
     // Settled: the callee has no turn left to join, and nothing re-routes it.
     await expect(
       service.sendCallMessage(run.id, 'helper', 'call-1', 'too late'),

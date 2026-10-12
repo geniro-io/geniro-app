@@ -197,7 +197,12 @@ describe('messaging a call’s callee directly', () => {
     await pressEnter(type('  use the rain metaphor  '));
     await flush();
 
-    expect(send).toHaveBeenCalledWith(TARGET, 'use the rain metaphor', []);
+    expect(send).toHaveBeenCalledWith(
+      TARGET,
+      'use the rain metaphor',
+      [],
+      expect.any(String),
+    );
     expect(container.querySelector('textarea')).toBeNull();
     expect(container.querySelector('[data-slot="queued-message"]')).toBeNull();
   });
@@ -223,9 +228,12 @@ describe('messaging a call’s callee directly', () => {
     await pressEnter(type('see this'));
     await flush();
 
-    expect(send).toHaveBeenCalledWith(TARGET, 'see this', [
-      { mediaType: 'image/png', data: Buffer.from(png).toString('base64') },
-    ]);
+    expect(send).toHaveBeenCalledWith(
+      TARGET,
+      'see this',
+      [{ mediaType: 'image/png', data: Buffer.from(png).toString('base64') }],
+      expect.any(String),
+    );
   });
 
   it('queues a second message behind one still being delivered, and sends it after', async () => {
@@ -264,7 +272,12 @@ describe('messaging a call’s callee directly', () => {
     await flush();
 
     expect(send).toHaveBeenCalledTimes(2);
-    expect(send).toHaveBeenLastCalledWith(TARGET, 'second', []);
+    expect(send).toHaveBeenLastCalledWith(
+      TARGET,
+      'second',
+      [],
+      expect.any(String),
+    );
   });
 
   it('retries a refusal the callee may clear, and delivers', async () => {
@@ -286,6 +299,10 @@ describe('messaging a call’s callee directly', () => {
     });
 
     expect(send).toHaveBeenCalledTimes(2);
+    const originalId = send.mock.calls[0]![3];
+    expect(originalId).toEqual(expect.any(String));
+    expect(originalId.length).toBeGreaterThan(0);
+    expect(send.mock.calls[1]![3]).toBe(originalId);
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
@@ -325,7 +342,12 @@ describe('messaging a call’s callee directly', () => {
     await flush();
 
     expect(send).toHaveBeenCalledTimes(2);
-    expect(send).toHaveBeenLastCalledWith(TARGET, 'second', []);
+    expect(send).toHaveBeenLastCalledWith(
+      TARGET,
+      'second',
+      [],
+      expect.any(String),
+    );
   });
 
   it('on a paused queue releases only the message pressed, even when it is removed mid-retry', async () => {

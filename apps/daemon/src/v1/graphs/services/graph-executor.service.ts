@@ -49,6 +49,7 @@ import { ArtifactStoreService } from '../../agents/services/artifact-store.servi
 import { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
+import { MessageSendService } from '../../agents/services/message-send.service';
 import {
   partialOwnerKey,
   PartialStreamService,
@@ -458,7 +459,10 @@ function messagePayload(
   text: string,
   stored: readonly AttachmentWire[],
 ): { text: string; images?: AttachmentWire[] } {
-  return { text, ...(stored.length > 0 ? { images: [...stored] } : {}) };
+  return {
+    text,
+    ...(stored.length > 0 ? { images: [...stored] } : {}),
+  };
 }
 
 interface DroppedNodeSetting {
@@ -683,6 +687,7 @@ export class GraphExecutorService
     private readonly runDao: RunDao,
     private readonly pullRequests: PullRequestCaptureService,
     private readonly itemDao: ItemDao,
+    private readonly messageSends: MessageSendService,
     private readonly nodeStateDao: NodeStateDao,
     private readonly callContextDao: CallContextDao,
     private readonly bus: AgentEventBus,
@@ -1328,33 +1333,39 @@ export class GraphExecutorService
     runId: string,
     text: string,
     images: SendMessageImage[] = [],
+    clientMessageId?: string,
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = await this.assertRunTakesMessage(em, runId, text, images);
-    const live = this.liveRuns.get(runId);
-    if (live) {
-      const item = await live.deliver(text, images);
-      if (item !== null) {
-        return item;
+    return this.messageSends.send(runId, text, clientMessageId, async () => {
+      const live = this.liveRuns.get(runId);
+      if (live) {
+        const item = await live.deliver(text, images);
+        if (item !== null) {
+          return item;
+        }
       }
-    }
-    return this.walkAgain(em, run, text, images);
+      return this.walkAgain(em, run, text, images);
+    });
   }
 
-  /** A message from the user straight to the callee of one running call. */
+  /** A user retry can replay its row after the addressed call has settled. */
   async sendCallMessage(
     runId: string,
     nodeId: string,
     callId: string,
     text: string,
     images: SendMessageImage[] = [],
+    clientMessageId?: string,
   ): Promise<ItemWire> {
     await this.assertRunTakesMessage(this.em.fork(), runId, text, images);
-    const live = this.liveRuns.get(runId);
-    if (!live) {
-      throw callNotRunning();
-    }
-    return live.deliverToCall(nodeId, callId, text, images);
+    return this.messageSends.send(runId, text, clientMessageId, async () => {
+      const live = this.liveRuns.get(runId);
+      if (!live) {
+        throw callNotRunning();
+      }
+      return live.deliverToCall(nodeId, callId, text, images);
+    });
   }
 
   /** The refusals every message into a workflow run shares, whatever it targets. */

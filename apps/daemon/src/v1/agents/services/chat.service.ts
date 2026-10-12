@@ -157,6 +157,7 @@ import { FindingsReportBroker } from './findings-report.broker';
 import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
+import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
@@ -553,6 +554,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
+    private readonly messageSends: MessageSendService,
     private readonly nodeStateDao: NodeStateDao,
     /**
      * Which pull requests each listed run opened — read off its own transcript
@@ -4126,7 +4128,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     text: string,
     images: SendMessageImage[] = [],
-    options: { resumeOnly?: boolean } = {},
+    options: { resumeOnly?: boolean; clientMessageId?: string } = {},
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
@@ -4140,6 +4142,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         'this chat is archived — unarchive it to send a message',
       );
     }
+    return this.messageSends.send(runId, text, options.clientMessageId, () =>
+      this.sendMessageOnce(em, run, text, images, options),
+    );
+  }
+
+  private async sendMessageOnce(
+    em: EntityManager,
+    run: Run,
+    text: string,
+    images: SendMessageImage[],
+    options: { resumeOnly?: boolean },
+  ): Promise<ItemWire> {
+    const runId = run.id;
     if (!run.cwd || !run.agentKind) {
       throw new BadRequestException(
         'RUN_NOT_CONFIGURED',

@@ -229,7 +229,11 @@ describe('WorkflowChatPanel', () => {
 
     expect(onBeforeSend).toHaveBeenCalledTimes(1);
     const send = chat.current?.post as ReturnType<typeof vi.fn>;
-    expect(send).toHaveBeenCalledWith('rename the reviewer', []);
+    expect(send).toHaveBeenCalledWith(
+      'rename the reviewer',
+      [],
+      expect.any(String),
+    );
     expect(onBeforeSend.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       send.mock.invocationCallOrder[0] ?? 0,
     );
@@ -268,7 +272,7 @@ describe('WorkflowChatPanel', () => {
     await paint();
 
     expect(onTurnSettled).toHaveBeenCalledTimes(1);
-    expect(post).toHaveBeenCalledWith('add a reviewer', []);
+    expect(post).toHaveBeenCalledWith('add a reviewer', [], expect.any(String));
     expect(onTurnSettled.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       post.mock.invocationCallOrder[0] ?? 0,
     );

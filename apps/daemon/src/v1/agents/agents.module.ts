@@ -61,6 +61,7 @@ import { GlobalChatSearchService } from './services/global-chat-search.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
+import { MessageSendService } from './services/message-send.service';
 import { MetricsBroker } from './services/metrics.broker';
 import { ModelParametersService } from './services/model-parameters.service';
 import { ModelPriceCatalog } from './services/model-price-catalog.service';
@@ -306,6 +307,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunGroupsService,
     ShellOutputService,
     ItemSeqAllocator,
+    MessageSendService,
     ItemDao,
     NodeStateDao,
     CallContextDao,
@@ -410,6 +412,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // the same allocator a chat's are, since its kept agent processes write
     // between passes.
     ItemSeqAllocator,
+    MessageSendService,
     SkillHarvestStore,
     // Exported for the graph executor's own turn seam: a node's turn reports
     // what it loaded, and that report is what keeps the MCP panel off a cold

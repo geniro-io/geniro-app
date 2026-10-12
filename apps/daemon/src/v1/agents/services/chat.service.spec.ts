@@ -96,6 +96,7 @@ import { FindingsReportBroker } from './findings-report.broker';
 import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
+import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
@@ -402,6 +403,39 @@ class FakeRunDao {
 }
 
 class FakeItemDao {
+  async acknowledgeUserMessage(
+    runId: string,
+    itemId: string,
+    clientMessageId: string,
+  ): Promise<Item> {
+    const item = this.items.find(
+      (row) => row.runId === runId && row.id === itemId,
+    );
+    if (!item) {
+      throw new Error('message missing');
+    }
+    item.payload = JSON.stringify({
+      ...JSON.parse(item.payload),
+      clientMessageId,
+    });
+    return item;
+  }
+
+  async userMessageByClientId(
+    runId: string,
+    clientMessageId: string,
+  ): Promise<Item | null> {
+    return (
+      this.items.find(
+        (item) =>
+          item.runId === runId &&
+          item.kind === 'message' &&
+          item.role === 'user' &&
+          JSON.parse(item.payload).clientMessageId === clientMessageId,
+      ) ?? null
+    );
+  }
+
   readonly items: Item[] = [];
   readonly hardDeleted: unknown[] = [];
   failNextKind: string | null = null;
@@ -1044,6 +1078,7 @@ function setup(
     em,
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
+    new MessageSendService(itemDao as unknown as ItemDao),
     nodeDao as unknown as NodeStateDao,
     // Inert: the capture pass reads its own transcript and writes its own
     // column, and no case in this spec is about a pull request. It stays a
@@ -4719,6 +4754,43 @@ describe('ChatService', () => {
     );
     expect(followUp).toBeGreaterThanOrEqual(0);
     expect(reply).toBeGreaterThan(followUp);
+  });
+
+  it('replays concurrent sends without another row, process or live delivery, and refuses changed text', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const send = (text: string, clientMessageId: string) =>
+      service.sendMessage(run.id, text, [], { clientMessageId });
+    const [first, replay] = await Promise.all([
+      send('first', 'phone-1'),
+      send('first', 'phone-1'),
+    ]);
+    expect(replay).toEqual(first);
+    expect(first.payload).toMatchObject({
+      text: 'first',
+      clientMessageId: 'phone-1',
+    });
+    expect(itemDao.items.filter((item) => item.role === 'user')).toHaveLength(
+      1,
+    );
+    expect(claude.handles).toHaveLength(1);
+    await expect(send('changed', 'phone-1')).rejects.toMatchObject({
+      errorCode: 'CLIENT_MESSAGE_ID_CONFLICT',
+      statusCode: 409,
+    });
+    const [live, liveReplay] = await Promise.all([
+      send('also', 'phone-2'),
+      send('also', 'phone-2'),
+    ]);
+    expect(liveReplay).toEqual(live);
+    expect(claude.handles[0]!.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(itemDao.items.filter((item) => item.role === 'user')).toHaveLength(
+      2,
+    );
+    claude.finish();
+    await drain();
+    expect(await send('first', 'phone-1')).toEqual(first);
+    expect(claude.handles).toHaveLength(1);
   });
 
   it('refuses with RUN_BUSY when the running turn cannot take one', async () => {
@@ -8589,8 +8661,8 @@ describe('ChatService — delete is a one-way door', () => {
     }
   });
 
-  it('retains a carried summary when the local model is unavailable', async () => {
-    const { service, runDao, claude } = setup();
+  it('retains a carried summary and retries the same send id after a model preflight failure', async () => {
+    const { service, runDao, itemDao, claude } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
       cwd: process.cwd(),
@@ -8601,13 +8673,42 @@ describe('ChatService — delete is a one-way door', () => {
       .spyOn(globalThis, 'fetch')
       .mockRejectedValue(new Error('Ollama stopped'));
     try {
-      await expect(service.sendMessage(run.id, 'continue')).rejects.toThrow(
-        'Ollama stopped',
-      );
+      await expect(
+        service.sendMessage(run.id, 'continue', [], {
+          clientMessageId: 'phone-recovery',
+        }),
+      ).rejects.toThrow('Ollama stopped');
       expect((await runDao.getById(run.id))?.pendingContext).toBe(
         'we agreed on plan B',
       );
       expect(claude.sessions).toHaveLength(0);
+      expect(
+        await itemDao.userMessageByClientId(run.id, 'phone-recovery'),
+      ).toBeNull();
+      fetcher.mockResolvedValue(
+        new Response(JSON.stringify({ capabilities: ['completion', 'tools'] })),
+      );
+      const accepted = await service.sendMessage(run.id, 'continue', [], {
+        clientMessageId: 'phone-recovery',
+      });
+      expect(accepted.payload).toMatchObject({
+        text: 'continue',
+        clientMessageId: 'phone-recovery',
+      });
+      expect(claude.sessions).toHaveLength(1);
+      expect(
+        await service.sendMessage(run.id, 'continue', [], {
+          clientMessageId: 'phone-recovery',
+        }),
+      ).toEqual(accepted);
+      expect(claude.handles).toHaveLength(1);
+      expect(
+        itemDao.items.filter(
+          (item) =>
+            item.role === 'user' &&
+            JSON.parse(item.payload).clientMessageId === 'phone-recovery',
+        ),
+      ).toHaveLength(1);
     } finally {
       fetcher.mockRestore();
     }

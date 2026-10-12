@@ -229,6 +229,12 @@ export const sendMessageSchema = z
     // message — no text AND no images — refused.
     text: z.string(),
     images: messageImagesSchema.optional(),
+    clientMessageId: z
+      .string()
+      .min(1)
+      .max(128)
+      .optional()
+      .describe('ID generated once per send and reused for retries'),
   })
   .refine(
     (dto) => dto.text.trim().length > 0 || (dto.images?.length ?? 0) > 0,

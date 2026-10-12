@@ -59,6 +59,45 @@ describe('ItemDao (in-memory sqlite)', () => {
     return dao.create({ runId, seq, kind, payload });
   }
 
+  it('finds a send id only on a live user message in its own run', async () => {
+    const payload = JSON.stringify({
+      text: 'hello',
+      clientMessageId: 'phone-1',
+    });
+    const add = (runId: string, seq: number, role: string, body = payload) =>
+      dao.create({ runId, seq, kind: 'message', role, payload: body });
+    await add('other-run', 0, 'user');
+    await add('run-a', 0, 'assistant');
+    const deleted = await add('run-a', 1, 'user');
+    await orm.em
+      .fork()
+      .createQueryBuilder(Item)
+      .update({ deletedAt: new Date() })
+      .where({ id: deleted.id })
+      .execute();
+    await add('run-a', 2, 'user', 'invalid json');
+    const expected = await add(
+      'run-a',
+      3,
+      'user',
+      JSON.stringify({ text: 'hello' }),
+    );
+    expect(await dao.userMessageByClientId('run-a', 'phone-1')).toBeNull();
+    const accepted = await dao.acknowledgeUserMessage(
+      'run-a',
+      expected.id,
+      'phone-1',
+    );
+    expect(JSON.parse(accepted.payload)).toEqual({
+      text: 'hello',
+      clientMessageId: 'phone-1',
+    });
+    expect((await dao.userMessageByClientId('run-a', 'phone-1'))?.id).toBe(
+      expected.id,
+    );
+    expect(await dao.userMessageByClientId('run-a', 'missing')).toBeNull();
+  });
+
   describe('getByRun', () => {
     it('selects a root hand-off history before limiting, excluding its callees and incoming calls', async () => {
       const add = (

@@ -435,7 +435,9 @@ export class ChatController {
     @Param('runId') runId: string,
     @Body() dto: SendMessageDto,
   ): Promise<ItemWire> {
-    return this.chatService.sendMessage(runId, dto.text, dto.images);
+    return this.chatService.sendMessage(runId, dto.text, dto.images, {
+      clientMessageId: dto.clientMessageId,
+    });
   }
 
   /**

@@ -1,3 +1,4 @@
+import { awakeTimeout, type AwakeTimer } from '../../../../utils/sleep-watch';
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
 import { delegateCloseEvent } from '../../utils/open-delegates';
 import type {
@@ -999,6 +1000,10 @@ export const QUEUED_FOR_SUBAGENTS_NOTICE =
  * outlasted it would end in that deadline's "produced nothing" failure, which
  * is false about a turn that DID produce its answer. Past this, the delegates
  * still out stay watched and their closes land after the turn.
+ *
+ * Awake time only ({@link awakeTimeout}), like that deadline: delegates asleep
+ * with the machine have not stopped moving, and both windows restart in full
+ * at a wake, so this one still ends first.
  */
 export const DELEGATE_HOLD_IDLE_MS = 25 * 60_000;
 
@@ -1257,7 +1262,7 @@ export class AcpTurnDriver {
   /** The stop reason of the prompt the hold is standing in for. */
   private heldStopReason: string | null = null;
   /** Gives up on a hold nothing has moved for — see {@link DELEGATE_HOLD_IDLE_MS}. */
-  private holdTimer: ReturnType<typeof setTimeout> | null = null;
+  private holdTimer: AwakeTimer | null = null;
   /** How many wake prompts this turn has sent — see {@link MAX_DELEGATE_WAKES}. */
   private delegateWakes = 0;
   /**
@@ -3139,9 +3144,9 @@ export class AcpTurnDriver {
    */
   private armHoldTimer(): void {
     if (this.holdTimer !== null) {
-      clearTimeout(this.holdTimer);
+      this.holdTimer.clear();
     }
-    this.holdTimer = setTimeout(() => {
+    this.holdTimer = awakeTimeout(() => {
       this.holdTimer = null;
       if (
         !this.awaitingDelegates ||
@@ -3167,14 +3172,13 @@ export class AcpTurnDriver {
         this.session.emit(event);
       }
     }, DELEGATE_HOLD_IDLE_MS);
-    this.holdTimer.unref?.();
   }
 
   /** Leave the hold — the delegates ended, or a Stop or a message ended it. */
   private endHold(): void {
     this.awaitingDelegates = false;
     if (this.holdTimer !== null) {
-      clearTimeout(this.holdTimer);
+      this.holdTimer.clear();
       this.holdTimer = null;
     }
     this.session.stopAwaitingDelegates();

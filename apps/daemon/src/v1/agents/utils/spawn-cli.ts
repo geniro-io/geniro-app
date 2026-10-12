@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 
+import { awakeTimeout, type AwakeTimer } from '../../../utils/sleep-watch';
 import type {
   AgentApprovalMode,
   AgentEvent,
@@ -576,6 +577,10 @@ const DETACHED_SHELL_POLL_MS = 5000;
  *
  * The process is deliberately LEFT ALIVE on expiry — it holds the run's MCP
  * servers, and the next turn reuses it. Only the turn is given up on.
+ *
+ * **Time the machine spends ASLEEP is not silence** ({@link awakeTimeout}): a
+ * detected wake restarts the window, in full, from the wake — as it does for
+ * the off-turn hold below.
  */
 const TURN_SILENCE_DEADLINE_MS = 30 * 60 * 1000;
 
@@ -671,7 +676,7 @@ interface TurnState {
    * {@link TURN_SILENCE_DEADLINE_MS} of nothing. Null for a lifetime whose
    * turn already ends with its process.
    */
-  silenceTimer: ReturnType<typeof setTimeout> | null;
+  silenceTimer: AwakeTimer | null;
   /**
    * Every approval request this turn has been shown and not yet answered —
    * whether it was adopted from the hold buffer or raised inside the turn.
@@ -1099,7 +1104,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   >();
 
   /** Bounds {@link deferredOffTurnTerminal}, as the turn's own deadline does. */
-  let offTurnHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  let offTurnHoldTimer: AwakeTimer | null = null;
   /**
    * Notices raised with NO turn to carry them, held for the next one.
    *
@@ -1259,7 +1264,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       turn.interruptTimer = null;
     }
     if (turn.silenceTimer) {
-      clearTimeout(turn.silenceTimer);
+      turn.silenceTimer.clear();
       turn.silenceTimer = null;
     }
     if (current === turn) {
@@ -1364,17 +1369,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (!settlesOnTerminalEvent || turn.settled) {
       return;
     }
-    if (turn.silenceTimer) {
-      clearTimeout(turn.silenceTimer);
-      turn.silenceTimer = null;
-    }
     if (turn.outstanding.size > 0) {
+      if (turn.silenceTimer) {
+        turn.silenceTimer.clear();
+        turn.silenceTimer = null;
+      }
       opts.logger?.debug?.(
         `${opts.command}: the silence deadline is suspended — the turn is blocked on ${turn.outstanding.size} unanswered request(s)`,
       );
       return;
     }
-    turn.silenceTimer = setTimeout(() => {
+    // Refreshed rather than rebuilt, so the sleep watch's ticker is not
+    // stopped and restarted on every event.
+    if (turn.silenceTimer) {
+      turn.silenceTimer.refresh();
+      return;
+    }
+    turn.silenceTimer = awakeTimeout(() => {
       turn.silenceTimer = null;
       if (turn.settled || turn.terminalEmitted) {
         return;
@@ -1428,7 +1439,6 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         )} minutes — giving up on the turn`,
       });
     }, TURN_SILENCE_DEADLINE_MS);
-    turn.silenceTimer.unref?.();
   };
 
   /**
@@ -1474,7 +1484,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       );
       deferredOffTurnTerminal = null;
       if (offTurnHoldTimer) {
-        clearTimeout(offTurnHoldTimer);
+        offTurnHoldTimer.clear();
         offTurnHoldTimer = null;
       }
     }
@@ -1862,9 +1872,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const armOffTurnHold = (): void => {
     if (offTurnHoldTimer) {
-      clearTimeout(offTurnHoldTimer);
+      offTurnHoldTimer.clear();
     }
-    offTurnHoldTimer = setTimeout(() => {
+    offTurnHoldTimer = awakeTimeout(() => {
       offTurnHoldTimer = null;
       const held = deferredOffTurnTerminal;
       if (!held) {
@@ -1878,7 +1888,6 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       openWork.clear();
       releaseOffTurnHold();
     }, TURN_SILENCE_DEADLINE_MS);
-    offTurnHoldTimer.unref?.();
   };
 
   /**
@@ -2114,7 +2123,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     const held = deferredOffTurnTerminal;
     deferredOffTurnTerminal = null;
     if (offTurnHoldTimer) {
-      clearTimeout(offTurnHoldTimer);
+      offTurnHoldTimer.clear();
       offTurnHoldTimer = null;
     }
     if (held) {

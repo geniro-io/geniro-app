@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent, TurnIo } from '../adapters/adapter.types';
 import { runCliSession, runHeadlessCli, type SessionLogger } from './spawn-cli';
@@ -533,6 +534,32 @@ describe('a session turn that goes silent', () => {
     line(child, { done: true });
     await handle?.done;
     expect(events).toEqual([COMPLETE]);
+  });
+
+  it('does not count the time the machine slept as silence, and gives a full window from the wake', async () => {
+    // The incident (2026-10-10): a card turn quiet for ~45s when the Mac slept
+    // for four hours was failed "produced nothing for 30 minutes" at the very
+    // second it woke, because node's timers count through a macOS sleep.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    await vi.advanceTimersByTimeAsync(45_000);
+    await simulateSleep(4 * 60 * 60 * 1000);
+    expect(events).toEqual([]);
+
+    // A FULL thirty minutes from the wake — not the 45s-shortened remainder.
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1000);
+    expect(events).toEqual([]);
+
+    // …after which it is still a deadline: genuine silence is given up on.
+    await vi.advanceTimersByTimeAsync(1000);
+    await handle?.done;
+    expect(events).toEqual([
+      { type: 'error', message: expect.stringContaining('giving up') },
+    ]);
+    line(child, { done: true });
   });
 });
 
@@ -2881,6 +2908,27 @@ describe('a turn whose background work outlives its result', () => {
     expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
       'never reported',
     );
+  });
+
+  it('does not give up on an off-turn hold because the machine slept through its window', async () => {
+    // Same question as the turn's own deadline, asked with no turn open — and
+    // the same answer: a delegate asleep with the machine has not gone quiet.
+    vi.useFakeTimers();
+    const between: AgentEvent[] = [];
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { child } = openSession(undefined, logger, (e) => between.push(e));
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true });
+    await vi.advanceTimersByTimeAsync(45_000);
+    await simulateSleep(4 * 60 * 60 * 1000);
+    expect(between).toEqual([]);
+
+    // A full window from the wake, not the 45s-shortened remainder.
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1);
+    expect(between).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(between).toEqual([COMPLETE]);
   });
 
   it('does not let a unit the deadline gave up on hold the next turn too', async () => {

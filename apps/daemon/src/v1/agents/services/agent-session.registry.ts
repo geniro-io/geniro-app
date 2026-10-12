@@ -7,6 +7,7 @@ import {
   Optional,
 } from '@nestjs/common';
 
+import { awakeTimeout, type AwakeTimer } from '../../../utils/sleep-watch';
 import type {
   AgentEvent,
   AgentSession,
@@ -196,7 +197,8 @@ interface SessionEntry {
    * the second is exempt, so a busy chat is not confused with a fresh one.
    */
   offTurnActiveAt: number;
-  timer: ReturnType<typeof setTimeout> | null;
+  /** The idle reap. Awake time — see {@link AgentSessionRegistry.arm}. */
+  timer: AwakeTimer | null;
   /**
    * The between-turn approval policy, in a holder the session reads THROUGH.
    *
@@ -819,9 +821,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     );
   }
 
+  /**
+   * Arm the idle reap on awake time.
+   *
+   * Time asleep is not a chat going unused, whether its process was working
+   * between turns or the chat was merely left idle. What that costs: a chat
+   * idle overnight keeps its CLI, and the MCP servers it dialled, for up to
+   * three awake hours after the wake.
+   */
   private arm(runId: string, entry: SessionEntry): void {
     this.disarm(entry);
-    entry.timer = setTimeout(() => {
+    entry.timer = awakeTimeout(() => {
       entry.timer = null;
       if (this.entries.get(runId) !== entry || !entry.session.idle) {
         return;
@@ -852,12 +862,11 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       }
       void this.closeAfterFarewell(runId, entry);
     }, SESSION_IDLE_MS);
-    entry.timer.unref?.();
   }
 
   private disarm(entry: SessionEntry): void {
     if (entry.timer) {
-      clearTimeout(entry.timer);
+      entry.timer.clear();
       entry.timer = null;
     }
   }

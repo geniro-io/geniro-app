@@ -1,5 +1,6 @@
 import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
 
+import { awakeTimeout, type AwakeTimer } from '../../../utils/sleep-watch';
 import type {
   CallResultPayload,
   CallStartedPayload,
@@ -93,6 +94,11 @@ const QUESTION_TTL_MS = 30 * 60_000;
  * makes: a callee waiting on a person emits nothing by construction, so
  * without it the window would time the human and report a callee that is
  * doing exactly what it should.
+ *
+ * It counts AWAKE time only ({@link awakeTimeout}), like the turn deadline it
+ * mirrors: node's timers count through a macOS sleep, so a window that ran out
+ * while the lid was shut would otherwise report every open call as stalled
+ * the moment the machine woke.
  */
 const CALL_SILENCE_DEADLINE_MS = 10 * 60_000;
 
@@ -203,7 +209,7 @@ interface ParkedQuestion {
    * own question to the user (answered after 33 minutes, and after 12 hours).
    * Re-armed, with its full window, the moment that card is answered.
    */
-  timer: NodeJS.Timeout | null;
+  timer: AwakeTimer | null;
   /**
    * The window this question was parked with, kept so a re-arm uses the SAME
    * one — the executor's capture seam may name its own, and re-arming with the
@@ -269,7 +275,7 @@ interface ActiveCall {
    * The silence watchdog — re-armed by every row the callee produces, cleared
    * when the call settles. See {@link CALL_SILENCE_DEADLINE_MS}.
    */
-  silence: NodeJS.Timeout | null;
+  silence: AwakeTimer | null;
   /**
    * message_agent messages the callee could not take YET, oldest first — see
    * {@link PENDING_MESSAGE_RETRY_MS}. Delivered in order by
@@ -981,7 +987,7 @@ export class CallBroker implements OnModuleInit {
           call.parked = null;
         }
         if (call.silence !== null) {
-          clearTimeout(call.silence);
+          call.silence.clear();
           call.silence = null;
         }
         if (call.messageRetry !== null) {
@@ -1421,7 +1427,7 @@ export class CallBroker implements OnModuleInit {
         // Same rule for the silence watchdog, and the same reason: a settled
         // call must not later announce that it went quiet.
         if (call.silence !== null) {
-          clearTimeout(call.silence);
+          call.silence.clear();
           call.silence = null;
         }
         this.dropPendingMessages(state, callId, call, callerNodeId);
@@ -2538,7 +2544,7 @@ export class CallBroker implements OnModuleInit {
     // caller — so its silence window stands down exactly as it does behind an
     // approval card, and restarts when the answer lands.
     if (call.silence !== null) {
-      clearTimeout(call.silence);
+      call.silence.clear();
       call.silence = null;
     }
     state.capability.persistItem(
@@ -3359,7 +3365,7 @@ export class CallBroker implements OnModuleInit {
     // Nothing of the callee's own can arrive while it waits, so its silence
     // window would be timing the calls it is waiting on — which have their own.
     if (call.silence !== null) {
-      clearTimeout(call.silence);
+      call.silence.clear();
       call.silence = null;
     }
     if (open > 0) {
@@ -3972,7 +3978,7 @@ export class CallBroker implements OnModuleInit {
     }
     call.blockedOnVerdicts += 1;
     if (call.silence !== null) {
-      clearTimeout(call.silence);
+      call.silence.clear();
       call.silence = null;
     }
   }
@@ -4015,7 +4021,7 @@ export class CallBroker implements OnModuleInit {
     }
     call.openToolCalls.add(toolCallId);
     if (call.silence !== null) {
-      clearTimeout(call.silence);
+      call.silence.clear();
       call.silence = null;
     }
   }
@@ -4147,18 +4153,14 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * (Re)arm one call's silence watchdog. Clearing first is what makes this
-   * idempotent under the callee's every row.
+   * (Re)arm one call's silence watchdog; each row the callee produces restarts
+   * its full window.
    */
   private armSilenceWatch(
     runId: string,
     callId: string,
     call: ActiveCall,
   ): void {
-    if (call.silence !== null) {
-      clearTimeout(call.silence);
-      call.silence = null;
-    }
     // A blocked callee stays suspended however many rows arrive: an approval
     // card is itself persisted as a row, so without this the very event that
     // suspends the window would immediately re-arm it. A PARKED one too —
@@ -4173,15 +4175,22 @@ export class CallBroker implements OnModuleInit {
       call.openToolCalls.size > 0 ||
       call.hold !== null
     ) {
+      if (call.silence !== null) {
+        call.silence.clear();
+        call.silence = null;
+      }
       return;
     }
-    call.silence = setTimeout(() => {
+    // Refreshed rather than rebuilt, so the sleep watch's ticker is not
+    // stopped and restarted on every row.
+    if (call.silence !== null) {
+      call.silence.refresh();
+      return;
+    }
+    call.silence = awakeTimeout(() => {
       call.silence = null;
       this.announceStall(runId, callId, call);
     }, CALL_SILENCE_DEADLINE_MS);
-    // Node keeps the process alive for a pending timer, and a ten-minute one
-    // on every open call would hold a daemon that is otherwise done.
-    call.silence.unref?.();
   }
 
   /**
@@ -4245,11 +4254,12 @@ export class CallBroker implements OnModuleInit {
     if ((state.blockedOwners.get(call.owner)?.size ?? 0) > 0) {
       return;
     }
-    parked.timer = setTimeout(
+    // Awake time only: nobody can answer while the machine sleeps, so a TTL
+    // that ran out during a sleep must not time the question out at the wake.
+    parked.timer = awakeTimeout(
       () => this.expireQuestion(runId, callId),
       parked.ttlMs,
     );
-    parked.timer.unref?.();
   }
 
   /**
@@ -4611,7 +4621,7 @@ function boundedWait(
 /** Stop a parked question's clock, whether or not one is running. */
 function stopQuestionTimer(parked: ParkedQuestion): void {
   if (parked.timer !== null) {
-    clearTimeout(parked.timer);
+    parked.timer.clear();
     parked.timer = null;
   }
 }

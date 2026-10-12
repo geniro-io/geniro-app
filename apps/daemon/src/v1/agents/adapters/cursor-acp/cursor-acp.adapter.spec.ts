@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { simulateSleep } from '../../../../__tests__/simulate-sleep';
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import { AgentAdapterRegistry } from '../../services/agent-adapter.registry';
 import { AgentVersionService } from '../../services/agent-version.service';
@@ -2250,6 +2251,33 @@ ${RESUMED}
       // Still watched, not closed: nothing says it is over.
       expect(closes(events)).toEqual([]);
       expect(wakes(child)).toEqual([]);
+    });
+
+    it('does not settle a held turn because the machine slept through the window', async () => {
+      // node's timers count through a macOS sleep: the hold ran out at the
+      // wake and the turn ended on its partial answer, over delegates that had
+      // been asleep with the machine, not idle.
+      const { child, events, warn } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      endTurn(child);
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      await simulateSleep(4 * 60 * 60_000);
+      expect(events.some((event) => event.type === 'turn_complete')).toBe(
+        false,
+      );
+
+      // The window starts again, whole, from the wake.
+      await vi.advanceTimersByTimeAsync(DELEGATE_HOLD_IDLE_MS - 1);
+      expect(events.some((event) => event.type === 'turn_complete')).toBe(
+        false,
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('settling a turn held for 1 background'),
+      );
+      expect(events.at(-1)?.type).toBe('turn_complete');
     });
 
     it('closes it with the outcome its transcript states, and the time it really took', async () => {

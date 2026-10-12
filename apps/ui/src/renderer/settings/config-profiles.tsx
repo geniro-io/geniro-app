@@ -54,6 +54,7 @@ export function ConfigProfileList({
   signingIn = null,
   busy = false,
   logins = {},
+  compact = false,
 }: {
   /**
    * The CLI this list's rows belong to — stamped onto every profile this list
@@ -62,6 +63,8 @@ export function ConfigProfileList({
    * its files into the claude profile).
    */
   agent: CliKind;
+  /** Omit the introduction when the surrounding guide already explains profiles. */
+  compact?: boolean;
   /** Already narrowed to {@link agent}'s own — the caller filters the whole list. */
   profiles: readonly ConfigProfile[];
   /**
@@ -193,20 +196,24 @@ export function ConfigProfileList({
 
   return (
     <div data-slot="config-profiles" className="flex flex-col gap-2">
-      <div className="flex flex-col gap-0.5">
-        <span className="text-sm font-medium">Configurations</span>
-        <span className="text-sm text-muted-foreground">
-          Name the config directories you run {agent} as, so a chat can be
-          pointed at an account rather than at a path.
-        </span>
-      </div>
+      {!compact ? (
+        <div className="flex flex-col gap-0.5">
+          <span className="text-sm font-medium">Configurations</span>
+          <span className="text-sm text-muted-foreground">
+            Name the config directories you run {agent} as, so a chat can be
+            pointed at an account rather than at a path.
+          </span>
+        </div>
+      ) : null}
 
       {profiles.length === 0 ? (
         // A sentence, not an empty box: this list is empty for most installs
         // and will stay that way, so the empty state has to say what the
         // feature is FOR rather than that there is nothing here.
         <p className="text-sm text-muted-foreground">
-          None yet — add one to give a config directory a name and a colour.
+          {compact
+            ? 'No extra profiles yet.'
+            : 'None yet — add one to give a config directory a name and a colour.'}
         </p>
       ) : (
         <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
@@ -346,7 +353,7 @@ export function ConfigProfileList({
           className="w-fit gap-1.5"
           onClick={() => void add()}>
           <Plus className="size-3.5 shrink-0" />
-          Add configuration
+          {compact ? 'Add profile' : 'Add configuration'}
         </Button>
       ) : null}
     </div>

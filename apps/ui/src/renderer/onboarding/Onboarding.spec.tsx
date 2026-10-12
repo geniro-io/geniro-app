@@ -152,6 +152,7 @@ afterEach(async () => {
     root = null;
   }
   container.remove();
+  vi.useRealTimers();
 });
 
 describe('Onboarding', () => {
@@ -167,10 +168,7 @@ describe('Onboarding', () => {
   });
 
   it('scrolls the PANE, not the reading column', async () => {
-    // The twin of the Settings pin — same one element doing both jobs, and this
-    // is the first screen anybody ever sees. `min-h-full` on the column rides
-    // with it: the footer is `mt-auto`, so without it "Get started" rides up
-    // under the last card on a machine where every CLI is already installed.
+    // Scroll the full pane while the footer remains reachable outside it.
     await mount();
 
     const scroller = container.querySelector('.overflow-y-auto');
@@ -179,6 +177,7 @@ describe('Onboarding', () => {
     const column = scroller!.querySelector('.mx-auto');
     expect(column?.className).toMatch(/\bmax-w-/);
     expect(column?.className).toMatch(/\bmin-h-full\b/);
+    expect(scroller!.contains(container.querySelector('footer'))).toBe(false);
   });
 
   it('backfills detected paths into empty fields only — a later scan never overwrites a seeded field', async () => {
@@ -339,10 +338,96 @@ describe('Onboarding', () => {
     await click(buttonByText('Skip for now'));
     await click(buttonByText('Open chat'));
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Your choices are still here',
+    );
+    expect(container.querySelector('details')?.textContent).toContain(
       'Could not save setup',
     );
     expect(onDone).not.toHaveBeenCalled();
     expect(buttonByText('Open chat').disabled).toBe(false);
+  });
+
+  it('uses the wordmark at its natural aspect ratio and reserves the native title bar', async () => {
+    await mount([], false);
+    const logo = container.querySelector('img[alt="Geniro"]');
+    expect(logo?.className).toContain('w-auto');
+    expect(logo?.className).not.toMatch(/\bsize-/);
+    expect(
+      container.querySelector('[data-slot="onboarding"]')?.className,
+    ).toContain('pt-11');
+    expect(
+      container.querySelector('nav')?.closest('aside')?.className,
+    ).not.toContain('max-md:hidden');
+  });
+
+  it('updates the progress and focuses the heading when navigating back and forth', async () => {
+    await mount([], false);
+    expect(
+      container
+        .querySelector('[role="progressbar"]')
+        ?.getAttribute('aria-valuenow'),
+    ).toBe('25');
+    await click(buttonByText('Continue'));
+    expect(
+      container
+        .querySelector('[role="progressbar"]')
+        ?.getAttribute('aria-valuenow'),
+    ).toBe('50');
+    expect(
+      container.querySelector('[aria-current="step"]')?.textContent,
+    ).toContain('Agents');
+    expect(document.activeElement).toBe(container.querySelector('h1'));
+    await click(buttonByText('Back'));
+    expect(
+      container.querySelector('[aria-current="step"]')?.textContent,
+    ).toContain('How it works');
+    expect(buttonByText('Back').disabled).toBe(true);
+  });
+
+  it('saves step changes without resending unchanged CLI paths and restarting the daemon', async () => {
+    vi.useFakeTimers();
+    await mount([], false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cliPaths: {
+          claude: '/detected/claude',
+          'cursor-agent': '/detected/cursor-agent',
+        },
+      }),
+    );
+    geniro.updateSettings.mockClear();
+    await click(buttonByText('Continue'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(geniro.updateSettings).toHaveBeenCalledTimes(1);
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      onboardingProgress: expect.objectContaining({ step: 1 }),
+    });
+  });
+
+  it('recovers a failed settings read through the local engine retry', async () => {
+    geniro.getSettings.mockRejectedValueOnce(
+      new Error('Error invoking remote method: setup failed'),
+    );
+    const ensureDaemon = vi.fn().mockResolvedValue(null);
+    window.geniro = createPreloadStub({ ...geniro, ensureDaemon });
+    await mount([], false);
+    expect(buttonByText('Continue').disabled).toBe(true);
+    expect(
+      container.querySelector('[role="alert"]')?.textContent,
+    ).not.toContain('remote method');
+    expect(container.querySelector('details')?.textContent).toContain(
+      'setup failed',
+    );
+    await click(buttonByText('Retry setup'));
+    expect(ensureDaemon).toHaveBeenCalledTimes(1);
+    expect(geniro.getSettings).toHaveBeenCalledTimes(2);
+    expect(buttonByText('Continue').disabled).toBe(false);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
   describe('installing a missing CLI', () => {

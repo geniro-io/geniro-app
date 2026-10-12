@@ -137,6 +137,24 @@ describe('the shared floating surface', () => {
       expect(classes).toContain('bg-popover');
     }
   });
+
+  it('resets the white-space it would inherit from its trigger’s row', () => {
+    // The panel renders INSIDE the trigger's wrapper, so a `nowrap` row (a chip
+    // strip, a `truncate`d label) handed it `white-space: nowrap`: its prose ran
+    // on one line and the panel scrolled sideways — the reported context
+    // readout. jsdom applies no stylesheet, so the class IS the mechanism.
+    const container = render(
+      <div className="whitespace-nowrap">
+        <Harness
+          anchor="viewport"
+          rect={{ top: 10, bottom: 30, left: 10, right: 40 }}
+        />
+      </div>,
+    );
+    expect(panelOf(container)?.className.split(/\s+/)).toContain(
+      'whitespace-normal',
+    );
+  });
 });
 
 describe('Popover — anchor="ancestor" (the default)', () => {

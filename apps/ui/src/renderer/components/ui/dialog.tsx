@@ -166,7 +166,10 @@ export function Dialog({
       role="dialog"
       aria-modal="true"
       className={cn(
-        'fixed inset-0 z-50 flex items-center justify-center',
+        // Electron's title-bar drag region still intercepts native presses
+        // beneath an overlay, regardless of its z-index. Exclude the whole
+        // modal so its header controls and backdrop receive clicks there too.
+        'app-no-drag fixed inset-0 z-50 flex items-center justify-center',
         !fullScreen && 'p-4',
       )}
       onClick={onClose}>

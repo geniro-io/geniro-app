@@ -6,6 +6,7 @@ import {
   liveNodeCost,
   liveRunCost,
   resolveCalleeContext,
+  resolveConversationCacheExpiry,
   resolveConversationContext,
   resolveConversationSpend,
   spendOfTotals,
@@ -52,6 +53,7 @@ function reading(
         toolCalls: null,
         status: 'running',
         startedAt: null,
+        promptCacheExpiresAt: null,
       },
     ],
   ]);
@@ -89,6 +91,7 @@ describe('resolveCalleeContext', () => {
     // throwaway state, so on a first open there is nothing in it at all.
     const rows = reading([
       {
+        promptCacheExpiresAt: null,
         callId: 'call-1',
         contextTokens: 64_500,
         contextWindowTokens: 200_000,
@@ -108,6 +111,7 @@ describe('resolveCalleeContext', () => {
     // open and reconnect only; a delta is this turn's latest request.
     const rows = reading([
       {
+        promptCacheExpiresAt: null,
         callId: 'call-1',
         contextTokens: 64_500,
         contextWindowTokens: 200_000,
@@ -131,6 +135,7 @@ describe('resolveCalleeContext', () => {
     // gauge's denominator away and leave a ring that cannot be drawn.
     const rows = reading([
       {
+        promptCacheExpiresAt: null,
         callId: 'call-1',
         contextTokens: 64_500,
         contextWindowTokens: 200_000,
@@ -151,6 +156,7 @@ describe('resolveCalleeContext', () => {
   it('answers UNMEASURED when neither source knows this call', () => {
     const rows = reading([
       {
+        promptCacheExpiresAt: null,
         callId: 'call-2',
         contextTokens: 64_500,
         contextWindowTokens: 200_000,
@@ -176,6 +182,7 @@ describe('resolveConversationContext', () => {
     // window stands now, and the first call's row is an older level of it.
     const rows = reading([
       {
+        promptCacheExpiresAt: null,
         callId: 'call-22',
         contextTokens: 40_000,
         contextWindowTokens: 200_000,
@@ -183,6 +190,7 @@ describe('resolveConversationContext', () => {
         start: null,
       },
       {
+        promptCacheExpiresAt: null,
         callId: 'call-24',
         contextTokens: 90_000,
         contextWindowTokens: 200_000,
@@ -202,6 +210,7 @@ describe('resolveConversationContext', () => {
   it('falls back to an earlier call while the latest has reported nothing yet', () => {
     const rows = reading([
       {
+        promptCacheExpiresAt: null,
         callId: 'call-22',
         contextTokens: 40_000,
         contextWindowTokens: null,
@@ -209,6 +218,7 @@ describe('resolveConversationContext', () => {
         start: null,
       },
       {
+        promptCacheExpiresAt: null,
         callId: 'call-23',
         contextTokens: 55_000,
         contextWindowTokens: 200_000,
@@ -236,6 +246,7 @@ describe('resolveConversationSpend', () => {
     // what all three cost.
     const rows = reading([
       {
+        promptCacheExpiresAt: null,
         callId: 'call-10',
         contextTokens: null,
         contextWindowTokens: null,
@@ -248,6 +259,7 @@ describe('resolveConversationSpend', () => {
         start: null,
       },
       {
+        promptCacheExpiresAt: null,
         callId: 'call-12',
         contextTokens: null,
         contextWindowTokens: null,
@@ -267,6 +279,7 @@ describe('resolveConversationSpend', () => {
   it('answers null when no call has a durable figure, so the caller folds instead', () => {
     const rows = reading([
       {
+        promptCacheExpiresAt: null,
         callId: 'call-1',
         contextTokens: 5,
         contextWindowTokens: 10,
@@ -340,5 +353,44 @@ describe('the running part of a conversation’s cost', () => {
     expect(withLiveCost(spend, null)).toBe(spend);
     expect(withLiveCost(spend, 0)).toBe(spend);
     expect(withLiveCost(null, null)).toBeNull();
+  });
+});
+
+describe('resolveConversationCacheExpiry', () => {
+  const call = (
+    callId: string,
+    promptCacheExpiresAt: string | null,
+  ): NodeDurableReading['calls'][number] => ({
+    callId,
+    contextTokens: null,
+    contextWindowTokens: null,
+    totals: NO_TOTALS,
+    start: null,
+    promptCacheExpiresAt,
+  });
+
+  it('takes the newest call of the conversation that states an expiry', () => {
+    const rows = reading([
+      call('call-1', '2026-10-11T10:00:00.000Z'),
+      call('call-4', '2026-10-11T11:00:00.000Z'),
+      call('call-9', null),
+    ]);
+    expect(
+      resolveConversationCacheExpiry(rows, 'callee', [
+        'call-1',
+        'call-4',
+        'call-9',
+      ]),
+    ).toBe('2026-10-11T11:00:00.000Z');
+  });
+
+  it('answers null when no call of the conversation states one', () => {
+    const rows = reading([call('call-1', null)]);
+    expect(resolveConversationCacheExpiry(rows, 'callee', ['call-1'])).toBe(
+      null,
+    );
+    expect(resolveConversationCacheExpiry(rows, 'other', ['call-1'])).toBe(
+      null,
+    );
   });
 });

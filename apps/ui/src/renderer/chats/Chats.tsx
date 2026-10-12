@@ -111,6 +111,7 @@ import {
   liveConversationCost,
   liveNodeCost,
   liveRunCost,
+  resolveConversationCacheExpiry,
   resolveConversationContext,
   resolveConversationSpend,
   resolveNodeToolCalls,
@@ -6356,6 +6357,8 @@ export function Chats({
               live?.contextWindowTokens ?? thread.contextWindowTokens ?? null,
             spentTokens: spend?.tokens ?? thread.spentTokens ?? null,
             spentUsd: spend?.costUsd ?? thread.spentUsd ?? null,
+            promptCacheExpiresAt:
+              nodeReadings.get(nodeId)?.promptCacheExpiresAt ?? null,
           };
         }
         if (thread.kind !== 'call') {
@@ -6383,6 +6386,11 @@ export function Chats({
           spentTokens: usage?.tokens ?? null,
           spentUsd: usage?.costUsd ?? null,
           member: conversationMember(block, thread.callIds),
+          promptCacheExpiresAt: resolveConversationCacheExpiry(
+            nodeReadings,
+            nodeId,
+            thread.callIds,
+          ),
         };
       });
       // Calls OLDER than the loaded window, known only from the daemon's
@@ -6473,6 +6481,11 @@ export function Chats({
           spentTokens: usage?.tokens ?? null,
           spentUsd: usage?.costUsd ?? null,
           member: conversationMember(block, callIds),
+          promptCacheExpiresAt: resolveConversationCacheExpiry(
+            nodeReadings,
+            nodeId,
+            callIds,
+          ),
         };
       });
       // After the node's own conversation, before the calls the window holds —

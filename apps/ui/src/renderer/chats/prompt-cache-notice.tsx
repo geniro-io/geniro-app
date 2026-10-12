@@ -6,6 +6,7 @@ import { ErrorBanner } from '../components/error-banner';
 import { formatTokens } from './agent-activity';
 import { formatElapsed } from './live-row';
 import {
+  formatCacheSpan,
   msUntilPromptCacheNotice,
   promptCacheReasonText,
   promptCacheState,
@@ -28,20 +29,6 @@ const EXPIRED_TICK_MS = 30_000;
  * is a new cache to warn about — so closing it is never a permanent mute.
  */
 const dismissedExpiries = new Set<string>();
-
-/** `<1m`, `12m`, `1h 5m` — how long ago the cache lapsed, to the minute. */
-function formatAgo(ms: number): string {
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 1) {
-    return '<1m';
-  }
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
-}
 
 /**
  * The strip at the bottom of the message box saying the prompt cache is about
@@ -118,7 +105,7 @@ export function PromptCacheNotice({
       : 'the whole conversation';
   const expired = state.kind === 'expired';
   const headline = expired
-    ? `Prompt cache expired ${formatAgo(state.sinceMs)} ago — the next message re-caches ${size} at full price.`
+    ? `Prompt cache expired ${formatCacheSpan(state.sinceMs)} ago — the next message re-caches ${size} at full price.`
     : `Prompt cache expires in ${formatElapsed(state.remainingMs)} — send now to keep the next message cheap.`;
   const reason = promptCacheReasonText(ttlReason, ttlMs);
   return (

@@ -1416,6 +1416,12 @@ export interface CallContextReading {
     totals: ChatTotals;
     /**
      * 
+     * @type {string}
+     * @memberof CallContextReading
+     */
+    promptCacheExpiresAt: string | null;
+    /**
+     * 
      * @type {CallStartReading}
      * @memberof CallContextReading
      */
@@ -3864,6 +3870,12 @@ export interface NodeStateDto {
      * @memberof NodeStateDto
      */
     mainTotals: ChatTotals;
+    /**
+     * 
+     * @type {string}
+     * @memberof NodeStateDto
+     */
+    promptCacheExpiresAt: string | null;
     /**
      * 
      * @type {number}

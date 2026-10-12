@@ -123,6 +123,7 @@ describe('useNodeDurableReadings', () => {
     const listWorkflowRunNodes = vi.fn(async () => [
       node('reviewer', 91_000, 200_000, [
         {
+          promptCacheExpiresAt: null,
           callId: 'call-1',
           contextTokens: 10_000,
           contextWindowTokens: 200_000,
@@ -130,6 +131,7 @@ describe('useNodeDurableReadings', () => {
           start: null,
         },
         {
+          promptCacheExpiresAt: '2026-10-11T11:00:00.000Z',
           callId: 'call-2',
           contextTokens: 91_000,
           contextWindowTokens: 200_000,
@@ -151,6 +153,7 @@ describe('useNodeDurableReadings', () => {
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
+        promptCacheExpiresAt: null,
       },
       {
         callId: 'call-2',
@@ -158,8 +161,28 @@ describe('useNodeDurableReadings', () => {
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
+        // When this call's cache lapses — what its instance row counts down to.
+        promptCacheExpiresAt: '2026-10-11T11:00:00.000Z',
       },
     ]);
+  });
+
+  it('carries the node’s own prompt-cache expiry through', async () => {
+    const listWorkflowRunNodes = vi.fn(async () => [
+      {
+        ...node('reviewer', 1_000, 200_000),
+        promptCacheExpiresAt: '2026-10-11T12:00:00.000Z',
+      },
+    ]);
+    const { seen } = drive(
+      { listWorkflowRunNodes } as unknown as WorkflowsApi,
+      { runId: 'run-1', isWorkflow: true, nonce: 0 },
+    );
+    await settle();
+
+    expect(seen.readings.get('reviewer')?.promptCacheExpiresAt).toBe(
+      '2026-10-11T12:00:00.000Z',
+    );
   });
 
   it('reads the daemon’s per-node rows when a workflow run opens', async () => {

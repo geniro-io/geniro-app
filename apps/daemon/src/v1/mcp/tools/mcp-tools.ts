@@ -18,6 +18,7 @@ import { AwaitAgentTool } from './await-agent/await-agent.tool';
 import { BoardTools } from './board/board.tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
+import { ListAgentThreadsTool } from './list-agent-threads/list-agent-threads.tool';
 import { MessageAgentTool } from './message-agent/message-agent.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposePatchTool } from './propose-patch/propose-patch.tool';
@@ -67,6 +68,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new AnswerAgentTool(deps.calls),
     new CancelAgentTool(deps.calls),
     new MessageAgentTool(deps.calls),
+    new ListAgentThreadsTool(deps.calls),
     new AskUserQuestionTool(deps.questions),
     new ReportFindingsTool(deps.findings),
     new ShowChartTool(deps.charts),

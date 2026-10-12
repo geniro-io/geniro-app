@@ -105,11 +105,13 @@ function MeterReadout({
       // sentence wraps instead of running off the screen. With a full
       // readout the panel takes a fixed width and a scroll of its own — the
       // breakdown is a dozen rows plus three lists, and a `w-max` panel over
-      // those would be as wide as the longest MCP server name.
+      // those would be as wide as the longest MCP server name. That panel
+      // scrolls DOWN only: an unbroken token (an error carrying a URL) wraps
+      // rather than widening the content into a sideways scroll.
       panelClassName={
         metrics === null
           ? 'w-max max-w-[20rem]'
-          : 'max-h-[26rem] w-[22rem] overflow-y-auto'
+          : 'max-h-[26rem] w-[22rem] overflow-x-hidden overflow-y-auto break-words'
       }
       trigger={ring}>
       {/* The summary steps aside as soon as a breakdown is COMING, not once

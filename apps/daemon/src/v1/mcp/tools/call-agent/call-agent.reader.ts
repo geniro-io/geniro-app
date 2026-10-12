@@ -37,6 +37,7 @@ const CALL_AGENT_ARGS = [
   'thread',
   'mode',
   'member',
+  'resume_cold',
 ];
 
 /**
@@ -86,6 +87,16 @@ export function validateCallAgentArgs(
     return invalidArgsEnvelope(
       "'member' must be a pool member number (1, 2, …)",
     );
+  }
+  if (args.resume_cold !== undefined) {
+    if (typeof args.resume_cold !== 'boolean') {
+      return invalidArgsEnvelope("'resume_cold' must be true or false");
+    }
+    if (args.resume_cold && args.thread === undefined) {
+      return invalidArgsEnvelope(
+        "'resume_cold' only applies with 'thread' — a new conversation has no cache to lose",
+      );
+    }
   }
   return title;
 }

@@ -32,6 +32,16 @@ import {
   callerKey,
   callerNodeOf,
 } from '../utils/caller-key';
+import {
+  COLD_RESUME_RULE,
+  type ConversationCacheFacts,
+  conversationContextPercent,
+  conversationFacts,
+  isColdAndLarge,
+  type PromptCacheStanding,
+  promptCacheStanding,
+  statedPercent,
+} from '../utils/prompt-cache-standing';
 import { resetInstantFrom } from '../utils/reset-instant';
 import { resetWakePrompt } from '../utils/reset-wake-prompt';
 
@@ -382,6 +392,11 @@ interface ThreadRecord {
    * is left alone.
    */
   madeIn?: string | null;
+  /**
+   * What this call left behind about its conversation's prompt cache — read
+   * by {@link CallBroker.listThreads} and by the cold-resume refusal.
+   */
+  cache: ConversationCacheFacts;
 }
 
 interface RunCallState {
@@ -735,6 +750,12 @@ export class CallBroker implements OnModuleInit {
             ? null
             : threads.get(record.thread)?.conversationId) ?? record.callId,
         member: record.member ?? 1,
+        cache: {
+          endedAt: record.endedAt ?? null,
+          promptCacheTtlMs: record.promptCacheTtlMs ?? null,
+          contextTokens: record.contextTokens ?? null,
+          contextWindowTokens: record.contextWindowTokens ?? null,
+        },
       });
     }
     // Every pass of a run registers again, and a reset wake is the one piece
@@ -1035,6 +1056,11 @@ export class CallBroker implements OnModuleInit {
        * handing on. Absent = the first available member in pool order.
        */
       member?: number;
+      /**
+       * Continue a `thread` even when its prompt cache has lapsed and its
+       * window is large — see {@link isColdAndLarge}. Absent = refused.
+       */
+      resumeCold?: boolean;
     },
     /**
      * Trips when the HTTP request this sync call is answering has gone away —
@@ -1046,7 +1072,10 @@ export class CallBroker implements OnModuleInit {
     if (!state) {
       return RUN_NOT_ACTIVE;
     }
-    const opened = this.openCall(runId, state, caller, args);
+    const opened = this.openCall(runId, state, caller, {
+      ...args,
+      coldGuard: args.resumeCold !== true,
+    });
     if ('refused' in opened) {
       return opened.refused;
     }
@@ -1136,6 +1165,13 @@ export class CallBroker implements OnModuleInit {
       thread?: string;
       title: string;
       member?: number;
+      /**
+       * Refuse a continuation whose cache has lapsed over a large window. Only
+       * a caller's own `call_agent` asks for it: geniro continuing a
+       * conversation on a caller's behalf is delivering what it owes, which no
+       * cost argument should stop.
+       */
+      coldGuard?: boolean;
     },
   ):
     | { refused: CallEnvelope }
@@ -1204,6 +1240,15 @@ export class CallBroker implements OnModuleInit {
           return refuse(
             `THREAD_BUSY: '${liveId}' is still running on that conversation — to correct or add to what it is doing now, send it message_agent(call_id: '${liveId}'); otherwise continue with thread: '${liveId}' once it has finished (await_agent collects it if you started it async)`,
           );
+        }
+      }
+      if (args.coldGuard === true) {
+        const facts = conversationCache(
+          state,
+          callsOfConversation(state, thread.conversationId),
+        );
+        if (isColdAndLarge(facts, Date.now())) {
+          return refuse(coldResumeRefusal(callee.id, args.thread, facts));
         }
       }
       resumeSessionId = thread.sessionId;
@@ -1275,6 +1320,9 @@ export class CallBroker implements OnModuleInit {
     // The member that took the call, for a pooled callee — on the result row,
     // where a restart reads it back (`utils/call-seed.ts`).
     let threadMember: number | null = null;
+    // What the settled turn said about its prompt cache and window, mirrored
+    // onto the result row so a restart can tell a caller the same thing.
+    let threadCache: ConversationCacheFacts | null = null;
     call.settled = state.capability
       .launchCalleeTurn(
         selected.node,
@@ -1289,6 +1337,12 @@ export class CallBroker implements OnModuleInit {
         const member = outcome.member ?? selected.plan?.member ?? 1;
         // Every settled turn leaves a resume handle so the conversation can
         // be continued from THIS point with `thread: <this call_id>`.
+        const cache: ConversationCacheFacts = {
+          endedAt: Date.now(),
+          promptCacheTtlMs: outcome.promptCacheTtlMs ?? null,
+          contextTokens: outcome.contextTokens ?? null,
+          contextWindowTokens: outcome.contextWindowTokens ?? null,
+        };
         state.threads.set(callId, {
           owner: caller,
           calleeId: callee.id,
@@ -1296,7 +1350,9 @@ export class CallBroker implements OnModuleInit {
           conversationId: call.conversationId,
           member,
           madeIn: call.madeIn,
+          cache,
         });
+        threadCache = cache;
         threadSessionId = outcome.sessionId;
         if (selected.plan !== null) {
           recordPoolHealth(state, callee.id, outcome);
@@ -1359,6 +1415,7 @@ export class CallBroker implements OnModuleInit {
           mode,
           sessionId: threadSessionId,
           ...(threadMember !== null ? { member: threadMember } : {}),
+          ...cacheResultFields(threadCache),
           ...final,
         } satisfies CallResultPayload);
         // The conversation that made this call may be HELD waiting for it —
@@ -1380,6 +1437,132 @@ export class CallBroker implements OnModuleInit {
       });
     }
     return { callId, call, calleeId: callee.id, mode };
+  }
+
+  /**
+   * A settled call's conversation ran a turn of its own (its kept process
+   * carried on after the call) — move that call's cache facts to it. A figure
+   * the turn did not report keeps the one it had. Nothing for a call that is
+   * not settled: its own settle writes the facts.
+   */
+  noteConversationTurnEnded(
+    runId: string,
+    callId: string,
+    facts: ConversationCacheFacts,
+  ): void {
+    const thread = this.runs.get(runId)?.threads.get(callId);
+    if (thread === undefined) {
+      return;
+    }
+    thread.cache = {
+      endedAt: facts.endedAt ?? thread.cache.endedAt,
+      promptCacheTtlMs: facts.promptCacheTtlMs ?? thread.cache.promptCacheTtlMs,
+      contextTokens: facts.contextTokens ?? thread.cache.contextTokens,
+      contextWindowTokens:
+        facts.contextWindowTokens ?? thread.cache.contextWindowTokens,
+    };
+  }
+
+  /**
+   * The list_agent_threads tool: every conversation this caller holds with its
+   * callees — the handle to continue it with, whether a call is running on it,
+   * how full its window is and where its prompt cache stands.
+   *
+   * What it exists for is the choice before a follow-up: a conversation whose
+   * cache is warm is cheap to continue, while one whose cache has lapsed is
+   * re-billed WHOLE on its next turn, so past half its window a fresh instance
+   * with a brief costs less. That choice needs figures that move with the
+   * clock, which is why they are a tool's answer rather than a line of the
+   * "May call" block — that block is part of the caller's session identity,
+   * and changing it would restart the caller's own process and cache.
+   */
+  listThreads(
+    runId: string,
+    /** WHO is asking — a caller key, as `callAgent` takes one. */
+    caller: string,
+  ): CallEnvelope {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return RUN_NOT_ACTIVE;
+    }
+    const now = Date.now();
+    const byConversation = new Map<
+      string,
+      { calleeId: string; settled: string[]; running: string[] }
+    >();
+    const entry = (conversationId: string, calleeId: string) => {
+      const found = byConversation.get(conversationId) ?? {
+        calleeId,
+        settled: [],
+        running: [],
+      };
+      byConversation.set(conversationId, found);
+      return found;
+    };
+    for (const [callId, thread] of state.threads) {
+      // A call that recorded no session never ran (cancelled while queued, or
+      // restored after a restart with no result): it is not a handle anything
+      // can continue, and it measured nothing about the conversation.
+      if (thread.owner === caller && thread.sessionId !== null) {
+        entry(thread.conversationId, thread.calleeId).settled.push(callId);
+      }
+    }
+    for (const [callId, call] of state.activeCalls) {
+      if (call.owner === caller) {
+        entry(call.conversationId, call.calleeId).running.push(callId);
+      }
+    }
+    const threads = [...byConversation.values()]
+      .map((found) => {
+        const settled = [...found.settled].sort(byCallNumber);
+        const running = [...found.running].sort(byCallNumber);
+        const facts = conversationCache(
+          state,
+          settled.map((callId) => state.threads.get(callId)!),
+        );
+        const standing = promptCacheStanding(facts, now);
+        const percent = conversationContextPercent(facts);
+        const busy = running.length > 0;
+        const newest = [...settled, ...running].sort(byCallNumber).pop() ?? '';
+        const wire = {
+          agent: found.calleeId,
+          thread: settled[settled.length - 1] ?? null,
+          status: busy ? 'running' : 'idle',
+          ...(busy ? { running_call: running[running.length - 1] } : {}),
+          calls: settled.length + running.length,
+          last_turn_ended_at:
+            facts.endedAt === null
+              ? null
+              : new Date(facts.endedAt).toISOString(),
+          context:
+            facts.contextTokens === null
+              ? null
+              : {
+                  tokens: facts.contextTokens,
+                  window: facts.contextWindowTokens,
+                  percent: percent === null ? null : statedPercent(percent),
+                },
+          cache: cacheWire(standing, now),
+          advice: busy
+            ? 'busy'
+            : isColdAndLarge(facts, now)
+              ? 'start_fresh'
+              : 'continue',
+        };
+        return { newest, wire };
+      })
+      // Oldest conversation first, by its newest call — the order they were
+      // last worked in.
+      .sort((a, b) => byCallNumber(a.newest, b.newest))
+      .map(({ wire }) => wire);
+    return {
+      status: 'ok',
+      result: {
+        now: new Date(now).toISOString(),
+        threads,
+        rule: COLD_RESUME_RULE,
+      },
+    };
   }
 
   /**
@@ -4421,4 +4604,114 @@ function toEnvelope(
     error: calleeFailedEnvelopeError(outcome, callId),
     ...poolEnvelopeFields(outcome),
   };
+}
+
+/** A settled call's measured cache facts, as optional `call_result` keys. */
+function cacheResultFields(
+  cache: ConversationCacheFacts | null,
+): Pick<
+  CallResultPayload,
+  'promptCacheTtlMs' | 'contextTokens' | 'contextWindowTokens'
+> {
+  if (cache === null) {
+    return {};
+  }
+  const { promptCacheTtlMs, contextTokens, contextWindowTokens } = cache;
+  return {
+    ...(promptCacheTtlMs !== null ? { promptCacheTtlMs } : {}),
+    ...(contextTokens !== null ? { contextTokens } : {}),
+    ...(contextWindowTokens !== null ? { contextWindowTokens } : {}),
+  };
+}
+
+/** Orders `call-N` ids by N; anything else after them, by text. */
+function byCallNumber(a: string, b: string): number {
+  return (
+    (callNumber(a) ?? Number.MAX_SAFE_INTEGER) -
+      (callNumber(b) ?? Number.MAX_SAFE_INTEGER) || a.localeCompare(b)
+  );
+}
+
+/**
+ * One conversation's cache facts, from those of its calls that ran (recorded a
+ * session), in call order. Its lifetime falls back to the one the same callee
+ * and pool member last stated in ANY conversation — the reading the nodes route
+ * gives the user, so the agent and the badge agree.
+ */
+function conversationCache(
+  state: RunCallState,
+  calls: readonly ThreadRecord[],
+): ConversationCacheFacts {
+  const ran = calls.filter((thread) => thread.sessionId !== null);
+  const facts = conversationFacts(ran.map((thread) => thread.cache));
+  if (facts.promptCacheTtlMs !== null || ran.length === 0) {
+    return facts;
+  }
+  const { calleeId, member } = ran[0]!;
+  let ttl: number | null = null;
+  for (const [, thread] of [...state.threads].sort(([a], [b]) =>
+    byCallNumber(a, b),
+  )) {
+    if (thread.calleeId === calleeId && thread.member === member) {
+      ttl = thread.cache.promptCacheTtlMs ?? ttl;
+    }
+  }
+  return { ...facts, promptCacheTtlMs: ttl };
+}
+
+/** Every call of one conversation, in call order. */
+function callsOfConversation(
+  state: RunCallState,
+  conversationId: string,
+): ThreadRecord[] {
+  return [...state.threads.entries()]
+    .filter(([, thread]) => thread.conversationId === conversationId)
+    .sort(([a], [b]) => byCallNumber(a, b))
+    .map(([, thread]) => thread);
+}
+
+/** A cache standing as the listing states it — instants and seconds, never ms. */
+function cacheWire(
+  standing: PromptCacheStanding,
+  now: number,
+): Record<string, unknown> {
+  if (standing.state === 'warm') {
+    return {
+      state: 'warm',
+      expires_at: new Date(standing.expiresAt).toISOString(),
+      expires_in_s: Math.round((standing.expiresAt - now) / 1000),
+    };
+  }
+  if (standing.state === 'expired') {
+    return {
+      state: 'expired',
+      expired_at: new Date(standing.expiredAt).toISOString(),
+      expired_s_ago: Math.round((now - standing.expiredAt) / 1000),
+    };
+  }
+  return {
+    state: 'unknown',
+    note: 'this agent’s CLI reports no prompt-cache lifetime',
+  };
+}
+
+/** A span as a model reads it best: minutes under two hours, else hours. */
+function spanText(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  return minutes < 120 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
+}
+
+/** The refusal for continuing a cold, large conversation. */
+function coldResumeRefusal(
+  calleeId: string,
+  thread: string,
+  facts: ConversationCacheFacts,
+): string {
+  const standing = promptCacheStanding(facts, Date.now());
+  const ago =
+    standing.state === 'expired'
+      ? ` ${spanText(Date.now() - standing.expiredAt)} ago`
+      : '';
+  const percent = statedPercent(conversationContextPercent(facts) ?? 0);
+  return `CACHE_EXPIRED: the prompt cache of your conversation with '${calleeId}' (thread '${thread}') expired${ago} and its context is ${percent}% full (${facts.contextTokens ?? 0} tokens), so continuing it would re-bill all of that uncached. Start a new instance instead: call_agent without thread, with a self-contained brief of what it needs from the old conversation. Only if that history is worth the cost, call again with resume_cold: true.`;
 }

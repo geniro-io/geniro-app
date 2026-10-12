@@ -5,12 +5,15 @@ import type {
   CallStartedPayload,
   RunCallSeed,
 } from '../chat.types';
-import { parseJsonColumn } from './json-util';
+import { asNumber, parseJsonColumn } from './json-util';
+import { positive } from './positive-figure';
 
 /** One transcript row, as much of it as the fold reads. */
 export interface CallSeedRow {
   kind: string;
   payload: unknown;
+  /** When the row was written — a `call_result`'s is when its call ended. */
+  createdAt?: Date;
 }
 
 /** The id the broker mints for a run's `n`th call — what {@link callNumber} reads back. */
@@ -32,6 +35,31 @@ export function callNumber(callId: string): number | null {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function positiveNumber(value: unknown): number | null {
+  const number = asNumber(value);
+  return positive(number) ? number : null;
+}
+
+/** The cache facts a `call_result` row carries, each only when measured. */
+function cacheFactsOf(
+  fields: Partial<Record<keyof CallResultPayload, unknown>>,
+  createdAt: Date | undefined,
+): Pick<
+  CallSeedRecord,
+  'endedAt' | 'promptCacheTtlMs' | 'contextTokens' | 'contextWindowTokens'
+> {
+  const endedAt = createdAt?.getTime();
+  const ttl = positiveNumber(fields.promptCacheTtlMs);
+  const tokens = positiveNumber(fields.contextTokens);
+  const window = positiveNumber(fields.contextWindowTokens);
+  return {
+    ...(endedAt !== undefined && Number.isFinite(endedAt) ? { endedAt } : {}),
+    ...(ttl !== null ? { promptCacheTtlMs: ttl } : {}),
+    ...(tokens !== null ? { contextTokens: tokens } : {}),
+    ...(window !== null ? { contextWindowTokens: window } : {}),
+  };
 }
 
 /**
@@ -91,10 +119,11 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
         typeof fields.member === 'number' && Number.isInteger(fields.member)
           ? { member: fields.member }
           : {};
+      const cache = cacheFactsOf(fields, row.createdAt);
       const existing = records.get(callId);
       if (existing) {
         existing.sessionId = sessionId;
-        Object.assign(existing, member);
+        Object.assign(existing, member, cache);
       } else {
         // A result whose start is missing (a transcript window, an older
         // build) is still a settled call — resumable when it says so.
@@ -106,6 +135,7 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
           thread: null,
           sessionId,
           ...member,
+          ...cache,
         });
       }
     }

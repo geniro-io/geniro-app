@@ -239,12 +239,15 @@ export function ModelSettingsSelect({
   configDir?: string | null;
   recentConfigDirs?: readonly string[];
   /**
-   * The user's NAMED configurations (Settings → the claude card), so a
-   * directory they have named wears its colour in the Profile list.
+   * The user's NAMED configurations for THIS run's CLI (Settings → its card),
+   * which always get rows of their own in the Profile list — by name, in their
+   * colour — whatever the recents hold. The caller filters by agent: a profile
+   * is offered to its own CLI alone.
    *
    * Defaulted to empty rather than required: every other caller of this control
-   * renders the same panel without one, and an empty list simply leaves every
-   * row uncoloured — which is also what an install that has named nothing sees.
+   * renders the same panel without one, and an empty list simply leaves the
+   * recents as the only rows — which is also what an install that has named
+   * nothing sees.
    */
   configProfiles?: readonly ConfigProfile[];
   /**
@@ -273,6 +276,17 @@ export function ModelSettingsSelect({
   nextTurnOnly?: boolean;
   className?: string;
 }): React.JSX.Element {
+  /**
+   * The named profiles by VALUE — what a row reads off each one — so the memo
+   * below rebuilds when one is added, renamed or recoloured, and not merely
+   * because a caller handed over a new array saying the same thing. Every
+   * caller does: each filters the user's list down to this CLI inline, which is
+   * a fresh array on every render. The `id` and the `agent` are left out
+   * because no row reads either.
+   */
+  const profilesKey = JSON.stringify(
+    configProfiles.map((profile) => [profile.name, profile.dir, profile.color]),
+  );
   // Memoized, and ABOVE the readout return below rather than beside the render
   // it feeds: a hook cannot sit after a conditional return. The rows are ~40
   // objects plus a JSX icon per axis, rebuilt on every render of a component
@@ -393,58 +407,80 @@ export function ModelSettingsSelect({
         return null;
       }
       // The current one leads even before it is among the persisted recents,
-      // so the panel always has a row to put the checkmark on.
-      const paths =
+      // so the panel always has a row to put the checkmark on. A NAMED
+      // directory is excluded: it has its own row above, and listing it twice
+      // would offer one account as two rows, one by name and one by path.
+      const paths = (
         configDir !== null && !recentConfigDirs.includes(configDir)
           ? [configDir, ...recentConfigDirs]
-          : recentConfigDirs;
+          : recentConfigDirs
+      ).filter(
+        (path) => !configProfiles.some((profile) => profile.dir === path),
+      );
+      const current = configProfiles.find(
+        (profile) => profile.dir === configDir,
+      );
       return {
         value: 'axis:profile:',
         icon: <IdCard />,
         label: 'Profile',
         // The LEAF, like the chip it replaced: a full path is a paragraph in a
         // row that has to state four other settings beside it, and the whole
-        // of it is one row down.
-        hint: configDir === null ? 'default' : folderName(configDir),
+        // of it is one row down. A NAMED directory says its name instead — the
+        // leaf is what naming it was meant to stop you reading, and two
+        // accounts routinely both live in a directory called `.claude`.
+        hint:
+          configDir === null
+            ? 'default'
+            : (current?.name ?? folderName(configDir)),
         submenu: [
+          // FIRST, and unconditional on the recents. Rows here used to come from
+          // `recentConfigDirs` alone — an MRU that only grows when a directory
+          // is picked THROUGH a menu — so a profile named in Settings had no row
+          // until the user had separately browsed to the same directory, the
+          // one action naming it was meant to replace. `DirectorySelect` was
+          // given the same group for the same report; this is its twin.
+          ...(configProfiles.length > 0
+            ? [
+                {
+                  label: 'Profiles',
+                  items: configProfiles.map((profile) => ({
+                    value: encode(PROFILE, profile.dir),
+                    // NAME over PATH, the same row `DirectorySelect` draws.
+                    // The two pickers offer the same directories, so a row
+                    // shape that differed between them described one account
+                    // two ways depending on where it was opened from.
+                    //
+                    // Both lines are needed and neither is decoration: the
+                    // name says which ACCOUNT, the path says which DIRECTORY,
+                    // and a colour — the row's left border, asked for as
+                    // "просто левый бордер вот этого же цвета" — is
+                    // recognition rather than either.
+                    label: profile.name,
+                    subLabel: shortenPath(profile.dir),
+                    title: profile.dir,
+                    icon: <IdCard />,
+                    checked: profile.dir === configDir,
+                    accent: profile.color,
+                  })),
+                },
+              ]
+            : []),
           ...(paths.length > 0
             ? [
                 {
                   label: 'Recents',
-                  items: paths.map((path) => {
-                    // The user's NAMED configuration for this directory, when
-                    // there is one. Its colour rides the row's left border —
-                    // asked for as "просто левый бордер вот этого же цвета" —
-                    // and its NAME leads the row.
-                    const profile = configProfiles.find(
-                      (candidate) => candidate.dir === path,
-                    );
-                    return {
-                      value: encode(PROFILE, path),
-                      // NAME over PATH, the same row `DirectorySelect` draws.
-                      // The two pickers offer the same directories, so a row
-                      // shape that differed between them described one account
-                      // two ways depending on where it was opened from.
-                      //
-                      // Both lines are needed and neither is decoration: the
-                      // name says which ACCOUNT, the path says which DIRECTORY,
-                      // and a colour is recognition rather than either. An
-                      // unnamed directory leads with its leaf, which is only
-                      // enough BECAUSE the line under it disambiguates two
-                      // checkouts that share one.
-                      label: profile?.name ?? folderName(path),
-                      subLabel: shortenPath(path),
-                      title: path,
-                      icon: <IdCard />,
-                      checked: path === configDir,
-                      // Spread rather than a possibly-`undefined` key: an
-                      // explicit undefined is still a key, and `MenuItem`
-                      // distinguishes "no colour" from "a colour".
-                      ...(profile?.color === undefined
-                        ? {}
-                        : { accent: profile.color }),
-                    };
-                  }),
+                  items: paths.map((path) => ({
+                    value: encode(PROFILE, path),
+                    // An unnamed directory leads with its leaf, which is only
+                    // enough BECAUSE the line under it disambiguates two
+                    // checkouts that share one.
+                    label: folderName(path),
+                    subLabel: shortenPath(path),
+                    title: path,
+                    icon: <IdCard />,
+                    checked: path === configDir,
+                  })),
                 },
               ]
             : []),
@@ -633,6 +669,8 @@ export function ModelSettingsSelect({
   }, [
     configDir,
     recentConfigDirs,
+    // Not `configProfiles` — see `profilesKey`.
+    profilesKey,
     configDirUnavailableReason,
     onConfigDirChange,
     onBrowseConfigDir,

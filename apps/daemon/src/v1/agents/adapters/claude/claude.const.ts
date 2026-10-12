@@ -1158,6 +1158,30 @@ export const CLAUDE_MCP_PENDING_MARKER = 'Pending approval';
 export const CLAUDE_MCP_NEEDS_AUTH_MARKER = 'Needs authentication';
 
 /**
+ * The CLI's own record of servers that answered a dial with 401, in the
+ * profile root (`CLAUDE_CONFIG_DIR`, else `~/.claude`):
+ * `{"<server>": {"timestamp": <ms>, "id"?: "<claude.ai server id>", "ttlMs"?: <ms>}}`.
+ *
+ * Read out of the 2.1.295 bundle and confirmed on a real profile. At session
+ * start a claude.ai connector with an entry younger than `ttlMs ?? 4h` (15 min
+ * for other remote servers) gets an auth stub and is NEVER dialled. Any 401 —
+ * a session's dial, `claude mcp get`, `claude mcp list` — writes an entry; only
+ * a session's own successful connect, or `claude mcp login`, deletes one. So
+ * a server signed in to in the browser stays withheld from every new session
+ * until the entry expires, while `mcp get` reports it Connected. No flag or env
+ * var skips the record. `claude mcp login` deletes the entry and exits before
+ * the user has authorized, and a re-check polled during the browser flow
+ * writes it back. Each process also keeps its first read of the file and
+ * rewrites that whole copy on its next write, so a session or terminal that
+ * read it before geniro cleared an entry can put the entry back; geniro
+ * clears it again whenever a later dial sees the server connected.
+ *
+ * RE-CHECK IF: the file moves or is renamed, its value shape changes, or a
+ * successful `mcp get` / `mcp list` starts deleting the entry itself.
+ */
+export const CLAUDE_MCP_NEEDS_AUTH_CACHE_FILE = 'mcp-needs-auth-cache.json';
+
+/**
  * Argv that signs the CLI in to one server, with the server name appended.
  *
  * Named rather than written inline because it has the second reader that earns

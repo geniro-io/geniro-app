@@ -105,6 +105,7 @@ import {
   CLAUDE_MCP_LIST_UNREADABLE_MESSAGE,
   CLAUDE_MCP_LOGIN_ARGS,
   CLAUDE_MCP_LOGIN_FAILURE_MARKERS,
+  CLAUDE_MCP_NEEDS_AUTH_CACHE_FILE,
   CLAUDE_MCP_SERVERS_KEY,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
@@ -591,6 +592,13 @@ export class ClaudeAdapter extends AgentAdapter {
         /** `claude mcp login <name>` — probe-verified on 2.1.223. */
         loginArgs: CLAUDE_MCP_LOGIN_ARGS,
         loginUnavailableReason: null,
+        // The switch is `projects[<repository>]` in the profile's own
+        // `.claude.json` (`claudeProjectKey`); a server's sign-in belongs to the
+        // profile, whatever folder it was made in.
+        changeReach: {
+          toggle: { where: 'repository', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: true },
+        },
         /**
          * The CLI's own failure line, observed verbatim on 2.1.232:
          * `Couldn't complete authentication for "probe": stdin isn't a
@@ -1504,6 +1512,63 @@ export class ClaudeAdapter extends AgentAdapter {
     return parseMcpGetHealth(stdout);
   }
 
+  /** The key this CLI files a folder's MCP switches under (`claudeProjectKey`). */
+  override mcpRepositoryKey(cwd: string): Promise<string> {
+    return claudeProjectKey(cwd);
+  }
+
+  /**
+   * Delete these servers' entries from the profile's needs-auth record
+   * ({@link CLAUDE_MCP_NEEDS_AUTH_CACHE_FILE}), the one thing that keeps a
+   * connector the user has signed in to out of every new session.
+   *
+   * Only those keys go; every other entry stays, since each still describes a
+   * server that really answered 401. A file that cannot be read or parsed is
+   * left alone and answers none — this is a cache, so a wrong guess about its
+   * shape must not replace it. No lock: the CLI serializes its own writes to
+   * this file in-process only, and it is a cache it rebuilds on the next 401.
+   * The fallback mode never applies: a file must exist to hold an entry, and
+   * `preserveTarget` keeps the mode it already has.
+   */
+  override forgetMcpNeedsAuth(input: {
+    servers: readonly string[];
+    configDir: string | null;
+  }): Promise<readonly string[]> {
+    const next = this.needsAuthWrites.then(() =>
+      this.rewriteNeedsAuthRecord(input.servers, input.configDir),
+    );
+    this.needsAuthWrites = next.catch(() => undefined);
+    return next;
+  }
+
+  private async rewriteNeedsAuthRecord(
+    servers: readonly string[],
+    configDir: string | null,
+  ): Promise<readonly string[]> {
+    const file = join(
+      this.profileDir(configDir),
+      CLAUDE_MCP_NEEDS_AUTH_CACHE_FILE,
+    );
+    const read = await readConfigForRewrite(file);
+    if (!read.ok) {
+      return [];
+    }
+    const forgotten = servers.filter((server) =>
+      Object.hasOwn(read.config, server),
+    );
+    if (forgotten.length === 0) {
+      return [];
+    }
+    const rest = { ...read.config };
+    for (const server of forgotten) {
+      delete rest[server];
+    }
+    await atomicWrite(file, JSON.stringify(rest), {
+      preserveTarget: { fallbackMode: CLAUDE_CONFIG_FILE_FALLBACK_MODE },
+    });
+    return forgotten;
+  }
+
   /**
    * Name the conversation by asking the CLI, since it writes no title itself.
    *
@@ -2198,6 +2263,13 @@ export class ClaudeAdapter extends AgentAdapter {
    * belongs to exactly one process; see {@link ClaudeSessionCostLedger}.
    */
   private readonly costLedger: ClaudeSessionCostLedger;
+
+  /**
+   * Orders this daemon's own rewrites of the needs-auth record: a re-check, a
+   * switch-on probe and an unawaited listing can each clear one, and two
+   * overlapping read-modify-writes would put back a key the other removed.
+   */
+  private needsAuthWrites: Promise<unknown> = Promise.resolve();
 
   protected mapMessage(obj: unknown): AgentEvent[] {
     return mapClaudeMessage(obj, this.costLedger);

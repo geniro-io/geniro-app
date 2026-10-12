@@ -158,6 +158,47 @@ describe('McpHarvestStore', () => {
     ]);
   });
 
+  it('carries a sign-in to the harvests it reaches, moving only rows that still need it', () => {
+    const store = new McpHarvestStore({ file: cacheFile() });
+    store.record('claude', '/a', '/p/1', [
+      server('figma', { status: 'needs_auth' }),
+    ]);
+    store.record('claude', '/b', '/p/1', [
+      server('figma', { status: 'failed', detail: 'boom' }),
+    ]);
+    store.record('claude', '/c', '/p/2', [
+      server('figma', { status: 'needs_auth' }),
+    ]);
+
+    store.patchSignedIn(
+      'claude',
+      'figma',
+      (_cwd, configDir) => configDir === '/p/1',
+    );
+
+    expect(store.get('claude', '/a', '/p/1')?.[0]?.status).toBe('connected');
+    expect(store.get('claude', '/b', '/p/1')?.[0]?.status).toBe('failed');
+    expect(store.get('claude', '/c', '/p/2')?.[0]?.status).toBe('needs_auth');
+    expect(store.foldersOf('claude').sort()).toEqual(['/a', '/b', '/c']);
+  });
+
+  it('keeps a folder whose servers need signing in or are still loading across a reload', () => {
+    // A signed-out connector is the commonest row there is; rejecting its
+    // status on load threw the whole folder's harvest away on every restart.
+    const file = cacheFile();
+    new McpHarvestStore({ file }).record('claude', '/proj', null, [
+      server('figma', { status: 'needs_auth' }),
+      server('linear', { status: 'loading' }),
+      server('codegraph'),
+    ]);
+
+    expect(new McpHarvestStore({ file }).get('claude', '/proj', null)).toEqual([
+      server('figma', { status: 'needs_auth' }),
+      server('linear', { status: 'loading' }),
+      server('codegraph'),
+    ]);
+  });
+
   it('drops a record whose rows are not servers, keeping well-formed ones', () => {
     // Per-subclass load validation is what stops a cache written by an older
     // shape surfacing as a half-populated listing in the panel.

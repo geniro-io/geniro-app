@@ -270,6 +270,10 @@ describe('ArtifactCard', () => {
 
     const dialog = document.body.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
+    // The full-screen header overlaps the shell's native window-drag strip.
+    // jsdom cannot dispatch native presses; the no-drag region is what lets
+    // Electron deliver those presses to the Close and Save controls.
+    expect(dialog?.classList.contains('app-no-drag')).toBe(true);
     expect(dialog?.querySelector('iframe')?.getAttribute('src')).toBe(
       'http://127.0.0.1:1/a?v=1',
     );

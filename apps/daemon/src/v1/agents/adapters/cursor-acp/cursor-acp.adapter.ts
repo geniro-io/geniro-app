@@ -265,6 +265,17 @@ export function cursorAutoDecision(
 }
 
 /**
+ * Whether a turn's permission requests must reach geniro — every mode the
+ * driver does not answer by itself. Such a turn's profile overrides the
+ * user's own approval mode (`CursorProfileSeed.askForApprovals`).
+ */
+export function cursorTurnAsks(
+  approvalMode: AgentTurnInput['approvalMode'],
+): boolean {
+  return cursorAutoDecision(approvalMode) === null;
+}
+
+/**
  * How long a cached handshake reply stays fresh — the same 10-minute window
  * `EffortsService`/`ContextWindowsService` already give the PARSED vocabulary
  * this feeds, so a cold model pays the ~2s handshake once per that window
@@ -750,17 +761,22 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         loginArgs: ['mcp', 'login'],
         loginUnavailableReason: null,
+        // Both are filed under `~/.cursor/projects/<project root>`, outside any
+        // `CURSOR_CONFIG_DIR` (`cursorProjectRoot`), so every profile working in
+        // that repository shares them.
+        changeReach: {
+          toggle: { where: 'repository', perProfile: false },
+          signIn: { where: 'repository', perProfile: false },
+        },
         /**
-         * EMPTY, and that is a measurement gap rather than a claim: this CLI's
-         * server sign-in has never been observed failing, so there is no
-         * wording to match. Inventing one would be a marker that silently never
-         * fires — the failure this adapter's own `needs_auth` note records
-         * having already made once. The consequence is bounded and stated at
-         * the field: with no marker, an attempt that failed is reported as
-         * having completed, and the LISTING — which is the authority either way
-         * — still shows the server unauthenticated on the re-read that follows.
+         * Measured on 2026.10.01-e373342 under a pty, the way geniro runs it:
+         * an unapproved server, an approved one that cannot be reached and a
+         * name the config does not hold each print `✗ MCP login failed`
+         * followed by the reason (`… has not been approved`, `fetch failed`,
+         * `… not found in config`). The `✗` is left out of the marker so a
+         * re-styled glyph cannot stop it matching.
          */
-        loginFailureMarkers: [],
+        loginFailureMarkers: ['MCP login failed'],
         /**
          * Null: `cursor-agent mcp enable <name>` IS the approval, and the CLI
          * says so in both its help ("Add an MCP server to the local approved
@@ -1834,6 +1850,15 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
+   * The folder this CLI files a workspace's MCP switches and sign-ins under —
+   * its own git-root walk, which does not follow a worktree to its main
+   * repository (`cursorProjectRoot`).
+   */
+  override mcpRepositoryKey(cwd: string): Promise<string> {
+    return Promise.resolve(cursorProjectRoot(cwd));
+  }
+
+  /**
    * Dial ONE server, so a row the user just switched on can say what it found.
    *
    * `mcp list-tools <server>` is the only per-server command this CLI has, and
@@ -2285,6 +2310,20 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
+   * Whether the CLI asks before a tool runs is spawn-time — it reads its
+   * approval mode from the profile `prepareTurn` seeds once per process — so a
+   * process spawned for an `auto` turn, under the user's own (possibly
+   * "run everything") mode, must not serve an `ask` or `plan` turn. Keyed
+   * rather than checked one way, so switching a chat INTO `auto` respawns too.
+   */
+  protected override sessionKey(input: AgentTurnInput): string {
+    return JSON.stringify([
+      super.sessionKey(input),
+      cursorTurnAsks(input.approvalMode),
+    ]);
+  }
+
+  /**
    * Every charge of the asked-about cursor conversations over the window, read
    * from the user's own account — the only place the figure exists
    * (`utils/cursor-usage.utils.ts` carries the evidence).
@@ -2708,6 +2747,7 @@ export class CursorAcpAdapter extends AgentAdapter {
       // untouched key means "however the user's own terminal was last left",
       // so OFF has to be written as much as ON.
       maxMode: this.agentOption(input, CURSOR_MAX_MODE_OPTION),
+      askForApprovals: cursorTurnAsks(input.approvalMode),
     });
     this.turnProfiles.set(input, dir);
     // A workflow node's switched-off MCP servers: this CLI reads which servers

@@ -617,12 +617,12 @@ export class ItemDao extends BaseDao<Item> {
   async usageRowsWithNode(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'nodeId' | 'payload' | 'createdAt'>[]> {
     return this.getRepo(txEm).find(
       { runId, kind: { $in: [...USAGE_ITEM_KINDS] } },
       {
         orderBy: { seq: 'asc' },
-        fields: ['nodeId', 'payload'],
+        fields: ['nodeId', 'payload', 'createdAt'],
         disableIdentityMap: true,
       },
     );

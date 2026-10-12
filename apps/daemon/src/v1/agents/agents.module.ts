@@ -389,6 +389,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // teardown obligation a chat delete does — a run-scoped CLI process is
     // reaped by nothing else.
     AgentSessionRegistry,
+    // Exported so a server sign-in can re-check the server until it SEES it
+    // connected, through the one path that also patches every reading of it.
+    AgentMcpService,
     // Exported for main.ts's boot sweep — it runs before the server listens,
     // beside the other reconciles a crashed launch leaves behind.
     StrandedChildReaper,

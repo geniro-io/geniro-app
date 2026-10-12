@@ -156,10 +156,13 @@ function lostSession(
  * listener. It also degrades correctly: a missed tick costs a second, not the
  * flow.
  *
- * `onSettled` fires once when the CLI exits, whatever the outcome. That is where
- * the caller re-probes detection — the daemon's `succeeded` means only "the
- * command completed cleanly", and whether the user is actually signed in is a
- * question only the CLI's own status command answers.
+ * `onSettled` fires once when the sign-in ends, whatever the outcome. For an
+ * ACCOUNT that is the CLI exiting, and the caller re-probes detection — the
+ * daemon's `succeeded` means only "the command completed cleanly", and whether
+ * the user is actually signed in is a question only the CLI's own status
+ * command answers. A SERVER sign-in passes through `verifying` first (not
+ * over, so the poll keeps going): the daemon re-checks the server itself and
+ * reports `succeeded` only once it is seen connected.
  *
  * It is handed the sign-in that settled, because ONE controller serves both
  * flows and they are re-probed by different reads: an MCP server's answer is in

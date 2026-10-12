@@ -9,7 +9,7 @@ import type {
   AgentMcpServerStatus,
 } from '../adapters/adapter.types';
 import { isHostMcpServerName } from '../utils/host-question';
-import { harvestKey, HarvestStore } from './harvest-store';
+import { harvestKey, HarvestStore, parseHarvestKey } from './harvest-store';
 
 /**
  * Defensive bound per key. A configured MCP set is a handful of servers; this
@@ -39,7 +39,9 @@ const STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
   'connected',
   'failed',
   'pending',
+  'loading',
   'disabled',
+  'needs_auth',
   'unknown',
 ]);
 
@@ -158,6 +160,49 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
         ? { ...row, status: health.status, detail: health.detail }
         : row,
     );
+  }
+
+  /**
+   * Mark `server` connected in every harvest of this agent that `reached`
+   * names and still says it needs signing in — a sign-in seen to succeed in
+   * one folder, carried to the others it reaches. Only `needs_auth` rows move:
+   * any other status there is that folder's own fact about its own server.
+   * `reached` is handed the row too, so the caller can refuse a same-named
+   * server that points somewhere else.
+   */
+  patchSignedIn(
+    agent: AgentKind,
+    server: string,
+    reached: (
+      cwd: string,
+      configDir: string | null,
+      row: AgentMcpServer,
+    ) => boolean,
+  ): void {
+    this.patchWhere(
+      (key) => parseHarvestKey(key).agent === agent,
+      (row, key) => {
+        const [cwd, configDir] = parseHarvestKey(key).parts;
+        return cwd !== undefined &&
+          row.name === server &&
+          row.status === 'needs_auth' &&
+          reached(cwd, configDir ? configDir : null, row)
+          ? { ...row, status: 'connected', detail: null }
+          : row;
+      },
+    );
+  }
+
+  /** The folders this agent has harvests for, each once. */
+  foldersOf(agent: AgentKind): string[] {
+    const folders = new Set<string>();
+    for (const key of this.recordKeys()) {
+      const { agent: keyAgent, parts } = parseHarvestKey(key);
+      if (keyAgent === agent && parts[0] !== undefined) {
+        folders.add(parts[0]);
+      }
+    }
+    return [...folders];
   }
 
   /** Forget everything a turn of this CLI reported — see `forgetAgentAt`. */

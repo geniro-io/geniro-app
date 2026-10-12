@@ -8,6 +8,7 @@ import {
   Injectable,
   Logger,
   type OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import {
   BadRequestException,
@@ -26,6 +27,7 @@ import {
 } from '../../runs/runs.types';
 import type {
   AgentEvent,
+  AgentMcpServer,
   AgentSession,
   AgentUsage,
   TurnAutoCompact,
@@ -143,6 +145,7 @@ import { StandingQuestions } from '../utils/standing-questions';
 import { unanswerablePayload, unansweredRequests } from '../utils/unanswerable';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import { AgentMcpService } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import { ArtifactBroker } from './artifact.broker';
@@ -599,6 +602,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly notices: NotifyBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
+    @Optional() private readonly agentMcp?: AgentMcpService,
   ) {}
 
   /**
@@ -2985,6 +2989,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // account's key both starves the profile's panel and poisons the default
       // one with another subscription's servers.
       this.mcpHarvest.record(agent, cwd, configDir, event.servers);
+      this.noteMcpMismatch(runId, agent, cwd, configDir, event.servers);
       return;
     }
     if (event.type === 'session') {
@@ -5872,6 +5877,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 configDir ?? null,
                 event.servers,
               );
+              this.noteMcpMismatch(
+                runId,
+                adapter.getConfig().kind,
+                cwd,
+                configDir ?? null,
+                event.servers,
+              );
               return;
             }
             if (event.type === 'context_compacted') {
@@ -6903,6 +6915,44 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     return delegate === null
       ? payload
       : { ...payload, parentToolUseId: delegate };
+  }
+
+  /**
+   * Say in the transcript when a turn started without servers geniro's own
+   * reading says are connected — and clear the record that held them back
+   * (`AgentMcpService.observeTurnServers`). Unawaited: the report is the turn's
+   * own housekeeping, and the note may land a row or two after it.
+   */
+  private noteMcpMismatch(
+    runId: string,
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+    servers: readonly AgentMcpServer[],
+  ): void {
+    if (this.agentMcp === undefined) {
+      return;
+    }
+    void this.agentMcp
+      .turnMismatchNotice(agent, cwd, configDir, servers)
+      .then(async (message) => {
+        if (message === null || this.deleting.has(runId)) {
+          return;
+        }
+        await this.persist(
+          this.em.fork(),
+          runId,
+          await this.seqs.reserve(runId),
+          'system',
+          null,
+          { message, severity: 'info' },
+        );
+      })
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `run ${runId}: could not note the MCP servers its turn started without: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
   }
 
   private async persist(

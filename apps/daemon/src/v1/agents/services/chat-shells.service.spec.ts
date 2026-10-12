@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from './agent-events.bus';
+import type { AgentSessionRegistry } from './agent-session.registry';
 import type { ChatService } from './chat.service';
 import { ChatShellsService } from './chat-shells.service';
 import type { ItemSeqAllocator } from './item-seq.allocator';
@@ -76,6 +77,12 @@ function service(
     name?: string;
     parentToolUseId?: string;
   }[],
+  live: {
+    /** Calls the CLI has already answered — a `tool_result` row exists. */
+    answered?: string[];
+    /** The pids of this run's live CLI processes. */
+    roots?: number[];
+  } = {},
 ): {
   service: ChatShellsService;
   asked: string[][];
@@ -107,6 +114,31 @@ function service(
           createdAt: new Date(0),
         }));
     },
+    // The foreground arm's read: the call and, when answered, its reply.
+    rowsByPayloadId: async (
+      _runId: string,
+      _kinds: readonly string[],
+      ids: readonly string[],
+    ) => [
+      ...calls
+        .filter((call) => ids.includes(call.id))
+        .map((call) => ({
+          kind: 'tool_call',
+          payload: JSON.stringify({
+            id: call.id,
+            name: call.name ?? 'Bash',
+            ...(call.command === undefined
+              ? {}
+              : { input: { command: call.command } }),
+          }),
+        })),
+      ...(live.answered ?? [])
+        .filter((id) => ids.includes(id))
+        .map((id) => ({
+          kind: 'tool_result',
+          payload: JSON.stringify({ id, result: 'done' }),
+        })),
+    ],
     // What `persistItemAndEmit` writes through — the real helper runs, so the
     // close is pinned as the row it actually stores rather than as a call to a
     // doubled `close`.
@@ -134,6 +166,15 @@ function service(
       bus,
       seqs,
       chats,
+      {
+        processRoots: () =>
+          (live.roots ?? []).map((pid) => ({
+            key: 'run-1',
+            agent: 'codex',
+            cwd: '/work',
+            pid,
+          })),
+      } as unknown as AgentSessionRegistry,
     ),
     asked,
     written,
@@ -411,5 +452,105 @@ describe('ChatShellsService.kill', () => {
     // And the row STAYS: it is still running, so writing its close would take
     // it off a list it belongs on.
     expect(written).toEqual([]);
+  });
+
+  describe('a FOREGROUND command — one the agent is still waiting on', () => {
+    // The reported case: a codex `pnpm dev` the agent never got an answer from,
+    // listed as running, and a Stop that answered "no longer running" because
+    // only detached commands (`shell_open` rows) were ever looked for.
+    const COMMAND =
+      "/bin/zsh -lc 'env -u ELECTRON_RUN_AS_NODE GENIRO_UI_USER_DATA=/tmp/review pnpm dev -- --remoteDebuggingPort 9341 > /tmp/dev.log 2>&1'";
+    const DEV = 'node /opt/homebrew/bin/pnpm dev -- --remoteDebuggingPort 9341';
+    // 100 is this run's CLI. zsh and env exec'd, so 102 reads as `pnpm dev`;
+    // 103/104 are what the dev server started. 200 is the user's OWN
+    // `pnpm dev` in another terminal, byte-for-byte the same command line.
+    const TABLE = [
+      { pid: 100, ppid: 1, args: 'codex app-server' },
+      { pid: 101, ppid: 100, args: 'node /mcp/server.js' },
+      { pid: 102, ppid: 100, args: DEV },
+      { pid: 103, ppid: 102, args: 'node electron-vite dev' },
+      { pid: 104, ppid: 103, args: '/Applications/Electron.app/Electron .' },
+      { pid: 200, ppid: 1, args: DEV },
+    ];
+
+    it('stops the command and everything it started, inside the run alone', async () => {
+      vi.useFakeTimers();
+      machine.processes = TABLE;
+      const { service: svc, written } = service(
+        [],
+        [{ id: 'call-fg', command: COMMAND }],
+        { roots: [100] },
+      );
+
+      const answer = await svc.kill('run-1', 'call-fg');
+
+      expect(answer).toEqual({ killed: true, reason: null });
+      expect(machine.signals).toEqual([
+        { pid: 102, signal: 'SIGTERM' },
+        { pid: 103, signal: 'SIGTERM' },
+        { pid: 104, signal: 'SIGTERM' },
+      ]);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(
+        machine.signals.filter((sent) => sent.signal === 'SIGKILL'),
+      ).toEqual([
+        { pid: 102, signal: 'SIGKILL' },
+        { pid: 103, signal: 'SIGKILL' },
+        { pid: 104, signal: 'SIGKILL' },
+      ]);
+      // The CLI answers the call itself once its command exits; a close
+      // written here would be a second, invented ending.
+      expect(written).toEqual([]);
+    });
+
+    it('signals nothing once the CLI has answered the call', async () => {
+      machine.processes = TABLE;
+      const { service: svc } = service(
+        [],
+        [{ id: 'call-fg', command: COMMAND }],
+        { roots: [100], answered: ['call-fg'] },
+      );
+
+      const answer = await svc.kill('run-1', 'call-fg');
+
+      expect(answer).toEqual({
+        killed: false,
+        reason: 'that command is no longer running',
+      });
+      expect(machine.signals).toEqual([]);
+    });
+
+    it('signals nothing when the run holds no live CLI to search under', async () => {
+      // Without a root the only match left is the user's own `pnpm dev` (200),
+      // which is exactly what attribution exists to keep out of reach.
+      machine.processes = TABLE;
+      const { service: svc } = service(
+        [],
+        [{ id: 'call-fg', command: COMMAND }],
+      );
+
+      const answer = await svc.kill('run-1', 'call-fg');
+
+      expect(answer.killed).toBe(false);
+      expect(answer.reason).toContain(
+        'agent process that started this command is gone',
+      );
+      expect(machine.signals).toEqual([]);
+    });
+
+    it("says so when the command is not among the run's processes", async () => {
+      machine.processes = TABLE.filter((row) => row.pid !== 102);
+      const { service: svc } = service(
+        [],
+        [{ id: 'call-fg', command: COMMAND }],
+        { roots: [100] },
+      );
+
+      const answer = await svc.kill('run-1', 'call-fg');
+
+      expect(answer.killed).toBe(false);
+      expect(answer.reason).toContain('stop the turn');
+      expect(machine.signals).toEqual([]);
+    });
   });
 });

@@ -207,7 +207,13 @@ function ShellRow({
           data-slot="shell-kill"
           size="icon"
           variant="ghost"
-          className="size-5 shrink-0 text-muted-foreground hover:text-destructive"
+          // ROUND, like the stop glyph it holds, and tinted in the destructive
+          // colour alone. The ghost hover was the caramel accent behind a red
+          // icon — two warm tones that read as a mistake — and once armed the
+          // resting `text-muted-foreground` beat the variant's white, leaving a
+          // grey (and, hovered, a red) icon on a red fill: the one state that
+          // must be unmistakable was the hardest to see.
+          className="size-5 shrink-0 rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive data-[armed]:text-destructive-foreground data-[armed]:hover:bg-destructive/90 data-[armed]:hover:text-destructive-foreground"
           // ONE title for both states, since the control has one job and the
           // press count is part of describing it. The command is named because
           // the row above truncates, and this is the press that cannot be

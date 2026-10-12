@@ -83,6 +83,10 @@ export function ConfirmButton({
     <Button
       type="button"
       variant={armed ? 'destructive' : variant}
+      // Exposed so a caller whose `className` restyles the resting look can
+      // restyle the armed one too (`data-[armed]:…`) instead of fighting the
+      // variant — a resting text colour otherwise wins over the armed one.
+      data-armed={armed ? '' : undefined}
       size={size}
       className={className}
       disabled={disabled || busy}

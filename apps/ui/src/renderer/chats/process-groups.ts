@@ -34,7 +34,11 @@ export interface ProcessGroup {
   rssBytes: number;
   /** How long its top process has been running, in seconds. */
   elapsedSeconds: number | null;
-  /** Outlived the shell that started it — kept only by the process group. */
+  /**
+   * Runs with no live parent of the agent's above it: a command that outlived
+   * its shell and is kept only by the CLI's process group, or something from
+   * the thread's detached set (`groupDetached`), which no agent CLI holds.
+   */
   detached: boolean;
 }
 
@@ -136,6 +140,33 @@ export function groupProcesses(tree: RunProcessTree): ProcessGroup[] {
   }
   return groups.sort(
     (a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role),
+  );
+}
+
+/**
+ * What a thread's agents left running with no CLI of theirs above it, one
+ * command per top process — each is something an agent started and detached.
+ */
+export function groupDetached(
+  processes: readonly RunProcess[],
+): ProcessGroup[] {
+  const subtrees: RunProcess[][] = [];
+  for (const process of processes) {
+    const current = subtrees.at(-1);
+    if (process.depth === 0 || current === undefined) {
+      subtrees.push([process]);
+    } else {
+      current.push(process);
+    }
+  }
+  return subtrees.map((subtree) =>
+    toGroup(
+      `detached:${(subtree[0] as RunProcess).pid}`,
+      'command',
+      commandLabel(subtree),
+      subtree,
+      true,
+    ),
   );
 }
 

@@ -814,6 +814,7 @@ beforeEach(() => {
   api.readRunProcesses.mockReset().mockResolvedValue({
     sampledAt: '2026-09-07T12:00:00.000Z',
     trees: [],
+    detached: [],
     processes: 0,
     cpuPercent: 0,
     rssBytes: 0,

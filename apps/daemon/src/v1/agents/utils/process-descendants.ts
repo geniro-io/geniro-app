@@ -1,4 +1,5 @@
-import { execFile } from 'node:child_process';
+import { decodePsText } from './process-usage';
+import { runPs } from './run-ps';
 
 /** One row of the process table, as `ps` reports it. */
 export interface ProcessRow {
@@ -7,13 +8,6 @@ export interface ProcessRow {
   /** The full command line, un-truncated (`ps -ww`). */
   args: string;
 }
-
-/**
- * How long a listing may take before it is abandoned. `ps` on a busy laptop
- * answers in single-digit milliseconds; anything near this is a machine in
- * trouble, and a readout is never worth blocking a turn's settle for.
- */
-const PS_TIMEOUT_MS = 4_000;
 
 /**
  * How much of a command has to match. `ps` reports the whole line, but a shell
@@ -35,14 +29,8 @@ const COMMAND_MATCH_CHARS = 120;
  * finished and can never be un-listed.
  */
 export async function listProcesses(): Promise<ProcessRow[]> {
-  const stdout = await new Promise<string>((resolve) => {
-    execFile(
-      'ps',
-      ['-axww', '-o', 'pid=,ppid=,args='],
-      { timeout: PS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
-      (error, out) => resolve(error ? '' : out),
-    );
-  });
+  const stdout =
+    (await runPs(['-axww', '-o', 'pid=,ppid=,args='], 8 * 1024 * 1024)) ?? '';
   return parseProcessRows(stdout);
 }
 
@@ -67,7 +55,9 @@ export function parseProcessRows(stdout: string): ProcessRow[] {
     if (!Number.isInteger(pid) || pid <= 0 || args === '') {
       continue;
     }
-    rows.push({ pid, ppid, args });
+    // `ps` escapes every non-ASCII byte under the C locale it runs in; the
+    // commands matched against these rows are the agent's own text.
+    rows.push({ pid, ppid, args: decodePsText(args) });
   }
   return rows;
 }

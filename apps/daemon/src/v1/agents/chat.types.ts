@@ -2178,7 +2178,15 @@ export type RunProcessTree = z.infer<typeof RunProcessTreeSchema>;
 export const RunProcessesWireSchema = z.object({
   sampledAt: z.string().describe('when the process table was read, ISO-8601'),
   trees: z.array(RunProcessTreeSchema),
-  processes: z.number().int(),
+  detached: z
+    .array(RunProcessSchema)
+    .describe(
+      "what the run's agents left running with no CLI of theirs above it — a `nohup` dev server, a watcher, a browser — found by the run's tag; each top process is `root`, depth-first under it. The same set archiving or deleting the run stops",
+    ),
+  processes: z
+    .number()
+    .int()
+    .describe('every process listed, the trees and `detached` together'),
   cpuPercent: z.number(),
   rssBytes: z.number().int(),
   unavailableReason: z
@@ -2212,6 +2220,12 @@ export const AppProcessThreadSchema = z
       .number()
       .int()
       .describe('how many agent processes it keeps — several for a workflow'),
+    detachedProcesses: z
+      .number()
+      .int()
+      .describe(
+        'how many of its processes no agent CLI of it holds — left running detached; counted in `figures`',
+      ),
     figures: ProcessFiguresSchema,
   })
   .meta({ id: 'AppProcessThread' });
@@ -2234,6 +2248,9 @@ export const AppProcessesWireSchema = z.object({
     .describe('heaviest first, by resident memory'),
   geniro: ProcessFiguresSchema.nullable().describe(
     'geniro itself; null when the process table could not be read',
+  ),
+  leftover: ProcessFiguresSchema.nullable().describe(
+    'what threads that are deleted or archived still have running — the sweep stops it; null when the process table could not be read',
   ),
   total: ProcessFiguresSchema,
   unavailableReason: z.string().nullable(),

@@ -19,6 +19,7 @@ function dto(processes: number): RunProcessesDto {
   return {
     sampledAt: '2026-10-04T12:00:00.000Z',
     trees: [],
+    detached: [],
     processes,
     cpuPercent: 0,
     rssBytes: 0,

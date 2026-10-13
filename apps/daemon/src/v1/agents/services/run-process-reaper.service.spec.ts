@@ -1,13 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
-import { RUN_ID_ENV, type ScannedProcess } from '../utils/run-process-scan';
 import {
+  RUN_ID_ENV,
+  RUN_OWNER_ENV,
+  type ScannedProcess,
+} from '../utils/run-process-scan';
+import { RunProcessAttribution } from './run-process-attribution.service';
+import {
+  isUnsignallable,
   RunProcessReaper,
   type RunProcessReaperOptions,
 } from './run-process-reaper.service';
 
 const RUN = 'run-1111';
+const OWNER = 'aaaaaaaaaaaaaaaa';
 const SELF = 900;
 const UID = 501;
 
@@ -21,6 +28,7 @@ function row(
     pid,
     ppid,
     uid: UID,
+    tty: null,
     startedAt: pid * 10,
     args,
     env: '',
@@ -28,15 +36,19 @@ function row(
   };
 }
 
-const tag = (runId = RUN): string => `${RUN_ID_ENV}=${runId}`;
+const tag = (runId = RUN): string =>
+  `${RUN_ID_ENV}=${runId} ${RUN_OWNER_ENV}=${OWNER}`;
 
 /** Start times as the kernel would report them for the listed rows. */
-const sameAsListed = (pids: number[]): Map<number, number> =>
-  new Map(pids.map((pid) => [pid, pid * 10]));
+const sameAsListed = (pids: number[]): Promise<Map<number, number>> =>
+  Promise.resolve(new Map(pids.map((pid) => [pid, pid * 10])));
 
 function reaper(
   rows: ScannedProcess[] | null,
-  options: RunProcessReaperOptions = {},
+  options: RunProcessReaperOptions & {
+    scan?: () => Promise<ScannedProcess[] | null>;
+    uid?: number | null;
+  } = {},
 ): {
   reaper: RunProcessReaper;
   signals: [number, NodeJS.Signals][];
@@ -47,14 +59,18 @@ function reaper(
   const signals: [number, NodeJS.Signals][] = [];
   const waits: number[] = [];
   const logger = { log: vi.fn(), warn: vi.fn() };
-  const scan = vi.fn(() => Promise.resolve(rows));
+  const scan = vi.fn(options.scan ?? (() => Promise.resolve(rows)));
+  const attribution = new RunProcessAttribution(OWNER, {
+    scan,
+    selfPid: SELF,
+    uid: options.uid === undefined ? UID : options.uid,
+  });
   return {
     signals,
     waits,
     logger,
     scan,
-    reaper: new RunProcessReaper({
-      scan,
+    reaper: new RunProcessReaper(attribution, {
       signal: (pid, sig) => signals.push([pid, sig]),
       startTimes: sameAsListed,
       wait: (ms) => {
@@ -63,7 +79,6 @@ function reaper(
       },
       logger,
       selfPid: SELF,
-      uid: UID,
       ...options,
     }),
   };
@@ -90,15 +105,17 @@ describe('RunProcessReaper', () => {
           }
           // After the grace: 10 exited, 11 still runs, 12's pid now belongs
           // to a process that started later — a recycled pid.
-          return new Map([
-            [11, 110],
-            [12, 99_999],
-          ]);
+          return Promise.resolve(
+            new Map([
+              [11, 110],
+              [12, 99_999],
+            ]),
+          );
         },
       },
     );
 
-    const stopped = await subject.reap(RUN);
+    const stopped = await subject.reap([RUN]);
 
     expect(stopped.sort()).toEqual([10, 11, 12]);
     expect(waits).toEqual([GROUP_KILL_GRACE_MS]);
@@ -110,14 +127,15 @@ describe('RunProcessReaper', () => {
     ]);
   });
 
-  it('logs every pid it signals', async () => {
+  it('logs every pid it signals by its executable, never its command line', async () => {
     const { reaper: subject, logger } = reaper([
-      row(10, 1, 'node server.js', { env: tag() }),
+      row(10, 1, '/usr/bin/psql postgres://u:hunter2@db/x', { env: tag() }),
     ]);
-    await subject.reap(RUN);
+    await subject.reap([RUN]);
     expect(logger.log).toHaveBeenCalledWith(
-      `SIGTERM pid 10 (node server.js) of run ${RUN}`,
+      `SIGTERM pid 10 (psql) of run ${RUN}`,
     );
+    expect(JSON.stringify(logger.log.mock.calls)).not.toContain('hunter2');
   });
 
   it.each(['', '  '])(
@@ -127,12 +145,51 @@ describe('RunProcessReaper', () => {
         reaper: subject,
         signals,
         scan,
-      } = reaper([row(10, 1, 'node a.js', { env: `${RUN_ID_ENV}=` })]);
-      expect(await subject.reap(runId)).toEqual([]);
+      } = reaper([row(10, 1, 'node a.js', { env: tag('') })]);
+      expect(await subject.reap([runId])).toEqual([]);
       expect(scan).not.toHaveBeenCalled();
       expect(signals).toEqual([]);
     },
   );
+
+  it('reads nothing and signals nothing when it cannot tell which user it is', async () => {
+    const {
+      reaper: subject,
+      signals,
+      scan,
+    } = reaper([row(10, 1, 'node a.js', { env: tag() })], { uid: null });
+    expect(await subject.reap([RUN])).toEqual([]);
+    expect(scan).not.toHaveBeenCalled();
+    expect(signals).toEqual([]);
+  });
+
+  it('leaves a run alone that has a live agent again by the time of its scan', async () => {
+    // Archived, then unarchived and messaged while its reap waited in line:
+    // what the table holds now is a working agent's.
+    // Held only from the moment of the scan: asked any earlier, the check
+    // would see nothing held and signal the new agent.
+    let scanned = false;
+    const rows = [
+      row(10, 1, 'claude -p', { env: tag() }),
+      row(20, 1, 'node b.js', { env: tag('run-2222') }),
+    ];
+    const {
+      reaper: subject,
+      signals,
+      logger,
+    } = reaper(rows, {
+      scan: () => {
+        scanned = true;
+        return Promise.resolve(rows);
+      },
+      held: (runId) => scanned && runId === RUN,
+    });
+    expect(await subject.reap([RUN, 'run-2222'])).toEqual([20]);
+    expect(signals.map(([pid]) => pid)).not.toContain(10);
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.stringContaining(`run ${RUN} has a live agent again`),
+    );
+  });
 
   it('signals nothing, and does not wait, for another run', async () => {
     const {
@@ -140,39 +197,42 @@ describe('RunProcessReaper', () => {
       signals,
       waits,
     } = reaper([row(10, 1, 'node a.js', { env: tag('run-2222') })]);
-    expect(await subject.reap(RUN)).toEqual([]);
+    expect(await subject.reap([RUN])).toEqual([]);
     expect(signals).toEqual([]);
     expect(waits).toEqual([]);
   });
 
   it('signals nothing when the process table cannot be read', async () => {
     const { reaper: subject, signals, logger } = reaper(null);
-    expect(await subject.reap(RUN)).toEqual([]);
+    expect(await subject.reap([RUN])).toEqual([]);
     expect(signals).toEqual([]);
     expect(logger.warn).toHaveBeenCalledOnce();
   });
 
-  it('signals nothing over the cap, and says how many matched', async () => {
+  it('signals nothing for a run over the cap, and still stops the others', async () => {
     const rows = [
       row(10, 1, 'node root.js', { env: tag() }),
       ...Array.from({ length: 300 }, (_, i) => row(1000 + i, 10, 'node w.js')),
+      row(20, 1, 'node other.js', { env: tag('run-2222') }),
     ];
     const { reaper: subject, signals, logger } = reaper(rows);
-    expect(await subject.reap(RUN)).toEqual([]);
-    expect(signals).toEqual([]);
+    expect(await subject.reap([RUN, 'run-2222'])).toEqual([20]);
+    expect(signals).toEqual([
+      [20, 'SIGTERM'],
+      [20, 'SIGKILL'],
+    ]);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('matched 301 processes'),
     );
   });
 
-  it('never signals the daemon itself, even tagged', async () => {
+  it('signals nothing of the run the daemon itself was started from', async () => {
     const { reaper: subject, signals } = reaper([
       row(SELF, 1, 'node daemon/main.js', { env: tag() }),
       row(10, 1, 'node server.js', { env: tag() }),
     ]);
-    await subject.reap(RUN);
-    expect(signals.map(([pid]) => pid)).not.toContain(SELF);
-    expect(signals).toContainEqual([10, 'SIGTERM']);
+    expect(await subject.reap([RUN])).toEqual([]);
+    expect(signals).toEqual([]);
   });
 
   it('never signals a process whose identity it cannot confirm', async () => {
@@ -183,14 +243,23 @@ describe('RunProcessReaper', () => {
       ],
       // 11's pid was recycled between the listing and the signal: what holds
       // it now started a minute after the process that was listed.
-      { startTimes: () => new Map([[11, 110 + 60_000]]) },
+      // 10 is alive, but the listing could not say when it started.
+      {
+        startTimes: () =>
+          Promise.resolve(
+            new Map([
+              [10, 100],
+              [11, 110 + 60_000],
+            ]),
+          ),
+      },
     );
-    expect(await subject.reap(RUN)).toEqual([]);
+    expect(await subject.reap([RUN])).toEqual([]);
     expect(signals).toEqual([]);
   });
 
   it('steps over a process that exits between the probe and the signal', async () => {
-    const { reaper: subject } = reaper(
+    const { reaper: subject, logger } = reaper(
       [
         row(10, 1, 'node a.js', { env: tag() }),
         row(11, 1, 'node b.js', { env: tag() }),
@@ -203,22 +272,112 @@ describe('RunProcessReaper', () => {
         },
       },
     );
-    expect(await subject.reap(RUN)).toEqual([11]);
+    expect(await subject.reap([RUN])).toEqual([11]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('says so when a signal is refused, rather than skipping it in silence', async () => {
+    const { reaper: subject, logger } = reaper(
+      [row(10, 1, 'node a.js', { env: tag() })],
+      {
+        signal: () => {
+          throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+        },
+      },
+    );
+    expect(await subject.reap([RUN])).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('could not send SIGTERM to pid 10 (node)'),
+    );
+  });
+
+  it('reaps what queued while a reap ran together, over one scan', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const scans: number[] = [];
+    const { reaper: subject, signals } = reaper(null, {
+      scan: async () => {
+        scans.push(scans.length);
+        if (scans.length === 1) {
+          await gate;
+        }
+        return [
+          row(10, 1, 'node a.js', { env: tag('run-a') }),
+          row(20, 1, 'node b.js', { env: tag('run-b') }),
+          row(30, 1, 'node c.js', { env: tag('run-c') }),
+        ];
+      },
+    });
+    subject.reapInBackground('run-a');
+    subject.reapInBackground('run-b');
+    subject.reapInBackground('run-c');
+    release();
+    await subject.settled();
+    // The first reap took run-a alone; b and c queued behind it, together.
+    expect(scans).toHaveLength(2);
+    expect(signals.filter(([, sig]) => sig === 'SIGTERM')).toEqual([
+      [10, 'SIGTERM'],
+      [20, 'SIGTERM'],
+      [30, 'SIGTERM'],
+    ]);
+  });
+
+  it('re-asks whether a run the sweep queued is still gone, never one an archive queued', async () => {
+    const asked: string[][] = [];
+    const { reaper: subject, signals } = reaper(
+      [
+        row(10, 1, 'node a.js', { env: tag('run-a') }),
+        row(20, 1, 'node b.js', { env: tag('run-b') }),
+        row(30, 1, 'node c.js', { env: tag('run-c') }),
+      ],
+      {
+        // run-b was unarchived since the sweep's verdict.
+        stillGone: (runIds) => {
+          asked.push(runIds);
+          return Promise.resolve(
+            new Set(runIds.filter((id) => id !== 'run-b')),
+          );
+        },
+      },
+    );
+    subject.reapInBackground('run-a', true);
+    subject.reapInBackground('run-b', true);
+    // Archived by the user while the sweep's request waited: that one wins.
+    subject.reapInBackground('run-c', true);
+    subject.reapInBackground('run-c');
+    await subject.settled();
+    expect(asked.flat().sort()).toEqual(['run-a', 'run-b']);
+    expect(
+      signals.filter(([, sig]) => sig === 'SIGTERM').map(([pid]) => pid),
+    ).toEqual([10, 30]);
   });
 
   it('reports a failed background reap as a warning instead of rejecting', async () => {
     const logger = { log: vi.fn(), warn: vi.fn() };
-    const subject = new RunProcessReaper({
-      scan: () => Promise.reject(new Error('boom')),
-      logger,
-      selfPid: SELF,
-      uid: UID,
-    });
-    subject.reapInBackground(RUN);
-    await vi.waitFor(() =>
-      expect(logger.warn).toHaveBeenCalledWith(
-        `could not stop the processes of run ${RUN}: boom`,
-      ),
+    const subject = new RunProcessReaper(
+      new RunProcessAttribution(OWNER, {
+        scan: () => Promise.reject(new Error('boom')),
+        selfPid: SELF,
+        uid: UID,
+      }),
+      { logger, selfPid: SELF },
     );
+    subject.reapInBackground(RUN);
+    await subject.settled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      `could not stop the processes of run(s) ${RUN}: boom`,
+    );
+  });
+});
+
+describe('isUnsignallable', () => {
+  it('refuses launchd, the whole-session pid and the daemon itself', () => {
+    expect(isUnsignallable(1, SELF)).toBe(true);
+    expect(isUnsignallable(0, SELF)).toBe(true);
+    expect(isUnsignallable(-1, SELF)).toBe(true);
+    expect(isUnsignallable(SELF, SELF)).toBe(true);
+    expect(isUnsignallable(10, SELF)).toBe(false);
   });
 });

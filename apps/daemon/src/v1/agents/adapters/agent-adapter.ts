@@ -23,7 +23,6 @@ import {
 } from '../utils/ollama';
 import { listProcesses, type ProcessRow } from '../utils/process-descendants';
 import { repositoryRootOf } from '../utils/repository-root';
-import { RUN_ID_ENV } from '../utils/run-process-scan';
 import {
   type BetweenTurnApproval,
   type CliSession,
@@ -2642,11 +2641,11 @@ export abstract class AgentAdapter {
       onBetweenTurnEvent?: (event: AgentEvent) => void;
       onHeldApproval?: CliSessionOptions['onHeldApproval'];
       /**
-       * The run this process works for, stamped into its environment as
-       * `RUN_ID_ENV` so everything it starts — detached or not — can be found
-       * and stopped when the run is archived or deleted.
+       * The run tag (`runTagEnv`) this process is stamped with, so everything
+       * it starts — detached or not — can be attributed to its run and stopped
+       * when the run is archived or deleted.
        */
-      runId?: string;
+      runTag?: Readonly<Record<string, string>>;
     } = {},
   ): AgentSession {
     const runScoped = opts.runScoped === true && this.canHostSession(input);
@@ -2686,7 +2685,7 @@ export abstract class AgentAdapter {
         env: {
           ...this.buildEnv(input),
           ...local.env,
-          ...(opts.runId ? { [RUN_ID_ENV]: opts.runId } : {}),
+          ...opts.runTag,
         },
         stdinLifetime: runScoped
           ? 'session'

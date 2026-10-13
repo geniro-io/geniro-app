@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { environment } from '../../../environments';
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
@@ -12,7 +13,12 @@ import type {
 } from '../adapters/adapter.types';
 import { AgentAdapter } from '../adapters/agent-adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
-import { RUN_ID_ENV } from '../utils/run-process-scan';
+import {
+  RUN_ID_ENV,
+  RUN_OWNER_ENV,
+  runOwnerOf,
+  runTagEnv,
+} from '../utils/run-process-scan';
 import {
   callSessionKey,
   callSessionKeyPrefix,
@@ -676,7 +682,7 @@ describe('AgentSessionRegistry — ending a process', () => {
 
     expect(startSession).toHaveBeenCalledWith(INPUT, {
       runScoped: false,
-      runId: 'run-1',
+      runTag: runTagEnv('run-1', runOwnerOf(environment.userDataDir)),
     });
   });
 
@@ -1136,7 +1142,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
     ['a workflow node', nodeSessionKey('run-tagged', 'dev')],
     ['a callee conversation', callSessionKey('run-tagged', 'call-1')],
   ])(
-    'spawns %s with its RUN id in the environment, whatever the caller put there',
+    'spawns %s tagged with its RUN and this geniro, whatever the caller put there',
     (_kind, key) => {
       // Every descendant inherits it, a dev server the agent detached
       // included — which is what the run's teardown finds them by.
@@ -1145,10 +1151,16 @@ describe('AgentSessionRegistry — the ceiling', () => {
       registry.startTurn(
         key,
         new SessionfulAdapter(spawn),
-        { ...INPUT, env: { [RUN_ID_ENV]: 'spoofed' } },
+        {
+          ...INPUT,
+          env: { [RUN_ID_ENV]: 'spoofed', [RUN_OWNER_ENV]: 'spoofed' },
+        },
         noop,
       );
       expect(captured.env?.[RUN_ID_ENV]).toBe('run-tagged');
+      expect(captured.env?.[RUN_OWNER_ENV]).toBe(
+        runOwnerOf(environment.userDataDir),
+      );
     },
   );
 

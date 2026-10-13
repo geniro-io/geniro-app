@@ -19,6 +19,7 @@ import {
   listProcessUsage,
   type OwnedProcess,
   processName,
+  processSetTree,
   processTreeOf,
   type ProcessUsageRow,
 } from '../utils/process-usage';
@@ -28,6 +29,7 @@ import {
   runIdOfSessionKey,
 } from '../utils/session-keys';
 import { AgentSessionRegistry } from './agent-session.registry';
+import { RunProcessAttribution } from './run-process-attribution.service';
 
 const PS_UNREADABLE =
   'the process table could not be read — `ps` failed or timed out';
@@ -37,50 +39,84 @@ function roundCpu(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
+/** Test seams — the production factory passes none. */
+export interface RunProcessesOptions {
+  listUsage?: () => Promise<ProcessUsageRow[] | null>;
+  selfPid?: number;
+}
+
 /**
  * What one run has running right now — every kept agent CLI, everything under
- * it, and what each costs (`GET /v1/chats/:runId/processes`).
+ * it, everything its agents left running detached, and what each costs
+ * (`GET /v1/chats/:runId/processes`).
  *
- * Attribution is EXPLICIT: it starts from the pids this daemon spawned for the
- * run, which `AgentSessionRegistry` holds, and follows only what the OS records
- * about them (parent links and the process group — see `processTreeOf`). No
- * command line is matched, so a user's own `claude` in a terminal, or another
- * run's identical MCP server, can never be counted here.
+ * Attribution is EXPLICIT, never a command-line match, so a user's own
+ * `claude` in a terminal, or another run's identical MCP server, can never be
+ * counted here. Two sources, in order: the pids this daemon spawned for the run
+ * (`AgentSessionRegistry`) and what the OS records about them (parent links and
+ * the process group — see `processTreeOf`); then the run's tag in the
+ * environment (`RunProcessAttribution`), which reaches what was detached and
+ * adopted by launchd. That is the very attribution the run's teardown stops by,
+ * so what this shows under a thread is what archiving it ends.
  *
  * Kind-blind like the waterfall beside it: a workflow run's processes are
  * kept under `<runId>::…` keys and come back as one tree per node or call.
  */
 @Injectable()
 export class RunProcessesService {
+  private readonly listUsage: () => Promise<ProcessUsageRow[] | null>;
+  private readonly selfPid: number;
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly sessions: AgentSessionRegistry,
-    private readonly listUsage: () => Promise<
-      ProcessUsageRow[] | null
-    > = listProcessUsage,
-    private readonly selfPid: number = process.pid,
-  ) {}
+    private readonly attribution: RunProcessAttribution,
+    options: RunProcessesOptions = {},
+  ) {
+    this.listUsage = options.listUsage ?? listProcessUsage;
+    this.selfPid = options.selfPid ?? process.pid;
+  }
+
+  /**
+   * The pids each run owns by its tag.
+   * Empty when the table could not be read with environments: the CLI trees
+   * still stand, and nothing is guessed.
+   */
+  private async tagged(): Promise<Map<string, Set<number>>> {
+    const reading = await this.attribution.attribute('readout');
+    if (reading === null) {
+      return new Map();
+    }
+    return new Map(
+      [...reading].map(([runId, procs]) => [
+        runId,
+        new Set(procs.map((proc) => proc.pid)),
+      ]),
+    );
+  }
 
   /**
    * Every thread's share of the machine at once, plus geniro's own — the
    * title bar's usage readout (`GET /v1/chats/processes`).
    *
-   * Threads are attributed exactly as {@link read} attributes one: from the
-   * pids this daemon spawned. Geniro's own figure is what is left of the tree
-   * that started the daemon — the window, its helpers, the daemon itself, the
-   * terminal panel's shells — once every thread's processes are taken out, so
-   * no process is counted twice. The `ps` read is paid even with no agent
-   * running, because geniro's own figure is part of the answer.
+   * Threads are attributed exactly as {@link read} attributes one. What a
+   * thread that is gone or archived still has running is `leftover` — the
+   * sweep's to stop, shown until it has. Geniro's own figure is what is left
+   * of the tree that started the daemon — the window, its helpers, the
+   * daemon itself, the terminal panel's shells — once every thread's processes
+   * are taken out, so no process is counted twice. The `ps` read is paid even
+   * with no agent running, because geniro's own figure is part of the answer.
    */
   async readAll(): Promise<AppProcessesWire> {
     const sampledAt = new Date().toISOString();
-    const rows = await this.listUsage();
+    const [rows, tagged] = await Promise.all([this.listUsage(), this.tagged()]);
     if (rows === null) {
       return {
         sampledAt,
         threads: [],
         geniro: null,
+        leftover: null,
         total: figuresOf([]),
         unavailableReason: PS_UNREADABLE,
       };
@@ -88,8 +124,23 @@ export class RunProcessesService {
     const claimed = new Set<number>();
     const byRun = new Map<
       string,
-      { kinds: Set<AgentKind>; agents: number; owned: OwnedProcess[] }
+      {
+        kinds: Set<AgentKind>;
+        agents: number;
+        owned: ProcessUsageRow[];
+        detached: number;
+      }
     >();
+    const threadOf = (runId: string) => {
+      const thread = byRun.get(runId) ?? {
+        kinds: new Set<AgentKind>(),
+        agents: 0,
+        owned: [],
+        detached: 0,
+      };
+      byRun.set(runId, thread);
+      return thread;
+    };
     for (const root of this.sessions.processRoots()) {
       const owned = processTreeOf(rows, root.pid).filter(
         (row) => !claimed.has(row.pid),
@@ -98,37 +149,58 @@ export class RunProcessesService {
         continue;
       }
       owned.forEach((row) => claimed.add(row.pid));
-      const runId = runIdOfSessionKey(root.key);
-      const thread = byRun.get(runId) ?? {
-        kinds: new Set<AgentKind>(),
-        agents: 0,
-        owned: [],
-      };
+      const thread = threadOf(runIdOfSessionKey(root.key));
       const kind = AgentKindSchema.safeParse(root.agent);
       if (kind.success) {
         thread.kinds.add(kind.data);
       }
       thread.agents += 1;
       thread.owned.push(...owned);
-      byRun.set(runId, thread);
     }
 
-    const titles = new Map<string, string | null>();
-    if (byRun.size > 0) {
-      const runs = await this.runDao.getAll(
-        { id: { $in: [...byRun.keys()] } },
+    const runs = new Map<string, { title: string | null; live: boolean }>();
+    // Held is the registry's word, as it is the sweep's: a run with a live
+    // agent is never leftover, whatever its row says.
+    const held = new Set(
+      this.sessions.processRoots().map((root) => runIdOfSessionKey(root.key)),
+    );
+    const runIds = new Set([...byRun.keys(), ...tagged.keys()]);
+    if (runIds.size > 0) {
+      for (const run of await this.runDao.getAll(
+        { id: { $in: [...runIds] } },
         undefined,
         this.em.fork(),
-      );
-      for (const run of runs) {
-        titles.set(run.id, run.title ?? null);
+      )) {
+        runs.set(run.id, {
+          title: run.title ?? null,
+          live: run.archivedAt === null,
+        });
       }
     }
+    const leftover: ProcessUsageRow[] = [];
+    for (const [runId, pids] of tagged) {
+      const detached = rows.filter(
+        (row) => pids.has(row.pid) && !claimed.has(row.pid),
+      );
+      if (detached.length === 0) {
+        continue;
+      }
+      detached.forEach((row) => claimed.add(row.pid));
+      if (runs.get(runId)?.live === true || held.has(runId)) {
+        const thread = threadOf(runId);
+        thread.owned.push(...detached);
+        thread.detached += detached.length;
+      } else {
+        leftover.push(...detached);
+      }
+    }
+
     const threads: AppProcessThread[] = [...byRun].map(([runId, thread]) => ({
       runId,
-      title: titles.get(runId) ?? null,
+      title: runs.get(runId)?.title ?? null,
       agentKinds: [...thread.kinds],
       agents: thread.agents,
+      detachedProcesses: thread.detached,
       figures: figuresOf(thread.owned),
     }));
     threads.sort((a, b) => b.figures.rssBytes - a.figures.rssBytes);
@@ -138,21 +210,17 @@ export class RunProcessesService {
         (row) => !claimed.has(row.pid),
       ),
     );
+    const left = figuresOf(leftover);
+    const parts = [geniro, left, ...threads.map((t) => t.figures)];
     return {
       sampledAt,
       threads,
       geniro,
+      leftover: left,
       total: {
-        processes:
-          geniro.processes +
-          threads.reduce((sum, t) => sum + t.figures.processes, 0),
-        cpuPercent: roundCpu(
-          geniro.cpuPercent +
-            threads.reduce((sum, t) => sum + t.figures.cpuPercent, 0),
-        ),
-        rssBytes:
-          geniro.rssBytes +
-          threads.reduce((sum, t) => sum + t.figures.rssBytes, 0),
+        processes: parts.reduce((sum, p) => sum + p.processes, 0),
+        cpuPercent: roundCpu(parts.reduce((sum, p) => sum + p.cpuPercent, 0)),
+        rssBytes: parts.reduce((sum, p) => sum + p.rssBytes, 0),
       },
       unavailableReason: null,
     };
@@ -178,26 +246,29 @@ export class RunProcessesService {
     }
     const sampledAt = new Date().toISOString();
     const roots = this.sessions.processRoots(runId);
-    // No kept process means nothing to attribute — and no reason to pay for a
-    // whole-machine `ps` on every poll of an idle chat.
-    if (roots.length === 0) {
-      return emptyReading(sampledAt, null);
-    }
-    const rows = await this.listUsage();
+    // Read even with no kept CLI: what its agents detached outlives them.
+    const [rows, tagged] = await Promise.all([this.listUsage(), this.tagged()]);
     if (rows === null) {
       return emptyReading(sampledAt, PS_UNREADABLE);
     }
     const trees = roots
       .map((root) => treeFor(root, processTreeOf(rows, root.pid)))
       .filter((tree): tree is RunProcessTree => tree !== null);
+    const inTrees = new Set(
+      trees.flatMap((tree) => tree.processes.map((proc) => proc.pid)),
+    );
+    const detachedPids = new Set(
+      [...(tagged.get(runId) ?? [])].filter((pid) => !inTrees.has(pid)),
+    );
+    const detached = processSetTree(rows, detachedPids).map(toWire);
+    const all = [...trees.flatMap((tree) => tree.processes), ...detached];
     return {
       sampledAt,
       trees,
-      processes: trees.reduce((sum, tree) => sum + tree.processes.length, 0),
-      cpuPercent: roundCpu(
-        trees.reduce((sum, tree) => sum + tree.cpuPercent, 0),
-      ),
-      rssBytes: trees.reduce((sum, tree) => sum + tree.rssBytes, 0),
+      detached,
+      processes: all.length,
+      cpuPercent: roundCpu(all.reduce((sum, proc) => sum + proc.cpuPercent, 0)),
+      rssBytes: all.reduce((sum, proc) => sum + proc.rssBytes, 0),
       unavailableReason: null,
     };
   }
@@ -218,6 +289,7 @@ function emptyReading(
   return {
     sampledAt,
     trees: [],
+    detached: [],
     processes: 0,
     cpuPercent: 0,
     rssBytes: 0,

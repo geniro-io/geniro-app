@@ -32,6 +32,15 @@ describe('parseProcessRows', () => {
     );
   });
 
+  it('reads back the non-ASCII text `ps` escapes under the C locale', () => {
+    // `ps` prints an em dash and Cyrillic as vis(3) escapes; the agent's
+    // command it is matched against carries the characters themselves.
+    const [only] = parseProcessRows(
+      '  42     1 perl -e sleep 4 fixM-bM^@M^TM-QM^BM-PM-5M-QM^AM-QM^B',
+    );
+    expect(only?.args).toBe('perl -e sleep 4 fix—тест');
+  });
+
   it('skips a line that does not open with two integers', () => {
     // Another program's output: a header, a warning, a blank. Read as a row it
     // would arrive as pid 0 and reparent half the machine under the tree.

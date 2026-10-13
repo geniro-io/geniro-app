@@ -70,6 +70,7 @@ function reading(over: Partial<RunProcessesDto> = {}): RunProcessesDto {
   return {
     sampledAt: '2026-10-04T12:00:00.000Z',
     trees: [tree()],
+    detached: [],
     processes: 3,
     cpuPercent: 16.8,
     rssBytes: 380 * 1024 * 1024 + 512 * 1024,
@@ -196,6 +197,61 @@ describe('RunProcesses', () => {
   });
 });
 
+describe('RunProcesses — what the agents left detached', () => {
+  const DEV = [
+    proc({
+      pid: 500,
+      ppid: 1,
+      depth: 0,
+      link: 'root',
+      name: 'pnpm',
+      args: 'node /usr/local/bin/pnpm dev',
+      rssBytes: 100 * 1024 * 1024,
+    }),
+    proc({
+      pid: 501,
+      ppid: 500,
+      depth: 1,
+      link: 'child',
+      name: 'next-server',
+      args: 'next-server (v16)',
+      rssBytes: 900 * 1024 * 1024,
+    }),
+  ];
+
+  it('lists them with no agent running, each command with its figures', () => {
+    const el = mount({
+      data: reading({ trees: [], detached: DEV, processes: 2 }),
+      loading: false,
+      error: null,
+    });
+    const section = el.querySelector('[data-slot="processes-detached"]');
+    expect(section?.textContent).toContain('Detached');
+    expect(section?.textContent).toContain('node /usr/local/bin/pnpm dev');
+    expect(section?.textContent).toContain('1000.0 MB');
+    expect(
+      el.querySelector('[data-slot="processes-summary"]')?.textContent,
+    ).toContain('2 processes · 2 detached');
+    expect(
+      section
+        ?.querySelector('[data-slot="process-group"] [title]')
+        ?.getAttribute('title'),
+    ).toContain('no agent CLI holds it');
+  });
+
+  it('gives them their own stretch of the bar beside the agent’s groups', () => {
+    const el = mount({
+      data: reading({ detached: DEV, processes: 5 }),
+      loading: false,
+      error: null,
+    });
+    expect(
+      el.querySelector('[data-slot="share-stack"]')?.getAttribute('aria-label'),
+    ).toContain('node /usr/local/bin/pnpm dev');
+    expect(el.querySelector('[data-slot="processes-detached"]')).not.toBeNull();
+  });
+});
+
 describe('RunProcesses — several agents', () => {
   function several(): HTMLDivElement {
     return mount({
@@ -223,6 +279,41 @@ describe('RunProcesses — several agents', () => {
     expect(
       el.querySelector('[data-slot="processes-summary"]')?.textContent,
     ).toContain('2 agents');
+  });
+
+  it('gives what the agents left detached its own colour after theirs', () => {
+    const el = mount({
+      data: reading({
+        trees: [
+          tree({ sessionKey: 'run-1::node:qa', nodeId: 'qa', rssBytes: 300 }),
+          tree({
+            sessionKey: 'run-1::call:call-2',
+            conversationId: 'call-2',
+            rssBytes: 100,
+          }),
+        ],
+        detached: [
+          proc({ pid: 500, ppid: 1, depth: 0, name: 'pnpm', args: 'pnpm dev' }),
+        ],
+        rssBytes: 700,
+      }),
+      loading: false,
+      error: null,
+    });
+    const swatches = [
+      ...el.querySelectorAll('[data-slot="share-segment"]'),
+    ].map((segment) => segment.className);
+    expect(swatches).toHaveLength(3);
+    // The detached group's stretch and its row's dot are one colour, and no
+    // agent's.
+    const detachedDot = el
+      .querySelector('[data-slot="processes-detached"] [data-slot="share-dot"]')
+      ?.className.split(' ')
+      .find((name) => name.startsWith('bg-'));
+    expect(detachedDot).toBeDefined();
+    expect(swatches[2]).toContain(detachedDot as string);
+    expect(swatches[0]).not.toContain(detachedDot as string);
+    expect(swatches[1]).not.toContain(detachedDot as string);
   });
 
   it('folds an agent away on its header', () => {

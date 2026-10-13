@@ -75,6 +75,9 @@ function probe(pids: number[]): string | null {
     return execFileSync('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      // `lstart` follows the locale (`вторник, 13 октября…`), which
+      // `Date.parse` cannot read: every pid would then read as unconfirmable.
+      env: { ...process.env, LC_ALL: 'C' },
     });
   } catch {
     // Non-zero exit: none of the requested pids is alive, or `ps` rejected the
@@ -83,9 +86,10 @@ function probe(pids: number[]): string | null {
   }
 }
 
-function parseStartTimes(
+/** `ps -o pid=,lstart=` output into start times (epoch ms) by pid. */
+export function parseStartTimes(
   output: string,
-  started: Map<number, number>,
+  started: Map<number, number> = new Map(),
 ): Map<number, number> {
   for (const line of output.split('\n')) {
     // `<pid> <Www Mmm DD HH:MM:SS YYYY>` — split on the FIRST run of spaces

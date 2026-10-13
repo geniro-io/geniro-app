@@ -4069,9 +4069,8 @@ describe('ChatService', () => {
     });
 
     it('stops the processes a run’s agents left running when it is archived or deleted', async () => {
-      // REPORTED as "after i deleted thread - it suppose to kill all related
-      // processes!": the desk offers only Archive, so that is the delete the
-      // user performs — and the permanent delete from the archive follows it.
+      // The desk offers only Archive, so that is the delete the user performs;
+      // the permanent delete from the archive must reap as well.
       const { service, runDao, reapedRuns } = setup();
       const chat = await service.createChat({ agentKind: 'claude', cwd: dir });
       const workflow = await runDao.create({

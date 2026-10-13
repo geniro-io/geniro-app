@@ -15,7 +15,7 @@ import type {
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { KeptProcessRoot } from '../chat.types';
-import { runSessionKeyPrefix } from '../utils/session-keys';
+import { runIdOfSessionKey, runSessionKeyPrefix } from '../utils/session-keys';
 import type {
   BetweenTurnApproval,
   CliSessionOptions,
@@ -438,6 +438,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
               offTurn.current?.(event);
             },
       onHeldApproval,
+      // The RUN, not this key: a workflow files each node and conversation
+      // under its own key, and the run's teardown searches by the run alone.
+      runId: runIdOfSessionKey(runId),
     });
     const handle = session.startTurn(input, onEvent);
     if (!handle) {

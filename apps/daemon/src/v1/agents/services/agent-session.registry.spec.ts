@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { FakeChild } from '../__tests__/fake-child';
+import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
@@ -12,6 +12,7 @@ import type {
 } from '../adapters/adapter.types';
 import { AgentAdapter } from '../adapters/agent-adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
+import { RUN_ID_ENV } from '../utils/run-process-scan';
 import {
   callSessionKey,
   callSessionKeyPrefix,
@@ -673,7 +674,10 @@ describe('AgentSessionRegistry — ending a process', () => {
     registry.onApplicationShutdown();
     registry.startTurn('run-1', adapter, INPUT, noop);
 
-    expect(startSession).toHaveBeenCalledWith(INPUT, { runScoped: false });
+    expect(startSession).toHaveBeenCalledWith(INPUT, {
+      runScoped: false,
+      runId: 'run-1',
+    });
   });
 
   it('judges a between-turn request by the LATEST turn’s posture, not the spawn’s', async () => {
@@ -1126,6 +1130,27 @@ describe('AgentSessionRegistry — the ceiling', () => {
     expect(at(children, 0).kills).toBe(0);
     expect(children).toHaveLength(1);
   });
+
+  it.each([
+    ['a chat', 'run-tagged'],
+    ['a workflow node', nodeSessionKey('run-tagged', 'dev')],
+    ['a callee conversation', callSessionKey('run-tagged', 'call-1')],
+  ])(
+    'spawns %s with its RUN id in the environment, whatever the caller put there',
+    (_kind, key) => {
+      // Every descendant inherits it, a dev server the agent detached
+      // included — which is what the run's teardown finds them by.
+      const registry = new AgentSessionRegistry(CEILING);
+      const { spawn, captured } = fakeSpawn();
+      registry.startTurn(
+        key,
+        new SessionfulAdapter(spawn),
+        { ...INPUT, env: { [RUN_ID_ENV]: 'spoofed' } },
+        noop,
+      );
+      expect(captured.env?.[RUN_ID_ENV]).toBe('run-tagged');
+    },
+  );
 
   it('reclaims a session that reports itself RETIRED before a warm one the user is still using', async () => {
     // The contract state `retired` names — alive and idle, yet refusing every

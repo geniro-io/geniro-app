@@ -78,6 +78,7 @@ import { PullRequestCaptureService } from './services/pull-request-capture.servi
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import { RunProcessReaper } from './services/run-process-reaper.service';
 import { RunProcessesService } from './services/run-processes.service';
 import { RunStateService } from './services/run-state.service';
 import { RunTeardownService } from './services/run-teardown.service';
@@ -301,6 +302,11 @@ import { defaultSpawn } from './utils/spawn-cli';
         new StrandedChildReaper(
           join(environment.userDataDir, CHILD_JOURNAL_FILE_NAME),
         ),
+    },
+    {
+      // Factory because the options bag is a test seam, not a DI token.
+      provide: RunProcessReaper,
+      useFactory: () => new RunProcessReaper(),
     },
     RunTeardownService,
     SessionTranscriptsService,

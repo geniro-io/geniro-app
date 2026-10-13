@@ -107,6 +107,7 @@ import { ProcessRegistry } from './process-registry';
 import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
+import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
 import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
@@ -985,6 +986,7 @@ function setup(
     get: () => null,
   } as unknown as McpHarvestStore;
   const removedAttachmentRuns: string[] = [];
+  const reapedRuns: string[] = [];
   const attachments = {
     save: () => ({ id: 'att-0', mediaType: 'image/png' }),
     pathOf: (runId: string, id: string) => `/tmp/${runId}/${id}`,
@@ -1066,6 +1068,11 @@ function setup(
     {
       removeReferenced: () => Promise.resolve(0),
     } as unknown as ChatUploadStoreService,
+    // Recording, never real: a real one would read and signal this machine's
+    // process table from a unit test.
+    {
+      reapInBackground: (runId: string) => reapedRuns.push(runId),
+    } as unknown as RunProcessReaper,
   );
   // A double rather than the real service: what THIS spec pins is that the
   // group the rule names lands on the created run, not how the rule reads a
@@ -1173,6 +1180,7 @@ function setup(
     artifactStore,
     statuses,
     deletedRuns,
+    reapedRuns,
     changedRuns,
     createdRuns,
     removedAttachmentRuns,
@@ -4058,6 +4066,25 @@ describe('ChatService', () => {
       expect((await runDao.getById(run.id))?.archivedAt).not.toBeNull();
       expect((await service.unarchive(run.id)).archivedAt).toBeNull();
       expect((await runDao.getById(run.id))?.archivedAt).toBeNull();
+    });
+
+    it('stops the processes a run’s agents left running when it is archived or deleted', async () => {
+      // REPORTED as "after i deleted thread - it suppose to kill all related
+      // processes!": the desk offers only Archive, so that is the delete the
+      // user performs — and the permanent delete from the archive follows it.
+      const { service, runDao, reapedRuns } = setup();
+      const chat = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const workflow = await runDao.create({
+        workflowId: 'wf-1',
+        status: 'completed',
+      });
+
+      await service.archive(chat.id);
+      await service.archive(workflow.id);
+      expect(reapedRuns).toEqual([chat.id, workflow.id]);
+
+      await service.delete(chat.id);
+      expect(reapedRuns).toEqual([chat.id, workflow.id, chat.id]);
     });
 
     it('stops a RUNNING workflow run through the registry both engines share', async () => {

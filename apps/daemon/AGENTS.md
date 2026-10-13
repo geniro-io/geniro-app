@@ -17,6 +17,7 @@ The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent exec
 - `crash-guards.ts` installs before Nest. An uncaught exception writes `<userData>/daemon-crashed` (twin of the UI's `daemon-pidfile.ts`), then SIGTERMs itself. Keep it latched (`shuttingDown`) and keep every handler body non-throwing; Nest runs hooks inside its SIGTERM listener, so a throwing hook re-enters.
 - `db/nul-safe-sqlite.driver.ts`: MikroORM 7 inlines values into SQL and SQLite ends a literal at NUL, so the driver renders NUL as `char(0)`. Do not swap back to the stock driver. WAL is on; copying `geniro.db` needs `geniro.db-wal` too.
 - Every child the daemon spawns registers with `ProcessRegistry`; every detached group is also journaled (`child-journal.ts`). An adapter spawns only through `start()` / `runCommand()`.
+- Every run-scoped CLI is spawned with `GENIRO_RUN_ID=<runId>` (`run-process-scan.ts`), merged last so no adapter or caller env replaces it. Archive and delete end the run's processes through `RunTeardownService.endProcesses`: `closeRun`, then `RunProcessReaper`, which finds the processes whose env carries exactly that id (`ps -E`, the text AFTER the argv) plus their descendants. It never walks through the daemon or its ancestors, and never signals pid ≤ 1, another uid, `/Applications`, `/System`, `/usr/libexec` or colima/lima/qemu/docker. It signals explicit pids only, each re-confirmed by start time, and kills nothing over `RUN_PROCESS_CAP` or when `ps` fails. macOS hides the env of its own platform binaries, and turbo's strict env mode strips the tag from its tasks, which is why descendants are included.
 - Persist-then-emit: allocate seq, write the row, then publish.
 - Env isolation is per adapter (`buildChildEnv`, `auth.isolatedEnvKeys` / `inheritedEnvKeys`); see `agent-adapters.md`.
 
@@ -141,7 +142,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 
 - `calleeSummary` (`utils/callee-text.ts`) is the one line a caller sees about a callee: label plus `description`, never `role`.
 - Node settings are resolved once at run start. An unusable `configDir` or `effort` is dropped with a system row (`DroppedNodeSetting`), never passed on or dropped silently. `effort` is a free string.
-- A pass leaves its processes running. The registry never reaps one holding a detached command (`shellsRunning > 0`). Archive and delete end all of them (`closeRun`, `<runId>` and `<runId>::…`).
+- A pass leaves its processes running. The registry never reaps one holding a detached command (`shellsRunning > 0`). Archive and delete end all of them (`endProcesses`: `closeRun` over `<runId>` and `<runId>::…`, then the reaper for what their agents detached).
 - Workflow rows take seq from the shared `ItemSeqAllocator` (a kept process writes between passes).
 - The pass-end `skipped` sweep touches only nodes still `pending`. `prepareNextPass` resets only DAG-scheduled nodes, never call-only nodes with state.
 - Workflow node auto-compaction: see Auto-compaction.

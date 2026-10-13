@@ -2640,6 +2640,12 @@ export abstract class AgentAdapter {
       betweenTurnApproval?: BetweenTurnApproval | undefined;
       onBetweenTurnEvent?: (event: AgentEvent) => void;
       onHeldApproval?: CliSessionOptions['onHeldApproval'];
+      /**
+       * The run tag (`runTagEnv`) this process is stamped with, so everything
+       * it starts — detached or not — can be attributed to its run and stopped
+       * when the run is archived or deleted.
+       */
+      runTag?: Readonly<Record<string, string>>;
     } = {},
   ): AgentSession {
     const runScoped = opts.runScoped === true && this.canHostSession(input);
@@ -2674,7 +2680,13 @@ export abstract class AgentAdapter {
         command,
         args,
         cwd: input.cwd,
-        env: { ...this.buildEnv(input), ...local.env },
+        // The run tag last: no adapter's `buildEnv` and no caller's
+        // `input.env` may replace the id the run's teardown searches for.
+        env: {
+          ...this.buildEnv(input),
+          ...local.env,
+          ...opts.runTag,
+        },
         stdinLifetime: runScoped
           ? 'session'
           : this.keepStdinOpen(input)

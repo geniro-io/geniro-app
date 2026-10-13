@@ -29,6 +29,7 @@ import type { ChatUploadStoreService } from '../../agents/services/chat-upload-s
 import type { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { PartialStreamService } from '../../agents/services/partial-stream.service';
 import type { ProcessRegistry } from '../../agents/services/process-registry';
+import type { RunProcessReaper } from '../../agents/services/run-process-reaper.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import { CallContext } from '../../runs/entity/call-context.entity';
@@ -126,6 +127,9 @@ describe('usage ledger retention across a run delete', () => {
       {
         removeReferenced: () => Promise.resolve(0),
       } as unknown as ChatUploadStoreService,
+      // Never real: a real one would read and signal this machine's process
+      // table from a unit test.
+      { reapInBackground: () => undefined } as unknown as RunProcessReaper,
     );
   });
 

@@ -78,6 +78,12 @@ import { PullRequestCaptureService } from './services/pull-request-capture.servi
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import {
+  currentRunOwner,
+  RunProcessAttribution,
+} from './services/run-process-attribution.service';
+import { RunProcessReaper } from './services/run-process-reaper.service';
+import { RunProcessSweep } from './services/run-process-sweep.service';
 import { RunProcessesService } from './services/run-processes.service';
 import { RunStateService } from './services/run-state.service';
 import { RunTeardownService } from './services/run-teardown.service';
@@ -135,8 +141,14 @@ import { defaultSpawn } from './utils/spawn-cli';
         em: EntityManager,
         runDao: RunDao,
         sessions: AgentSessionRegistry,
-      ) => new RunProcessesService(em, runDao, sessions),
-      inject: [EntityManager, RunDao, AgentSessionRegistry],
+        attribution: RunProcessAttribution,
+      ) => new RunProcessesService(em, runDao, sessions, attribution),
+      inject: [
+        EntityManager,
+        RunDao,
+        AgentSessionRegistry,
+        RunProcessAttribution,
+      ],
     },
     PullRequestCaptureService,
     RunAttentionService,
@@ -301,6 +313,55 @@ import { defaultSpawn } from './utils/spawn-cli';
         new StrandedChildReaper(
           join(environment.userDataDir, CHILD_JOURNAL_FILE_NAME),
         ),
+    },
+    {
+      // Factories because the options bags are test seams, not DI tokens.
+      provide: RunProcessAttribution,
+      useFactory: () => new RunProcessAttribution(currentRunOwner()),
+    },
+    {
+      provide: RunProcessReaper,
+      useFactory: (
+        attribution: RunProcessAttribution,
+        sessions: AgentSessionRegistry,
+        em: EntityManager,
+        runDao: RunDao,
+      ) =>
+        new RunProcessReaper(attribution, {
+          held: (runId) => sessions.processRoots(runId).length > 0,
+          stillGone: async (runIds) => {
+            const live = await runDao.getAll(
+              { id: { $in: runIds }, archivedAt: null },
+              undefined,
+              em.fork(),
+            );
+            const liveIds = new Set(live.map((run) => run.id));
+            return new Set(runIds.filter((id) => !liveIds.has(id)));
+          },
+        }),
+      inject: [
+        RunProcessAttribution,
+        AgentSessionRegistry,
+        EntityManager,
+        RunDao,
+      ],
+    },
+    {
+      provide: RunProcessSweep,
+      useFactory: (
+        em: EntityManager,
+        runDao: RunDao,
+        sessions: AgentSessionRegistry,
+        reaper: RunProcessReaper,
+        attribution: RunProcessAttribution,
+      ) => new RunProcessSweep(em, runDao, sessions, reaper, attribution),
+      inject: [
+        EntityManager,
+        RunDao,
+        AgentSessionRegistry,
+        RunProcessReaper,
+        RunProcessAttribution,
+      ],
     },
     RunTeardownService,
     SessionTranscriptsService,

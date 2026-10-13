@@ -24,6 +24,7 @@ import {
 } from '../components/process-figures';
 import { cn } from '../components/ui/utils';
 import {
+  groupDetached,
   groupProcesses,
   type ProcessGroup,
   ROLE_CAPTION,
@@ -64,11 +65,18 @@ export function treeLabel(tree: RunProcessTree, agentName: string): string {
   return agentName;
 }
 
-function processTitle(process: RunProcess): string {
+/**
+ * A process's hover text. `detached` marks a process from the thread's
+ * detached set, whose top was left running by an agent rather than started
+ * by geniro.
+ */
+function processTitle(process: RunProcess, detached = false): string {
   const uptime = formatUptime(process.elapsedSeconds);
   const how =
     process.link === 'root'
-      ? 'the agent CLI geniro started'
+      ? detached
+        ? 'left running by this thread’s agents — no agent CLI holds it; archiving the thread stops it'
+        : 'the agent CLI geniro started'
       : process.link === 'group'
         ? 'outlived the shell that started it — kept by the CLI’s process group'
         : `started under pid ${process.ppid}`;
@@ -90,14 +98,16 @@ function groupDetail(group: ProcessGroup): string | null {
 function NestedProcess({
   process,
   baseDepth,
+  detached,
 }: {
   process: RunProcess;
   baseDepth: number;
+  detached: boolean;
 }): React.JSX.Element {
   return (
     <li
       className="flex items-baseline gap-1.5 text-[11px]"
-      title={processTitle(process)}
+      title={processTitle(process, detached)}
       style={{
         paddingLeft: `${Math.min(process.depth - baseDepth, MAX_INDENT_DEPTH) * 10}px`,
       }}>
@@ -127,7 +137,9 @@ function GroupRow({
   const expandable = group.processes.length > 1;
   const [open, setOpen] = useThreadFlag(memoryKey, false);
   const detail = groupDetail(group);
-  const title = group.processes.map(processTitle).join('\n\n');
+  const title = group.processes
+    .map((process) => processTitle(process, group.detached))
+    .join('\n\n');
   // A command gets the whole first line for itself — it is the most telling
   // text in the section and the longest — and states how long it has run, and
   // whether it outlived its shell, on a second line under it.
@@ -226,6 +238,7 @@ function GroupRow({
               key={process.pid}
               process={process}
               baseDepth={group.processes[0]?.depth ?? 0}
+              detached={group.detached}
             />
           ))}
         </ul>
@@ -353,10 +366,50 @@ function AgentBlock({
 }
 
 /**
+ * What the thread's agents left running with no CLI of theirs above it — the
+ * same set archiving the thread stops, so nothing it will end is hidden here.
+ */
+function DetachedSection({
+  groups,
+  colorOf,
+  columns,
+}: {
+  groups: readonly ProcessGroup[];
+  colorOf: (group: ProcessGroup) => string;
+  /** Whether the caption names the CPU / memory columns. */
+  columns: boolean;
+}): React.JSX.Element {
+  return (
+    <section data-slot="processes-detached" aria-label="Detached">
+      <ProcessFigureHeader
+        className="mb-0.5"
+        columns={columns}
+        label={
+          <span title="Started by this thread’s agents and left running — no agent CLI holds them. Archiving or deleting the thread stops them.">
+            Detached
+            <span className="ml-1 tabular-nums">{groups.length}</span>
+          </span>
+        }
+      />
+      <ul className="m-0 flex list-none flex-col p-0">
+        {groups.map((group) => (
+          <GroupRow
+            key={group.key}
+            group={group}
+            memoryKey={`processes:${group.key}`}
+            colorClass={colorOf(group)}
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
  * Every process this thread has running — each agent CLI geniro started for
  * it, and what that CLI runs: its servers and tools, and the commands it
- * started — with CPU and resident memory, and ONE bar showing how the
- * thread's memory divides between them.
+ * started; then what its agents left running detached — with CPU and resident
+ * memory, and ONE bar showing how the thread's memory divides between them.
  *
  * A LIVE reading, not a history: a process that has ended is simply gone from
  * the next poll.
@@ -379,7 +432,7 @@ export function RunProcesses({
       <p className="text-xs text-muted-foreground">reading processes…</p>
     ) : null;
   }
-  if (data.trees.length === 0) {
+  if (data.trees.length === 0 && data.detached.length === 0) {
     return (
       <div className="flex flex-col gap-1">
         <p className="text-xs text-muted-foreground">
@@ -394,13 +447,13 @@ export function RunProcesses({
   }
 
   const several = data.trees.length > 1;
-  const single = several ? null : (data.trees[0] as RunProcessTree);
+  const single =
+    data.trees.length === 1 ? (data.trees[0] as RunProcessTree) : null;
   const singleGroups = single === null ? [] : groupProcesses(single);
-  // One colour per part of the division, in the order the bar draws them.
-  const groupColor = new Map(
-    singleGroups.map((group, index) => [group.key, segmentColorClass(index)]),
-  );
-  const segments: ShareSegment[] = several
+  const detachedGroups = groupDetached(data.detached);
+  // One colour per part of the division, in the order the bar draws them:
+  // the agents (or the one agent's groups), then what was left detached.
+  const leading: ShareSegment[] = several
     ? data.trees.map((tree, index) => ({
         key: tree.sessionKey,
         label: treeLabel(
@@ -412,12 +465,29 @@ export function RunProcesses({
         value: tree.rssBytes,
         colorClass: segmentColorClass(index),
       }))
-    : singleGroups.map((group) => ({
+    : singleGroups.map((group, index) => ({
         key: group.key,
         label: group.label,
         value: group.rssBytes,
-        colorClass: groupColor.get(group.key) ?? '',
+        colorClass: segmentColorClass(index),
       }));
+  const groupColor = new Map(
+    [...singleGroups, ...detachedGroups].map((group, index) => [
+      group.key,
+      segmentColorClass(several ? data.trees.length + index : index),
+    ]),
+  );
+  const segments: ShareSegment[] = [
+    ...leading,
+    ...detachedGroups.map((group) => ({
+      key: group.key,
+      label: group.label,
+      value: group.rssBytes,
+      colorClass: groupColor.get(group.key) ?? '',
+    })),
+  ];
+  const colorOf = (group: ProcessGroup): string =>
+    groupColor.get(group.key) ?? '';
 
   return (
     <div className="flex flex-col gap-2">
@@ -427,6 +497,9 @@ export function RunProcesses({
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
           {data.processes} process{data.processes === 1 ? '' : 'es'}
           {several ? ` · ${data.trees.length} agents` : ''}
+          {data.detached.length > 0
+            ? ` · ${data.detached.length} detached`
+            : ''}
         </span>
         <span className="shrink-0 text-muted-foreground tabular-nums">
           {formatCpu(data.cpuPercent)} CPU
@@ -440,7 +513,7 @@ export function RunProcesses({
         label={several ? 'Memory by agent' : 'Memory by process group'}
       />
       {several ? <ProcessFigureHeader label="agents" className="mt-1" /> : null}
-      {single === null ? (
+      {several ? (
         <ul className="m-0 flex list-none flex-col gap-2 p-0">
           {data.trees.map((tree, index) => (
             <AgentBlock
@@ -450,14 +523,21 @@ export function RunProcesses({
             />
           ))}
         </ul>
-      ) : (
+      ) : single !== null ? (
         <AgentGroups
           tree={single}
           groups={singleGroups}
-          colorOf={(group) => groupColor.get(group.key) ?? ''}
+          colorOf={colorOf}
           columns
         />
-      )}
+      ) : null}
+      {detachedGroups.length > 0 ? (
+        <DetachedSection
+          groups={detachedGroups}
+          colorOf={colorOf}
+          columns={data.trees.length === 0}
+        />
+      ) : null}
       {error === null ? null : (
         <p className="text-[11px] text-muted-foreground">{error}</p>
       )}

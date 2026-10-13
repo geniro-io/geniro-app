@@ -2349,11 +2349,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       if (run.status === 'running') {
         await this.stopForArchive(run);
       }
-      // EVERY process of the run: a chat's kept one, and each of a workflow's,
-      // which the executor keys `<runId>::node:<id>` and keeps between its
-      // passes — so a shelved workflow does not go on serving the dev servers
-      // its agents started.
-      this.sessions.closeRun(runId);
+      // EVERY process of the run — its CLIs and what their agents left running
+      // detached — so a shelved thread does not go on serving the dev servers
+      // its agents started. The desk offers no delete, so for the user this
+      // archive IS deleting the thread.
+      this.teardown.endProcesses(runId);
       const archivedAt = new Date();
       // Shelving is not activity: the archive lists threads by when they were
       // last WORKED in, so this must not re-date the row to the moment it was

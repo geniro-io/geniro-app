@@ -1251,6 +1251,12 @@ export interface AppProcessThread {
      */
     agents: number;
     /**
+     * how many of its processes no agent CLI of it holds — left running detached; counted in `figures`
+     * @type {number}
+     * @memberof AppProcessThread
+     */
+    detachedProcesses: number;
+    /**
      * 
      * @type {ProcessFigures}
      * @memberof AppProcessThread
@@ -1281,6 +1287,12 @@ export interface AppProcessesDto {
      * @memberof AppProcessesDto
      */
     geniro: ProcessFigures | null;
+    /**
+     * 
+     * @type {ProcessFigures}
+     * @memberof AppProcessesDto
+     */
+    leftover: ProcessFigures | null;
     /**
      * 
      * @type {ProcessFigures}
@@ -5204,7 +5216,13 @@ export interface RunProcessesDto {
      */
     trees: Array<RunProcessTree>;
     /**
-     * 
+     * what the run's agents left running with no CLI of theirs above it — a `nohup` dev server, a watcher, a browser — found by the run's tag; each top process is `root`, depth-first under it. The same set archiving or deleting the run stops
+     * @type {Array<RunProcess>}
+     * @memberof RunProcessesDto
+     */
+    detached: Array<RunProcess>;
+    /**
+     * every process listed, the trees and `detached` together
      * @type {number}
      * @memberof RunProcessesDto
      */

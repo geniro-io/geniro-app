@@ -1,8 +1,8 @@
-import { execFile } from 'node:child_process';
 import { basename } from 'node:path';
 
 import type { RunProcess } from '../chat.types';
 import type { ProcessRow } from './process-descendants';
+import { runPs } from './run-ps';
 
 /** One row of the process table, with what it costs. */
 export interface ProcessUsageRow extends ProcessRow {
@@ -18,11 +18,6 @@ export interface ProcessUsageRow extends ProcessRow {
    */
   comm: string | null;
 }
-
-/** See `process-descendants.ts`'s twin — a readout must never hang. */
-const PS_TIMEOUT_MS = 4_000;
-
-const PS_MAX_BUFFER = 16 * 1024 * 1024;
 
 /**
  * Executables that RUN something else, so the process is named after what
@@ -40,23 +35,6 @@ const INTERPRETERS = new Set([
 
 /** Flags by which an interpreter runs code from argv instead of a script. */
 const INLINE_CODE_FLAGS = new Set(['-e', '--eval', '-p', '--print', '-c']);
-
-function runPs(args: readonly string[]): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile(
-      'ps',
-      [...args],
-      {
-        timeout: PS_TIMEOUT_MS,
-        maxBuffer: PS_MAX_BUFFER,
-        // `%cpu` is printed in the locale's decimal format; a comma would
-        // otherwise end the number early.
-        env: { ...process.env, LC_ALL: 'C' },
-      },
-      (error, out) => resolve(error ? null : out),
-    );
-  });
-}
 
 /**
  * The whole process table with CPU and memory, or null when `ps` could not be
@@ -193,24 +171,75 @@ export function processName(
   const argv0 = byComm
     ? (row.comm as string)
     : (row.args.split(/\s+/)[0] ?? '');
-  const rest = row.args.slice(argv0.length);
   const exe = basename(argv0) || argv0;
-  if (INTERPRETERS.has(exe)) {
-    const tokens = rest.trim().split(/\s+/);
-    const scriptAt = tokens.findIndex(
-      (token) => token !== '' && !token.startsWith('-'),
-    );
-    const script = scriptAt === -1 ? undefined : tokens[scriptAt];
-    // `node -e <code>` runs inline code, not a script: what follows the flag
-    // is source text, and naming the process after its first word is noise.
-    const inline = tokens
-      .slice(0, scriptAt === -1 ? tokens.length : scriptAt)
-      .some((token) => INLINE_CODE_FLAGS.has(token));
-    if (script !== undefined && !inline) {
-      return basename(script) || script;
+  const tokens = row.args.slice(argv0.length).trim().split(/\s+/);
+  const scriptAt = interpretedScriptAt(exe, tokens);
+  const script = scriptAt === -1 ? undefined : tokens[scriptAt];
+  return script === undefined ? exe : basename(script) || script;
+}
+
+/**
+ * Where, in the arguments after the executable, the script an interpreter
+ * runs is — or -1 for an executable that is no interpreter, or one running
+ * inline code: `node -e <code>`'s first word is source text, not a program.
+ */
+function interpretedScriptAt(exe: string, args: readonly string[]): number {
+  if (!INTERPRETERS.has(exe)) {
+    return -1;
+  }
+  const scriptAt = args.findIndex(
+    (token) => token !== '' && !token.startsWith('-'),
+  );
+  const inline = args
+    .slice(0, scriptAt === -1 ? args.length : scriptAt)
+    .some((token) => INLINE_CODE_FLAGS.has(token));
+  return inline ? -1 : scriptAt;
+}
+
+/**
+ * A set of processes laid out as the forest their parent links make: each
+ * whose parent is outside the set is a `root`, the rest hang under it in pid
+ * order. For what a run owns with no CLI of its own above it — what its agents
+ * left running detached.
+ */
+export function processSetTree(
+  rows: readonly ProcessUsageRow[],
+  pids: ReadonlySet<number>,
+): OwnedProcess[] {
+  const members = rows
+    .filter((row) => pids.has(row.pid))
+    .sort((a, b) => a.pid - b.pid);
+  const byParent = new Map<number, ProcessUsageRow[]>();
+  for (const row of members) {
+    const siblings = byParent.get(row.ppid);
+    if (siblings) {
+      siblings.push(row);
+    } else {
+      byParent.set(row.ppid, [row]);
     }
   }
-  return exe;
+  const out: OwnedProcess[] = [];
+  const seen = new Set<number>();
+  const visit = (row: ProcessUsageRow, depth: number): void => {
+    if (seen.has(row.pid)) {
+      return;
+    }
+    seen.add(row.pid);
+    out.push({ ...row, depth, link: depth === 0 ? 'root' : 'child' });
+    for (const child of byParent.get(row.pid) ?? []) {
+      visit(child, depth + 1);
+    }
+  };
+  for (const row of members) {
+    if (!pids.has(row.ppid)) {
+      visit(row, 0);
+    }
+  }
+  // A cycle in a non-atomic snapshot has no top; still the run's, so listed.
+  for (const row of members) {
+    visit(row, 0);
+  }
+  return out;
 }
 
 /** A process counted as one CLI's, placed in that CLI's tree. */

@@ -41,15 +41,30 @@ function threadMeta(
   names: (kind: string) => string,
 ): string {
   const kinds = thread.agentKinds.map(names).join(', ');
-  const agents = thread.agents > 1 ? `${thread.agents} agents` : '1 agent';
+  const agents =
+    thread.agents === 0
+      ? null
+      : thread.agents > 1
+        ? `${thread.agents} agents`
+        : '1 agent';
   const processes = `${thread.figures.processes} process${thread.figures.processes === 1 ? '' : 'es'}`;
-  return [kinds, agents, processes].filter(Boolean).join(' · ');
+  const detached =
+    thread.detachedProcesses > 0
+      ? `${thread.detachedProcesses} detached`
+      : null;
+  return [kinds, agents, processes, detached].filter(Boolean).join(' · ');
 }
 
-/** One row of the division: a thread, or geniro itself. */
+/** The stretch of the bar for what gone threads left running, to be stopped. */
+const LEFTOVER_SEGMENT_CLASS = 'bg-warning';
+
+/** One row of the division: a thread, geniro itself, or what gone threads left running. */
 interface UsageRow {
   key: string;
   runId: string | null;
+  /** The row's `data-slot`, and what its hover says — for the rows that open no thread. */
+  slot?: 'app-usage-geniro' | 'app-usage-leftover';
+  hint?: string;
   title: string;
   meta: string;
   figures: ProcessFigures;
@@ -184,13 +199,30 @@ function AppUsageBody({
     threads.sort(
       (a, b) => metricOf(b.figures, metric) - metricOf(a.figures, metric),
     );
+    const count = (n: number): string => `${n} process${n === 1 ? '' : 'es'}`;
+    const gone: UsageRow[] = [];
+    if (data.leftover !== null && data.leftover.processes > 0) {
+      gone.push({
+        key: 'leftover',
+        runId: null,
+        slot: 'app-usage-leftover',
+        hint: 'Processes the agents of deleted or archived threads left running. Geniro stops them within a few minutes.',
+        title: 'Deleted & archived threads',
+        meta: `left running · ${count(data.leftover.processes)} · stopped by the next sweep`,
+        figures: data.leftover,
+        colorClass: LEFTOVER_SEGMENT_CLASS,
+      });
+    }
     return data.geniro === null
-      ? threads
+      ? [...threads, ...gone]
       : [
           ...threads,
+          ...gone,
           {
             key: 'geniro',
             runId: null,
+            slot: 'app-usage-geniro',
+            hint: 'The window, the daemon and the terminal panel’s shells',
             title: 'Geniro',
             meta: `app, daemon and terminals · ${data.geniro.processes} processes`,
             figures: data.geniro,
@@ -284,8 +316,8 @@ function AppUsageBody({
               )}>
               {row.runId === null ? (
                 <div
-                  data-slot="app-usage-geniro"
-                  title="The window, the daemon and the terminal panel’s shells"
+                  data-slot={row.slot}
+                  title={row.hint}
                   className="flex flex-col gap-0.5 px-1.5 py-1.5">
                   {body}
                 </div>

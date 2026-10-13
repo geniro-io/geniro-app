@@ -27,6 +27,7 @@ import type { ChatUploadStoreService } from './chat-upload-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
 import { SessionTranscriptsService } from './session-transcripts.service';
 
@@ -48,6 +49,8 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let callContextDao: CallContextDao;
   let referencedTexts: string[][] = [];
   let removedArtifactRuns: string[];
+  /** The run's CLIs closing and its detached processes being reaped, in order. */
+  let processEnds: string[];
   /** Every CLI transcript the teardown asked an adapter to delete. */
   let deletedTranscripts: (DeleteSessionTranscriptInput & { agent: string })[];
   /**
@@ -85,6 +88,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   beforeEach(async () => {
     await orm.schema.clear();
     removedArtifactRuns = [];
+    processEnds = [];
     referencedTexts = [];
     deletedTranscripts = [];
     const em = orm.em.fork();
@@ -104,7 +108,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       { cancel: () => false } as unknown as ProcessRegistry,
       {
         close: () => undefined,
-        closeRun: () => undefined,
+        closeRun: (runId: string) => processEnds.push(`closeRun ${runId}`),
       } as unknown as AgentSessionRegistry,
       { revokeRun: () => undefined } as unknown as CallTokenRegistry,
       { forgetRun: () => undefined } as unknown as PartialStreamService,
@@ -136,6 +140,11 @@ describe('RunTeardownService (in-memory sqlite)', () => {
           return Promise.resolve(0);
         },
       } as unknown as ChatUploadStoreService,
+      // Recording, never real: a real one would read and signal this machine's
+      // process table from a unit test.
+      {
+        reapInBackground: (runId: string) => processEnds.push(`reap ${runId}`),
+      } as unknown as RunProcessReaper,
     );
   });
 
@@ -158,6 +167,15 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       200000,
     );
   };
+
+  it('closes the run’s CLIs, then reaps what its agents left running — that run’s only', async () => {
+    await seedRun('run-a');
+    await seedRun('run-b');
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(processEnds).toEqual(['closeRun run-a', 'reap run-a']);
+  });
 
   it('destroys the per-call context rows of the run it deletes', async () => {
     await seedRun('run-a');

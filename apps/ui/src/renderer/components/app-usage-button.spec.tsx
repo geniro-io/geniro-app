@@ -20,6 +20,7 @@ const READING: AppProcessesDto = {
       title: 'Ship it',
       agentKinds: ['claude'],
       agents: 2,
+      detachedProcesses: 0,
       figures: { processes: 6, cpuPercent: 3, rssBytes: 600 * MB },
     },
     {
@@ -27,10 +28,12 @@ const READING: AppProcessesDto = {
       title: null,
       agentKinds: ['codex'],
       agents: 1,
+      detachedProcesses: 0,
       figures: { processes: 1, cpuPercent: 0, rssBytes: 100 * MB },
     },
   ],
   geniro: { processes: 4, cpuPercent: 1, rssBytes: 300 * MB },
+  leftover: { processes: 0, cpuPercent: 0, rssBytes: 0 },
   total: { processes: 11, cpuPercent: 4, rssBytes: 1_000 * MB },
   unavailableReason: null,
 };
@@ -134,6 +137,60 @@ describe('AppUsageButton', () => {
     expect(
       document.querySelector('[data-slot="app-usage-geniro"]'),
     ).not.toBeNull();
+  });
+
+  it('names what a thread left running detached, and what deleted threads still run', () => {
+    mount({
+      data: {
+        ...READING,
+        threads: [
+          {
+            runId: 'run-3',
+            title: 'Web stand',
+            agentKinds: [],
+            agents: 0,
+            detachedProcesses: 5,
+            figures: { processes: 5, cpuPercent: 1, rssBytes: 900 * MB },
+          },
+        ],
+        leftover: { processes: 7, cpuPercent: 0.5, rssBytes: 2_000 * MB },
+      },
+    });
+    const thread = document.querySelector('[data-slot="app-usage-thread"]');
+    expect(thread?.textContent).toContain('5 processes · 5 detached');
+    expect(thread?.textContent).not.toContain('agent');
+    const leftover = document.querySelector('[data-slot="app-usage-leftover"]');
+    expect(leftover?.textContent).toContain('Deleted & archived threads');
+    expect(leftover?.textContent).toContain('7 processes');
+    // Its own stretch of the bar, beside the thread's and geniro's.
+    expect(
+      document.querySelectorAll('[data-slot="share-segment"]'),
+    ).toHaveLength(3);
+  });
+
+  it('gives what gone threads left its own stretch of the bar, in the warning tone', () => {
+    mount({
+      data: {
+        ...READING,
+        leftover: { processes: 4, cpuPercent: 0, rssBytes: 100 * MB },
+      },
+    });
+    const segment = [
+      ...document.querySelectorAll('[data-slot="share-segment"]'),
+    ].find((node) =>
+      node.getAttribute('title')?.startsWith('Deleted & archived threads'),
+    );
+    expect(segment?.className).toMatch(/\bbg-warning\b/);
+    expect(
+      document.querySelector('[data-slot="app-usage-leftover"]')?.textContent,
+    ).toContain('stopped by the next sweep');
+  });
+
+  it('draws no leftover row when deleted threads left nothing', () => {
+    mount({});
+    expect(
+      document.querySelector('[data-slot="app-usage-leftover"]'),
+    ).toBeNull();
   });
 
   it('toggles from the title bar glyph', () => {

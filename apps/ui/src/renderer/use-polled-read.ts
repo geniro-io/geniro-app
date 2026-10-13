@@ -10,9 +10,11 @@ export interface PolledReadState<T> {
 
 /**
  * How often a live process reading is retaken while it is on screen. CPU and
- * memory move second to second, and a `ps` of the whole machine costs the
- * daemon a few milliseconds — three seconds keeps the figures live without the
- * readout becoming the busiest thing it measures.
+ * memory move second to second, and a plain `ps` of the whole machine costs
+ * the daemon a few milliseconds — three seconds keeps the figures live without
+ * the readout becoming the busiest thing it measures. (The far costlier
+ * environment scan that finds detached processes is shared across polls on
+ * the daemon's side, up to its `READOUT_SCAN_MAX_AGE_MS`.)
  */
 export const PROCESS_POLL_MS = 3_000;
 

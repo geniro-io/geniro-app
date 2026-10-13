@@ -15,11 +15,13 @@ import type {
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { KeptProcessRoot } from '../chat.types';
-import { runSessionKeyPrefix } from '../utils/session-keys';
+import { runTagEnv } from '../utils/run-process-scan';
+import { runIdOfSessionKey, runSessionKeyPrefix } from '../utils/session-keys';
 import type {
   BetweenTurnApproval,
   CliSessionOptions,
 } from '../utils/spawn-cli';
+import { currentRunOwner } from './run-process-attribution.service';
 
 /**
  * How long a run's CLI process is kept after its last turn.
@@ -265,6 +267,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   private readonly ceiling: number;
 
+  /** This geniro's owner tag, stamped on every process beside the run id. */
+  private readonly runOwner = currentRunOwner();
+
   constructor(@Optional() ceiling?: number) {
     this.ceiling = ceiling ?? MAX_LIVE_SESSIONS;
   }
@@ -438,6 +443,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
               offTurn.current?.(event);
             },
       onHeldApproval,
+      // The RUN, not this key: a workflow files each node and conversation
+      // under its own key, and the run's teardown searches by the run alone.
+      runTag: runTagEnv(runIdOfSessionKey(runId), this.runOwner),
     });
     const handle = session.startTurn(input, onEvent);
     if (!handle) {

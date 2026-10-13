@@ -65,6 +65,7 @@ import { PartialStreamService } from '../../agents/services/partial-stream.servi
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
+import type { RunProcessReaper } from '../../agents/services/run-process-reaper.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
@@ -1148,6 +1149,9 @@ function setup(
     {
       removeReferenced: () => Promise.resolve(0),
     } as unknown as ChatUploadStoreService,
+    // Never real: a real one would read and signal this machine's process
+    // table from a unit test. Reaping is `run-teardown.service.spec.ts`'s.
+    { reapInBackground: () => undefined } as unknown as RunProcessReaper,
   );
   const service = new GraphExecutorService(
     em,

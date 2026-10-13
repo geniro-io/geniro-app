@@ -14,6 +14,7 @@ import { ChatUploadStoreService } from './chat-upload-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import { RunProcessReaper } from './run-process-reaper.service';
 import { SessionTranscriptsService } from './session-transcripts.service';
 
 /**
@@ -70,7 +71,22 @@ export class RunTeardownService {
     private readonly seqs: ItemSeqAllocator,
     private readonly transcripts: SessionTranscriptsService,
     private readonly uploads: ChatUploadStoreService,
+    private readonly reaper: RunProcessReaper,
   ) {}
+
+  /**
+   * End every process the run holds, for a run being archived or deleted.
+   *
+   * EVERY CLI of it — a workflow run keeps one per node and per conversation
+   * under `<runId>::…`, and they outlive each of its passes — and then what its
+   * agents started to outlive a turn: a detached dev server, a watcher, a
+   * browser, which closing the CLI does not reach. The second half runs in the
+   * background, so the caller's route never waits out its grace period.
+   */
+  endProcesses(runId: string): void {
+    this.sessions.closeRun(runId);
+    this.reaper.reapInBackground(runId);
+  }
 
   /**
    * Stop the run's live work, then destroy everything it owns.
@@ -98,10 +114,8 @@ export class RunTeardownService {
     // above stops the WORK but deliberately leaves the process running — that
     // is the whole point of a run-scoped session — so a delete that skipped
     // this would strand a CLI, and every MCP server it started, belonging to a
-    // run that no longer exists and that nothing can ever reach again. EVERY
-    // process of it: a workflow run keeps one per node and per conversation
-    // under `<runId>::…`, and they outlive each of its passes.
-    this.sessions.closeRun(runId);
+    // run that no longer exists and that nothing can ever reach again.
+    this.endProcesses(runId);
 
     // The in-memory planes. Cleared next — pure bookkeeping, and a failure
     // here must not leave the durable rows half-deleted.

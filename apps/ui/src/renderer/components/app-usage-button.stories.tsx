@@ -14,6 +14,7 @@ const READING: AppProcessesDto = {
       title: 'Dev Team — ship the process monitor',
       agentKinds: ['claude', 'cursor-agent'],
       agents: 3,
+      detachedProcesses: 0,
       figures: { processes: 21, cpuPercent: 64.2, rssBytes: 2_310 * MB },
     },
     {
@@ -21,6 +22,7 @@ const READING: AppProcessesDto = {
       title: 'Fix the flaky scroll spec',
       agentKinds: ['claude'],
       agents: 1,
+      detachedProcesses: 0,
       figures: { processes: 8, cpuPercent: 0.4, rssBytes: 737 * MB },
     },
     {
@@ -28,10 +30,12 @@ const READING: AppProcessesDto = {
       title: null,
       agentKinds: ['codex'],
       agents: 1,
+      detachedProcesses: 0,
       figures: { processes: 2, cpuPercent: 0, rssBytes: 96 * MB },
     },
   ],
   geniro: { processes: 9, cpuPercent: 6.1, rssBytes: 1_020 * MB },
+  leftover: { processes: 0, cpuPercent: 0, rssBytes: 0 },
   total: { processes: 40, cpuPercent: 70.7, rssBytes: 4_163 * MB },
   unavailableReason: null,
 };
@@ -74,6 +78,28 @@ export const NothingRunning: Story = {
       ...READING,
       threads: [],
       total: READING.geniro ?? READING.total,
+    },
+  },
+};
+
+/** A thread's agents left a dev server running, and gone threads left some too. */
+export const DetachedAndLeftover: Story = {
+  args: {
+    data: {
+      ...READING,
+      threads: [
+        {
+          runId: 'run-4',
+          title: 'Spin up the web stand',
+          agentKinds: [],
+          agents: 0,
+          detachedProcesses: 18,
+          figures: { processes: 18, cpuPercent: 12.4, rssBytes: 3_480 * MB },
+        },
+        ...READING.threads,
+      ],
+      leftover: { processes: 31, cpuPercent: 3.2, rssBytes: 5_900 * MB },
+      total: { processes: 89, cpuPercent: 86.3, rssBytes: 13_543 * MB },
     },
   },
 };

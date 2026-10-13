@@ -247,6 +247,7 @@ pnpm commit             # conventional commit via commitizen
 - Every child process the daemon spawns registers with `ProcessRegistry` (claim → register → auto-unregister on settle). Never spawn an unmanaged child.
 - Every detached child group is also recorded in the child journal (`v1/agents/utils/child-journal.ts` → `<userData>/children.json`) inside the spawn helper itself (`defaultSpawn`, `AgentAdapter.runAsProcessGroup`). The next boot reaps survivors (`services/stranded-child-reaper.service.ts`, first in `main.ts`).
 - The reaper never kills on a pid alone: it re-confirms identity through `utils/process-identity`, and leaves an unconfirmable entry alone. A plain short `execFile` utility child is not journaled.
+- Run-scoped CLIs carry a deliberate run tag (`GENIRO_RUN_ID` + `GENIRO_RUN_OWNER`, set after `buildChildEnv`'s strip). Archive, delete and the leftover sweep stop what a run's agents left running by that tag, with explicit pids only. The safety rules (never the daemon, pid 1, another uid, anything on an open terminal, system or installed-app executables, the container VM; cap; start-time check) are in `apps/daemon/AGENTS.md` → *Run processes*; never widen the kill past them.
 - Workflow definitions are YAML; SQLite holds runtime/history only.
 - The daemon binds `127.0.0.1` only and gates every non-public route with the per-launch token.
 - No tmux or PTY scraping for graph execution. Inspection is a handoff to the user's own terminal (`v1/handoff/`).

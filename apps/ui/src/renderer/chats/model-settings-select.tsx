@@ -287,6 +287,13 @@ export function ModelSettingsSelect({
   const profilesKey = JSON.stringify(
     configProfiles.map((profile) => [profile.name, profile.dir, profile.color]),
   );
+  /**
+   * The recent directories by VALUE — the paths a row lists. A fresh array of
+   * the same paths, including the empty one a caller mints when a CLI has no
+   * recents, is the same answer, and the open thread re-renders on each
+   * streamed delta. Keyed here so neither rebuilds the rows.
+   */
+  const recentsKey = JSON.stringify(recentConfigDirs);
   // Memoized, and ABOVE the readout return below rather than beside the render
   // it feeds: a hook cannot sit after a conditional return. The rows are ~40
   // objects plus a JSX icon per axis, rebuilt on every render of a component
@@ -668,12 +675,17 @@ export function ModelSettingsSelect({
     ].filter((row): row is MenuItem => row !== null);
   }, [
     configDir,
-    recentConfigDirs,
+    // Not `recentConfigDirs` — see `recentsKey`.
+    recentsKey,
     // Not `configProfiles` — see `profilesKey`.
     profilesKey,
     configDirUnavailableReason,
-    onConfigDirChange,
-    onBrowseConfigDir,
+    // A handler is read only for whether its axis is offered. The pick runs
+    // in `onValueChange`, which closes over the props of that render, so a
+    // new function that is still present is not a new row list. Both chat
+    // panels pass a fresh arrow on every render.
+    onConfigDirChange !== undefined,
+    onBrowseConfigDir !== undefined,
     models,
     model,
     efforts,
@@ -682,7 +694,7 @@ export function ModelSettingsSelect({
     contextWindow,
     windowTokens,
     autoCompactPercent,
-    onAutoCompactChange,
+    onAutoCompactChange !== undefined,
     parameters,
     parameterValues,
     settingsLoading,

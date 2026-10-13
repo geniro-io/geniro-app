@@ -544,6 +544,62 @@ describe('ModelSettingsSelect', () => {
     });
   });
 
+  it('does not rebuild rows when handlers and lists are new but equal', () => {
+    // The open thread and the workflow chat hand this panel a fresh arrow and
+    // a `?? []` on every render, and the thread re-renders on each streamed
+    // delta. A handler is read only to know whether its axis exists, and a
+    // list only for what it contains, so a new function that is still present
+    // and a new array saying the same paths are not a new row list. Counted
+    // through `approvalOptions`, which the row build calls exactly once.
+    const builds = (): number => vi.mocked(approvalOptions).mock.calls.length;
+    const { el, rerender } = render({
+      configProfiles: [ALT_PROFILE],
+      configDirUnavailableReason: null,
+      configDir: ALT,
+      recentConfigDirs: ['/accounts/.claude-other'],
+      onConfigDirChange: () => undefined,
+      onBrowseConfigDir: () => undefined,
+      onAutoCompactChange: () => undefined,
+      autoCompactPercent: 90,
+    });
+    const before = builds();
+
+    rerender({
+      configProfiles: [{ ...ALT_PROFILE }],
+      recentConfigDirs: ['/accounts/.claude-other'],
+      onConfigDirChange: () => undefined,
+      onBrowseConfigDir: () => undefined,
+      onAutoCompactChange: () => undefined,
+    });
+    expect(builds()).toBe(before);
+
+    // A fresh EMPTY list is the `?? []` the callers mint when a CLI has no
+    // recents. The first one is a real change (the other directory is gone);
+    // the second says the same and must not rebuild.
+    rerender({ recentConfigDirs: [] });
+    rerender({ recentConfigDirs: [] });
+    expect(builds()).toBe(before + 1);
+
+    // The axis is there, so the next step is what removes it.
+    open(el);
+    expect(axisRows(el)).toContain('Auto-compact');
+    open(el);
+
+    // Dropping the auto-compact handler removes that axis.
+    rerender({ onAutoCompactChange: undefined });
+    expect(builds()).toBe(before + 2);
+    open(el);
+    expect(axisRows(el)).not.toContain('Auto-compact');
+    open(el);
+
+    // A different recent directory is a different Profile list.
+    rerender({ recentConfigDirs: ['/accounts/.claude-new'] });
+    expect(builds()).toBe(before + 3);
+    open(el);
+    openAxis(el, 'Profile');
+    expect(submenuRow(el, '.claude-new')).toBeDefined();
+  });
+
   it('draws NO profile row for a CLI that reads no config directory', () => {
     // The standing "a picker with nothing to pick is not drawn" rule, which the
     // chip decided for itself and the row now decides the same way — and it

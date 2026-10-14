@@ -130,6 +130,14 @@ export const CLAUDE_SESSION_FILE_SUFFIX = '.jsonl';
  * `utils/claude-cost-state.utils.ts`.
  */
 export const CLAUDE_COST_STATE_LINE_TYPE = 'cost-state';
+/**
+ * The transcript line the CLI appends when a session creates, pushes to,
+ * checks out, comments on or merges a pull request —
+ * `{"type":"pr-link","sessionId","prNumber","prUrl","prRepository","timestamp"}`
+ * (what `claude --from-pr` resumes by). Read on 2.1.295, headless `-p` sessions
+ * included; see `utils/claude-pr-links.utils.ts`.
+ */
+export const CLAUDE_PR_LINK_LINE_TYPE = 'pr-link';
 
 /** `<userData>/` file the per-session running cost totals survive a restart in. */
 export const CLAUDE_COST_TOTALS_FILE = 'claude-session-costs.json';

@@ -143,6 +143,27 @@ describe('TaskMergeService (in-memory sqlite)', () => {
       expect(await service.listAwaitingMerge()).toEqual([]);
     });
 
+    it('never watches, ends or shows a pull request the run only touched', async () => {
+      const { task, runId } = await inReview([]);
+      await runDao.updateWithoutActivity(runId, {
+        touchedPullRequests: JSON.stringify([
+          {
+            owner: 'geniro-io',
+            repo: 'geniro-app',
+            number: 9,
+            url: PR_URL,
+            seq: 0,
+          },
+        ]),
+      });
+
+      expect(await service.listAwaitingMerge()).toEqual([]);
+      await expect(
+        service.settleMerged(task.id, PR_URL, MERGED_AT),
+      ).rejects.toThrow(/TASK_PULL_REQUEST_UNKNOWN|did not open/u);
+      expect((await tasks.get(task.id)).pullRequests).toEqual([]);
+    });
+
     it('leaves out a card that is not in review', async () => {
       const { task } = await inReview();
       await tasks.moveStatus(task.id, { from: 'in_review', to: 'todo' });

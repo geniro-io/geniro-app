@@ -135,8 +135,11 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 ### Pull requests and task lists
 
 - A thread's pull requests are read from its own transcript (`pull-request-capture`). Never key them by branch.
-  - Signal: a `…/pull/\d+` URL alone on a line in a `tool_result` whose paired call ran `gh pr create` in command position (prefix words walked back).
-  - Incremental: the marker advances even when nothing was captured. Errors are swallowed per run. No re-scan sweep.
+  - `Run.pullRequests` holds the ones it OPENED. Only these end a card on merge (`TaskMergeService`), count in Stats (`announceOpened`, the backfill) and stand as a card's result.
+  - `Run.touchedPullRequests` holds the ones a conversation's CLI record names (`AgentAdapter.readSessionPullRequests`: claude's `pr-link` lines — created, pushed to, checked out, commented on, merged). Shown on the chat surfaces only: `readDisplayedPullRequests` merges both for the run wire and the run-status announce. A task card and `get_task` show the opened ones (`RunDao.pullRequestsOf`).
+  - Transcript signal: a `…/pull/\d+` URL that ENDS a line (alone, or after whitespace or `=`; never a bare `:`, which is `grep -n`) in a `tool_result` whose paired call ran `gh pr create` in command position (prefix words walked back). A URL mid-line is a quotation.
+  - A record has no row of ours: it takes the seq of the tool result its time falls on (`ItemDao.toolResultSeqAt`), so ordering stays seq-based.
+  - Incremental: the marker advances even when nothing was captured. Errors are swallowed per run. No repeating re-scan sweep; a rule change bumps `PULL_REQUEST_SCAN_VERSION`, and a run scanned under another version is re-read from the start once.
   - Store identity only (owner, repo, number, url), never title or state.
 - `task_list` rows: `mode` says snapshot vs patch and is never inferred; absent means patch. The run fold is keyed by node AND `callId` and skips delegate rows (`parentToolUseId`).
 - What `v1/agents` exports is whatever `agents.module.ts`'s `exports` names.

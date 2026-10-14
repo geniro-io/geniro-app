@@ -1434,7 +1434,8 @@ function ThreadPullRequestList({
 }
 
 /**
- * The pull requests THIS THREAD opened, whatever repository each landed in —
+ * The pull requests THIS THREAD opened or touched, whatever repository each
+ * landed in —
  * newest first, with the finished ones behind a fold.
  *
  * The ONLY pull requests the panel lists — what is merely open on the folder's
@@ -1467,7 +1468,7 @@ function ThreadPullRequestsSection({
     false,
   );
   return (
-    <PanelSection label="Opened by this thread">
+    <PanelSection label="This thread’s pull requests">
       {open.length > 0 ? (
         <ThreadPullRequestList results={open} showRepo={showRepo} />
       ) : null}
@@ -1590,8 +1591,9 @@ export function AgentsPanel({
    */
   publishedArtifacts?: readonly PublishedArtifact[];
   /**
-   * The pull requests THIS THREAD opened, newest first — captured from the
-   * agent's own output rather than derived from a checkout, and the only pull
+   * The pull requests THIS THREAD opened or its CLI recorded it touching,
+   * newest first — captured from the agent's own output and record rather
+   * than derived from a checkout, and the only pull
    * requests the panel lists. Empty draws no section, the rule
    * {@link artifacts} follows.
    */

@@ -4,12 +4,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
-import type { PullRequestsCapturedEvent } from '../chat.types';
+import { AgentKind } from '../../runs/runs.types';
+import type {
+  SessionPullRequest,
+  SessionPullRequestsInput,
+} from '../adapters/adapter.types';
+import type {
+  PullRequestsCapturedEvent,
+  SessionTranscriptTarget,
+} from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
-import { readRunPullRequests } from '../utils/pull-request-capture';
+import {
+  PULL_REQUEST_SCAN_VERSION,
+  readRunPullRequests,
+} from '../utils/pull-request-capture';
+import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
-import { PullRequestCaptureService } from './pull-request-capture.service';
+import {
+  PULL_REQUEST_RESCAN_BUDGET_MS,
+  PullRequestCaptureService,
+} from './pull-request-capture.service';
+import type { SessionTranscriptsService } from './session-transcripts.service';
 
 // `fork` because the SETTLE path takes its own context — the listing runs
 // inside the request's, this one has no request to borrow. The daos are
@@ -71,7 +87,7 @@ function result(
  * count is the only way to say that.
  */
 function daos(rows: Row[]) {
-  const counts = { max: 0, candidates: 0 };
+  const counts = { max: 0, candidates: 0, placed: 0 };
   const itemDao = {
     maxSeq: async () => {
       counts.max += 1;
@@ -93,6 +109,21 @@ function daos(rows: Row[]) {
         ) as unknown as Item) ?? null,
       result: null,
     }),
+    // Where a CLI's own record lands: the newest tool result written at or
+    // before its time, else the oldest after — the real DAO's answer, pinned in
+    // item.dao.spec.ts.
+    toolResultSeqAt: async (_runId: string, at: Date) => {
+      counts.placed += 1;
+      const results = rows.filter((row) => row.kind === 'tool_result');
+      const before = results
+        .filter((row) => (row.createdAt ?? WRITTEN_AT) <= at)
+        .at(-1);
+      return (
+        before?.seq ??
+        results.find((row) => (row.createdAt ?? WRITTEN_AT) > at)?.seq ??
+        null
+      );
+    },
     // The read that dates a captured pull request: each named seq's earliest tool
     // result, as the real DAO answers it. The ordering is pinned against the real DAO
     // in item.dao.spec.ts; this double answers the same question.
@@ -128,6 +159,7 @@ function chatRun(overrides: Partial<Run> = {}): Run {
     id: 'run-1',
     pullRequests: null,
     pullRequestsScannedSeq: null,
+    pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION,
     ...overrides,
   } as Run;
 }
@@ -187,6 +219,61 @@ function settleDeps(): {
 }
 
 /**
+ * The conversations a run held and what each one's CLI record names, as the
+ * two collaborators the service reads them through; `asked` is every
+ * conversation the adapter was asked about.
+ */
+function sessionRecords(
+  records: SessionPullRequest[],
+  {
+    collect = async () => [
+      { agentKind: AgentKind.Claude, sessionId: 'session-1', configDir: '/p' },
+    ],
+    failing,
+  }: {
+    collect?: () => Promise<SessionTranscriptTarget[]>;
+    failing?: string;
+  } = {},
+) {
+  const asked: SessionPullRequestsInput[] = [];
+  const sessionTranscripts = {
+    collect,
+  } as unknown as SessionTranscriptsService;
+  // Only claude keeps such a record; every other CLI answers the base's empty.
+  const adapters = {
+    for: (kind: AgentKind) => ({
+      readSessionPullRequests: async (input: SessionPullRequestsInput) => {
+        if (kind !== AgentKind.Claude) {
+          return [];
+        }
+        asked.push(input);
+        if (input.sessionId === failing) {
+          throw new Error('record unreadable');
+        }
+        return records;
+      },
+    }),
+  } as unknown as AgentAdapterRegistry;
+  return { deps: [sessionTranscripts, adapters] as const, asked };
+}
+
+/** `acme/platform#<number>` as a conversation's record names it. */
+function touchedRecord(number: number, at: string | null): SessionPullRequest {
+  return {
+    owner: 'acme',
+    repo: 'platform',
+    number,
+    url: `https://github.com/acme/platform/pull/${number}`,
+    at: at === null ? null : new Date(at),
+  };
+}
+
+/** A run whose conversations' records name no pull request. */
+function noSessionRecords() {
+  return sessionRecords([]).deps;
+}
+
+/**
  * A service over `rows` with an inert settle path, and what its bus was handed.
  *
  * `itemDao` is replaceable for the cases that break one read; `writes` is what
@@ -196,7 +283,13 @@ function announcing(rows: Row[], itemDao: ItemDao = daos(rows).itemDao) {
   const { dao, writes } = runDao();
   const deps = settleDeps();
   return {
-    service: new PullRequestCaptureService(itemDao, dao, deps.em, deps.bus),
+    service: new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    ),
     captured: deps.captured,
     writes,
   };
@@ -216,6 +309,7 @@ describe('PullRequestCaptureService', () => {
       dao,
       settleDeps().em,
       settleDeps().bus,
+      ...noSessionRecords(),
     ).sync([run], em);
 
     expect(readRunPullRequests(writes[0]?.pullRequests ?? null)).toEqual([
@@ -263,6 +357,7 @@ describe('PullRequestCaptureService', () => {
       dao,
       settleDeps().em,
       settleDeps().bus,
+      ...noSessionRecords(),
     ).sync([chatRun()], em);
 
     expect(
@@ -286,9 +381,402 @@ describe('PullRequestCaptureService', () => {
       dao,
       settleDeps().em,
       settleDeps().bus,
+      ...noSessionRecords(),
     ).sync([chatRun()], em);
 
     expect(writes[0]?.pullRequests).toBeNull();
+  });
+
+  it('captures a pull request whose URL the command captured and printed after a label', async () => {
+    // `gh pr create`'s stdout kept in a variable and echoed after a label.
+    const { itemDao } = daos([
+      call(
+        1,
+        'toolu_1',
+        'cd "$W"; URL=$(gh pr create --draft --base main --body-file "$S/pr-body.md"); echo "create rc=$? url=$URL"; gh pr view "$URL" --json number,url',
+      ),
+      result(
+        2,
+        'toolu_1',
+        `create rc=0 url=${CREATED}\n{\n "number": 87,\n "url": "${CREATED}"\n}`,
+      ),
+      call(3, 'toolu_2', 'echo "PR: $(gh pr create --fill --repo acme/api)"'),
+      result(4, 'toolu_2', 'PR: https://github.com/acme/api/pull/12'),
+    ]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    ).sync([chatRun()], em);
+
+    expect(
+      readRunPullRequests(writes[0]?.pullRequests ?? null).map((row) => ({
+        repo: row.repo,
+        number: row.number,
+        url: row.url,
+      })),
+    ).toEqual([
+      { repo: 'platform', number: 87, url: CREATED },
+      { repo: 'api', number: 12, url: 'https://github.com/acme/api/pull/12' },
+    ]);
+  });
+
+  it('keeps a pull request a conversation only touched apart from the opened ones, at the tool result its time falls on', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr checkout 6841', '2026-10-13T20:36:00.000Z'),
+      result(2, 'toolu_1', 'Switched to branch', '2026-10-13T20:36:40.000Z'),
+      call(3, 'toolu_2', 'ls', '2026-10-13T20:38:00.000Z'),
+      result(4, 'toolu_2', 'a', '2026-10-13T20:38:01.000Z'),
+    ]);
+    const { dao, writes } = runDao();
+    const records = sessionRecords([
+      touchedRecord(6841, '2026-10-13T20:36:47.487Z'),
+    ]);
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...records.deps,
+    ).sync([chatRun()], em);
+
+    expect(records.asked).toEqual([
+      { sessionId: 'session-1', configDir: '/p' },
+    ]);
+    expect(writes[0]?.pullRequests).toBeNull();
+    expect(readRunPullRequests(writes[0]?.touchedPullRequests ?? null)).toEqual(
+      [
+        {
+          owner: 'acme',
+          repo: 'platform',
+          number: 6841,
+          url: 'https://github.com/acme/platform/pull/6841',
+          seq: 2,
+        },
+      ],
+    );
+  });
+
+  it('places a pull request the records name twice at its EARLIEST record, in either order', async () => {
+    const early = touchedRecord(87, '2026-10-13T20:36:41.000Z');
+    const late = touchedRecord(87, '2026-10-13T20:50:02.000Z');
+    // Oldest first as one CLI record holds them; newest first across sessions.
+    for (const records of [
+      [early, late],
+      [late, early],
+    ]) {
+      const { itemDao } = daos([
+        call(1, 'toolu_1', 'gh pr checkout 87', '2026-10-13T20:36:00.000Z'),
+        result(2, 'toolu_1', 'Switched to branch', '2026-10-13T20:36:40.000Z'),
+        call(3, 'toolu_2', 'gh pr comment 87', '2026-10-13T20:50:00.000Z'),
+        result(4, 'toolu_2', 'ok', '2026-10-13T20:50:01.000Z'),
+      ]);
+      const { dao, writes } = runDao();
+
+      await new PullRequestCaptureService(
+        itemDao,
+        dao,
+        settleDeps().em,
+        settleDeps().bus,
+        ...sessionRecords(records).deps,
+      ).sync([chatRun()], em);
+
+      expect(
+        readRunPullRequests(writes[0]?.touchedPullRequests ?? null).map(
+          (row) => row.seq,
+        ),
+      ).toEqual([2]);
+    }
+  });
+
+  it('places a record with no time at the newest tool result, and a timed record of the same pull request wins over it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-13T21:00:00.000Z'));
+    try {
+      const { itemDao } = daos([
+        call(1, 'toolu_1', 'gh pr checkout 7', '2026-10-13T20:36:00.000Z'),
+        result(2, 'toolu_1', 'ok', '2026-10-13T20:36:40.000Z'),
+        call(3, 'toolu_2', 'ls', '2026-10-13T20:38:00.000Z'),
+        result(4, 'toolu_2', 'a', '2026-10-13T20:38:01.000Z'),
+      ]);
+      const { dao, writes } = runDao();
+
+      await new PullRequestCaptureService(
+        itemDao,
+        dao,
+        settleDeps().em,
+        settleDeps().bus,
+        ...sessionRecords([
+          touchedRecord(7, '2026-10-13T20:36:41.000Z'),
+          touchedRecord(7, null),
+          touchedRecord(8, null),
+        ]).deps,
+      ).sync([chatRun()], em);
+      const untimedFirst = runDao();
+      await new PullRequestCaptureService(
+        itemDao,
+        untimedFirst.dao,
+        settleDeps().em,
+        settleDeps().bus,
+        ...sessionRecords([
+          touchedRecord(7, null),
+          touchedRecord(7, '2026-10-13T20:36:41.000Z'),
+        ]).deps,
+      ).sync([chatRun()], em);
+
+      expect(
+        readRunPullRequests(writes[0]?.touchedPullRequests ?? null).map(
+          (row) => `#${row.number}@${row.seq}`,
+        ),
+      ).toEqual(['#7@2', '#8@4']);
+      expect(
+        readRunPullRequests(
+          untimedFirst.writes[0]?.touchedPullRequests ?? null,
+        ).map((row) => `#${row.number}@${row.seq}`),
+      ).toEqual(['#7@2']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a record of a run that has no tool result to place it at', async () => {
+    const { itemDao } = daos([call(1, 'toolu_1', 'gh pr checkout 7')]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...sessionRecords([touchedRecord(7, '2026-10-13T20:36:41.000Z')]).deps,
+    ).sync([chatRun()], em);
+
+    expect(writes[0]?.pullRequestsScannedSeq).toBe(1);
+    expect(writes[0]?.touchedPullRequests).toBeNull();
+  });
+
+  it('asks each conversation through its own CLI and keeps the others when one cannot be read', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr checkout 7', '2026-10-13T20:36:00.000Z'),
+      result(2, 'toolu_1', 'ok', '2026-10-13T20:36:40.000Z'),
+    ]);
+    const { dao, writes } = runDao();
+    const records = sessionRecords(
+      [touchedRecord(7, '2026-10-13T20:36:41.000Z')],
+      {
+        collect: async () => [
+          { agentKind: AgentKind.Claude, sessionId: 'broken', configDir: null },
+          { agentKind: AgentKind.Codex, sessionId: 'codex-1', configDir: null },
+          {
+            agentKind: AgentKind.Claude,
+            sessionId: 'session-1',
+            configDir: '/p',
+          },
+        ],
+        failing: 'broken',
+      },
+    );
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...records.deps,
+    ).sync([chatRun()], em);
+
+    expect(records.asked.map((input) => input.sessionId)).toEqual([
+      'broken',
+      'session-1',
+    ]);
+    expect(
+      readRunPullRequests(writes[0]?.touchedPullRequests ?? null).map(
+        (row) => row.number,
+      ),
+    ).toEqual([7]);
+  });
+
+  it('shows touched pull requests beside the opened ones, and tells the ledger only about the opened', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill', '2026-10-13T20:36:00.000Z'),
+      result(2, 'toolu_1', CREATED, '2026-10-13T20:36:40.000Z'),
+      call(3, 'toolu_2', 'gh pr checkout 6841', '2026-10-13T20:38:00.000Z'),
+      result(4, 'toolu_2', 'ok', '2026-10-13T20:38:01.000Z'),
+    ]);
+    const { dao } = runDao();
+    const deps = settleDeps();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...sessionRecords([touchedRecord(6841, '2026-10-13T20:38:02.000Z')]).deps,
+    ).sync([chatRun()], em);
+
+    expect(deps.published).toEqual([
+      {
+        runId: 'run-1',
+        status: null,
+        pullRequests: [
+          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 6841,
+            url: 'https://github.com/acme/platform/pull/6841',
+            seq: 4,
+          },
+        ],
+      },
+    ]);
+    expect(
+      deps.captured.flatMap((event) =>
+        event.pullRequests.map((row) => row.number),
+      ),
+    ).toEqual([87]);
+  });
+
+  it('announces a run whose only pull request is one it touched', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr checkout 6841', '2026-10-13T20:36:00.000Z'),
+      result(2, 'toolu_1', 'ok', '2026-10-13T20:36:40.000Z'),
+    ]);
+    const { dao } = runDao();
+    const deps = settleDeps();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...sessionRecords([touchedRecord(6841, '2026-10-13T20:36:47.000Z')]).deps,
+    ).sync([chatRun()], em);
+
+    expect(deps.published).toEqual([
+      {
+        runId: 'run-1',
+        status: null,
+        pullRequests: [
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 6841,
+            url: 'https://github.com/acme/platform/pull/6841',
+            seq: 2,
+          },
+        ],
+      },
+    ]);
+    expect(deps.captured).toEqual([]);
+  });
+
+  it('announces a newly touched pull request beside the opened one the run already carries', async () => {
+    const { itemDao } = daos([
+      call(3, 'toolu_2', 'gh pr checkout 6841', '2026-10-13T20:38:00.000Z'),
+      result(4, 'toolu_2', 'ok', '2026-10-13T20:38:01.000Z'),
+    ]);
+    const { dao } = runDao();
+    const deps = settleDeps();
+    const opened = {
+      owner: 'acme',
+      repo: 'platform',
+      number: 87,
+      url: CREATED,
+      seq: 2,
+    };
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...sessionRecords([touchedRecord(6841, '2026-10-13T20:38:02.000Z')]).deps,
+    ).sync(
+      [
+        chatRun({
+          pullRequests: JSON.stringify([opened]),
+          pullRequestsScannedSeq: 2,
+        }),
+      ],
+      em,
+    );
+
+    expect(
+      deps.published
+        .flatMap(
+          (event) =>
+            (event as { pullRequests: { number: number }[] }).pullRequests,
+        )
+        .map((row) => row.number),
+    ).toEqual([87, 6841]);
+  });
+
+  it('does not place again a touched pull request the run already carries', async () => {
+    const { itemDao, counts } = daos([
+      call(3, 'toolu_2', 'ls', '2026-10-13T20:38:00.000Z'),
+      result(4, 'toolu_2', 'a', '2026-10-13T20:38:01.000Z'),
+    ]);
+    const { dao, writes } = runDao();
+    const carried = {
+      owner: 'acme',
+      repo: 'platform',
+      number: 6841,
+      url: 'https://github.com/acme/platform/pull/6841',
+      seq: 2,
+    };
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...sessionRecords([touchedRecord(6841, '2026-10-13T20:38:02.000Z')]).deps,
+    ).sync(
+      [
+        chatRun({
+          touchedPullRequests: JSON.stringify([carried]),
+          pullRequestsScannedSeq: 2,
+        }),
+      ],
+      em,
+    );
+
+    expect(counts.placed).toBe(0);
+    expect(readRunPullRequests(writes[0]?.touchedPullRequests ?? null)).toEqual(
+      [carried],
+    );
+  });
+
+  it('still captures the transcript when the conversations cannot be listed', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...sessionRecords([], {
+        collect: async () => {
+          throw new Error('node_state unreadable');
+        },
+      }).deps,
+    ).sync([chatRun()], em);
+
+    expect(
+      readRunPullRequests(writes[0]?.pullRequests ?? null).map(
+        (row) => row.number,
+      ),
+    ).toEqual([87]);
   });
 
   it('recovers pull requests opened BEFORE the run was ever scanned', async () => {
@@ -307,6 +795,7 @@ describe('PullRequestCaptureService', () => {
       dao,
       settleDeps().em,
       settleDeps().bus,
+      ...noSessionRecords(),
     ).sync([chatRun()], em);
 
     expect(
@@ -331,6 +820,7 @@ describe('PullRequestCaptureService', () => {
       dao,
       settleDeps().em,
       settleDeps().bus,
+      ...noSessionRecords(),
     ).sync([chatRun()], em);
 
     expect(writes[0]?.pullRequestsScannedSeq).toBe(2);
@@ -349,11 +839,93 @@ describe('PullRequestCaptureService', () => {
       dao,
       settleDeps().em,
       settleDeps().bus,
+      ...noSessionRecords(),
     ).sync([chatRun({ pullRequestsScannedSeq: 2 })], em);
 
     expect(counts.max).toBe(1);
     expect(counts.candidates).toBe(0);
     expect(writes).toEqual([]);
+  });
+
+  it('reads a run scanned under an older capture rule again from the start, once', async () => {
+    const { itemDao, counts } = daos([
+      call(1, 'toolu_1', 'URL=$(gh pr create --fill); echo "url=$URL"'),
+      result(2, 'toolu_1', `url=${CREATED}`),
+    ]);
+    const { dao, writes } = runDao();
+    const carried = {
+      owner: 'acme',
+      repo: 'api',
+      number: 5,
+      url: 'https://github.com/acme/api/pull/5',
+      seq: 1,
+    };
+    const run = chatRun({
+      pullRequestsScannedSeq: 2,
+      pullRequestsScanVersion: null,
+      pullRequests: JSON.stringify([carried]),
+    });
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+
+    await service.sync([run], em);
+    await service.sync([run], em);
+
+    expect(counts.candidates).toBe(1);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.pullRequestsScanVersion).toBe(PULL_REQUEST_SCAN_VERSION);
+    expect(
+      readRunPullRequests(writes[0]?.pullRequests ?? null).map(
+        (row) => `${row.repo}#${row.number}`,
+      ),
+    ).toEqual(['api#5', 'platform#87']);
+  });
+
+  it('re-reads outdated runs on a listing only until its budget is spent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const base = daos([
+        call(1, 'toolu_1', 'gh pr create --fill'),
+        result(2, 'toolu_1', CREATED),
+      ]).itemDao;
+      const scannedFrom: number[] = [];
+      const itemDao = {
+        ...base,
+        // Each run's first read takes longer than the whole budget.
+        maxSeq: async () => {
+          vi.setSystemTime(Date.now() + PULL_REQUEST_RESCAN_BUDGET_MS + 1);
+          return 2;
+        },
+        pullRequestCandidates: async (runId: string, afterSeq: number) => {
+          scannedFrom.push(afterSeq);
+          return base.pullRequestCandidates(runId, afterSeq);
+        },
+      } as unknown as ItemDao;
+      const { dao, writes } = runDao();
+      const outdated = (id: string) =>
+        chatRun({ id, pullRequestsScannedSeq: 1, pullRequestsScanVersion: 1 });
+
+      await new PullRequestCaptureService(
+        itemDao,
+        dao,
+        settleDeps().em,
+        settleDeps().bus,
+        ...noSessionRecords(),
+      ).sync([outdated('run-1'), outdated('run-2')], em);
+
+      expect(scannedFrom).toEqual([-1, 1]);
+      expect(writes.map((write) => write.pullRequestsScanVersion)).toEqual([
+        PULL_REQUEST_SCAN_VERSION,
+        1,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps listing the other runs when one transcript cannot be read', async () => {
@@ -370,6 +942,7 @@ describe('PullRequestCaptureService', () => {
       dao,
       settleDeps().em,
       settleDeps().bus,
+      ...noSessionRecords(),
     );
 
     await expect(
@@ -619,10 +1192,13 @@ describe('PullRequestCaptureService — telling the activity ledger which pull r
       },
     } as unknown as AgentEventBus;
 
-    await new PullRequestCaptureService(itemDao, dao, em, bus).sync(
-      [chatRun()],
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
       em,
-    );
+      bus,
+      ...noSessionRecords(),
+    ).sync([chatRun()], em);
 
     expect(order).toEqual(['row written', 'pull requests announced']);
   });
@@ -674,6 +1250,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
       dao,
       deps.em,
       deps.bus,
+      ...noSessionRecords(),
     );
     service.onModuleInit();
 
@@ -697,6 +1274,40 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
     ]);
   });
 
+  it('re-reads its run from the start when the run was scanned under an older rule', async () => {
+    // A listing re-reads such runs only within its budget; a turn's end is the
+    // run's own pass and always does.
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'URL=$(gh pr create --fill); echo "url=$URL"'),
+      result(2, 'toolu_1', `url=${CREATED}`),
+    ]);
+    const run = chatRun({
+      pullRequestsScannedSeq: 2,
+      pullRequestsScanVersion: 1,
+    });
+    const { dao } = settleRunDao(run);
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+    service.onModuleInit();
+
+    await deps.listeners[0]?.({
+      runId: 'run-1',
+      item: { nodeId: 'engineer', kind: 'turn_complete' },
+    });
+    await settled();
+
+    expect(
+      readRunPullRequests(run.pullRequests).map((row) => row.number),
+    ).toEqual([87]);
+    expect(run.pullRequestsScanVersion).toBe(PULL_REQUEST_SCAN_VERSION);
+  });
+
   it('ANNOUNCES a pull request the LISTING captured before the turn ended', async () => {
     // THE REPORTED DEFECT, second form. Run `4f7ae5fa`: the Engineer's `gh pr
     // create` landed at 14:02:32Z, a `GET /v1/workflows/runs` at 14:14:38Z
@@ -716,6 +1327,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
       dao,
       deps.em,
       deps.bus,
+      ...noSessionRecords(),
     );
     service.onModuleInit();
 
@@ -750,6 +1362,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
       dao,
       deps.em,
       deps.bus,
+      ...noSessionRecords(),
     );
     service.onModuleInit();
 
@@ -780,6 +1393,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
       dao,
       deps.em,
       deps.bus,
+      ...noSessionRecords(),
     );
     service.onModuleInit();
 
@@ -816,6 +1430,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
       dao,
       deps.em,
       deps.bus,
+      ...noSessionRecords(),
     );
     service.onModuleInit();
 
@@ -846,6 +1461,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
       dao,
       deps.em,
       deps.bus,
+      ...noSessionRecords(),
     );
     service.onModuleInit();
 

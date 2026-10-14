@@ -31,7 +31,8 @@ import type { RunPullRequest } from '../chat.types';
  */
 
 /**
- * A pull request URL on github.com, standing ALONE on its line.
+ * A pull request URL on github.com that ENDS its line — alone, or after
+ * whitespace or `=`.
  *
  * `\d+` is load-bearing rather than merely tidy: `git push` prints
  * `…/pull/new/<branch>` as its "create a pull request" hint, which sits in the
@@ -39,19 +40,22 @@ import type { RunPullRequest } from '../chat.types';
  * (verified in the transcripts here). A pattern that accepted a path segment
  * there would file every pushed branch as a pull request that does not exist.
  *
- * Anchored to the whole line because that is the shape `gh pr create` prints
- * — the URL, and nothing else on that line — and it is what tells that output
- * from text that merely QUOTES a pull request: a `grep` over an exported
- * transcript answers `87398:    "text": "…draft PR is up — https://…/pull/5639\n`,
- * which carried a real thread's pull request into a thread that had only read
- * about it (measured 2026-09-13, on this app's own conversation).
+ * `gh pr create` prints the URL on a line of its own, but an agent that keeps
+ * that stdout in a variable prints it after a label of its own
+ * (`create rc=0 url=<URL>`, `PR: <URL>`, a table whose last column is the URL),
+ * so the URL has to END the line rather than BE it. Not after a bare `:` —
+ * that is `grep -n`'s `12:<URL>`. A URL in the middle of a line stays a
+ * quotation — `Opened <URL> for review.`, or a `grep` over an
+ * exported transcript answering `…draft PR is up — <URL>\n\n**PR…` — and only a
+ * result of a call that RUNS `gh pr create` is read at all
+ * ({@link runsPullRequestCreate}).
  *
  * github.com only. A GitHub Enterprise host would need its own base URL, and
  * guessing one from an arbitrary `https://…/pull/N` would file a link to
  * someone's blog post as a pull request.
  */
 const PULL_REQUEST_URL_LINE =
-  /^https:\/\/github\.com\/([A-Za-z0-9][\w.-]*)\/([A-Za-z0-9][\w.-]*)\/pull\/(\d+)$/;
+  /(?:^|[\s=])(https:\/\/github\.com\/([A-Za-z0-9][\w.-]*)\/([A-Za-z0-9][\w.-]*)\/pull\/(\d+))$/;
 
 /**
  * What marks a tool call as OPENING a pull request rather than reading one.
@@ -250,14 +254,13 @@ export function isPullRequestCreateCall(input: unknown): boolean {
 }
 
 /**
- * Every pull request URL that stands on a line of its own in one tool
- * result's text.
+ * Every pull request URL that ends a line of one tool result's text.
  *
- * The result of `gh pr create` is the URL on a line of its own, but it is
- * routinely NOT the only line: a `git push` in the same command prints its
- * `remote:` block first, and `gh` itself prefixes warnings
- * (`Warning: 2 uncommitted changes`). Reading every line rather than the last
- * is what makes those shapes all work; reading only a line that IS the URL is
+ * The result of `gh pr create` is routinely NOT one line: a `git push` in the
+ * same command prints its `remote:` block first, `gh` itself prefixes warnings
+ * (`Warning: 2 uncommitted changes`), and a loop over repositories prints one
+ * URL per pull request it opened. Reading every line rather than the last is
+ * what makes those shapes all work; reading only a URL that ENDS its line is
  * what keeps a quoted one out — see {@link PULL_REQUEST_URL_LINE}.
  */
 export function readPullRequestUrls(
@@ -269,17 +272,34 @@ export function readPullRequestUrls(
     if (match === null) {
       continue;
     }
-    const [url, owner, repo, number] = match;
-    // Every group is mandatory in the pattern, so a match has all three. The
+    const [, url, owner, repo, number] = match;
+    // Every group is mandatory in the pattern, so a match has all four. The
     // guard is here because `exec` types them optional, and asserting would be
     // the same claim with nothing checking it.
-    if (owner === undefined || repo === undefined || number === undefined) {
+    if (
+      url === undefined ||
+      owner === undefined ||
+      repo === undefined ||
+      number === undefined
+    ) {
       continue;
     }
     found.push({ owner, repo, number: Number(number), url });
   }
   return found;
 }
+
+/**
+ * The capture rule's version, stored beside the scan marker
+ * (`Run.pullRequestsScanVersion`). Bump it with any change that would find
+ * pull requests the previous rule missed: every run scanned under another
+ * version is then read again from the start, once, and what it already carries
+ * is merged rather than replaced.
+ *
+ * 2: a URL that ends its line after a label, and the CLI's own record of the
+ * pull requests a session touched (`AgentAdapter.readSessionPullRequests`).
+ */
+export const PULL_REQUEST_SCAN_VERSION = 2;
 
 /** The identity two captures of the same pull request share. */
 export function pullRequestKey(pullRequest: {
@@ -313,6 +333,7 @@ export const MAX_RUN_PULL_REQUESTS = 200;
 export function mergePullRequests(
   existing: readonly RunPullRequest[],
   captured: readonly RunPullRequest[],
+  limit: number = MAX_RUN_PULL_REQUESTS,
 ): RunPullRequest[] {
   const byKey = new Map<string, RunPullRequest>();
   for (const pullRequest of [...existing, ...captured]) {
@@ -322,9 +343,26 @@ export function mergePullRequests(
       byKey.set(key, pullRequest);
     }
   }
-  return [...byKey.values()]
-    .sort((a, b) => a.seq - b.seq)
-    .slice(0, MAX_RUN_PULL_REQUESTS);
+  return [...byKey.values()].sort((a, b) => a.seq - b.seq).slice(0, limit);
+}
+
+/**
+ * What a run SHOWS as its pull requests: the ones it opened and the ones its
+ * CLI recorded touching, as one list in the order the thread reached them.
+ * Only display reads this; ending a card and counting what a thread opened
+ * read the opened column alone.
+ */
+export function readDisplayedPullRequests(
+  opened: string | null | undefined,
+  touched: string | null | undefined,
+): RunPullRequest[] {
+  // Each column is capped on its own; capping the union again would let
+  // touched pull requests push opened ones off the list.
+  return mergePullRequests(
+    readRunPullRequests(opened),
+    readRunPullRequests(touched),
+    Number.POSITIVE_INFINITY,
+  );
 }
 
 /**

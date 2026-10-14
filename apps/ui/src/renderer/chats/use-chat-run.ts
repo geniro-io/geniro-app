@@ -1750,7 +1750,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // a broadcast rather than a message to the run's room.
       const named = event.title;
       /**
-       * The pull requests the daemon has just seen this run OPEN.
+       * The pull requests this run shows — opened, and touched by its CLI's own
+       * record — as the daemon has just changed them.
        *
        * The same row update as the title beside it, and the same reason it has
        * to ride this channel: the capture ran on the chat LISTING alone, which
@@ -1760,7 +1761,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
        * announces only when a settle CHANGED the answer, so an ordinary status
        * event carries nothing here and asserts nothing.
        */
-      const opened = event.pullRequests;
+      const shownPullRequests = event.pullRequests;
       /**
        * The agent's own task list, folded by the DAEMON over the whole
        * transcript.
@@ -1868,7 +1869,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         parked !== undefined ||
         at !== undefined ||
         named !== undefined ||
-        opened !== undefined ||
+        shownPullRequests !== undefined ||
         // The task-list capture announces with `status: null` and nothing else
         // beside the list, so leaving it out of this gate dropped every live
         // update: the shelf's `Tasks` chip kept the list the chat listing was
@@ -1939,7 +1940,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // held, so the announcement IS the current list, and
           // merging again here would keep a ref a later pass had
           // dropped.
-          ...(opened === undefined ? {} : { pullRequests: opened }),
+          ...(shownPullRequests === undefined
+            ? {}
+            : { pullRequests: shownPullRequests }),
           ...(resetWakes === undefined ? {} : { resetWakes }),
           // Only ever FORWARD: two announces can land out of order, and
           // this window may already hold a later moment it set itself when

@@ -15,7 +15,7 @@ import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
 import { threadPreviewOf } from './message-preview';
 import { readModelParameters } from './model-parameters';
-import { readRunPullRequests } from './pull-request-capture';
+import { readDisplayedPullRequests } from './pull-request-capture';
 import { readRunResetWakes } from './run-reset-wakes';
 import { searchIndexText } from './searchable-text';
 import { readRunTaskList } from './task-list-fold';
@@ -217,9 +217,12 @@ export function runToWire(
     lastMessage: preview?.lastMessage ?? null,
     lastActivityAt: preview?.lastActivityAt?.toISOString() ?? null,
     // Read off the row rather than passed in like the four live readings above:
-    // this one IS a column, written by the capture pass, so a caller that
-    // cannot know about approvals or holds still projects it correctly.
-    pullRequests: readRunPullRequests(run.pullRequests),
+    // these ARE columns (opened + touched), written by the capture pass, so a
+    // caller that cannot know about approvals or holds still projects them.
+    pullRequests: readDisplayedPullRequests(
+      run.pullRequests,
+      run.touchedPullRequests,
+    ),
     // A column too, written by the call broker's reset wakes.
     resetWakes: readRunResetWakes(run.resetWakes),
     // Likewise a column, written by `TaskListCaptureService` — and on the row

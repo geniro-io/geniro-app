@@ -638,7 +638,7 @@ async function collectSessionFiles(profileDir: string): Promise<SessionFile[]> {
  * The id therefore reaches a path, which the scan it replaced never let it do,
  * so a separator in it is refused rather than joined. It arrives over HTTP.
  */
-async function findSessionFile(
+export async function findSessionFile(
   profileDir: string,
   sessionId: string,
 ): Promise<string | null> {

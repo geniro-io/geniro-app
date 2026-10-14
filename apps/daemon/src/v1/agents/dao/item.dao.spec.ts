@@ -1134,6 +1134,51 @@ describe('ItemDao (in-memory sqlite)', () => {
     ]);
   });
 
+  describe('toolResultSeqAt', () => {
+    it('answers the newest tool result at or before the moment, else the oldest after, else null', async () => {
+      const em = orm.em.fork();
+      const rows: [string, string, number, Item['kind'], string][] = [
+        ['r-1', 'run-at', 2, 'tool_result', '2026-10-13T20:00:00.000Z'],
+        ['r-2', 'run-at', 5, 'tool_result', '2026-10-13T20:36:40.000Z'],
+        // Newer in time than the moment, so never the "at or before" answer.
+        ['r-3', 'run-at', 9, 'tool_result', '2026-10-13T20:40:00.000Z'],
+        // A row of another kind between them is not a tool result.
+        ['m-1', 'run-at', 6, 'message', '2026-10-13T20:36:45.000Z'],
+        ['o-1', 'run-other', 7, 'tool_result', '2026-10-13T20:36:46.000Z'],
+      ];
+      for (const [id, runId, seq, kind, at] of rows) {
+        await em.getRepository(Item).insert({
+          id,
+          runId,
+          seq,
+          kind,
+          payload: '{}',
+          createdAt: new Date(at),
+          updatedAt: new Date(at),
+        });
+      }
+
+      expect(
+        await dao.toolResultSeqAt(
+          'run-at',
+          new Date('2026-10-13T20:36:47.487Z'),
+        ),
+      ).toBe(5);
+      expect(
+        await dao.toolResultSeqAt(
+          'run-at',
+          new Date('2026-10-13T19:00:00.000Z'),
+        ),
+      ).toBe(2);
+      expect(
+        await dao.toolResultSeqAt(
+          'run-none',
+          new Date('2026-10-13T20:36:47.487Z'),
+        ),
+      ).toBeNull();
+    });
+  });
+
   describe('earliestToolResultTimes', () => {
     it('dates each seq by its earliest tool result, whichever row was written first', async () => {
       const em = orm.em.fork();

@@ -2,18 +2,27 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
 import type { Run } from '../../runs/entity/run.entity';
-import type { CapturedPullRequest, RunPullRequest } from '../chat.types';
+import type { SessionPullRequest } from '../adapters/adapter.types';
+import type {
+  CapturedPullRequest,
+  RunPullRequest,
+  SessionTranscriptTarget,
+} from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { asRecord, asString } from '../utils/json-util';
 import {
   isPullRequestCreateCall,
   mergePullRequests,
+  PULL_REQUEST_SCAN_VERSION,
   pullRequestKey,
+  readDisplayedPullRequests,
   readPullRequestUrls,
   readRunPullRequests,
 } from '../utils/pull-request-capture';
+import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import { SessionTranscriptsService } from './session-transcripts.service';
 
 /**
  * The item kinds that END a turn — the moment a pull request the turn opened
@@ -22,6 +31,17 @@ import { AgentEventBus } from './agent-events.bus';
  * answering the same question is a coincidence, not a shared rule.
  */
 const TURN_ENDING_KINDS = new Set(['turn_complete', 'turn_cancelled', 'error']);
+
+/**
+ * How long one listing may spend re-reading, from the start, runs scanned
+ * under an older capture rule. A re-read runs `LIKE` over a run's whole
+ * history — seconds for one long thread — and the renderer abandons a listing
+ * at 30 s (`REQUEST_TIMEOUT_MS`), leaving no sidebar at all. Runs past the
+ * budget stay incremental under their old rule until a later listing, or their
+ * own turn's end, reaches them; the list is newest first, so the threads in use
+ * are re-read first.
+ */
+export const PULL_REQUEST_RESCAN_BUDGET_MS = 2_000;
 
 /**
  * One `Item.payload` as an object, or null.
@@ -55,7 +75,9 @@ function parseRow(payload: string): Record<string, unknown> | null {
 
 /**
  * Which pull requests a run OPENED, read out of the transcript it already
- * wrote and kept on the run row.
+ * wrote and kept on the run row — and, kept apart on `touchedPullRequests`,
+ * the ones its CLIs' own records say its conversations touched (claude's
+ * `pr-link` lines), which are shown beside them and decide nothing.
  *
  * The WHY is in `utils/pull-request-capture.ts`; this is the pass that runs it.
  * Two properties shape everything here:
@@ -65,7 +87,9 @@ function parseRow(payload: string): Record<string, unknown> | null {
  *   and nothing else, however long it is. A run that has never been scanned
  *   starts at -1, which is what makes the BACKFILL free rather than a migration
  *   — every pull request opened before this feature existed is recovered the
- *   first time its chat is listed.
+ *   first time its chat is listed. A marker reached under an older capture
+ *   rule (`PULL_REQUEST_SCAN_VERSION`) counts as never scanned, so a rule
+ *   change recovers what the old rule missed — once, not on every listing.
  * - It **never fails a caller**. This runs inside the chat list, and a chat
  *   list that 500s because a transcript could not be scanned is a far worse
  *   outcome than a thread missing its pull-request row. Every error is logged
@@ -80,6 +104,8 @@ export class PullRequestCaptureService implements OnModuleInit {
     private readonly runDao: RunDao,
     private readonly em: EntityManager,
     private readonly bus: AgentEventBus,
+    private readonly sessionTranscripts: SessionTranscriptsService,
+    private readonly adapters: AgentAdapterRegistry,
   ) {}
 
   /**
@@ -138,7 +164,7 @@ export class PullRequestCaptureService implements OnModuleInit {
       if (run === null) {
         return;
       }
-      await this.syncOne(run, em);
+      await this.syncOne(run, em, true);
     } catch (error) {
       // Swallowed on this path too, and for the listing's own reason: a
       // subscriber that rejects takes the RxJS stream down with it, which
@@ -165,9 +191,10 @@ export class PullRequestCaptureService implements OnModuleInit {
    * previous pass's answer.
    */
   async sync(runs: readonly Run[], em: EntityManager): Promise<void> {
+    const rescanUntil = Date.now() + PULL_REQUEST_RESCAN_BUDGET_MS;
     for (const run of runs) {
       try {
-        await this.syncOne(run, em);
+        await this.syncOne(run, em, Date.now() < rescanUntil);
       } catch (error) {
         this.logger.warn(
           `run ${run.id}: could not capture pull requests: ${
@@ -178,8 +205,24 @@ export class PullRequestCaptureService implements OnModuleInit {
     }
   }
 
-  private async syncOne(run: Run, em: EntityManager): Promise<void> {
-    const scanned = run.pullRequestsScannedSeq ?? -1;
+  /**
+   * `mayRescan` lets a run scanned under an older rule be read again from the
+   * start; without it the run is scanned on from its marker and keeps its old
+   * version, so a later pass still re-reads it.
+   */
+  private async syncOne(
+    run: Run,
+    em: EntityManager,
+    mayRescan: boolean,
+  ): Promise<void> {
+    const current = run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION;
+    const fromStart =
+      run.pullRequestsScannedSeq === null || (!current && mayRescan);
+    const scanned = fromStart ? -1 : (run.pullRequestsScannedSeq ?? -1);
+    const version =
+      fromStart || current
+        ? PULL_REQUEST_SCAN_VERSION
+        : run.pullRequestsScanVersion;
     const maxSeq = await this.itemDao.maxSeq(run.id, em);
     if (maxSeq <= scanned) {
       return;
@@ -191,25 +234,133 @@ export class PullRequestCaptureService implements OnModuleInit {
     }
     const carried = readRunPullRequests(run.pullRequests);
     const merged = mergePullRequests(carried, captured);
+    const carriedTouched = readRunPullRequests(run.touchedPullRequests);
+    const touched = mergePullRequests(
+      carriedTouched,
+      await this.sessionPullRequests(
+        run,
+        new Set(carriedTouched.map(pullRequestKey)),
+        em,
+      ),
+    );
     // The MARKER moves even when nothing was captured — that is the whole point
     // of it. A conversation with no pull requests in it would otherwise be
     // re-scanned from the beginning on every chat list for the rest of its life.
     const pullRequests = merged.length > 0 ? JSON.stringify(merged) : null;
-    const before = run.pullRequests;
+    const touchedPullRequests =
+      touched.length > 0 ? JSON.stringify(touched) : null;
+    const changed =
+      pullRequests !== run.pullRequests ||
+      touchedPullRequests !== run.touchedPullRequests;
     // Bookkeeping, not activity: this pass runs over every run a chat list
     // returns, so stamping `updatedAt` here re-dated a whole archive to the
     // moment it was opened (see `RunDao.updateWithoutActivity`).
     await this.runDao.updateWithoutActivity(
       run.id,
-      { pullRequests, pullRequestsScannedSeq: maxSeq },
+      {
+        pullRequests,
+        touchedPullRequests,
+        pullRequestsScannedSeq: maxSeq,
+        pullRequestsScanVersion: version,
+      },
       em,
     );
     run.pullRequests = pullRequests;
+    run.touchedPullRequests = touchedPullRequests;
     run.pullRequestsScannedSeq = maxSeq;
-    if (pullRequests !== null && pullRequests !== before) {
-      this.announce(run.id, merged);
+    run.pullRequestsScanVersion = version;
+    if (changed && (pullRequests !== null || touchedPullRequests !== null)) {
+      this.announce(
+        run.id,
+        readDisplayedPullRequests(pullRequests, touchedPullRequests),
+      );
     }
+    // Opened ones only: the ledger counts what a thread OPENED.
     await this.announceOpened(run.id, carried, merged, em);
+  }
+
+  /**
+   * The pull requests the CLIs' own records say this run's conversations
+   * touched (`AgentAdapter.readSessionPullRequests`), each placed at the tool
+   * result its record's time falls on — earliest record per pull request.
+   * One the run already carries (`known`) keeps its place: its CLI's earliest
+   * record of it does not move, so it is not placed again.
+   *
+   * Never throws: a conversation whose record cannot be read costs its own
+   * chips, never the transcript capture beside it.
+   */
+  private async sessionPullRequests(
+    run: Run,
+    known: ReadonlySet<string>,
+    em: EntityManager,
+  ): Promise<RunPullRequest[]> {
+    const earliest = new Map<string, SessionPullRequest>();
+    for (const target of await this.conversationsOf(run, em)) {
+      let records: SessionPullRequest[];
+      try {
+        records = await this.adapters
+          .for(target.agentKind)
+          .readSessionPullRequests({
+            sessionId: target.sessionId,
+            configDir: target.configDir,
+          });
+      } catch (error) {
+        this.logger.warn(
+          `run ${run.id}: could not read ${target.agentKind} conversation ${target.sessionId}'s own pull-request records: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        continue;
+      }
+      for (const record of records) {
+        const key = pullRequestKey(record);
+        if (known.has(key)) {
+          continue;
+        }
+        const seen = earliest.get(key);
+        if (
+          seen === undefined ||
+          (record.at !== null && (seen.at === null || record.at < seen.at))
+        ) {
+          earliest.set(key, record);
+        }
+      }
+    }
+    const found: RunPullRequest[] = [];
+    for (const record of earliest.values()) {
+      const seq = await this.itemDao.toolResultSeqAt(
+        run.id,
+        record.at ?? new Date(),
+        em,
+      );
+      if (seq !== null) {
+        found.push({
+          owner: record.owner,
+          repo: record.repo,
+          number: record.number,
+          url: record.url,
+          seq,
+        });
+      }
+    }
+    return found;
+  }
+
+  /** The run's conversations, or none when they cannot be listed. */
+  private async conversationsOf(
+    run: Run,
+    em: EntityManager,
+  ): Promise<SessionTranscriptTarget[]> {
+    try {
+      return await this.sessionTranscripts.collect(run, em);
+    } catch (error) {
+      this.logger.warn(
+        `run ${run.id}: could not list its conversations: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return [];
+    }
   }
 
   /**

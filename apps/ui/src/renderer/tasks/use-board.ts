@@ -541,7 +541,9 @@ export function useBoard(
     //
     // The announce is client-wide and fires for every chat in the app, so it
     // is narrowed to a run this board is actually holding; the daemon is
-    // already silent when a run's pull requests have not changed.
+    // already silent when a run's pull requests have not changed. A change to
+    // the touched ones alone also announces, and costs one reload of a card
+    // that shows only the opened ones.
     return client.onRunStatus((event) => {
       if (event.pullRequests === undefined) {
         return;

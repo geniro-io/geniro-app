@@ -47,6 +47,8 @@ import type {
   FollowUpMessage,
   InstalledApprovalSupport,
   NO_PLAN_LIMITS,
+  SessionPullRequest,
+  SessionPullRequestsInput,
   TurnDriver,
   TurnImage,
 } from '../adapter.types';
@@ -185,6 +187,7 @@ import {
   readPlanLimitsReply,
   usageRequestLine,
 } from './utils/claude-plan-limits.utils';
+import { readClaudeSessionPullRequests } from './utils/claude-pr-links.utils';
 import { claudeProjectKey } from './utils/claude-project-key.utils';
 import {
   claudeCardQuestions,
@@ -1308,6 +1311,16 @@ export class ClaudeAdapter extends AgentAdapter {
       sessionId: input.sessionId,
       limit: input.limit,
     });
+  }
+
+  /** The `pr-link` lines the session's transcript carries. */
+  override readSessionPullRequests(
+    input: SessionPullRequestsInput,
+  ): Promise<SessionPullRequest[]> {
+    return readClaudeSessionPullRequests(
+      this.profileDir(input.configDir),
+      input.sessionId,
+    );
   }
 
   /**

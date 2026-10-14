@@ -1,9 +1,12 @@
 import {
   BrowserWindow,
+  clipboard,
   Menu,
   type MenuItemConstructorOptions,
   type WebContents,
 } from 'electron';
+
+import { EXTERNAL_LINK_SCHEMES } from '../shared/link-schemes';
 
 /**
  * The right-click menu, which Electron does NOT provide for you.
@@ -24,6 +27,14 @@ import {
  * The coordinates are the ones the event reported, and they must be: it copies
  * whatever image is at that point, not "the image this menu is about".
  *
+ * Copying a LINK is the other one. A right-click on an anchor — in the
+ * transcript or inside an artifact's frame, whose events reach this same
+ * WebContents — copies nothing but the selection without it, while every
+ * browser offers its address. REPORTED: "I want to be able to copy links in
+ * artifact by clicking to them with right click … as in normal browser". The
+ * address is Chromium's `linkURL`, already resolved against the frame's
+ * document, and it goes on the pasteboard as plain text.
+ *
  * Everything else IS a role, deliberately. A role is wired to Chromium's own
  * editing commands and picks up the platform's labels and accelerators for
  * free, so the menu reads as the system's rather than as a translation of it.
@@ -31,6 +42,15 @@ import {
 
 /** The subset of Electron's `ContextMenuParams` the template actually reads. */
 export interface ContextMenuInput {
+  /** The resolved address of the link under the click; empty when there is none. */
+  linkURL: string;
+  /**
+   * The address of the document that link sits in — the artifact frame's own
+   * for a click inside one. A link back into that same document (a `#section`
+   * anchor) is not offered: its address is the artifact route, which carries
+   * the page's serving key and is no use outside this app.
+   */
+  frameURL: string;
   /** `'image'` when the click landed on one; `'none'` for ordinary content. */
   mediaType: string;
   /**
@@ -56,6 +76,7 @@ export interface ContextMenuInput {
 export type ContextMenuEntry =
   | { kind: 'role'; role: 'cut' | 'copy' | 'paste' | 'selectAll' }
   | { kind: 'copyImage' }
+  | { kind: 'copyLink'; url: string }
   | { kind: 'separator' };
 
 /**
@@ -74,6 +95,11 @@ export function contextMenuTemplate(
   params: ContextMenuInput,
 ): ContextMenuEntry[] {
   const groups: ContextMenuEntry[][] = [];
+
+  const link = copyableLink(params.linkURL, params.frameURL);
+  if (link !== null) {
+    groups.push([{ kind: 'copyLink', url: link }]);
+  }
 
   if (params.mediaType === 'image' && params.hasImageContents) {
     groups.push([{ kind: 'copyImage' }]);
@@ -114,6 +140,35 @@ export function contextMenuTemplate(
 }
 
 /**
+ * The link address worth copying, or null.
+ *
+ * Only the schemes a click would open ({@link EXTERNAL_LINK_SCHEMES}): the
+ * renderer's own `file:` routes and the like are app plumbing, not addresses
+ * anyone can use elsewhere. A link to the very document it sits in, fragment
+ * aside, is dropped for the reason {@link ContextMenuInput.frameURL} gives.
+ */
+function copyableLink(linkURL: string, frameURL: string): string | null {
+  let link: URL;
+  try {
+    link = new URL(linkURL);
+  } catch {
+    return null;
+  }
+  if (!EXTERNAL_LINK_SCHEMES.has(link.protocol)) {
+    return null;
+  }
+  if (withoutHash(link.href) === withoutHash(frameURL)) {
+    return null;
+  }
+  return linkURL;
+}
+
+function withoutHash(url: string): string {
+  const hash = url.indexOf('#');
+  return hash === -1 ? url : url.slice(0, hash);
+}
+
+/**
  * Give one WebContents the menu above.
  *
  * Installed per WebContents rather than once on `app`, because the entries act
@@ -122,6 +177,10 @@ export function contextMenuTemplate(
 export function installContextMenu(contents: WebContents): void {
   contents.on('context-menu', (_event, params) => {
     const entries = contextMenuTemplate({
+      linkURL: params.linkURL,
+      // The frame the click landed in, which for an artifact is its own
+      // document rather than the renderer's.
+      frameURL: params.frame?.url ?? params.pageURL,
       mediaType: params.mediaType,
       hasImageContents: params.hasImageContents,
       isEditable: params.isEditable,
@@ -139,6 +198,12 @@ export function installContextMenu(contents: WebContents): void {
     const template: MenuItemConstructorOptions[] = entries.map((entry) => {
       if (entry.kind === 'separator') {
         return { type: 'separator' };
+      }
+      if (entry.kind === 'copyLink') {
+        return {
+          label: 'Copy Link',
+          click: () => clipboard.writeText(entry.url),
+        };
       }
       if (entry.kind === 'copyImage') {
         return {

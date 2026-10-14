@@ -1542,6 +1542,18 @@ export const ActiveSpanSchema = z
 export type ActiveSpan = z.infer<typeof ActiveSpanSchema>;
 
 /**
+ * One stretch in which a run waited on the user with nothing running
+ * (`utils/active-spans.ts` → `pausedSpansFrom`); `endMs` null while it lasts.
+ */
+export const PausedSpanSchema = z
+  .object({
+    startMs: z.number(),
+    endMs: z.number().nullable(),
+  })
+  .meta({ id: 'PausedSpan' });
+export type PausedSpan = z.infer<typeof PausedSpanSchema>;
+
+/**
  * The totals ALONE, for a caller that wants the spend and not the window.
  *
  * A route of its own because the two halves cost wildly different things.
@@ -1563,7 +1575,12 @@ export const ChatTotalsResponseSchema = z.object({
   activeSpans: z
     .array(ActiveSpanSchema)
     .describe(
-      'on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock',
+      'on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working, with every `pausedSpans` stretch already cut out — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock',
+    ),
+  pausedSpans: z
+    .array(PausedSpanSchema)
+    .describe(
+      'on a WORKFLOW run, where it waited on the user — an approval or question card open with no background shell or sub-agent running. The header clock stands still through them, the open one included. Always empty for a chat',
     ),
 });
 export type ChatTotalsResponse = z.infer<typeof ChatTotalsResponseSchema>;

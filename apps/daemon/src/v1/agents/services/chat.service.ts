@@ -3976,8 +3976,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * conversation whose CLI is long gone), where the count is already zero and
    * announcing again would say nothing new.
    */
-  noteShellClosed(runId: string, workId: string | null): void {
-    this.backgroundWork.noteShellClosed(runId, workId);
+  noteShellClosed(
+    runId: string,
+    workId: string | null,
+    nodeId: string | null = null,
+  ): void {
+    this.backgroundWork.noteShellClosed(runId, workId, nodeId);
   }
 
   /**

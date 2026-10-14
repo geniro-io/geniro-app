@@ -42,8 +42,9 @@ export interface StrandedShell {
 }
 
 export function strandedShells(rows: readonly ShellRow[]): StrandedShell[] {
-  // Keyed by the work id, which every open carries; the launching call is an
-  // alias a close may name instead.
+  // Keyed by node and work id, which every open carries — a work id is the
+  // CLI's per-process counter, as `BackgroundWorkCounts` keys it too. The
+  // launching call is an alias a close may name instead.
   const open = new Map<string, StrandedShell>();
   const workIdOfCall = new Map<string, string>();
   for (const row of rows) {
@@ -53,25 +54,26 @@ export function strandedShells(rows: readonly ShellRow[]): StrandedShell[] {
     }
     const toolCallId = asString(record.id) || null;
     const workId = asString(record.workId) || null;
+    const key = (id: string): string => `${row.nodeId ?? ''}\u0000${id}`;
     if (row.kind === 'shell_open') {
       if (workId === null) {
         continue;
       }
-      open.set(workId, {
+      open.set(key(workId), {
         toolCallId,
         workId,
         nodeId: row.nodeId,
         callId: asString(record.callId) || null,
       });
       if (toolCallId !== null) {
-        workIdOfCall.set(toolCallId, workId);
+        workIdOfCall.set(key(toolCallId), key(workId));
       }
       continue;
     }
     if (row.kind === 'shell_info') {
       const target =
-        (toolCallId === null ? undefined : workIdOfCall.get(toolCallId)) ??
-        workId;
+        (toolCallId === null ? undefined : workIdOfCall.get(key(toolCallId))) ??
+        (workId === null ? null : key(workId));
       if (target !== null) {
         open.delete(target);
       }

@@ -12,10 +12,14 @@ const open = (
   payload: JSON.stringify({ id, workId, ...extra }),
   nodeId,
 });
-const close = (id: string | null, workId: string): ShellRow => ({
+const close = (
+  id: string | null,
+  workId: string,
+  nodeId: string | null = null,
+): ShellRow => ({
   kind: 'shell_info',
   payload: JSON.stringify({ id, workId }),
-  nodeId: null,
+  nodeId,
 });
 
 describe('strandedShells', () => {
@@ -47,6 +51,16 @@ describe('strandedShells', () => {
     ).toEqual([
       { toolCallId: 't1', workId: 'b1', nodeId: 'engineer', callId: 'call-2' },
     ]);
+  });
+
+  it('keeps two nodes’ shells apart when their per-process work ids collide', () => {
+    expect(
+      strandedShells([
+        open('t1', 'bash_1', {}, 'engineer'),
+        open('t1', 'bash_1', {}, 'qa'),
+        close('t1', 'bash_1', 'engineer'),
+      ]).map((shell) => shell.nodeId),
+    ).toEqual(['qa']);
   });
 
   it('skips a row it cannot read rather than throwing', () => {

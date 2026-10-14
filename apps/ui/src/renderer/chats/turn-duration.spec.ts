@@ -727,6 +727,54 @@ describe('clockMs — a workflow header’s clock', () => {
     );
     expect(clockMs(spans, [], T + 70_000)).toBe(20_000);
   });
+
+  const INF = Number.POSITIVE_INFINITY;
+
+  it('stands still while a card waits on the user and nothing runs in the background', () => {
+    // A Manager in `await_agent` plus an Engineer parked on a question is two
+    // open turns and no work.
+    const turns = [open('manager', T), open('engineer', T + 10_000)];
+    const paused = [{ startMs: T + 20_000, endMs: INF }];
+
+    expect(clockMs([], turns, T + 20_000, paused)).toBe(20_000);
+    expect(clockMs([], turns, T + 3_600_000, paused)).toBe(20_000);
+  });
+
+  it('runs on from where a paused stretch closed', () => {
+    // A background shell opened at 30s: the daemon closes the paused stretch there.
+    const turns = [open('manager', T), open('engineer', T + 10_000)];
+    const paused = [{ startMs: T + 20_000, endMs: T + 30_000 }];
+
+    expect(
+      clockMs([], turns, T + 41_000, paused) -
+        clockMs([], turns, T + 40_000, paused),
+    ).toBe(1000);
+    expect(clockMs([], turns, T + 40_000, paused)).toBe(30_000);
+  });
+
+  it('does not jump when the second open turn lands', () => {
+    // The Engineer's card [10s, 40s] was answered; the Manager's turn settles
+    // at 100s and its span arrives with that wait already cut out.
+    const paused = [{ startMs: T + 10_000, endMs: T + 40_000 }];
+    const before = clockMs(
+      [],
+      [open('engineer', T), open('manager', T + 5_000)],
+      T + 100_000,
+      paused,
+    );
+    const after = clockMs(
+      [
+        { startMs: T + 5_000, endMs: T + 10_000 },
+        { startMs: T + 40_000, endMs: T + 100_000 },
+      ],
+      [open('engineer', T)],
+      T + 100_000,
+      paused,
+    );
+
+    expect(before).toBe(70_000);
+    expect(after).toBe(before);
+  });
 });
 
 describe('withDurableChatTurn', () => {

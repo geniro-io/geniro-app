@@ -1542,6 +1542,38 @@ describe('ChatMetricsService.readTotalsResponse', () => {
     expect(turnSpanRows).toHaveBeenCalledWith('run-1', expect.anything());
   });
 
+  it('sends a wait still open as an open-ended paused stretch', async () => {
+    // JSON has no Infinity; dropped or nulled-out by accident, the live clock
+    // would tick through the question it should be standing still on.
+    const { service, turnSpanRows } = build({
+      workflow: { rows: [], states: [] },
+    });
+    const at = (s: number): Date => new Date(Date.UTC(2026, 9, 13, 10, 0, s));
+    turnSpanRows.mockResolvedValue([
+      {
+        kind: 'status',
+        nodeId: 'engineer',
+        createdAt: at(0),
+        payload: JSON.stringify({ status: 'running' }),
+      },
+      {
+        kind: 'approval_request',
+        nodeId: 'engineer',
+        createdAt: at(20),
+        payload: JSON.stringify({ id: 'q1' }),
+      },
+    ]);
+
+    const response = await service.readTotalsResponse('run-1');
+
+    expect(response.pausedSpans).toEqual([
+      { startMs: at(20).getTime(), endMs: null },
+    ]);
+    expect(JSON.parse(JSON.stringify(response)).pausedSpans).toEqual(
+      response.pausedSpans,
+    );
+  });
+
   it('404s on a run that does not exist', async () => {
     const { service } = build({ runExists: false });
 

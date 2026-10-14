@@ -833,6 +833,8 @@ beforeEach(() => {
       thinkingTokens: null,
       workedMs: null,
     },
+    activeSpans: [],
+    pausedSpans: [],
   });
   agentsApi.listAgentSkills.mockReset().mockResolvedValue([]);
   agentsApi.listAgentMcpServers.mockReset().mockResolvedValue({
@@ -1909,6 +1911,8 @@ describe('Chats transcript auto-scroll', () => {
         thinkingTokens: null,
         workedMs: null,
       },
+      activeSpans: [],
+      pausedSpans: [],
     });
 
     const { client } = makeClient();
@@ -4296,6 +4300,96 @@ describe('Chats workflow runs', () => {
     expect(composerButton(container, 'Stop')).toBeNull();
     expect(sidebarRow()).toContain('completed');
     expect(sidebarRow()).not.toContain('running');
+  });
+
+  it('re-reads the clock’s paused stretches when the run starts waiting on the user, and when that row lands', async () => {
+    // A card opening settles no turn. The run-row flag announces first; the row
+    // landing is what proves the daemon has it. Without either re-read the
+    // header ticks through the wait until the next turn settles.
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+    const reads = (): number =>
+      api.readChatTotals.mock.calls.filter(([req]) => req.runId === 'w1')
+        .length;
+    const before = reads();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: null, awaiting: 'question' });
+    });
+    expect(reads()).toBe(before + 1);
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(7, 'approval_request', 'coder'),
+        payload: { id: 'q1', toolName: 'ask_user_question' },
+      });
+    });
+    expect(reads()).toBe(before + 2);
+
+    // A turn starting can end a card that lost its close on the daemon side.
+    await act(async () => {
+      emitItem({
+        ...wfItem(8, 'status', 'coder'),
+        payload: { nodeId: 'coder', status: 'running' },
+      });
+    });
+    expect(reads()).toBe(before + 3);
+
+    // Ordinary rows move nothing the clock is folded from.
+    await act(async () => {
+      emitItem({ ...wfItem(9, 'message', 'coder'), payload: { text: 'hi' } });
+    });
+    expect(reads()).toBe(before + 3);
+  });
+
+  it('stands the header clock still through a paused stretch the daemon serves', async () => {
+    // The coder's turn has run 60s; the daemon says the run has waited on the
+    // user for the last 30s with nothing running.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const T = Date.parse('2026-10-13T10:00:00.000Z');
+      vi.setSystemTime(T);
+      workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+      api.listRunItems.mockResolvedValue([
+        {
+          ...wfItem(1, 'status', 'coder'),
+          payload: { nodeId: 'coder', status: 'running' },
+          createdAt: new Date(T - 60_000).toISOString(),
+        },
+      ]);
+      api.readChatTotals.mockResolvedValue({
+        totals: {
+          turns: 0,
+          costedTurns: 0,
+          costUsd: null,
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          ownerKey: null,
+          thinkingTokens: null,
+          workedMs: null,
+        },
+        activeSpans: [],
+        pausedSpans: [{ startMs: T - 30_000, endMs: null }],
+      });
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'Review team');
+      const clock = (): string =>
+        container.querySelector('[data-slot="thread-metrics"]')?.textContent ??
+        '';
+
+      expect(clock()).toBe('30s');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      expect(clock()).toBe('30s');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('gives a CALLEE node’s card the context of the call it is running', async () => {

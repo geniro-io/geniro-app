@@ -9921,6 +9921,18 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     // ONE `running` however many rows the stretch writes — the claim is the
     // map, not the row count — and it stands AHEAD of the work it describes.
     expect(statuses()).toEqual(['running', 'completed', 'running']);
+    // The badge row says it is NOT a turn starting, which the turn's own row
+    // never claims: the workflow clock ends a lost card only on the latter.
+    const runningRows = itemDao.items
+      .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+      .map(
+        (item) => JSON.parse(item.payload as string) as Record<string, unknown>,
+      )
+      .filter((payload) => payload.status === 'running');
+    expect(runningRows.map((payload) => payload.offTurn)).toEqual([
+      undefined,
+      true,
+    ]);
     expect(nodeDao.row(run.id, 'callee')?.status).toBe('running');
     const kinds = itemDao.items
       .filter((item) => item.nodeId === 'callee')
@@ -11261,6 +11273,16 @@ describe('GraphExecutorService — work still out when a process ends', () => {
         .at(-1)?.[key];
     expect(last('subagentsOut')).toBe(1);
     expect(last('shellsOpen')).toBe(1);
+
+    // The command ends between turns: its close is filed under the same node as
+    // its open, so the count comes back down.
+    turn.emitOffTurn({
+      type: 'shell_info',
+      toolCallId: 'toolu_left',
+      workId: 'b1',
+    });
+    await drain();
+    expect(last('shellsOpen')).toBe(0);
 
     // The process goes, the executor writes the delegate's ending — and the
     // count comes down with that row.

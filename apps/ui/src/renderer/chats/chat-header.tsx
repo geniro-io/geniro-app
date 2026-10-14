@@ -25,6 +25,7 @@ import {
   formatDuration,
   type OpenTurn,
   openTurnWorkedMs,
+  type Span,
 } from './turn-duration';
 
 /*
@@ -89,10 +90,12 @@ import {
  * usual way a memoized child stops being memoized.
  */
 const EMPTY_OPEN_TURNS: readonly OpenTurn[] = [];
+const EMPTY_SPANS: readonly Span[] = [];
 
 function ThreadMetrics({
   settledMs,
   activeSpans = null,
+  pausedSpans = EMPTY_SPANS,
   turnCount,
   openTurns,
   costUsd,
@@ -104,7 +107,9 @@ function ThreadMetrics({
    * union with the running turns ({@link clockMs}) rather than a sum, which ran
    * N times fast while N agents worked at once.
    */
-  activeSpans?: readonly { startMs: number; endMs: number }[] | null;
+  activeSpans?: readonly Span[] | null;
+  /** Where the run waited on the user with nothing running (`pausedSpans`). */
+  pausedSpans?: readonly Span[];
   turnCount: number;
   openTurns: readonly OpenTurn[];
   costUsd: number | null;
@@ -122,7 +127,7 @@ function ThreadMetrics({
     // no settled span yet while its Manager and Engineer both run, which is
     // exactly the moment the sum ran at 2 s/s.
     activeSpans !== null
-      ? clockMs(activeSpans, openTurns, now)
+      ? clockMs(activeSpans, openTurns, now, pausedSpans)
       : settledMs + openTurnWorkedMs(openTurns, now);
   // The running turns count toward the tally because their time counts toward
   // the total — a sum over fifteen turns labelled "14 turns" is the kind of
@@ -430,6 +435,7 @@ export function ChatHeader({
   costedTurns = null,
   openTurns = EMPTY_OPEN_TURNS,
   activeSpans = null,
+  pausedSpans = EMPTY_SPANS,
 }: {
   label: string;
   isWorkflow: boolean;
@@ -542,7 +548,14 @@ export function ChatHeader({
    * clock is a union rather than a sum (see `clockMs`). A 1:1 chat passes none:
    * its one agent's turns never overlap, so the sum IS the union there.
    */
-  activeSpans?: readonly { startMs: number; endMs: number }[] | null;
+  activeSpans?: readonly Span[] | null;
+  /**
+   * Where a WORKFLOW waited on the user with nothing running, served by the
+   * daemon's totals route (`useChatTotals` → `pausedSpans`; the open one ends at
+   * `Infinity`) — the live half of the clock stands still through them, as the
+   * daemon's spans already do.
+   */
+  pausedSpans?: readonly Span[];
   /**
    * Open the conversation search. Absent draws no control at all — a disabled
    * one would state that this thread can be searched and that something is
@@ -652,6 +665,7 @@ export function ChatHeader({
         <ThreadMetrics
           settledMs={workedMs}
           activeSpans={activeSpans}
+          pausedSpans={pausedSpans}
           turnCount={turnCount}
           openTurns={openTurns}
           costUsd={costUsd}

@@ -13,6 +13,7 @@ const NO_TOTALS = {
   outputTokens: null,
   cacheTokens: null,
   activeSpans: null,
+  pausedSpans: null,
 } as const;
 
 interface ChatTotalsState {
@@ -26,6 +27,7 @@ interface ChatTotalsState {
   outputTokens: number | null;
   cacheTokens: number | null;
   activeSpans: readonly ActiveSpan[] | null;
+  pausedSpans: readonly ActiveSpan[] | null;
 }
 
 /** Two counters that may each be unmeasured: null only when BOTH are. */
@@ -55,7 +57,7 @@ interface SpendMark {
  * cheaper thread rather than like a bug.
  *
  * `settledTurns` is the refresh trigger, and it is a COUNT rather than a
- * timestamp or a boolean: the total only moves when a turn ends, so counting
+ * timestamp or a boolean: the spend only moves when a turn ends, so counting
  * the thread's finished turns re-asks exactly then — once per turn, never on a
  * stream of deltas, and correctly for a turn that ended while this component
  * was mounted on another thread.
@@ -71,12 +73,18 @@ interface SpendMark {
  * (`RunStatusEvent.spendUpdatedAt`), and this re-asks on it — for the figure
  * itself, which stays the totals route's to state; the announce carries none.
  * Optional, so the harness and the specs that predate it pass nothing.
+ *
+ * `clockKey` is the THIRD: what the run row says about waiting on the user and
+ * the background work it has out, plus how many rows the paused stretches are
+ * folded from have landed. The flags arrive whatever page is loaded but can
+ * announce before their row is written; a landed row proves the daemon has it.
  */
 export function useChatTotals(
   api: Pick<ChatsApi, 'readChatTotals'> | null,
   runId: string | null,
   settledTurns: number,
   client: Pick<DaemonClient, 'onRunStatus'> | null = null,
+  clockKey = '',
 ): {
   costUsd: number | null;
   /**
@@ -113,6 +121,11 @@ export function useChatTotals(
    * the daemon has answered.
    */
   activeSpans: readonly ActiveSpan[] | null;
+  /**
+   * Where a WORKFLOW waited on the user with nothing running; the one still
+   * open ends at `Infinity`. Null until the daemon has answered.
+   */
+  pausedSpans: readonly ActiveSpan[] | null;
 } {
   /**
    * The four figures, STAMPED with the thread they were read from.
@@ -198,6 +211,10 @@ export function useChatTotals(
               answer.totals.cacheCreationTokens,
             ),
             activeSpans: answer.activeSpans,
+            pausedSpans: answer.pausedSpans.map((span) => ({
+              startMs: span.startMs,
+              endMs: span.endMs ?? Number.POSITIVE_INFINITY,
+            })),
           });
         }
       })
@@ -219,7 +236,7 @@ export function useChatTotals(
     return () => {
       cancelled = true;
     };
-  }, [api, forget, runId, settledTurns, spendMark]);
+  }, [api, clockKey, forget, runId, settledTurns, spendMark]);
 
   // The figures belong to the run they were read from. A thread switch renders
   // once before the effect above can replace them, so without this guard the
@@ -235,5 +252,6 @@ export function useChatTotals(
     outputTokens: current.outputTokens,
     cacheTokens: current.cacheTokens,
     activeSpans: current.activeSpans,
+    pausedSpans: current.pausedSpans,
   };
 }

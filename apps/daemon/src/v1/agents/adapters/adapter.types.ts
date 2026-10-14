@@ -1389,11 +1389,11 @@ type AgentEventBody =
       /**
        * A detached command has STARTED — the opening half of `shell_info`.
        *
-       * It writes NO row, deliberately: the launch is already in the transcript
-       * as the tool call that made it, which is the reason `shell_info` was
-       * settle-only in the first place. What it carries instead is the one thing
-       * no row can — that this run has a command out RIGHT NOW — so the daemon
-       * can publish a live count per run (`BackgroundWorkCounts`).
+       * It is written as a durable `shell_open` row (`event-to-item.ts`), which
+       * marks the launch as detached for the renderer and opens the background
+       * stretch the workflow clock folds (`utils/active-spans.ts`). It also tells
+       * the daemon that this run has a command out RIGHT NOW, so it can publish a
+       * live count per run (`BackgroundWorkCounts`).
        *
        * That count exists because the renderer used to fold the same question
        * out of the OPEN thread's transcript, which is answerable for one run and

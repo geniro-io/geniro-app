@@ -17,16 +17,12 @@ import type {
   ContextBreakdownWire,
   PlanLimitsWire,
 } from '../chat.types';
-import type {
-  ActiveSpan,
-  ChatTotalsResponse,
-  StoredMetricsReading,
-} from '../chat.types';
+import type { ChatTotalsResponse, StoredMetricsReading } from '../chat.types';
 import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
-import { activeSpansFrom } from '../utils/active-spans';
+import { activeSpansFrom, pausedSpansFrom } from '../utils/active-spans';
 import {
   callConversation,
   readCallSeed,
@@ -618,13 +614,23 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
-   * The merged wall-clock stretches in which some agent of this run worked —
-   * the chat header's clock on a workflow (`utils/active-spans.ts`).
+   * The merged wall-clock stretches in which some agent of this run worked,
+   * and those in which it waited on the user — the chat header's clock on a
+   * workflow (`utils/active-spans.ts`).
    */
-  async readActiveSpans(runId: string): Promise<ActiveSpan[]> {
-    return activeSpansFrom(
-      await this.itemDao.turnSpanRows(runId, this.em.fork()),
-    );
+  async readClockSpans(
+    runId: string,
+  ): Promise<Pick<ChatTotalsResponse, 'activeSpans' | 'pausedSpans'>> {
+    const rows = await this.itemDao.turnSpanRows(runId, this.em.fork());
+    const paused = pausedSpansFrom(rows);
+    return {
+      activeSpans: activeSpansFrom(rows, paused),
+      // JSON has no Infinity: a stretch still running goes out open-ended.
+      pausedSpans: paused.map((span) => ({
+        startMs: span.startMs,
+        endMs: Number.isFinite(span.endMs) ? span.endMs : null,
+      })),
+    };
   }
 
   /**
@@ -637,9 +643,11 @@ export class ChatMetricsService implements OnModuleInit {
     const em = this.em.fork();
     const run = await this.requireRun(runId, em);
     const totals = await this.totalsOf(runId, run, em);
-    const activeSpans =
-      run.workflowId === null ? [] : await this.readActiveSpans(runId);
-    return { totals, activeSpans };
+    const spans =
+      run.workflowId === null
+        ? { activeSpans: [], pausedSpans: [] }
+        : await this.readClockSpans(runId);
+    return { totals, ...spans };
   }
 
   /**

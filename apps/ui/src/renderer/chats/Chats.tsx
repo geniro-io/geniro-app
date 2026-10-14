@@ -289,6 +289,7 @@ import {
 } from './transcript-item';
 import { TranscriptRow } from './transcript-row';
 import {
+  movesPausedSpans,
   parkWhileHeld,
   scanTurns,
   threadWorkedMs,
@@ -5839,17 +5840,37 @@ export function Chats({
     [turnDurations],
   );
   /**
+   * The workflow header's paused stretches are the daemon's, re-read when any
+   * row they are folded from lands (`movesPausedSpans`). The run-row flags in
+   * the clock key announce before that row is written, and only its arrival
+   * proves the daemon has it; the flags cover a transcript scrolled away from
+   * its tail.
+   */
+  const clockRowCount = useMemo(
+    () => items.filter(movesPausedSpans).length,
+    [items],
+  );
+  /**
    * What this thread has SPENT, for the header beside what it worked.
    *
    * Re-asked on `threadWorked.turns` — the count of settled turns — because
-   * that is the only thing that moves the total, and a count changes exactly
-   * once per turn rather than on every delta the turn streams.
+   * that is what moves the spend, and a count changes exactly once per turn
+   * rather than on every delta the turn streams. A workflow also re-asks on its
+   * clock key, for the paused stretches.
    */
   const threadTotals = useChatTotals(
     chatApi,
     activeRunId,
     threadWorked.turns,
     client,
+    activeRun?.workflowId != null
+      ? [
+          activeRun.awaiting ?? '',
+          shellsOut.has(activeRun.id),
+          delegatesOut.has(activeRun.id),
+          clockRowCount,
+        ].join('|')
+      : '',
   );
   /**
    * The newest user message the loaded window holds — the timeline rail's
@@ -6093,8 +6114,10 @@ export function Chats({
           pausedQueues.has(activeRunId),
         );
   /**
-   * The open turn as the HEADER should measure it: the hold counted as a parked
-   * stretch, exactly like an approval card's wait.
+   * The open turn as a CHAT header (and each agent's figure) should measure it:
+   * the hold counted as a parked stretch, exactly like an approval card's wait.
+   * A workflow header reads only the turn starts and the daemon's paused
+   * stretches (`clockMs`).
    *
    * The header's figure is "how much work is in here", not how long the window
    * has been open, and while a turn is held nobody is working — the agent has
@@ -8899,6 +8922,7 @@ export function Chats({
                             ? threadTotals.activeSpans
                             : null
                         }
+                        pausedSpans={threadTotals.pausedSpans ?? undefined}
                         // The delegate, task and terminal counters that used to
                         // end this row are chips on the composer shelf now.
                         // `sidePanelLive` still feeds all three from one place

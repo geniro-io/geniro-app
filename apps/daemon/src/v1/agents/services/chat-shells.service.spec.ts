@@ -153,10 +153,18 @@ function service(
     },
   } as unknown as AgentEventBus;
   const seqs = { reserve: async () => 99 } as unknown as ItemSeqAllocator;
-  const uncounted: { runId: string; workId: string | null }[] = [];
+  const uncounted: {
+    runId: string;
+    workId: string | null;
+    nodeId: string | null;
+  }[] = [];
   const chats = {
-    noteShellClosed: (runId: string, workId: string | null) => {
-      uncounted.push({ runId, workId });
+    noteShellClosed: (
+      runId: string,
+      workId: string | null,
+      nodeId: string | null,
+    ) => {
+      uncounted.push({ runId, workId, nodeId });
     },
   } as unknown as ChatService;
   return {
@@ -390,7 +398,10 @@ describe('ChatShellsService.kill', () => {
     // down: the count is kept off the CLI's own brackets and the CLI already
     // answered this command's launch, so without this the badge reads
     // `working · waiting on background work` for the rest of the session.
-    expect(uncounted).toEqual([{ runId: 'run-1', workId: 'w-call-1' }]);
+    // Under the node that opened it: the count is keyed by node and work id.
+    expect(uncounted).toEqual([
+      { runId: 'run-1', workId: 'w-call-1', nodeId: 'qa' },
+    ]);
   });
 
   it('takes a row off the list when the machine says it already stopped', async () => {

@@ -2651,6 +2651,7 @@ export class CallBroker implements OnModuleInit {
     }
     state.capability.persistItem(callerNodeOf(owner), 'system', null, {
       severity: 'info',
+      ...inAnsweredCall(state, owner),
       message: `Passed ${asked.callee}'s question in ${callId} to this agent while it was working.`,
     });
   }
@@ -2829,6 +2830,7 @@ export class CallBroker implements OnModuleInit {
     }
     state.capability.persistItem(callerNodeOf(owner), 'system', null, {
       severity: 'info',
+      ...inAnsweredCall(state, owner),
       message: `Told this agent that ${finished.callee} finished ${callId} while it was working.`,
     });
   }
@@ -4489,6 +4491,21 @@ function callEntryInConversation(
     }
   }
   return undefined;
+}
+
+/**
+ * Files a note about `owner`'s turn inside the call its conversation answers.
+ * Call membership places a row by its `callId`, so a note without one is drawn
+ * in the run's own flow — REPORTED (run `99ac3def`): a Senior Engineer told
+ * mid-call-10 showed up there as a stray block of its own. A node's own
+ * conversation answers no call, and its note stays in the run's flow.
+ */
+function inAnsweredCall(
+  state: RunCallState,
+  owner: string,
+): { callId?: string } {
+  const callId = callEntryInConversation(state, owner)?.[0];
+  return callId === undefined ? {} : { callId };
 }
 
 /** The HELD call a callee conversation is answering, with its id, if any. */

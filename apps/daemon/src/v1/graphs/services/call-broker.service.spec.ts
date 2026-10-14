@@ -3769,6 +3769,78 @@ describe('CallBroker — every conversation of a node is a caller of its own', (
       }),
     ).toMatchObject({ status: 'ok', result: { state: 'answered' } });
   });
+
+  it('files the notes told to a WORKING callee conversation inside the call it answers', async () => {
+    // REPORTED (run `99ac3def`, seq 5441): the Senior Engineer, answering the
+    // Manager's call-10, was told its Middle Engineer finished call-11. The
+    // note carried no callId, so call membership put it in the run's own flow,
+    // where it was drawn as a stray "Senior Engineer" block of its own.
+    const { broker, deferred, items } = harness({
+      launch: 'defer',
+      calleesOf: new Map([
+        ['orch', [HELPER]],
+        ['helper', [RESEARCHER]],
+      ]),
+      tellLiveNode: () => true,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'feature A',
+      mode: 'async',
+    });
+    for (const topic of ['sources', 'prior art']) {
+      await broker.callAgent('run-1', engineerIn('call-1'), {
+        title: 'research',
+        agent: 'res',
+        message: topic,
+        mode: 'async',
+      });
+    }
+
+    // The question twin: call-3's callee asks while the Engineer works.
+    broker.parkQuestion('run-1', 'call-3', {
+      question: 'Which source?',
+      options: [],
+      payload: {},
+      deliver: () => true,
+      fail: () => {},
+    });
+    // The result twin: call-2 settles while the Engineer works.
+    broker.noteCalleeSettling('run-1', 'call-2');
+    deferred[1]!.resolve(DONE('found'));
+
+    const notes = items.filter(
+      (item) =>
+        item.kind === 'system' &&
+        String(item.payload.message).includes('while it was working'),
+    );
+    expect(notes.map((note) => note.payload.message)).toEqual([
+      expect.stringContaining('question in call-3'),
+      expect.stringContaining('finished call-2'),
+    ]);
+    for (const note of notes) {
+      expect(note.nodeId).toBe('helper');
+      expect(note.payload.callId).toBe('call-1');
+    }
+  });
+
+  it('keeps the notes told to a node’s OWN working conversation in the run’s flow', async () => {
+    const { broker, items } = harness({
+      launch: 'defer',
+      tellLiveNode: () => true,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    broker.noteCalleeSettling('run-1', 'call-1');
+    const note = items.find((item) => item.kind === 'system');
+    expect(note?.payload.message).toContain('finished call-1');
+    expect(note?.payload).not.toHaveProperty('callId');
+  });
 });
 
 describe('CallBroker — a wait never outlives the caller CLI’s own tool-call deadline', () => {

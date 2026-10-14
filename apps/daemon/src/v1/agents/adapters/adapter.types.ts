@@ -1550,7 +1550,8 @@ type AgentEventBody =
        * line carries (read out of the 2.1.270 bundle: no parent id). A
        * delegate's own background command belongs to that delegate's block,
        * not to the main thread's terminals, so `runCliSession` announces
-       * nothing for it.
+       * nothing for it — but while it runs, it keeps that delegate's
+       * `completed` settle from being announced.
        */
       ownedByDelegate?: true;
       /**

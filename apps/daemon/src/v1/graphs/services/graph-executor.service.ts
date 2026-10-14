@@ -2688,11 +2688,9 @@ export class GraphExecutorService
      *
      * The process that owed each ending is gone or about to be: a delegate
      * lives inside the CLI process that launched it, and a detached command is
-     * that process's own child. Neither of the other writers can say so for a
-     * workflow run — `ChatService`'s session-close hook keys by RUN and is
-     * handed this executor's per-turn session key, and the shell closes a dying
-     * process announces arrive after `runFinished`, where `onOffTurnEvent`
-     * drops them.
+     * that process's own child. `ChatService`'s session-close hook cannot say
+     * so for a workflow run: it keys by RUN and is handed this executor's
+     * per-turn session key.
      *
      * Read from the transcript, so one fold answers both callers, and written
      * through `persistItem`, so the rows take this run's own seq.

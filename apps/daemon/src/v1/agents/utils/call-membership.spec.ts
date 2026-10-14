@@ -47,12 +47,13 @@ describe('callMembershipOf', () => {
     }
   });
 
-  it("keeps the call's start, the pickup note and approval cards in the caller's flow", () => {
+  it("keeps the call's start, the pickup note, approval cards and a callee's published page in the run's own flow", () => {
     for (const kind of [
       'call_started',
       'await_collected',
       'approval_request',
       'approval_verdict',
+      'show_artifact',
     ] as const) {
       expect(
         callMembershipOf(row(kind, 'engineer', { callId: 'call-1' }), lookup),

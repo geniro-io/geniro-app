@@ -13,14 +13,19 @@ export const OUTSIDE_ANY_CALL = '';
  * what the rule answers: a launch that finds stamps of another version clears
  * them and stamps every row again (`ItemCallIndexService.indexAllQuietly`).
  */
-export const CALL_MEMBERSHIP_VERSION = 1;
+export const CALL_MEMBERSHIP_VERSION = 2;
 
-/** Rows about a call that sit in the CALLER's flow even though they name it. */
+/**
+ * Rows about a call that sit in the run's own flow even though they name it —
+ * a published page among them: it is made for the user, and inside a shut call
+ * card nobody would see it.
+ */
 const CALLER_FLOW_KINDS = new Set<ItemKind>([
   'call_started',
   'await_collected',
   'approval_request',
   'approval_verdict',
+  'show_artifact',
 ]);
 
 /** Caller-written rows about a call that are drawn inside its card. */

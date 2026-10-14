@@ -3626,7 +3626,16 @@ export class GraphExecutorService
       const nodeWindow = separateCallState
         ? null
         : (nodeWindows.get(node.id) ?? null);
+      // Asked of the adapter, never inferred from the agent kind — the graph
+      // twin of `ChatService`'s probe, and the answer is per INSTALLED binary
+      // (an older claude rejects the flag on argv). Without it a node never
+      // streams the `tool_compose` frames the card loader is drawn from, so a
+      // workflow agent writing an artifact showed nothing until the card landed.
+      const streamPartials = await adapter
+        .supportsLiveStream()
+        .catch(() => false);
       const input: AgentTurnInput = {
+        ...(streamPartials ? { streamPartials: true } : {}),
         prompt: withCarriedContext(carried, prompt),
         ...(extras.images?.length ? { images: extras.images } : {}),
         cwd,
@@ -3799,6 +3808,15 @@ export class GraphExecutorService
               node.configDir ?? null,
               event.servers,
             );
+            return;
+          }
+          if (event.type === 'tool_compose') {
+            // The model is serializing a tool call — the graph twin of
+            // `ChatService`'s site, and ephemeral like it: the live plane's
+            // `composingTool` is what the transcript draws a card's loader from,
+            // and the finished call is the durable copy. A delegate's frames
+            // are already dropped by the claude mapper.
+            this.partials.composing(runId, ownerKey, node.id, event);
             return;
           }
           if (event.type === 'usage_progress') {

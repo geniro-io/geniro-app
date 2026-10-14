@@ -640,6 +640,11 @@ class FakeAdapter {
   getConfig(): AdapterConfig {
     return this.real.getConfig();
   }
+  /** Answered from the SHIPPED config rather than by running `--help`: the
+   *  double fakes the spawn, and a CLI with a partial stream declares it. */
+  supportsLiveStream(): Promise<boolean> {
+    return Promise.resolve(this.getConfig().liveStream !== null);
+  }
 
   validateModel(model: string | null | undefined): Promise<void> {
     return this.real.validateModel(model);
@@ -2338,6 +2343,35 @@ describe('GraphExecutorService', () => {
       partials.snapshot(run.id).find((event) => event.ownerKey === 'a')
         ?.spentCostUsd ?? null,
     ).toBeNull();
+  });
+
+  it('puts the card a node turn is writing on the live plane, so the transcript draws its loader', async () => {
+    // REPORTED: a workflow agent writing an artifact showed no loader until the
+    // finished card appeared, while a plain chat on the same CLI showed one.
+    // The chat path feeds `tool_compose` into the live plane; a node turn must
+    // too — and must ask its CLI for the partial stream that produces it.
+    const { service, claude, partials } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    const turn = claude.starts[0]!;
+    expect(turn.input.streamPartials).toBe(true);
+    const tool = `mcp__geniro-${run.id.slice(0, 8)}__show_artifact`;
+    const composingOf = (): string | null =>
+      partials.snapshot(run.id).find((event) => event.ownerKey === 'a')
+        ?.composingTool ?? null;
+
+    turn.emit({ type: 'tool_compose', tool, bytes: 0, done: false });
+    await drain();
+    expect(composingOf()).toBe(tool);
+
+    turn.emit({ type: 'tool_compose', tool: null, bytes: 0, done: true });
+    await drain();
+    expect(composingOf()).toBeNull();
   });
 
   it("harvests a node turn's slash_commands report for the run cwd, off the transcript", async () => {

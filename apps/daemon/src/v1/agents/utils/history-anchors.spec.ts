@@ -31,6 +31,13 @@ describe('anchorNeedsOf', () => {
     expect([...needs.callIds].sort()).toEqual(['call-3', 'call-4', 'call-9']);
   });
 
+  it('asks for no call on behalf of a page a callee published — it is drawn outside its call', () => {
+    const needs = anchorNeedsOf([
+      row(12, 'show_artifact', { callId: 'call-5', artifactId: 'plan' }),
+    ]);
+    expect([...needs.callIds]).toEqual([]);
+  });
+
   it('asks for the call of a reply the page holds without its call, and nothing for a held pair', () => {
     const needs = anchorNeedsOf([
       row(10, 'tool_result', { id: 'orphan' }),

@@ -89,7 +89,9 @@ export function anchorNeedsOf(page: readonly ItemWire[]): AnchorNeeds {
   const resultsHeld = new Set<string>();
   for (const item of page) {
     const callId = payloadString(item.payload, 'callId');
-    if (callId !== null) {
+    // A page is drawn in the main flow, never inside its call's card, so it
+    // gives no reason to fetch that call.
+    if (callId !== null && item.kind !== 'show_artifact') {
       callIds.add(callId);
     }
     // A continuation names the call it continues, which is the same

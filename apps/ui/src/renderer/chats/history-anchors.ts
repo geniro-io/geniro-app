@@ -110,9 +110,12 @@ export function unplacedStructureOf(
 ): string[] {
   const keys: string[] = [];
   const callId = payloadString(item.payload, 'callId');
+  // A page is drawn in the main flow, never inside its call's card, so it
+  // gives no reason to fetch that call.
   if (
     callId !== null &&
     item.kind !== 'call_started' &&
+    item.kind !== 'show_artifact' &&
     !index.callStarts.has(callId)
   ) {
     keys.push(`call:${callId}`);

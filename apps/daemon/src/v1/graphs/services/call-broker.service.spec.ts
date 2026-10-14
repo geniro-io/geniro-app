@@ -10,6 +10,7 @@ import type {
   RunCallCapability,
   WorkflowAgentNode,
 } from '../graphs.types';
+import { PUBLISHED_PAGES_NOTE } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 
@@ -37,6 +38,7 @@ interface RecordedItem {
 
 interface Deferred {
   resolve: (outcome: CalleeTurnOutcome) => void;
+  reject: (err: Error) => void;
 }
 
 function harness(options?: {
@@ -110,8 +112,8 @@ function harness(options?: {
         return Promise.reject(new Error('spawn exploded'));
       }
       if (mode === 'defer') {
-        return new Promise<CalleeTurnOutcome>((resolve) => {
-          deferred.push({ resolve });
+        return new Promise<CalleeTurnOutcome>((resolve, reject) => {
+          deferred.push({ resolve, reject });
         });
       }
       return Promise.resolve({
@@ -6281,5 +6283,364 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
         context: { tokens: 700_000, window: 1_000_000, percent: 70 },
       }),
     ]);
+  });
+});
+
+describe('CallBroker — pages published inside a call', () => {
+  const completed = (
+    finalText: string,
+    extra: Partial<CalleeTurnOutcome> = {},
+  ): CalleeTurnOutcome => ({
+    status: 'completed',
+    finalText,
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: 'sess-call-1',
+    ...extra,
+  });
+  const node = (id: string): WorkflowAgentNode => ({
+    id,
+    kind: 'agent',
+    agent: 'claude',
+    approval: 'auto',
+  });
+
+  it('names every page the callee published in its envelope and its call_result row, each at its newest version', async () => {
+    const { broker, deferred, items } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'plan it',
+    });
+    const callId = broker.callAnsweredBy(
+      'run-1',
+      callerKey('helper', 'call-1'),
+    );
+    expect(callId).toBe('call-1');
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'plan',
+      title: 'Plan v1',
+      version: 1,
+    });
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'diagram',
+      title: 'Diagram',
+      version: 1,
+    });
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 2,
+    });
+    deferred[0]!.resolve(completed('planned'));
+    const envelope = await pending;
+    expect(envelope).toEqual({
+      status: 'ok',
+      result: {
+        call_id: 'call-1',
+        agent: 'helper',
+        text: 'planned',
+        // First-publish order, the revised page at its newest version.
+        artifacts: [
+          { artifact_id: 'plan', title: 'Plan', version: 2 },
+          { artifact_id: 'diagram', title: 'Diagram', version: 1 },
+        ],
+        note: PUBLISHED_PAGES_NOTE,
+      },
+    });
+    const result = items.find((i) => i.kind === 'call_result')!;
+    expect(result.payload.result).toEqual(
+      (envelope as { result: unknown }).result,
+    );
+  });
+
+  it('keeps the envelope’s own note beside the pages one', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'plan it',
+    });
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 1,
+    });
+    deferred[0]!.resolve(completed('partial', { callsStillOut: 1 }));
+    const { result } = (await pending) as { result: { note: string } };
+    expect(result.note).toContain('This call is NOT finished');
+    expect(result.note).toContain("already in the user's chat");
+  });
+
+  it('an await_agent collection names the pages too', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'plan it',
+      mode: 'async',
+    });
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 1,
+    });
+    const awaiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve(completed('planned'));
+    expect(await awaiting).toMatchObject({
+      status: 'ok',
+      result: {
+        artifacts: [{ artifact_id: 'plan', title: 'Plan', version: 1 }],
+      },
+    });
+  });
+
+  it('a thread continuation names only what was published in IT', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const first = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'plan it',
+    });
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'notes',
+      title: 'Notes',
+      version: 1,
+    });
+    deferred[0]!.resolve(completed('v1'));
+    await first;
+    const second = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'revise it',
+      thread: 'call-1',
+    });
+    // The continuation speaks in the SAME conversation as call-1.
+    expect(broker.callAnsweredBy('run-1', callerKey('helper', 'call-1'))).toBe(
+      'call-2',
+    );
+    broker.notePublishedArtifact('run-1', 'call-2', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 2,
+    });
+    deferred[1]!.resolve(completed('v2'));
+    const envelope = (await second) as { result: { artifacts: unknown } };
+    expect(envelope.result.artifacts).toEqual([
+      { artifact_id: 'plan', title: 'Plan', version: 2 },
+    ]);
+  });
+
+  it('a page a callee of a callee publishes is named to every caller up the chain', async () => {
+    const { broker, deferred } = harness({
+      launch: 'defer',
+      calleesOf: new Map([
+        ['a', [node('b')]],
+        ['b', [node('c')]],
+      ]),
+    });
+    const outer = broker.callAgent('run-1', 'a', {
+      title: 'why',
+      agent: 'b',
+      message: 'm',
+    });
+    // b, answering call-1, calls c from inside that call.
+    const inner = broker.callAgent('run-1', callerKey('b', 'call-1'), {
+      title: 'why',
+      agent: 'c',
+      message: 'm',
+    });
+    expect(broker.callAnsweredBy('run-1', callerKey('c', 'call-2'))).toBe(
+      'call-2',
+    );
+    broker.notePublishedArtifact('run-1', 'call-2', {
+      artifact_id: 'deep',
+      title: 'Deep page',
+      version: 1,
+    });
+    deferred[1]!.resolve(completed('c done'));
+    deferred[0]!.resolve(completed('b done'));
+    const page = [{ artifact_id: 'deep', title: 'Deep page', version: 1 }];
+    expect(await inner).toMatchObject({ result: { artifacts: page } });
+    expect(await outer).toMatchObject({ result: { artifacts: page } });
+  });
+
+  it('reaches a call still running above one that already settled', async () => {
+    // a → b (call-1) → c fire-and-forget (call-2) → d (call-3): b's call does
+    // not wait for a fire-and-forget callee, so it settles while c works on.
+    const { broker, deferred } = harness({
+      launch: 'defer',
+      calleesOf: new Map([
+        ['root', [node('a')]],
+        ['a', [node('b')]],
+        ['b', [node('c')]],
+      ]),
+    });
+    const top = broker.callAgent('run-1', 'root', {
+      title: 'why',
+      agent: 'a',
+      message: 'm',
+    });
+    const middle = broker.callAgent('run-1', callerKey('a', 'call-1'), {
+      title: 'why',
+      agent: 'b',
+      message: 'm',
+    });
+    await broker.callAgent('run-1', callerKey('b', 'call-2'), {
+      title: 'why',
+      agent: 'c',
+      message: 'm',
+      mode: 'fire_and_forget',
+    });
+    deferred[1]!.resolve(completed('b done'));
+    expect(await middle).not.toHaveProperty('result.artifacts');
+    broker.notePublishedArtifact('run-1', 'call-3', {
+      artifact_id: 'late',
+      title: 'Late page',
+      version: 1,
+    });
+    deferred[2]!.resolve(completed('c done'));
+    deferred[0]!.resolve(completed('a done'));
+    expect(await top).toMatchObject({
+      result: {
+        artifacts: [{ artifact_id: 'late', title: 'Late page', version: 1 }],
+      },
+    });
+  });
+
+  it('reaches a call still running above one whose launch THREW', async () => {
+    const { broker, deferred } = harness({
+      launch: 'defer',
+      calleesOf: new Map([
+        ['root', [node('a')]],
+        ['a', [node('b')]],
+        ['b', [node('c')]],
+      ]),
+    });
+    const top = broker.callAgent('run-1', 'root', {
+      title: 'why',
+      agent: 'a',
+      message: 'm',
+    });
+    const middle = broker.callAgent('run-1', callerKey('a', 'call-1'), {
+      title: 'why',
+      agent: 'b',
+      message: 'm',
+    });
+    await broker.callAgent('run-1', callerKey('b', 'call-2'), {
+      title: 'why',
+      agent: 'c',
+      message: 'm',
+      mode: 'fire_and_forget',
+    });
+    deferred[1]!.reject(new Error('spawn exploded'));
+    expect(await middle).toMatchObject({ status: 'error' });
+    broker.notePublishedArtifact('run-1', 'call-3', {
+      artifact_id: 'late',
+      title: 'Late page',
+      version: 1,
+    });
+    deferred[2]!.resolve(completed('c done'));
+    deferred[0]!.resolve(completed('a done'));
+    expect(await top).toMatchObject({
+      result: {
+        artifacts: [{ artifact_id: 'late', title: 'Late page', version: 1 }],
+      },
+    });
+  });
+
+  it('a node’s own conversation answers no call', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    expect(broker.callAnsweredBy('run-1', 'orch')).toBeNull();
+    expect(broker.callAnsweredBy('run-1', 'helper')).toBeNull();
+    deferred[0]!.resolve(completed('done'));
+    await pending;
+  });
+
+  it('undoing a note puts back what the call named before — and drops a first page entirely', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'plan it',
+    });
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 1,
+    });
+    // A revision whose row then failed, and a new page whose row failed.
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 2,
+    })();
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'lost',
+      title: 'Lost',
+      version: 1,
+    })();
+    deferred[0]!.resolve(completed('planned'));
+    const { result } = (await pending) as { result: { artifacts: unknown } };
+    expect(result.artifacts).toEqual([
+      { artifact_id: 'plan', title: 'Plan', version: 1 },
+    ]);
+  });
+
+  it('an undo leaves alone a newer page that replaced the one it took back', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'plan it',
+    });
+    const undo = broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 1,
+    });
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 2,
+    });
+    undo();
+    deferred[0]!.resolve(completed('planned'));
+    const { result } = (await pending) as { result: { artifacts: unknown } };
+    expect(result.artifacts).toEqual([
+      { artifact_id: 'plan', title: 'Plan', version: 2 },
+    ]);
+  });
+
+  it('a failed call still names the pages it left in the user’s chat', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    broker.notePublishedArtifact('run-1', 'call-1', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 1,
+    });
+    deferred[0]!.resolve({
+      status: 'failed',
+      finalText: null,
+      error: 'exit 1',
+      failureClass: 'crashed',
+      resetsAt: null,
+      sessionId: null,
+    });
+    expect(await pending).toMatchObject({
+      status: 'error',
+      artifacts: [{ artifact_id: 'plan', title: 'Plan', version: 1 }],
+    });
   });
 });

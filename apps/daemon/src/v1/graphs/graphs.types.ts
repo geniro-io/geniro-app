@@ -1032,10 +1032,36 @@ export interface PoolSkip {
 }
 
 /**
+ * One page published with `show_artifact` while a call ran — by its callee or
+ * by any call made inside it — as the caller's envelope names it: the newest
+ * version, and the title it was last published under.
+ */
+export interface CallPublishedPage {
+  artifact_id: string;
+  title: string;
+  version: number;
+}
+
+/** The `result` of a COMPLETED call's ok envelope. */
+export interface CallSettledResult {
+  call_id: string;
+  agent: string;
+  /** The callee pool member that ran it; absent without a pool. */
+  member?: number;
+  pool_skipped?: PoolSkipWire[];
+  text: string;
+  delegates_still_running?: number;
+  calls_still_running?: number;
+  /** What the text alone would leave the caller to misread. */
+  note?: string;
+  artifacts?: CallPublishedPage[];
+}
+
+/**
  * The envelope every call tool returns — NEVER bare text. A discriminated
  * union so an `ok` envelope always carries `result` and an `error` always
  * carries `error` — the illegal mixed shapes are unrepresentable. `result`
- * carries `{ call_id, agent, text }` for a settled call and
+ * carries a {@link CallSettledResult} for a settled call and
  * `{ call_id, agent, state }` for an accepted async/fire-and-forget start;
  * `error` is a machine-prefixed one-liner (`DEPTH_LIMIT: …`).
  *
@@ -1059,6 +1085,8 @@ export type CallEnvelope =
       error: string;
       /** Which call failed — set when a wait over several calls returns it. */
       call_id?: string;
+      /** Pages the call published before it failed — they stay in the user's chat. */
+      artifacts?: CallPublishedPage[];
       /** The callee pool member the failure came from; absent without a pool. */
       member?: number;
       /** Pool members the call was handed past before failing. */

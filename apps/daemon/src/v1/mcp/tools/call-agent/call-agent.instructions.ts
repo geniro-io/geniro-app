@@ -1,4 +1,7 @@
-import { ANSWERING_A_CALL } from '../../../graphs/utils/callee-text';
+import {
+  ANSWERING_A_CALL,
+  CALL_RESULT_PAGES,
+} from '../../../graphs/utils/callee-text';
 
 /**
  * What a model reads about `call_agent`.
@@ -26,6 +29,7 @@ export function callAgentInstructions(
     'only when your role/context makes you confident; otherwise ask the user yourself and relay their answer. ' +
     'After answering, collect the final result with await_agent(call_id). ' +
     'Check the envelope\'s call_id: a question from ANOTHER of your calls can arrive here too, and then "still_running" names this call, which you collect later with await_agent. ' +
+    `${CALL_RESULT_PAGES} ` +
     'An agent listed with an "agent pool" runs on numbered configurations (CLI, model, account) in priority order: a new conversation uses member 1 first, skipping members with a recent usage limit or lapsed sign-in while they recover. If a member hits a usage limit, is signed out, or fails before doing any work, the call falls back to the next member in priority order — the envelope\'s "member" says which ran it and "pool_skipped" which failed. ' +
     'Omit member unless the user requests a specific pool member, CLI, model, or account; then pass its member number to select it.'
   );

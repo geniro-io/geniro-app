@@ -2354,12 +2354,17 @@ describe('ChatService', () => {
       const before = itemDao.items.length;
       const html = '<!doctype html><title>Plan</title><p>step one';
 
-      const outcome = await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
-        id: 'plan',
-        title: 'Migration plan',
-        summary: 'three phases',
-        html,
-      });
+      const outcome = await artifacts.publish(
+        run.id,
+        SINGLE_AGENT_NODE,
+        {
+          id: 'plan',
+          title: 'Migration plan',
+          summary: 'three phases',
+          html,
+        },
+        SINGLE_AGENT_NODE,
+      );
       await drain();
 
       expect(outcome).toEqual({
@@ -2396,17 +2401,27 @@ describe('ChatService', () => {
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
       await service.sendMessage(run.id, 'hello');
 
-      await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
-        id: 'plan',
-        title: 'Migration plan',
-        html: '<p>v1',
-      });
+      await artifacts.publish(
+        run.id,
+        SINGLE_AGENT_NODE,
+        {
+          id: 'plan',
+          title: 'Migration plan',
+          html: '<p>v1',
+        },
+        SINGLE_AGENT_NODE,
+      );
       await drain();
-      const second = await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
-        id: 'plan',
-        title: 'Migration plan (revised)',
-        html: '<p>v2',
-      });
+      const second = await artifacts.publish(
+        run.id,
+        SINGLE_AGENT_NODE,
+        {
+          id: 'plan',
+          title: 'Migration plan (revised)',
+          html: '<p>v2',
+        },
+        SINGLE_AGENT_NODE,
+      );
       await drain();
 
       expect(second).toEqual({
@@ -2442,10 +2457,15 @@ describe('ChatService', () => {
       await service.sendMessage(run.id, 'hello');
       const before = itemDao.items.length;
 
-      const outcome = await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
-        title: 'Far too big',
-        html: 'x'.repeat(MAX_ARTIFACT_HTML_BYTES + 1),
-      });
+      const outcome = await artifacts.publish(
+        run.id,
+        SINGLE_AGENT_NODE,
+        {
+          title: 'Far too big',
+          html: 'x'.repeat(MAX_ARTIFACT_HTML_BYTES + 1),
+        },
+        SINGLE_AGENT_NODE,
+      );
       await drain();
 
       expect(outcome.status).toBe('rejected');
@@ -2460,10 +2480,15 @@ describe('ChatService', () => {
       const before = itemDao.items.length;
       itemDao.failNextKind = 'show_artifact';
 
-      const outcome = await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
-        title: 'Plan',
-        html: '<p>x',
-      });
+      const outcome = await artifacts.publish(
+        run.id,
+        SINGLE_AGENT_NODE,
+        {
+          title: 'Plan',
+          html: '<p>x',
+        },
+        SINGLE_AGENT_NODE,
+      );
 
       expect(outcome).toEqual({
         status: 'unavailable',
@@ -2485,10 +2510,15 @@ describe('ChatService', () => {
 
       expect(artifacts.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
       await expect(
-        artifacts.publish(run.id, SINGLE_AGENT_NODE, {
-          title: 'Plan',
-          html: '<p>x',
-        }),
+        artifacts.publish(
+          run.id,
+          SINGLE_AGENT_NODE,
+          {
+            title: 'Plan',
+            html: '<p>x',
+          },
+          SINGLE_AGENT_NODE,
+        ),
       ).resolves.toEqual({
         status: 'unavailable',
         reason: 'no turn is running that could show it',

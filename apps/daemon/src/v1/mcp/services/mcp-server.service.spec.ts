@@ -2091,6 +2091,73 @@ describe('McpServerService', () => {
     expect(result.content[0]!.text).not.toContain('<');
   });
 
+  it('tools/call show_artifact names the publishing CONVERSATION, so a callee’s page is filed under its call', async () => {
+    const artifacts = new ArtifactBroker();
+    const callers: string[] = [];
+    artifacts.register('run-1', 'agent', async (_artifact, caller) => {
+      callers.push(caller);
+      return { status: 'published', artifactId: 'plan', version: 1 };
+    });
+    const call = rpc('tools/call', {
+      name: HOST_ARTIFACT_TOOL,
+      arguments: {
+        title: 'Plan',
+        html: '<!doctype html><title>Plan</title><p>step one',
+      },
+    });
+    await post(artifactService(artifacts), 'run-1', 'agent', call, 'call-3');
+    await post(artifactService(artifacts), 'run-1', 'agent', call);
+    expect(callers).toEqual([callerKey('agent', 'call-3'), 'agent']);
+  });
+
+  it('tells a WORKFLOW agent its page reaches the user whoever publishes it, and a chat nothing of the kind', async () => {
+    const description = async (inWorkflow: boolean): Promise<string> => {
+      const artifacts = new ArtifactBroker();
+      artifacts.register('run-1', 'agent', async () => ({
+        status: 'published',
+        artifactId: 'x',
+        version: 1,
+      }));
+      if (inWorkflow) {
+        // What the executor does for every workflow run, call edges or none.
+        artifacts.markWorkflowRun('run-1');
+      }
+      const { json } = await post(
+        artifactService(artifacts),
+        'run-1',
+        'agent',
+        rpc('tools/list', {}),
+      );
+      return (
+        json().result as { tools: { name: string; description: string }[] }
+      ).tools.find((t) => t.name === HOST_ARTIFACT_TOOL)!.description;
+    };
+    const workflow = await description(true);
+    expect(workflow).toContain('WHICHEVER agent of the run publishes it');
+    expect(workflow).toContain('never hand the HTML to your caller');
+    expect(workflow).toContain('Ids belong to the whole run');
+    const chat = await description(false);
+    expect(chat).not.toContain('WHICHEVER agent');
+    expect(chat).not.toContain('Ids belong to the whole run');
+  });
+
+  it('tells a caller, in call_agent AND await_agent, that its result names the pages the callee published', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as { tools: { name: string; description: string }[] }
+    ).tools;
+    for (const name of ['call_agent', 'await_agent']) {
+      const text = tools.find((t) => t.name === name)!.description;
+      expect(text).toContain('"artifacts"');
+      expect(text).toContain('never publish them again');
+    }
+  });
+
   it('refuses a show_artifact call carrying no document, without reaching the run', async () => {
     const artifacts = new ArtifactBroker();
     const published: unknown[] = [];

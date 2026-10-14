@@ -231,6 +231,8 @@ class FakeItemDao {
   /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
   readonly hardDeleted: unknown[] = [];
   failNextKind: string | null = null;
+  /** Holds the next write of `kind` until `until` resolves. */
+  holdNextKind: { kind: string; until: Promise<void> } | null = null;
   async userMessagePayloads(runId: string): Promise<string[]> {
     return this.items
       .filter(
@@ -255,6 +257,11 @@ class FakeItemDao {
     return removed;
   }
   async create(data: Partial<Item>): Promise<Item> {
+    if (this.holdNextKind !== null && data.kind === this.holdNextKind.kind) {
+      const { until } = this.holdNextKind;
+      this.holdNextKind = null;
+      await until;
+    }
     if (data.kind === this.failNextKind) {
       this.failNextKind = null;
       throw new Error('SQLITE_FULL');
@@ -4488,10 +4495,12 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
 
     expect(artifacts.canPublish(run.id, 'helper')).toBe(true);
-    const outcome = await artifacts.publish(run.id, 'helper', {
-      title: 'Plan',
-      html: '<!doctype html><title>Plan</title><p>hi</p>',
-    });
+    const outcome = await artifacts.publish(
+      run.id,
+      'helper',
+      { title: 'Plan', html: '<!doctype html><title>Plan</title><p>hi</p>' },
+      'helper',
+    );
 
     expect(outcome.status).toBe('published');
     const row = [...itemDao.items.values()]
@@ -4518,10 +4527,12 @@ describe('GraphExecutorService — agent calls', () => {
     const before = pages();
     pageStore.refusal = 'this page shows more than 64 MB of pictures';
 
-    const outcome = await artifacts.publish(run.id, 'helper', {
-      title: 'Plan',
-      html: '<!doctype html><title>Plan</title><p>hi</p>',
-    });
+    const outcome = await artifacts.publish(
+      run.id,
+      'helper',
+      { title: 'Plan', html: '<!doctype html><title>Plan</title><p>hi</p>' },
+      'helper',
+    );
 
     expect(outcome).toEqual({
       status: 'rejected',
@@ -4914,11 +4925,9 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
-  it('files a page inside a call only while that call is the node’s ONLY live turn', async () => {
-    // A node reachable by a data edge AND a call edge holds its own DAG turn
-    // beside a callee turn. With one call live, a page it published was
-    // stamped with that call's id — including one published from its OWN
-    // turn, which then sat inside a call block it had nothing to do with.
+  it('files a page under the call its publishing CONVERSATION answers, and names it in that call’s result', async () => {
+    // A node can hold its own DAG turn beside a callee turn: the conversation
+    // the tool call arrived on is what says which of them published.
     const dualRole: Workflow = {
       name: 'dual',
       nodes: [
@@ -4947,42 +4956,158 @@ describe('GraphExecutorService — agent calls', () => {
       prompt: 'go',
     });
     await drain();
-    const dagTurn = claude.starts.find(
-      (t) => t.input.systemPrompt === 'I am the worker.',
-    )!;
     const envelope = callBroker.callAgent(run.id, 'orch', {
       title: 'why',
       agent: 'worker',
       message: 'sub-task',
     });
     await drain();
+    const dagTurn = claude.starts.find(
+      (t) => t.input.systemPrompt === 'I am the worker.',
+    );
     const calleeTurn = claude.starts[claude.starts.length - 1]!;
     expect(calleeTurn.input.prompt).toBe('sub-task');
+    expect(dagTurn).toBeDefined();
+    expect(dagTurn).not.toBe(calleeTurn);
     const pages = (): Record<string, unknown>[] =>
       itemDao.items
         .filter((item) => item.kind === 'show_artifact')
         .map((item) => JSON.parse(item.payload) as Record<string, unknown>);
 
-    // Two turns live on the node: the page could be either's, so it names no
-    // call rather than the wrong one.
-    await artifacts.publish(run.id, 'worker', {
-      title: 'Own',
-      html: '<!doctype html><title>Own</title><p>hi</p>',
-    });
-    expect(pages()[0]).not.toHaveProperty('callId');
-
-    // Its own turn over, the call is the only thing it can be answering.
-    completeTurn(dagTurn, 'dag-done');
-    await drain();
-    await artifacts.publish(run.id, 'worker', {
-      title: 'Call',
-      html: '<!doctype html><title>Call</title><p>hi</p>',
-    });
-    expect(pages()[1]).toMatchObject({ callId: 'call-1' });
+    // Both turns live: the call's conversation names its call exactly…
+    await artifacts.publish(
+      run.id,
+      'worker',
+      {
+        id: 'plan',
+        title: 'Plan',
+        html: '<!doctype html><title>Plan</title><p>hi</p>',
+      },
+      callerKey('worker', 'call-1'),
+    );
+    expect(pages()[0]).toMatchObject({ callId: 'call-1', version: 1 });
+    // …and the node's own conversation names none.
+    await artifacts.publish(
+      run.id,
+      'worker',
+      {
+        id: 'own',
+        title: 'Own',
+        html: '<!doctype html><title>Own</title><p>hi</p>',
+      },
+      'worker',
+    );
+    expect(pages()[1]).not.toHaveProperty('callId');
 
     completeTurn(calleeTurn, 'sub-done');
-    expect((await envelope).status).toBe('ok');
+    expect(await envelope).toMatchObject({
+      status: 'ok',
+      result: {
+        call_id: 'call-1',
+        artifacts: [
+          { artifact_id: pages()[0]!.artifactId, title: 'Plan', version: 1 },
+        ],
+      },
+    });
     await drain();
+  });
+
+  it('names no page to a caller when its transcript row could not be written', async () => {
+    const { service, claude, callBroker, artifacts, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'plan it',
+    });
+    await drain();
+    // The publishing conversation does answer the call, so the only thing
+    // keeping the page out of the envelope below is the failed write.
+    expect(
+      callBroker.callAnsweredBy(run.id, callerKey('helper', 'call-1')),
+    ).toBe('call-1');
+    itemDao.failNextKind = 'show_artifact';
+    const outcome = await artifacts.publish(
+      run.id,
+      'helper',
+      { title: 'Plan', html: '<!doctype html><title>Plan</title><p>hi</p>' },
+      callerKey('helper', 'call-1'),
+    );
+    expect(outcome.status).toBe('unavailable');
+
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done');
+    const settled = (await envelope) as { status: string; result: unknown };
+    expect(settled.status).toBe('ok');
+    expect(settled.result).not.toHaveProperty('artifacts');
+    await drain();
+  });
+
+  it('names a page to its call BEFORE the row is written, so a call settling meanwhile still names it', async () => {
+    const { service, claude, callBroker, artifacts, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'plan it',
+    });
+    await drain();
+    let release = (): void => {};
+    itemDao.holdNextKind = {
+      kind: 'show_artifact',
+      until: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    };
+    const publishing = artifacts.publish(
+      run.id,
+      'helper',
+      { title: 'Plan', html: '<!doctype html><title>Plan</title><p>hi</p>' },
+      callerKey('helper', 'call-1'),
+    );
+    await drain();
+
+    // The call settles while the page's row is still being written.
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done');
+    const settled = (await envelope) as {
+      result: { artifacts?: { title: string; version: number }[] };
+    };
+    expect(
+      itemDao.items.filter((item) => item.kind === 'show_artifact'),
+    ).toEqual([]);
+    expect(settled.result.artifacts).toEqual([
+      expect.objectContaining({ title: 'Plan', version: 1 }),
+    ]);
+
+    release();
+    expect((await publishing).status).toBe('published');
+    await drain();
+  });
+
+  it('marks every workflow run for the page tool’s run-wide wording, call edges or none, until the run is deleted', async () => {
+    const { service, artifacts } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(artifacts.inWorkflowRun(run.id)).toBe(true);
+
+    await service.deleteRun(run.id);
+    expect(artifacts.inWorkflowRun(run.id)).toBe(false);
   });
 
   it('a live fire-and-forget callee holds the run open until it settles', async () => {

@@ -21,6 +21,19 @@ export const ANSWERING_A_CALL =
   'You are answering a call from another agent. Ending your turn while async or sync calls you made are still running does NOT hand back your result: that call stays open, you are started again inside it when they finish or ask, and the reply you end THAT turn with is your result — so put your full answer in the turn that has nothing left running. Fire-and-forget calls are not waited for.';
 
 /**
+ * What a caller is told about the pages its callees publish — said in both
+ * `call_agent`'s and `await_agent`'s descriptions, since either returns the
+ * finished envelope. The broker's `withPublishedPages` is what keeps it true.
+ */
+export const CALL_RESULT_PAGES =
+  'A finished call\'s envelope — its result, or the envelope itself when the call failed — lists under "artifacts" every page the callee — or an agent it called — published with show_artifact during the call, by artifact_id, title and version. Those pages are already in the user\'s chat: point the user at them by title, and never publish them again or restate their content.';
+
+/** The same promise, as the `note` of an envelope that carries `artifacts`. */
+export const PUBLISHED_PAGES_NOTE =
+  'The pages in "artifacts" are already in the user\'s chat — they were shown there as they were published. ' +
+  'Point the user at a page by its title instead of publishing it again or restating what it shows.';
+
+/**
  * Collapse free-form node text to a single line, capped at `max` characters
  * with a trailing ellipsis when longer. Both caller-facing surfaces embed it
  * inline, where a newline or a runaway length would corrupt the surrounding

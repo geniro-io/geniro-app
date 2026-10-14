@@ -80,6 +80,15 @@ describe('unplacedStructureOf — what a live row needs anchors for', () => {
     ).toEqual([]);
   });
 
+  it('asks for no call on behalf of a page a callee published — it is drawn outside its call', () => {
+    expect(
+      unplacedStructureOf(
+        row(13, 'show_artifact', { callId: 'call-9', artifactId: 'plan' }),
+        index,
+      ),
+    ).toEqual([]);
+  });
+
   it('asks for the conversation a continuation names when its calls are above the window', () => {
     expect(
       unplacedStructureOf(

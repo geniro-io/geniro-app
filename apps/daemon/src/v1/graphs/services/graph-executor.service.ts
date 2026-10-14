@@ -1702,7 +1702,6 @@ export class GraphExecutorService
       role: string | null,
       payload: unknown,
     ) => Promise<ItemWire>,
-    liveCallOf: (nodeId: string) => string | null,
   ): void {
     const broker = this.artifacts;
     const store = this.artifactStore;
@@ -1713,13 +1712,16 @@ export class GraphExecutorService
     // scope (its database fork, its queues), and without this every pass of a
     // long-lived run added another set that only a delete would release.
     this.disposeArtifactPublishers(runId);
-    const disposers: (() => void)[] = [];
+    const disposers: (() => void)[] = [broker.markWorkflowRun(runId)];
     for (const nodeId of nodeIds) {
       disposers.push(
         broker.register(
           runId,
           nodeId,
-          async (artifact: HostArtifact): Promise<HostArtifactOutcome> => {
+          async (
+            artifact: HostArtifact,
+            caller: string,
+          ): Promise<HostArtifactOutcome> => {
             const stored = await store.publish(runId, artifact);
             if (!stored.ok) {
               return { status: 'rejected', reason: stored.reason };
@@ -1733,7 +1735,19 @@ export class GraphExecutorService
                 ? {}
                 : { summary: artifact.summary }),
             };
-            const callId = liveCallOf(nodeId);
+            // Named to the call (and every call above it) BEFORE the write:
+            // a call that settles while the row is written must still name
+            // it. A row that then fails takes the page back from every call
+            // still running; one that settled in between keeps naming it.
+            const callId = this.callBroker.callAnsweredBy(runId, caller);
+            const unnote =
+              callId === null
+                ? () => {}
+                : this.callBroker.notePublishedArtifact(runId, callId, {
+                    artifact_id: row.artifactId,
+                    title: row.title,
+                    version: row.version,
+                  });
             try {
               await persistItem(
                 nodeId,
@@ -1742,6 +1756,7 @@ export class GraphExecutorService
                 callId === null ? row : { ...row, callId },
               );
             } catch (err) {
+              unnote();
               // Logged and kept here, on the chat's rule: a persist failure
               // names an absolute database path, and the string returned goes
               // to a model whose provider is off this machine.
@@ -6148,26 +6163,6 @@ export class GraphExecutorService
         )
         .map((node) => node.id),
       persistItem,
-      // The call a node is answering, when exactly one is live on it — so a
-      // callee's page lands inside its call block, as every other row of that
-      // call does. Two at once cannot be told apart from here, and a card
-      // filed under the wrong call reads exactly like a right one, so that
-      // case stays unattributed.
-      //
-      // And only when that call is the node's ONLY live turn: a callable DAG
-      // node can hold its own turn (or a continuation) beside a callee turn,
-      // and a page published from its own turn would otherwise be stamped with
-      // the call's id and filed inside a block it has nothing to do with.
-      // `liveTurnsByNode` counts every kind of turn a node holds, callee
-      // sub-turns included.
-      (nodeId) => {
-        const live = [...subTurns]
-          .filter(([, turn]) => turn.callee.id === nodeId)
-          .map(([callId]) => callId);
-        return live.length === 1 && liveTurnsByNode.get(nodeId) === 1
-          ? (live[0] ?? null)
-          : null;
-      },
     );
     /** The node a caller conversation runs as — its pool member, once known. */
     const agentNodeOfConversation = (

@@ -5,6 +5,7 @@ import { liveRowKind } from './live-row';
 import { CHAT_LIVE_KEY, type LiveState } from './live-text';
 import { foldTaskList, readTaskAnnouncement } from './task-payload';
 import {
+  type ArtifactEntry,
   buildSubagentBlocks,
   buildTurnBlocks,
   callBlockActivity,
@@ -2280,6 +2281,74 @@ describe('groupTranscript — call blocks', () => {
         (e) => e.type === 'item' && e.item.kind === 'approval_request',
       ),
     ).toBe(true);
+  });
+
+  describe('a page a callee publishes', () => {
+    const page = (version: number) => ({
+      artifactId: 'plan',
+      version,
+      title: 'Plan',
+      key: 'k'.repeat(64),
+    });
+    const artifacts = (entries: readonly { type: string }[]) =>
+      entries.filter((e): e is ArtifactEntry => e.type === 'artifact');
+
+    it('stays in the MAIN flow under its publisher, not inside the shut call card', () => {
+      const entries = groupTranscript([
+        startCall('call-1', 'poet'),
+        tagged('status', { status: 'running' }, 'poet', 'call-1'),
+        tagged('show_artifact', page(1), 'poet', 'call-1'),
+      ]);
+
+      const block = entries.find(isBlock)!;
+      expect(artifacts(block.entries)).toEqual([]);
+      const [card] = artifacts(entries);
+      expect(card).toMatchObject({ nodeId: 'poet', latest: true });
+      expect(card!.artifact.version).toBe(1);
+    });
+
+    it('a callee of a callee’s page reaches the main flow too', () => {
+      const entries = groupTranscript([
+        startCall('call-1', 'poet'),
+        tagged('status', { status: 'running' }, 'poet', 'call-1'),
+        item(
+          'call_started',
+          {
+            callId: 'call-2',
+            callerNodeId: 'poet',
+            callerConversationId: 'call-1',
+            calleeNodeId: 'scribe',
+            mode: 'async',
+            message: 'draw it',
+          },
+          'poet',
+        ),
+        tagged('status', { status: 'running' }, 'scribe', 'call-2'),
+        tagged('show_artifact', page(1), 'scribe', 'call-2'),
+      ]);
+
+      expect(artifacts(entries).map((e) => e.nodeId)).toEqual(['scribe']);
+      for (const block of collectCallBlocks(entries)) {
+        expect(artifacts(block.entries)).toEqual([]);
+      }
+    });
+
+    it('a revision by ANY agent of the run supersedes it — one page, its newest card open', () => {
+      const entries = groupTranscript([
+        startCall('call-1', 'poet'),
+        tagged('show_artifact', page(1), 'poet', 'call-1'),
+        tagged('show_artifact', page(2), 'poet', 'call-1'),
+        item('show_artifact', page(3), 'orch'),
+      ]);
+
+      expect(
+        artifacts(entries).map((e) => [e.artifact.version, e.latest]),
+      ).toEqual([
+        [1, false],
+        [2, false],
+        [3, true],
+      ]);
+    });
   });
 
   it('the WHOLE exchange claims into the block: question/answer nest, the ok settle drops', () => {

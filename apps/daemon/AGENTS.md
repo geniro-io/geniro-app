@@ -114,6 +114,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - Caps refuse, never truncate. A refused page image refuses the whole page.
   - The serving key is registered with `registerSecret` at its mint site.
   - Workflow call-capable nodes publish too; publishers are dropped with the run, not at pass end.
+  - Ids are the run's (`<runId>/<artifactId>`), whichever node publishes. A workflow page's row names the call its publishing conversation answers (`CallBroker.callAnsweredBy`, resolved once), and that call's envelope plus every ancestor call's still running lists it under `artifacts` (`notePublishedArtifact`, noted before the write so a call settling meanwhile still names it, undone if the row fails). A page row never fetches its call as an anchor (`anchorNeedsOf` / `unplacedStructureOf`), since it is drawn outside the call's card. The tool's run-wide wording keys on `ArtifactBroker.inWorkflowRun`, never on call registration (a data-only workflow registers no calls).
 - `propose_patch`:
   - The call auto-approves; the Apply card shows even in `auto`. Caps refuse.
   - `applyHostPatch` writes only inside the run's cwd per `utils/write-containment.ts` (shared with codex `acceptEdits`): lexical and real-path, under both readings. It is rechecked at write time with `O_NOFOLLOW`; hard-linked targets are refused.

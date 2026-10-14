@@ -265,6 +265,7 @@ One home for each concern:
 - The page is framed with `sandbox="allow-scripts"` and never `allow-same-origin`. It is served by the daemon, never put in `srcdoc`, and loaded with `referrerPolicy="no-referrer"`.
 - Only theme tokens and height cross the frame, by `postMessage`, filtered on `event.source`.
 - Key the frame by `${artifactId}:${version}`.
+- A `show_artifact` row is never claimed into a call card (`UNCLAIMABLE_KINDS`): a callee's page is drawn in the main flow, and the newest-card sweep spans the whole run.
 - The panel list comes from `GET /v1/chats/:runId/artifacts` and answers empty on a run mismatch.
 - A saved file bakes in the theme and restates the CSP as `ARTIFACT_FILE_CSP`, a twin of the daemon's `artifact-page.ts`. Insert them into a parsed `<head>` (`DOMParser`), never by text splice.
 - Links are opened by the host, only for `http:`, `https:` and `mailto:` (`shared/link-schemes.ts`). Main's `guardArtifactFrameNavigations` cancels any frame navigation away from the artifact route.

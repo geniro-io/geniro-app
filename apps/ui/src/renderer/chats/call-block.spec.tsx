@@ -195,6 +195,59 @@ describe('an earlier call of a continued conversation', () => {
   });
 });
 
+describe('a page a callee published', () => {
+  it('is drawn in the caller’s flow, open, while the callee’s card stays shut', () => {
+    // REPORTED: a Researcher's plan page sat inside its shut call card, so the
+    // user watching the Manager's chat never saw it.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', mode: 'async', message: 'm' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'show_artifact',
+        {
+          artifactId: 'plan',
+          version: 2,
+          title: 'Sea plan',
+          key: 'k'.repeat(64),
+          callId: 'call-1',
+        },
+        'poet',
+      ),
+    ]);
+    act(() =>
+      root.render(
+        <>
+          {entries.map((entry) => (
+            <TranscriptEntryView
+              key={entry.type === 'item' ? entry.item.id : entry.id}
+              entry={entry}
+              nodes={NODES}
+            />
+          ))}
+        </>,
+      ),
+    );
+
+    const card = container.querySelector('[data-slot="artifact-card"]');
+    expect(card?.textContent).toContain('Sea plan');
+    expect(card?.getAttribute('data-open')).toBe('true');
+    expect(card?.closest('[data-role="call-block"]')).toBeNull();
+    expect(
+      container
+        .querySelector('[data-role="call-block"] [aria-expanded]')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+});
+
 describe('CallBlock', () => {
   /** Open the card — every one of these starts shut now. */
   function expand(): void {

@@ -25,8 +25,8 @@ export class ShowArtifactTool extends BaseMcpTool {
     return this.artifacts.canPublish(runId, nodeId);
   }
 
-  protected instructions(): string {
-    return showArtifactInstructions();
+  protected instructions({ runId }: McpListContext): string {
+    return showArtifactInstructions(this.artifacts.inWorkflowRun(runId));
   }
 
   protected inputSchema(): Record<string, unknown> {
@@ -37,7 +37,7 @@ export class ShowArtifactTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, nodeId, caller } = context;
     const artifact = readHostArtifact(args);
     // Null is the reader saying there is no page here — no document, or no
     // title to list it under. A malformed call on the chart's rule: an
@@ -47,7 +47,12 @@ export class ShowArtifactTool extends BaseMcpTool {
         "no page to show — 'html' must hold the document and 'title' must name it.",
       );
     }
-    const outcome = await this.artifacts.publish(runId, nodeId, artifact);
+    const outcome = await this.artifacts.publish(
+      runId,
+      nodeId,
+      artifact,
+      caller,
+    );
     // Same reading as its drawing siblings, and it covers `rejected` too:
     // an oversize page is an answer the agent acts on by writing a
     // smaller one, not a call it got wrong.

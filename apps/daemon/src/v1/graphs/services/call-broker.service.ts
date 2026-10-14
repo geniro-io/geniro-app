@@ -14,6 +14,8 @@ import type {
   CallEnvelope,
   CallHoldRelease,
   CallMode,
+  CallPublishedPage,
+  CallSettledResult,
   ParkQuestionInput,
   PoolSkipWire,
   ResetWakeHooks,
@@ -27,6 +29,7 @@ import {
   poolSize,
 } from '../utils/agent-pool';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
+import { PUBLISHED_PAGES_NOTE } from '../utils/callee-text';
 import {
   callerConversationOf,
   callerKey,
@@ -350,6 +353,12 @@ interface ActiveCall {
    * it changes.
    */
   reportedWaitingOn: number;
+  /**
+   * The pages published while this call ran — by its callee, or inside any
+   * call made under it — keyed by artifact id. Named in its envelope
+   * ({@link withPublishedPages}).
+   */
+  published: Map<string, CallPublishedPage>;
 }
 
 /**
@@ -410,6 +419,12 @@ interface RunCallState {
   pendingAsync: Map<string, AsyncCallEntry>;
   /** Settled calls' resume handles keyed by call id (thread continuation). */
   threads: Map<string, ThreadRecord>;
+  /**
+   * The call each SETTLED call was made in, however it settled — what a page
+   * published under a call that already ended walks up through. `threads`
+   * cannot serve: a call whose launch threw leaves no thread record.
+   */
+  settledMadeIn: Map<string, string | null>;
   /**
    * The highest call number an EARLIER daemon gave this run — what
    * {@link RunCallSeed} carried in. An id at or below it that no map holds is
@@ -786,6 +801,7 @@ export class CallBroker implements OnModuleInit {
       callSeq: Math.max(seed?.callSeq ?? 0, previous?.callSeq ?? 0),
       seededCallSeq: seed?.callSeq ?? 0,
       activeCalls: new Map(),
+      settledMadeIn: new Map(),
       pendingAsync: new Map(),
       threads,
       blockedOwners: new Map(),
@@ -1290,6 +1306,7 @@ export class CallBroker implements OnModuleInit {
       everHeld: false,
       cancelledOwing: false,
       reportedWaitingOn: 0,
+      published: new Map(),
     };
     state.activeCalls.set(callId, call);
     this.armSilenceWatch(runId, callId, call);
@@ -1358,7 +1375,7 @@ export class CallBroker implements OnModuleInit {
           recordPoolHealth(state, callee.id, outcome);
           threadMember = member;
         }
-        const envelope = toEnvelope(callId, callee.id, outcome);
+        const envelope = toEnvelope(callId, callee.id, outcome, call.published);
         if (
           envelope.status === 'error' &&
           outcome.failureClass === 'rate_limited' &&
@@ -1391,10 +1408,12 @@ export class CallBroker implements OnModuleInit {
         // reason, not the generic CALLEE_CANCELLED the cancel maps to. Never
         // over a COMPLETED turn: a stop that lost the race to the callee's own
         // ending stopped nothing, and the finished work is the caller's.
-        const final: CallEnvelope =
+        const final = withPublishedPages(
           call.failReason !== null && envelope.status !== 'ok'
             ? { status: 'error', error: call.failReason }
-            : envelope;
+            : envelope,
+          call.published,
+        );
         // The turn died with a question still parked (external cancel,
         // crash) — the timer must not fire into a settled call, and the
         // callee must not stay counted as blocked on it.
@@ -1406,6 +1425,7 @@ export class CallBroker implements OnModuleInit {
           call.silence = null;
         }
         this.dropPendingMessages(state, callId, call, callerNodeId);
+        state.settledMadeIn.set(callId, call.madeIn);
         state.activeCalls.delete(callId);
         state.capability.persistItem(callerNodeId, 'call_result', null, {
           callId,
@@ -3836,6 +3856,71 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * The call `caller`'s conversation is answering right now, or null when it
+   * answers none — a node's own conversation, or a callee carrying on after
+   * its call settled.
+   */
+  callAnsweredBy(runId: string, caller: string): string | null {
+    const state = this.runs.get(runId);
+    return state ? (callEntryInConversation(state, caller)?.[0] ?? null) : null;
+  }
+
+  /**
+   * A page is being published inside call `callId` (see
+   * {@link callAnsweredBy}): record it on that call AND on every call above it
+   * still running, so each caller up the chain is told in its envelope — a
+   * page a callee of a callee publishes is what the run's root agent has to
+   * point the user at.
+   *
+   * Answers the undo, for a page whose transcript row then could not be
+   * written: it puts back what each call named before, unless a newer page
+   * replaced this one meanwhile.
+   */
+  notePublishedArtifact(
+    runId: string,
+    callId: string,
+    page: CallPublishedPage,
+  ): () => void {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return () => {};
+    }
+    const replaced: [ActiveCall, CallPublishedPage | undefined][] = [];
+    // `madeIn` cannot loop — a call is made inside one already live — but a
+    // walk over shared state stays bounded regardless.
+    const seen = new Set<string>();
+    let next: string | null = callId;
+    while (next !== null && !seen.has(next)) {
+      seen.add(next);
+      const call = state.activeCalls.get(next);
+      if (call) {
+        replaced.push([call, call.published.get(page.artifact_id)]);
+        // Set on an existing key keeps its place: pages are listed in the
+        // order they first appeared, each at its newest version.
+        call.published.set(page.artifact_id, page);
+        next = call.madeIn;
+      } else {
+        // A call that settled already — a fire-and-forget callee outlives the
+        // call that launched it — has nobody left to tell, but a call above it
+        // may still be running.
+        next = state.settledMadeIn.get(next) ?? null;
+      }
+    }
+    return () => {
+      for (const [call, before] of replaced) {
+        if (call.published.get(page.artifact_id) !== page) {
+          continue;
+        }
+        if (before === undefined) {
+          call.published.delete(page.artifact_id);
+        } else {
+          call.published.set(page.artifact_id, before);
+        }
+      }
+    };
+  }
+
+  /**
    * The callee's turn has ENDED — its handle settled — though the call stays
    * open while the executor finishes the turn's bookkeeping (see
    * {@link ActiveCall.turnEnded}). Called by the executor at that one seam, which
@@ -4670,6 +4755,7 @@ function toEnvelope(
   callId: string,
   calleeId: string,
   outcome: CalleeTurnOutcome,
+  published: ReadonlyMap<string, CallPublishedPage>,
 ): CallEnvelope {
   if (outcome.status === 'completed') {
     const stillOut = outcome.delegatesStillOut ?? 0;
@@ -4687,19 +4773,19 @@ function toEnvelope(
             `This call is NOT finished: ${calleeId} ended with ${callsOut} call(s) of its own still running, and this call could not wait for them any longer. Continue the conversation (call_agent with thread: '${callId}') to collect what they report.`,
           ]
         : []),
+      ...(published.size > 0 ? [PUBLISHED_PAGES_NOTE] : []),
     ];
-    return {
-      status: 'ok',
-      result: {
-        call_id: callId,
-        agent: calleeId,
-        ...poolEnvelopeFields(outcome),
-        text: outcome.finalText ?? '',
-        ...(stillOut > 0 ? { delegates_still_running: stillOut } : {}),
-        ...(callsOut > 0 ? { calls_still_running: callsOut } : {}),
-        ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
-      },
+    const result: CallSettledResult = {
+      call_id: callId,
+      agent: calleeId,
+      ...poolEnvelopeFields(outcome),
+      text: outcome.finalText ?? '',
+      ...(stillOut > 0 ? { delegates_still_running: stillOut } : {}),
+      ...(callsOut > 0 ? { calls_still_running: callsOut } : {}),
+      ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
+      ...(published.size > 0 ? { artifacts: [...published.values()] } : {}),
     };
+    return { status: 'ok', result };
   }
   if (outcome.status === 'cancelled') {
     return {
@@ -4712,6 +4798,20 @@ function toEnvelope(
     error: calleeFailedEnvelopeError(outcome, callId),
     ...poolEnvelopeFields(outcome),
   };
+}
+
+/**
+ * A FAILED call's envelope naming the pages it published before it failed —
+ * they stay in the user's chat. A completed call names them in its result
+ * ({@link toEnvelope}).
+ */
+function withPublishedPages(
+  envelope: CallEnvelope,
+  published: ReadonlyMap<string, CallPublishedPage>,
+): CallEnvelope {
+  return envelope.status === 'error' && published.size > 0
+    ? { ...envelope, artifacts: [...published.values()] }
+    : envelope;
 }
 
 /** A settled call's measured cache facts, as optional `call_result` keys. */

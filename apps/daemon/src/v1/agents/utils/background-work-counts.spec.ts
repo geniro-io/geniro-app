@@ -50,6 +50,18 @@ describe('BackgroundWorkCounts', () => {
     ]);
   });
 
+  it('keeps two nodes’ shells apart when their per-process work ids collide', () => {
+    const { subject } = counts();
+    subject.record('r1', shellOpen('bash_1'), 'engineer');
+    subject.record('r1', shellOpen('bash_1'), 'qa');
+
+    subject.record('r1', shellClose('bash_1'), 'engineer');
+    expect(subject.shellsOpen('r1')).toBe(1);
+
+    subject.noteShellClosed('r1', 'bash_1', 'qa');
+    expect(subject.shellsOpen('r1')).toBe(0);
+  });
+
   it('announces a duplicate close only once — claude reports an ending twice', () => {
     const { subject, announced } = counts();
     subject.record('r1', shellOpen('b1'));

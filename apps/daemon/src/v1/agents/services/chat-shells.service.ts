@@ -363,7 +363,7 @@ export class ChatShellsService {
         killedByUser: true,
       },
     });
-    this.chats.noteShellClosed(runId, shell.workId);
+    this.chats.noteShellClosed(runId, shell.workId, shell.nodeId);
   }
 }
 

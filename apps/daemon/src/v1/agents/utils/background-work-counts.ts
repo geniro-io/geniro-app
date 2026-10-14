@@ -22,6 +22,10 @@ export type BackgroundCountsPatch =
  * reach the held state and its shelf never saw a delegate launched earlier than
  * the loaded page.
  *
+ * Shells are keyed by the node that opened them as well: a work id is the CLI's
+ * per-process counter (`bash_1`), so two agents of one workflow can each have
+ * the same id out. Delegate ids are tool-use ids and unique.
+ *
  * SETS of ids rather than counters: a CLI is free to report one unit's end on
  * both of its terminal channels (claude does, 7ms apart), and a counter would go
  * negative or latch on the double. For the same reason a close announces only
@@ -41,15 +45,18 @@ export class BackgroundWorkCounts {
     ) => void,
   ) {}
 
-  /** Apply one agent event; anything that is not a bracket is ignored. */
-  record(runId: string, event: AgentEvent): void {
+  /**
+   * Apply one agent event; anything that is not a bracket is ignored. `nodeId`
+   * is the workflow node the event came from, null for a chat.
+   */
+  record(runId: string, event: AgentEvent, nodeId: string | null = null): void {
     if (event.type === 'shell_open') {
-      add(this.shells, runId, event.workId);
+      add(this.shells, runId, shellKey(nodeId, event.workId));
       this.announce(runId, { shellsOpen: this.shellsOpen(runId) });
       return;
     }
     if (event.type === 'shell_info') {
-      this.noteShellClosed(runId, event.workId);
+      this.noteShellClosed(runId, event.workId, nodeId);
       return;
     }
     if (event.type !== 'subagent_info' || event.backgroundOpen === null) {
@@ -70,8 +77,15 @@ export class BackgroundWorkCounts {
    * kill. A shell whose open recorded no work id is a no-op: the set is keyed by
    * that id, so there is nothing to remove.
    */
-  noteShellClosed(runId: string, workId: string | null): void {
-    if (workId !== null && remove(this.shells, runId, workId)) {
+  noteShellClosed(
+    runId: string,
+    workId: string | null,
+    nodeId: string | null = null,
+  ): void {
+    if (
+      workId !== null &&
+      remove(this.shells, runId, shellKey(nodeId, workId))
+    ) {
       this.announce(runId, { shellsOpen: this.shellsOpen(runId) });
     }
   }
@@ -104,6 +118,10 @@ export class BackgroundWorkCounts {
   isDelegateOut(runId: string, id: string): boolean {
     return this.delegates.get(runId)?.has(id) ?? false;
   }
+}
+
+function shellKey(nodeId: string | null, workId: string): string {
+  return `${nodeId ?? ''}\u0000${workId}`;
 }
 
 function add(map: Map<string, Set<string>>, runId: string, id: string): void {

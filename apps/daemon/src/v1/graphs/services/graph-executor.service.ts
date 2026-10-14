@@ -2692,7 +2692,7 @@ export class GraphExecutorService
       }
       for (const { event, owner } of closes) {
         // The count comes down with the row that states the ending.
-        this.backgroundWork.record(runId, event);
+        this.backgroundWork.record(runId, event, owner.nodeId);
         const mapped = mapEventToItem(event);
         if (mapped) {
           await persistItem(owner.nodeId, mapped.kind, mapped.role, {
@@ -3265,6 +3265,8 @@ export class GraphExecutorService
         nodeId,
         status: 'running',
         ...(callId ? { callId } : {}),
+        // Not a turn starting: `pausedSpansFrom` ends a lost card only on that.
+        offTurn: true,
       });
     };
 
@@ -4047,7 +4049,7 @@ export class GraphExecutorService
           // (see `PartialStreamService.endThinking`). Kept in step with the
           // chat path, which does the same at its own persist seam.
           this.partials.endThinking(runId, ownerKey, node.id);
-          this.backgroundWork.record(runId, event);
+          this.backgroundWork.record(runId, event, node.id);
           const mapped = mapEventToItem(event);
           // A compaction the agent finished: stamped onto its summary, or
           // written on its own ahead of this row — nothing else records one.
@@ -4238,7 +4240,7 @@ export class GraphExecutorService
           if (this.deleting.has(runId)) {
             return;
           }
-          this.backgroundWork.record(runId, event);
+          this.backgroundWork.record(runId, event, node.id);
           const mapped = mapEventToItem(event);
           const settles = terminalStatus(event) !== null;
           const callId = callContext ? callContext.callId : null;

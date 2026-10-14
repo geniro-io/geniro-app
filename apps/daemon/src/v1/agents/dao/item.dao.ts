@@ -10,6 +10,7 @@ import type {
   RunPreview,
   SeqRange,
 } from '../chat.types';
+import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
 import { messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
@@ -591,22 +592,78 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * The rows a run's working STRETCHES are read from — every `status` and
-   * `turn_complete` row, in order, with its node and time (`utils/active-spans`).
-   * Projected: both kinds are a handful of rows beside a transcript of thousands.
+   * The rows a run's working STRETCHES are read from — its turn boundaries,
+   * cards and background units (`SPAN_ROW_KINDS`), in `seq` order, with node and
+   * time (`utils/active-spans`).
+   *
+   * A card's payload is projected down to the two fields the fold reads: an
+   * `approval_request` carries the plan, patch or question set it asks about,
+   * and every totals read would otherwise parse them all to find an id.
    */
   async turnSpanRows(
     runId: string,
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'kind' | 'nodeId' | 'createdAt' | 'payload'>[]> {
-    return this.getRepo(txEm).find(
-      { runId, kind: { $in: ['status', 'turn_complete'] } },
-      {
-        orderBy: { seq: 'asc' },
-        fields: ['kind', 'nodeId', 'createdAt', 'payload'],
-        disableIdentityMap: true,
-      },
-    );
+    const [rows, cards] = await Promise.all([
+      this.getRepo(txEm).find(
+        {
+          runId,
+          kind: {
+            $in: SPAN_ROW_KINDS.filter((kind) => !SPAN_CARD_KINDS.has(kind)),
+          },
+        },
+        {
+          orderBy: { seq: 'asc' },
+          fields: ['seq', 'kind', 'nodeId', 'createdAt', 'payload'],
+          disableIdentityMap: true,
+        },
+      ),
+      (txEm ?? this.em.fork())
+        .getKysely<ChatTextDatabase>({ convertValues: false })
+        .selectFrom('items')
+        .select((eb) => {
+          const field = (path: string) =>
+            eb.fn<string | null>('json_extract', [
+              eb
+                .case()
+                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                .then(eb.ref('payload'))
+                .else(eb.val('{}'))
+                .end(),
+              eb.val(path),
+            ]);
+          return [
+            'seq',
+            'kind',
+            'node_id',
+            'created_at',
+            field('$.id').as('card_id'),
+            field('$.callId').as('call_id'),
+          ];
+        })
+        .where('run_id', '=', runId)
+        .where('deleted_at', 'is', null)
+        .where('kind', 'in', [...SPAN_CARD_KINDS])
+        .orderBy('seq', 'asc')
+        .execute(),
+    ]);
+    return [
+      ...rows,
+      ...cards.map((card) => ({
+        seq: card.seq,
+        kind: card.kind,
+        nodeId: card.node_id,
+        createdAt: new Date(card.created_at),
+        payload: JSON.stringify({ id: card.card_id, callId: card.call_id }),
+      })),
+    ]
+      .sort((a, b) => a.seq - b.seq)
+      .map(({ kind, nodeId, createdAt, payload }) => ({
+        kind,
+        nodeId,
+        createdAt,
+        payload,
+      }));
   }
 
   /**

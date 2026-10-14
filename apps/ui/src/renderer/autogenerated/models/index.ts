@@ -2191,11 +2191,17 @@ export interface ChatTotalsDto {
      */
     totals: ChatTotals;
     /**
-     * on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock
+     * on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working, with every `pausedSpans` stretch already cut out — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock
      * @type {Array<ActiveSpan>}
      * @memberof ChatTotalsDto
      */
     activeSpans: Array<ActiveSpan>;
+    /**
+     * on a WORKFLOW run, where it waited on the user — an approval or question card open with no background shell or sub-agent running. The header clock stands still through them, the open one included. Always empty for a chat
+     * @type {Array<PausedSpan>}
+     * @memberof ChatTotalsDto
+     */
+    pausedSpans: Array<PausedSpan>;
 }
 /**
  * 
@@ -3973,6 +3979,25 @@ export interface OpenShell {
      * @memberof OpenShell
      */
     startedAt: number;
+}
+/**
+ * 
+ * @export
+ * @interface PausedSpan
+ */
+export interface PausedSpan {
+    /**
+     * 
+     * @type {number}
+     * @memberof PausedSpan
+     */
+    startMs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof PausedSpan
+     */
+    endMs: number | null;
 }
 /**
  * 

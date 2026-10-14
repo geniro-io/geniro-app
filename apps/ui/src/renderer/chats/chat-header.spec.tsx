@@ -655,6 +655,38 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
     expect(metrics(el)).toContain('10m 20s');
   });
 
+  it('freezes a WORKFLOW’s clock while a card waits with nothing running, however many turns are open', () => {
+    // A Manager awaiting its Engineer, who is parked on a question.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-04T00:01:00Z'));
+    const T = Date.parse('2026-08-04T00:00:00.000Z');
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="needs-input"
+        turnCount={0}
+        activeSpans={[]}
+        pausedSpans={[{ startMs: T + 20_000, endMs: Number.POSITIVE_INFINITY }]}
+        openTurns={[
+          { agentKey: 'manager', startedAt: T, parkedMs: 0, openSince: [] },
+          {
+            agentKey: 'engineer',
+            startedAt: T + 10_000,
+            parkedMs: 0,
+            openSince: [T + 20_000],
+          },
+        ]}
+      />,
+    );
+
+    expect(metrics(el)).toBe('20s');
+
+    act(() => {
+      vi.advanceTimersByTime(3_600_000);
+    });
+    expect(metrics(el)).toBe('20s');
+  });
+
   it('stands still once the run has no turn in flight', () => {
     // The settled reading is the sum and nothing else — this pins that the
     // ticking is driven by the open turn, not by the component being mounted.

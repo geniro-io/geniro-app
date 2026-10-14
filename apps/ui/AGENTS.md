@@ -225,6 +225,7 @@ One home for each concern:
 - `chats/geniro-tool.ts` is the one place host tool names are matched. A composing card of an unknown kind draws nothing.
 - While a turn runs there is one clock, the worked total. Do not reintroduce `ElapsedTime`.
 - Turn duration uses the CLI's own figure where one exists. A thread total is the sum of its turns, never `updatedAt - createdAt`.
+- A workflow's header clock (`clockMs`) is one formula for any number of open turns: the union of working stretches minus `pausedSpans`, the time a card waited on the user with no background shell or delegate running. Both come from the daemon's totals route (`utils/active-spans.ts`). It is re-read when the run's `awaiting`, shells-out or delegates-out flip, or a row they are folded from lands (`movesPausedSpans`). Never fold them from loaded `items`.
 
 **Calls, instances and delegates:**
 

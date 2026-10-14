@@ -12,16 +12,29 @@ function Probe({
   runId,
   settledTurns,
   client = null,
+  clockKey,
 }: {
   api: Parameters<typeof useChatTotals>[0];
   runId: string | null;
   settledTurns: number;
   client?: Parameters<typeof useChatTotals>[3];
+  clockKey?: string;
 }): React.JSX.Element {
-  const { costUsd, costedTurns, inputTokens, outputTokens, cacheTokens } =
-    useChatTotals(api, runId, settledTurns, client);
+  const {
+    costUsd,
+    costedTurns,
+    inputTokens,
+    outputTokens,
+    cacheTokens,
+    pausedSpans,
+  } = useChatTotals(api, runId, settledTurns, client, clockKey);
   return (
     <>
+      <span data-slot="paused">
+        {pausedSpans === null
+          ? 'none'
+          : pausedSpans.map((s) => `${s.startMs}-${s.endMs}`).join(',')}
+      </span>
       <span data-slot="spend">{costUsd === null ? 'none' : costUsd}</span>
       <span data-slot="costed">
         {costedTurns === null ? 'unknown' : costedTurns}
@@ -82,7 +95,9 @@ function apiReturning(
   return {
     readChatTotals: vi.fn<ChatsApi['readChatTotals']>().mockResolvedValue({
       totals: { costUsd, costedTurns },
-    } as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
+      activeSpans: [],
+      pausedSpans: [],
+    } as unknown as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
   };
 }
 
@@ -130,7 +145,9 @@ describe('useChatTotals', () => {
           cacheReadTokens: 36_300_000,
           cacheCreationTokens: 767_400,
         },
-      } as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
+        activeSpans: [],
+        pausedSpans: [],
+      } as unknown as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
     };
 
     const el = mount({ api, runId: 'run-1', settledTurns: 0 });
@@ -152,7 +169,9 @@ describe('useChatTotals', () => {
           cacheReadTokens: 40,
           cacheCreationTokens: null,
         },
-      } as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
+        activeSpans: [],
+        pausedSpans: [],
+      } as unknown as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
     };
     const el = mount({ api: readOnly, runId: 'run-1', settledTurns: 0 });
     await settle();
@@ -172,7 +191,9 @@ describe('useChatTotals', () => {
           cacheReadTokens: null,
           cacheCreationTokens: null,
         },
-      } as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
+        activeSpans: [],
+        pausedSpans: [],
+      } as unknown as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
     };
     const again = mount({ api: neither, runId: 'run-2', settledTurns: 0 });
     await settle();
@@ -217,6 +238,51 @@ describe('useChatTotals', () => {
     expect(api.readChatTotals).toHaveBeenCalledTimes(2);
   });
 
+  it('re-asks when the clock key changes — a wait starting, then ending', async () => {
+    // A card opening is no settled turn; without this the header's paused
+    // stretch would arrive only at the next settle and the clock ticks on.
+    const api = apiReturning(1.25);
+    mount({ api, runId: 'run-1', settledTurns: 2, clockKey: '|false|false' });
+    await settle();
+
+    rerender({
+      api,
+      runId: 'run-1',
+      settledTurns: 2,
+      clockKey: 'question|false|false',
+    });
+    await settle();
+    expect(api.readChatTotals).toHaveBeenCalledTimes(2);
+
+    rerender({
+      api,
+      runId: 'run-1',
+      settledTurns: 2,
+      clockKey: '|false|false',
+    });
+    await settle();
+    expect(api.readChatTotals).toHaveBeenCalledTimes(3);
+  });
+
+  it('reads a paused stretch still open as running to Infinity', async () => {
+    const api = {
+      readChatTotals: vi.fn<ChatsApi['readChatTotals']>().mockResolvedValue({
+        totals: { costUsd: null, costedTurns: 0 },
+        activeSpans: [],
+        pausedSpans: [
+          { startMs: 10, endMs: 20 },
+          { startMs: 30, endMs: null },
+        ],
+      } as unknown as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
+    };
+    const el = mount({ api, runId: 'run-1', settledTurns: 0 });
+    await settle();
+
+    expect(el.querySelector('[data-slot="paused"]')?.textContent).toBe(
+      '10-20,30-Infinity',
+    );
+  });
+
   it('re-asks when the daemon says this run’s FETCHED spend moved', async () => {
     // cursor's price is fetched from Cursor on the daemon's own cadence, which
     // has no reason to coincide with a turn ending — so without this the figure
@@ -229,7 +295,9 @@ describe('useChatTotals', () => {
 
     api.readChatTotals.mockResolvedValue({
       totals: { costUsd: 4.89, costedTurns: 1 },
-    } as Awaited<ReturnType<ChatsApi['readChatTotals']>>);
+      activeSpans: [],
+      pausedSpans: [],
+    } as unknown as Awaited<ReturnType<ChatsApi['readChatTotals']>>);
     await announce({ runId: 'run-1', spendUpdatedAt: 1_788_358_173_608 });
 
     expect(api.readChatTotals).toHaveBeenCalledTimes(2);

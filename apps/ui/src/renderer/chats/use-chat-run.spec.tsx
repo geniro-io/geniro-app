@@ -1535,6 +1535,7 @@ describe('useChatRun', () => {
     expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
       limit: HISTORY_PAGE,
+      conversation: 'root',
     });
   });
 
@@ -2056,6 +2057,7 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
       runId: 'r1',
       limit: 1000,
       beforeSeq: 2050,
+      conversation: 'root',
     });
     expect(seqs(harness)).toEqual(range(1050, 2049));
     expect(harness.state().awayFromTail).toBe(true);
@@ -2389,6 +2391,44 @@ describe('useChatRun — anchors', () => {
       await harness.state().loadAround(40);
     });
     expect(harness.state().anchors.map((item) => item.seq)).toEqual([30]);
+  });
+
+  it("asks nothing for a live callee result whose tool call the call's rows already hold", async () => {
+    const { client, emitItem } = makeClient();
+    chatApi.listRunItems.mockResolvedValue(page([callStarted(3, 'call-7')]));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    const callee = (
+      seq: number,
+      kind: ChatItem['kind'],
+      payload: Record<string, unknown>,
+    ): ChatItem => ({
+      id: `r1-x${seq}`,
+      runId: 'r1',
+      nodeId: 'qa',
+      seq,
+      kind,
+      role: null,
+      payload: { ...payload, callId: 'call-7' },
+      createdAt: 'now',
+      inCall: 'call-7',
+    });
+    const asked = chatApi.listRunItems.mock.calls.length;
+
+    await act(async () => {
+      emitItem(callee(10, 'tool_call', { id: 't1', name: 'Bash' }));
+    });
+    // A row of the run's own flow in between: the window moves, and the index
+    // of what it can place is rebuilt.
+    await act(async () => {
+      emitItem(msg('r1', 11, 'assistant', 'waiting on qa'));
+    });
+    await act(async () => {
+      emitItem(callee(12, 'tool_result', { id: 't1' }));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+
+    expect(chatApi.listRunItems.mock.calls.length).toBe(asked);
   });
 
   it('asks for the anchors of a live row whose call started above the window — once', async () => {
@@ -2783,14 +2823,24 @@ describe('useChatRun — anchors', () => {
     });
     expect(harness.state().awayFromTail).toBe(true);
     expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
-      expect.objectContaining({ afterSeq: 10, take: 'oldest', probe: 'true' }),
+      expect.objectContaining({
+        afterSeq: 10,
+        take: 'oldest',
+        probe: 'true',
+        conversation: 'root',
+      }),
     );
 
     await act(async () => {
       await harness.state().loadNewer();
     });
     expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
-      expect.objectContaining({ limit: 3, take: 'oldest', probe: 'true' }),
+      expect.objectContaining({
+        limit: 3,
+        take: 'oldest',
+        probe: 'true',
+        conversation: 'root',
+      }),
     );
   });
 
@@ -2856,6 +2906,7 @@ describe('useChatRun — the page size', () => {
     expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
       limit: 2,
+      conversation: 'root',
     });
     // A FULL page of the size asked for may have more behind it.
     expect(harness.state().hasOlder).toBe(true);
@@ -2868,7 +2919,335 @@ describe('useChatRun — the page size', () => {
       runId: 'r1',
       limit: 2,
       beforeSeq: 10,
+      conversation: 'root',
     });
     expect(harness.state().hasOlder).toBe(false);
+  });
+});
+
+describe('useChatRun — a workflow run’s calls', () => {
+  /** A row the daemon filed under a call (`inCall`). */
+  function inCall(item: ChatItem, callId: string): ChatItem {
+    return { ...item, inCall: callId };
+  }
+
+  it('folds a live row of a call beside the window, never into it', async () => {
+    const { client, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitItem(msg('r1', 1, 'assistant', 'splitting the work'));
+      emitItem(inCall(msg('r1', 2, 'assistant', 'on it'), 'call-1'));
+    });
+
+    expect(harness.state().items.map((item) => item.id)).toEqual(['r1-i1']);
+    expect(harness.state().anchors.map((item) => item.id)).toEqual(['r1-i2']);
+  });
+
+  it('files the rows a tail catch-up brings back by the conversation they belong to', async () => {
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValueOnce([
+      msg('r1', 10, 'assistant', 'a'),
+      msg('r1', 11, 'assistant', 'b'),
+    ]);
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    // A jump that lands with a row past it, so the reader is away from the tail…
+    chatApi.listRunItems
+      .mockResolvedValueOnce([
+        msg('r1', 10, 'assistant', 'a'),
+        msg('r1', 11, 'assistant', 'b'),
+      ])
+      .mockResolvedValueOnce([msg('r1', 12, 'assistant', 'c')]);
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().awayFromTail).toBe(true);
+    // …and the page forward that reaches it, then the whole run's rows since.
+    chatApi.listRunItems
+      .mockResolvedValueOnce([msg('r1', 12, 'assistant', 'c')])
+      .mockResolvedValueOnce([
+        msg('r1', 13, 'assistant', 'caller'),
+        inCall(msg('r1', 14, 'assistant', 'callee'), 'call-1'),
+      ]);
+
+    await act(async () => {
+      await harness.state().loadNewer();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      afterSeq: 12,
+    });
+    expect(harness.state().items.map((item) => item.seq)).toEqual([
+      10, 11, 12, 13,
+    ]);
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([14]);
+  });
+
+  it('has an opened card read again once the window is back at the tail — its rows from the jump were skipped', async () => {
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValueOnce([
+      msg('r1', 10, 'assistant', 'a'),
+      msg('r1', 11, 'assistant', 'b'),
+    ]);
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValueOnce([
+      inCall(msg('r1', 9, 'assistant', 'looking'), 'call-1'),
+    ]);
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+    });
+    chatApi.listRunItems
+      .mockResolvedValueOnce([
+        msg('r1', 10, 'assistant', 'a'),
+        msg('r1', 11, 'assistant', 'b'),
+      ])
+      .mockResolvedValueOnce([msg('r1', 12, 'assistant', 'c')]);
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().callConversations.stateOf('call-1')).not.toBeNull();
+    chatApi.listRunItems
+      .mockResolvedValueOnce([msg('r1', 12, 'assistant', 'c')])
+      .mockResolvedValueOnce([]);
+
+    await act(async () => {
+      await harness.state().loadNewer();
+    });
+
+    expect(harness.state().callConversations.stateOf('call-1')).toBeNull();
+  });
+
+  it("reads an opened card's conversation once, then its older page below the oldest row held", async () => {
+    const { client } = makeClient();
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValueOnce([
+      inCall(msg('r1', 5, 'assistant', 'looking'), 'call-1'),
+      inCall(msg('r1', 7, 'assistant', 'found it'), 'call-1'),
+    ]);
+
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: 2,
+      call: 'call-1',
+    });
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([5, 7]);
+    expect(harness.state().callConversations.stateOf('call-1')).toMatchObject({
+      loading: false,
+      hasOlder: true,
+    });
+
+    const asked = chatApi.listRunItems.mock.calls.length;
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+    });
+    expect(chatApi.listRunItems.mock.calls.length).toBe(asked);
+
+    chatApi.listRunItems.mockResolvedValueOnce([
+      inCall(msg('r1', 3, 'user', 'look again'), 'call-1'),
+    ]);
+    await act(async () => {
+      harness.state().callConversations.load('call-1', true);
+      await Promise.resolve();
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: 2,
+      call: 'call-1',
+      beforeSeq: 5,
+    });
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([3, 5, 7]);
+    expect(harness.state().callConversations.stateOf('call-1')).toMatchObject({
+      hasOlder: false,
+    });
+  });
+
+  it('drops an older page that fails after the thread was opened again', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValueOnce([
+      inCall(msg('r1', 5, 'assistant', 'looking'), 'call-1'),
+      inCall(msg('r1', 7, 'assistant', 'found it'), 'call-1'),
+    ]);
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+    });
+    let fail: (err: Error) => void = () => undefined;
+    chatApi.listRunItems.mockImplementationOnce(
+      () =>
+        new Promise<ChatItem[]>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    act(() => {
+      harness.state().callConversations.load('call-1', true);
+    });
+
+    await open(harness, 'r1');
+    await act(async () => {
+      fail(new Error('daemon down'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The re-open forgot what the card had read; the old page's failure must
+    // not put that state back.
+    expect(harness.state().callConversations.stateOf('call-1')).toBeNull();
+  });
+
+  it('keeps the button an older page was asked from when that page fails', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValueOnce([
+      inCall(msg('r1', 5, 'assistant', 'looking'), 'call-1'),
+      inCall(msg('r1', 7, 'assistant', 'found it'), 'call-1'),
+    ]);
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+    });
+    chatApi.listRunItems.mockRejectedValueOnce(new Error('daemon down'));
+
+    await act(async () => {
+      harness.state().callConversations.load('call-1', true);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(harness.state().callConversations.stateOf('call-1')).toMatchObject({
+      loading: false,
+      failed: false,
+      hasOlder: true,
+    });
+  });
+
+  it("reads an opened card's conversation again when the open thread is opened again", async () => {
+    const { client } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValueOnce([
+      inCall(msg('r1', 5, 'assistant', 'looking'), 'call-1'),
+    ]);
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+    });
+
+    // A re-select runs the whole open again, and its rows go with it.
+    await open(harness, 'r1');
+    expect(harness.state().callConversations.stateOf('call-1')).toBeNull();
+    chatApi.listRunItems.mockResolvedValueOnce([
+      inCall(msg('r1', 5, 'assistant', 'looking'), 'call-1'),
+    ]);
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: HISTORY_PAGE,
+      call: 'call-1',
+    });
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([5]);
+  });
+
+  it('parks a failed read rather than asking again, and asks once more on a retry', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockRejectedValueOnce(new Error('daemon down'));
+
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(harness.state().callConversations.stateOf('call-1')).toMatchObject({
+      loading: false,
+      failed: true,
+    });
+    const asked = chatApi.listRunItems.mock.calls.length;
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+    });
+    expect(chatApi.listRunItems.mock.calls.length).toBe(asked);
+
+    chatApi.listRunItems.mockResolvedValueOnce([
+      inCall(msg('r1', 5, 'assistant', 'looking'), 'call-1'),
+    ]);
+    await act(async () => {
+      harness.state().callConversations.retry('call-1');
+      await Promise.resolve();
+    });
+
+    expect(chatApi.listRunItems.mock.calls.length).toBe(asked + 1);
+    expect(harness.state().callConversations.stateOf('call-1')).toMatchObject({
+      failed: false,
+    });
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([5]);
+  });
+
+  it('drops a card read that lands after another thread opened', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    let land: (rows: ChatItem[]) => void = () => undefined;
+    chatApi.listRunItems.mockImplementationOnce(
+      () =>
+        new Promise<ChatItem[]>((resolve) => {
+          land = resolve;
+        }),
+    );
+    act(() => {
+      harness.state().callConversations.load('call-1', false);
+    });
+
+    await open(harness, 'r2');
+    await act(async () => {
+      land([inCall(msg('r1', 5, 'assistant', 'late'), 'call-1')]);
+      await Promise.resolve();
+    });
+
+    expect(harness.state().anchors).toEqual([]);
+    expect(harness.state().callConversations.stateOf('call-1')).toBeNull();
+  });
+
+  it("forgets the cards' conversations when another thread opens", async () => {
+    const { client } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValueOnce([
+      inCall(msg('r1', 5, 'assistant', 'looking'), 'call-1'),
+    ]);
+    await act(async () => {
+      harness.state().callConversations.load('call-1', false);
+      await Promise.resolve();
+    });
+
+    await open(harness, 'r2');
+
+    expect(harness.state().anchors).toEqual([]);
+    expect(harness.state().callConversations.stateOf('call-1')).toBeNull();
   });
 });

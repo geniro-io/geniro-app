@@ -2413,6 +2413,12 @@ const CALL_FOLLOWUP_KINDS = new Set<ChatItem['kind']>([
  * a shut call card (or a card nested in one) nobody would see it. Left here,
  * a revision anywhere in the run also folds the older card, since the
  * newest-card sweep runs over this flow.
+ *
+ * TWIN PARSER: `callMembershipOf` in
+ * apps/daemon/src/v1/agents/utils/call-membership.ts decides the same claim on
+ * the daemon, which serves a workflow run's rows one conversation at a time on
+ * its answer. A kind moved between these sets moves there too, with a bump of
+ * its `CALL_MEMBERSHIP_VERSION` so the rows already stamped are stamped again.
  */
 const UNCLAIMABLE_KINDS = new Set<ChatItem['kind']>([
   'call_started',
@@ -3350,6 +3356,14 @@ function isPoolHandOff(item: ChatItem): boolean {
   return typeof member === 'number' && Number.isInteger(member);
 }
 
+/**
+ * TWIN PARSER: `CARD_KINDS` / `cardRowsFor` in
+ * apps/daemon/src/v1/agents/services/chat-history.service.ts pick the rows a
+ * FOLDED card is built from on a workflow run, whose window never holds a
+ * callee's rows: its status rows, task lists, turn ends and notices, and its
+ * newest row, newest words and newest named tool call. A reading taken from
+ * anything else goes empty there until it is added on that side.
+ */
 function buildCallBlock(
   callId: string,
   shell: CallShell,

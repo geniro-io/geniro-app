@@ -25,6 +25,11 @@ import type { ItemKind } from '../runs.types';
 // one side of a page. On `(runId, seq)` that is a walk over the whole run; on
 // `kind` alone it is a walk over every run's rows of that kind.
 @Index({ properties: ['runId', 'kind', 'seq'] })
+// A workflow run is paged one conversation at a time (`inCall`), and a page of
+// its own flow asks each call it shows for the few rows of a few kinds its card
+// is drawn from.
+@Index({ properties: ['runId', 'inCall', 'seq'] })
+@Index({ properties: ['runId', 'inCall', 'kind', 'seq'] })
 export class Item extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();
@@ -66,4 +71,14 @@ export class Item extends TimestampsEntity {
    */
   @Property({ type: 'text', nullable: true })
   searchText: string | null = null;
+
+  /**
+   * The call whose card this row is drawn in, or `OUTSIDE_ANY_CALL` (`''`) for
+   * the run's own flow — `utils/call-membership.ts`. NULL means no build has
+   * stamped the row yet: the column was added to a table that already held
+   * every row, and `ItemCallIndexService.ensureIndexed` fills those per run
+   * before a conversation read trusts it.
+   */
+  @Property({ type: 'string', nullable: true })
+  inCall: string | null = null;
 }

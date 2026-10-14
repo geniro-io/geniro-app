@@ -4,6 +4,10 @@ import {
   CalleeContextResolverContext,
 } from './call-context';
 import {
+  CallConversationContext,
+  type CallConversationLoader,
+} from './call-conversation';
+import {
   type CallMessageChannel,
   CallMessageChannelContext,
 } from './call-message-box';
@@ -97,6 +101,7 @@ export function ChatProviders({
   delegatesOut,
   transcript,
   loadAttachment = null,
+  callConversations = null,
   children,
 }: {
   /**
@@ -142,31 +147,39 @@ export function ChatProviders({
   artifactUrl: ArtifactUrlBuilder | null;
   /** Read images attached to this conversation, including in the workflow dock. */
   loadAttachment?: AttachmentLoader | null;
+  /**
+   * How an opened call card reads its own conversation — see
+   * `CallConversationContext`. Here for `callContext`'s reason: a call block is
+   * drawn from three subtrees. Absent where the window holds every row.
+   */
+  callConversations?: CallConversationLoader | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
     <CliLoginContext.Provider value={signIn}>
       <RetryContext.Provider value={retry}>
         <CalleeContextResolverContext.Provider value={callContext}>
-          <CallMessageChannelContext.Provider value={callChannel}>
-            <ArtifactUrlContext.Provider value={artifactUrl}>
-              <ThreadUiMemoryContext.Provider value={threadId}>
-                <AttachmentLoaderContext.Provider value={loadAttachment}>
-                  <RunSettledContext.Provider value={runSettledAt}>
-                    <DelegatesOutContext.Provider value={delegatesOut}>
-                      {transcript === undefined ? (
-                        children
-                      ) : (
-                        <SurfaceContexts {...transcript}>
-                          {children}
-                        </SurfaceContexts>
-                      )}
-                    </DelegatesOutContext.Provider>
-                  </RunSettledContext.Provider>
-                </AttachmentLoaderContext.Provider>
-              </ThreadUiMemoryContext.Provider>
-            </ArtifactUrlContext.Provider>
-          </CallMessageChannelContext.Provider>
+          <CallConversationContext.Provider value={callConversations}>
+            <CallMessageChannelContext.Provider value={callChannel}>
+              <ArtifactUrlContext.Provider value={artifactUrl}>
+                <ThreadUiMemoryContext.Provider value={threadId}>
+                  <AttachmentLoaderContext.Provider value={loadAttachment}>
+                    <RunSettledContext.Provider value={runSettledAt}>
+                      <DelegatesOutContext.Provider value={delegatesOut}>
+                        {transcript === undefined ? (
+                          children
+                        ) : (
+                          <SurfaceContexts {...transcript}>
+                            {children}
+                          </SurfaceContexts>
+                        )}
+                      </DelegatesOutContext.Provider>
+                    </RunSettledContext.Provider>
+                  </AttachmentLoaderContext.Provider>
+                </ThreadUiMemoryContext.Provider>
+              </ArtifactUrlContext.Provider>
+            </CallMessageChannelContext.Provider>
+          </CallConversationContext.Provider>
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>
     </CliLoginContext.Provider>

@@ -379,7 +379,7 @@ export function useWorkflowChat({
   });
   const {
     items,
-    anchors,
+    structure: anchors,
     liveText,
     setLiveText,
     ingest,
@@ -387,6 +387,7 @@ export function useWorkflowChat({
     reconnectAfterSeqRef,
     commitItems,
     commitAnchors,
+    commitCallRows,
     forgetAnchorAsks,
   } = stream;
 
@@ -398,6 +399,7 @@ export function useWorkflowChat({
     setRun(null);
     commitItems([]);
     commitAnchors([]);
+    commitCallRows([]);
     setLiveText(EMPTY_LIVE_TEXT);
     lastSeqRef.current = -1;
     reconnectAfterSeqRef.current = -1;
@@ -450,6 +452,7 @@ export function useWorkflowChat({
         // screen takes in `activateRun`.
         runIdRef.current = opened.id;
         commitItems([]);
+        commitCallRows([]);
         // A new conversation starts its cursor over, as `activateRun` does: the
         // previous run's seq would otherwise hold the replay cursor past rows
         // this one never had.

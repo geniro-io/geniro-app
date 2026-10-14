@@ -173,6 +173,12 @@ The rules live in `.claude/rules/renderer-design-system.md` (tokens, themes, `da
 - Worked time and tool count, which take the daemon's figure alone where it has one.
 - In each case the turn in flight is added on top (`withLiveCost`, `openTurns`).
 
+A workflow run's window is its OWN flow only:
+
+- Every window PAGE read passes `conversation=root` (the daemon answers a chat, whose agent calls no one, with the whole run). A root page anchors what each call's FOLDED card is drawn from. The tail catch-up and the reconnect replay read the whole run since a cursor.
+- A row whose `inCall` is a call id (`isCallRow`; the run's own flow carries null) never joins `items`. Both places a row can arrive split on it into `callRows` — `use-run-stream.ts`'s `ingest` (live rows and the replay) and `use-chat-run.ts`'s `catchUpTail` — and the stream's `structure` folds the anchors and the call rows as one. An opened call card reads its own conversation through `CallConversationPager` (`call=<id>`). What it read is forgotten on thread open and close, and on return to the tail, whose root pages skipped the calls' rows written meanwhile.
+- A reader about a call's turns, cards, shells or pages reads `transcriptRows` (the window plus every structure row filed under a call — a page's card anchors, live rows, an opened card's pages), never `items` alone.
+
 Anchors and run state:
 
 - Anchors (`GET …/items` → `{items, anchors}`) are kept apart from `items`, laid in only where the transcript is folded, and never drawn as rows.

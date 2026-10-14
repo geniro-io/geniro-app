@@ -58,6 +58,7 @@ import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
+import { ItemCallIndexService } from './services/item-call-index.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
@@ -368,6 +369,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunGroupsService,
     ShellOutputService,
     ItemSeqAllocator,
+    ItemCallIndexService,
     MessageSendService,
     ItemDao,
     NodeStateDao,
@@ -476,6 +478,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // the same allocator a chat's are, since its kept agent processes write
     // between passes.
     ItemSeqAllocator,
+    // Exported for the graph executor's writes, which stamp each row's call
+    // the way a chat's do.
+    ItemCallIndexService,
     MessageSendService,
     SkillHarvestStore,
     // Exported for the graph executor's own turn seam: a node's turn reports

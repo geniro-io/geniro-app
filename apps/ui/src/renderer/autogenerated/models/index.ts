@@ -1932,6 +1932,12 @@ export interface ChatHistoryDtoItemsInner {
      * @memberof ChatHistoryDtoItemsInner
      */
     createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    inCall?: string | null;
 }
 
 
@@ -3450,6 +3456,12 @@ export interface ItemDto {
      * @memberof ItemDto
      */
     createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ItemDto
+     */
+    inCall?: string | null;
 }
 
 

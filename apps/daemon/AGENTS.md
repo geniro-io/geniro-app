@@ -35,6 +35,8 @@ The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent exec
 - `Run.workedMs` / `toolCalls` are written at every ending (complete, cancelled, error) and carried on the settle announce, never on activity announces. Null means not measured, never zero.
 - `NodeState.polledSpend` is a per-EVENT ledger (the vendor revises charges): each poll replaces each event's figure; never a watermark. A node answers for its `sessionIds`, its callee `call_result` sessions, and their delegates (`spawnedConversations`).
 - `Run.notes` is the user's alone and is never composed into a turn's instructions.
+- `Item.inCall` is which call's card a row is drawn in (`utils/call-membership.ts`, twin of the renderer's claim pass): `''` is the run's own flow, NULL is not stamped yet. It is stamped at the one insert seam (`persistItemAndEmit`, through `ItemCallIndexService`). Older rows are stamped per run before a conversation read (`ensureIndexed`) and by a boot sweep off the ready path, retired by a versioned marker: a change to the rule bumps `CALL_MEMBERSHIP_VERSION`.
+- `GET /v1/chats/:runId/items` pages one conversation with `conversation=root` or `call=<id>` (a workflow run only). A root page also anchors each call's `CARD_KINDS` rows and its newest row, message and tool call, the twin of the renderer's folded call card.
 
 ### Agents: adapters
 

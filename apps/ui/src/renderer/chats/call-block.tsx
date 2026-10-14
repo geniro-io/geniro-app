@@ -19,6 +19,7 @@ import {
   REVEALABLE_CARD_CLASS,
 } from './block-shell';
 import { CalleeContextResolverContext, withLiveCost } from './call-context';
+import { CallConversationPager } from './call-conversation';
 import {
   CallMessageButton,
   CallMessageChannelContext,
@@ -658,6 +659,9 @@ export const CallBlock = memo(function CallBlock({
             memoryKey={`call:${block.id}:request`}
           />
         ) : null}
+        <CallConversationPager
+          conversation={block.conversationCallIds[0] ?? block.callId}
+        />
         {/*
           The card's header IS the callee's identity, so its rows carry none of
           their own — the same rule, and the same context, the sub-agent block

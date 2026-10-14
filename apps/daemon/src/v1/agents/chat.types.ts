@@ -1675,6 +1675,13 @@ export const ItemWireSchema = z.object({
   role: z.string().nullable(),
   payload: z.unknown().describe('Kind-specific structured payload'),
   createdAt: z.string(),
+  inCall: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "The call whose card this row is drawn in; null for the run's own flow, absent when not yet known",
+    ),
 });
 export type ItemWire = z.infer<typeof ItemWireSchema>;
 
@@ -4455,6 +4462,9 @@ export interface HistoryWindow {
   probe?: boolean;
 }
 
+/** One conversation of a workflow run — `HistoryQueryDto.conversation` / `.call`. */
+export type HistoryConversation = { root: true } | { call: string };
+
 /** One page's first and last seq — the rows its anchors are read around. */
 export interface PageBounds {
   firstSeq: number;
@@ -4799,6 +4809,7 @@ export interface ChatTextDatabase {
     kind: Item['kind'];
     role: Item['role'];
     payload: Item['payload'];
+    in_call: Item['inCall'];
     created_at: StoredDate;
     deleted_at: StoredDate | null;
   };

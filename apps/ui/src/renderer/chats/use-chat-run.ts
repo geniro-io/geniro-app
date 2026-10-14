@@ -4,6 +4,7 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -13,6 +14,7 @@ import {
   type ChatsApi,
   type ItemDto as ChatItem,
   type ListChatsScopeEnum,
+  ListRunItemsConversationEnum,
   ListRunItemsProbeEnum,
   ListRunItemsTakeEnum,
   type RunDto as ChatRun,
@@ -30,9 +32,13 @@ import { reportRendererIssue } from '../debug/report-ui-errors';
  */
 export type ChatListScope = ListChatsScopeEnum;
 import type { AgentNotice } from '../notifications/run-notifications';
+import type {
+  CallConversationLoader,
+  CallConversationState,
+} from './call-conversation';
 import { previewMessageOf, previewsThread } from './chat-preview';
 import { discardsContextReading } from './compaction-payload';
-import { mergeAnchorRows } from './history-anchors';
+import { isCallRow, mergeAnchorRows } from './history-anchors';
 import type { LiveState } from './live-text';
 import { activityAfterAnnounce, isSettledRunStatus } from './run-status';
 import { runStatusRowFields } from './run-status-row';
@@ -95,6 +101,9 @@ export const HISTORY_PAGE = DEFAULT_HISTORY_PAGE_SIZE;
  * parameter was needed for any of this.
  */
 const JUMP_CONTEXT_AFTER = 50;
+
+/** Where an opened call card's conversation stands, and the oldest row it read. */
+type CallPage = CallConversationState & { oldestSeq: number | null };
 
 /**
  * A WORKFLOW run that is `running` while every agent a message goes to has
@@ -270,10 +279,13 @@ export interface ChatRunState {
   /**
    * Rows OUTSIDE the loaded window that rows inside it belong to — a call's
    * start and settle, a delegate's launch — as the daemon picked them for each
-   * page (see `history-anchors.ts`). Never part of {@link items}: everything
+   * page (see `history-anchors.ts`), and the rows of the run's calls, which a
+   * workflow run's window never holds. Never part of {@link items}: everything
    * that pages reads the window's first and last row.
    */
   anchors: ChatItem[];
+  /** How an opened call card reads its own conversation. */
+  callConversations: CallConversationLoader;
   /** The loaded window does not reach the start of the conversation. */
   hasOlder: boolean;
   /** A page of older items is in flight. */
@@ -796,12 +808,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   // and the streaming flag.
   const {
     items,
-    anchors,
+    structure,
     liveText,
     setLiveText,
     deadRequestKeys,
     commitItems,
     commitAnchors,
+    commitCallRows,
     forgetAnchorAsks,
     itemsRef,
     lastSeqRef,
@@ -963,6 +976,131 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       }
     },
   });
+
+  /**
+   * The call conversations an opened card has read, keyed by the conversation
+   * the card asked for. The rows themselves join {@link callRows}.
+   */
+  const [callPages, setCallPages] = useState<ReadonlyMap<string, CallPage>>(
+    () => new Map(),
+  );
+  // Written with the state, not after the render: a load asked for in the
+  // same tick as a reset must see the reset.
+  const callPagesRef = useRef(callPages);
+  const writeCallPages = useCallback(
+    (
+      update: (
+        prev: ReadonlyMap<string, CallPage>,
+      ) => ReadonlyMap<string, CallPage>,
+    ): void => {
+      const next = update(callPagesRef.current);
+      callPagesRef.current = next;
+      setCallPages(next);
+    },
+    [],
+  );
+  /** Moves at every forget, so a read asked for before one cannot land after it. */
+  const callPagesGenerationRef = useRef(0);
+  /**
+   * Forget what the cards have read, at every place their rows go: a thread
+   * opened — the same one again included — or closed, and a window back at the
+   * tail, whose return skipped the calls' rows written while it was away. An
+   * opened card asks again.
+   */
+  const forgetCallPages = useCallback((): void => {
+    callPagesGenerationRef.current += 1;
+    writeCallPages(() => new Map());
+  }, [writeCallPages]);
+
+  const loadCallConversation = useCallback(
+    (conversation: string, older: boolean): void => {
+      const runId = activeRunIdRef.current;
+      const held = callPagesRef.current.get(conversation);
+      if (
+        runId === null ||
+        held?.loading === true ||
+        (older ? held?.hasOlder !== true : held !== undefined)
+      ) {
+        return;
+      }
+      const beforeSeq = older ? held?.oldestSeq : null;
+      const generation = callPagesGenerationRef.current;
+      const current = (): boolean =>
+        activeRunIdRef.current === runId &&
+        callPagesGenerationRef.current === generation;
+      const settle = (next: CallPage): void => {
+        writeCallPages((prev) => new Map(prev).set(conversation, next));
+      };
+      settle({
+        loading: true,
+        failed: false,
+        hasOlder: held?.hasOlder ?? false,
+        oldestSeq: held?.oldestSeq ?? null,
+      });
+      const pageSize = pageSizeRef.current;
+      void chatApi
+        .listRunItems({
+          runId,
+          limit: pageSize,
+          call: conversation,
+          ...(beforeSeq === null || beforeSeq === undefined
+            ? {}
+            : { beforeSeq }),
+        })
+        .then(({ items: page, anchors: pageAnchors }) => {
+          if (!current()) {
+            return;
+          }
+          // The page's anchors with it: they place what the page names — a
+          // tool call above it, a delegate's launch — and, kept with the rows,
+          // they outlive a window replaced by a jump.
+          commitCallRows((prev) =>
+            mergeAnchorRows(prev, [...page, ...pageAnchors]),
+          );
+          settle({
+            loading: false,
+            failed: false,
+            hasOlder: page.length === pageSize,
+            oldestSeq: page[0]?.seq ?? held?.oldestSeq ?? null,
+          });
+        })
+        .catch(() => {
+          if (!current()) {
+            return;
+          }
+          // Parked, never re-asked by itself: the card's pager would otherwise
+          // ask again on every render the failure causes. An older page keeps
+          // the button it was pressed from.
+          settle(
+            older && held !== undefined
+              ? held
+              : {
+                  loading: false,
+                  failed: true,
+                  hasOlder: false,
+                  oldestSeq: null,
+                },
+          );
+        });
+    },
+    [chatApi, commitCallRows, writeCallPages],
+  );
+
+  const callConversations = useMemo<CallConversationLoader>(
+    () => ({
+      load: loadCallConversation,
+      retry: (conversation) => {
+        writeCallPages((prev) => {
+          const next = new Map(prev);
+          next.delete(conversation);
+          return next;
+        });
+        loadCallConversation(conversation, false);
+      },
+      stateOf: (conversation) => callPages.get(conversation) ?? null,
+    }),
+    [loadCallConversation, writeCallPages, callPages],
+  );
 
   /**
    * A replay's one reading of the sidebar row — the run's status, taken from
@@ -1494,6 +1632,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       setActiveRunId(runId);
       commitItems([]);
       commitAnchors([]);
+      commitCallRows([]);
+      forgetCallPages();
       forgetAnchorAsks();
       // Both belong to the thread being left. `hasOlder` is answered by the
       // fetch below; clearing it first stops the incoming thread from offering
@@ -1537,6 +1677,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           await chatApi.listRunItems({
             runId,
             limit: pageSize,
+            conversation: ListRunItemsConversationEnum.Root,
           });
         // The user may have switched runs while this fetch was in flight —
         // a stale completion must not replay items or re-arm Stop/streaming
@@ -1636,6 +1777,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     setActiveRunId(null);
     commitItems([]);
     commitAnchors([]);
+    commitCallRows([]);
+    forgetCallPages();
     forgetAnchorAsks();
     setLoadingHistory(false);
     setLiveText(EMPTY_LIVE_TEXT);
@@ -2313,6 +2456,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         runId,
         limit: pageSize,
         beforeSeq,
+        conversation: ListRunItemsConversationEnum.Root,
       });
       // The user may have switched threads while this was in flight; a stale
       // page must not be spliced into somebody else's conversation.
@@ -2376,6 +2520,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       if (afterSeq < 0) {
         return;
       }
+      forgetCallPages();
       void chatApi
         .listRunItems({ runId, afterSeq })
         .then(({ items: missed, anchors: missedAnchors }) => {
@@ -2387,9 +2532,16 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
             return;
           }
           commitAnchors((prev) => mergeAnchorRows(prev, missedAnchors));
+          // The whole run's rows since the cursor: a call's go to its card.
+          const calls = missed.filter(isCallRow);
+          if (calls.length > 0) {
+            commitCallRows((prev) => mergeAnchorRows(prev, calls));
+          }
           commitItems((prev) => {
             const held = new Set(prev.map((item) => item.id));
-            const fresh = missed.filter((item) => !held.has(item.id));
+            const fresh = missed.filter(
+              (item) => !held.has(item.id) && !isCallRow(item),
+            );
             return fresh.length === 0
               ? prev
               : [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
@@ -2398,7 +2550,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // Best effort: the next live row, or reopening the thread, covers it.
         .catch(() => undefined);
     },
-    [chatApi, commitItems, commitAnchors],
+    [chatApi, commitItems, commitAnchors, commitCallRows, forgetCallPages],
   );
 
   /**
@@ -2435,6 +2587,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
             // `beforeSeq` takes the newest `limit` items BELOW it, so asking a
             // little PAST the target is what leaves context on both sides of it.
             beforeSeq: seq + JUMP_CONTEXT_AFTER,
+            conversation: ListRunItemsConversationEnum.Root,
           });
         // The user may have switched threads while this was in flight.
         if (activeRunIdRef.current !== runId || page.length === 0) {
@@ -2462,6 +2615,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                 limit: room + 1,
                 take: ListRunItemsTakeEnum.Oldest,
                 probe: ListRunItemsProbeEnum.True,
+                conversation: ListRunItemsConversationEnum.Root,
               });
         if (activeRunIdRef.current !== runId) {
           return false;
@@ -2535,6 +2689,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         limit: pageSize + 1,
         take: ListRunItemsTakeEnum.Oldest,
         probe: ListRunItemsProbeEnum.True,
+        conversation: ListRunItemsConversationEnum.Root,
       });
       if (activeRunIdRef.current !== runId) {
         return false;
@@ -2593,6 +2748,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         await chatApi.listRunItems({
           runId,
           limit: pageSize,
+          conversation: ListRunItemsConversationEnum.Root,
         });
       if (activeRunIdRef.current !== runId) {
         return false;
@@ -2647,7 +2803,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     activeRunId,
     activeRunIdRef,
     items,
-    anchors,
+    anchors: structure,
+    callConversations,
     hasOlder,
     loadingOlder,
     loadingHistory,

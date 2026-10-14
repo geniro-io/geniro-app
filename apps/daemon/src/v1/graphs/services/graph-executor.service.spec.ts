@@ -21,6 +21,7 @@ import {
 } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
@@ -1215,6 +1216,7 @@ function setup(
     partials,
     attachments,
     seqs,
+    NO_CALL_INDEX,
     artifacts,
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.

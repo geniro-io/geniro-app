@@ -13,6 +13,8 @@ import {
 } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
+import type { ItemCallIndexService } from '../services/item-call-index.service';
+import { inCallWire } from './item-wire';
 import { threadPreviewOf } from './message-preview';
 import { readModelParameters } from './model-parameters';
 import { readDisplayedPullRequests } from './pull-request-capture';
@@ -29,7 +31,11 @@ import { readRunTaskList } from './task-list-fold';
  * a long streaming run doesn't grow it unboundedly.
  */
 export async function persistItemAndEmit(
-  deps: { itemDao: ItemDao; bus: AgentEventBus },
+  deps: {
+    itemDao: ItemDao;
+    bus: AgentEventBus;
+    calls: Pick<ItemCallIndexService, 'inCallOf'>;
+  },
   em: EntityManager,
   row: {
     runId: string;
@@ -40,6 +46,7 @@ export async function persistItemAndEmit(
     payload: unknown;
   },
 ): Promise<ItemWire> {
+  const inCall = await deps.calls.inCallOf(row.runId, row);
   const item = await deps.itemDao.create(
     {
       runId: row.runId,
@@ -53,6 +60,7 @@ export async function persistItemAndEmit(
       // and scanning JSON payloads across a long transcript is what the column
       // exists to avoid.
       searchText: searchIndexText(row.payload),
+      inCall,
     },
     em,
   );
@@ -65,6 +73,7 @@ export async function persistItemAndEmit(
     role: row.role,
     payload: row.payload,
     createdAt: item.createdAt.toISOString(),
+    inCall: inCallWire(inCall),
   };
   deps.bus.publish({ runId: row.runId, item: wire });
   // Items reach ONE run room and a client joins one at a time, so a thread

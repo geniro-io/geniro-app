@@ -2,7 +2,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it } from 'vitest';
 
 import { Run } from '../../runs/entity/run.entity';
-import type { RunStatusEvent } from '../chat.types';
+import type { ItemWire, RunStatusEvent } from '../chat.types';
 import { persistItemAndEmit, runToWire } from './persist-item';
 
 /**
@@ -77,17 +77,19 @@ describe('runToWire', () => {
  * while silently missing everything said from then on.
  */
 describe('persistItemAndEmit', () => {
-  function fakeDeps(): {
+  function fakeDeps(inCall = ''): {
     deps: Parameters<typeof persistItemAndEmit>[0];
     created: Record<string, unknown>[];
     published: string[];
     statuses: RunStatusEvent[];
+    wires: ItemWire[];
   } {
     const created: Record<string, unknown>[] = [];
     // One ordered log across both channels, so "after the row is durable and
     // published" is an assertion rather than an assumption.
     const published: string[] = [];
     const statuses: RunStatusEvent[] = [];
+    const wires: ItemWire[] = [];
     const deps = {
       itemDao: {
         create: (row: Record<string, unknown>) => {
@@ -97,16 +99,18 @@ describe('persistItemAndEmit', () => {
         },
       },
       bus: {
-        publish: () => {
+        publish: ({ item }: { item: ItemWire }) => {
           published.push('item');
+          wires.push(item);
         },
         publishRunStatus: (event: RunStatusEvent) => {
           published.push('status');
           statuses.push(event);
         },
       },
+      calls: { inCallOf: () => Promise.resolve(inCall) },
     } as unknown as Parameters<typeof persistItemAndEmit>[0];
-    return { deps, created, published, statuses };
+    return { deps, created, published, statuses, wires };
   }
 
   const em = { clear: () => undefined } as unknown as EntityManager;
@@ -144,6 +148,38 @@ describe('persistItemAndEmit', () => {
     });
 
     expect(created[0]?.searchText).toBe('');
+  });
+
+  it('stamps the row with the call it is drawn in, and says so on the wire', async () => {
+    const { deps, created, wires } = fakeDeps('call-4');
+
+    await persistItemAndEmit(deps, em, {
+      runId: 'run-1',
+      nodeId: 'engineer',
+      seq: 4,
+      kind: 'tool_call',
+      role: 'assistant',
+      payload: { id: 't1', callId: 'call-4' },
+    });
+
+    expect(created[0]?.inCall).toBe('call-4');
+    expect(wires[0]?.inCall).toBe('call-4');
+  });
+
+  it("says the run's own flow as null on the wire", async () => {
+    const { deps, created, wires } = fakeDeps('');
+
+    await persistItemAndEmit(deps, em, {
+      runId: 'run-1',
+      nodeId: 'manager',
+      seq: 5,
+      kind: 'message',
+      role: 'assistant',
+      payload: { text: 'plan' },
+    });
+
+    expect(created[0]?.inCall).toBe('');
+    expect(wires[0]?.inCall).toBeNull();
   });
 
   describe('the sidebar preview line', () => {

@@ -3228,6 +3228,7 @@ describe('Chats reconnect seam', () => {
     expect(api.listRunItems).toHaveBeenCalledWith({
       runId: 'r1',
       limit: HISTORY_PAGE,
+      conversation: 'root',
     });
   });
 
@@ -3941,6 +3942,36 @@ describe('Chats — the daemon closes a dead approval card', () => {
         (b) => b.textContent === 'Approve',
       ),
     ).toHaveLength(1);
+  });
+});
+
+describe('Chats — a workflow run’s rows that live in a call', () => {
+  it('expires a card when the row naming it was filed under a call — never in the window', async () => {
+    // A callee's approval card is drawn in the run's own flow, and the daemon
+    // files the sweep that kills it under the callee's call (`inCall`), which a
+    // workflow run's window never holds.
+    api.listRunItems.mockResolvedValue([approval('r1', 0, 'req-dead')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitItem({
+        id: 'r1-unanswerable-1',
+        runId: 'r1',
+        nodeId: null,
+        seq: 1,
+        kind: 'unanswerable' as const,
+        role: null,
+        payload: { id: 'req-dead', toolName: 'Write' },
+        createdAt: 'now',
+        inCall: 'call-1',
+      });
+    });
+
+    expect(container.textContent).toContain(
+      'expired — the turn ended before an answer',
+    );
   });
 });
 
@@ -7436,6 +7467,7 @@ describe('Chats queued messages', () => {
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
       limit: HISTORY_PAGE,
+      conversation: 'root',
     });
     // Said out loud, rather than leaving a conversation that appears to start
     // mid-sentence.
@@ -7472,6 +7504,7 @@ describe('Chats queued messages', () => {
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
       limit: HISTORY_PAGE,
+      conversation: 'root',
     });
 
     scroller.scrollTop = 100;
@@ -7484,6 +7517,7 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       limit: HISTORY_PAGE,
       beforeSeq: 1000,
+      conversation: 'root',
     });
     // A SHORT page is the start of the conversation — the notice goes away.
     expect(container.querySelector('[data-slot="older-messages"]')).toBeNull();
@@ -7634,6 +7668,7 @@ describe('Chats queued messages', () => {
         runId: 'r1',
         limit: HISTORY_PAGE,
         beforeSeq: 1000,
+        conversation: 'root',
       });
       expect(
         container.querySelector('[data-slot="older-messages"]'),
@@ -7669,6 +7704,7 @@ describe('Chats queued messages', () => {
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
       limit: HISTORY_PAGE,
+      conversation: 'root',
     });
 
     api.listRunItems.mockResolvedValue(page(0, 10));
@@ -7683,6 +7719,7 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       limit: HISTORY_PAGE,
       beforeSeq: 1000,
+      conversation: 'root',
     });
   }, 20_000);
 
@@ -13084,7 +13121,11 @@ describe('Chats — what the status badge says the run is doing', () => {
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
-    expect(api.listRunItems).toHaveBeenCalledWith({ runId: 'r1', limit: 250 });
+    expect(api.listRunItems).toHaveBeenCalledWith({
+      runId: 'r1',
+      limit: 250,
+      conversation: 'root',
+    });
 
     const chip = container.querySelector('[data-slot="running-subagents"]');
     await act(async () => {
@@ -13762,6 +13803,7 @@ describe('Chats — running shells', () => {
    */
   const continuedCalls = () => {
     let seq = 0;
+    let emitItem: (item: ChatItem) => void = () => undefined;
     const row = (
       kind: ChatItem['kind'],
       nodeId: string,
@@ -13817,7 +13859,7 @@ describe('Chats — running shells', () => {
         callId,
       });
     const open = async (
-      items: ChatItem[],
+      items: ChatItem[] | { items: ChatItem[]; anchors: ChatItem[] },
       taskList: (typeof run1)['taskList'] = [],
     ): Promise<HTMLElement> => {
       api.listChats.mockResolvedValue([]);
@@ -13855,7 +13897,8 @@ describe('Chats — running shells', () => {
         },
       });
       api.listRunItems.mockResolvedValue(items);
-      const { client } = makeClient();
+      const { client, emitItem: emit } = makeClient();
+      emitItem = emit;
       const container = await mount(client);
       await clickRun(container, 'Dev team');
       // Pinned open when there is a shell to list; a run with none has no chip.
@@ -13880,8 +13923,56 @@ describe('Chats — running shells', () => {
         agent:
           r.querySelector('[data-slot="shell-agent"]')?.textContent ?? null,
       }));
-    return { row, started, running, settled, bash, open, shelfRows };
+    return {
+      row,
+      started,
+      running,
+      settled,
+      bash,
+      open,
+      shelfRows,
+      emit: (item: ChatItem) => emitItem(item),
+    };
   };
+
+  it("re-reads the agents' spend when a callee's turn ends — its row filed under the call, never in the window", async () => {
+    const c = continuedCalls();
+    await c.open([c.started('call-22'), c.running('call-22')]);
+    const reads = workflowApi.listWorkflowRunNodes.mock.calls.length;
+
+    await act(async () => {
+      c.emit({
+        ...c.row('turn_complete', 'eng', { callId: 'call-22' }),
+        inCall: 'call-22',
+      });
+    });
+
+    expect(workflowApi.listWorkflowRunNodes.mock.calls.length).toBeGreaterThan(
+      reads,
+    );
+  });
+
+  it("lists a callee's detached command when its rows arrive filed under its call — never in the window", async () => {
+    // A workflow run's page holds its own flow; a callee's rows come as the
+    // card's anchors, stamped with the call (`inCall`).
+    const c = continuedCalls();
+    const inCall = (item: ChatItem): ChatItem => ({
+      ...item,
+      inCall: 'call-22',
+    });
+    const container = await c.open({
+      items: [c.started('call-22')],
+      anchors: [
+        inCall(c.running('call-22')),
+        inCall(c.bash('sh-bg', 'pnpm dev', 'call-22', true)),
+        inCall(c.row('shell_open', 'eng', { id: 'sh-bg', callId: 'call-22' })),
+      ],
+    });
+
+    expect(
+      c.shelfRows(container).some((row) => row.text.includes('pnpm dev')),
+    ).toBe(true);
+  });
 
   it('draws a CONTINUED conversation as ONE instance, naming its shells by the latest call and dropping an earlier call’s command', async () => {
     // A Manager that briefs its Engineer once and continues that thread twice

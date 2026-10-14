@@ -32,6 +32,7 @@ import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
+import { ItemCallIndexService } from './v1/agents/services/item-call-index.service';
 import { PartialStreamService } from './v1/agents/services/partial-stream.service';
 import { SearchTextBackfillService } from './v1/agents/services/search-text-backfill.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
@@ -111,6 +112,7 @@ const bootstrapper = buildBootstrapper({
  * so this is always assigned by the time the listen callback fires.
  */
 let searchTextBackfill: SearchTextBackfillService | null = null;
+let callIndex: ItemCallIndexService | null = null;
 bootstrapper.addExtension(
   buildHttpServerExtension(
     {
@@ -160,14 +162,18 @@ bootstrapper.addExtension(
         process.stdout.write(
           `GENIRO_DAEMON_READY ${JSON.stringify({ port })}\n`,
         );
-        // AFTER the ready print, and deliberately NOT awaited — the one sweep
-        // here that is neither. It walks every transcript row the app has ever
+        // AFTER the ready print, and deliberately NOT awaited, unlike the
+        // backfills on the boot path below. It walks every transcript row the app has ever
         // written (~160,000 on a real profile), and Nest awaits `onModuleInit`
         // before the socket binds, so giving it either of the shapes its two
         // siblings use would hold the pidfile write and this print behind it.
         // The app would look hung on the first launch after an update; search
         // being incomplete for a minute is the cheaper failure.
         void searchTextBackfill?.backfillQuietly();
+        // Off the boot path for the same reason: it stamps every row of every
+        // workflow run written before `Item.inCall` existed, and a run it has
+        // not reached yet is stamped on its first read anyway.
+        void callIndex?.indexAllQuietly();
       },
     },
     async (app: INestApplication) => {
@@ -272,6 +278,7 @@ bootstrapper.addExtension(
       // the only line of it that may run before the server is up, and it only
       // reads the container.
       searchTextBackfill = app.get(SearchTextBackfillService);
+      callIndex = app.get(ItemCallIndexService);
 
       // Sweep what a prior crash left behind — per-turn files and directories
       // whose disposer only runs on a clean settle. Each adapter knows its own;

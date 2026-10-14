@@ -89,6 +89,8 @@ export interface ChatsApiListRunItemsRequest {
     beforeSeq?: number;
     take?: ListRunItemsTakeEnum;
     probe?: ListRunItemsProbeEnum;
+    conversation?: ListRunItemsConversationEnum;
+    call?: string;
 }
 
 export interface ChatsApiMarkRunSeenRequest {
@@ -607,6 +609,14 @@ export class ChatsApi extends runtime.BaseAPI {
 
         if (requestParameters['probe'] != null) {
             queryParameters['probe'] = requestParameters['probe'];
+        }
+
+        if (requestParameters['conversation'] != null) {
+            queryParameters['conversation'] = requestParameters['conversation'];
+        }
+
+        if (requestParameters['call'] != null) {
+            queryParameters['call'] = requestParameters['call'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -1982,6 +1992,13 @@ export const ListRunItemsProbeEnum = {
     False: 'false'
 } as const;
 export type ListRunItemsProbeEnum = typeof ListRunItemsProbeEnum[keyof typeof ListRunItemsProbeEnum];
+/**
+ * @export
+ */
+export const ListRunItemsConversationEnum = {
+    Root: 'root'
+} as const;
+export type ListRunItemsConversationEnum = typeof ListRunItemsConversationEnum[keyof typeof ListRunItemsConversationEnum];
 /**
  * @export
  */

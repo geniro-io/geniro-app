@@ -31,6 +31,7 @@ import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { fakeSpawn } from '../__tests__/fake-child';
+import { NO_CALL_INDEX } from '../__tests__/no-call-index';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AgentApprovalMode,
@@ -1152,6 +1153,7 @@ function setup(
     artifactStore,
     notices,
     callTokens,
+    NO_CALL_INDEX,
     {
       token: 'launch',
       version: '0.0.0',
@@ -1219,6 +1221,28 @@ describe('ChatService', () => {
   });
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("hands the history route's conversation to the transcript read", async () => {
+    // The route's `conversation` / `call` reaches the DAO only through here;
+    // dropping it would page a workflow run's whole transcript again.
+    const read = vi.spyOn(FakeItemDao.prototype, 'getByRun');
+    try {
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.getHistory(run.id, -1, { limit: 10 }, ['']);
+
+      expect(read).toHaveBeenLastCalledWith(
+        run.id,
+        -1,
+        expect.anything(),
+        { limit: 10 },
+        [''],
+      );
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it('createChat rejects a missing cwd and stores the canonical path', async () => {

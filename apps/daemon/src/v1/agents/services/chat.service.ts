@@ -162,6 +162,7 @@ import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
 import { GalleryBroker } from './gallery.broker';
+import { ItemCallIndexService } from './item-call-index.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
@@ -605,6 +606,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly artifactStore: ArtifactStoreService,
     private readonly notices: NotifyBroker,
     private readonly callTokens: CallTokenRegistry,
+    private readonly calls: ItemCallIndexService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     @Optional() private readonly agentMcp?: AgentMcpService,
   ) {}
@@ -2444,13 +2446,20 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     afterSeq = -1,
     window?: HistoryWindow,
+    inCalls?: readonly string[],
   ): Promise<ItemWire[]> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    const items = await this.itemDao.getByRun(runId, afterSeq, em, window);
+    const items = await this.itemDao.getByRun(
+      runId,
+      afterSeq,
+      em,
+      window,
+      inCalls,
+    );
     return items.map(itemToWire);
   }
 
@@ -6981,14 +6990,18 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      */
     nodeId: string | null = null,
   ): Promise<ItemWire> {
-    return persistItemAndEmit({ itemDao: this.itemDao, bus: this.bus }, em, {
-      runId,
-      nodeId,
-      seq,
-      kind,
-      role,
-      payload,
-    });
+    return persistItemAndEmit(
+      { itemDao: this.itemDao, bus: this.bus, calls: this.calls },
+      em,
+      {
+        runId,
+        nodeId,
+        seq,
+        kind,
+        role,
+        payload,
+      },
+    );
   }
 
   /**

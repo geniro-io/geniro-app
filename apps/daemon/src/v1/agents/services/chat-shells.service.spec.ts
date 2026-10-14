@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { NO_CALL_INDEX } from '../__tests__/no-call-index';
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from './agent-events.bus';
 import type { AgentSessionRegistry } from './agent-session.registry';
@@ -183,6 +184,7 @@ function service(
             pid,
           })),
       } as unknown as AgentSessionRegistry,
+      NO_CALL_INDEX,
     ),
     asked,
     written,
@@ -390,6 +392,7 @@ describe('ChatShellsService.kill', () => {
           killedByUser: true,
         },
         searchText: expect.anything(),
+        inCall: '',
       },
     ]);
     // Persist THEN emit, so a reconnecting client replays a durable row.

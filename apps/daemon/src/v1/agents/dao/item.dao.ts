@@ -188,12 +188,17 @@ export class ItemDao extends BaseDao<Item> {
     afterSeq = -1,
     txEm?: EntityManager,
     window?: HistoryWindow,
+    /** Only rows whose `inCall` is one of these — one conversation of a workflow run. */
+    inCalls?: readonly string[],
   ): Promise<Item[]> {
+    const conversation =
+      inCalls === undefined ? {} : { inCall: { $in: [...inCalls] } };
     if (window) {
       const oldestFirst = window.take === 'oldest';
       const rows = await this.getRepo(txEm).find(
         {
           runId,
+          ...conversation,
           seq: {
             $gt: afterSeq,
             ...(window.beforeSeq === undefined
@@ -213,7 +218,7 @@ export class ItemDao extends BaseDao<Item> {
       return oldestFirst ? rows : rows.reverse();
     }
     return this.getRepo(txEm).find(
-      { runId, seq: { $gt: afterSeq } },
+      { runId, ...conversation, seq: { $gt: afterSeq } },
       // Read-only replay path: skip identity-map tracking so a long transcript
       // doesn't accumulate managed entities in the forked EM.
       { orderBy: { seq: 'asc' }, disableIdentityMap: true },
@@ -1143,6 +1148,179 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate({ id }, { searchText });
+  }
+
+  /**
+   * The newest `limit` rows of ONE call (`inCall`), returned in seq order — of
+   * `kinds` when given, with a non-blank `said` field when named, and never a
+   * message the user wrote: a person writing to a quiet callee is not the
+   * callee producing anything. Read newest first off the
+   * `(runId, inCall, kind, seq)` index, so a long call is walked only as far as
+   * `limit` matching rows.
+   */
+  async newestRowsInCall(
+    runId: string,
+    callId: string,
+    pick: {
+      kinds?: readonly ItemKind[];
+      said?: 'name' | 'text';
+      limit: number;
+    },
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    const em = txEm ?? this.em.fork();
+    let heads = em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('id')
+      .where('run_id', '=', runId)
+      .where('in_call', '=', callId)
+      .where('deleted_at', 'is', null)
+      .where((eb) =>
+        eb.or([
+          eb('kind', '!=', 'message'),
+          eb('role', 'is', null),
+          eb('role', '!=', 'user'),
+        ]),
+      );
+    if (pick.kinds !== undefined) {
+      heads = heads.where('kind', 'in', [...pick.kinds]);
+    }
+    const said = pick.said;
+    if (said !== undefined) {
+      // Every kind of blank, as the renderer's `String.trim` reads one: SQLite's
+      // one-argument `trim` strips spaces only.
+      heads = heads.where(
+        (eb) =>
+          eb.fn<string>('trim', [
+            eb.fn<string>('coalesce', [
+              eb.fn<string>('json_extract', [
+                eb
+                  .case()
+                  .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                  .then(eb.ref('payload'))
+                  .else(eb.val('{}'))
+                  .end(),
+                eb.val(`$.${said}`),
+              ]),
+              eb.val(''),
+            ]),
+            eb.val(' \t\n\r'),
+          ]),
+        '!=',
+        '',
+      );
+    }
+    const ids = (
+      await heads.orderBy('seq', 'desc').limit(pick.limit).execute()
+    ).map((head) => head.id);
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.getRepo(em).find(
+      { id: { $in: ids } },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * The start and settle rows of these calls — a conversation's own calls, read
+   * by id rather than over every call the run made. A start sits in its
+   * caller's flow (`inCall` names no call of its own), so it is matched on its
+   * payload, among the run's few rows of that kind.
+   */
+  async callRowsOf(
+    runId: string,
+    callIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    if (callIds.length === 0) {
+      return [];
+    }
+    const em = txEm ?? this.em.fork();
+    const starts = (
+      await em
+        .getKysely<ChatTextDatabase>({ convertValues: false })
+        .selectFrom('items')
+        .select('id')
+        .where('run_id', '=', runId)
+        .where('kind', '=', 'call_started')
+        .where('deleted_at', 'is', null)
+        .where(
+          (eb) =>
+            eb.fn<string>('json_extract', [
+              eb
+                .case()
+                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                .then(eb.ref('payload'))
+                .else(eb.val('{}'))
+                .end(),
+              eb.val('$.callId'),
+            ]),
+          'in',
+          [...callIds],
+        )
+        .execute()
+    ).map((row) => row.id);
+    return this.getRepo(em).find(
+      {
+        runId,
+        $or: [
+          ...(starts.length === 0 ? [] : [{ id: { $in: starts } }]),
+          { kind: 'call_result', inCall: { $in: [...callIds] } },
+        ],
+      },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /** Unstamp every row — the stamps of a membership rule that has since changed. */
+  async forgetInCalls(txEm?: EntityManager): Promise<number> {
+    return this.getRepo(txEm).nativeUpdate(
+      { inCall: { $ne: null } },
+      { inCall: null },
+    );
+  }
+
+  /** Whether one run still holds a row no build stamped with `inCall`. */
+  async hasUnstampedRow(runId: string, txEm?: EntityManager): Promise<boolean> {
+    const row = await this.getRepo(txEm).findOne(
+      { runId, inCall: null },
+      { fields: ['id'], disableIdentityMap: true },
+    );
+    return row !== null;
+  }
+
+  /**
+   * One batch of a run's rows with no `inCall` yet, in seq order after
+   * `afterSeq` — the order the membership rule folds a run in.
+   */
+  async unstampedRows(
+    runId: string,
+    afterSeq: number,
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'id' | 'seq' | 'kind' | 'nodeId' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, inCall: null, seq: { $gt: afterSeq } },
+      {
+        limit,
+        orderBy: { seq: 'asc' },
+        fields: ['id', 'seq', 'kind', 'nodeId', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  async rememberInCall(
+    ids: readonly string[],
+    inCall: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: { $in: [...ids] } },
+      { inCall },
+    );
   }
 
   /**

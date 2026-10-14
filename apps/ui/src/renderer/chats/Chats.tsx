@@ -163,7 +163,7 @@ import {
 } from './follow-up-delivery';
 import { GlobalChatSearchDialog } from './global-chat-search-dialog';
 import { type GroupCommand, GroupHeader } from './group-header';
-import { withAnchors } from './history-anchors';
+import { isCallRow, mergeAnchorRows, withAnchors } from './history-anchors';
 import { JumpToLatest } from './jump-to-latest';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import {
@@ -178,6 +178,7 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { browserImageCodec } from './normalize-image';
+import { OlderMessagesControl } from './older-messages-control';
 import { PromptCacheNotice } from './prompt-cache-notice';
 import {
   type ArtifactUrlBuilder,
@@ -1110,6 +1111,7 @@ export function Chats({
     activeRunIdRef,
     items,
     anchors,
+    callConversations,
     hasOlder,
     loadingOlder,
     loadingHistory,
@@ -4251,16 +4253,35 @@ export function Chats({
     [client, startTurn, enqueueMessage],
   );
 
-  const verdicts = useMemo(() => collectVerdicts(items), [items]);
+  /**
+   * The window and every row filed under one of the run's calls (`inCall`) —
+   * a page's card rows, live rows, an opened card's pages — which a workflow
+   * run's window never holds. What every reader below that is about a call's
+   * turns, cards, shells or pages reads.
+   */
+  const transcriptRows = useMemo(() => {
+    const inCalls = anchors.filter(isCallRow);
+    return inCalls.length === 0 ? items : mergeAnchorRows(items, inCalls);
+  }, [items, anchors]);
+  const verdicts = useMemo(
+    () => collectVerdicts(transcriptRows),
+    [transcriptRows],
+  );
   // Memoized so the set is referentially stable across composer keystrokes —
   // a fresh Set per render would re-render every memoized row shell below.
-  const cardBacked = useMemo(() => cardBackedRequestIds(items), [items]);
+  const cardBacked = useMemo(
+    () => cardBackedRequestIds(transcriptRows),
+    [transcriptRows],
+  );
   // Which requests died with their turn. READ from the transcript, never
   // inferred from it: the renderer used to reconstruct this by scanning for a
   // later terminal item with a matching callId, which could not tell a callee
   // sub-turn settling from the node's own turn ending, and saw nothing at all
   // for a turn that failed before it started. The daemon knows both.
-  const unanswerableIds = useMemo(() => unanswerableRequestIds(items), [items]);
+  const unanswerableIds = useMemo(
+    () => unanswerableRequestIds(transcriptRows),
+    [transcriptRows],
+  );
   /**
    * The agents holding an approval card nobody has answered yet.
    *
@@ -4419,8 +4440,11 @@ export function Chats({
   // which is exactly when a node's SPEND totals change.
   const settledTurnCount = useMemo(
     () =>
-      items.reduce((n, item) => (item.kind === 'turn_complete' ? n + 1 : n), 0),
-    [items],
+      transcriptRows.reduce(
+        (n, item) => (item.kind === 'turn_complete' ? n + 1 : n),
+        0,
+      ),
+    [transcriptRows],
   );
   const nodeReadings = useNodeDurableReadings(
     activeRunId,
@@ -5418,11 +5442,11 @@ export function Chats({
       }
       return byConversation();
     }
-    for (const list of taskListsByThread(items, subagentIdOf)) {
+    for (const list of taskListsByThread(transcriptRows, subagentIdOf)) {
       add(list.nodeId, list.callId, list.tasks, list.snapshot);
     }
     return byConversation();
-  }, [items, activeRun?.taskList, callChains]);
+  }, [transcriptRows, activeRun?.taskList, callChains]);
   /**
    * The agents whose turn is in flight — the transcript draws each of them a
    * row even when they have nothing to say yet, so the flow never goes silent
@@ -5830,8 +5854,11 @@ export function Chats({
     // A WORKFLOW's work belongs to its nodes — several of which run at once —
     // and the run itself has no turn at all; a chat is the other way round.
     // The two transcripts are scanned as the different things they are.
-    () => scanTurns(items, { nodeScoped: activeRun?.workflowId != null }),
-    [items, activeRun?.workflowId],
+    () =>
+      scanTurns(transcriptRows, {
+        nodeScoped: activeRun?.workflowId != null,
+      }),
+    [transcriptRows, activeRun?.workflowId],
   );
   const turnDurations = turnScan.durations;
   /** What this whole thread has worked, for the header. */
@@ -5883,12 +5910,12 @@ export function Chats({
    */
   const latestUserSeq = useMemo(
     () =>
-      items.reduce(
+      transcriptRows.reduce(
         (seq, item) =>
           item.kind === 'message' && item.role === 'user' ? item.seq : seq,
         0,
       ),
-    [items],
+    [transcriptRows],
   );
   /**
    * The newest paragraph the agent WROTE in the loaded window — a `message`
@@ -5898,7 +5925,7 @@ export function Chats({
    */
   const latestAgentSeq = useMemo(
     () =>
-      items.reduce(
+      transcriptRows.reduce(
         (seq, item) =>
           (item.kind === 'message' && item.role !== 'user') ||
           item.kind === 'reasoning'
@@ -5906,7 +5933,7 @@ export function Chats({
             : seq,
         0,
       ),
-    [items],
+    [transcriptRows],
   );
   /**
    * Every user message in the thread, whatever the loaded window holds.
@@ -5930,14 +5957,14 @@ export function Chats({
    */
   const latestArtifactSeq = useMemo(
     () =>
-      items.reduce(
+      transcriptRows.reduce(
         (newest, item) =>
           item.kind === 'show_artifact' && item.seq > newest
             ? item.seq
             : newest,
         0,
       ),
-    [items],
+    [transcriptRows],
   );
   /**
    * The pages this run published, read from the DAEMON — a fold over `items`
@@ -6848,7 +6875,7 @@ export function Chats({
       }
     }
     const byAgent = new Map<string, ShellRun[]>();
-    const runs = shellRuns(items);
+    const runs = shellRuns(transcriptRows);
     for (const [nodeId, shells] of withDurableShells(
       groupRunningShells(runs),
       runs,
@@ -6869,7 +6896,7 @@ export function Chats({
       }
     }
     return byAgent;
-  }, [agents, handle.startedAt, items, runState.shells]);
+  }, [agents, handle.startedAt, transcriptRows, runState.shells]);
   /**
    * Worked time and tool count per agent — the pair each card draws under its
    * spend line, keyed like `shellsByAgent` above.
@@ -6905,7 +6932,7 @@ export function Chats({
       ),
     );
     const inFlightTools = new Map<string, number>();
-    for (const item of items) {
+    for (const item of transcriptRows) {
       if (subagentIdOf(item) !== null) {
         continue;
       }
@@ -6960,7 +6987,7 @@ export function Chats({
       }
     }
     return byAgent;
-  }, [items, turnDurations, nodeReadings, activeRun, openTurnsShown]);
+  }, [transcriptRows, turnDurations, nodeReadings, activeRun, openTurnsShown]);
   /**
    * What the side panel is holding RIGHT NOW, as two numbers for the header
    * beside its toggle: delegates still working, and tasks still outstanding.
@@ -7213,8 +7240,8 @@ export function Chats({
 
   /** The pages this thread has published to claude.ai, newest first. */
   const artifacts = useMemo(
-    () => artifactsFrom(withAnchors(items, runState.artifactRows)),
-    [items, runState.artifactRows],
+    () => artifactsFrom(withAnchors(transcriptRows, runState.artifactRows)),
+    [transcriptRows, runState.artifactRows],
   );
   /**
    * How a published page is addressed on the daemon.
@@ -8146,7 +8173,8 @@ export function Chats({
         // `thread-ui-memory.ts`.
         threadId={activeRunId}
         runSettledAt={activeRunSettledAt}
-        delegatesOut={activeDelegatesOut}>
+        delegatesOut={activeDelegatesOut}
+        callConversations={callConversations}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -9033,35 +9061,18 @@ export function Chats({
                           </div>
                         ) : null}
                         {hasOlder ? (
-                          <div
-                            data-slot="older-messages"
-                            // A FIXED height: the button and the spinner that
-                            // replaces it differ by 8px, and a page load must
-                            // not shift the reader.
-                            className="flex h-8 shrink-0 items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                            {loadingOlder ? (
-                              <>
-                                <Spinner />
-                                Loading earlier messages…
-                              </>
-                            ) : (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                data-slot="older-messages-load"
-                                className="h-6 px-2 text-xs text-muted-foreground"
-                                onClick={() => {
-                                  const scroller =
-                                    transcriptEndRef.current?.parentElement;
-                                  if (scroller) {
-                                    void pageOlderUntilVisible(scroller);
-                                  }
-                                }}>
-                                Load earlier messages
-                              </Button>
-                            )}
-                          </div>
+                          <OlderMessagesControl
+                            slot="older-messages"
+                            className="justify-center"
+                            loading={loadingOlder}
+                            onLoad={() => {
+                              const scroller =
+                                transcriptEndRef.current?.parentElement;
+                              if (scroller) {
+                                void pageOlderUntilVisible(scroller);
+                              }
+                            }}
+                          />
                         ) : null}
                         {transcriptEntries.map((entry) => {
                           const key = transcriptEntryKey(entry);

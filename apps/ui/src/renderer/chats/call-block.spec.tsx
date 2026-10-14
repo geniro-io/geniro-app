@@ -15,6 +15,11 @@ import {
   CalleeContextResolverContext,
 } from './call-context';
 import {
+  CallConversationContext,
+  type CallConversationLoader,
+  type CallConversationState,
+} from './call-conversation';
+import {
   type ChatMetricsLoader,
   ChatMetricsLoaderContext,
 } from './chat-metrics';
@@ -1863,5 +1868,89 @@ describe('CallBlock', () => {
       // The denominator survived — the block's own settled turn supplied it.
       expect(ringLabel()).toContain('of 200k');
     });
+  });
+});
+
+describe("a call card's own conversation", () => {
+  function loader(
+    state: CallConversationState | null,
+  ): CallConversationLoader & {
+    load: ReturnType<typeof vi.fn<CallConversationLoader['load']>>;
+    retry: ReturnType<typeof vi.fn<CallConversationLoader['retry']>>;
+  } {
+    return {
+      load: vi.fn<CallConversationLoader['load']>(),
+      retry: vi.fn<CallConversationLoader['retry']>(),
+      stateOf: () => state,
+    };
+  }
+
+  function render(value: CallConversationLoader): void {
+    act(() =>
+      root.render(
+        <CallConversationContext.Provider value={value}>
+          <TranscriptEntryView entry={makeBlock()} nodes={NODES} />
+        </CallConversationContext.Provider>,
+      ),
+    );
+  }
+
+  function expand(): void {
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-expanded]',
+    )!;
+    act(() => toggle.click());
+  }
+
+  it('is read when the card is opened, never while it is shut', () => {
+    const value = loader(null);
+    render(value);
+
+    expect(value.load).not.toHaveBeenCalled();
+
+    expand();
+
+    expect(value.load).toHaveBeenCalledWith('call-1', false);
+  });
+
+  it('says it is loading while the first page is on its way', () => {
+    render(loader({ loading: true, failed: false, hasOlder: false }));
+    expand();
+
+    expect(
+      container.querySelector('[data-slot="call-conversation-loading"]')
+        ?.textContent,
+    ).toContain('Loading messages');
+  });
+
+  it('offers the page before the oldest row it holds, and only while there is one', () => {
+    const value = loader({ loading: false, failed: false, hasOlder: true });
+    render(value);
+    expand();
+
+    const older = container.querySelector<HTMLButtonElement>(
+      '[data-slot="call-conversation-older-load"]',
+    );
+    act(() => older!.click());
+    expect(value.load).toHaveBeenLastCalledWith('call-1', true);
+
+    render(loader({ loading: false, failed: false, hasOlder: false }));
+    expect(
+      container.querySelector('[data-slot="call-conversation-older-load"]'),
+    ).toBeNull();
+  });
+
+  it('offers a retry after a failed read, and asks nothing by itself', () => {
+    const value = loader({ loading: false, failed: true, hasOlder: false });
+    render(value);
+    expand();
+    expect(value.retry).not.toHaveBeenCalled();
+
+    const failed = container.querySelector(
+      '[data-slot="call-conversation-failed"]',
+    );
+    expect(failed?.textContent).toContain('Couldn’t load this conversation');
+    act(() => failed!.querySelector('button')!.click());
+    expect(value.retry).toHaveBeenCalledWith('call-1');
   });
 });

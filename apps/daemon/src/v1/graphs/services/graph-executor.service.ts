@@ -53,6 +53,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
@@ -725,6 +726,7 @@ export class GraphExecutorService
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
     private readonly seqs: ItemSeqAllocator,
+    private readonly calls: ItemCallIndexService,
     /**
      * The page tool (`show_artifact`) for workflow agents. Optional only so the
      * executor's specs, which construct it positionally, need not supply it.
@@ -6475,13 +6477,17 @@ export class GraphExecutorService
     role: string | null,
     payload: unknown,
   ): Promise<ItemWire> {
-    return persistItemAndEmit({ itemDao: this.itemDao, bus: this.bus }, em, {
-      runId,
-      nodeId,
-      seq,
-      kind,
-      role,
-      payload,
-    });
+    return persistItemAndEmit(
+      { itemDao: this.itemDao, bus: this.bus, calls: this.calls },
+      em,
+      {
+        runId,
+        nodeId,
+        seq,
+        kind,
+        role,
+        payload,
+      },
+    );
   }
 }

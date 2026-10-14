@@ -62,6 +62,7 @@ import { useAgentModels } from '../chats/use-agent-models';
 import { CliLoginProgress } from '../components/cli-login-progress';
 import { ConfirmDialog } from '../components/confirm-dialog';
 import { EmptyState } from '../components/empty-state';
+import { ErrorBanner } from '../components/error-banner';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
 import { Field } from '../components/field';
@@ -74,7 +75,7 @@ import { Input } from '../components/ui/input';
 import { Menu, type MenuGroup } from '../components/ui/menu';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Select } from '../components/ui/select';
-import { createDaemonApis } from '../daemon-api';
+import { createDaemonApis, daemonErrorCode } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { starterTeam, type TeamLaunch } from '../onboarding/first-launch';
 import { useSharedCapabilities } from '../use-capabilities';
@@ -265,6 +266,14 @@ export function Workflows({
   // file the canvas does.
   const [chatOpen, setChatOpen] = useState(false);
   const [chatWorking, setChatWorking] = useState(false);
+  /**
+   * The file version the canvas was loaded from or last saved as — sent with
+   * every save, so a save over a file something else changed since (an
+   * analysis applying a recommendation) is refused instead of undoing it.
+   */
+  const loadedHashRef = useRef<string | null>(null);
+  /** The last save was refused because the file changed; autosave holds off. */
+  const [staleCopy, setStaleCopy] = useState(false);
   /** What the chat's agent is waiting on the user for, if anything — see the toggle. */
   const [chatAwaiting, setChatAwaiting] = useState<RunAwaiting | null>(null);
   // Whether the dock has been opened for the workflow on the canvas. Once it
@@ -361,9 +370,11 @@ export function Workflows({
       setError(null);
       setNotice(null);
       try {
-        const { workflow } = await api.getWorkflow({ slug });
+        const { workflow, hash } = await api.getWorkflow({ slug });
         const flow = toFlow(workflow);
         openGeneration.current += 1;
+        loadedHashRef.current = hash;
+        setStaleCopy(false);
         setActiveSlug(slug);
         setName(workflow.name);
         setDescription(workflow.description ?? '');
@@ -467,7 +478,12 @@ export function Workflows({
         const saved = activeSlug
           ? await api.saveWorkflow({
               slug: activeSlug,
-              saveWorkflowDto: { workflow },
+              saveWorkflowDto: {
+                workflow,
+                ...(loadedHashRef.current === null
+                  ? {}
+                  : { baseHash: loadedHashRef.current }),
+              },
             })
           : await api.createWorkflow({ createWorkflowDto: { workflow } });
         if (openGeneration.current !== generation) {
@@ -477,6 +493,7 @@ export function Workflows({
           return true;
         }
         setActiveSlug(saved.slug);
+        loadedHashRef.current = saved.hash;
         setSavedSnapshot(
           canvasSnapshot(meta.name, meta.description ?? '', nodes, edges),
         );
@@ -486,7 +503,11 @@ export function Workflows({
         // Same reasoning: a refusal about the workflow the builder left must
         // not appear as an error over the one it opened since.
         if (openGeneration.current === generation) {
-          setError(String(err));
+          if (daemonErrorCode(err) === 'WORKFLOW_CHANGED') {
+            setStaleCopy(true);
+          } else {
+            setError(String(err));
+          }
         }
         return false;
       }
@@ -511,7 +532,8 @@ export function Workflows({
     // Suspended while the chat's agent is mid-turn, on the same reasoning the
     // delete uses: a queued write would land on top of the file the agent is
     // editing, and the two would overwrite each other silently.
-    enabled: started && activeSlug !== null && !deleting && !chatWorking,
+    enabled:
+      started && activeSlug !== null && !deleting && !chatWorking && !staleCopy,
     snapshot: liveSnapshot,
     savedSnapshot,
     save: saveNow,
@@ -549,12 +571,14 @@ export function Workflows({
     }
     const generation = openGeneration.current;
     try {
-      const { workflow } = await api.getWorkflow({ slug: activeSlug });
+      const { workflow, hash } = await api.getWorkflow({ slug: activeSlug });
       if (openGeneration.current !== generation) {
         // The builder left this workflow while the read was out — the answer
         // is about a canvas that is gone.
         return;
       }
+      // Whatever the canvas does next, its saves are now made from this file.
+      loadedHashRef.current = hash;
       const flow = toFlow(workflow);
       const onDisk = canvasSnapshot(
         workflow.name,
@@ -1532,6 +1556,23 @@ export function Workflows({
         <ErrorText className="border-b border-border px-3 py-1.5">
           {error}
         </ErrorText>
+      ) : null}
+      {staleCopy && activeSlug !== null ? (
+        <ErrorBanner
+          tone="warning"
+          className="rounded-none border-x-0 border-t-0"
+          message="This workflow changed outside the builder (an analysis applied a change), so your latest edits were not saved. Reload to see the saved version — the unsaved edits on the canvas will be replaced."
+          action={
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void openWorkflow(activeSlug)}>
+              Reload
+            </Button>
+          }
+          onDismiss={() => setStaleCopy(false)}
+        />
       ) : null}
 
       <div className="flex min-h-0 flex-1">

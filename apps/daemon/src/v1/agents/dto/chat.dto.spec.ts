@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { MAX_RUN_NOTES_LENGTH } from '../chat.types';
 import {
+  analyzeThreadSchema,
   createChatSchema,
   listChatsQuerySchema,
   searchChatQuerySchema,
@@ -163,5 +164,20 @@ describe('updateChatSettingsSchema — the auto-compact threshold', () => {
         updateChatSettingsSchema.parse({ autoCompactPercent }),
       ).toThrow();
     }
+  });
+});
+
+describe('analyzeThreadSchema', () => {
+  it('refuses a focus carrying a control character, and keeps multi-line prose', () => {
+    expect(
+      analyzeThreadSchema.safeParse({ agentKind: 'claude', focus: 'a\u0000b' })
+        .success,
+    ).toBe(false);
+    expect(
+      analyzeThreadSchema.safeParse({
+        agentKind: 'claude',
+        focus: 'why so slow?\n\twhich node?',
+      }).success,
+    ).toBe(true);
   });
 });

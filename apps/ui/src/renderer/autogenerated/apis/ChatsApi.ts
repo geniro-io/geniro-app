@@ -15,7 +15,9 @@
 
 import * as runtime from '../runtime';
 import type {
+  AnalyzeThreadDto,
   AppProcessesDto,
+  ApplyRecommendationsDto,
   AttachmentDataDto,
   CancelledDto,
   ChatDeletedDto,
@@ -52,6 +54,16 @@ import type {
   UpdateChatSettingsDto,
   UploadChatFileDto,
 } from '../models/index';
+
+export interface ChatsApiAnalyzeThreadRequest {
+    runId: string;
+    analyzeThreadDto: AnalyzeThreadDto;
+}
+
+export interface ChatsApiApplyRecommendationsRequest {
+    runId: string;
+    applyRecommendationsDto: ApplyRecommendationsDto;
+}
 
 export interface ChatsApiArchiveChatRequest {
     runId: string;
@@ -216,6 +228,116 @@ export interface ChatsApiUploadChatFileRequest {
  * 
  */
 export class ChatsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async analyzeThreadRaw(requestParameters: ChatsApiAnalyzeThreadRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling analyzeThread().'
+            );
+        }
+
+        if (requestParameters['analyzeThreadDto'] == null) {
+            throw new runtime.RequiredError(
+                'analyzeThreadDto',
+                'Required parameter "analyzeThreadDto" was null or undefined when calling analyzeThread().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/analyses`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['analyzeThreadDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async analyzeThread(requestParameters: ChatsApiAnalyzeThreadRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
+        const response = await this.analyzeThreadRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async applyRecommendationsRaw(requestParameters: ChatsApiApplyRecommendationsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ItemDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling applyRecommendations().'
+            );
+        }
+
+        if (requestParameters['applyRecommendationsDto'] == null) {
+            throw new runtime.RequiredError(
+                'applyRecommendationsDto',
+                'Required parameter "applyRecommendationsDto" was null or undefined when calling applyRecommendations().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/recommendations/apply`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['applyRecommendationsDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async applyRecommendations(requestParameters: ChatsApiApplyRecommendationsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ItemDto> {
+        const response = await this.applyRecommendationsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 

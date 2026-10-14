@@ -25,7 +25,7 @@ Instructions and schemas are `.ts`, never `.md` or `.json` — swc copies nothin
 - `McpTool` (`mcp.types.ts`) is the contract: `handles`, `list`, `call`.
 - Extend `BaseMcpTool` (`tools/base-mcp-tool.ts`): fill `isOffered`, `instructions`, `inputSchema`, `run`; answer through `this.text(…)` / `this.invalidArgs(…)`. Never override `list` or `call`.
 - `CallMcpTool` is the base for agent-to-agent call-runtime tools (offered only to nodes with callees, answers via `envelope(…)`, waits via `waiting(…)`).
-- `HistoryMcpTool` is the base for chat-history tools. They are never auto-approved and carry no `readOnlyHint` (codex skips approval for read-only tools).
+- `HistoryMcpTool` is the base for chat-history tools. They are never auto-approved and carry no `readOnlyHint` (codex skips approval for read-only tools). One recorded exception: `read_analyzed_thread` (on `BaseMcpTool`, reusing the history preface; every tool's zod argument reader is `tools/tool-args.ts`) is auto-approved (`agents/utils/host-analysis.ts`) because it is installed only on an analysis chat and reads only its one source thread up to a snapshot; it still carries no `readOnlyHint`, leads with the history preface and masks secrets.
 - A tool that waits on a person runs the wait through `context.whileCancellable(…)`.
 - The only tool not on `BaseMcpTool` is `tools/board/board.tools.ts` (the tasks module owns those tools and this module may not import it). Do not add a second exception.
 

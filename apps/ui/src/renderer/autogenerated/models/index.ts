@@ -1223,6 +1223,63 @@ export interface AgentUsageCapability {
 /**
  * 
  * @export
+ * @interface AnalyzeThreadDto
+ */
+export interface AnalyzeThreadDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AnalyzeThreadDto
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    cwd?: string;
+    /**
+     * The user's focus or extra instructions for this analysis
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    focus?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
+     * @memberof AnalyzeThreadDto
+     */
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+}
+
+
+/**
+ * 
+ * @export
  * @interface AppProcessThread
  */
 export interface AppProcessThread {
@@ -1305,6 +1362,37 @@ export interface AppProcessesDto {
      * @memberof AppProcessesDto
      */
     unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ApplyRecommendationsDto
+ */
+export interface ApplyRecommendationsDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof ApplyRecommendationsDto
+     */
+    cardSeq: number;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ApplyRecommendationsDto
+     */
+    ids: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ApplyRecommendationsDto
+     */
+    note?: string;
+    /**
+     * ID generated once per press and reused for retries
+     * @type {string}
+     * @memberof ApplyRecommendationsDto
+     */
+    clientMessageId: string;
 }
 
 /**
@@ -3500,7 +3588,9 @@ export const ItemKind = {
     ShowMetrics: 'show_metrics',
     ShowComparison: 'show_comparison',
     ShowGallery: 'show_gallery',
-    ShowArtifact: 'show_artifact'
+    ShowArtifact: 'show_artifact',
+    Recommendations: 'recommendations',
+    RecommendationOutcome: 'recommendation_outcome'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -4902,6 +4992,18 @@ export interface RunDto {
     taskIdentifier: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    analysisSourceRunId: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    analysisSourceSeq: number | null;
+    /**
+     * 
      * @type {number}
      * @memberof RunDto
      */
@@ -6003,6 +6105,12 @@ export interface SaveWorkflowDto {
      * @memberof SaveWorkflowDto
      */
     workflow: Workflow;
+    /**
+     * The `hash` of the version this save was made from; a file changed since is refused 409 WORKFLOW_CHANGED
+     * @type {string}
+     * @memberof SaveWorkflowDto
+     */
+    baseHash?: string;
 }
 /**
  * 
@@ -7459,6 +7567,12 @@ export interface WorkflowFileDto {
      * @memberof WorkflowFileDto
      */
     workflow: Workflow;
+    /**
+     * The file's version as stored — send it back as a save's `baseHash` so a save over a newer file is refused
+     * @type {string}
+     * @memberof WorkflowFileDto
+     */
+    hash: string;
 }
 /**
  * 

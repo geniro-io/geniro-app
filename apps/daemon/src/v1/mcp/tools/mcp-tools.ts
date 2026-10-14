@@ -1,3 +1,4 @@
+import type { AnalysisBroker } from '../../agents/services/analysis.broker';
 import type { ArtifactBroker } from '../../agents/services/artifact.broker';
 import type { ChartBroker } from '../../agents/services/chart.broker';
 import type { ComparisonBroker } from '../../agents/services/comparison.broker';
@@ -8,9 +9,11 @@ import type { MetricsBroker } from '../../agents/services/metrics.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
+import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import type { CallBroker } from '../../graphs/services/call-broker.service';
 import type { TaskBoardBroker } from '../../graphs/services/task-board.broker';
+import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
 import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
 import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
@@ -19,12 +22,16 @@ import { BoardTools } from './board/board.tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
 import { ListAgentThreadsTool } from './list-agent-threads/list-agent-threads.tool';
+import { MarkRecommendationsTool } from './mark-recommendations/mark-recommendations.tool';
 import { MessageAgentTool } from './message-agent/message-agent.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposePatchTool } from './propose-patch/propose-patch.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
+import { ReadAnalyzedThreadTool } from './read-analyzed-thread/read-analyzed-thread.tool';
 import { ReadChatContextTool } from './read-chat-context/read-chat-context.tool';
 import { ReportFindingsTool } from './report-findings/report-findings.tool';
+import { ReportRecommendationsTool } from './report-recommendations/report-recommendations.tool';
+import { SaveWorkflowChangeTool } from './save-workflow-change/save-workflow-change.tool';
 import { SearchChatsTool } from './search-chats/search-chats.tool';
 import { ShowArtifactTool } from './show-artifact/show-artifact.tool';
 import { ShowChartTool } from './show-chart/show-chart.tool';
@@ -50,6 +57,9 @@ export interface McpToolDeps {
   notices: NotifyBroker;
   board: TaskBoardBroker;
   history: GlobalChatSearchService;
+  analysis: AnalysisBroker;
+  threads: ThreadReaderService;
+  workflowChanges: WorkflowChangeService;
 }
 
 /**
@@ -59,7 +69,7 @@ export interface McpToolDeps {
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
  * surface, then the question, the render family, the board, the chat history,
- * and the agent's own notification last.
+ * the analysis tools, and the agent's own notification last.
  */
 export function createMcpTools(deps: McpToolDeps): McpTool[] {
   return [
@@ -81,6 +91,18 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new BoardTools(deps.board),
     new SearchChatsTool(deps.history),
     new ReadChatContextTool(deps.history),
+    new ReadAnalyzedThreadTool(
+      deps.analysis,
+      deps.threads,
+      deps.workflowChanges,
+    ),
+    new ReportRecommendationsTool(deps.analysis),
+    new MarkRecommendationsTool(deps.analysis),
+    new SaveWorkflowChangeTool(
+      deps.analysis,
+      deps.threads,
+      deps.workflowChanges,
+    ),
     new NotifyUserTool(deps.notices),
   ];
 }

@@ -27,6 +27,7 @@ import {
 } from '../graphs.types';
 import { computeRunOrder } from '../utils/graph-order';
 import { validateWorkflowGraph } from '../utils/graph-validate';
+import { workflowFileHash } from '../utils/workflow-hash';
 import {
   WORKFLOW_SCHEMA_FILE_NAME,
   workflowJsonSchema,
@@ -82,6 +83,9 @@ export interface WorkflowStoreOptions {
 export class WorkflowStoreService {
   private readonly logger = new Logger(WorkflowStoreService.name);
   private readonly dir: string;
+
+  /** The save in flight per slug — see {@link save}. */
+  private readonly saving = new Map<string, Promise<WorkflowWire>>();
 
   constructor(options: WorkflowStoreOptions = {}) {
     this.dir =
@@ -185,7 +189,11 @@ export class WorkflowStoreService {
     // One read serves both the 404 mapping and the parse — a second read
     // could race a concurrent delete into a raw ENOENT instead of the 404.
     const source = await this.readSource(path, slug);
-    return { slug, workflow: parseWorkflowYaml(source) };
+    return {
+      slug,
+      workflow: parseWorkflowYaml(source),
+      hash: workflowFileHash(source),
+    };
   }
 
   /**
@@ -220,25 +228,72 @@ export class WorkflowStoreService {
         }
         throw err;
       }
-      return { slug, workflow };
+      return { slug, workflow, hash: workflowFileHash(content) };
     }
     const landed = await this.createDerivedSlug(
       slugifyWorkflowName(workflow.name),
       content,
     );
-    return { slug: landed, workflow };
+    return { slug: landed, workflow, hash: workflowFileHash(content) };
   }
 
-  /** Save (upsert) a workflow, preserving hand-written YAML comments. */
-  async save(slug: string, workflow: Workflow): Promise<WorkflowWire> {
+  /**
+   * Save (upsert) a workflow, preserving hand-written YAML comments.
+   *
+   * With `baseHash`, a file that has changed since that version is refused
+   * (`WORKFLOW_CHANGED`) rather than overwritten: the builder's autosave and
+   * an analysis's applied change both write this file, and a save from a
+   * stale copy would silently undo the other's.
+   */
+  async save(
+    slug: string,
+    workflow: Workflow,
+    baseHash?: string,
+  ): Promise<WorkflowWire> {
+    // One save per slug at a time: the hash check and the write must not
+    // interleave with another save's, or both could pass against the same
+    // version and the later rename would silently win.
+    const previous = this.saving.get(slug) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.saveNow(slug, workflow, baseHash));
+    this.saving.set(slug, next);
+    try {
+      return await next;
+    } finally {
+      if (this.saving.get(slug) === next) {
+        this.saving.delete(slug);
+      }
+    }
+  }
+
+  private async saveNow(
+    slug: string,
+    workflow: Workflow,
+    baseHash: string | undefined,
+  ): Promise<WorkflowWire> {
     this.validateGraph(workflow);
     await mkdir(this.dir, { recursive: true });
     const path = this.fileFor(slug);
     const existing = (await this.exists(path))
       ? await readFile(path, 'utf8')
       : null;
-    await atomicWrite(path, serializeWorkflowYaml(workflow, existing));
-    return { slug, workflow };
+    if (
+      baseHash !== undefined &&
+      (existing === null || workflowFileHash(existing) !== baseHash)
+    ) {
+      // A file deleted since the copy was read is a change too: writing it
+      // back would resurrect a workflow the user removed.
+      throw new ConflictException(
+        'WORKFLOW_CHANGED',
+        existing === null
+          ? `Workflow '${slug}' was deleted since this copy was read`
+          : `Workflow '${slug}' changed since this copy was read — reload it before saving`,
+      );
+    }
+    const content = serializeWorkflowYaml(workflow, existing);
+    await atomicWrite(path, content);
+    return { slug, workflow, hash: workflowFileHash(content) };
   }
 
   async delete(slug: string): Promise<void> {
@@ -279,7 +334,7 @@ export class WorkflowStoreService {
       slugifyWorkflowName(importedName),
       source,
     );
-    return { slug, workflow };
+    return { slug, workflow, hash: workflowFileHash(source) };
   }
 
   /** Export a library workflow to an external path chosen by the user. */

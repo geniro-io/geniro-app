@@ -31,6 +31,8 @@ import { AgentEventBus } from './services/agent-events.bus';
 import { AgentMcpService } from './services/agent-mcp.service';
 import { AgentSessionRegistry } from './services/agent-session.registry';
 import { AgentVersionService } from './services/agent-version.service';
+import { AnalysisBroker } from './services/analysis.broker';
+import { AnalysisReportsService } from './services/analysis-reports.service';
 import { ApprovalRegistry } from './services/approval-registry';
 import { ArtifactBroker } from './services/artifact.broker';
 import { ArtifactPageService } from './services/artifact-page.service';
@@ -77,6 +79,7 @@ import { PlanBroker } from './services/plan.broker';
 import { PolledSpendService } from './services/polled-spend.service';
 import { ProcessRegistry } from './services/process-registry';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
+import { RecommendationsApplyService } from './services/recommendations-apply.service';
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
@@ -96,6 +99,9 @@ import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
+import { ThreadAnalysisService } from './services/thread-analysis.service';
+import { ThreadReaderService } from './services/thread-reader.service';
+import { ThreadTimelineService } from './services/thread-timeline.service';
 import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
 import { UserQuestionBroker } from './services/user-question.broker';
 import { WallWorkService } from './services/wall-work.service';
@@ -136,6 +142,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatArtifactsService,
     ChatTimelineService,
     ChatWaterfallService,
+    ThreadTimelineService,
+    ThreadReaderService,
+    ThreadAnalysisService,
+    RecommendationsApplyService,
     {
       // Factory because the trailing process listing is a test seam, not a
       // DI token.
@@ -160,6 +170,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     PolledSpendService,
     UserQuestionBroker,
     FindingsReportBroker,
+    AnalysisBroker,
+    AnalysisReportsService,
     ChartBroker,
     PatchBroker,
     ComparisonBroker,
@@ -424,6 +436,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
   ],
   exports: [
+    AnalysisBroker,
+    ThreadReaderService,
     GlobalChatSearchService,
     AgentEventBus,
     ApprovalRegistry,

@@ -217,6 +217,15 @@ export const settingsPatchSchema = z.strictObject({
     .max(MAX_AUTO_COMPACT_PERCENT)
     .nullable()
     .optional(),
+  lastAnalysisConfig: z
+    .strictObject({
+      agent: cliKind,
+      configDir: absolutePath.nullable(),
+      model: z.string().min(1).max(64).nullable(),
+      effort: z.string().min(1).max(64).nullable(),
+    })
+    .nullable()
+    .optional(),
   // The OTHER model settings, per CLI, as `{parameterId: value}`. Both halves
   // are the CLI's own words (`optimize_for` → `balanced`), so both are bounded
   // and neither is enumerated — this app holds no vocabulary for them at all.

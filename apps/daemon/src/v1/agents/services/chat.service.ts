@@ -67,6 +67,7 @@ import {
   type HostQuestion,
   type HostQuestionOutcome,
   type ItemWire,
+  type RecommendationApply,
   type RunGroupColor,
   type RunPreview,
   type RunSeenWire,
@@ -103,6 +104,10 @@ import {
   restatesRunAsWorking,
   terminalStatus,
 } from '../utils/event-to-item';
+import {
+  isHostAnalysisReadCall,
+  isHostRecommendationsCall,
+} from '../utils/host-analysis';
 import { isHostArtifactCall } from '../utils/host-artifact';
 import { isHostBoardCall } from '../utils/host-board';
 import { isHostChartCall } from '../utils/host-chart';
@@ -153,6 +158,8 @@ import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentMcpService } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
+import { AnalysisBroker } from './analysis.broker';
+import { AnalysisReportsService } from './analysis-reports.service';
 import { ApprovalRegistry } from './approval-registry';
 import { ArtifactBroker } from './artifact.broker';
 import { ArtifactStoreService } from './artifact-store.service';
@@ -619,6 +626,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly calls: ItemCallIndexService,
     private readonly wallWork: WallWorkService,
     private readonly wallTurns: WallTurnDao,
+    private readonly analyses: AnalysisBroker,
+    private readonly analysisReports: AnalysisReportsService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     @Optional() private readonly agentMcp?: AgentMcpService,
   ) {}
@@ -1175,6 +1184,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      * Explicit `null` files it loose; absent falls through to the rule.
      */
     groupId?: string | null;
+    /**
+     * The run this chat analyses and the seq its reads stop at — set only by
+     * `ThreadAnalysisService.start`. See `Run.analysisSourceRunId`.
+     */
+    analysisSource?: { runId: string; seq: number; working: boolean };
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
     this.assertApprovalSupported(input.agentKind, input.approval);
@@ -1246,6 +1260,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         groupId,
         taskId: input.taskId ?? null,
         taskIdentifier: input.taskIdentifier ?? null,
+        analysisSourceRunId: input.analysisSource?.runId ?? null,
+        analysisSourceSeq: input.analysisSource?.seq ?? null,
+        analysisSourceWorking: input.analysisSource?.working ?? null,
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
         // stay null.
@@ -4160,7 +4177,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     text: string,
     images: SendMessageImage[] = [],
-    options: { resumeOnly?: boolean; clientMessageId?: string } = {},
+    options: {
+      resumeOnly?: boolean;
+      clientMessageId?: string;
+      /**
+       * The recommendations this message applies — persisted on the message
+       * row as `payload.apply`, the durable record `save_workflow_change`
+       * checks a write against. Refused while a turn runs.
+       */
+      apply?: RecommendationApply;
+    } = {},
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
@@ -4184,7 +4210,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     run: Run,
     text: string,
     images: SendMessageImage[],
-    options: { resumeOnly?: boolean },
+    options: { resumeOnly?: boolean; apply?: RecommendationApply },
   ): Promise<ItemWire> {
     const runId = run.id;
     if (!run.cwd || !run.agentKind) {
@@ -4253,6 +4279,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         throw new ConflictException(
           'RUN_BUSY',
           'this chat is still working — retry is for a turn that has already failed',
+        );
+      }
+      if (options.apply !== undefined) {
+        // An Apply starts its own turn: delivered into a running one, the
+        // agent would take the selection mid-thought, and the analysis it is
+        // still writing could post a second card the selection never saw.
+        throw new ConflictException(
+          'RUN_BUSY',
+          'the analysis is still working — apply once it has finished',
         );
       }
       return await this.deliverIntoRunningTurn(runId, text, images);
@@ -4409,6 +4444,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // already in `auto` (`TaskBoardToolService.refuseUnattended`), since
         // this gate sees only the tool name.
         isHostBoardCall(hostServerName, toolName) ||
+        // The analysis chat's own reader and card, installed only on an
+        // analysis and scoped to its one source — see `isHostAnalysisReadCall`.
+        isHostAnalysisReadCall(hostServerName, toolName) ||
+        isHostRecommendationsCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -4491,6 +4530,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               {
                 text,
                 ...(attachments.length > 0 ? { images: attachments } : {}),
+                ...(options.apply === undefined
+                  ? {}
+                  : { apply: options.apply }),
               },
             );
 
@@ -5594,6 +5636,35 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const disposeNotifier = mcpEndpoint
         ? this.notices.register(runId, SINGLE_AGENT_NODE, notifyUser)
         : null;
+      // Only an analysis chat reads another thread — see `AnalysisBroker`.
+      const analysisSourceRunId = run.analysisSourceRunId;
+      const analysisSourceSeq = run.analysisSourceSeq;
+      const disposeAnalysis =
+        mcpEndpoint &&
+        analysisSourceRunId !== null &&
+        analysisSourceSeq !== null
+          ? this.analyses.register(
+              runId,
+              SINGLE_AGENT_NODE,
+              this.analysisReports.sinkFor(
+                {
+                  analysisRunId: runId,
+                  sourceRunId: analysisSourceRunId,
+                  snapshotSeq: analysisSourceSeq,
+                  sourceWorking: run.analysisSourceWorking ?? false,
+                },
+                async (kind, payload) =>
+                  this.persist(
+                    em,
+                    runId,
+                    await this.seqs.reserve(runId),
+                    kind,
+                    null,
+                    this.attributeCard(runId, payload),
+                  ),
+              ),
+            )
+          : null;
       // NOT disposed with the turn — see `notifiers`.
       if (disposeNotifier) {
         this.notifiers.set(runId, disposeNotifier);
@@ -5612,6 +5683,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeComparer?.();
         disposeGallerist?.();
         disposePublisher?.();
+        disposeAnalysis?.();
       };
       // ZERO the last turn's running bill before this one's first request can
       // report. It belongs HERE rather than at the settle for the reason the

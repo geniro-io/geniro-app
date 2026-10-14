@@ -214,7 +214,7 @@ export class WorkflowsController {
     @Param('slug') slug: string,
     @Body() dto: SaveWorkflowDto,
   ): Promise<WorkflowWire> {
-    return this.store.save(slug, dto.workflow);
+    return this.store.save(slug, dto.workflow, dto.baseHash);
   }
 
   /**

@@ -987,6 +987,23 @@ describe('AgentsPanel', () => {
     expect(el.querySelector('[data-slot="rail-divider"]')).toBeNull();
   });
 
+  it('opens Analyze thread from the heading and from the rail', () => {
+    const onAnalyzeThread = vi.fn();
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onAnalyzeThread={onAnalyzeThread}
+      />,
+    );
+    const selector = 'button[aria-label="Analyze thread"]';
+    click(el.querySelector(selector));
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    click(el.querySelector(selector));
+    expect(onAnalyzeThread).toHaveBeenCalledTimes(2);
+  });
+
   it('exports the chat from the heading and from the rail', () => {
     const onExportChat = vi.fn();
     const el = render(

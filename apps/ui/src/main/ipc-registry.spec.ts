@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => {
     lastEfforts: {},
     lastContextWindows: {},
     lastAutoCompactPercent: null,
+    lastAnalysisConfig: null,
     lastModelParameters: {},
     cliPaths: {},
     checkForUpdates: true,

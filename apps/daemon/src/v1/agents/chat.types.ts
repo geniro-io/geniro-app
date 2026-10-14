@@ -363,6 +363,385 @@ export type HostFindingsOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * The analysis tools ("Analyze thread"): installed for a turn only on a chat
+ * whose `Run.analysisSourceRunId` is set, and scoped to that one source run.
+ */
+export const HOST_ANALYZED_THREAD_TOOL = 'read_analyzed_thread';
+export const HOST_RECOMMENDATIONS_TOOL = 'report_recommendations';
+export const HOST_RECOMMENDATION_MARKS_TOOL = 'mark_recommendations';
+export const HOST_WORKFLOW_CHANGE_TOOL = 'save_workflow_change';
+
+export const ANALYSIS_VIEWS = [
+  'overview',
+  'spans',
+  'items',
+  'item',
+  'workflow',
+] as const;
+export const ANALYSIS_SPAN_KINDS = [
+  'turn',
+  'call',
+  'wait',
+  'delegate',
+  'tool',
+  'critical',
+] as const;
+export type AnalysisSpanKind = (typeof ANALYSIS_SPAN_KINDS)[number];
+
+/** The `read_analyzed_thread` arguments. */
+export const ReadAnalyzedThreadArgsSchema = z.object({
+  view: z
+    .enum(ANALYSIS_VIEWS)
+    .describe(
+      'overview: timing summary, per-node time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. workflow: the workflow as it is in the library now, its hash and how it differs from the copy this run started with (workflow threads only)',
+    ),
+  cursor: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('spans: the `next.cursor` the previous page returned'),
+  afterSeq: z
+    .number()
+    .int()
+    .min(-1)
+    .optional()
+    .describe('items: start after this seq; the previous page names it'),
+  fromTime: z
+    .string()
+    .max(40)
+    .optional()
+    .describe(
+      'items: start at the first row written at or after this ISO time',
+    ),
+  seq: z.number().int().min(0).optional().describe('item: which row'),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('item: the `next.offset` the previous chunk returned'),
+  nodeId: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('spans / items: one node only ("agent" is a chat’s own lane)'),
+  kinds: z
+    .array(z.string().max(40))
+    .max(12)
+    .optional()
+    .describe(
+      `spans: ${ANALYSIS_SPAN_KINDS.join(', ')} (default all but tool). items: item kinds such as message, tool_call, tool_result, turn_complete`,
+    ),
+  minMs: z
+    .number()
+    .min(0)
+    .optional()
+    .describe('spans: only spans at least this long'),
+});
+export type ReadAnalyzedThreadArgs = z.infer<
+  typeof ReadAnalyzedThreadArgsSchema
+>;
+
+/** At most this many items per target on one card; zero is a valid report. */
+export const MAX_RECOMMENDATIONS_PER_TARGET = 5;
+
+export const RecommendationIdSchema = z
+  .string()
+  .regex(
+    /^[WR]-\d{1,3}$/,
+    'an id is W-<n> for a workflow item, R-<n> for repo',
+  );
+
+export const RecommendationTargetSchema = z.enum(['workflow', 'repo']);
+
+export const RecommendationRiskLevelSchema = z.enum(['low', 'medium', 'high']);
+
+export const RecommendationEvidenceSchema = z.object({
+  seq: z
+    .number()
+    .int()
+    .min(0)
+    .describe('The source item seq the quote is from'),
+  ts: z.string().max(40).optional().describe('That item’s timestamp, ISO'),
+  nodeId: z.string().max(200).optional().describe('The node that wrote it'),
+  quote: z
+    .string()
+    .min(1)
+    .max(600)
+    .describe('A short verbatim excerpt of that item'),
+});
+
+export const RecommendationItemSchema = z.object({
+  id: RecommendationIdSchema.describe('W-1, W-2… workflow; R-1, R-2… repo'),
+  target: RecommendationTargetSchema,
+  kind: z
+    .string()
+    .min(1)
+    .max(40)
+    .describe(
+      'workflow: role|edge|parallelize|model|effort|termination|node; repo: ADD|UPDATE|REMOVE|WIRE',
+    ),
+  location: z
+    .string()
+    .min(1)
+    .max(300)
+    .describe('A workflow node id, or a repo file:line'),
+  title: z.string().min(1).max(200),
+  change: z
+    .string()
+    .min(1)
+    .max(12_000)
+    .describe(
+      'The exact change: replacement text, a YAML diff, or a WHEN…→… rule',
+    ),
+  evidence: z.array(RecommendationEvidenceSchema).min(1).max(6),
+  rootCause: z.string().min(1).max(600),
+  impact: z.object({
+    minutesSaved: z
+      .number()
+      .min(0)
+      .max(100_000)
+      .describe('Estimated minutes saved per run'),
+    basis: z
+      .string()
+      .min(1)
+      .max(400)
+      .describe('Which spans the estimate is drawn from'),
+    confidence: z.number().int().min(1).max(5),
+  }),
+  risk: z.object({
+    level: RecommendationRiskLevelSchema,
+    note: z
+      .string()
+      .min(1)
+      .max(600)
+      .describe('What breaks if this is wrong, and what must be preserved'),
+  }),
+  standsAlone: z
+    .boolean()
+    .optional()
+    .describe('False when it only works together with another item'),
+});
+export type RecommendationItem = z.infer<typeof RecommendationItemSchema>;
+
+/** The `report_recommendations` arguments. */
+export const RecommendationsReportSchema = z.object({
+  summary: z
+    .string()
+    .max(2000)
+    .optional()
+    .describe('One or two sentences on where the time went'),
+  items: z
+    .array(RecommendationItemSchema)
+    .max(2 * MAX_RECOMMENDATIONS_PER_TARGET),
+});
+export type RecommendationsReport = z.infer<typeof RecommendationsReportSchema>;
+
+/** The summary strip a card opens with — measured by the daemon, never the agent. */
+export const RecommendationsTimingSchema = z.object({
+  wallMs: z.number().min(0),
+  activeMs: z.number().min(0),
+  waitingMs: z.number().min(0),
+  criticalPathMs: z.number().min(0),
+  sinks: z.array(z.object({ label: z.string(), ms: z.number().min(0) })).max(3),
+});
+export type RecommendationsTiming = z.infer<typeof RecommendationsTimingSchema>;
+
+/**
+ * TWIN PARSER: apps/ui/src/renderer/chats/recommendations-payload.ts — the
+ * `recommendations` item payload.
+ */
+export const RecommendationsPayloadSchema = RecommendationsReportSchema.extend({
+  sourceRunId: z.string(),
+  sourceKind: z.enum(['workflow', 'chat']),
+  timing: RecommendationsTimingSchema.nullable(),
+});
+export type RecommendationsPayload = z.infer<
+  typeof RecommendationsPayloadSchema
+>;
+
+export const RecommendationOutcomeStatusSchema = z.enum([
+  'applied',
+  'skipped',
+  'failed',
+]);
+
+/**
+ * The `mark_recommendations` arguments, and the `recommendation_outcome` item
+ * payload as written.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/recommendations-payload.ts.
+ */
+export const RecommendationMarksSchema = z.object({
+  cardSeq: z
+    .number()
+    .int()
+    .min(0)
+    .describe('The seq of the recommendations card the Apply named'),
+  outcomes: z
+    .array(
+      z.object({
+        id: RecommendationIdSchema,
+        status: RecommendationOutcomeStatusSchema,
+        note: z
+          .string()
+          .max(600)
+          .optional()
+          .describe('Why it failed or was skipped, or what was done'),
+        backup: z
+          .string()
+          .max(300)
+          .optional()
+          .describe('The backup file name save_workflow_change returned'),
+      }),
+    )
+    .min(1)
+    .max(2 * MAX_RECOMMENDATIONS_PER_TARGET),
+});
+export type RecommendationMarks = z.infer<typeof RecommendationMarksSchema>;
+
+/**
+ * The durable record of one Apply, carried on the user message it sent
+ * (`payload.apply`) — what `save_workflow_change` checks a write against.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/recommendations-payload.ts.
+ */
+export const RecommendationApplySchema = z.object({
+  cardSeq: z.number().int().min(0),
+  ids: z
+    .array(RecommendationIdSchema)
+    .min(1)
+    .max(2 * MAX_RECOMMENDATIONS_PER_TARGET),
+});
+export type RecommendationApply = z.infer<typeof RecommendationApplySchema>;
+
+/* Thread timeline — `utils/thread-timeline.ts` folds these. */
+
+/** One `tool_call` / `tool_result` row with none of its content. */
+export interface ToolCallTime {
+  seq: number;
+  kind: 'tool_call' | 'tool_result';
+  nodeId: string | null;
+  inCall: string | null;
+  /** The row's persist time, epoch ms. */
+  at: number;
+  toolId: string | null;
+  name: string | null;
+}
+
+/** A tool call and how long it took to be answered. */
+export interface ToolSpan {
+  seq: number;
+  resultSeq: number | null;
+  nodeId: string | null;
+  name: string;
+  startMs: number;
+  /** Null when no result was ever written and the run is no longer working. */
+  durationMs: number | null;
+  /** True when it was still unanswered at the last row of a working run. */
+  open: boolean;
+}
+
+/** The waterfall spans `foldThreadTimeline` reads, as `ChatWaterfallService.fold` returns them. */
+export interface TimelineSpans {
+  from: number;
+  to: number;
+  turns: readonly {
+    nodeId: string | null;
+    startedAt: string;
+    durationMs: number;
+  }[];
+  calls: readonly {
+    callerNodeId: string | null;
+    calleeNodeId: string | null;
+    mode: string | null;
+    startedAt: string;
+    durationMs: number;
+  }[];
+  waits: readonly {
+    nodeId: string | null;
+    startedAt: string;
+    durationMs: number;
+  }[];
+}
+
+export interface NodeTime {
+  nodeId: string | null;
+  /** Wall time inside the node's turns, overlaps counted once. */
+  inTurnsMs: number;
+  /** Inside a turn, blocked on a synchronous call it made. */
+  waitingOnCalleeMs: number;
+  /** Inside a turn, blocked on a card for the user. */
+  waitingOnUserMs: number;
+  /** In a turn and blocked on neither — the node's own work. */
+  busyMs: number;
+  turns: number;
+  toolCalls: number;
+  /** Summed tool-call durations — tools run in parallel, so this can exceed busy. */
+  toolMs: number;
+}
+
+export interface CriticalSegment {
+  kind: 'work' | 'waiting_on_user' | 'idle';
+  nodeId: string | null;
+  startMs: number;
+  durationMs: number;
+}
+
+export interface ToolTotal {
+  nodeId: string | null;
+  name: string;
+  calls: number;
+  totalMs: number;
+  maxMs: number;
+}
+
+export interface ThreadTimeline {
+  from: number;
+  to: number;
+  wallMs: number;
+  /** Some node was doing its own work. */
+  activeMs: number;
+  /** A card was waiting on the user. */
+  waitingOnUserMs: number;
+  criticalPathMs: number;
+  criticalPath: CriticalSegment[];
+  /** The nodes holding most of the critical path, largest first. */
+  sinks: { nodeId: string | null; ms: number }[];
+  nodes: NodeTime[];
+  tools: ToolSpan[];
+  toolTotals: ToolTotal[];
+}
+
+/** What kind of thread an analysis reads — it decides what may be recommended. */
+export type AnalysedThreadKind = 'workflow' | 'chat';
+
+/** Which source an analysis turn reads, and where its snapshot ends. */
+export interface AnalysisTurn {
+  analysisRunId: string;
+  sourceRunId: string;
+  snapshotSeq: number;
+  /** `Run.analysisSourceWorking`: the source was working at the snapshot. */
+  sourceWorking: boolean;
+}
+
+/** What filing a report or a set of outcomes resolved to. */
+export type AnalysisFiled =
+  | { status: 'recorded'; seq: number; count: number }
+  | { status: 'refused'; reason: string };
+
+/**
+ * One analysis turn's half of the analysis tools: which source it reads, and
+ * how its card and outcome rows are written into its own transcript.
+ */
+export interface AnalysisSink {
+  turn: AnalysisTurn;
+  report(report: RecommendationsReport): Promise<AnalysisFiled>;
+  mark(marks: RecommendationMarks): Promise<AnalysisFiled>;
+}
+
+/**
  * TWIN PARSER: apps/ui/src/renderer/chats/chart-payload.ts — the reader over the
  * `show_chart` item payload this tool produces.
  *
@@ -2114,6 +2493,16 @@ export const RunWaterfallWireSchema = z.object({
     ),
 });
 export type RunWaterfallWire = z.infer<typeof RunWaterfallWireSchema>;
+
+/**
+ * `ChatWaterfallService.fold`'s answer: the card's spans before the cap, and
+ * whether the run was working at the read's end (an open span then runs to
+ * `to`).
+ */
+export type RunWaterfallFold = Omit<
+  RunWaterfallWire,
+  'toolUse' | 'partialReason'
+> & { working: boolean };
 
 /**
  * One CLI process a run keeps, as `AgentSessionRegistry.processRoots` reports
@@ -4273,6 +4662,19 @@ export const RunWireSchema = z.object({
     .nullable()
     .describe(
       "That card's own identifier — `GEN-12` — or null for a run no card started, and for a task run made before this was recorded. Denormalized onto the run so the chat list can label a thread with the card it is working without joining two more tables",
+    ),
+  analysisSourceRunId: z
+    .string()
+    .nullable()
+    .describe(
+      'The run this chat analyses ("Analyze thread"); null for every chat that is not an analysis',
+    ),
+  analysisSourceSeq: z
+    .number()
+    .int()
+    .nullable()
+    .describe(
+      "The source run's highest seq when the analysis started — the snapshot its reads stop at; null when not an analysis",
     ),
   /**
    * Where this run sits in the pinned band at the top of its own group (or of

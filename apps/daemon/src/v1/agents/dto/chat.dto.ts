@@ -18,10 +18,12 @@ import {
   ChatUploadWireSchema,
   commitShaSchema,
   CustomInstructionsSchema,
+  hasControlCharacters,
   ItemWireSchema,
   LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_RUN_NOTES_LENGTH,
+  RecommendationApplySchema,
   RunArtifactsWireSchema,
   RunProcessesWireSchema,
   RunSeenWireSchema,
@@ -151,6 +153,49 @@ export const createChatSchema = z.object({
   resumeSessionId: z.string().min(1).optional(),
 });
 export class CreateChatDto extends createZodDto(createChatSchema) {}
+
+/**
+ * `POST /v1/chats/:runId/analyses` — start a chat that analyses `:runId`.
+ *
+ * The agent setup mirrors {@link createChatSchema}'s fields of the same name.
+ * `cwd` is only sent when the source's own folder is gone (the route answers
+ * `ANALYSIS_FOLDER_GONE` until one is); otherwise the analysis runs where the
+ * source ran, so its repo recommendations land in that working tree.
+ */
+export const analyzeThreadSchema = z.object({
+  agentKind: AgentKindSchema,
+  model: z.string().min(1).optional(),
+  effort: z.string().min(1).optional(),
+  configDir: z.string().min(1).optional(),
+  cwd: z.string().min(1).optional(),
+  focus: z
+    .string()
+    .max(4000)
+    .refine(
+      (value) => !hasControlCharacters(value),
+      'must not contain control characters',
+    )
+    .optional()
+    .describe("The user's focus or extra instructions for this analysis"),
+  customInstructions: CustomInstructionsSchema.optional(),
+  agentOptions: AgentOptionsSchema.optional(),
+});
+export class AnalyzeThreadDto extends createZodDto(analyzeThreadSchema) {}
+
+/** `POST /v1/chats/:runId/recommendations/apply` — the card's Apply. */
+export const applyRecommendationsSchema = z.object({
+  cardSeq: z.number().int().min(0),
+  ids: RecommendationApplySchema.shape.ids,
+  note: z.string().max(2000).optional(),
+  clientMessageId: z
+    .string()
+    .min(1)
+    .max(128)
+    .describe('ID generated once per press and reused for retries'),
+});
+export class ApplyRecommendationsDto extends createZodDto(
+  applyRecommendationsSchema,
+) {}
 
 export const updateChatSettingsSchema = z
   .object({

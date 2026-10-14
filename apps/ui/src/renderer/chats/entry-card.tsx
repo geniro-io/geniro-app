@@ -6,6 +6,7 @@ import { ComparisonCard } from './comparison-block';
 import { FindingsCard } from './findings-block';
 import { GalleryCard } from './gallery-block';
 import { MetricsCard } from './metrics-block';
+import { RecommendationsBlock } from './recommendations-block';
 import { TaskListCard } from './task-list';
 import type { CardEntry } from './transcript-groups';
 import { WorkflowCard } from './workflow-block';
@@ -48,6 +49,8 @@ export const EntryCard = memo(function EntryCard({
           memoryKey={`findings:${entry.id}`}
         />
       );
+    case 'recommendations':
+      return <RecommendationsBlock entry={entry} />;
     case 'chart':
       return <ChartCard chart={entry.chart} memoryKey={`chart:${entry.id}`} />;
     case 'metrics':

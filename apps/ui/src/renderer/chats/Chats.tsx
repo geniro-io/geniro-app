@@ -106,6 +106,7 @@ import {
   type InstanceTaskList,
 } from './agent-instances';
 import { AgentsPanel } from './agents-panel';
+import { AnalyzeThreadDialog } from './analyze-thread-dialog';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
@@ -191,6 +192,7 @@ import {
 } from './published-artifact';
 import { QueuedStrip } from './queued-strip';
 import { holdReadingPlace } from './reading-anchor';
+import type { RecommendationsApplier } from './recommendations-apply-context';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
 import {
@@ -2063,6 +2065,42 @@ export function Chats({
     },
     [chatApi, workflowNames],
   );
+
+  /** A recommendations card's Apply, for `RecommendationsApplyContext`. */
+  const applyRecommendations = useCallback<RecommendationsApplier>(
+    async (runId, cardSeq, ids) => {
+      await chatApi.applyRecommendations({
+        runId,
+        applyRecommendationsDto: { cardSeq, ids, clientMessageId: randomId() },
+      });
+    },
+    [chatApi],
+  );
+
+  /** An analysis chat's header chip: the thread it reads, one press away. */
+  const analysisSourceOf = useCallback(
+    (run: ChatRun): { label: string; onOpen: () => void } | null => {
+      const sourceId = run.analysisSourceRunId;
+      if (sourceId == null) {
+        return null;
+      }
+      const source = runsRef.current.find((r) => r.id === sourceId);
+      return {
+        label: source ? runLabel(source, workflowNames) : 'the analysed thread',
+        onOpen: () => void activateRun(sourceId),
+      };
+    },
+    [activateRun, workflowNames],
+  );
+
+  /** The thread the Analyze thread dialog is open for (null = closed). */
+  const [analyzingRun, setAnalyzingRun] = useState<ChatRun | null>(null);
+  const handleAnalyzeRun = useCallback((runId: string): void => {
+    const run = runsRef.current.find((r) => r.id === runId);
+    if (run) {
+      setAnalyzingRun(run);
+    }
+  }, []);
 
   // The run queued for deletion (null = no confirm open). Deleting is
   // IRREVERSIBLE — rows, attachments and PTY sessions all go — so it is the
@@ -8331,7 +8369,8 @@ export function Chats({
         threadId={activeRunId}
         runSettledAt={activeRunSettledAt}
         delegatesOut={activeDelegatesOut}
-        callConversations={callConversations}>
+        callConversations={callConversations}
+        applyRecommendations={applyRecommendations}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -8578,6 +8617,12 @@ export function Chats({
                               // the desk but destroying it.
                               onArchive={handleArchiveRun}
                               onUnarchive={handleUnarchiveRun}
+                              // An analysis is not itself analysed.
+                              onAnalyze={
+                                run.analysisSourceRunId == null
+                                  ? handleAnalyzeRun
+                                  : undefined
+                              }
                               // Read off the ROW, like `archived` above and
                               // for its reason: under `Show all` the band and
                               // the rest are one list, so a flag derived from
@@ -9061,6 +9106,7 @@ export function Chats({
                     {activeRun ? (
                       <ChatHeader
                         label={runLabel(activeRun, workflowNames)}
+                        analysisSource={analysisSourceOf(activeRun)}
                         isWorkflow={activeRun.workflowId != null}
                         agentKind={activeRun.agentKind}
                         // Where this conversation happens. Beside the agent
@@ -9993,6 +10039,11 @@ export function Chats({
                           ? () => handleExportRun(activeRun.id)
                           : undefined
                       }
+                      onAnalyzeThread={
+                        activeRun && activeRun.analysisSourceRunId == null
+                          ? () => handleAnalyzeRun(activeRun.id)
+                          : undefined
+                      }
                       terminalReasons={terminalReasons}
                       // In the drawer the panel owns no column, so it drops
                       // the stored width, the resize handle and the fold —
@@ -10275,6 +10326,35 @@ export function Chats({
                   onDelete={deleteRunConfig}
                   onReorder={reorderRunConfigs}
                   onClose={() => setRunConfigPickerOpen(false)}
+                />
+                <AnalyzeThreadDialog
+                  source={analyzingRun}
+                  sourceLabel={
+                    analyzingRun ? runLabel(analyzingRun, workflowNames) : ''
+                  }
+                  chatApi={chatApi}
+                  agentsApi={agentsApi}
+                  cliDetections={cliDetections}
+                  composerSetup={{
+                    agent: agentKind,
+                    configDir: configDirs[agentKind] ?? null,
+                    model: models[agentKind] ?? null,
+                    effort: efforts[agentKind] ?? null,
+                  }}
+                  recentConfigDirsFor={(kind) =>
+                    recentConfigDirsByAgent[kind] ?? []
+                  }
+                  configProfilesFor={(kind) =>
+                    configProfiles.filter((profile) => profile.agent === kind)
+                  }
+                  configDirReasonFor={configDirReasonFor}
+                  runSettings={currentRunSettings}
+                  onClose={() => setAnalyzingRun(null)}
+                  onStarted={(run) => {
+                    setAnalyzingRun(null);
+                    addRun(run);
+                    void activateRun(run.id);
+                  }}
                 />
                 <GlobalChatSearchDialog
                   open={globalSearchOpen}

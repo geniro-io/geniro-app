@@ -1045,7 +1045,97 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('userMessagesInOrder', () => {
+    it('reads the live user messages oldest first, whatever order they were written in', async () => {
+      const add = (seq: number, role: string) =>
+        dao.create({
+          runId: 'run-a',
+          seq,
+          kind: 'message',
+          role,
+          payload: JSON.stringify({ text: `m${seq}` }),
+        });
+      await add(7, 'user');
+      await add(2, 'user');
+      await add(5, 'assistant');
+      const deleted = await add(9, 'user');
+      await orm.em
+        .fork()
+        .createQueryBuilder(Item)
+        .update({ deletedAt: new Date() })
+        .where({ id: deleted.id })
+        .execute();
+
+      const rows = await dao.userMessagesInOrder('run-a');
+
+      expect(rows.map((row) => row.seq)).toEqual([2, 7]);
+    });
+  });
+
+  describe('existingSeqs', () => {
+    it('answers only the seqs the run holds at or below the snapshot', async () => {
+      await insert('run-a', 1);
+      await insert('run-a', 4);
+      await insert('run-a', 9);
+      await insert('run-b', 2);
+
+      const found = await dao.existingSeqs('run-a', [1, 2, 4, 9], 5);
+
+      expect([...found].sort((a, b) => a - b)).toEqual([1, 4]);
+    });
+  });
+
+  describe('toolCallTimes', () => {
+    it('reads the id and name of each tool row up to the snapshot, and nothing it said', async () => {
+      await insert(
+        'run-a',
+        0,
+        'tool_call',
+        JSON.stringify({ id: 't1', name: 'Bash', input: { command: 'ls' } }),
+      );
+      await insert('run-a', 1, 'message');
+      await insert(
+        'run-a',
+        2,
+        'tool_result',
+        JSON.stringify({ id: 't1', output: 'secret listing' }),
+      );
+      await insert('run-a', 3, 'tool_call', 'not json');
+      await insert('run-a', 4, 'tool_call', JSON.stringify({ id: 't2' }));
+      await insert('run-b', 0, 'tool_call', JSON.stringify({ id: 'x' }));
+
+      const rows = await dao.toolCallTimes('run-a', 3);
+
+      expect(
+        rows.map(({ seq, kind, toolId, name }) => ({
+          seq,
+          kind,
+          toolId,
+          name,
+        })),
+      ).toEqual([
+        { seq: 0, kind: 'tool_call', toolId: 't1', name: 'Bash' },
+        { seq: 2, kind: 'tool_result', toolId: 't1', name: null },
+        { seq: 3, kind: 'tool_call', toolId: null, name: null },
+      ]);
+      expect(typeof rows[0]!.at).toBe('number');
+      expect(rows[2]!.at).toBeGreaterThanOrEqual(rows[0]!.at);
+    });
+  });
+
   describe('waterfallPayloadRows', () => {
+    it('stops at the snapshot seq it is given', async () => {
+      await insert('run-a', 0, 'turn_complete', JSON.stringify({ usage: {} }));
+      await insert('run-a', 5, 'turn_complete', JSON.stringify({ usage: {} }));
+
+      const rows = await dao.waterfallPayloadRows('run-a', undefined, 4);
+
+      expect(rows.map((row) => row.seq)).toEqual([0]);
+      expect(
+        (await dao.timelineSpine('run-a', undefined, 4)).map((row) => row.seq),
+      ).toEqual([0]);
+    });
+
     it('leaves tool calls and results out, which is what makes the read affordable', async () => {
       // The exclusion IS the design: tool rows outnumber every other kind by
       // orders of magnitude, and the waterfall draws them as a density that

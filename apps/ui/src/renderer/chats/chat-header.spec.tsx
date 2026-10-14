@@ -71,6 +71,30 @@ describe('ChatHeader', () => {
     expect(el.textContent).not.toContain('/proj');
   });
 
+  it("names an analysis chat's source and opens it, and shows nothing on any other chat", () => {
+    const onOpen = vi.fn();
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        analysisSource={{ label: 'Dev Team run', onOpen }}
+      />,
+    );
+    const chip = el.querySelector<HTMLButtonElement>(
+      '[data-slot="analysis-source-chip"]',
+    );
+    expect(chip?.textContent).toContain('Analyzing: Dev Team run');
+    act(() => {
+      chip!.click();
+    });
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    expect(
+      render(<ChatHeader {...baseProps} />).querySelector(
+        '[data-slot="analysis-source-chip"]',
+      ),
+    ).toBeNull();
+  });
+
   it('shows the activity time once settled', () => {
     const el = render(<ChatHeader {...baseProps} status="completed" />);
     expect(el.textContent).toContain('1m');

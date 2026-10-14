@@ -238,6 +238,15 @@ export interface OnboardingProgress {
   brief: string;
 }
 
+/** Who runs an analysis — see `Settings.lastAnalysisConfig`. */
+export interface AnalysisConfig {
+  agent: CliKind;
+  /** The profile (config directory), or null for the CLI's own. */
+  configDir: string | null;
+  model: string | null;
+  effort: string | null;
+}
+
 export interface Settings {
   /** First-run onboarding finished (gates the renderer's initial route). */
   onboardingComplete: boolean;
@@ -326,6 +335,12 @@ export interface Settings {
    * share of the window means the same thing to every agent.
    */
   lastAutoCompactPercent: number | null;
+  /**
+   * The "Analyze thread" dialog's last choice, so the next analysis opens on
+   * it; null until one has been started (the dialog then starts from the
+   * composer's setup).
+   */
+  lastAnalysisConfig: AnalysisConfig | null;
   /**
    * The OTHER model settings for the next chat on each CLI, as
    * `{parameterId: value}` — `{optimize_for: 'balanced'}`.
@@ -538,6 +553,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastEfforts: {},
   lastContextWindows: {},
   lastAutoCompactPercent: null,
+  lastAnalysisConfig: null,
   lastModelParameters: {},
   cliPaths: {},
   checkForUpdates: true,

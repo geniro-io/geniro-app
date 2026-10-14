@@ -18,7 +18,7 @@ import { Workflows } from './Workflows';
 
 interface SaveRequest {
   slug: string;
-  saveWorkflowDto: { workflow: Workflow };
+  saveWorkflowDto: { workflow: Workflow; baseHash?: string };
 }
 
 /** A promise the spec settles by hand — a request still "on the wire". */
@@ -65,7 +65,10 @@ const {
 // mocked `useNodesState` froze every one of them. Only the stylesheet goes.
 vi.mock('@xyflow/react/dist/style.css', () => ({}));
 
-vi.mock('../daemon-api', () => ({
+vi.mock('../daemon-api', async (importOriginal) => ({
+  // The real reader of a refusal's code — the builder branches on it.
+  daemonErrorCode: (await importOriginal<typeof import('../daemon-api')>())
+    .daemonErrorCode,
   describeDaemonError: (err: unknown) => String(err),
   // Read by the MCP listing a selected agent node asks for.
   MCP_ROUTE_TIMEOUT_MS: 60_000,
@@ -212,10 +215,12 @@ beforeEach(() => {
     .mockImplementation(async ({ slug }: { slug: string }) => ({
       slug,
       workflow: EMPTY,
+      hash: 'loaded-1',
     }));
   saveWorkflow.mockReset().mockImplementation(async (request: SaveRequest) => ({
     slug: request.slug,
     workflow: request.saveWorkflowDto.workflow,
+    hash: 'saved-1',
   }));
   openWorkflowChat
     .mockReset()
@@ -1144,5 +1149,79 @@ describe('first team from onboarding', () => {
       },
     });
     expect(openWorkflowChat).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * An analysis can save the workflow the builder has open. The builder's saves
+ * quote the version they were made from, and one made from a stale copy is
+ * refused rather than writing the old canvas back over the applied change.
+ */
+describe('Workflows — a save over a file changed outside the builder', () => {
+  beforeEach(() => {
+    client = fakeClient();
+  });
+
+  it('quotes its version, holds autosave on a refusal, and reloads on request', async () => {
+    saveWorkflow.mockImplementation(async () => {
+      throw new Error(
+        'daemon PUT /v1/workflows/dev-team failed (409): {"code":"WORKFLOW_CHANGED","message":"changed since this copy was read"}',
+      );
+    });
+    await openBuilder();
+
+    await addFromPalette('Manual');
+    await wait(900);
+
+    expect(savedRequests()).toHaveLength(1);
+    expect(savedRequests()[0]!.saveWorkflowDto.baseHash).toBe('loaded-1');
+    expect(container.textContent).toContain(
+      'This workflow changed outside the builder',
+    );
+
+    await addFromPalette('Manual');
+    await wait(900);
+    expect(savedRequests()).toHaveLength(1);
+
+    const reads = getWorkflow.mock.calls.length;
+    await press('Reload');
+    expect(getWorkflow.mock.calls.length).toBe(reads + 1);
+    expect(container.textContent).not.toContain(
+      'This workflow changed outside the builder',
+    );
+  });
+
+  it('quotes the version its own last save returned on the next save', async () => {
+    await openBuilder();
+
+    await addFromPalette('Manual');
+    await wait(900);
+    await addFromPalette('Manual');
+    await wait(900);
+
+    expect(savedRequests().map((r) => r.saveWorkflowDto.baseHash)).toEqual([
+      'loaded-1',
+      'saved-1',
+    ]);
+  });
+
+  it('quotes the version the post-turn re-read found', async () => {
+    openWorkflowChat.mockImplementation(async () => ({
+      id: 'run-1',
+      status: 'running',
+    }));
+    await openBuilder();
+    await press('Change with chat');
+    getWorkflow.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      workflow: EMPTY,
+      hash: 'reread-2',
+    }));
+
+    await addFromPalette('Manual');
+    await endTurn('done-1');
+    await wait(900);
+
+    expect(savedRequests().at(-1)!.saveWorkflowDto.baseHash).toBe('reread-2');
   });
 });

@@ -144,33 +144,7 @@ export function OptionList({
               'hover:bg-accent hover:text-accent-foreground',
             )}>
             {arity === 'none' ? null : (
-              <span
-                aria-hidden="true"
-                data-slot="option-indicator"
-                className={cn(
-                  // `mt-0.5` rather than centring the row: a label that wraps
-                  // to three lines would otherwise float its box against the
-                  // middle line, where it reads as belonging to that line
-                  // rather than to the option.
-                  'mt-0.5 flex size-4 shrink-0 items-center justify-center border transition-colors',
-                  arity === 'many' ? 'rounded-[4px]' : 'rounded-full',
-                  chosen
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : // NOT `border-input`: that token is tuned for a field's
-                      // own edge against page cream, where it is meant to
-                      // recede — at 16px it disappeared, and an invisible
-                      // checkbox is exactly the state this control exists to
-                      // make visible.
-                      'border-muted-foreground/50',
-                )}>
-                {chosen ? (
-                  arity === 'many' ? (
-                    <Check className="size-3" strokeWidth={3} />
-                  ) : (
-                    <span className="size-1.5 rounded-full bg-primary-foreground" />
-                  )
-                ) : null}
-              </span>
+              <OptionIndicator arity={arity} chosen={chosen} />
             )}
             {detail ? (
               <span className="flex min-w-0 flex-col gap-0.5">
@@ -189,5 +163,48 @@ export function OptionList({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * The box (`many`) or dot (`one`) that marks a pickable option and its pick —
+ * exported for a list whose rows carry more than a label (the
+ * recommendations card), so a tick looks the same wherever it is drawn.
+ */
+export function OptionIndicator({
+  arity,
+  chosen,
+}: {
+  arity: Exclude<OptionArity, 'none'>;
+  chosen: boolean;
+}): React.JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      data-slot="option-indicator"
+      className={cn(
+        // `mt-0.5` rather than centring the row: a label that wraps
+        // to three lines would otherwise float its box against the
+        // middle line, where it reads as belonging to that line
+        // rather than to the option.
+        'mt-0.5 flex size-4 shrink-0 items-center justify-center border transition-colors',
+        arity === 'many' ? 'rounded-[4px]' : 'rounded-full',
+        chosen
+          ? 'border-primary bg-primary text-primary-foreground'
+          : // NOT `border-input`: that token is tuned for a field's
+            // own edge against page cream, where it is meant to
+            // recede — at 16px it disappeared, and an invisible
+            // checkbox is exactly the state this control exists to
+            // make visible.
+            'border-muted-foreground/50',
+      )}>
+      {chosen ? (
+        arity === 'many' ? (
+          <Check className="size-3" strokeWidth={3} />
+        ) : (
+          <span className="size-1.5 rounded-full bg-primary-foreground" />
+        )
+      ) : null}
+    </span>
   );
 }

@@ -65,6 +65,21 @@ describe('runToWire', () => {
   it('projects a run without notes as null', () => {
     expect(runToWire(new Run()).notes).toBeNull();
   });
+
+  it('projects the run an analysis chat analyses, and the seq it stops at', () => {
+    const run = new Run();
+    run.analysisSourceRunId = 'source-run';
+    run.analysisSourceSeq = 412;
+
+    expect(runToWire(run)).toMatchObject({
+      analysisSourceRunId: 'source-run',
+      analysisSourceSeq: 412,
+    });
+    expect(runToWire(new Run())).toMatchObject({
+      analysisSourceRunId: null,
+      analysisSourceSeq: null,
+    });
+  });
 });
 
 /**

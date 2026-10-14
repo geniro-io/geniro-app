@@ -195,6 +195,28 @@ describe('ChatListItem', () => {
       ]);
     });
 
+    it('offers Analyze thread on a live row, and never in the archive', async () => {
+      const onAnalyze = vi.fn();
+      const container = await mount(<ChatListItem {...props({ onAnalyze })} />);
+      expect(await openMenu(container)).toEqual([
+        'Rename',
+        'Analyze thread…',
+        'Archive',
+      ]);
+      await clickMenuRow('Analyze thread…');
+      expect(onAnalyze).toHaveBeenCalledWith('run-1');
+
+      act(() => {
+        document.body.innerHTML = '';
+      });
+      const shelved = await mount(
+        <ChatListItem
+          {...props({ onAnalyze, archived: true, onUnarchive: vi.fn() })}
+        />,
+      );
+      expect(await openMenu(shelved)).not.toContain('Analyze thread…');
+    });
+
     it('asks for the state the row should END in, never a toggle', async () => {
       const onSetPinned = vi.fn();
       const container = await mount(

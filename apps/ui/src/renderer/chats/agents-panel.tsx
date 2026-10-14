@@ -8,6 +8,7 @@ import {
   LayoutTemplate,
   NotebookPen,
   Search,
+  Sparkles,
   Terminal as TerminalIcon,
 } from 'lucide-react';
 import { useContext, useEffect, useRef, useState } from 'react';
@@ -291,6 +292,32 @@ function ExportChatButton({
       onClick={onExport}
       className={cn('shrink-0 text-muted-foreground', className)}>
       <Download className="size-4" />
+    </Button>
+  );
+}
+
+/**
+ * "Analyze thread": opens the dialog that starts a linked analysis chat over
+ * this run — where its time went, and what to change. A panel control beside
+ * Export for Export's reason: it acts on the whole run, not on one agent.
+ */
+function AnalyzeThreadButton({
+  onAnalyze,
+  className,
+}: {
+  onAnalyze: () => void;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label="Analyze thread"
+      title="Analyze thread — where the time went, and what to change"
+      onClick={onAnalyze}
+      className={cn('shrink-0 text-muted-foreground', className)}>
+      <Sparkles className="size-4" />
     </Button>
   );
 }
@@ -1560,6 +1587,7 @@ export function AgentsPanel({
   timeline,
   onOpenFolderTerminal,
   onExportChat,
+  onAnalyzeThread,
   onResolveHandoff,
   terminalReasons,
   fill = false,
@@ -1788,6 +1816,11 @@ export function AgentsPanel({
    * column that never sees the items cannot export a stale window of them.
    */
   onExportChat?: () => void;
+  /**
+   * Open the Analyze thread dialog for this run. Absent draws no button —
+   * Chats withholds it on an analysis chat, which is not analysed again.
+   */
+  onAnalyzeThread?: () => void;
   /**
    * Each agent's OWN current task list, keyed by `AgentDisplay.id` — the
    * checklist its CLI keeps while working a multi-step job.
@@ -2038,6 +2071,7 @@ export function AgentsPanel({
         onSearch ||
         onOpenFolderTerminal ||
         onExportChat ||
+        onAnalyzeThread ||
         notes ? (
           <>
             {/* The chevron acts on the COLUMN; everything under it acts on the
@@ -2079,6 +2113,12 @@ export function AgentsPanel({
             ) : null}
             {onExportChat ? (
               <ExportChatButton onExport={onExportChat} className="size-7" />
+            ) : null}
+            {onAnalyzeThread ? (
+              <AnalyzeThreadButton
+                onAnalyze={onAnalyzeThread}
+                className="size-7"
+              />
             ) : null}
             {notes ? (
               <ThreadNotesRailButton
@@ -2153,6 +2193,9 @@ export function AgentsPanel({
         ) : null}
         {onExportChat ? (
           <ExportChatButton onExport={onExportChat} className="size-6" />
+        ) : null}
+        {onAnalyzeThread ? (
+          <AnalyzeThreadButton onAnalyze={onAnalyzeThread} className="size-6" />
         ) : null}
         {/* Withheld while filling a drawer: the fold is dropped there (see
             `fill`), so this would be a control that does nothing — and the

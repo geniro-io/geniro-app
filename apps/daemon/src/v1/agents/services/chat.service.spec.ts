@@ -90,6 +90,8 @@ import { AgentEventBus } from './agent-events.bus';
 import type { AgentMcpService } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { AgentVersionService } from './agent-version.service';
+import { AnalysisBroker } from './analysis.broker';
+import type { AnalysisReportsService } from './analysis-reports.service';
 import { ApprovalRegistry } from './approval-registry';
 import { ArtifactBroker } from './artifact.broker';
 import { ArtifactStoreService } from './artifact-store.service';
@@ -962,6 +964,8 @@ function setup(
     >;
     /** The MCP service a turn's server report is checked against, when a test needs one. */
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
+    /** The analysis sink a turn installs, for the cases that drive an analysis chat. */
+    analysisSink?: AnalysisReportsService['sinkFor'];
   } = {},
 ) {
   const runDao = new FakeRunDao();
@@ -1029,6 +1033,7 @@ function setup(
   const callTokens = new CallTokenRegistry();
   const userQuestions = new UserQuestionBroker();
   const findingsReports = new FindingsReportBroker();
+  const analyses = new AnalysisBroker();
   const charts = new ChartBroker();
   const patches = new PatchBroker();
   const plans = new PlanBroker();
@@ -1196,6 +1201,12 @@ function setup(
       join(tmpdir(), 'geniro-chat-wall-work-marker'),
     ),
     wallTurns as unknown as WallTurnDao,
+    analyses,
+    // Inert unless a case drives an analysis turn: what a report checks is
+    // `analysis-reports.service.spec.ts`'s.
+    {
+      sinkFor: opts.analysisSink ?? (() => ({})),
+    } as unknown as AnalysisReportsService,
     {
       token: 'launch',
       version: '0.0.0',
@@ -1209,6 +1220,7 @@ function setup(
   service.onModuleInit();
   return {
     service,
+    analyses,
     deltas,
     partials,
     callTokens,
@@ -5052,6 +5064,76 @@ describe('ChatService', () => {
     expect(claude.handles).toHaveLength(1);
   });
 
+  it("persists an Apply's selection on the message row it sends, once per press", async () => {
+    const { service, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const press = () =>
+      service.sendMessage(run.id, 'apply W-1', [], {
+        clientMessageId: 'apply-1',
+        apply: { cardSeq: 7, ids: ['W-1'] },
+      });
+
+    const [sent, replay] = await Promise.all([press(), press()]);
+
+    expect(replay).toEqual(sent);
+    expect(sent.payload).toMatchObject({
+      text: 'apply W-1',
+      apply: { cardSeq: 7, ids: ['W-1'] },
+    });
+    expect(itemDao.items.filter((item) => item.role === 'user')).toHaveLength(
+      1,
+    );
+  });
+
+  it('installs the analysis tools only on a turn of an analysis chat, scoped to its source', async () => {
+    const turns: unknown[] = [];
+    const { service, analyses, claude } = setup({
+      analysisSink: (turn) => {
+        turns.push(turn);
+        return { turn } as never;
+      },
+    });
+    const plain = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const analysis = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      analysisSource: { runId: plain.id, seq: 12, working: true },
+    });
+
+    await service.sendMessage(plain.id, 'hello');
+    await service.sendMessage(analysis.id, 'analyse');
+
+    expect(analyses.canAnalyse(plain.id, SINGLE_AGENT_NODE)).toBe(false);
+    expect(analyses.canAnalyse(analysis.id, SINGLE_AGENT_NODE)).toBe(true);
+    expect(turns).toEqual([
+      {
+        analysisRunId: analysis.id,
+        sourceRunId: plain.id,
+        snapshotSeq: 12,
+        sourceWorking: true,
+      },
+    ]);
+    claude.finish();
+    await drain();
+    expect(analyses.canAnalyse(analysis.id, SINGLE_AGENT_NODE)).toBe(false);
+  });
+
+  it('refuses an Apply while a turn runs, and writes nothing into it', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'analyse');
+
+    await expect(
+      service.sendMessage(run.id, 'apply W-1', [], {
+        apply: { cardSeq: 7, ids: ['W-1'] },
+      }),
+    ).rejects.toMatchObject({ errorCode: 'RUN_BUSY', statusCode: 409 });
+    expect(itemDao.items.filter((item) => item.role === 'user')).toHaveLength(
+      1,
+    );
+    expect(claude.handles[0]!.sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it('refuses with RUN_BUSY when the running turn cannot take one', async () => {
     // ACP's `session/prompt` is one request per turn, so its adapter reports
     // false — and the refusal has to be the SAME RUN_BUSY the caller already
@@ -8522,6 +8604,37 @@ describe('ChatService — approval modes (parity M1)', () => {
       false,
     );
     expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the analysis reader and card on an ASK chat, and leaves the workflow save to a card', async () => {
+    const { service, claude, approvals } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const server = hostMcpServerName(run.id);
+    for (const [id, tool] of [
+      ['p-read', 'read_analyzed_thread'],
+      ['p-report', 'report_recommendations'],
+      ['p-save', 'save_workflow_change'],
+    ] as const) {
+      claude.emit({
+        type: 'approval_request',
+        id,
+        toolName: `mcp__${server}__${tool}`,
+        input: {},
+      });
+    }
+    await drain();
+
+    const respond = claude.handles[0]!.respondApproval;
+    expect(respond).toHaveBeenCalledWith('p-read', true, {});
+    expect(respond).toHaveBeenCalledWith('p-report', true, {});
+    expect(respond).not.toHaveBeenCalledWith('p-save', true, {});
+    // Only the save is left waiting on the user.
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
   });
 
   it('does NOT auto-approve a shell call whose title merely names a host tool', async () => {

@@ -129,6 +129,15 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - Descriptions are audited as a set (`mcp-server.service.spec.ts`). `report_findings` asks to be preferred over claude's `ReportFindings`; `propose_plan` says to use either plan mode or this tool, never both.
 - No graph node registers a findings/chart/metrics/comparison/gallery/notify sink; `show_artifact` is the one render tool nodes get.
 
+**Thread analysis** ("Analyze thread"; `ThreadAnalysisService`, `POST /v1/chats/:runId/analyses`):
+
+- An analysis is an ordinary chat whose `Run.analysisSourceRunId` / `analysisSourceSeq` name the thread it reads and the seq its reads stop at (the source's newest row when it was started). Its method is `taskInstructions` (`utils/thread-analysis-guide.ts`), never a plugin skill at run time.
+- Its four tools (`read_analyzed_thread`, `report_recommendations`, `mark_recommendations`, `save_workflow_change`) are offered only while an analysis turn runs: `ChatService` registers an `AnalysisBroker` sink per turn only when the run has a source. The sink carries the source and snapshot, so no tool takes a run id from the model.
+- `read_analyzed_thread` pages ~22KB (codex cuts a tool result near 10k tokens): timing from `ThreadTimelineService` (the waterfall's UNCAPPED fold plus id-paired tool durations and the critical path, cached per `(runId, snapshotSeq, working)`, after the run's call membership is stamped), rows clipped at 2KB, one row in chunks. Images are collapsed (`collapse-image-blocks.ts`, twin of the renderer's export) and secrets masked before any cut; every answer leads with `HISTORY_RESULT_PREFACE`.
+- `report_recommendations` refuses an evidence seq that does not exist at or below the snapshot, a workflow item for a plain chat, a duplicate id, and an id whose `W-`/`R-` prefix contradicts its target. The card's timing strip is measured by the daemon, never taken from the agent.
+- An Apply (`POST /v1/chats/:runId/recommendations/apply`) is a user message carrying the selected items in full and `payload.apply: {cardSeq, ids}`; it is refused `RUN_BUSY` while a turn runs, never delivered mid-turn, and `ALREADY_APPLIED` for a card that already has one (the renderer reads "applied" from its window only). `save_workflow_change` (`WorkflowChangeService`, in `v1/graphs`) writes only `W-` ids in the NEWEST Apply (user messages read in seq order), refuses a hash drift, a deleted file and an invalid graph, and writes a timed backup first. It is not auto-approved.
+- Timeline spans are clipped to the read's `[from, to]`; the critical path takes, at each step, the work still going latest before the cursor (an interval running past the cursor counts up to it); tool calls pair by node, call and id (ACP ids restart per session). Whether the source was working at the snapshot is recorded at the start (`Run.analysisSourceWorking`) and every read folds with it, so one snapshot always folds the same.
+
 ### Question cards
 
 - A standing `ask_user_question` card belongs to the TURN, not the MCP call (`utils/standing-questions.ts`). An abandoned call DETACHES, an identical re-ask ADOPTS, an early answer is HELD for the next ask, and a reworded question is a new card.
@@ -158,6 +167,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - Node settings are resolved once at run start. An unusable `configDir` or `effort` is dropped with a system row (`DroppedNodeSetting`), never passed on or dropped silently. `effort` is a free string.
 - A pass leaves its processes running. The registry never reaps one holding a detached command (`shellsRunning > 0`). Archive and delete end all of them (`endProcesses`: `closeRun` over `<runId>` and `<runId>::…`, then the reaper for what their agents detached).
 - Workflow rows take seq from the shared `ItemSeqAllocator` (a kept process writes between passes).
+- A library save may quote the `hash` it was read at (`baseHash`); a file changed since is refused `409 WORKFLOW_CHANGED`, never overwritten. The builder's autosave and an analysis's applied change both write the same file.
 - The pass-end `skipped` sweep touches only nodes still `pending`. `prepareNextPass` resets only DAG-scheduled nodes, never call-only nodes with state.
 - Workflow node auto-compaction: see Auto-compaction.
 
@@ -197,6 +207,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - `McpController` serves `/v1/mcp/<runId>/<nodeId>[/<conversationId>]`; tools are composed per request from what that node can use.
 - The module sits above `v1/agents` and `v1/graphs`; nothing imports it back. Permission predicates stay in `v1/agents/utils/host-*.ts`.
 - History tools (`search_chats`, `read_chat_context`) are never auto-approved and carry no `readOnlyHint`. Results lead with the data-not-instructions line and pass `redactSecrets`.
+  - One recorded exception, `read_analyzed_thread`: see `mcp-tools.md`.
 - claude is never offered `ask_user_question` (it has its own).
 
 ### Projects and tasks

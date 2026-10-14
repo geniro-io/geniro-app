@@ -925,4 +925,54 @@ describe('ChatWaterfallService', () => {
     expect(result.turns[0]?.startedAt).toBe(iso(19));
     expect(result.turns.at(-1)?.startedAt).toBe(iso(518));
   });
+
+  it('folds every span UNCAPPED for an analysis while the card still caps', async () => {
+    const many = Array.from({ length: 520 }, (_, index) =>
+      row(index, 'turn_complete', { usage: { durationMs: 1_000 } }, index),
+    );
+    const service = build(many);
+
+    const folded = await service.fold('run-a');
+
+    expect(folded?.turns).toHaveLength(520);
+    expect(folded?.turns[0]?.startedAt).toBe(iso(-1));
+    expect((await service.read('run-a')).turns).toHaveLength(500);
+  });
+
+  it('folds a snapshot with the working flag recorded for it, not the live status', async () => {
+    const rows = [
+      row(0, 'message', { role: 'user', text: 'go' }, 0),
+      row(1, 'tool_call', { id: 't1' }, 5),
+    ];
+    // The source has since settled; the analysis recorded it working.
+    const service = build(rows, { status: 'completed' });
+
+    const recordedWorking = await service.fold('run-a', 1, undefined, true);
+    expect(recordedWorking?.working).toBe(true);
+    // The turn open at the snapshot is drawn to the snapshot's last row.
+    expect(recordedWorking?.turns).toEqual([
+      expect.objectContaining({ outcome: 'running', durationMs: 5_000 }),
+    ]);
+
+    const recordedSettled = await service.fold('run-a', 1, undefined, false);
+    expect(recordedSettled?.working).toBe(false);
+    expect(recordedSettled?.turns).toEqual([]);
+  });
+
+  it('reads only the rows at or below the snapshot seq it is given', async () => {
+    const asked: (number | undefined)[] = [];
+    const service = build([]);
+    const dao = (service as unknown as { itemDao: ItemDao }).itemDao;
+    dao.timelineSpine = (_runId, _em, maxSeq) => {
+      asked.push(maxSeq);
+      return Promise.resolve([]);
+    };
+    dao.waterfallPayloadRows = (_runId, _em, maxSeq) => {
+      asked.push(maxSeq);
+      return Promise.resolve([]);
+    };
+
+    expect(await service.fold('run-a', 41)).toBeNull();
+    expect(asked).toEqual([41, 41]);
+  });
 });

@@ -33,6 +33,10 @@ import {
   type ArtifactUrlBuilder,
   ArtifactUrlContext,
 } from './published-artifact';
+import {
+  type RecommendationsApplier,
+  RecommendationsApplyContext,
+} from './recommendations-apply-context';
 import { RetryContext } from './retry-context';
 import { SubagentDetailContext } from './subagent-context';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
@@ -104,6 +108,7 @@ export function ChatProviders({
   loadAttachment = null,
   callConversations = null,
   jumpMark = null,
+  applyRecommendations = null,
   children,
 }: {
   /**
@@ -160,6 +165,11 @@ export function ChatProviders({
    * reason: the rows that mark themselves are drawn deep inside call cards.
    */
   jumpMark?: JumpMark | null;
+  /**
+   * A recommendations card's Apply — see `RecommendationsApplyContext`.
+   * Absent draws the card read-only (the workflow dock has no analysis).
+   */
+  applyRecommendations?: RecommendationsApplier | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -174,13 +184,16 @@ export function ChatProviders({
                     <AttachmentLoaderContext.Provider value={loadAttachment}>
                       <RunSettledContext.Provider value={runSettledAt}>
                         <DelegatesOutContext.Provider value={delegatesOut}>
-                          {transcript === undefined ? (
-                            children
-                          ) : (
-                            <SurfaceContexts {...transcript}>
-                              {children}
-                            </SurfaceContexts>
-                          )}
+                          <RecommendationsApplyContext.Provider
+                            value={applyRecommendations}>
+                            {transcript === undefined ? (
+                              children
+                            ) : (
+                              <SurfaceContexts {...transcript}>
+                                {children}
+                              </SurfaceContexts>
+                            )}
+                          </RecommendationsApplyContext.Provider>
                         </DelegatesOutContext.Provider>
                       </RunSettledContext.Provider>
                     </AttachmentLoaderContext.Provider>

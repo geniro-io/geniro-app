@@ -661,6 +661,11 @@ export type WorkflowSummary = z.infer<typeof WorkflowSummarySchema>;
 export const WorkflowWireSchema = z.object({
   slug: z.string(),
   workflow: WorkflowSchema,
+  hash: z
+    .string()
+    .describe(
+      "The file's version as stored — send it back as a save's `baseHash` so a save over a newer file is refused",
+    ),
 });
 export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
 

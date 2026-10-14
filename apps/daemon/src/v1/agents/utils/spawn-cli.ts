@@ -429,7 +429,8 @@ export interface CliSession {
   readonly pid: number | null;
   /**
    * How many detached commands this process has started and not yet ended —
-   * a `pnpm dev`, a watcher, a server the agent ran in the background.
+   * a `pnpm dev`, a watcher, a server the agent ran in the background, its
+   * delegates' included.
    *
    * They are this process's own children and die with its group, so whoever
    * REAPS an unused process must not reap one holding them: a dev server is
@@ -1004,7 +1005,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   const settledShells = new Set<string>();
   /**
    * Every detached command this process has started and not yet ended — what
-   * {@link CliSession.shellsRunning} counts.
+   * {@link CliSession.shellsRunning} counts, with {@link delegateCommands}.
    *
    * Its own set rather than a reading of {@link shellWork}, which records only
    * a unit whose launching call is known: a command is running whether or not
@@ -1069,10 +1070,33 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   let announcesSessionState = false;
   /**
    * Background commands a DELEGATE started (`background_work.ownedByDelegate`),
-   * remembered only so their settle is swallowed along with their start — see
-   * {@link announceShellWork}.
+   * remembered for the session so both of their settles are swallowed along
+   * with their start — see {@link announceShellWork}.
    */
   const delegateShells = new Set<string>();
+  /**
+   * The delegate each delegate-made tool call belongs to (its
+   * `parentToolUseId`) — the only owner fact a command a delegate detaches can
+   * be filed by, since claude's `task_started` names none. Dropped once read,
+   * and with the delegate once its end is announced.
+   */
+  const delegateCallOwner = new Map<string, string>();
+  /**
+   * A delegate's detached commands still running → the delegate's launching
+   * call, or null while the call that started the command is not yet seen.
+   */
+  const delegateCommands = new Map<string, string | null>();
+  /** Delegate commands still waiting for their owner, by their launching call. */
+  const unownedDelegateCommands = new Map<string, string>();
+  /**
+   * A delegate's settle withheld while a command it detached still runs.
+   * claude reports a delegate `completed` each time it ends a TURN and starts
+   * it again once that command reports, so this settle is not its end.
+   */
+  const heldDelegateSettles = new Map<
+    string,
+    Extract<AgentEvent, { type: 'background_work' }>
+  >();
 
   /** Bounds {@link deferredOffTurnTerminal}, as the turn's own deadline does. */
   let offTurnHoldTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1718,6 +1742,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return;
     }
     if (event.phase === 'started') {
+      heldDelegateSettles.delete(toolCallId);
       delegateWork.set(event.id, toolCallId);
       // A delegate the agent is WAITING on is not background work, and says
       // nothing yet: its block is the launching call, which is still open. The
@@ -1733,6 +1758,19 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (!foregroundUnits.has(event.id)) {
         return;
       }
+    } else if (
+      event.outcome === 'completed' &&
+      [...delegateCommands.values()].includes(toolCallId)
+    ) {
+      // Announced when its last command settles. Of the two channels' settles
+      // the one carrying figures is kept.
+      if (
+        heldDelegateSettles.get(toolCallId)?.usage === undefined ||
+        event.usage !== undefined
+      ) {
+        heldDelegateSettles.set(toolCallId, event);
+      }
+      return;
     } else if (event.usage !== undefined) {
       // Forgotten on the settle that carried the FIGURES, not on the first
       // settle to arrive — and the difference is the whole of what a delegate
@@ -1753,6 +1791,16 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // strings, on a map this code already keeps deliberately past the
       // silence deadline for late reports.
       delegateWork.delete(event.id);
+    }
+    if (event.phase === 'settled') {
+      // Its end, announced: whatever was held for it is superseded, and the
+      // owner entries of calls that never started a command are let go.
+      heldDelegateSettles.delete(toolCallId);
+      for (const [call, owner] of delegateCallOwner) {
+        if (owner === toolCallId) {
+          delegateCallOwner.delete(call);
+        }
+      }
     }
     const announcement: AgentEvent = {
       type: 'subagent_info',
@@ -1940,6 +1988,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // chip listed it unlabelled while the agents panel showed nothing.
       if (event.ownedByDelegate === true && event.unit !== 'agent') {
         delegateShells.add(event.id);
+        const owner =
+          event.toolCallId === null
+            ? undefined
+            : delegateCallOwner.get(event.toolCallId);
+        delegateCommands.set(event.id, owner ?? null);
+        if (event.toolCallId !== null) {
+          if (owner === undefined) {
+            unownedDelegateCommands.set(event.toolCallId, event.id);
+          } else {
+            delegateCallOwner.delete(event.toolCallId);
+          }
+        }
         return;
       }
       // Recorded for EVERY unit, delegate or not: a settle carries no kind, so
@@ -1997,8 +2057,24 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (delegateWork.has(event.id)) {
       return;
     }
-    // Its start announced nothing, so its end has nothing to close.
-    if (delegateShells.delete(event.id)) {
+    // Its start announced nothing, so its end has nothing to close. Kept in the
+    // set: claude reports the end on both terminal channels, and the second
+    // would otherwise be announced as an ordinary shell's.
+    if (delegateShells.has(event.id)) {
+      const owner = delegateCommands.get(event.id) ?? null;
+      delegateCommands.delete(event.id);
+      for (const [call, unit] of unownedDelegateCommands) {
+        if (unit === event.id) {
+          unownedDelegateCommands.delete(call);
+        }
+      }
+      // Offered again rather than announced outright: it is held once more
+      // while another of the delegate's commands still runs.
+      const held = owner === null ? undefined : heldDelegateSettles.get(owner);
+      if (owner !== null && held !== undefined) {
+        heldDelegateSettles.delete(owner);
+        announceDelegateWork(held);
+      }
       return;
     }
     runningShells.delete(event.id);
@@ -2335,6 +2411,21 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // detachable as one run inside a turn, and the sweep's whole subject is
     // work that outlives the turn that started it.
     rememberExecuteCall(event);
+    if (event.type === 'tool_call' && event.parentToolUseId !== undefined) {
+      // Either order: nothing ties claude's `task_started` for a command to
+      // the delegate line that made the call.
+      const command = unownedDelegateCommands.get(event.id);
+      if (command === undefined) {
+        // Only a delegate this layer tracks: a CLI that never brackets its
+        // delegates would have nothing ever prune the entry.
+        if ([...delegateWork.values()].includes(event.parentToolUseId)) {
+          delegateCallOwner.set(event.id, event.parentToolUseId);
+        }
+      } else {
+        unownedDelegateCommands.delete(event.id);
+        delegateCommands.set(command, event.parentToolUseId);
+      }
+    }
     if (event.type === 'session_state') {
       // Turn plumbing wherever it arrives, never forwarded: it maps to no row,
       // and what it says is this layer's business — whether a hold is over.
@@ -2726,6 +2817,16 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     osDetachedShells.clear();
     executeCalls.clear();
+    // A delegate's own commands die with the group as well, so a settle held
+    // for them is owed now — as `stopped`, figures kept: its work was cut off,
+    // and it is the outcome the session-close sweep writes for a delegate it
+    // finds still open, so the two writers cannot disagree.
+    delegateCommands.clear();
+    unownedDelegateCommands.clear();
+    delegateCallOwner.clear();
+    for (const held of [...heldDelegateSettles.values()]) {
+      announceDelegateWork({ ...held, outcome: 'stopped' });
+    }
     // `runningShells` as well as `shellWork`: a unit the CLI announced with no
     // launching call is in the first alone, and closing only the second left
     // its `shell_open` without an end — a `Terminals 1` nothing could retire.
@@ -3512,7 +3613,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return processGone || processExited ? null : (child.pid ?? null);
     },
     get shellsRunning() {
-      return runningShells.size;
+      return runningShells.size + delegateCommands.size;
     },
     close: () => {
       if (processGone) {

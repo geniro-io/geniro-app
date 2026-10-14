@@ -59,7 +59,20 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     owned?: boolean;
     /** The CLI's running cost since its last `result` (claude's `get_usage`). */
     live?: number;
+    /** A tool call with this id — a delegate's own when `parent` is set. */
+    run?: string;
   };
+  if (typeof row.run === 'string') {
+    return [
+      {
+        type: 'tool_call',
+        id: row.run,
+        name: 'Bash',
+        input: {},
+        ...(row.parent === undefined ? {} : { parentToolUseId: row.parent }),
+      },
+    ];
+  }
   if (typeof row.live === 'number') {
     return [{ type: 'cost_progress', costUsd: row.live }];
   }
@@ -1506,11 +1519,225 @@ describe('which delegate a render card can be credited to', () => {
   });
 });
 
+// claude reports a delegate `completed` each time it ends a TURN, even with a
+// command it ran in the background still going, and starts it again when that
+// command reports — so that settle is not the delegate's end.
+describe('a delegate whose own detached command outlives its turn', () => {
+  const SPENT = { tokens: 1234, toolUses: 5, durationMs: 6000 };
+
+  function openDelegateSession() {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, (e) =>
+      events.push(e),
+    );
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    const last = () =>
+      events
+        .filter(
+          (e): e is Extract<AgentEvent, { type: 'subagent_info' }> =>
+            e.type === 'subagent_info' && e.id === 'toolu_launch',
+        )
+        .at(-1);
+    const launch = (...commands: string[]) => {
+      line(child, {
+        work: 'a-delegate',
+        phase: 'started',
+        unit: 'agent',
+        call: 'toolu_launch',
+      });
+      for (const command of commands) {
+        line(child, { run: `toolu_${command}`, parent: 'toolu_launch' });
+        line(child, {
+          work: command,
+          phase: 'started',
+          unit: 'other',
+          call: `toolu_${command}`,
+          owned: true,
+        });
+      }
+    };
+    const finish = async () => {
+      line(child, { done: true });
+      line(child, { state: 'idle' });
+      await handle?.done;
+    };
+    return { session, child, last, launch, finish };
+  }
+
+  it('closes only once the last of its commands has ended', async () => {
+    const { child, last, launch, finish } = openDelegateSession();
+    launch('b-1', 'b-2');
+    line(child, { work: 'a-delegate', phase: 'settled', outcome: 'completed' });
+    line(child, { work: 'b-1', phase: 'settled' });
+    expect(last()?.backgroundOpen).toBe(true);
+
+    line(child, { work: 'b-2', phase: 'settled' });
+    expect(last()?.backgroundOpen).toBe(false);
+    await finish();
+  });
+
+  it('stays open when claude starts it again before its command reports', async () => {
+    const { child, last, launch, finish } = openDelegateSession();
+    launch('b-1');
+    line(child, { work: 'a-delegate', phase: 'settled', outcome: 'completed' });
+    line(child, {
+      work: 'a-delegate',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_launch',
+    });
+    line(child, { work: 'b-1', phase: 'settled' });
+    expect(last()?.backgroundOpen).toBe(true);
+
+    line(child, { work: 'a-delegate', phase: 'settled', outcome: 'completed' });
+    expect(last()?.backgroundOpen).toBe(false);
+    await finish();
+  });
+
+  it.each([
+    ['the figure-less channel first', [undefined, SPENT]],
+    ['the figures first', [SPENT, undefined]],
+  ])(
+    'keeps the settle carrying its figures, with %s',
+    async (_order, channels) => {
+      const { child, last, launch, finish } = openDelegateSession();
+      launch('b-1');
+      for (const spent of channels) {
+        line(child, {
+          work: 'a-delegate',
+          phase: 'settled',
+          outcome: 'completed',
+          spent,
+        });
+      }
+      line(child, { work: 'b-1', phase: 'settled' });
+      expect(last()).toMatchObject({
+        backgroundOpen: false,
+        backgroundOutcome: 'completed',
+        tokens: 1234,
+        toolUses: 5,
+        durationMs: 6000,
+      });
+      await finish();
+    },
+  );
+
+  it('files a command under its delegate when the call that started it arrives after it', async () => {
+    const { child, last, finish } = openDelegateSession();
+    line(child, {
+      work: 'a-delegate',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_launch',
+    });
+    line(child, {
+      work: 'b-1',
+      phase: 'started',
+      unit: 'other',
+      call: 'toolu_b-1',
+      owned: true,
+    });
+    line(child, { run: 'toolu_b-1', parent: 'toolu_launch' });
+    line(child, { work: 'a-delegate', phase: 'settled', outcome: 'completed' });
+    expect(last()?.backgroundOpen).toBe(true);
+
+    line(child, { work: 'b-1', phase: 'settled' });
+    expect(last()?.backgroundOpen).toBe(false);
+    await finish();
+  });
+
+  it('lets go of a command that ended before the call that started it arrived', async () => {
+    const { session, child, last, finish } = openDelegateSession();
+    line(child, {
+      work: 'a-delegate',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_launch',
+    });
+    line(child, {
+      work: 'b-1',
+      phase: 'started',
+      unit: 'other',
+      call: 'toolu_b-1',
+      owned: true,
+    });
+    line(child, { work: 'b-1', phase: 'settled' });
+    line(child, { run: 'toolu_b-1', parent: 'toolu_launch' });
+    line(child, { work: 'a-delegate', phase: 'settled', outcome: 'completed' });
+    expect(last()?.backgroundOpen).toBe(false);
+    expect(session.shellsRunning).toBe(0);
+    await finish();
+  });
+
+  it('lets a STOPPED end supersede a held completed one', async () => {
+    const { child, last, launch, finish } = openDelegateSession();
+    launch('b-1');
+    line(child, { work: 'a-delegate', phase: 'settled', outcome: 'completed' });
+    line(child, { work: 'a-delegate', phase: 'settled', outcome: 'stopped' });
+    expect(last()).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'stopped',
+    });
+
+    line(child, { work: 'b-1', phase: 'settled' });
+    expect(last()?.backgroundOutcome).toBe('stopped');
+    await finish();
+  });
+
+  it('closes a delegate that FAILED at once, its command still running', async () => {
+    const { child, last, launch, finish } = openDelegateSession();
+    launch('b-1');
+    line(child, { work: 'a-delegate', phase: 'settled', outcome: 'failed' });
+    expect(last()).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'failed',
+    });
+    await finish();
+  });
+
+  it('announces the held settle as STOPPED, figures kept, when the process ends under its command', () => {
+    const { child, last, launch } = openDelegateSession();
+    launch('b-1');
+    line(child, {
+      work: 'a-delegate',
+      phase: 'settled',
+      outcome: 'completed',
+      spent: SPENT,
+    });
+    expect(last()?.backgroundOpen).toBe(true);
+
+    child.emit('close', 0, null);
+    expect(last()).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'stopped',
+      tokens: 1234,
+    });
+  });
+
+  it('counts its command as one the process is still running', async () => {
+    // What keeps the session registry from reaping the process — and the
+    // command with it — under a delegate shown as working.
+    const { session, child, launch, finish } = openDelegateSession();
+    launch('b-1');
+    // A command whose launching call the CLI never named still runs.
+    line(child, { work: 'b-2', phase: 'started', unit: 'other', owned: true });
+    expect(session.shellsRunning).toBe(2);
+
+    line(child, { work: 'b-1', phase: 'settled' });
+    line(child, { work: 'b-1', phase: 'settled', outcome: 'completed' });
+    line(child, { work: 'b-2', phase: 'settled' });
+    expect(session.shellsRunning).toBe(0);
+    await finish();
+  });
+});
+
 describe('a turn whose background work outlives its result', () => {
   it('announces nothing for a command a DELEGATE started, at either end', async () => {
     // REPORTED as "we should not show terminals from subagents": claude marks
     // such a command `owned_by_subagent` and names no parent, and its open used
-    // to reach the run's shell list and count as the main thread's.
+    // to reach the run's shell list and count as the main thread's. claude
+    // reports its end on BOTH terminal channels, and the second must be
+    // swallowed too.
     const events: AgentEvent[] = [];
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
@@ -1523,6 +1750,7 @@ describe('a turn whose background work outlives its result', () => {
       owned: true,
     });
     line(child, { work: 'b-owned', phase: 'settled' });
+    line(child, { work: 'b-owned', phase: 'settled', outcome: 'completed' });
     line(child, { done: true });
     await handle?.done;
 

@@ -22,6 +22,7 @@ import { RunDao } from '../dao/run.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ApprovalRegistry } from './approval-registry';
 import type { ChatShellsService } from './chat-shells.service';
+import { ItemSeqAllocator } from './item-seq.allocator';
 import { RunStateService } from './run-state.service';
 
 /**
@@ -57,7 +58,11 @@ describe('RunStateService (in-memory sqlite)', () => {
     items = new ItemDao(orm.em.fork());
     runs = new RunDao(orm.em.fork());
     approvals = new ApprovalRegistry();
+    seqs = new ItemSeqAllocator(orm.em, items);
   });
+
+  /** The allocator the read asks how far the run is written. */
+  let seqs: ItemSeqAllocator;
 
   function service(): RunStateService {
     const shells = {
@@ -94,6 +99,7 @@ describe('RunStateService (in-memory sqlite)', () => {
       approvals,
       shells,
       adapters,
+      seqs,
     );
   }
 
@@ -108,7 +114,12 @@ describe('RunStateService (in-memory sqlite)', () => {
     seq: number,
     kind: ItemKind,
     payload: unknown,
-    extra: { nodeId?: string | null; role?: string; at?: number } = {},
+    extra: {
+      nodeId?: string | null;
+      role?: string;
+      at?: number;
+      inCall?: string;
+    } = {},
   ): Promise<void> {
     await items.create({
       runId: 'run-a',
@@ -116,10 +127,95 @@ describe('RunStateService (in-memory sqlite)', () => {
       kind,
       nodeId: extra.nodeId ?? null,
       role: extra.role ?? null,
+      ...(extra.inCall === undefined ? {} : { inCall: extra.inCall }),
       payload: JSON.stringify(payload),
       ...(extra.at === undefined ? {} : { createdAt: new Date(extra.at) }),
     });
   }
+
+  describe('what a client takes over the page it holds', () => {
+    const seqsOf = (rows: readonly { seq: number }[]): number[] =>
+      rows.map((row) => row.seq);
+
+    it("states how far through the run it read — the run's newest seq", async () => {
+      await createRun('running');
+      await insert(1, 'message', { text: 'hi' }, { role: 'user' });
+      await insert(7, 'message', { text: 'ok' }, { role: 'assistant' });
+
+      expect((await service().read('run-a')).throughSeq).toBe(7);
+    });
+
+    it("lists a chat's open turn's unanswered commands — never an answered one, one before the turn, or a delegate's", async () => {
+      await createRun('running');
+      await insert(1, 'tool_call', { id: 'old', name: 'Bash' });
+      await insert(2, 'turn_complete', {});
+      await insert(3, 'message', { text: 'again' }, { role: 'user' });
+      await insert(4, 'tool_call', { id: 'done', name: 'Bash' });
+      await insert(5, 'tool_result', { id: 'done' });
+      await insert(6, 'tool_call', { id: 'running', name: 'Bash' });
+      await insert(7, 'tool_call', {
+        id: 'delegate',
+        name: 'Bash',
+        parentToolUseId: 'task-1',
+      });
+
+      expect(seqsOf((await service().read('run-a')).openToolCalls)).toEqual([
+        6,
+      ]);
+    });
+
+    it('lists none for a chat whose turn ended', async () => {
+      await createRun('completed');
+      await insert(1, 'tool_call', { id: 'cut', name: 'Bash' });
+      await insert(2, 'turn_complete', {});
+
+      expect((await service().read('run-a')).openToolCalls).toEqual([]);
+    });
+
+    it('lists the commands of every conversation whose newest status says running — a callee carrying on after its call included', async () => {
+      await createRun('running', 'dev-team');
+      const status = (
+        seq: number,
+        nodeId: string,
+        inCall: string,
+        value: string,
+      ): Promise<void> =>
+        insert(seq, 'status', { status: value }, { nodeId, inCall });
+      const call = (
+        seq: number,
+        id: string,
+        nodeId: string,
+        inCall: string,
+      ): Promise<void> =>
+        insert(seq, 'tool_call', { id, name: 'Bash' }, { nodeId, inCall });
+      await status(1, 'manager', '', 'running');
+      await call(2, 'own', 'manager', '');
+      await status(3, 'engineer', 'call-1', 'running');
+      await call(4, 'callee', 'engineer', 'call-1');
+      // Settled, then carrying on by itself under the same call.
+      await status(5, 'engineer', 'call-2', 'completed');
+      await status(6, 'engineer', 'call-2', 'running');
+      await call(7, 'carrying-on', 'engineer', 'call-2');
+      // A conversation whose turn is over.
+      await status(8, 'qa', '', 'running');
+      await call(9, 'idle', 'qa', '');
+      await status(10, 'qa', '', 'completed');
+
+      expect(seqsOf((await service().read('run-a')).openToolCalls)).toEqual([
+        2, 4, 7,
+      ]);
+    });
+
+    it('lists a cancelled chat’s off-turn commands — its turn is open from its last ending on', async () => {
+      await createRun('cancelled');
+      await insert(1, 'turn_cancelled', {});
+      await insert(2, 'tool_call', { id: 'off-turn', name: 'Bash' });
+
+      expect(seqsOf((await service().read('run-a')).openToolCalls)).toEqual([
+        2,
+      ]);
+    });
+  });
 
   it('answers a run that does not exist with a 404', async () => {
     await expect(service().read('nope')).rejects.toThrow(/not found/);

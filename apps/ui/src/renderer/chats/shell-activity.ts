@@ -95,6 +95,16 @@ export interface ShellRun {
   exitCode: number | null;
   /** When the call streamed in — what the row's clock counts from. */
   startedAt: string;
+  /**
+   * The launching call's seq — what the daemon's run state is matched against
+   * (`withoutDaemonEndedShells`); null for a command only the daemon names.
+   */
+  launchSeq: number | null;
+  /**
+   * The seq of the daemon's `shell_open` for it — set only for a command the
+   * daemon brackets, whose end is then the daemon's to say.
+   */
+  trackedSeq: number | null;
   /** Which agent card this belongs to: the item's node id (null in a chat). */
   agentId: string | null;
   /**
@@ -385,7 +395,7 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
    * Knowing the whole set up front also lets the launch itself open a row (see
    * the `tool_call` arm), which cannot be done from a set still being built.
    */
-  const detached = new Set<string>();
+  const detached = new Map<string, number>();
   for (const item of items) {
     // The same drop the fold makes below, for the same reason: a delegate's
     // detachment must not reach the main thread's list through this set.
@@ -393,8 +403,8 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
       continue;
     }
     const callId = payloadString(item.payload, 'id');
-    if (callId !== null) {
-      detached.add(callId);
+    if (callId !== null && !detached.has(callId)) {
+      detached.set(callId, item.seq);
     }
   }
   for (const item of items) {
@@ -474,6 +484,8 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
         status: 'running',
         exitCode: null,
         startedAt: item.createdAt,
+        launchSeq: item.seq,
+        trackedSeq: detached.get(callId) ?? null,
         agentId: item.nodeId,
         callId: payloadString(payload, 'callId'),
       };

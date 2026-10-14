@@ -257,46 +257,65 @@ export const setRunNotesSchema = z.object({
 });
 export class SetRunNotesDto extends createZodDto(setRunNotesSchema) {}
 
-export const historyQuerySchema = z.object({
-  /** Replay cursor — return only items with seq greater than this. */
-  afterSeq: z.coerce.number().int().optional(),
-  /**
-   * At most this many items, taken from the END of the conversation — the
-   * newest ones. Absent means the whole transcript, which is what the reconnect
-   * replay wants and what every caller did before paging existed.
-   *
-   * Bounded here rather than trusted: this is the one query whose cost scales
-   * with a number the client picks, and a thread of 7,814 items is 18.9MB.
-   *
-   * TWIN: `ANCHOR_ASK_MAX_ROWS` in
-   * apps/ui/src/renderer/chats/use-live-anchor-asks.ts — a live anchor ask
-   * spanning more than this is refused, silently, so lower both together.
-   */
-  limit: z.coerce.number().int().min(1).max(5000).optional(),
-  /**
-   * Page BACKWARDS: only items before this seq. Paired with `limit` to walk a
-   * long conversation towards its start, one window at a time.
-   */
-  beforeSeq: z.coerce.number().int().optional(),
-  /**
-   * Which END of the range `limit` keeps: the `newest` items (the default —
-   * a chat opens on its tail) or the `oldest`, which is how a client reading
-   * FORWARD from somewhere in the middle asks for the next page after
-   * `afterSeq`. Without it the only forward read was "the newest `limit` after
-   * this seq", which skips everything in between — so a transcript opened at
-   * its first message could never be read on past a few dozen rows.
-   *
-   * An enum rather than a boolean for the reason `listChatsQuerySchema.scope`
-   * is one: `z.coerce.boolean()` reads the string `'false'` as true.
-   */
-  take: z.enum(['newest', 'oldest']).optional(),
-  /**
-   * `true` when the client asked for one row MORE than it will keep — only to
-   * learn whether anything lies past the page. A full page then anchors every
-   * row but that far-end probe, whose structure the client never draws.
-   */
-  probe: z.enum(['true', 'false']).optional(),
-});
+export const historyQuerySchema = z
+  .object({
+    /** Replay cursor — return only items with seq greater than this. */
+    afterSeq: z.coerce.number().int().optional(),
+    /**
+     * At most this many items, taken from the END of the conversation — the
+     * newest ones. Absent means the whole transcript, which is what the reconnect
+     * replay wants and what every caller did before paging existed.
+     *
+     * Bounded here rather than trusted: this is the one query whose cost scales
+     * with a number the client picks, and a thread of 7,814 items is 18.9MB.
+     *
+     * TWIN: `ANCHOR_ASK_MAX_ROWS` in
+     * apps/ui/src/renderer/chats/use-live-anchor-asks.ts — a live anchor ask
+     * spanning more than this is refused, silently, so lower both together.
+     */
+    limit: z.coerce.number().int().min(1).max(5000).optional(),
+    /**
+     * Page BACKWARDS: only items before this seq. Paired with `limit` to walk a
+     * long conversation towards its start, one window at a time.
+     */
+    beforeSeq: z.coerce.number().int().optional(),
+    /**
+     * Which END of the range `limit` keeps: the `newest` items (the default —
+     * a chat opens on its tail) or the `oldest`, which is how a client reading
+     * FORWARD from somewhere in the middle asks for the next page after
+     * `afterSeq`. Without it the only forward read was "the newest `limit` after
+     * this seq", which skips everything in between — so a transcript opened at
+     * its first message could never be read on past a few dozen rows.
+     *
+     * An enum rather than a boolean for the reason `listChatsQuerySchema.scope`
+     * is one: `z.coerce.boolean()` reads the string `'false'` as true.
+     */
+    take: z.enum(['newest', 'oldest']).optional(),
+    /**
+     * `true` when the client asked for one row MORE than it will keep — only to
+     * learn whether anything lies past the page. A full page then anchors every
+     * row but that far-end probe, whose structure the client never draws.
+     */
+    probe: z.enum(['true', 'false']).optional(),
+    /**
+     * Only the run's OWN flow — its agents' turns, every call's start and the
+     * cards a person answers, never a callee's rows. Absent reads the whole run,
+     * which is what the reconnect replay wants; a chat, whose agent calls no one,
+     * is answered with the whole run either way.
+     */
+    conversation: z.enum(['root']).optional(),
+    /**
+     * Only the conversation this call belongs to, its continuations included —
+     * what an opened call card reads. Never together with `conversation`.
+     */
+    call: z.string().min(1).max(200).optional(),
+  })
+  .refine(
+    (query) => query.conversation === undefined || query.call === undefined,
+    {
+      message: 'conversation and call name two different conversations',
+    },
+  );
 export class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
 
 export const listChatsQuerySchema = z.object({

@@ -507,6 +507,10 @@ function opensNodeTurn(payload: unknown): boolean {
  * run does carry (the trigger's prompt, `nodeId: null`) is the run's input
  * rather than any agent's turn. Reading it as one opened a turn at seq 0 that
  * nothing could ever close.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/wall-worked.ts` →
+ * `wallMeasuredTurns` folds both modes' wall clock the same way for the
+ * daemon's served `workedMs` (its doc block lists where it deliberately differs).
  */
 export function scanTurns(
   items: readonly ChatItem[],

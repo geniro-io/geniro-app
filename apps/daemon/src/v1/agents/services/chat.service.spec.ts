@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
+import { Logger } from '@nestjs/common';
 import {
   afterAll,
   afterEach,
@@ -31,6 +32,8 @@ import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { fakeSpawn } from '../__tests__/fake-child';
+import { FakeWallTurnDao } from '../__tests__/fake-wall-turn-dao';
+import { NO_CALL_INDEX } from '../__tests__/no-call-index';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AgentApprovalMode,
@@ -74,7 +77,12 @@ import type { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import type { WallTurnDao } from '../dao/wall-turn.dao';
 import { hostCardQuestions, hostMcpServerName } from '../utils/host-question';
+import {
+  CHAT_WALL_CLOCK_ROW_KINDS,
+  type WallClockRow,
+} from '../utils/wall-worked';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -112,6 +120,7 @@ import { RunTeardownService } from './run-teardown.service';
 import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
+import { WallWorkService } from './wall-work.service';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
 class FakeRunDao {
@@ -486,6 +495,26 @@ class FakeItemDao {
   async maxSeq(runId: string): Promise<number> {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
     return seqs.length ? Math.max(...seqs) : -1;
+  }
+  /** The wall ledger's chat read; the real query is pinned in `wall-work.service.spec.ts`. */
+  async chatWallClockRows(runId: string): Promise<WallClockRow[]> {
+    return this.items
+      .filter(
+        (i) =>
+          i.runId === runId &&
+          i.nodeId === null &&
+          (CHAT_WALL_CLOCK_ROW_KINDS as readonly string[]).includes(i.kind) &&
+          (i.kind !== 'message' || i.role === 'user'),
+      )
+      .sort((a, b) => a.seq - b.seq)
+      .map((i) => ({
+        seq: i.seq,
+        kind: i.kind,
+        nodeId: i.nodeId,
+        role: i.role,
+        createdAt: i.createdAt,
+        payload: i.payload,
+      }));
   }
   async latestUserMessage(
     runId: string,
@@ -1046,6 +1075,7 @@ function setup(
       return 0;
     },
   };
+  const wallTurns = new FakeWallTurnDao();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -1073,6 +1103,7 @@ function setup(
     {
       reapInBackground: (runId: string) => reapedRuns.push(runId),
     } as unknown as RunProcessReaper,
+    wallTurns as unknown as WallTurnDao,
   );
   // A double rather than the real service: what THIS spec pins is that the
   // group the rule names lands on the created run, not how the rule reads a
@@ -1152,6 +1183,19 @@ function setup(
     artifactStore,
     notices,
     callTokens,
+    NO_CALL_INDEX,
+    // The real ledger over the fake DAOs: when the chat hands it a turn, and
+    // what the row and the settle then serve, is what these cases pin.
+    new WallWorkService(
+      itemDao as unknown as ItemDao,
+      nodeDao as unknown as NodeStateDao,
+      runDao as unknown as RunDao,
+      wallTurns as unknown as WallTurnDao,
+      em,
+      // Never written here: no case runs the boot sweep.
+      join(tmpdir(), 'geniro-chat-wall-work-marker'),
+    ),
+    wallTurns as unknown as WallTurnDao,
     {
       token: 'launch',
       version: '0.0.0',
@@ -1186,6 +1230,7 @@ function setup(
     removedAttachmentRuns,
     runDao,
     itemDao,
+    wallTurns,
     nodeDao,
     published,
     registry,
@@ -1219,6 +1264,28 @@ describe('ChatService', () => {
   });
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("hands the history route's conversation to the transcript read", async () => {
+    // The route's `conversation` / `call` reaches the DAO only through here;
+    // dropping it would page a workflow run's whole transcript again.
+    const read = vi.spyOn(FakeItemDao.prototype, 'getByRun');
+    try {
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.getHistory(run.id, -1, { limit: 10 }, ['']);
+
+      expect(read).toHaveBeenLastCalledWith(
+        run.id,
+        -1,
+        expect.anything(),
+        { limit: 10 },
+        [''],
+      );
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it('createChat rejects a missing cwd and stores the canonical path', async () => {
@@ -4567,6 +4634,141 @@ describe('ChatService', () => {
     expect(
       statuses.filter((event) => event.status === null),
     ).not.toContainEqual(expect.objectContaining({ workedMs: 5_000 }));
+  });
+
+  describe('the wall-clock ledger of a chat turn its CLI did not time', () => {
+    /**
+     * Stamp each row with `clock`, as the real insert stamps it with the time
+     * it is written — the fake's own `Date(0)` would make every wall turn 0.
+     */
+    function clocked(itemDao: FakeItemDao): { at: (ms: number) => void } {
+      let clock = 0;
+      const create = itemDao.create.bind(itemDao);
+      itemDao.create = (data) =>
+        create({ createdAt: new Date(clock), ...data });
+      return {
+        at: (ms) => {
+          clock = ms;
+        },
+      };
+    }
+
+    const untimed = {
+      type: 'turn_complete' as const,
+      usage: null,
+      stopReason: 'end_turn' as const,
+      finalText: null,
+    };
+
+    it("serves the user's message to the settle as worked time — on the settle announce and the row", async () => {
+      // A cursor chat's `Run.workedMs` stayed null, so the card summed the
+      // rows the window had loaded and drifted with paging. Measured only if
+      // the catch-up runs after the `turn_complete` row exists and BEFORE the
+      // settle reads the figure back.
+      const { service, claude, itemDao, runDao, statuses } = setup();
+      const time = clocked(itemDao);
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      time.at(1_000);
+      await service.sendMessage(run.id, 'one');
+      time.at(9_000);
+      claude.emit(untimed);
+      claude.finish();
+      await drain();
+
+      const settled = statuses.filter((event) => event.status === 'completed');
+      expect(settled.at(-1)?.workedMs).toBe(8_000);
+      const listed = (await service.listChats('all')).find(
+        (row) => row.id === run.id,
+      );
+      expect(listed?.workedMs).toBe(8_000);
+      // The row keeps the CLI's own figure: none.
+      expect((await runDao.getById(run.id))?.workedMs ?? null).toBeNull();
+    });
+
+    it("serves the CLI total plus the wall turns, and a CLI-timed turn's figure exactly", async () => {
+      const { service, claude, itemDao, statuses } = setup();
+      const time = clocked(itemDao);
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      time.at(1_000);
+      await service.sendMessage(run.id, 'one');
+      time.at(16_000);
+      // The CLI says 5s; the wall clock says 15s. The CLI's word stands.
+      claude.emit({
+        ...untimed,
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
+          contextTokens: null,
+          contextWindowTokens: null,
+          contextModel: null,
+          costUsd: null,
+          durationMs: 5_000,
+          apiMs: null,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
+        },
+      });
+      claude.finish();
+      await drain();
+      expect(
+        statuses.filter((event) => event.status === 'completed').at(-1)
+          ?.workedMs,
+      ).toBe(5_000);
+
+      time.at(20_000);
+      await service.sendMessage(run.id, 'two');
+      time.at(23_000);
+      claude.emit(untimed);
+      claude.finish();
+      await drain();
+
+      expect(
+        statuses.filter((event) => event.status === 'completed').at(-1)
+          ?.workedMs,
+      ).toBe(8_000);
+    });
+
+    it('measures a turn that ended with no terminal event', async () => {
+      const { service, claude, itemDao } = setup();
+      const time = clocked(itemDao);
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      time.at(1_000);
+      await service.sendMessage(run.id, 'one');
+      time.at(4_000);
+      claude.emit({ type: 'text', text: 'partial' });
+      claude.finish();
+      await drain();
+
+      const listed = (await service.listChats('all')).find(
+        (row) => row.id === run.id,
+      );
+      expect(listed?.workedMs).toBe(3_000);
+    });
+
+    it('a catch-up that fails is logged and never fails the turn', async () => {
+      const { service, claude, wallTurns, runDao } = setup();
+      wallTurns.record = async () => {
+        throw new Error('SQLITE_BUSY');
+      };
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => {});
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'one');
+      claude.emit(untimed);
+      claude.finish();
+      await drain();
+
+      expect((await runDao.getById(run.id))?.status).toBe('completed');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('wall work not measured: SQLITE_BUSY'),
+      );
+      warn.mockRestore();
+    });
   });
 
   it("announces THIS turn's prompt-cache expiry on the settle", async () => {

@@ -8,6 +8,7 @@ import {
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { type BlockStatus } from './block-shell';
+import { jumpAnchorProps } from './jump-target';
 import { RunSettledContext } from './live-row';
 import { NestedThreadContext } from './subagent-context';
 import { useThreadOverride } from './thread-ui-memory';
@@ -30,6 +31,8 @@ import {
 } from './transcript-groups';
 import { payloadString } from './transcript-item';
 import type { TranscriptNodeMeta } from './transcript-payload';
+import { JUMP_MARK_CLASS, TranscriptRow } from './transcript-row';
+import { JumpMarkContext } from './use-transcript-jump';
 
 /**
  * Whether a turn's intermediate steps start FOLDED, whatever the app would
@@ -111,8 +114,14 @@ function ToolRow({
   // edit's diff used to render as a wall of escaped JSON.
   const resultBody = toolResultBody(input, result);
   const status = toolPairStatus(pair, settled);
+  const mark = useContext(JumpMarkContext);
+  const key = `tool:${pair.call.id}`;
   return (
-    <div className="flex flex-col">
+    // A place a jump can land — for the call, and for its result, which is
+    // drawn once the row is open (`jump-folds.ts` opens it).
+    <TranscriptRow
+      className={cn(mark?.key === key && JUMP_MARK_CLASS)}
+      {...jumpAnchorProps('row', pair.call.seq, key, pair.result?.seq ?? null)}>
       <button
         type="button"
         aria-expanded={open}
@@ -165,7 +174,7 @@ function ToolRow({
           ) : null}
         </div>
       ) : null}
-    </div>
+    </TranscriptRow>
   );
 }
 

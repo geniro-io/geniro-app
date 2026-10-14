@@ -22,6 +22,7 @@ import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
+import { WallTurnDao } from './dao/wall-turn.dao';
 import {
   AGENT_ADAPTERS,
   AgentAdapterRegistry,
@@ -58,6 +59,7 @@ import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
+import { ItemCallIndexService } from './services/item-call-index.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
@@ -96,6 +98,7 @@ import { StrandedChildReaper } from './services/stranded-child-reaper.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
 import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
 import { UserQuestionBroker } from './services/user-question.broker';
+import { WallWorkService } from './services/wall-work.service';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 import { defaultSpawn } from './utils/spawn-cli';
 
@@ -368,9 +371,12 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunGroupsService,
     ShellOutputService,
     ItemSeqAllocator,
+    ItemCallIndexService,
+    WallWorkService,
     MessageSendService,
     ItemDao,
     NodeStateDao,
+    WallTurnDao,
     CallContextDao,
     RunDao,
     RunGroupDao,
@@ -476,6 +482,12 @@ import { defaultSpawn } from './utils/spawn-cli';
     // the same allocator a chat's are, since its kept agent processes write
     // between passes.
     ItemSeqAllocator,
+    // Exported for the graph executor's writes, which stamp each row's call
+    // the way a chat's do.
+    ItemCallIndexService,
+    // Exported for the graph executor, which catches a node's wall-clock work
+    // up after each turn its CLI did not time, and for the boot sweep.
+    WallWorkService,
     MessageSendService,
     SkillHarvestStore,
     // Exported for the graph executor's own turn seam: a node's turn reports
@@ -488,6 +500,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     LocalImageService,
     ItemDao,
     NodeStateDao,
+    WallTurnDao,
     CallContextDao,
     RunDao,
     AgentAdapterRegistry,

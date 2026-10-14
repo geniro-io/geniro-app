@@ -1932,6 +1932,12 @@ export interface ChatHistoryDtoItemsInner {
      * @memberof ChatHistoryDtoItemsInner
      */
     createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    inCall?: string | null;
 }
 
 
@@ -3450,6 +3456,12 @@ export interface ItemDto {
      * @memberof ItemDto
      */
     createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ItemDto
+     */
+    inCall?: string | null;
 }
 
 
@@ -5401,11 +5413,23 @@ export interface RunStateDto {
      */
     artifactRows: Array<ChatHistoryDtoItemsInner>;
     /**
-     * every command still running
+     * every DETACHED command still running
      * @type {Array<OpenShell>}
      * @memberof RunStateDto
      */
     shells: Array<OpenShell>;
+    /**
+     * the unanswered tool calls of every conversation's open turn — the commands running in the foreground, whatever page a client holds
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof RunStateDto
+     */
+    openToolCalls: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * the run's newest seq when this was read: what it says ended, ended — for anything that started at or before it
+     * @type {number}
+     * @memberof RunStateDto
+     */
+    throughSeq: number;
     /**
      * 
      * @type {string}

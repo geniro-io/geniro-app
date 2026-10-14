@@ -6,6 +6,7 @@ import { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { WallTurnDao } from '../dao/wall-turn.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ArtifactStoreService } from './artifact-store.service';
@@ -72,6 +73,7 @@ export class RunTeardownService {
     private readonly transcripts: SessionTranscriptsService,
     private readonly uploads: ChatUploadStoreService,
     private readonly reaper: RunProcessReaper,
+    private readonly wallTurns: WallTurnDao,
   ) {}
 
   /**
@@ -167,6 +169,9 @@ export class RunTeardownService {
     );
     const callContexts =
       await this.callContextDao.hardDeleteIncludingSoftDeleted({ runId }, em);
+    // The run's wall-measured turns go with it: they are run-scoped, a part of
+    // its agents' worked time, unlike the usage ledgers that outlive a delete.
+    await this.wallTurns.hardDeleteIncludingSoftDeleted({ runId }, em);
     await this.runDao.hardDeleteIncludingSoftDeleted({ id: runId }, em);
     this.attachments.removeRun(runId);
     this.artifacts.removeRun(runId);

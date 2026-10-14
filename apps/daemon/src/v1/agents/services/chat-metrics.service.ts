@@ -22,6 +22,7 @@ import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { WallTurnDao } from '../dao/wall-turn.dao';
 import { activeSpansFrom, pausedSpansFrom } from '../utils/active-spans';
 import {
   callConversation,
@@ -55,6 +56,7 @@ import {
   snapshotPoolKinds,
 } from '../utils/snapshot-config-dirs';
 import { sumUsagePayloads, turnAgentKindOf } from '../utils/usage-figures';
+import { servedWorkedMs } from '../utils/wall-worked';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
@@ -153,6 +155,7 @@ export class ChatMetricsService implements OnModuleInit {
     private readonly bus: AgentEventBus,
     private readonly polledSpend: PolledSpendService,
     private readonly configDirPins: ConfigDirPinService,
+    private readonly wallTurns: WallTurnDao,
   ) {}
 
   /**
@@ -674,7 +677,27 @@ export class ChatMetricsService implements OnModuleInit {
     return run;
   }
 
+  /**
+   * The run's totals with its worked time made whole: the CLIs' own time plus
+   * what the daemon measured for turns a CLI timed nothing of (`wall_turns`),
+   * so the figure is the same however much of the history a client holds.
+   */
   private async totalsOf(
+    runId: string,
+    run: Run,
+    em: EntityManager,
+  ): Promise<ChatTotalsWire> {
+    const totals = await this.cliTotalsOf(runId, run, em);
+    return {
+      ...totals,
+      workedMs: servedWorkedMs(
+        totals.workedMs,
+        await this.wallTurns.runSum(runId, em),
+      ),
+    };
+  }
+
+  private async cliTotalsOf(
     runId: string,
     run: Run,
     em: EntityManager,

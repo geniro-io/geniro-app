@@ -173,6 +173,12 @@ The rules live in `.claude/rules/renderer-design-system.md` (tokens, themes, `da
 - Worked time and tool count, which take the daemon's figure alone where it has one.
 - In each case the turn in flight is added on top (`withLiveCost`, `openTurns`).
 
+A workflow run's window is its OWN flow only:
+
+- Every window PAGE read passes `conversation=root` (the daemon answers a chat, whose agent calls no one, with the whole run). A root page anchors what each call's FOLDED card is drawn from. The tail catch-up and the reconnect replay read the whole run since a cursor.
+- A row whose `inCall` is a call id (`isCallRow`; the run's own flow carries null) never joins `items`. Both places a row can arrive split on it into `callRows` — `use-run-stream.ts`'s `ingest` (live rows and the replay) and `use-chat-run.ts`'s `catchUpTail` — and the stream's `structure` folds the anchors and the call rows as one. An opened call card reads its own conversation through `CallConversationPager` (`call=<id>`). What it read is forgotten on thread open and close, and on return to the tail, whose root pages skipped the calls' rows written meanwhile.
+- A reader about a call's turns, cards, shells or pages reads `transcriptRows` (the window plus every structure row filed under a call — a page's card anchors, live rows, an opened card's pages), never `items` alone.
+
 Anchors and run state:
 
 - Anchors (`GET …/items` → `{items, anchors}`) are kept apart from `items`, laid in only where the transcript is folded, and never drawn as rows.
@@ -180,7 +186,13 @@ Anchors and run state:
 - Whatever replaces anchors calls `forget`. A page landing after a live answer merges.
 - Rows refused by `addItem`'s away-from-tail guard bring no anchors.
 - Never rebuild a call heuristically from its later rows: it draws ghost cards.
-- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window's own reading wins where it holds the same thing, except for open requests off the tail.
+- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window supplies details; the daemon decides what has ENDED: a shell, delegate or call the page reads as running that began at or before the read's `throughSeq` and that the read says is over, is over (`withoutDaemonEndedShells`, `withDaemonDelegateEndings`, `callEndedPerDaemon`). The open turns' unanswered calls (`openToolCalls`) are folded in with the page, so a foreground command shows while the reader is elsewhere. Open requests off the tail are the daemon's too.
+
+Jumps (search, global search, timeline, the Agents chip) — `chats/use-transcript-jump.ts`, DOM contract in `chats/jump-target.ts`:
+
+- Every row a jump can land on carries its seq (`data-transcript-seq` / `data-row-seq` / `data-call-seq`), a second row it draws (`data-seq-also`, a tool row's result) and a page-unique `data-jump-key`; the mark is matched on the key, never the seq (a turn and its first row share one). The anchor drawing the hit wins, innermost first; only without one, the nearest start below it.
+- The folds a row is drawn inside (tool group, tool row, long reasoning, sub-agent block, call card) are found from the transcript's STRUCTURE (`chats/jump-folds.ts`), never from seq ranges — interleaved delegates span each other's seqs. They are opened through thread memory, then the row is landed on.
+- A row filed under a call is located (one-row read), the window paged to its card, the card and every card around it opened and read back to the row (`loadThrough`), then the row is marked inside the card.
 
 One home for each concern:
 

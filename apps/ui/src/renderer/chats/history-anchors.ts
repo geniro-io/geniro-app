@@ -16,6 +16,15 @@ import { payloadString } from './transcript-payload';
  * from, not something the reader scrolled to.
  */
 
+/**
+ * Whether a row is filed under one of the run's calls: its `inCall` names the
+ * call. A row of the run's own flow says null (the daemon's `''` on the wire),
+ * and one no build has stamped says nothing.
+ */
+export function isCallRow(item: ChatItem): boolean {
+  return typeof item.inCall === 'string';
+}
+
 /** Two anchor sets as one, by id, in seq order. */
 export function mergeAnchorRows(
   held: readonly ChatItem[],

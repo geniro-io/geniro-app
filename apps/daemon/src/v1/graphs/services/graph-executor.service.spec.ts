@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
+import { Logger } from '@nestjs/common';
 import type { BadRequestException } from '@packages/common';
 import {
   afterAll,
@@ -21,6 +22,8 @@ import {
 } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
+import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
@@ -47,6 +50,7 @@ import type { CallContextDao } from '../../agents/dao/call-context.dao';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
+import type { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
@@ -69,7 +73,12 @@ import type { RunProcessReaper } from '../../agents/services/run-process-reaper.
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
+import {
+  WALL_CLOCK_ROW_KINDS,
+  type WallClockRow,
+} from '../../agents/utils/wall-worked';
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
@@ -347,6 +356,22 @@ class FakeItemDao {
       })
       .sort((a, b) => a.seq - b.seq)
       .slice(-200);
+  }
+  /** The wall ledger's read — one node's clock rows; the real query is pinned in `item.dao.spec.ts`. */
+  async nodeWallClockRows(
+    runId: string,
+    nodeId: string,
+  ): Promise<WallClockRow[]> {
+    return this.ofKinds(runId, [...WALL_CLOCK_ROW_KINDS])
+      .filter((i) => i.nodeId === nodeId)
+      .map((i) => ({
+        seq: i.seq,
+        kind: i.kind,
+        nodeId: i.nodeId,
+        role: i.role,
+        createdAt: i.createdAt,
+        payload: i.payload,
+      }));
   }
   private ofKinds(runId: string, kinds: string[]): Item[] {
     return this.items
@@ -890,6 +915,7 @@ function setup(
   cursor: FakeAdapter;
   runDao: FakeRunDao;
   itemDao: FakeItemDao;
+  wallTurns: FakeWallTurnDao;
   nodeDao: FakeNodeStateDao;
   callContextDao: {
     hardDeleted: unknown[];
@@ -1130,6 +1156,7 @@ function setup(
   // The page store's answer, switchable per test: a refusal names the reason the
   // executor must hand back to the caller verbatim.
   const pageStore: { refusal: string | null } = { refusal: null };
+  const wallTurns = new FakeWallTurnDao();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -1159,6 +1186,7 @@ function setup(
     // Never real: a real one would read and signal this machine's process
     // table from a unit test. Reaping is `run-teardown.service.spec.ts`'s.
     { reapInBackground: () => undefined } as unknown as RunProcessReaper,
+    wallTurns as unknown as WallTurnDao,
   );
   const service = new GraphExecutorService(
     em,
@@ -1215,6 +1243,18 @@ function setup(
     partials,
     attachments,
     seqs,
+    NO_CALL_INDEX,
+    // The real ledger over the fake DAOs: what the executor hands it, and when,
+    // is what these cases pin; the fold and the compare-and-set have their own.
+    new WallWorkService(
+      itemDao as unknown as ItemDao,
+      nodeDao as unknown as NodeStateDao,
+      runDao as unknown as RunDao,
+      wallTurns as unknown as WallTurnDao,
+      em,
+      join(dir, 'wall-work-marker'),
+    ),
+    wallTurns as unknown as WallTurnDao,
     artifacts,
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.
@@ -1244,6 +1284,7 @@ function setup(
     cursor,
     runDao,
     itemDao,
+    wallTurns,
     nodeDao,
     callContextDao,
     registry,
@@ -10943,6 +10984,198 @@ describe('GraphExecutorService — a node’s context reading', () => {
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+
+  describe('the wall-clock ledger of a node turn its CLI did not time', () => {
+    const ONE_NODE: Workflow = {
+      name: 'one',
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+      edges: [],
+    };
+
+    /**
+     * Stamp each row the executor writes with `clock`, as the real insert
+     * stamps it with the time it is written — the fake's own `Date(0)` would
+     * make every wall turn measure 0.
+     */
+    function clocked(itemDao: FakeItemDao): { at: (ms: number) => void } {
+      let clock = 0;
+      const create = itemDao.create.bind(itemDao);
+      itemDao.create = (data) =>
+        create({ createdAt: new Date(clock), ...data });
+      return {
+        at: (ms) => {
+          clock = ms;
+        },
+      };
+    }
+
+    /** The worked time the nodes route serves for one node. */
+    async function servedWorkedMs(
+      service: GraphExecutorService,
+      runId: string,
+      nodeId: string,
+    ): Promise<number | null | undefined> {
+      return (await service.getNodeStates(runId)).find(
+        (row) => row.nodeId === nodeId,
+      )?.workedMs;
+    }
+
+    it('serves the turn start-to-settle as worked time once its row is written', async () => {
+      // A cursor turn reports no duration, so before the ledger this node's
+      // worked time stayed null and the card fell back to whatever history the
+      // client had loaded. Measured only if the catch-up runs AFTER the
+      // `turn_complete` row exists — before it, the fold sees no settle.
+      const { service, claude, itemDao, nodeDao } = setup();
+      const time = clocked(itemDao);
+      time.at(1_000);
+      const run = await service.startRun({
+        slug: 'one',
+        workflow: triggered(ONE_NODE),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+      time.at(16_000);
+      claude.starts[0]!.emit({
+        type: 'tool_call',
+        id: 't1',
+        name: 'Bash',
+        input: {},
+      });
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+
+      expect(await servedWorkedMs(service, run.id, 'a')).toBe(15_000);
+      // The row keeps the CLI's own figure — none here — and the tool count.
+      expect(nodeDao.row(run.id, 'a')).toMatchObject({
+        workedMs: null,
+        toolCalls: 1,
+      });
+    });
+
+    it('serves the CLI total plus the wall turns for a node that has both', async () => {
+      // A pool or a CLI change can give one node both kinds of turn; the
+      // served figure is their sum, the row only the CLI's part.
+      const { service, claude, itemDao, nodeDao } = setup();
+      const time = clocked(itemDao);
+      time.at(1_000);
+      const run = await service.startRun({
+        slug: 'one',
+        workflow: triggered(ONE_NODE),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+      await nodeDao.rememberWork(run.id, 'a', 2_500, null);
+      time.at(5_000);
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+
+      expect(await servedWorkedMs(service, run.id, 'a')).toBe(6_500);
+      expect(nodeDao.row(run.id, 'a')?.workedMs).toBe(2_500);
+    });
+
+    it('adds a BETWEEN-TURNS turn the CLI did not time, once its row is written', async () => {
+      // A kept callee process carrying on after its call settled: its own
+      // `running` (off-turn) row opens the stretch, and the off-turn
+      // `turn_complete` ends it. Only the off-turn sink's catch-up measures it
+      // — the in-turn path never sees this event, and the root's later turn
+      // catches up the root, not the callee.
+      const { service, claude, callBroker, itemDao } = setup();
+      const time = clocked(itemDao);
+      const run = await service.startRun({
+        slug: 'bg',
+        workflow: triggered(CALL_WORKFLOW),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      time.at(1_000);
+      const call = callBroker.callAgent(run.id, 'a', {
+        title: 'why',
+        agent: 'callee',
+        message: 'start the build',
+      });
+      await drain();
+      time.at(4_000);
+      claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-callee' });
+      completeTurn(claude.starts[1]!, 'build launched');
+      await call;
+      await drain();
+      expect(await servedWorkedMs(service, run.id, 'callee')).toBe(3_000);
+
+      time.at(10_000);
+      claude.starts[1]!.emitOffTurn({ type: 'text', text: 'the build passed' });
+      await drain();
+      time.at(17_000);
+      claude.starts[1]!.emitOffTurn({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: 'the build passed',
+      });
+      await drain();
+
+      expect(await servedWorkedMs(service, run.id, 'callee')).toBe(10_000);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('keeps the CLI figure exactly for a turn the CLI timed', async () => {
+      // The wall clock here says 15s; the CLI said 5s. Claude's figures must not
+      // move by a millisecond — the ledger measures only untimed turns.
+      const { service, claude, itemDao, nodeDao } = setup();
+      const time = clocked(itemDao);
+      time.at(1_000);
+      const run = await service.startRun({
+        slug: 'one',
+        workflow: triggered(ONE_NODE),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+      time.at(16_000);
+      claude.starts[0]!.emit({
+        type: 'turn_complete',
+        usage: { ...NO_USAGE, durationMs: 5_000 },
+        stopReason: 'end_turn',
+        finalText: 'done',
+      });
+      claude.starts[0]!.finish();
+      await drain();
+
+      expect(nodeDao.row(run.id, 'a')?.workedMs).toBe(5_000);
+      expect(await servedWorkedMs(service, run.id, 'a')).toBe(5_000);
+    });
+
+    it('a catch-up that fails is logged and never fails the run', async () => {
+      // Bookkeeping: a failed ledger write must not mark the pass's
+      // persistence failed, which would settle a finished run `failed`.
+      const { service, claude, wallTurns, runDao } = setup();
+      wallTurns.record = async () => {
+        throw new Error('SQLITE_BUSY');
+      };
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => {});
+      const run = await service.startRun({
+        slug: 'one',
+        workflow: triggered(ONE_NODE),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+
+      expect(runDao.runs.get(run.id)?.status).toBe('completed');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('not measured: SQLITE_BUSY'),
+      );
+      warn.mockRestore();
+    });
   });
 
   it('writes a DURABLE reading per CALL, so both rings survive a reload', async () => {

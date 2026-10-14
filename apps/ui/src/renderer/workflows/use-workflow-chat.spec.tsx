@@ -282,6 +282,15 @@ describe('useWorkflowChat', () => {
     expect(state().items.filter((row) => row.id === 'live')).toHaveLength(1);
   });
 
+  it('folds a live row filed under a call beside the window, never into it', async () => {
+    await mount();
+
+    await emitItem(item({ id: 'callee', inCall: 'call-1' }));
+
+    expect(state().items.map((row) => row.id)).not.toContain('callee');
+    expect(state().anchors.map((row) => row.id)).toEqual(['callee']);
+  });
+
   it('holds the opened page’s anchors apart from its rows', async () => {
     const start = item({
       id: 'start',
@@ -845,7 +854,11 @@ describe('useWorkflowChat', () => {
     await reconnect();
 
     const [args] = listRunItems.mock.calls.at(-1)!;
-    expect(args).toEqual({ runId: 'run-1', limit: expect.any(Number) });
+    expect(args).toEqual({
+      runId: 'run-1',
+      limit: expect.any(Number),
+      conversation: 'root',
+    });
   });
 
   it('keeps working when the rows read back end mid-turn', async () => {

@@ -2,7 +2,9 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 
 import { isTerminalRunStatus, type RunStatus } from '../../runs/runs.types';
 import type { RunDao } from '../dao/run.dao';
+import type { WallTurnDao } from '../dao/wall-turn.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
+import { servedWorkedMs } from './wall-worked';
 
 /**
  * The one write-then-announce implementation both execution paths (single-agent
@@ -68,7 +70,7 @@ export interface RunStatusAnnounce {
 }
 
 export async function writeRunStatus(
-  deps: { runDao: RunDao; bus: AgentEventBus },
+  deps: { runDao: RunDao; bus: AgentEventBus; wallTurns: WallTurnDao },
   em: EntityManager,
   runId: string,
   status: RunStatus,
@@ -126,7 +128,20 @@ export async function writeRunStatus(
   // nothing nulls them once written — so a pair of nulls could never correct a
   // client's copy of anything. That is every workflow run (its figures live per
   // NODE) and every chat whose CLI has reported no timing and called no tool.
-  const read = settled ? await deps.runDao.readWork(runId, em) : null;
+  const stored = settled ? await deps.runDao.readWork(runId, em) : null;
+  // The worked time as every reader is served it: the CLI-reported total plus
+  // the chat's wall-measured turns (`WallWorkService`), which the turn's own
+  // catch-up recorded before this settle.
+  const read =
+    stored === null
+      ? null
+      : {
+          ...stored,
+          workedMs: servedWorkedMs(
+            stored.workedMs,
+            (await deps.wallTurns.chatSums([runId], em)).get(runId),
+          ),
+        };
   const work =
     read !== null && (read.workedMs !== null || read.toolCalls !== null)
       ? read

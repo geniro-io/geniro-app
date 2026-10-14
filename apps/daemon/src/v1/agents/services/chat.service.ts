@@ -78,6 +78,7 @@ import {
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { WallTurnDao } from '../dao/wall-turn.dao';
 import {
   type AgentOptionsSnapshot,
   readAgentOptions,
@@ -147,6 +148,7 @@ import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { StandingQuestions } from '../utils/standing-questions';
 import { unanswerablePayload, unansweredRequests } from '../utils/unanswerable';
+import { cliTurnDurationMs } from '../utils/wall-worked';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentMcpService } from './agent-mcp.service';
@@ -162,6 +164,7 @@ import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
 import { GalleryBroker } from './gallery.broker';
+import { ItemCallIndexService } from './item-call-index.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
@@ -177,6 +180,7 @@ import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
+import { WallWorkService } from './wall-work.service';
 
 function parsePayload(raw: string): unknown {
   try {
@@ -224,6 +228,13 @@ const DELEGATE_ROW_LEASE_MS = 5 * 60 * 1000;
  * early or late twice a year, on rows nobody can get back.
  */
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** What `ChatService.toRunWire` reads for one run beyond its row. */
+interface RunWireRead {
+  preview: RunPreview | null;
+  /** The chat's wall-measured worked time (`WallTurnDao.chatSums`). */
+  wallMs: number | null;
+}
 
 /**
  * What an agent is told when it asks a DIFFERENT question while one of its
@@ -605,6 +616,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly artifactStore: ArtifactStoreService,
     private readonly notices: NotifyBroker,
     private readonly callTokens: CallTokenRegistry,
+    private readonly calls: ItemCallIndexService,
+    private readonly wallWork: WallWorkService,
+    private readonly wallTurns: WallTurnDao,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     @Optional() private readonly agentMcp?: AgentMcpService,
   ) {}
@@ -712,7 +726,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       .catch(() => undefined)
       .then(() =>
         writeRunStatus(
-          { runDao: this.runDao, bus: this.bus },
+          { runDao: this.runDao, bus: this.bus, wallTurns: this.wallTurns },
           em,
           runId,
           status,
@@ -1248,7 +1262,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (input.resumeSessionId !== undefined) {
       await this.adoptSession(em, run.id, input, cwd, configDir);
     }
-    return this.toRunWire(run);
+    return this.toRunWire(run, (await this.wireReads([run.id], em)).of(run.id));
   }
 
   /**
@@ -1518,8 +1532,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         { message: profileMove.notice, severity: 'info' },
       );
     }
-    const previews = await this.itemDao.runPreviews([runId], em);
-    return this.toRunWire(run, previews.get(runId) ?? null);
+    const previews = await this.wireReads([runId], em);
+    return this.toRunWire(run, previews.of(runId));
   }
 
   /**
@@ -1941,8 +1955,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (!run) {
       return null;
     }
-    const previews = await this.itemDao.runPreviews([run.id], em);
-    return this.toRunWire(run, previews.get(run.id) ?? null);
+    const previews = await this.wireReads([run.id], em);
+    return this.toRunWire(run, previews.of(run.id));
   }
 
   /**
@@ -2018,11 +2032,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // Incremental and error-swallowing by construction, so this is a `max(seq)`
     // read per run in the steady state and can never fail the listing.
     await this.pullRequests.sync(runs, em);
-    const previews = await this.itemDao.runPreviews(
+    const previews = await this.wireReads(
       runs.map((run) => run.id),
       em,
     );
-    return runs.map((run) => this.toRunWire(run, previews.get(run.id) ?? null));
+    return runs.map((run) => this.toRunWire(run, previews.of(run.id)));
   }
 
   /**
@@ -2094,10 +2108,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     await this.runDao.updateWithoutActivity(runId, patch, em);
     Object.assign(run, patch);
-    const previews = await this.itemDao.runPreviews([runId], em);
-    return this.announceRefiled(
-      this.toRunWire(run, previews.get(runId) ?? null),
-    );
+    const previews = await this.wireReads([runId], em);
+    return this.announceRefiled(this.toRunWire(run, previews.of(runId)));
   }
 
   /**
@@ -2115,10 +2127,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     await this.runDao.updateWithoutActivity(runId, { color }, em);
     run.color = color;
-    const previews = await this.itemDao.runPreviews([runId], em);
-    return this.announceRefiled(
-      this.toRunWire(run, previews.get(runId) ?? null),
-    );
+    const previews = await this.wireReads([runId], em);
+    return this.announceRefiled(this.toRunWire(run, previews.of(runId)));
   }
 
   /**
@@ -2159,8 +2169,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (moving) {
       await this.runDao.repin(run, true, em);
     }
-    const previews = await this.itemDao.runPreviews([runId], em);
-    const answer = this.toRunWire(run, previews.get(runId) ?? null);
+    const previews = await this.wireReads([runId], em);
+    const answer = this.toRunWire(run, previews.of(runId));
     if (!moving) {
       return this.announceRefiled(answer);
     }
@@ -2196,13 +2206,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         }
       }
     }
-    const previews = await this.itemDao.runPreviews(
+    const previews = await this.wireReads(
       band.map((row) => row.id),
       em,
     );
     this.announceRefiled([
       ...changed,
-      ...band.map((row) => this.toRunWire(row, previews.get(row.id) ?? null)),
+      ...band.map((row) => this.toRunWire(row, previews.of(row.id))),
     ]);
   }
 
@@ -2245,12 +2255,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const affected = band.some((row) => row.id === run.id)
       ? band
       : [...band, run];
-    const previews = await this.itemDao.runPreviews(
+    const previews = await this.wireReads(
       affected.map((row) => row.id),
       em,
     );
     return this.announceRefiled(
-      affected.map((row) => this.toRunWire(row, previews.get(row.id) ?? null)),
+      affected.map((row) => this.toRunWire(row, previews.of(row.id))),
     );
   }
 
@@ -2285,12 +2295,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const namedIds = new Set(named.map((run) => run.id));
     const ordered = [...named, ...band.filter((run) => !namedIds.has(run.id))];
     await this.runDao.applyPinnedOrder(ordered, em);
-    const previews = await this.itemDao.runPreviews(
+    const previews = await this.wireReads(
       ordered.map((run) => run.id),
       em,
     );
     return this.announceRefiled(
-      ordered.map((run) => this.toRunWire(run, previews.get(run.id) ?? null)),
+      ordered.map((run) => this.toRunWire(run, previews.of(run.id))),
     );
   }
 
@@ -2375,7 +2385,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       await this.runDao.repin(fresh, false, em);
       const answer = this.toRunWire(
         fresh,
-        (await this.itemDao.runPreviews([runId], em)).get(runId) ?? null,
+        (await this.wireReads([runId], em)).of(runId),
       );
       // The band the pin left was renumbered, and every OTHER client's copy of
       // it has to hear so — see {@link announceBands}.
@@ -2434,23 +2444,28 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     await this.runDao.updateWithoutActivity(runId, { archivedAt: null }, em);
     run.archivedAt = null;
-    const previews = await this.itemDao.runPreviews([runId], em);
-    return this.announceRefiled(
-      this.toRunWire(run, previews.get(runId) ?? null),
-    );
+    const previews = await this.wireReads([runId], em);
+    return this.announceRefiled(this.toRunWire(run, previews.of(runId)));
   }
 
   async getHistory(
     runId: string,
     afterSeq = -1,
     window?: HistoryWindow,
+    inCalls?: readonly string[],
   ): Promise<ItemWire[]> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    const items = await this.itemDao.getByRun(runId, afterSeq, em, window);
+    const items = await this.itemDao.getByRun(
+      runId,
+      afterSeq,
+      em,
+      window,
+      inCalls,
+    );
     return items.map(itemToWire);
   }
 
@@ -6302,6 +6317,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 workRows += 1;
               }
             }
+            if (
+              event.type === 'turn_complete' &&
+              cliTurnDurationMs({ usage: event.usage }) === null
+            ) {
+              // A turn the CLI did not time (every ACP agent) is measured by
+              // the wall clock from the chat's durable rows — AFTER its
+              // `turn_complete` row above is written, which the fold needs to
+              // see the turn end, and BEFORE the settle below, whose announce
+              // reads the served figure back.
+              await this.catchUpWallWork(runId);
+            }
             if (status) {
               // What the settle SAYS, for whoever is not looking at this chat.
               // A failure speaks for itself; a completion is summarised by the
@@ -6523,6 +6549,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 );
               },
             );
+            // A turn end no CLI timed, measured like any other — AFTER the
+            // status write, which a cancel landing in between must not lose.
+            await this.catchUpWallWork(runId);
             settledStatus = 'completed';
           }
           // Only a compaction that FINISHED re-bases the auto-compact rule. One
@@ -6981,13 +7010,36 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      */
     nodeId: string | null = null,
   ): Promise<ItemWire> {
-    return persistItemAndEmit({ itemDao: this.itemDao, bus: this.bus }, em, {
-      runId,
-      nodeId,
-      seq,
-      kind,
-      role,
-      payload,
+    return persistItemAndEmit(
+      {
+        itemDao: this.itemDao,
+        bus: this.bus,
+        calls: this.calls,
+        seqs: this.seqs,
+      },
+      em,
+      {
+        runId,
+        nodeId,
+        seq,
+        kind,
+        role,
+        payload,
+      },
+    );
+  }
+
+  /**
+   * Record this chat's settled turns its CLI did not time
+   * (`WallWorkService.catchUpChat`). Bookkeeping, so a failure is logged and
+   * never fails the turn — any later catch-up, or the boot sweep, records the
+   * turn still missing.
+   */
+  private async catchUpWallWork(runId: string): Promise<void> {
+    await this.wallWork.catchUpChat(runId).catch((err: unknown) => {
+      this.logger.warn(
+        `run ${runId}: wall work not measured: ${err instanceof Error ? err.message : String(err)}`,
+      );
     });
   }
 
@@ -7000,15 +7052,40 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * a run parked on a question emits nothing further by definition, so a client
    * that missed the transition has only this to learn it from.
    */
-  private toRunWire(run: Run, preview: RunPreview | null = null): RunWire {
+  private toRunWire(run: Run, reads: RunWireRead): RunWire {
     return runToWire(
       run,
-      preview,
+      reads.preview,
       this.approvals.awaitingFor(run.id),
       this.heldRuns.get(run.id) ?? 0,
       this.configDirPins.forRun(run.agentKind, run.cwd),
       this.backgroundWork.shellsOpen(run.id),
       this.backgroundWork.subagentsOut(run.id),
+      0,
+      0,
+      reads.wallMs,
     );
+  }
+
+  /**
+   * What {@link toRunWire} needs read for these runs beyond the row: each
+   * one's newest transcript rows, and its wall-measured worked time — the
+   * turns its CLI did not time (`WallWorkService`), served on top of the
+   * CLI-reported `Run.workedMs`. Two queries however many runs.
+   */
+  private async wireReads(
+    runIds: readonly string[],
+    em: EntityManager,
+  ): Promise<{ of: (runId: string) => RunWireRead }> {
+    const [previews, wall] = await Promise.all([
+      this.itemDao.runPreviews([...runIds], em),
+      this.wallTurns.chatSums(runIds, em),
+    ]);
+    return {
+      of: (runId) => ({
+        preview: previews.get(runId) ?? null,
+        wallMs: wall.get(runId) ?? null,
+      }),
+    };
   }
 }

@@ -31,6 +31,8 @@ const state = (calls: number): RunStateDto => ({
   workflowRows: [],
   artifactRows: [],
   shells: [],
+  openToolCalls: [],
+  throughSeq: -1,
   turnStartedAt: null,
 });
 
@@ -184,6 +186,35 @@ describe('useRunState', () => {
     });
     await settle();
     expect(h.api.readRunState.mock.calls.length).toBe(before + 2);
+  });
+
+  it("re-reads on the reply to an open turn's command it lists — the page off the tail holds neither", async () => {
+    const h = harness('r1');
+    h.api.readRunState.mockResolvedValue({
+      ...state(0),
+      openToolCalls: [
+        {
+          id: 'row-sh',
+          runId: 'r1',
+          nodeId: null,
+          seq: 9,
+          kind: 'tool_call',
+          role: null,
+          payload: { id: 'toolu_sh', name: 'Bash' },
+          createdAt: 'now',
+        },
+      ],
+      throughSeq: 9,
+    });
+    await h.render('r1');
+    const before = h.api.readRunState.mock.calls.length;
+
+    await act(async () => {
+      h.emitItem({ kind: 'tool_result', payload: { id: 'toolu_sh' } });
+    });
+    await settle();
+
+    expect(h.api.readRunState.mock.calls.length).toBe(before + 1);
   });
 
   it('re-reads on the reply to an artifact or a workflow it lists — the reply is what carries the URL', async () => {

@@ -20,6 +20,7 @@ import { CallContextDao } from '../../agents/dao/call-context.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
@@ -36,6 +37,7 @@ import { CallContext } from '../../runs/entity/call-context.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
@@ -75,6 +77,7 @@ describe('usage ledger retention across a run delete', () => {
           Item,
           NodeState,
           CallContext,
+          WallTurn,
           UsageActivity,
           UsageEvent,
         ],
@@ -130,6 +133,7 @@ describe('usage ledger retention across a run delete', () => {
       // Never real: a real one would read and signal this machine's process
       // table from a unit test.
       { reapInBackground: () => undefined } as unknown as RunProcessReaper,
+      new WallTurnDao(em),
     );
   });
 

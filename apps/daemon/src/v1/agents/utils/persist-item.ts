@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 
+import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
 import {
@@ -13,12 +14,16 @@ import {
 } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
+import type { ItemCallIndexService } from '../services/item-call-index.service';
+import type { ItemSeqAllocator } from '../services/item-seq.allocator';
+import { inCallWire } from './item-wire';
 import { threadPreviewOf } from './message-preview';
 import { readModelParameters } from './model-parameters';
 import { readDisplayedPullRequests } from './pull-request-capture';
 import { readRunResetWakes } from './run-reset-wakes';
 import { searchIndexText } from './searchable-text';
 import { readRunTaskList } from './task-list-fold';
+import { servedWorkedMs } from './wall-worked';
 
 /**
  * The one persist-then-emit implementation both execution paths (single-agent
@@ -29,7 +34,13 @@ import { readRunTaskList } from './task-list-fold';
  * a long streaming run doesn't grow it unboundedly.
  */
 export async function persistItemAndEmit(
-  deps: { itemDao: ItemDao; bus: AgentEventBus },
+  deps: {
+    itemDao: ItemDao;
+    bus: AgentEventBus;
+    calls: Pick<ItemCallIndexService, 'inCallOf'>;
+    /** Told when the row's reserved seq is no longer in flight. */
+    seqs: Pick<ItemSeqAllocator, 'settle'>;
+  },
   em: EntityManager,
   row: {
     runId: string;
@@ -40,22 +51,32 @@ export async function persistItemAndEmit(
     payload: unknown;
   },
 ): Promise<ItemWire> {
-  const item = await deps.itemDao.create(
-    {
-      runId: row.runId,
-      nodeId: row.nodeId,
-      seq: row.seq,
-      kind: row.kind,
-      role: row.role,
-      payload: JSON.stringify(row.payload),
-      // Computed at the insert rather than at query time: the search is a
-      // daemon route precisely because the client holds only the newest page,
-      // and scanning JSON payloads across a long transcript is what the column
-      // exists to avoid.
-      searchText: searchIndexText(row.payload),
-    },
-    em,
-  );
+  let item: Item;
+  let inCall: string;
+  // Settled however the insert ends: a row on disk is no longer in flight, and
+  // one that failed never will be (`ItemSeqAllocator.writtenThrough`).
+  try {
+    inCall = await deps.calls.inCallOf(row.runId, row);
+    item = await deps.itemDao.create(
+      {
+        runId: row.runId,
+        nodeId: row.nodeId,
+        seq: row.seq,
+        kind: row.kind,
+        role: row.role,
+        payload: JSON.stringify(row.payload),
+        // Computed at the insert rather than at query time: the search is a
+        // daemon route precisely because the client holds only the newest page,
+        // and scanning JSON payloads across a long transcript is what the column
+        // exists to avoid.
+        searchText: searchIndexText(row.payload),
+        inCall,
+      },
+      em,
+    );
+  } finally {
+    deps.seqs.settle(row.runId, row.seq);
+  }
   const wire: ItemWire = {
     id: item.id,
     runId: row.runId,
@@ -65,6 +86,7 @@ export async function persistItemAndEmit(
     role: row.role,
     payload: row.payload,
     createdAt: item.createdAt.toISOString(),
+    inCall: inCallWire(inCall),
   };
   deps.bus.publish({ runId: row.runId, item: wire });
   // Items reach ONE run room and a client joins one at a time, so a thread
@@ -172,6 +194,13 @@ export function runToWire(
   awaitingCalls = 0,
   /** Trigger-fed workflow agents inside a turn — see `RunWire.rootsWorking`. */
   rootsWorking = 0,
+  /**
+   * This chat's wall-measured worked time (`WallTurnDao.chatSums`), added to
+   * the CLI-reported `Run.workedMs` so the row says what the agent worked
+   * whatever its CLI timed. Last and defaulted to null for the workflow
+   * callers, whose worked time lives per node.
+   */
+  wallWorkedMs: number | null = null,
 ): RunWire {
   return {
     id: run.id,
@@ -196,7 +225,7 @@ export function runToWire(
     modelParameters: readModelParameters(run.modelParameters),
     contextTokens: run.contextTokens,
     contextWindowTokens: run.contextWindowTokens,
-    workedMs: run.workedMs,
+    workedMs: servedWorkedMs(run.workedMs, wallWorkedMs),
     toolCalls: run.toolCalls,
     promptCacheExpiresAt: run.promptCacheExpiresAt?.toISOString() ?? null,
     promptCacheTtlMs: run.promptCacheTtlMs,

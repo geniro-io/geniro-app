@@ -5,6 +5,7 @@ import { Subject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentKind } from '../../runs/runs.types';
+import { FakeWallTurnDao } from '../__tests__/fake-wall-turn-dao';
 import {
   type AgentContextUsage,
   NO_PLAN_LIMITS,
@@ -16,6 +17,7 @@ import { ChatMetricsWireSchema } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
+import type { WallTurnDao } from '../dao/wall-turn.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
 import type { AgentSessionRegistry } from './agent-session.registry';
@@ -187,6 +189,7 @@ function build(opts: {
           : null;
       },
     } as unknown as ConfigDirPinService,
+    wallTurns as unknown as WallTurnDao,
   );
   service.onModuleInit();
   return {
@@ -204,6 +207,9 @@ function build(opts: {
       } as unknown as RunItemEvent),
   };
 }
+
+/** The wall ledger the totals add to the CLIs' own time. */
+const wallTurns = new FakeWallTurnDao();
 
 describe('ChatMetricsService — one workflow node', () => {
   // A workflow run keeps a process per node, so its readout names the node:
@@ -282,6 +288,7 @@ describe('ChatMetricsService — one workflow node', () => {
         pollsSpend: (kind: string | null) => kind === AgentKind.CursorAgent,
       } as unknown as PolledSpendService,
       { forRun: () => null } as unknown as ConfigDirPinService,
+      wallTurns as unknown as WallTurnDao,
     );
     service.onModuleInit();
     return {
@@ -634,6 +641,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
         pollsSpend: (kind: string | null) => kind === AgentKind.CursorAgent,
       } as unknown as PolledSpendService,
       { forRun: () => null } as unknown as ConfigDirPinService,
+      wallTurns as unknown as WallTurnDao,
     );
     service.onModuleInit();
     return {
@@ -1434,6 +1442,20 @@ describe('ChatMetricsService.readTotals', () => {
     expect(totals.costUsd).toBeCloseTo(0.75, 10);
     expect(totals.turns).toBe(2);
     expect(readContextUsage).not.toHaveBeenCalled();
+  });
+
+  it("adds the daemon's wall-clock measure of the turns a CLI timed nothing of to the CLI's own time", async () => {
+    // A cursor turn reports no duration; without the ledger the header totals
+    // only what the loaded page holds, and moves as the reader pages back.
+    wallTurns.rows.clear();
+    await wallTurns.record('run-1', [{ seq: 9, nodeId: null, ms: 3_000 }]);
+    await wallTurns.record('run-other', [{ seq: 9, nodeId: null, ms: 7_000 }]);
+    const { service } = build({
+      payloads: [turn({ inputTokens: 1, durationMs: 2_000 })],
+    });
+
+    expect((await service.readTotals('run-1')).workedMs).toBe(5_000);
+    wallTurns.rows.clear();
   });
 
   it('answers a thread nothing measured with null, never zero', async () => {

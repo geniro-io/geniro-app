@@ -15,6 +15,11 @@ import {
   CalleeContextResolverContext,
 } from './call-context';
 import {
+  CallConversationContext,
+  type CallConversationLoader,
+  type CallConversationState,
+} from './call-conversation';
+import {
   type ChatMetricsLoader,
   ChatMetricsLoaderContext,
 } from './chat-metrics';
@@ -26,6 +31,7 @@ import {
   type TranscriptEntry,
 } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
+import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -1863,5 +1869,248 @@ describe('CallBlock', () => {
       // The denominator survived — the block's own settled turn supplied it.
       expect(ringLabel()).toContain('of 200k');
     });
+  });
+});
+
+describe("a call card's own conversation", () => {
+  function loader(
+    state: CallConversationState | null,
+  ): CallConversationLoader & {
+    load: ReturnType<typeof vi.fn<CallConversationLoader['load']>>;
+    retry: ReturnType<typeof vi.fn<CallConversationLoader['retry']>>;
+  } {
+    return {
+      load: vi.fn<CallConversationLoader['load']>(),
+      loadThrough: vi.fn<CallConversationLoader['loadThrough']>(() =>
+        Promise.resolve(true),
+      ),
+      retry: vi.fn<CallConversationLoader['retry']>(),
+      stateOf: () => state,
+    };
+  }
+
+  function render(value: CallConversationLoader): void {
+    act(() =>
+      root.render(
+        <CallConversationContext.Provider value={value}>
+          <TranscriptEntryView entry={makeBlock()} nodes={NODES} />
+        </CallConversationContext.Provider>,
+      ),
+    );
+  }
+
+  function expand(): void {
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-expanded]',
+    )!;
+    act(() => toggle.click());
+  }
+
+  it('is read when the card is opened, never while it is shut', () => {
+    const value = loader(null);
+    render(value);
+
+    expect(value.load).not.toHaveBeenCalled();
+
+    expand();
+
+    expect(value.load).toHaveBeenCalledWith('call-1', false);
+  });
+
+  it('says it is loading while the first page is on its way', () => {
+    render(
+      loader({
+        loading: true,
+        failed: false,
+        hasOlder: false,
+        oldestSeq: null,
+      }),
+    );
+    expand();
+
+    expect(
+      container.querySelector('[data-slot="call-conversation-loading"]')
+        ?.textContent,
+    ).toContain('Loading messages');
+  });
+
+  it('offers the page before the oldest row it holds, and only while there is one', () => {
+    const value = loader({
+      loading: false,
+      failed: false,
+      hasOlder: true,
+      oldestSeq: null,
+    });
+    render(value);
+    expand();
+
+    const older = container.querySelector<HTMLButtonElement>(
+      '[data-slot="call-conversation-older-load"]',
+    );
+    act(() => older!.click());
+    expect(value.load).toHaveBeenLastCalledWith('call-1', true);
+
+    render(
+      loader({
+        loading: false,
+        failed: false,
+        hasOlder: false,
+        oldestSeq: null,
+      }),
+    );
+    expect(
+      container.querySelector('[data-slot="call-conversation-older-load"]'),
+    ).toBeNull();
+  });
+
+  /**
+   * A card whose callee said two things in one turn and a third in the next,
+   * with the seq each was said at.
+   */
+  function threeSaid(): {
+    block: CallBlockEntry;
+    first: number;
+    second: number;
+    third: number;
+  } {
+    const rows = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write.' },
+        'orch',
+      ),
+      item('message', { text: 'An early line', callId: 'call-1' }, 'poet'),
+      item('reasoning', { text: 'thinking', callId: 'call-1' }, 'poet'),
+      item('message', { text: 'A middle line', callId: 'call-1' }, 'poet'),
+      item('turn_complete', { callId: 'call-1' }, 'poet'),
+      item('message', { text: 'A later line', callId: 'call-1' }, 'poet'),
+    ];
+    const [block] = groupTranscript(rows);
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    return {
+      block,
+      first: rows[1]!.seq,
+      second: rows[3]!.seq,
+      third: rows[5]!.seq,
+    };
+  }
+
+  function renderBlock(
+    block: CallBlockEntry,
+    value: CallConversationLoader,
+    marked: JumpMark | null = null,
+  ): void {
+    act(() =>
+      root.render(
+        <JumpMarkContext.Provider value={marked}>
+          <CallConversationContext.Provider value={value}>
+            <TranscriptEntryView entry={block} nodes={NODES} />
+          </CallConversationContext.Provider>
+        </JumpMarkContext.Provider>,
+      ),
+    );
+  }
+
+  /** The one anchor drawn under `key`. */
+  const keyed = (key: string): HTMLElement | null =>
+    container.querySelector<HTMLElement>(`[data-jump-key="${key}"]`);
+
+  it('lets a jump land on each row an open card draws — a row inside a turn too — and marks the one it landed on', () => {
+    const { block, first, second } = threeSaid();
+    const value = loader({
+      loading: false,
+      failed: false,
+      hasOlder: false,
+      oldestSeq: first,
+    });
+    renderBlock(block, value, {
+      seq: second,
+      cardId: block.id,
+      key: `row:${second}`,
+    });
+    expand();
+
+    const landed = keyed(`row:${second}`);
+    expect(landed?.dataset.rowSeq).toBe(String(second));
+    expect(landed?.textContent).toContain('A middle line');
+    expect(landed?.textContent).not.toContain('An early line');
+    expect(landed?.className).toContain('bg-accent/60');
+    expect(keyed(`row:${first}`)?.className).not.toContain('bg-accent/60');
+  });
+
+  it('marks only the anchor the landing names, never another drawn at the same seq', () => {
+    const { block, first } = threeSaid();
+    const value = loader({
+      loading: false,
+      failed: false,
+      hasOlder: false,
+      oldestSeq: first,
+    });
+    // The card's row and the turn's first row inside it share the seq.
+    renderBlock(block, value, {
+      seq: first,
+      cardId: block.id,
+      key: `card-row:${first}`,
+    });
+    expand();
+    expect(keyed(`card-row:${first}`)?.className).toContain('bg-accent/60');
+    expect(keyed(`row:${first}`)?.className).not.toContain('bg-accent/60');
+
+    renderBlock(block, value, {
+      seq: first,
+      cardId: null,
+      key: `entry:${first}`,
+    });
+    expect(keyed(`card-row:${first}`)?.className).not.toContain('bg-accent/60');
+    expect(keyed(`row:${first}`)?.className).not.toContain('bg-accent/60');
+  });
+
+  it('draws none of the turns above the pages it has read while older ones are unread', () => {
+    const { block, third } = threeSaid();
+    renderBlock(
+      block,
+      loader({
+        loading: false,
+        failed: false,
+        hasOlder: true,
+        oldestSeq: third,
+      }),
+    );
+    expand();
+
+    expect(container.textContent).not.toContain('An early line');
+    expect(container.textContent).toContain('A later line');
+
+    renderBlock(
+      block,
+      loader({
+        loading: false,
+        failed: false,
+        hasOlder: false,
+        oldestSeq: third,
+      }),
+    );
+    expect(container.textContent).toContain('An early line');
+  });
+
+  it('offers a retry after a failed read, and asks nothing by itself', () => {
+    const value = loader({
+      loading: false,
+      failed: true,
+      hasOlder: false,
+      oldestSeq: null,
+    });
+    render(value);
+    expand();
+    expect(value.retry).not.toHaveBeenCalled();
+
+    const failed = container.querySelector(
+      '[data-slot="call-conversation-failed"]',
+    );
+    expect(failed?.textContent).toContain('Couldn’t load this conversation');
+    act(() => failed!.querySelector('button')!.click());
+    expect(value.retry).toHaveBeenCalledWith('call-1');
   });
 });

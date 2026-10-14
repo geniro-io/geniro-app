@@ -11,9 +11,16 @@ import type {
   SeqRange,
 } from '../chat.types';
 import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
+import { parseJsonColumn, payloadString } from '../utils/json-util';
 import { messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
+import {
+  CHAT_WALL_CLOCK_ROW_KINDS,
+  WALL_CLOCK_CARD_KINDS,
+  WALL_CLOCK_ROW_KINDS,
+  type WallClockRow,
+} from '../utils/wall-worked';
 
 /**
  * The SIDEBAR PREVIEW's one exclusion: a message a DELEGATE wrote.
@@ -188,12 +195,17 @@ export class ItemDao extends BaseDao<Item> {
     afterSeq = -1,
     txEm?: EntityManager,
     window?: HistoryWindow,
+    /** Only rows whose `inCall` is one of these — one conversation of a workflow run. */
+    inCalls?: readonly string[],
   ): Promise<Item[]> {
+    const conversation =
+      inCalls === undefined ? {} : { inCall: { $in: [...inCalls] } };
     if (window) {
       const oldestFirst = window.take === 'oldest';
       const rows = await this.getRepo(txEm).find(
         {
           runId,
+          ...conversation,
           seq: {
             $gt: afterSeq,
             ...(window.beforeSeq === undefined
@@ -213,7 +225,7 @@ export class ItemDao extends BaseDao<Item> {
       return oldestFirst ? rows : rows.reverse();
     }
     return this.getRepo(txEm).find(
-      { runId, seq: { $gt: afterSeq } },
+      { runId, ...conversation, seq: { $gt: afterSeq } },
       // Read-only replay path: skip identity-map tracking so a long transcript
       // doesn't accumulate managed entities in the forked EM.
       { orderBy: { seq: 'asc' }, disableIdentityMap: true },
@@ -664,6 +676,128 @@ export class ItemDao extends BaseDao<Item> {
         createdAt,
         payload,
       }));
+  }
+
+  /**
+   * One workflow node's clock rows — its turn boundaries and approval cards
+   * (`WALL_CLOCK_ROW_KINDS`), every conversation of it, in `seq` order — what
+   * its wall-measured turns are folded from (`utils/wall-worked`).
+   */
+  async nodeWallClockRows(
+    runId: string,
+    nodeId: string,
+    txEm?: EntityManager,
+  ): Promise<WallClockRow[]> {
+    return this.wallClockRows(runId, nodeId, WALL_CLOCK_ROW_KINDS, txEm);
+  }
+
+  /**
+   * A 1:1 chat's clock rows — its user messages, turn endings and approval
+   * cards (`CHAT_WALL_CLOCK_ROW_KINDS`, the rows with no node), in `seq`
+   * order. A message is read for its role and time only: only a USER's opens a
+   * turn, and its text is never needed.
+   */
+  async chatWallClockRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<WallClockRow[]> {
+    return this.wallClockRows(runId, null, CHAT_WALL_CLOCK_ROW_KINDS, txEm);
+  }
+
+  /**
+   * The clock rows of one agent (`nodeId`, or null for a chat's), projected:
+   * a card down to its `id` and `callId` for {@link turnSpanRows}' reason (an
+   * `approval_request` carries the whole plan, patch or question set), a
+   * message down to its role — and only a user's is read.
+   */
+  private async wallClockRows(
+    runId: string,
+    nodeId: string | null,
+    kinds: readonly ItemKind[],
+    txEm?: EntityManager,
+  ): Promise<WallClockRow[]> {
+    const plainKinds = kinds.filter(
+      (kind) => kind !== 'message' && !WALL_CLOCK_CARD_KINDS.has(kind),
+    );
+    const [rows, messages, cards] = await Promise.all([
+      this.getRepo(txEm).find(
+        { runId, nodeId, kind: { $in: plainKinds } },
+        {
+          orderBy: { seq: 'asc' },
+          fields: ['seq', 'kind', 'nodeId', 'role', 'createdAt', 'payload'],
+          disableIdentityMap: true,
+        },
+      ),
+      kinds.includes('message')
+        ? this.getRepo(txEm).find(
+            { runId, nodeId, kind: 'message', role: 'user' },
+            {
+              orderBy: { seq: 'asc' },
+              fields: ['seq', 'kind', 'nodeId', 'role', 'createdAt'],
+              disableIdentityMap: true,
+            },
+          )
+        : Promise.resolve([]),
+      (txEm ?? this.em.fork())
+        .getKysely<ChatTextDatabase>({ convertValues: false })
+        .selectFrom('items')
+        .select((eb) => {
+          const field = (path: string) =>
+            eb.fn<string | null>('json_extract', [
+              eb
+                .case()
+                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                .then(eb.ref('payload'))
+                .else(eb.val('{}'))
+                .end(),
+              eb.val(path),
+            ]);
+          return [
+            'seq',
+            'kind',
+            'node_id',
+            'created_at',
+            field('$.id').as('card_id'),
+            field('$.callId').as('call_id'),
+          ];
+        })
+        .where('run_id', '=', runId)
+        .where('node_id', nodeId === null ? 'is' : '=', nodeId)
+        .where('deleted_at', 'is', null)
+        .where(
+          'kind',
+          'in',
+          kinds.filter((kind) => WALL_CLOCK_CARD_KINDS.has(kind)),
+        )
+        .orderBy('seq', 'asc')
+        .execute(),
+    ]);
+    return [
+      ...rows.map((row) => ({
+        seq: row.seq,
+        kind: row.kind,
+        nodeId: row.nodeId,
+        role: row.role,
+        createdAt: row.createdAt,
+        payload: row.payload,
+      })),
+      ...messages.map((row) => ({
+        seq: row.seq,
+        kind: row.kind,
+        nodeId: row.nodeId,
+        role: row.role,
+        createdAt: row.createdAt,
+        payload: '{}',
+      })),
+      ...cards.map((card) => ({
+        seq: card.seq,
+        kind: card.kind,
+        nodeId: card.node_id,
+        role: null,
+        createdAt: new Date(card.created_at),
+        payload: JSON.stringify({ id: card.card_id, callId: card.call_id }),
+      })),
+    ].sort((a, b) => a.seq - b.seq);
   }
 
   /**
@@ -1146,6 +1280,327 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * The newest `limit` rows of ONE call (`inCall`), returned in seq order — of
+   * `kinds` when given, with a non-blank `said` field when named, and never a
+   * message the user wrote: a person writing to a quiet callee is not the
+   * callee producing anything. Read newest first off the
+   * `(runId, inCall, kind, seq)` index, so a long call is walked only as far as
+   * `limit` matching rows. `fromSeq` keeps only rows at or after that seq, and
+   * `snapshot` only task lists that state the whole list (`mode: 'snapshot'`).
+   */
+  async newestRowsInCall(
+    runId: string,
+    callId: string,
+    pick: {
+      kinds?: readonly ItemKind[];
+      said?: 'name' | 'text';
+      fromSeq?: number;
+      snapshot?: boolean;
+      /** Only the callee's own rows, never a delegate's (`parentToolUseId`). */
+      ownThread?: boolean;
+      limit: number;
+    },
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    const em = txEm ?? this.em.fork();
+    let heads = em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('id')
+      .where('run_id', '=', runId)
+      .where('in_call', '=', callId)
+      .where('deleted_at', 'is', null)
+      .where((eb) =>
+        eb.or([
+          eb('kind', '!=', 'message'),
+          eb('role', 'is', null),
+          eb('role', '!=', 'user'),
+        ]),
+      );
+    if (pick.kinds !== undefined) {
+      heads = heads.where('kind', 'in', [...pick.kinds]);
+    }
+    if (pick.fromSeq !== undefined) {
+      heads = heads.where('seq', '>=', pick.fromSeq);
+    }
+    if (pick.ownThread === true) {
+      heads = heads.where(
+        (eb) =>
+          eb.fn<string | null>('json_extract', [
+            eb
+              .case()
+              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+              .then(eb.ref('payload'))
+              .else(eb.val('{}'))
+              .end(),
+            eb.val('$.parentToolUseId'),
+          ]),
+        'is',
+        null,
+      );
+    }
+    if (pick.snapshot === true) {
+      heads = heads.where(
+        (eb) =>
+          eb.fn<string>('json_extract', [
+            eb
+              .case()
+              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+              .then(eb.ref('payload'))
+              .else(eb.val('{}'))
+              .end(),
+            eb.val('$.mode'),
+          ]),
+        '=',
+        'snapshot',
+      );
+    }
+    const said = pick.said;
+    if (said !== undefined) {
+      // Every kind of blank, as the renderer's `String.trim` reads one: SQLite's
+      // one-argument `trim` strips spaces only.
+      heads = heads.where(
+        (eb) =>
+          eb.fn<string>('trim', [
+            eb.fn<string>('coalesce', [
+              eb.fn<string>('json_extract', [
+                eb
+                  .case()
+                  .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                  .then(eb.ref('payload'))
+                  .else(eb.val('{}'))
+                  .end(),
+                eb.val(`$.${said}`),
+              ]),
+              eb.val(''),
+            ]),
+            eb.val(' \t\n\r'),
+          ]),
+        '!=',
+        '',
+      );
+    }
+    const ids = (
+      await heads.orderBy('seq', 'desc').limit(pick.limit).execute()
+    ).map((head) => head.id);
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.getRepo(em).find(
+      { id: { $in: ids } },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * ONE call's rows of `kinds` whose payload's top-level `id` is one of `ids` —
+   * the replies to tool calls a card anchors, read off the
+   * `(runId, inCall, kind, seq)` index rather than over the whole run.
+   */
+  async rowsInCallById(
+    runId: string,
+    callId: string,
+    kinds: readonly ItemKind[],
+    ids: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const em = txEm ?? this.em.fork();
+    const found: string[] = [];
+    for (let at = 0; at < ids.length; at += PAYLOAD_ID_BATCH) {
+      const heads = await em
+        .getKysely<ChatTextDatabase>({ convertValues: false })
+        .selectFrom('items')
+        .select('id')
+        .where('run_id', '=', runId)
+        .where('in_call', '=', callId)
+        .where('kind', 'in', [...kinds])
+        .where('deleted_at', 'is', null)
+        .where(
+          (eb) =>
+            eb.fn<string>('json_extract', [
+              eb
+                .case()
+                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                .then(eb.ref('payload'))
+                .else(eb.val('{}'))
+                .end(),
+              eb.val('$.id'),
+            ]),
+          'in',
+          ids.slice(at, at + PAYLOAD_ID_BATCH),
+        )
+        .execute();
+      found.push(...heads.map((head) => head.id));
+    }
+    if (found.length === 0) {
+      return [];
+    }
+    return this.getRepo(em).find(
+      { id: { $in: found } },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * Where each call the run made starts and settles, as seqs — no payload
+   * beyond a start's call id is read, so a run's hundreds of calls cost a few
+   * numbers each. A call with no settle row is still open (or was cut off).
+   */
+  async callSpansOf(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<{ callId: string; startSeq: number; settleSeq: number | null }[]> {
+    const em = txEm ?? this.em.fork();
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => [
+        'kind',
+        'seq',
+        'in_call',
+        eb
+          .fn<string | null>('json_extract', [
+            eb
+              .case()
+              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+              .then(eb.ref('payload'))
+              .else(eb.val('{}'))
+              .end(),
+            eb.val('$.callId'),
+          ])
+          .as('call_id'),
+      ])
+      .where('run_id', '=', runId)
+      .where('kind', 'in', ['call_started', 'call_result'])
+      .where('deleted_at', 'is', null)
+      .orderBy('seq', 'asc')
+      .execute();
+    const spans = new Map<
+      string,
+      { callId: string; startSeq: number; settleSeq: number | null }
+    >();
+    for (const row of rows) {
+      const callId =
+        row.kind === 'call_result' && row.in_call ? row.in_call : row.call_id;
+      if (typeof callId !== 'string' || callId.length === 0) {
+        continue;
+      }
+      const span = spans.get(callId);
+      if (row.kind === 'call_started') {
+        if (span === undefined) {
+          spans.set(callId, { callId, startSeq: row.seq, settleSeq: null });
+        }
+      } else if (span !== undefined && span.settleSeq === null) {
+        span.settleSeq = row.seq;
+      }
+    }
+    return [...spans.values()];
+  }
+
+  /**
+   * The start and settle rows of these calls — a conversation's own calls, read
+   * by id rather than over every call the run made. A start sits in its
+   * caller's flow (`inCall` names no call of its own), so it is matched on its
+   * payload, among the run's few rows of that kind.
+   */
+  async callRowsOf(
+    runId: string,
+    callIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    if (callIds.length === 0) {
+      return [];
+    }
+    const em = txEm ?? this.em.fork();
+    const starts = (
+      await em
+        .getKysely<ChatTextDatabase>({ convertValues: false })
+        .selectFrom('items')
+        .select('id')
+        .where('run_id', '=', runId)
+        .where('kind', '=', 'call_started')
+        .where('deleted_at', 'is', null)
+        .where(
+          (eb) =>
+            eb.fn<string>('json_extract', [
+              eb
+                .case()
+                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                .then(eb.ref('payload'))
+                .else(eb.val('{}'))
+                .end(),
+              eb.val('$.callId'),
+            ]),
+          'in',
+          [...callIds],
+        )
+        .execute()
+    ).map((row) => row.id);
+    return this.getRepo(em).find(
+      {
+        runId,
+        $or: [
+          ...(starts.length === 0 ? [] : [{ id: { $in: starts } }]),
+          { kind: 'call_result', inCall: { $in: [...callIds] } },
+        ],
+      },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /** Unstamp every row — the stamps of a membership rule that has since changed. */
+  async forgetInCalls(txEm?: EntityManager): Promise<number> {
+    return this.getRepo(txEm).nativeUpdate(
+      { inCall: { $ne: null } },
+      { inCall: null },
+    );
+  }
+
+  /** Whether one run still holds a row no build stamped with `inCall`. */
+  async hasUnstampedRow(runId: string, txEm?: EntityManager): Promise<boolean> {
+    const row = await this.getRepo(txEm).findOne(
+      { runId, inCall: null },
+      { fields: ['id'], disableIdentityMap: true },
+    );
+    return row !== null;
+  }
+
+  /**
+   * One batch of a run's rows with no `inCall` yet, in seq order after
+   * `afterSeq` — the order the membership rule folds a run in.
+   */
+  async unstampedRows(
+    runId: string,
+    afterSeq: number,
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'id' | 'seq' | 'kind' | 'nodeId' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, inCall: null, seq: { $gt: afterSeq } },
+      {
+        limit,
+        orderBy: { seq: 'asc' },
+        fields: ['id', 'seq', 'kind', 'nodeId', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  async rememberInCall(
+    ids: readonly string[],
+    inCall: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: { $in: [...ids] } },
+      { inCall },
+    );
+  }
+
+  /**
    * Every `task_list` announcement a run has written, oldest first — the input
    * to `utils/task-list-fold.ts`.
    *
@@ -1551,6 +2006,142 @@ export class ItemDao extends BaseDao<Item> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /**
+   * The tool calls a conversation's OPEN turn has made and not had answered —
+   * the commands it is running in the foreground right now, whatever page of
+   * the transcript a client holds. A conversation is a node and the call it
+   * runs in (`inCall`: `''` for its own flow), or a chat's (`nodeId` null,
+   * every row). A delegate's own calls are left out.
+   */
+  async openTurnToolCalls(
+    runId: string,
+    conversation: { nodeId: string | null; inCall: string | null },
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    const em = txEm ?? this.em.fork();
+    let endings = em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('seq')
+      .where('run_id', '=', runId)
+      .where('kind', 'in', ['turn_complete', 'turn_cancelled', 'error'])
+      .where('deleted_at', 'is', null)
+      // A continuation's result inside a turn ends nothing.
+      .where(
+        (eb) =>
+          eb.fn<number>('coalesce', [
+            eb.fn<number>('json_extract', [
+              eb
+                .case()
+                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                .then(eb.ref('payload'))
+                .else(eb.val('{}'))
+                .end(),
+              eb.val('$.insideTurn'),
+            ]),
+            eb.val(0),
+          ]),
+        '=',
+        0,
+      );
+    endings =
+      conversation.nodeId === null
+        ? endings.where('node_id', 'is', null)
+        : endings.where('node_id', '=', conversation.nodeId);
+    if (conversation.inCall !== null) {
+      endings = endings.where('in_call', '=', conversation.inCall);
+    }
+    const ending = await endings
+      .orderBy('seq', 'desc')
+      .limit(1)
+      .executeTakeFirst();
+    const scope = {
+      runId,
+      nodeId: conversation.nodeId,
+      ...(conversation.inCall === null ? {} : { inCall: conversation.inCall }),
+    };
+    const calls = (
+      await this.getRepo(em).find(
+        { ...scope, kind: 'tool_call', seq: { $gt: ending?.seq ?? -1 } },
+        { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+      )
+    ).filter(
+      (row) =>
+        payloadString(parseJsonColumn(row.payload), 'parentToolUseId') === null,
+    );
+    const ids = calls
+      .map((row) => payloadString(parseJsonColumn(row.payload), 'id'))
+      .filter((id) => id !== null);
+    if (ids.length === 0) {
+      return [];
+    }
+    // Replies after the turn's first call, of this conversation alone — off
+    // the `(runId, inCall, kind, seq)` index where the conversation has one.
+    const replies =
+      conversation.inCall === null
+        ? await this.rowsByPayloadId(
+            runId,
+            ['tool_result'],
+            ids,
+            { after: calls[0]!.seq },
+            em,
+          )
+        : await this.rowsInCallById(
+            runId,
+            conversation.inCall,
+            ['tool_result'],
+            ids,
+            em,
+          );
+    const answered = new Set(
+      replies.map((row) => payloadString(parseJsonColumn(row.payload), 'id')),
+    );
+    return calls.filter(
+      (row) => !answered.has(payloadString(parseJsonColumn(row.payload), 'id')),
+    );
+  }
+
+  /**
+   * The conversations whose newest `status` row says `running` — a node's own
+   * flow (`inCall` `''`) or a call it runs in, whether the call is still out or
+   * the callee carries on after it settled. What has a turn open right now.
+   */
+  async runningConversations(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<{ nodeId: string; inCall: string }[]> {
+    const db = (txEm ?? this.em.fork()).getKysely<ChatTextDatabase>({
+      convertValues: false,
+    });
+    const newest = await db
+      .selectFrom('items')
+      .select((eb) => eb.fn.max<number>('seq').as('seq'))
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'status')
+      .where('node_id', 'is not', null)
+      .where('deleted_at', 'is', null)
+      .groupBy(['node_id', 'in_call'])
+      .execute();
+    const seqs = newest.map((row) => Number(row.seq));
+    if (seqs.length === 0) {
+      return [];
+    }
+    const rows = await db
+      .selectFrom('items')
+      .select(['node_id', 'in_call', 'payload'])
+      .where('run_id', '=', runId)
+      .where('seq', 'in', seqs)
+      .execute();
+    return rows
+      .filter(
+        (row) =>
+          row.node_id !== null &&
+          row.in_call !== null &&
+          payloadString(parseJsonColumn(row.payload), 'status') === 'running',
+      )
+      .map((row) => ({ nodeId: row.node_id!, inCall: row.in_call! }));
   }
 
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */

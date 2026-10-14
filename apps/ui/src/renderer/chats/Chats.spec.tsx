@@ -71,6 +71,8 @@ function emptyRunState(): RunStateDto {
     workflowRows: [],
     artifactRows: [],
     shells: [],
+    openToolCalls: [],
+    throughSeq: -1,
     turnStartedAt: null,
   };
 }
@@ -1207,6 +1209,66 @@ describe('Chats — searching one conversation', () => {
     expect(api.listRunItems).not.toHaveBeenCalled();
   });
 
+  it('opens the tool group and the tool row a hit is inside, and marks that row', async () => {
+    // A hit in a command's OUTPUT is inside two folds: the group, shut by
+    // default, and the row, whose result is drawn only once it is open.
+    const tool = (
+      seq: number,
+      kind: 'tool_call' | 'tool_result',
+      payload: unknown,
+    ): ChatItem => ({
+      id: `i${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind,
+      role: null,
+      payload,
+      createdAt: 'now',
+    });
+    api.listRunItems.mockResolvedValue([
+      msg(900, 'user', 'check the disk'),
+      tool(901, 'tool_call', {
+        id: 't1',
+        name: 'Bash',
+        input: { command: 'df' },
+      }),
+      tool(902, 'tool_result', { id: 't1', result: 'the needle output' }),
+      tool(903, 'tool_call', {
+        id: 't2',
+        name: 'Bash',
+        input: { command: 'du' },
+      }),
+      tool(904, 'tool_result', { id: 't2', result: 'other output' }),
+      msg(905, 'assistant', 'all fine'),
+    ]);
+    api.searchChat.mockResolvedValue({
+      hits: [{ ...hit(902, 'the needle output'), kind: 'tool_result' }],
+      partialReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(container.textContent).not.toContain('the needle output');
+    const rows = await search(container, 'needle');
+
+    await act(async () => {
+      rows[0]!.click();
+    });
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    const marked = [
+      ...container.querySelectorAll<HTMLElement>('[data-jump-key]'),
+    ].filter((el) => classesOf(el).includes('bg-accent/60'));
+    // The tool row of the call whose result the hit is (item `i901`).
+    expect(marked.map((el) => el.dataset.jumpKey)).toEqual(['tool:i901']);
+    expect(marked[0]!.textContent).toContain('the needle output');
+  });
+
   it('marks the row a jump landed on, and unmarks it again', async () => {
     // The mark is on the ROW rather than the matched words, deliberately: a
     // message renders as markdown — which is most of what a search finds — and
@@ -1233,21 +1295,23 @@ describe('Chats — searching one conversation', () => {
     // while a user's bubble is `self-end`, so a ring drew a box around the empty
     // half and read as a stray rectangle rather than as "this row" — reported,
     // and replaced. The class is the whole of the mark, so it is what to assert.
-    const landed = container.querySelector('[data-transcript-seq="901"]')!;
-    expect(classesOf(landed)).toContain('bg-accent/60');
+    // ONE anchor is marked — the row itself, the innermost drawn at its seq
+    // — and nothing else: a mark on everything says nothing.
+    const marked = (): HTMLElement[] =>
+      [...container.querySelectorAll<HTMLElement>('[data-jump-key]')].filter(
+        (el) => classesOf(el).includes('bg-accent/60'),
+      );
+    expect(marked()).toHaveLength(1);
+    const landed = marked()[0]!;
+    expect(landed.dataset.transcriptSeq ?? landed.dataset.rowSeq).toBe('901');
+    expect(landed.textContent).toContain('sizing the bloom filter');
     // And NOT the ring it replaced, so the two cannot both quietly be applied.
     expect(classesOf(landed)).not.toContain('ring-2');
-    // Its neighbour is not marked — a mark on everything says nothing.
-    expect(
-      classesOf(container.querySelector('[data-transcript-seq="900"]')!),
-    ).not.toContain('bg-accent/60');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
-    expect(
-      classesOf(container.querySelector('[data-transcript-seq="901"]')!),
-    ).not.toContain('bg-accent/60');
+    expect(marked()).toHaveLength(0);
   });
 
   it('draws the conversation timeline and jumps the transcript from it', async () => {
@@ -3228,6 +3292,7 @@ describe('Chats reconnect seam', () => {
     expect(api.listRunItems).toHaveBeenCalledWith({
       runId: 'r1',
       limit: HISTORY_PAGE,
+      conversation: 'root',
     });
   });
 
@@ -3944,6 +4009,36 @@ describe('Chats — the daemon closes a dead approval card', () => {
   });
 });
 
+describe('Chats — a workflow run’s rows that live in a call', () => {
+  it('expires a card when the row naming it was filed under a call — never in the window', async () => {
+    // A callee's approval card is drawn in the run's own flow, and the daemon
+    // files the sweep that kills it under the callee's call (`inCall`), which a
+    // workflow run's window never holds.
+    api.listRunItems.mockResolvedValue([approval('r1', 0, 'req-dead')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitItem({
+        id: 'r1-unanswerable-1',
+        runId: 'r1',
+        nodeId: null,
+        seq: 1,
+        kind: 'unanswerable' as const,
+        role: null,
+        payload: { id: 'req-dead', toolName: 'Write' },
+        createdAt: 'now',
+        inCall: 'call-1',
+      });
+    });
+
+    expect(container.textContent).toContain(
+      'expired — the turn ended before an answer',
+    );
+  });
+});
+
 describe('Chats — what the transcript says the agent is doing', () => {
   it('draws no "Working…" row under a question waiting for an answer', async () => {
     // A parked question leaves the run running, so every signal said the agent
@@ -4344,6 +4439,36 @@ describe('Chats workflow runs', () => {
     expect(reads()).toBe(before + 3);
   });
 
+  it("re-reads the clock's paused stretches when a CALLEE's turn starts — a row the window never holds", async () => {
+    // A workflow run's window is its own flow alone; a callee's rows land among
+    // the call rows, and a count over the window alone never moved for them.
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+    await act(async () => {
+      emitItem({
+        ...wfItem(5, 'call_started', 'orch'),
+        payload: { callId: 'call-5', calleeNodeId: 'helper', mode: 'async' },
+        inCall: '',
+      });
+    });
+    const reads = (): number =>
+      api.readChatTotals.mock.calls.filter(([req]) => req.runId === 'w1')
+        .length;
+    const before = reads();
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(6, 'status', 'helper'),
+        payload: { status: 'running', callId: 'call-5' },
+        inCall: 'call-5',
+      });
+    });
+
+    expect(reads()).toBe(before + 1);
+  });
+
   it('stands the header clock still through a paused stretch the daemon serves', async () => {
     // The coder's turn has run 60s; the daemon says the run has waited on the
     // user for the last 30s with nothing running.
@@ -4694,6 +4819,129 @@ describe('Chats workflow runs', () => {
     await clickRun(container, 'Review team');
 
     expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
+  });
+
+  it("opens the card of the call a search hit was written in, reads that call's conversation back to it, and marks the hit there", async () => {
+    // A workflow run's window is its own flow alone, so a hit a callee wrote
+    // is in no row the window holds: landing "near" it put the reader beside
+    // the card, or at the tail where the card is drawn.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+      const calleeRow = (seq: number, text: string): ChatItem => ({
+        ...wfItem(seq, 'message', 'helper'),
+        role: 'assistant',
+        payload: { text, callId: 'call-5' },
+        inCall: 'call-5',
+      });
+      api.listRunItems.mockImplementation(async (req) => {
+        if (req.call === 'call-5') {
+          return [
+            {
+              ...wfItem(15, 'status', 'helper'),
+              payload: { status: 'running', callId: 'call-5' },
+              inCall: 'call-5',
+            },
+            calleeRow(20, 'the hidden find'),
+          ];
+        }
+        if (req.take === 'oldest' && req.afterSeq === 19) {
+          return [calleeRow(20, 'the hidden find')];
+        }
+        return [
+          {
+            ...wfItem(10, 'call_started', 'orch'),
+            payload: {
+              callId: 'call-5',
+              calleeNodeId: 'helper',
+              mode: 'async',
+              message: 'look into it',
+            },
+            inCall: '',
+          },
+          {
+            ...wfItem(30, 'message', 'orch'),
+            role: 'assistant',
+            payload: { text: 'waiting on the helper' },
+            inCall: '',
+          },
+        ];
+      });
+      api.searchChat.mockResolvedValue({
+        hits: [
+          {
+            seq: 20,
+            kind: 'message',
+            role: 'assistant',
+            snippet: 'the hidden find',
+            createdAt: '2026-09-05T10:00:00.000Z',
+          },
+        ],
+        partialReason: null,
+      });
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'Review team');
+
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>(
+            'button[aria-label="Search this conversation"]',
+          )
+          ?.click();
+      });
+      await act(async () => {
+        typeInto(
+          container.querySelector<HTMLInputElement>(
+            'input[aria-label="Search this conversation"]',
+          )!,
+          'hidden',
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      const result = container
+        .querySelector('[data-slot="search-snippet"]')!
+        .closest('button')!;
+      await act(async () => {
+        result.click();
+      });
+      for (let i = 0; i < 5; i += 1) {
+        await act(async () => {
+          await Promise.resolve();
+        });
+      }
+
+      expect(api.listRunItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'w1',
+          afterSeq: 19,
+          limit: 1,
+          take: 'oldest',
+        }),
+      );
+      expect(api.listRunItems).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'w1', call: 'call-5' }),
+      );
+      const card = container.querySelector('[data-role="call-block"]')!;
+      expect(
+        card
+          .querySelector('button[aria-expanded]')
+          ?.getAttribute('aria-expanded'),
+      ).toBe('true');
+      const marked = [
+        ...container.querySelectorAll<HTMLElement>('[data-jump-key]'),
+      ].filter((el) => classesOf(el).includes('bg-accent/60'));
+      expect(marked).toHaveLength(1);
+      expect(card.contains(marked[0]!)).toBe(true);
+      expect(marked[0]!.dataset.callSeq ?? marked[0]!.dataset.rowSeq).toBe(
+        '20',
+      );
+      expect(marked[0]!.textContent).toContain('the hidden find');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('lists a call the daemon holds open whose rows are all ABOVE the window, and jumps to it', async () => {
@@ -7436,6 +7684,7 @@ describe('Chats queued messages', () => {
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
       limit: HISTORY_PAGE,
+      conversation: 'root',
     });
     // Said out loud, rather than leaving a conversation that appears to start
     // mid-sentence.
@@ -7472,6 +7721,7 @@ describe('Chats queued messages', () => {
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
       limit: HISTORY_PAGE,
+      conversation: 'root',
     });
 
     scroller.scrollTop = 100;
@@ -7484,6 +7734,7 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       limit: HISTORY_PAGE,
       beforeSeq: 1000,
+      conversation: 'root',
     });
     // A SHORT page is the start of the conversation — the notice goes away.
     expect(container.querySelector('[data-slot="older-messages"]')).toBeNull();
@@ -7634,6 +7885,7 @@ describe('Chats queued messages', () => {
         runId: 'r1',
         limit: HISTORY_PAGE,
         beforeSeq: 1000,
+        conversation: 'root',
       });
       expect(
         container.querySelector('[data-slot="older-messages"]'),
@@ -7669,6 +7921,7 @@ describe('Chats queued messages', () => {
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
       limit: HISTORY_PAGE,
+      conversation: 'root',
     });
 
     api.listRunItems.mockResolvedValue(page(0, 10));
@@ -7683,6 +7936,7 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       limit: HISTORY_PAGE,
       beforeSeq: 1000,
+      conversation: 'root',
     });
   }, 20_000);
 
@@ -13084,7 +13338,11 @@ describe('Chats — what the status badge says the run is doing', () => {
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
-    expect(api.listRunItems).toHaveBeenCalledWith({ runId: 'r1', limit: 250 });
+    expect(api.listRunItems).toHaveBeenCalledWith({
+      runId: 'r1',
+      limit: 250,
+      conversation: 'root',
+    });
 
     const chip = container.querySelector('[data-slot="running-subagents"]');
     await act(async () => {
@@ -13592,6 +13850,81 @@ describe('Chats — running shells', () => {
     expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
   });
 
+  it("drops a command the page holds open once the daemon's read of the whole run says it is over", async () => {
+    // The page holds the launch and not the reply — after a jump, or on an
+    // older page — and its own fold would read the command as running for good.
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'build it'),
+      bashCall(1, 'pnpm build'),
+    ]);
+    api.readRunState.mockResolvedValue({ ...emptyRunState(), throughSeq: 5 });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
+  });
+
+  it('lists a command running in the foreground though the page holds none of it', async () => {
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'build it')]);
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      openToolCalls: [bashCall(9, 'pnpm test', 'sh-9')],
+      throughSeq: 9,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('1');
+    expect(
+      container.querySelector('[data-slot="agent-shell-list"]')?.textContent,
+    ).toContain('pnpm test');
+  });
+
+  it("drops a sub-agent the page holds running once the daemon's read says it finished", async () => {
+    // The page holds the delegate's launch and not its reply.
+    const launch: ChatItem = {
+      id: 'i1',
+      runId: 'r1',
+      nodeId: null,
+      seq: 1,
+      kind: 'tool_call',
+      role: 'assistant',
+      payload: { id: 'd1', name: 'Task', input: { description: 'review' } },
+      createdAt: 'now',
+    };
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'fan out'), launch]);
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      delegates: [
+        {
+          id: 'd1',
+          nodeId: null,
+          callId: null,
+          label: 'review',
+          kind: null,
+          status: 'completed',
+          launchSeq: 1,
+          startedAt: 'now',
+        },
+      ],
+      throughSeq: 5,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-subagents"]'),
+    ).toBeNull();
+  });
+
   it('drops a command as soon as its reply lands', async () => {
     api.listChats.mockResolvedValue([run1]);
     api.listRunItems.mockResolvedValue([
@@ -13762,6 +14095,7 @@ describe('Chats — running shells', () => {
    */
   const continuedCalls = () => {
     let seq = 0;
+    let emitItem: (item: ChatItem) => void = () => undefined;
     const row = (
       kind: ChatItem['kind'],
       nodeId: string,
@@ -13817,7 +14151,7 @@ describe('Chats — running shells', () => {
         callId,
       });
     const open = async (
-      items: ChatItem[],
+      items: ChatItem[] | { items: ChatItem[]; anchors: ChatItem[] },
       taskList: (typeof run1)['taskList'] = [],
     ): Promise<HTMLElement> => {
       api.listChats.mockResolvedValue([]);
@@ -13855,7 +14189,8 @@ describe('Chats — running shells', () => {
         },
       });
       api.listRunItems.mockResolvedValue(items);
-      const { client } = makeClient();
+      const { client, emitItem: emit } = makeClient();
+      emitItem = emit;
       const container = await mount(client);
       await clickRun(container, 'Dev team');
       // Pinned open when there is a shell to list; a run with none has no chip.
@@ -13880,8 +14215,56 @@ describe('Chats — running shells', () => {
         agent:
           r.querySelector('[data-slot="shell-agent"]')?.textContent ?? null,
       }));
-    return { row, started, running, settled, bash, open, shelfRows };
+    return {
+      row,
+      started,
+      running,
+      settled,
+      bash,
+      open,
+      shelfRows,
+      emit: (item: ChatItem) => emitItem(item),
+    };
   };
+
+  it("re-reads the agents' spend when a callee's turn ends — its row filed under the call, never in the window", async () => {
+    const c = continuedCalls();
+    await c.open([c.started('call-22'), c.running('call-22')]);
+    const reads = workflowApi.listWorkflowRunNodes.mock.calls.length;
+
+    await act(async () => {
+      c.emit({
+        ...c.row('turn_complete', 'eng', { callId: 'call-22' }),
+        inCall: 'call-22',
+      });
+    });
+
+    expect(workflowApi.listWorkflowRunNodes.mock.calls.length).toBeGreaterThan(
+      reads,
+    );
+  });
+
+  it("lists a callee's detached command when its rows arrive filed under its call — never in the window", async () => {
+    // A workflow run's page holds its own flow; a callee's rows come as the
+    // card's anchors, stamped with the call (`inCall`).
+    const c = continuedCalls();
+    const inCall = (item: ChatItem): ChatItem => ({
+      ...item,
+      inCall: 'call-22',
+    });
+    const container = await c.open({
+      items: [c.started('call-22')],
+      anchors: [
+        inCall(c.running('call-22')),
+        inCall(c.bash('sh-bg', 'pnpm dev', 'call-22', true)),
+        inCall(c.row('shell_open', 'eng', { id: 'sh-bg', callId: 'call-22' })),
+      ],
+    });
+
+    expect(
+      c.shelfRows(container).some((row) => row.text.includes('pnpm dev')),
+    ).toBe(true);
+  });
 
   it('draws a CONTINUED conversation as ONE instance, naming its shells by the latest call and dropping an earlier call’s command', async () => {
     // A Manager that briefs its Engineer once and continues that thread twice

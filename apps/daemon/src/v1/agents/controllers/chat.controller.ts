@@ -90,6 +90,7 @@ import { LocalImageService } from '../services/local-image.service';
 import { RunProcessesService } from '../services/run-processes.service';
 import { RunStateService } from '../services/run-state.service';
 import { ShellOutputService } from '../services/shell-output.service';
+import { historyConversationOf } from '../utils/history-conversation';
 
 /**
  * Loopback chat REST surface (token-gated by the global LoopbackTokenGuard).
@@ -300,6 +301,7 @@ export class ChatController {
             take: query.take,
             probe: query.probe === 'true',
           },
+      historyConversationOf(query),
     );
   }
 

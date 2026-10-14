@@ -14,6 +14,7 @@ import { foldRunCalls, foldRunDelegates } from '../utils/run-state-folds';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ApprovalRegistry } from './approval-registry';
 import { ChatShellsService } from './chat-shells.service';
+import { ItemSeqAllocator } from './item-seq.allocator';
 
 /**
  * What a run holds as a whole, for the readouts that must not depend on how
@@ -37,6 +38,7 @@ export class RunStateService {
     private readonly approvals: ApprovalRegistry,
     private readonly shells: ChatShellsService,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly seqs: ItemSeqAllocator,
   ) {}
 
   async read(runId: string): Promise<RunStateWire> {
@@ -47,6 +49,13 @@ export class RunStateService {
     }
     const wire = (rows: readonly Item[]): ItemWire[] => rows.map(itemToWire);
     const runSettled = isTerminalRunStatus(run.status);
+    // Read FIRST, and never past a seq still being written: every row at or
+    // before it is on disk and reflected in what follows, so a client may take
+    // this read's "ended" over a page that still says running.
+    const throughSeq = this.seqs.writtenThrough(
+      runId,
+      await this.itemDao.maxSeq(runId, em),
+    );
 
     // The cards the registry still holds, read back as the rows they were
     // persisted as — the client draws a card from its row, and the registry
@@ -162,6 +171,8 @@ export class RunStateService {
 
     return {
       openRequests,
+      openToolCalls: wire(await this.openToolCalls(runId, run.workflowId, em)),
+      throughSeq,
       calls,
       delegates,
       workflowRows,
@@ -169,6 +180,36 @@ export class RunStateService {
       shells: (await this.shells.read(runId)).shells,
       turnStartedAt,
     };
+  }
+
+  /**
+   * The foreground commands of every conversation with a turn open: a chat's,
+   * and each workflow conversation whose newest status row says running.
+   */
+  private async openToolCalls(
+    runId: string,
+    workflowId: string | null,
+    em: EntityManager,
+  ): Promise<Item[]> {
+    if (workflowId === null) {
+      // A chat's turn is open from its last ending on, whatever the run row
+      // says — a cancelled chat still answers off-turn.
+      return this.itemDao.openTurnToolCalls(
+        runId,
+        { nodeId: null, inCall: null },
+        em,
+      );
+    }
+    const rows: Item[] = [];
+    for (const conversation of await this.itemDao.runningConversations(
+      runId,
+      em,
+    )) {
+      rows.push(
+        ...(await this.itemDao.openTurnToolCalls(runId, conversation, em)),
+      );
+    }
+    return rows.sort((a, b) => a.seq - b.seq);
   }
 
   /**

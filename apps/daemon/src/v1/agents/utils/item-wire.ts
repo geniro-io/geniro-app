@@ -1,5 +1,6 @@
 import type { Item } from '../../runs/entity/item.entity';
 import type { ItemWire } from '../chat.types';
+import { OUTSIDE_ANY_CALL } from './call-membership';
 import { parseJsonColumn } from './json-util';
 
 /**
@@ -18,5 +19,14 @@ export function itemToWire(item: Item): ItemWire {
     role: item.role,
     payload: parseJsonColumn(item.payload),
     createdAt: item.createdAt.toISOString(),
+    inCall: inCallWire(item.inCall),
   };
+}
+
+/** `Item.inCall` as the wire states it: absent while unstamped, null outside every call. */
+export function inCallWire(inCall: string | null): string | null | undefined {
+  if (inCall === null) {
+    return undefined;
+  }
+  return inCall === OUTSIDE_ANY_CALL ? null : inCall;
 }

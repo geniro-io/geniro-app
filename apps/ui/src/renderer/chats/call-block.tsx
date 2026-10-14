@@ -20,11 +20,16 @@ import {
 } from './block-shell';
 import { CalleeContextResolverContext, withLiveCost } from './call-context';
 import {
+  CallConversationContext,
+  CallConversationPager,
+} from './call-conversation';
+import {
   CallMessageButton,
   CallMessageChannelContext,
   CallMessagePanel,
 } from './call-message-box';
 import { ContextMeter } from './context-meter';
+import { jumpAnchorProps } from './jump-target';
 import { liveRowKind } from './live-row';
 import { THINKING_WORDS, useLiveWord } from './live-words';
 import { NestedThreadContext } from './subagent-context';
@@ -41,10 +46,14 @@ import {
   callBlockTasks,
   callBlockUsage,
   countTools,
+  entryEndSeq,
+  entryStartSeq,
   isCallContinuation,
 } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
 import { payloadString } from './transcript-payload';
+import { JUMP_MARK_CLASS, TranscriptRow } from './transcript-row';
+import { JumpMarkContext } from './use-transcript-jump';
 
 function blockStatusOf(status: CallBlockEntry['status']): BlockStatus {
   switch (status) {
@@ -540,6 +549,15 @@ export const CallBlock = memo(function CallBlock({
       costUsd={usage.costUsd}
     />
   );
+  /**
+   * Where the conversation's read pages begin, while older ones are still
+   * unread — the rows a page of the run's own flow anchored for the folded
+   * readings lie above it, scattered, and are not drawn as if they joined it.
+   */
+  const conversation = block.conversationCallIds[0] ?? block.callId;
+  const pages = useContext(CallConversationContext)?.stateOf(conversation);
+  const drawnFrom = pages?.hasOlder === true ? (pages.oldestSeq ?? null) : null;
+  const mark = useContext(JumpMarkContext);
   const hasSummary =
     summaryText !== null ||
     pending ||
@@ -658,6 +676,7 @@ export const CallBlock = memo(function CallBlock({
             memoryKey={`call:${block.id}:request`}
           />
         ) : null}
+        <CallConversationPager conversation={conversation} />
         {/*
           The card's header IS the callee's identity, so its rows carry none of
           their own — the same rule, and the same context, the sub-agent block
@@ -669,6 +688,12 @@ export const CallBlock = memo(function CallBlock({
         */}
         <NestedThreadContext.Provider value={true}>
           {block.entries.map((entry) => {
+            const startSeq = entryStartSeq(entry);
+            const endSeq = entryEndSeq(entry);
+            // Wholly above the pages read: a scattered card row, not one of them.
+            if (drawnFrom !== null && endSeq !== null && endSeq < drawnFrom) {
+              return null;
+            }
             // A CONTINUED call's ask, at the point it was sent — drawn exactly
             // as the first ask is, since the card is one conversation and each
             // ask is a brief to the same callee.
@@ -682,13 +707,21 @@ export const CallBlock = memo(function CallBlock({
                 />
               ) : null;
             }
+            // Each row is a place a jump can land (`data-call-seq`), marked
+            // the way the transcript marks its own rows.
             return (
-              <TranscriptEntryView
+              <TranscriptRow
                 key={entry.type === 'item' ? entry.item.id : entry.id}
-                entry={entry}
-                nodes={nodes}
-                chatAgentName={chatAgentName}
-              />
+                className={cn(
+                  mark?.key === `card-row:${startSeq}` && JUMP_MARK_CLASS,
+                )}
+                {...jumpAnchorProps('call', startSeq, `card-row:${startSeq}`)}>
+                <TranscriptEntryView
+                  entry={entry}
+                  nodes={nodes}
+                  chatAgentName={chatAgentName}
+                />
+              </TranscriptRow>
             );
           })}
         </NestedThreadContext.Provider>

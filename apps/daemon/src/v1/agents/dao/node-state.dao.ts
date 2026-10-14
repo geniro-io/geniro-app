@@ -7,6 +7,22 @@ import type { AgentKind, NodeStatus } from '../../runs/runs.types';
 import { readNodeSessions, withNodeSession } from '../utils/node-sessions';
 import { positive } from '../utils/positive-figure';
 
+/**
+ * The `node_state` columns the increments below write, as SQLite stores them —
+ * the shape their typed Kysely builder is handed. Each column is typed off the
+ * entity property it stores, so a renamed or retyped field fails the build.
+ */
+interface NodeStateDatabase {
+  node_state: {
+    run_id: NodeState['runId'];
+    node_id: NodeState['nodeId'];
+    worked_ms: NodeState['workedMs'];
+    tool_calls: NodeState['toolCalls'];
+    /** Epoch milliseconds, since value conversion is off. */
+    deleted_at: number | null;
+  };
+}
+
 @Injectable()
 export class NodeStateDao extends BaseDao<NodeState> {
   constructor(em: EntityManager) {
@@ -299,15 +315,12 @@ export class NodeStateDao extends BaseDao<NodeState> {
    * answer — overwriting would report the last turn's work as the node's whole
    * history, and a lost write is a figure that is permanently short.
    *
-   * Read-modify-write rather than a SQL increment because nothing else in this
-   * daemon reaches past the ORM, and it is safe here for a reason that lives
-   * outside this method: the executor funnels these through the same serialized
-   * `enqueue()` chain its context writes use, and the DAG gives a node one turn
-   * at a time — so the writes that can touch one row never overlap. A second
-   * writer reaching this row from another path would break that assumption and
-   * needs a real increment instead, not a longer read. The read is also far
-   * cheaper than the one {@link rememberContext} refuses to make: this fires
-   * once per turn where that fires once per model response.
+   * A real increment in ONE statement, not a read-modify-write, so it holds
+   * whatever else writes the row: a read-then-write overwrites anything that
+   * lands between its two halves, and the figure is then permanently short.
+   * CLI-reported time only — a turn its CLI did not time is recorded in
+   * `wall_turns` instead (`WallWorkService`), and the served figure is the
+   * sum of the two.
    *
    * Neither figure is cleared by a turn that omits it, on that method's rule —
    * a CLI reporting no timing must not erase the time already counted, and the
@@ -325,21 +338,33 @@ export class NodeStateDao extends BaseDao<NodeState> {
     if (!positive(workedMs) && !positive(toolCalls)) {
       return;
     }
-    const row = await this.getRepo(txEm).findOne(
-      { runId, nodeId },
-      { disableIdentityMap: true },
-    );
-    if (row === null) {
-      return;
-    }
-    const data: Partial<NodeState> = {};
-    if (positive(workedMs)) {
-      data.workedMs = (row.workedMs ?? 0) + workedMs;
-    }
-    if (positive(toolCalls)) {
-      data.toolCalls = (row.toolCalls ?? 0) + toolCalls;
-    }
-    await this.getRepo(txEm).nativeUpdate({ runId, nodeId }, data);
+    await (txEm ?? this.em.fork())
+      .getKysely<NodeStateDatabase>({ convertValues: false })
+      .updateTable('node_state')
+      .set((eb) => ({
+        ...(positive(workedMs)
+          ? {
+              worked_ms: eb(
+                eb.fn.coalesce('worked_ms', eb.val(0)),
+                '+',
+                workedMs,
+              ),
+            }
+          : {}),
+        ...(positive(toolCalls)
+          ? {
+              tool_calls: eb(
+                eb.fn.coalesce('tool_calls', eb.val(0)),
+                '+',
+                toolCalls,
+              ),
+            }
+          : {}),
+      }))
+      .where('run_id', '=', runId)
+      .where('node_id', '=', nodeId)
+      .where('deleted_at', 'is', null)
+      .execute();
   }
 
   /**

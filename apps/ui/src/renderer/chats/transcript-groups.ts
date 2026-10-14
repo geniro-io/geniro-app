@@ -1117,6 +1117,32 @@ export function entryStartSeq(entry: TranscriptEntry): number | null {
   }, null);
 }
 
+/**
+ * The newest row an entry draws — {@link entryStartSeq}'s other end, a tool
+ * pair's result included.
+ */
+export function entryEndSeq(entry: TranscriptEntry): number | null {
+  if (entry.type === 'item') {
+    return entry.item.seq;
+  }
+  if (entry.type === 'tools') {
+    return entry.pairs.reduce<number | null>((max, pair) => {
+      const end = Math.max(pair.call.seq, pair.result?.seq ?? pair.call.seq);
+      return max === null ? end : Math.max(max, end);
+    }, null);
+  }
+  if (isCardEntry(entry)) {
+    return entry.seq;
+  }
+  return entry.entries.reduce<number | null>((max, inner) => {
+    const seq = entryEndSeq(inner);
+    if (seq === null) {
+      return max;
+    }
+    return max === null ? seq : Math.max(max, seq);
+  }, null);
+}
+
 /** The highest `seq` any row inside these entries carries (0 when empty). */
 function maxSeqOf(list: readonly TranscriptEntry[]): number {
   let max = 0;
@@ -1816,6 +1842,39 @@ export function collectCallBlocks(
 }
 
 /**
+ * The call cards a reader opens to reach the one holding `callId`, outermost
+ * first and that card last — a card drawn inside another's conversation is
+ * mounted only while every card around it is open. Empty when none holds it.
+ */
+export function callBlockPath(
+  entries: readonly TranscriptEntry[],
+  callId: string,
+): CallBlockEntry[] {
+  const walk = (list: readonly TranscriptEntry[]): CallBlockEntry[] | null => {
+    for (const entry of list) {
+      if (entry.type === 'call-block') {
+        if (entry.callIds.includes(callId)) {
+          return [entry];
+        }
+        const inner = walk(entry.entries);
+        if (inner !== null) {
+          return [entry, ...inner];
+        }
+        continue;
+      }
+      if (entry.type === 'turn-block' || entry.type === 'subagent-block') {
+        const inner = walk(entry.entries);
+        if (inner !== null) {
+          return inner;
+        }
+      }
+    }
+    return null;
+  };
+  return walk(entries) ?? [];
+}
+
+/**
  * Every call block of a folded transcript, keyed by EVERY call it holds — a
  * continued conversation is one block, reachable by whichever of its calls a
  * reader asks with.
@@ -2413,6 +2472,12 @@ const CALL_FOLLOWUP_KINDS = new Set<ChatItem['kind']>([
  * a shut call card (or a card nested in one) nobody would see it. Left here,
  * a revision anywhere in the run also folds the older card, since the
  * newest-card sweep runs over this flow.
+ *
+ * TWIN PARSER: `callMembershipOf` in
+ * apps/daemon/src/v1/agents/utils/call-membership.ts decides the same claim on
+ * the daemon, which serves a workflow run's rows one conversation at a time on
+ * its answer. A kind moved between these sets moves there too, with a bump of
+ * its `CALL_MEMBERSHIP_VERSION` so the rows already stamped are stamped again.
  */
 const UNCLAIMABLE_KINDS = new Set<ChatItem['kind']>([
   'call_started',
@@ -3350,6 +3415,16 @@ function isPoolHandOff(item: ChatItem): boolean {
   return typeof member === 'number' && Number.isInteger(member);
 }
 
+/**
+ * TWIN PARSER: `CARD_READS` / `cardRowsFor` in
+ * apps/daemon/src/v1/agents/services/chat-history.service.ts pick the rows a
+ * FOLDED card is built from on a workflow run, whose window never holds a
+ * callee's rows: its status rows, turn endings of every terminal kind and
+ * notices, its task lists since the newest whole one, the tool calls of a turn
+ * still running, and its newest row, newest words and newest named tool calls.
+ * A reading taken from anything else goes empty there until it is added on
+ * that side.
+ */
 function buildCallBlock(
   callId: string,
   shell: CallShell,

@@ -10,6 +10,7 @@ import { CallContext } from '../../runs/entity/call-context.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import type {
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
@@ -18,6 +19,7 @@ import { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { WallTurnDao } from '../dao/wall-turn.dao';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
@@ -47,6 +49,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let runDao: RunDao;
   let nodeStateDao: NodeStateDao;
   let callContextDao: CallContextDao;
+  let wallTurnDao: WallTurnDao;
   let referencedTexts: string[][] = [];
   let removedArtifactRuns: string[];
   /** The run's CLIs closing and its detached processes being reaped, in order. */
@@ -65,7 +68,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, Item, NodeState, CallContext],
+        entities: [Run, Item, NodeState, CallContext, WallTurn],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -96,6 +99,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     runDao = new RunDao(em);
     nodeStateDao = new NodeStateDao(em);
     callContextDao = new CallContextDao(em);
+    wallTurnDao = new WallTurnDao(em);
     teardown = new RunTeardownService(
       itemDao,
       nodeStateDao,
@@ -145,6 +149,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       {
         reapInBackground: (runId: string) => processEnds.push(`reap ${runId}`),
       } as unknown as RunProcessReaper,
+      wallTurnDao,
     );
   });
 
@@ -203,6 +208,20 @@ describe('RunTeardownService (in-memory sqlite)', () => {
 
     expect(await nodeStateDao.listByRun('run-a')).toHaveLength(0);
     expect(await runDao.getById('run-a', orm.em.fork())).toBeNull();
+  });
+
+  it('destroys the run’s wall-measured turns, and only that run’s', async () => {
+    // Run-scoped worked time: left behind, a deleted run's turns would sit in
+    // the table for good and be summed into nothing anyone can see.
+    await seedRun('run-a');
+    await seedRun('run-b');
+    await wallTurnDao.record('run-a', [{ seq: 3, nodeId: 'node-a', ms: 900 }]);
+    await wallTurnDao.record('run-b', [{ seq: 3, nodeId: null, ms: 700 }]);
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect((await wallTurnDao.nodeSums('run-a')).size).toBe(0);
+    expect((await wallTurnDao.chatSums(['run-b'])).get('run-b')).toBe(700);
   });
 
   it('drops the run’s published artifacts, which nothing else would reach', async () => {

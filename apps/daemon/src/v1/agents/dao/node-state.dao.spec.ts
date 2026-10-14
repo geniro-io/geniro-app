@@ -405,5 +405,47 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       );
       expect(row).toBeNull();
     });
+
+    it('is a real increment: an addition landing beside it is kept', async () => {
+      // A read-modify-write reads 0, another writer adds 300, and the write of
+      // 0 + 500 erases it — a figure short for good.
+      await dao.createPending('run-1', 'node-a');
+      // Land the other addition at the worst moment there is: inside any read
+      // this write makes before it writes. A real increment makes none, and
+      // the addition then lands after it instead.
+      let added = false;
+      const addBeside = async (): Promise<void> => {
+        if (!added) {
+          added = true;
+          await new NodeStateDao(orm.em.fork()).rememberWork(
+            'run-1',
+            'node-a',
+            300,
+            null,
+          );
+        }
+      };
+      const findOne = SqlEntityRepository.prototype.findOne;
+      const spy = vi
+        .spyOn(SqlEntityRepository.prototype, 'findOne')
+        .mockImplementation(async function (
+          this: SqlEntityRepository<NodeState>,
+          ...args: Parameters<typeof findOne>
+        ) {
+          const read = await findOne.apply(this, args);
+          await addBeside();
+          return read;
+        } as typeof findOne);
+
+      await dao.rememberWork('run-1', 'node-a', 500, 1, orm.em.fork());
+      spy.mockRestore();
+      await addBeside();
+
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect(row?.workedMs).toBe(800);
+    });
   });
 });

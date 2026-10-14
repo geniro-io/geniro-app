@@ -11,9 +11,11 @@ import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
 import type { ItemWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
+import { RunDao } from '../dao/run.dao';
 import { itemToWire } from '../utils/item-wire';
 import type { ChatService } from './chat.service';
 import { ChatHistoryService } from './chat-history.service';
+import { ItemCallIndexService } from './item-call-index.service';
 
 /**
  * Real-driver spec, on `item.dao.spec.ts`'s pattern: the anchor reads include a
@@ -60,8 +62,495 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     const chats = {
       getHistory: () => Promise.resolve([...page]),
     } as unknown as ChatService;
-    return new ChatHistoryService(orm.em, dao, chats);
+    return new ChatHistoryService(orm.em, dao, chats, callIndex());
   }
+
+  function callIndex(): ItemCallIndexService {
+    return new ItemCallIndexService(dao, new RunDao(orm.em.fork()), orm.em);
+  }
+
+  /** The service with `getHistory` reading the real DAO, as `ChatService`'s does. */
+  function readingService(): ChatHistoryService {
+    const chats = {
+      getHistory: async (
+        runId: string,
+        afterSeq: number,
+        window: Parameters<ItemDao['getByRun']>[3],
+        inCalls: readonly string[] | undefined,
+      ) =>
+        (
+          await dao.getByRun(runId, afterSeq, orm.em.fork(), window, inCalls)
+        ).map(itemToWire),
+    } as unknown as ChatService;
+    return new ChatHistoryService(orm.em, dao, chats, callIndex());
+  }
+
+  describe('one conversation of a workflow run', () => {
+    async function workflowRun(): Promise<void> {
+      await new RunDao(orm.em.fork()).create({
+        id: 'run-a',
+        workflowId: 'dev-team',
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 1,
+        kind: 'message',
+        nodeId: 'manager',
+        payload: JSON.stringify({ text: 'splitting the work' }),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 2,
+        kind: 'call_started',
+        nodeId: 'manager',
+        payload: JSON.stringify({ callId: 'call-1', calleeNodeId: 'eng' }),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 3,
+        kind: 'tool_call',
+        nodeId: 'eng',
+        payload: JSON.stringify({ id: 't1', callId: 'call-1' }),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 4,
+        kind: 'approval_request',
+        nodeId: 'eng',
+        payload: JSON.stringify({ callId: 'call-1', requestId: 'r1' }),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 5,
+        kind: 'call_started',
+        nodeId: 'manager',
+        payload: JSON.stringify({ callId: 'call-2', calleeNodeId: 'qa' }),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 6,
+        kind: 'message',
+        nodeId: 'qa',
+        payload: JSON.stringify({ text: 'checked', callId: 'call-2' }),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 7,
+        kind: 'call_started',
+        nodeId: 'manager',
+        payload: JSON.stringify({
+          callId: 'call-3',
+          calleeNodeId: 'eng',
+          thread: 'call-1',
+        }),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 8,
+        kind: 'message',
+        nodeId: 'eng',
+        payload: JSON.stringify({ text: 'continued', callId: 'call-3' }),
+      });
+    }
+
+    it("reads the run's own flow — its turns, every call's start and the card a person answers — and no callee's rows", async () => {
+      await workflowRun();
+
+      const { items } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      expect(items.map((item) => item.seq)).toEqual([1, 2, 4, 5, 7]);
+    });
+
+    it("reads a call's conversation, its continuation included, and no other call's", async () => {
+      await workflowRun();
+
+      const { items } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { call: 'call-3' },
+      );
+
+      expect(items.map((item) => item.seq)).toEqual([3, 8]);
+    });
+
+    it("anchors each call card's readings to a page of the run's own flow — and nothing only an opened card draws", async () => {
+      await workflowRun();
+      const row = (
+        seq: number,
+        kind: ItemKind,
+        nodeId: string,
+        payload: unknown,
+        role: string | null = null,
+      ) =>
+        dao.create({
+          runId: 'run-a',
+          seq,
+          kind,
+          nodeId,
+          role,
+          payload: JSON.stringify(payload),
+        });
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'tool_call', 'qa', {
+        id: 't2',
+        name: 'Bash',
+        callId: 'call-2',
+      });
+      await row(11, 'tool_result', 'qa', { id: 't2', callId: 'call-2' });
+      await row(12, 'message', 'qa', { text: 'all green', callId: 'call-2' });
+      await row(13, 'task_list', 'qa', { callId: 'call-2', tasks: [] });
+      // Newer than the readings a folded card shows, and saying nothing: an
+      // ACP tool call naming no tool, and a blank message.
+      await row(20, 'tool_call', 'qa', { id: 't3', callId: 'call-2' });
+      // Blank in every way the renderer's `String.trim` reads one.
+      await row(21, 'message', 'qa', { text: '\n\t\n', callId: 'call-2' });
+      await row(22, 'system', 'qa', {
+        callId: 'call-2',
+        heldCall: true,
+        waitingOn: 1,
+      });
+      await row(23, 'reasoning', 'qa', { callId: 'call-2', text: 'still' });
+      await row(14, 'status', 'qa', { callId: 'call-2', status: 'completed' });
+      await row(15, 'call_result', 'manager', {
+        callId: 'call-2',
+        status: 'ok',
+      });
+      await row(16, 'turn_complete', 'qa', { callId: 'call-2' });
+      // The callee carrying on after the call settled: its newest row.
+      await row(17, 'reasoning', 'qa', { callId: 'call-2', text: 'hmm' });
+      // A person writing to the callee is never its newest words or row.
+      await row(
+        18,
+        'message',
+        'qa',
+        { text: 'ping', callId: 'call-2' },
+        'user',
+      );
+      await row(19, 'message', 'manager', { text: 'qa is done' });
+
+      const { items, anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      expect(items.map((item) => item.seq)).toEqual([1, 2, 4, 5, 7, 19]);
+      const qa = anchors
+        .filter(
+          (item) =>
+            item.payload !== null &&
+            (item.payload as { callId?: string }).callId === 'call-2',
+        )
+        .map((item) => item.seq);
+      // Statuses, task list, turn end, notice and settle; the newest NAMED tool
+      // call and its reply, the newest words and the newest row. Never its
+      // older words, the user's message or the rows that say nothing.
+      expect(qa).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 22, 23]);
+    });
+
+    it('anchors older named tool calls too, for the card to pass over one it hides', async () => {
+      await workflowRun();
+      const row = (seq: number, payload: Record<string, unknown>) =>
+        dao.create({
+          runId: 'run-a',
+          seq,
+          kind: 'tool_call',
+          nodeId: 'qa',
+          payload: JSON.stringify({ ...payload, callId: 'call-2' }),
+        });
+      await row(9, { id: 't1', name: 'Bash' });
+      // Newer, and one of geniro's own: the folded card never draws it.
+      await row(10, { id: 't2', name: 'mcp__geniro__show_chart' });
+
+      const { anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      expect(
+        anchors
+          .filter(
+            (item) =>
+              item.kind === 'tool_call' &&
+              (item.payload as { callId?: string }).callId === 'call-2',
+          )
+          .map((item) => item.seq),
+      ).toEqual([9, 10]);
+    });
+
+    /** One row of the run, written the way the tests above write theirs. */
+    const row = (
+      seq: number,
+      kind: ItemKind,
+      nodeId: string,
+      payload: unknown,
+    ): Promise<unknown> =>
+      dao.create({
+        runId: 'run-a',
+        seq,
+        kind,
+        nodeId,
+        payload: JSON.stringify(payload),
+      });
+
+    /** The seqs of `call`'s rows of `kinds` anchored to the run's newest root page. */
+    async function anchoredOf(
+      call: string,
+      kinds: readonly ItemKind[],
+    ): Promise<number[]> {
+      const { anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+      return anchors
+        .filter(
+          (item) =>
+            kinds.includes(item.kind) &&
+            (item.payload as { callId?: string } | null)?.callId === call,
+        )
+        .map((item) => item.seq);
+    }
+
+    it("caps a call's card rows per kind, so a flood of one kind never crowds out another", async () => {
+      await workflowRun();
+      await row(90, 'turn_complete', 'qa', { callId: 'call-2' });
+      for (let seq = 100; seq < 310; seq += 1) {
+        await row(seq, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      }
+
+      const statuses = await anchoredOf('call-2', ['status']);
+      expect(statuses).toHaveLength(200);
+      expect(statuses[0]).toBe(110);
+      expect(await anchoredOf('call-2', ['turn_complete'])).toEqual([90]);
+    });
+
+    it('anchors a turn that ended in an error or was cancelled — without it the turn reads as still running', async () => {
+      await workflowRun();
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'error', 'qa', { callId: 'call-2', message: 'boom' });
+      await row(11, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(12, 'turn_cancelled', 'qa', { callId: 'call-2' });
+
+      expect(await anchoredOf('call-2', ['error', 'turn_cancelled'])).toEqual([
+        10, 12,
+      ]);
+    });
+
+    it("anchors a call's task lists from the newest one stating the whole list", async () => {
+      await workflowRun();
+      await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(10, 'task_list', 'qa', { callId: 'call-2', mode: 'snapshot' });
+      await row(11, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(12, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+
+      expect(await anchoredOf('call-2', ['task_list'])).toEqual([10, 11, 12]);
+    });
+
+    it('anchors every task list of a call that never stated a whole one', async () => {
+      await workflowRun();
+      await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(10, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+
+      expect(await anchoredOf('call-2', ['task_list'])).toEqual([9, 10]);
+    });
+
+    it("anchors every tool call of a call's turn still running — and not a settled turn's", async () => {
+      await workflowRun();
+      // A settled turn's tools, naming nothing: no reading needs them.
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'tool_call', 'qa', { id: 'old', callId: 'call-2' });
+      await row(11, 'status', 'qa', { callId: 'call-2', status: 'completed' });
+      // The turn in flight: more tools than the named reading keeps, unnamed.
+      await row(12, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      for (let seq = 13; seq < 33; seq += 1) {
+        await row(seq, 'tool_call', 'qa', { id: `t${seq}`, callId: 'call-2' });
+      }
+
+      const tools = await anchoredOf('call-2', ['tool_call']);
+      expect(tools).toHaveLength(20);
+      expect(tools).not.toContain(10);
+    });
+
+    it('anchors the calls that run across a page of the run’s own flow but began above it', async () => {
+      await workflowRun();
+      // call-2 settles before the page, call-4 below it; call-1 (continued by
+      // call-3) never settles.
+      await row(15, 'call_result', 'manager', { callId: 'call-2', ok: true });
+      await row(16, 'call_started', 'manager', {
+        callId: 'call-4',
+        calleeNodeId: 'qa',
+      });
+      await row(17, 'message', 'qa', { text: 'on it', callId: 'call-4' });
+      await row(19, 'message', 'manager', { text: 'waiting' });
+      await row(20, 'call_result', 'manager', { callId: 'call-4', ok: true });
+      const page = (await dao.getByRun('run-a', 18, orm.em.fork()))
+        .filter((item) => item.seq === 19)
+        .map(itemToWire);
+
+      const { anchors } = await service(page).read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      const starts = anchors
+        .filter((item) => item.kind === 'call_started')
+        .map((item) => (item.payload as { callId: string }).callId);
+      expect(starts).toEqual(['call-1', 'call-3', 'call-4']);
+      expect(anchors.map((item) => item.seq)).toEqual(
+        expect.arrayContaining([3, 8, 17, 20]),
+      );
+    });
+
+    it('anchors a call that began above the page and settled within it — its settle is filed under the call, never on the page', async () => {
+      await workflowRun();
+      await row(16, 'call_started', 'manager', {
+        callId: 'call-4',
+        calleeNodeId: 'qa',
+      });
+      await row(17, 'message', 'qa', { text: 'on it', callId: 'call-4' });
+      await row(19, 'message', 'manager', { text: 'waiting' });
+      await row(20, 'call_result', 'manager', { callId: 'call-4', ok: true });
+      await row(21, 'message', 'manager', { text: 'qa answered' });
+      const page = (await dao.getByRun('run-a', 18, orm.em.fork()))
+        .filter((item) => item.seq === 19 || item.seq === 21)
+        .map(itemToWire);
+
+      const { anchors } = await service(page).read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      expect(
+        anchors
+          .filter((item) => item.kind === 'call_started')
+          .map((item) => (item.payload as { callId: string }).callId),
+      ).toContain('call-4');
+      expect(anchors.map((item) => item.seq)).toEqual(
+        expect.arrayContaining([16, 17, 20]),
+      );
+    });
+
+    it("anchors what closes a call's anchored rows — a tool call's reply, its shells and delegates opened and ended", async () => {
+      await workflowRun();
+      await row(9, 'tool_call', 'qa', {
+        id: 't9',
+        name: 'Bash',
+        callId: 'call-2',
+      });
+      await row(10, 'tool_result', 'qa', { id: 't9', callId: 'call-2' });
+      // A reply to a tool call no reading anchors.
+      await row(11, 'tool_result', 'qa', { id: 't-old', callId: 'call-2' });
+      await row(12, 'shell_open', 'qa', { id: 's1', callId: 'call-2' });
+      await row(13, 'shell_info', 'qa', { id: 's1', callId: 'call-2' });
+      await row(14, 'subagent_info', 'qa', { id: 'd1', callId: 'call-2' });
+      await row(15, 'message', 'qa', { text: 'later', callId: 'call-2' });
+
+      const anchored = await anchoredOf('call-2', [
+        'tool_result',
+        'shell_open',
+        'shell_info',
+        'subagent_info',
+      ]);
+      expect(anchored).toEqual([10, 12, 13, 14]);
+    });
+
+    it("anchors the callee's own newest words, never a delegate's", async () => {
+      await workflowRun();
+      await row(9, 'message', 'qa', { text: 'mine', callId: 'call-2' });
+      await row(10, 'message', 'qa', {
+        text: "the delegate's",
+        callId: 'call-2',
+        parentToolUseId: 'task-1',
+      });
+      await row(11, 'reasoning', 'qa', { text: 'next', callId: 'call-2' });
+
+      expect(await anchoredOf('call-2', ['message'])).toEqual([9]);
+    });
+
+    it("anchors the row saying a callee's turn took its approval card down", async () => {
+      await workflowRun();
+      await row(29, 'unanswerable', 'eng', { id: 'req-0', callId: 'call-1' });
+      await row(30, 'approval_request', 'eng', {
+        id: 'req-9',
+        callId: 'call-1',
+      });
+      await row(31, 'unanswerable', 'eng', { id: 'req-9', callId: 'call-1' });
+      // The call's newest row, so neither is anchored as that.
+      await row(32, 'reasoning', 'eng', { text: 'next', callId: 'call-1' });
+
+      const { items, anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      expect(items.map((item) => item.seq)).toContain(30);
+      expect(
+        anchors
+          .filter((item) => item.kind === 'unanswerable')
+          .map((item) => item.seq),
+      ).toEqual([31]);
+    });
+
+    it("anchors none of a call's rows to a page of that call's own conversation", async () => {
+      await workflowRun();
+
+      const { anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { call: 'call-1' },
+      );
+
+      expect(anchors.map((item) => item.seq)).toEqual([2, 7]);
+    });
+
+    it("reads every row of a chat for its own flow — a chat's agent calls no one", async () => {
+      await new RunDao(orm.em.fork()).create({ id: 'run-a' });
+      await insert(1, 'message', { text: 'hi' });
+      await insert(2, 'message', { text: 'there', callId: 'call-1' });
+
+      const { items } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      expect(items.map((item) => item.seq)).toEqual([1, 2]);
+      // Nothing was indexed to answer it.
+      expect((await dao.getByRun('run-a')).map((row) => row.inCall)).toEqual([
+        null,
+        null,
+      ]);
+    });
+
+    it('still reads the whole run when no conversation is named', async () => {
+      await workflowRun();
+
+      const { items } = await readingService().read('run-a', -1, {
+        limit: 50,
+      });
+
+      expect(items.map((item) => item.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    });
+  });
 
   async function pageOf(from: number, to: number): Promise<ItemWire[]> {
     return (await dao.getByRun('run-a'))

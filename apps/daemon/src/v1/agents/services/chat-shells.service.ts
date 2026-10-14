@@ -16,6 +16,7 @@ import {
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ChatService } from './chat.service';
+import { ItemCallIndexService } from './item-call-index.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 
 /**
@@ -57,6 +58,7 @@ export class ChatShellsService {
      * looked for. See {@link killForeground}.
      */
     private readonly sessions: AgentSessionRegistry,
+    private readonly calls: ItemCallIndexService,
   ) {}
 
   async read(runId: string): Promise<ChatShellsWire> {
@@ -346,23 +348,32 @@ export class ChatShellsService {
    */
   private async close(runId: string, shell: FoldedShell): Promise<void> {
     const em = this.em.fork();
-    await persistItemAndEmit({ itemDao: this.itemDao, bus: this.bus }, em, {
-      runId,
-      // The node that STARTED it, carried over from the open: a close filed at
-      // the wrong node is a row the workflow's own transcript cannot show.
-      nodeId: shell.nodeId,
-      seq: await this.seqs.reserve(runId),
-      kind: 'shell_info',
-      role: null,
-      payload: {
-        id: shell.id,
-        workId: shell.workId,
-        // The one key a CLI's own close never carries. Nothing branches on it
-        // today; it is what makes a transcript say who ended the command, which
-        // is the only question a reader has about a row that stops mid-run.
-        killedByUser: true,
+    await persistItemAndEmit(
+      {
+        itemDao: this.itemDao,
+        bus: this.bus,
+        calls: this.calls,
+        seqs: this.seqs,
       },
-    });
+      em,
+      {
+        runId,
+        // The node that STARTED it, carried over from the open: a close filed at
+        // the wrong node is a row the workflow's own transcript cannot show.
+        nodeId: shell.nodeId,
+        seq: await this.seqs.reserve(runId),
+        kind: 'shell_info',
+        role: null,
+        payload: {
+          id: shell.id,
+          workId: shell.workId,
+          // The one key a CLI's own close never carries. Nothing branches on it
+          // today; it is what makes a transcript say who ended the command, which
+          // is the only question a reader has about a row that stops mid-run.
+          killedByUser: true,
+        },
+      },
+    );
     this.chats.noteShellClosed(runId, shell.workId, shell.nodeId);
   }
 }

@@ -4,6 +4,10 @@ import {
   CalleeContextResolverContext,
 } from './call-context';
 import {
+  CallConversationContext,
+  type CallConversationLoader,
+} from './call-conversation';
+import {
   type CallMessageChannel,
   CallMessageChannelContext,
 } from './call-message-box';
@@ -36,6 +40,7 @@ import { CollapseToolStepsContext } from './tool-group';
 import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
 import { CardBackedRequestsContext } from './transcript-item';
 import { type TurnDuration, TurnDurationContext } from './turn-duration';
+import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /**
  * The values only a transcript row reads. {@link TranscriptContexts} provides
@@ -97,6 +102,8 @@ export function ChatProviders({
   delegatesOut,
   transcript,
   loadAttachment = null,
+  callConversations = null,
+  jumpMark = null,
   children,
 }: {
   /**
@@ -142,31 +149,46 @@ export function ChatProviders({
   artifactUrl: ArtifactUrlBuilder | null;
   /** Read images attached to this conversation, including in the workflow dock. */
   loadAttachment?: AttachmentLoader | null;
+  /**
+   * How an opened call card reads its own conversation — see
+   * `CallConversationContext`. Here for `callContext`'s reason: a call block is
+   * drawn from three subtrees. Absent where the window holds every row.
+   */
+  callConversations?: CallConversationLoader | null;
+  /**
+   * Where a jump landed — see `JumpMarkContext`. Here for `callContext`'s
+   * reason: the rows that mark themselves are drawn deep inside call cards.
+   */
+  jumpMark?: JumpMark | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
     <CliLoginContext.Provider value={signIn}>
       <RetryContext.Provider value={retry}>
         <CalleeContextResolverContext.Provider value={callContext}>
-          <CallMessageChannelContext.Provider value={callChannel}>
-            <ArtifactUrlContext.Provider value={artifactUrl}>
-              <ThreadUiMemoryContext.Provider value={threadId}>
-                <AttachmentLoaderContext.Provider value={loadAttachment}>
-                  <RunSettledContext.Provider value={runSettledAt}>
-                    <DelegatesOutContext.Provider value={delegatesOut}>
-                      {transcript === undefined ? (
-                        children
-                      ) : (
-                        <SurfaceContexts {...transcript}>
-                          {children}
-                        </SurfaceContexts>
-                      )}
-                    </DelegatesOutContext.Provider>
-                  </RunSettledContext.Provider>
-                </AttachmentLoaderContext.Provider>
-              </ThreadUiMemoryContext.Provider>
-            </ArtifactUrlContext.Provider>
-          </CallMessageChannelContext.Provider>
+          <CallConversationContext.Provider value={callConversations}>
+            <JumpMarkContext.Provider value={jumpMark}>
+              <CallMessageChannelContext.Provider value={callChannel}>
+                <ArtifactUrlContext.Provider value={artifactUrl}>
+                  <ThreadUiMemoryContext.Provider value={threadId}>
+                    <AttachmentLoaderContext.Provider value={loadAttachment}>
+                      <RunSettledContext.Provider value={runSettledAt}>
+                        <DelegatesOutContext.Provider value={delegatesOut}>
+                          {transcript === undefined ? (
+                            children
+                          ) : (
+                            <SurfaceContexts {...transcript}>
+                              {children}
+                            </SurfaceContexts>
+                          )}
+                        </DelegatesOutContext.Provider>
+                      </RunSettledContext.Provider>
+                    </AttachmentLoaderContext.Provider>
+                  </ThreadUiMemoryContext.Provider>
+                </ArtifactUrlContext.Provider>
+              </CallMessageChannelContext.Provider>
+            </JumpMarkContext.Provider>
+          </CallConversationContext.Provider>
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>
     </CliLoginContext.Provider>

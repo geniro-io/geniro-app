@@ -4,6 +4,7 @@ import { InitialsAvatar } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
 import { CallBlock } from './call-block';
 import { EntryCard } from './entry-card';
+import { jumpAnchorProps } from './jump-target';
 import { liveRowKind } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { formatClockTime } from './relative-time';
@@ -12,6 +13,7 @@ import { NestedThreadContext } from './subagent-context';
 import { ThinkingDisclosure } from './thinking-block';
 import { ToolGroup } from './tool-group';
 import {
+  entryStartSeq,
   isCardEntry,
   type TranscriptEntry,
   type TurnBlockEntry,
@@ -21,6 +23,8 @@ import {
   TranscriptItem,
   type TranscriptNodeMeta,
 } from './transcript-item';
+import { JUMP_MARK_CLASS, TranscriptRow } from './transcript-row';
+import { JumpMarkContext } from './use-transcript-jump';
 
 /**
  * One agent's contiguous run of work as ONE avatar-framed block — the
@@ -72,6 +76,29 @@ export const TurnBlock = memo(function TurnBlock({
         sub-agent
       </span>
     );
+  const mark = useContext(JumpMarkContext);
+  /**
+   * Each row of the block as a place a jump can land (`data-row-seq`), marked
+   * the way the transcript marks its own rows — a turn runs to hundreds of
+   * rows, and landing on its first would leave the hit a screen below.
+   * A `TranscriptRow`, whose `empty:hidden` keeps a row that draws nothing
+   * out of the column's gaps.
+   */
+  const renderRow = (entry: TranscriptEntry): React.ReactNode => {
+    const drawn = renderInner(entry);
+    if (drawn === null) {
+      return null;
+    }
+    const seq = entryStartSeq(entry);
+    return (
+      <TranscriptRow
+        key={entry.type === 'item' ? entry.item.id : entry.id}
+        className={cn(mark?.key === `row:${seq}` && JUMP_MARK_CLASS)}
+        {...jumpAnchorProps('row', seq, `row:${seq}`)}>
+        {drawn}
+      </TranscriptRow>
+    );
+  };
   const renderInner = (entry: TranscriptEntry): React.ReactNode => {
     if (entry.type === 'tools') {
       return <ToolGroup key={entry.id} group={entry} nodes={nodes} />;
@@ -167,7 +194,7 @@ export const TurnBlock = memo(function TurnBlock({
             'border-l-2 border-border pl-3',
         )}>
         {subagentLabel}
-        {block.entries.map(renderInner)}
+        {block.entries.map(renderRow)}
       </div>
     );
   }
@@ -203,7 +230,7 @@ export const TurnBlock = memo(function TurnBlock({
             </>
           ) : null}
         </div>
-        {block.entries.map(renderInner)}
+        {block.entries.map(renderRow)}
       </div>
     </div>
   );

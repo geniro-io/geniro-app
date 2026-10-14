@@ -509,8 +509,8 @@ function opensNodeTurn(payload: unknown): boolean {
  * nothing could ever close.
  *
  * TWIN PARSER: `apps/daemon/src/v1/agents/utils/wall-worked.ts` →
- * `wallMeasuredTurns` folds the node-scoped wall clock the same way for the
- * daemon's `workedMs` (its doc block lists where it deliberately differs).
+ * `wallMeasuredTurns` folds both modes' wall clock the same way for the
+ * daemon's served `workedMs` (its doc block lists where it deliberately differs).
  */
 export function scanTurns(
   items: readonly ChatItem[],

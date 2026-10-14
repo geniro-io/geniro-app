@@ -45,6 +45,8 @@ const shell = (id: string, callId: string | null): ShellRun => ({
   handle: null,
   status: 'running',
   exitCode: null,
+  launchSeq: null,
+  trackedSeq: null,
   startedAt: new Date().toISOString(),
   agentId: 'engineer',
   callId,

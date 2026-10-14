@@ -349,7 +349,12 @@ export class ChatShellsService {
   private async close(runId: string, shell: FoldedShell): Promise<void> {
     const em = this.em.fork();
     await persistItemAndEmit(
-      { itemDao: this.itemDao, bus: this.bus, calls: this.calls },
+      {
+        itemDao: this.itemDao,
+        bus: this.bus,
+        calls: this.calls,
+        seqs: this.seqs,
+      },
       em,
       {
         runId,

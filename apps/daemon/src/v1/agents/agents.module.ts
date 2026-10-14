@@ -22,6 +22,7 @@ import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
+import { WallTurnDao } from './dao/wall-turn.dao';
 import {
   AGENT_ADAPTERS,
   AgentAdapterRegistry,
@@ -68,7 +69,6 @@ import { ModelParametersService } from './services/model-parameters.service';
 import { ModelPriceCatalog } from './services/model-price-catalog.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
-import { NodeWallWorkService } from './services/node-wall-work.service';
 import { NotifyBroker } from './services/notify.broker';
 import { OllamaService } from './services/ollama.service';
 import { PartialStreamService } from './services/partial-stream.service';
@@ -98,6 +98,7 @@ import { StrandedChildReaper } from './services/stranded-child-reaper.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
 import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
 import { UserQuestionBroker } from './services/user-question.broker';
+import { WallWorkService } from './services/wall-work.service';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 import { defaultSpawn } from './utils/spawn-cli';
 
@@ -371,10 +372,11 @@ import { defaultSpawn } from './utils/spawn-cli';
     ShellOutputService,
     ItemSeqAllocator,
     ItemCallIndexService,
-    NodeWallWorkService,
+    WallWorkService,
     MessageSendService,
     ItemDao,
     NodeStateDao,
+    WallTurnDao,
     CallContextDao,
     RunDao,
     RunGroupDao,
@@ -485,7 +487,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ItemCallIndexService,
     // Exported for the graph executor, which catches a node's wall-clock work
     // up after each turn its CLI did not time, and for the boot sweep.
-    NodeWallWorkService,
+    WallWorkService,
     MessageSendService,
     SkillHarvestStore,
     // Exported for the graph executor's own turn seam: a node's turn reports
@@ -498,6 +500,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     LocalImageService,
     ItemDao,
     NodeStateDao,
+    WallTurnDao,
     CallContextDao,
     RunDao,
     AgentAdapterRegistry,

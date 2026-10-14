@@ -45,6 +45,7 @@ import {
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentMcpService } from '../../agents/services/agent-mcp.service';
@@ -57,7 +58,6 @@ import { ItemCallIndexService } from '../../agents/services/item-call-index.serv
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
-import { NodeWallWorkService } from '../../agents/services/node-wall-work.service';
 import {
   partialOwnerKey,
   PartialStreamService,
@@ -67,6 +67,7 @@ import { PullRequestCaptureService } from '../../agents/services/pull-request-ca
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { WallWorkService } from '../../agents/services/wall-work.service';
 import {
   type AgentOptionsSnapshot,
   readAgentOptions,
@@ -144,7 +145,10 @@ import {
   type UsageFigures,
   usageFiguresFrom,
 } from '../../agents/utils/usage-figures';
-import { cliTurnDurationMs } from '../../agents/utils/wall-worked';
+import {
+  cliTurnDurationMs,
+  servedWorkedMs,
+} from '../../agents/utils/wall-worked';
 import {
   AgentKind,
   type ItemKind,
@@ -729,7 +733,8 @@ export class GraphExecutorService
     private readonly attachments: AttachmentStoreService,
     private readonly seqs: ItemSeqAllocator,
     private readonly calls: ItemCallIndexService,
-    private readonly wallWork: NodeWallWorkService,
+    private readonly wallWork: WallWorkService,
+    private readonly wallTurns: WallTurnDao,
     /**
      * The page tool (`show_artifact`) for workflow agents. Optional only so the
      * executor's specs, which construct it positionally, need not supply it.
@@ -1185,7 +1190,7 @@ export class GraphExecutorService
     announce: RunStatusAnnounce = {},
   ): Promise<void> {
     await writeRunStatus(
-      { runDao: this.runDao, bus: this.bus },
+      { runDao: this.runDao, bus: this.bus, wallTurns: this.wallTurns },
       em,
       runId,
       status,
@@ -1882,6 +1887,9 @@ export class GraphExecutorService
     const em = this.em.fork();
     const run = assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     const rows = await this.nodeStateDao.listByRun(runId, em);
+    // Each node's wall-measured turns — what its CLI did not time — served on
+    // top of the CLI-reported `workedMs` the row holds.
+    const wallByNode = await this.wallTurns.nodeSums(runId, em);
     const adapters = this.adapters.all();
     const poolKinds = snapshotPoolKinds(run.workflowSnapshot);
     const ownPoolMembers =
@@ -2092,7 +2100,7 @@ export class GraphExecutorService
       ),
       mainTotals: mainTotals.get(row.nodeId) ?? emptyTotals(),
       promptCacheExpiresAt: cacheExpiryOf(mainCache.get(row.nodeId)),
-      workedMs: row.workedMs,
+      workedMs: servedWorkedMs(row.workedMs, wallByNode.get(row.nodeId)),
       toolCalls: row.toolCalls,
       startedAt: row.startedAt,
       endedAt: row.endedAt,
@@ -2618,13 +2626,13 @@ export class GraphExecutorService
 
     /**
      * Add the wall time of this node's settled turns its CLI did not time
-     * (`NodeWallWorkService`). Run on this chain after the turn's
+     * (`WallWorkService`). Run on this chain after the turn's
      * `turn_complete` row is written. Bookkeeping, so a failure is logged and
      * never fails the turn — the next catch-up (or the boot sweep) finds the
      * turn still above the node's mark.
      */
     const catchUpWallWork = (nodeId: string): Promise<void> =>
-      this.wallWork.catchUp(runId, nodeId, em).catch((err: unknown) => {
+      this.wallWork.catchUpNode(runId, nodeId, em).catch((err: unknown) => {
         this.logger.warn(
           `wall work for workflow run ${runId} node ${nodeId} not measured: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -6511,7 +6519,12 @@ export class GraphExecutorService
     payload: unknown,
   ): Promise<ItemWire> {
     return persistItemAndEmit(
-      { itemDao: this.itemDao, bus: this.bus, calls: this.calls },
+      {
+        itemDao: this.itemDao,
+        bus: this.bus,
+        calls: this.calls,
+        seqs: this.seqs,
+      },
       em,
       {
         runId,

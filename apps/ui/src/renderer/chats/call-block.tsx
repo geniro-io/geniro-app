@@ -29,6 +29,7 @@ import {
   CallMessagePanel,
 } from './call-message-box';
 import { ContextMeter } from './context-meter';
+import { jumpAnchorProps } from './jump-target';
 import { liveRowKind } from './live-row';
 import { THINKING_WORDS, useLiveWord } from './live-words';
 import { NestedThreadContext } from './subagent-context';
@@ -556,10 +557,7 @@ export const CallBlock = memo(function CallBlock({
   const conversation = block.conversationCallIds[0] ?? block.callId;
   const pages = useContext(CallConversationContext)?.stateOf(conversation);
   const drawnFrom = pages?.hasOlder === true ? (pages.oldestSeq ?? null) : null;
-  // A landing in THIS card — never one in the run's flow, nor in a card
-  // drawn inside this one, whose first row shares a seq with the row here.
   const mark = useContext(JumpMarkContext);
-  const markedSeq = mark?.cardId === block.id ? mark.seq : null;
   const hasSummary =
     summaryText !== null ||
     pending ||
@@ -715,11 +713,9 @@ export const CallBlock = memo(function CallBlock({
               <TranscriptRow
                 key={entry.type === 'item' ? entry.item.id : entry.id}
                 className={cn(
-                  startSeq !== null &&
-                    startSeq === markedSeq &&
-                    JUMP_MARK_CLASS,
+                  mark?.key === `card-row:${startSeq}` && JUMP_MARK_CLASS,
                 )}
-                {...(startSeq === null ? {} : { 'data-call-seq': startSeq })}>
+                {...jumpAnchorProps('call', startSeq, `card-row:${startSeq}`)}>
                 <TranscriptEntryView
                   entry={entry}
                   nodes={nodes}

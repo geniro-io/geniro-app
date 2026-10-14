@@ -1997,12 +1997,6 @@ describe("a call card's own conversation", () => {
     };
   }
 
-  /** The anchor a jump can land on for `seq`, inside the card. */
-  const anchorOf = (seq: number): HTMLElement | null =>
-    container.querySelector<HTMLElement>(
-      `[data-call-seq="${seq}"], [data-row-seq="${seq}"]`,
-    );
-
   function renderBlock(
     block: CallBlockEntry,
     value: CallConversationLoader,
@@ -2019,6 +2013,10 @@ describe("a call card's own conversation", () => {
     );
   }
 
+  /** The one anchor drawn under `key`. */
+  const keyed = (key: string): HTMLElement | null =>
+    container.querySelector<HTMLElement>(`[data-jump-key="${key}"]`);
+
   it('lets a jump land on each row an open card draws — a row inside a turn too — and marks the one it landed on', () => {
     const { block, first, second } = threeSaid();
     const value = loader({
@@ -2027,17 +2025,22 @@ describe("a call card's own conversation", () => {
       hasOlder: false,
       oldestSeq: first,
     });
-    renderBlock(block, value, { seq: second, cardId: block.id });
+    renderBlock(block, value, {
+      seq: second,
+      cardId: block.id,
+      key: `row:${second}`,
+    });
     expand();
 
-    const landed = anchorOf(second);
+    const landed = keyed(`row:${second}`);
+    expect(landed?.dataset.rowSeq).toBe(String(second));
     expect(landed?.textContent).toContain('A middle line');
     expect(landed?.textContent).not.toContain('An early line');
     expect(landed?.className).toContain('bg-accent/60');
-    expect(anchorOf(first)?.className).not.toContain('bg-accent/60');
+    expect(keyed(`row:${first}`)?.className).not.toContain('bg-accent/60');
   });
 
-  it("marks none of its rows for a landing elsewhere at the same seq — the run's own row, or a card inside it", () => {
+  it('marks only the anchor the landing names, never another drawn at the same seq', () => {
     const { block, first } = threeSaid();
     const value = loader({
       loading: false,
@@ -2045,15 +2048,23 @@ describe("a call card's own conversation", () => {
       hasOlder: false,
       oldestSeq: first,
     });
-    renderBlock(block, value, { seq: first, cardId: null });
+    // The card's row and the turn's first row inside it share the seq.
+    renderBlock(block, value, {
+      seq: first,
+      cardId: block.id,
+      key: `card-row:${first}`,
+    });
     expand();
-    expect(anchorOf(first)?.className).not.toContain('bg-accent/60');
+    expect(keyed(`card-row:${first}`)?.className).toContain('bg-accent/60');
+    expect(keyed(`row:${first}`)?.className).not.toContain('bg-accent/60');
 
-    renderBlock(block, value, { seq: first, cardId: 'another-card' });
-    expect(anchorOf(first)?.className).not.toContain('bg-accent/60');
-
-    renderBlock(block, value, { seq: first, cardId: block.id });
-    expect(anchorOf(first)?.className).toContain('bg-accent/60');
+    renderBlock(block, value, {
+      seq: first,
+      cardId: null,
+      key: `entry:${first}`,
+    });
+    expect(keyed(`card-row:${first}`)?.className).not.toContain('bg-accent/60');
+    expect(keyed(`row:${first}`)?.className).not.toContain('bg-accent/60');
   });
 
   it('draws none of the turns above the pages it has read while older ones are unread', () => {

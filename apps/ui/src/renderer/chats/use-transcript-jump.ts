@@ -9,6 +9,7 @@ import {
 
 import { jumpToBottom } from '../scroll-to-bottom';
 import { isScrolledToBottom } from './scroll-follow';
+import { writeThreadFlag } from './thread-ui-memory';
 
 /**
  * How long the row a search jump landed on stays marked.
@@ -71,6 +72,10 @@ const JUMP_SETTLE_TOLERANCE_PX = 4;
  * non-monotonic. The list is one window of entries, so scanning all of it costs
  * nothing.
  *
+ * Among anchors at the same seq — a turn and its first row, a card and its
+ * first row — the LAST in document order wins, which is the innermost: the
+ * landing is the row itself, not everything around it.
+ *
  * A hit BELOW the oldest loaded row still has somewhere to go: the top of what
  * is held. That is the honest landing place while the older page is still being
  * fetched, and it beats not moving at all.
@@ -79,10 +84,23 @@ export function pickJumpAnchor(
   anchors: Iterable<HTMLElement>,
   seq: number,
 ): HTMLElement | null {
+  // The row itself first — an anchor at the hit's seq, or one that also draws
+  // it (a tool row its result) — the innermost of them. Only without one is
+  // the hit inside an entry, and the nearest start below it the place.
+  const list = [...anchors];
+  let exact: HTMLElement | null = null;
+  for (const anchor of list) {
+    if (anchorSeq(anchor) === seq || Number(anchor.dataset.seqAlso) === seq) {
+      exact = anchor;
+    }
+  }
+  if (exact !== null) {
+    return exact;
+  }
   let target: HTMLElement | null = null;
   let best = Number.NEGATIVE_INFINITY;
   let first: HTMLElement | null = null;
-  for (const anchor of anchors) {
+  for (const anchor of list) {
     first ??= anchor;
     const at = anchorSeq(anchor);
     if (Number.isFinite(at) && at <= seq && at >= best) {
@@ -94,19 +112,28 @@ export function pickJumpAnchor(
 }
 
 /**
- * The seq a jump landed on, for a row drawn INSIDE a card — a call's rows are
- * several memoized shells below the transcript, which marks only its own.
+ * Where a jump landed, for the rows that mark themselves — every anchor drawn
+ * below the transcript (a turn's rows, a card's rows, a tool row).
  */
 export const JumpMarkContext = createContext<JumpMark | null>(null);
 
 /**
- * Where a jump landed: the row's seq, and the card it landed in — null for the
- * run's own flow. A card and its first row share a seq, and so do a turn and
- * its first row; the card names which of them is the landing.
+ * Where a jump landed: the row's seq, the card it landed in (null for the run's
+ * own flow), and the `data-jump-key` of the one anchor it landed on — what a
+ * row matches to mark itself, since a turn and its first row, or a card and its
+ * first row, share a seq.
  */
 export interface JumpMark {
   seq: number;
   cardId: string | null;
+  key: string;
+}
+
+/** A landing on its way: the row, the card it is in, and whether its folds are open. */
+interface Landing {
+  seq: number;
+  cardId: string | null;
+  unfolded: boolean;
 }
 
 /**
@@ -180,12 +207,15 @@ export interface TranscriptJumpOptions {
   returnToTail: () => Promise<boolean>;
   /** Absent where the window holds every row of the run. */
   calls?: CallJumps;
+  /**
+   * The thread-memory keys of the folds holding the row at `seq`, outermost
+   * first (`jump-folds.ts`) — opened before the landing looks for the row.
+   */
+  foldsHolding?: (seq: number) => readonly string[];
 }
 
 export interface TranscriptJump {
-  /** The row a jump landed on, marked so the reader can see which one it is. */
-  markedSeq: number | null;
-  /** The same landing with the card it is in, for the rows drawn inside cards. */
+  /** Where a jump landed, marked so the reader can see which row it is. */
   mark: JumpMark | null;
   /** Take the reader to a row anywhere in the conversation. */
   jumpToSeq: (seq: number) => void;
@@ -218,6 +248,7 @@ export function useTranscriptJump({
   loadAround,
   returnToTail,
   calls,
+  foldsHolding,
 }: TranscriptJumpOptions): TranscriptJump {
   /**
    * Scroll to the entry holding `seq`, and answer WHICH anchor it landed on so
@@ -268,73 +299,63 @@ export function useTranscriptJump({
     },
     [followingRef, setAboveTail],
   );
-  const revealSeq = useCallback(
-    (seq: number): number | null => {
+  /**
+   * The anchors a landing picks from: the run's own flow — never a row inside
+   * a call's card, which is another conversation's, interleaved by seq — or ONE
+   * card's own rows, never those of a card open inside it. Matched on the
+   * dataset rather than through a selector built from an id.
+   */
+  const anchorsIn = useCallback(
+    (
+      cardId: string | null,
+    ): {
+      scroller: HTMLElement;
+      scope: HTMLElement | null;
+      anchors: HTMLElement[];
+    } | null => {
       const scroller = endRef.current?.parentElement;
       if (!scroller) {
         return null;
       }
-      // A row of the run's own flow, never one inside a call's card — the
-      // card's rows are another conversation's, interleaved by seq.
-      const target = pickJumpAnchor(
-        [...scroller.querySelectorAll<HTMLElement>(ANCHORS)].filter(
-          (anchor) =>
-            anchor.dataset.callSeq === undefined &&
-            anchor.parentElement?.closest('[data-role="call-block"]') == null,
-        ),
-        seq,
-      );
-      if (!target) {
-        return null;
+      if (cardId === null) {
+        return {
+          scroller,
+          scope: null,
+          anchors: [...scroller.querySelectorAll<HTMLElement>(ANCHORS)].filter(
+            (anchor) =>
+              anchor.dataset.callSeq === undefined &&
+              anchor.parentElement?.closest('[data-role="call-block"]') == null,
+          ),
+        };
       }
-      revealAnchor(scroller, target);
-      return anchorSeq(target);
-    },
-    [endRef, revealAnchor],
-  );
-  /**
-   * The same landing inside ONE call card, on the rows it draws
-   * (`data-call-seq`, and a turn's rows inside it) — nearest at or below, for
-   * the reason {@link pickJumpAnchor} gives. The card itself when it draws
-   * none.
-   */
-  const revealInCard = useCallback(
-    (cardId: string, seq: number): number | null => {
-      const scroller = endRef.current?.parentElement;
-      // Matched on the dataset rather than through a selector built from the
-      // id, which would have to be escaped.
       const card = [
-        ...(scroller?.querySelectorAll<HTMLElement>(
-          '[data-role="call-block"]',
-        ) ?? []),
+        ...scroller.querySelectorAll<HTMLElement>('[data-role="call-block"]'),
       ].find((each) => each.dataset.callBlock === cardId);
-      if (!scroller || !card) {
+      if (!card) {
         return null;
       }
-      // This card's own rows, never those of a card open inside it.
-      const target = pickJumpAnchor(
-        [...card.querySelectorAll<HTMLElement>(ANCHORS)].filter(
+      return {
+        scroller,
+        scope: card,
+        anchors: [...card.querySelectorAll<HTMLElement>(ANCHORS)].filter(
           (anchor) =>
             anchor.parentElement?.closest('[data-role="call-block"]') === card,
         ),
-        seq,
-      );
-      revealAnchor(scroller, target ?? card);
-      return target === null ? null : anchorSeq(target);
+      };
     },
-    [endRef, revealAnchor],
+    [endRef],
   );
 
   /**
-   * The row a search hit named, waiting for the commit that can show it.
+   * The landing waiting for the commit that can show it.
    *
-   * A jump cannot scroll in the same tick it asks for a window: `loadAround`
-   * sets state, and the rows it fetched are not in the DOM until React has
-   * committed them. So the seq is PARKED and an effect reveals it on the next
-   * commit — which also covers the case where the row was already loaded, since
-   * setting this is itself a commit.
+   * A jump cannot scroll in the same tick it asks for rows: `loadAround` sets
+   * state, and the rows it fetched are not in the DOM until React has committed
+   * them. So the landing is PARKED and an effect makes it on the next commit —
+   * which also covers a row already loaded, since setting this is itself a
+   * commit — and again after each fold it opened has drawn what it holds.
    */
-  const [pendingSeq, setPendingSeq] = useState<number | null>(null);
+  const [landing, setLanding] = useState<Landing | null>(null);
 
   /**
    * The row a jump LANDED on, marked so the reader can see which one it is.
@@ -350,20 +371,48 @@ export function useTranscriptJump({
    * the honest thing to point at.
    */
   const [mark, setMark] = useState<JumpMark | null>(null);
-  /** A landing in the run's own flow; the transcript's own rows mark it. */
-  const markedSeq = mark !== null && mark.cardId === null ? mark.seq : null;
 
   useEffect(() => {
-    if (pendingSeq === null) {
+    if (landing === null) {
       return;
     }
-    const landed = revealSeq(pendingSeq);
-    setMark(landed === null ? null : { seq: landed, cardId: null });
-    // Cleared whether or not it found an anchor: a second attempt would need a
-    // reason to believe the next commit is different, and there is none — the
-    // window it asked for has arrived by now.
-    setPendingSeq(null);
-  }, [items, pendingSeq, revealSeq]);
+    // Cleared whether or not it lands: a second attempt would need a reason to
+    // believe the next commit is different — only opened folds are one.
+    setLanding(null);
+    // The row may be drawn inside folds the reader has not opened — a tool
+    // group, the tool row holding its result, a long reasoning, a sub-agent
+    // block. Opened as their own press would open them, all at once, and the
+    // row looked for again once they are drawn.
+    const folds =
+      landing.unfolded || threadId === null || foldsHolding === undefined
+        ? []
+        : foldsHolding(landing.seq);
+    if (folds.length > 0 && threadId !== null) {
+      for (const key of folds) {
+        writeThreadFlag(threadId, key, true);
+      }
+      setLanding({ ...landing, unfolded: true });
+      return;
+    }
+    const found = anchorsIn(landing.cardId);
+    const target =
+      found === null ? null : pickJumpAnchor(found.anchors, landing.seq);
+    const reveal = target ?? found?.scope ?? null;
+    if (found === null || reveal === null) {
+      setMark(null);
+      return;
+    }
+    revealAnchor(found.scroller, reveal);
+    setMark(
+      target === null
+        ? null
+        : {
+            seq: anchorSeq(target),
+            cardId: landing.cardId,
+            key: target.dataset.jumpKey ?? '',
+          },
+    );
+  }, [landing, anchorsIn, revealAnchor, threadId, foldsHolding]);
 
   useEffect(() => {
     if (mark === null) {
@@ -396,12 +445,12 @@ export function useTranscriptJump({
         seq >= items[0]!.seq &&
         seq <= items[items.length - 1]!.seq;
       if (loaded) {
-        setPendingSeq(seq);
+        setLanding({ seq, cardId: null, unfolded: false });
         return;
       }
       void loadAround(seq).then((ok) => {
         if (ok && jumpGenerationRef.current === generation) {
-          setPendingSeq(seq);
+          setLanding({ seq, cardId: null, unfolded: false });
         }
       });
     },
@@ -414,16 +463,11 @@ export function useTranscriptJump({
    * card's conversation back to the row, then land on the row inside it.
    */
   const [pendingCall, setPendingCall] = useState<PendingCallJump | null>(null);
-  /** The card a jump into a call is waiting to land in, once its rows are drawn. */
-  const [pendingCardSeq, setPendingCardSeq] = useState<{
-    cardId: string;
-    seq: number;
-  } | null>(null);
   useEffect(() => {
     // Another thread: whatever was on its way belonged to the one before.
     jumpGenerationRef.current += 1;
     setPendingCall(null);
-    setPendingCardSeq(null);
+    setLanding(null);
   }, [threadId]);
 
   useEffect(() => {
@@ -471,20 +515,9 @@ export function useTranscriptJump({
         return;
       }
       setPendingCall(null);
-      setPendingCardSeq({ cardId: card.id, seq: pendingCall.seq });
+      setLanding({ seq: pendingCall.seq, cardId: card.id, unfolded: false });
     });
   }, [pendingCall, calls, loadAround, jumpInFlow]);
-
-  useEffect(() => {
-    if (pendingCardSeq === null) {
-      return;
-    }
-    const landed = revealInCard(pendingCardSeq.cardId, pendingCardSeq.seq);
-    setMark(
-      landed === null ? null : { seq: landed, cardId: pendingCardSeq.cardId },
-    );
-    setPendingCardSeq(null);
-  }, [pendingCardSeq, revealInCard]);
 
   const jumpToSeq = useCallback(
     (seq: number): void => {
@@ -541,5 +574,5 @@ export function useTranscriptJump({
     });
   }, [returnToTail, jumpToLatest]);
 
-  return { markedSeq, mark, jumpToSeq, jumpToLatest, backToTail };
+  return { mark, jumpToSeq, jumpToLatest, backToTail };
 }

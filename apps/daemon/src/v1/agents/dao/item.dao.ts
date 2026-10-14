@@ -11,10 +11,12 @@ import type {
   SeqRange,
 } from '../chat.types';
 import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
+import { parseJsonColumn, payloadString } from '../utils/json-util';
 import { messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
 import {
+  CHAT_WALL_CLOCK_ROW_KINDS,
   WALL_CLOCK_CARD_KINDS,
   WALL_CLOCK_ROW_KINDS,
   type WallClockRow,
@@ -680,32 +682,62 @@ export class ItemDao extends BaseDao<Item> {
    * One workflow node's clock rows — its turn boundaries and approval cards
    * (`WALL_CLOCK_ROW_KINDS`), every conversation of it, in `seq` order — what
    * its wall-measured turns are folded from (`utils/wall-worked`).
-   *
-   * Cards projected to `id` and `callId` for {@link turnSpanRows}' reason: an
-   * `approval_request` carries the whole plan, patch or question set.
    */
   async nodeWallClockRows(
     runId: string,
     nodeId: string,
     txEm?: EntityManager,
   ): Promise<WallClockRow[]> {
-    const [rows, cards] = await Promise.all([
+    return this.wallClockRows(runId, nodeId, WALL_CLOCK_ROW_KINDS, txEm);
+  }
+
+  /**
+   * A 1:1 chat's clock rows — its user messages, turn endings and approval
+   * cards (`CHAT_WALL_CLOCK_ROW_KINDS`, the rows with no node), in `seq`
+   * order. A message is read for its role and time only: only a USER's opens a
+   * turn, and its text is never needed.
+   */
+  async chatWallClockRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<WallClockRow[]> {
+    return this.wallClockRows(runId, null, CHAT_WALL_CLOCK_ROW_KINDS, txEm);
+  }
+
+  /**
+   * The clock rows of one agent (`nodeId`, or null for a chat's), projected:
+   * a card down to its `id` and `callId` for {@link turnSpanRows}' reason (an
+   * `approval_request` carries the whole plan, patch or question set), a
+   * message down to its role — and only a user's is read.
+   */
+  private async wallClockRows(
+    runId: string,
+    nodeId: string | null,
+    kinds: readonly ItemKind[],
+    txEm?: EntityManager,
+  ): Promise<WallClockRow[]> {
+    const plainKinds = kinds.filter(
+      (kind) => kind !== 'message' && !WALL_CLOCK_CARD_KINDS.has(kind),
+    );
+    const [rows, messages, cards] = await Promise.all([
       this.getRepo(txEm).find(
-        {
-          runId,
-          nodeId,
-          kind: {
-            $in: WALL_CLOCK_ROW_KINDS.filter(
-              (kind) => !WALL_CLOCK_CARD_KINDS.has(kind),
-            ),
-          },
-        },
+        { runId, nodeId, kind: { $in: plainKinds } },
         {
           orderBy: { seq: 'asc' },
-          fields: ['seq', 'kind', 'nodeId', 'createdAt', 'payload'],
+          fields: ['seq', 'kind', 'nodeId', 'role', 'createdAt', 'payload'],
           disableIdentityMap: true,
         },
       ),
+      kinds.includes('message')
+        ? this.getRepo(txEm).find(
+            { runId, nodeId, kind: 'message', role: 'user' },
+            {
+              orderBy: { seq: 'asc' },
+              fields: ['seq', 'kind', 'nodeId', 'role', 'createdAt'],
+              disableIdentityMap: true,
+            },
+          )
+        : Promise.resolve([]),
       (txEm ?? this.em.fork())
         .getKysely<ChatTextDatabase>({ convertValues: false })
         .selectFrom('items')
@@ -730,24 +762,38 @@ export class ItemDao extends BaseDao<Item> {
           ];
         })
         .where('run_id', '=', runId)
-        .where('node_id', '=', nodeId)
+        .where('node_id', nodeId === null ? 'is' : '=', nodeId)
         .where('deleted_at', 'is', null)
-        .where('kind', 'in', [...WALL_CLOCK_CARD_KINDS])
+        .where(
+          'kind',
+          'in',
+          kinds.filter((kind) => WALL_CLOCK_CARD_KINDS.has(kind)),
+        )
         .orderBy('seq', 'asc')
         .execute(),
     ]);
     return [
-      ...rows.map(({ seq, kind, nodeId: node, createdAt, payload }) => ({
-        seq,
-        kind,
-        nodeId: node,
-        createdAt,
-        payload,
+      ...rows.map((row) => ({
+        seq: row.seq,
+        kind: row.kind,
+        nodeId: row.nodeId,
+        role: row.role,
+        createdAt: row.createdAt,
+        payload: row.payload,
+      })),
+      ...messages.map((row) => ({
+        seq: row.seq,
+        kind: row.kind,
+        nodeId: row.nodeId,
+        role: row.role,
+        createdAt: row.createdAt,
+        payload: '{}',
       })),
       ...cards.map((card) => ({
         seq: card.seq,
         kind: card.kind,
         nodeId: card.node_id,
+        role: null,
         createdAt: new Date(card.created_at),
         payload: JSON.stringify({ id: card.card_id, callId: card.call_id }),
       })),
@@ -1960,6 +2006,142 @@ export class ItemDao extends BaseDao<Item> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /**
+   * The tool calls a conversation's OPEN turn has made and not had answered —
+   * the commands it is running in the foreground right now, whatever page of
+   * the transcript a client holds. A conversation is a node and the call it
+   * runs in (`inCall`: `''` for its own flow), or a chat's (`nodeId` null,
+   * every row). A delegate's own calls are left out.
+   */
+  async openTurnToolCalls(
+    runId: string,
+    conversation: { nodeId: string | null; inCall: string | null },
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    const em = txEm ?? this.em.fork();
+    let endings = em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('seq')
+      .where('run_id', '=', runId)
+      .where('kind', 'in', ['turn_complete', 'turn_cancelled', 'error'])
+      .where('deleted_at', 'is', null)
+      // A continuation's result inside a turn ends nothing.
+      .where(
+        (eb) =>
+          eb.fn<number>('coalesce', [
+            eb.fn<number>('json_extract', [
+              eb
+                .case()
+                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                .then(eb.ref('payload'))
+                .else(eb.val('{}'))
+                .end(),
+              eb.val('$.insideTurn'),
+            ]),
+            eb.val(0),
+          ]),
+        '=',
+        0,
+      );
+    endings =
+      conversation.nodeId === null
+        ? endings.where('node_id', 'is', null)
+        : endings.where('node_id', '=', conversation.nodeId);
+    if (conversation.inCall !== null) {
+      endings = endings.where('in_call', '=', conversation.inCall);
+    }
+    const ending = await endings
+      .orderBy('seq', 'desc')
+      .limit(1)
+      .executeTakeFirst();
+    const scope = {
+      runId,
+      nodeId: conversation.nodeId,
+      ...(conversation.inCall === null ? {} : { inCall: conversation.inCall }),
+    };
+    const calls = (
+      await this.getRepo(em).find(
+        { ...scope, kind: 'tool_call', seq: { $gt: ending?.seq ?? -1 } },
+        { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+      )
+    ).filter(
+      (row) =>
+        payloadString(parseJsonColumn(row.payload), 'parentToolUseId') === null,
+    );
+    const ids = calls
+      .map((row) => payloadString(parseJsonColumn(row.payload), 'id'))
+      .filter((id) => id !== null);
+    if (ids.length === 0) {
+      return [];
+    }
+    // Replies after the turn's first call, of this conversation alone — off
+    // the `(runId, inCall, kind, seq)` index where the conversation has one.
+    const replies =
+      conversation.inCall === null
+        ? await this.rowsByPayloadId(
+            runId,
+            ['tool_result'],
+            ids,
+            { after: calls[0]!.seq },
+            em,
+          )
+        : await this.rowsInCallById(
+            runId,
+            conversation.inCall,
+            ['tool_result'],
+            ids,
+            em,
+          );
+    const answered = new Set(
+      replies.map((row) => payloadString(parseJsonColumn(row.payload), 'id')),
+    );
+    return calls.filter(
+      (row) => !answered.has(payloadString(parseJsonColumn(row.payload), 'id')),
+    );
+  }
+
+  /**
+   * The conversations whose newest `status` row says `running` — a node's own
+   * flow (`inCall` `''`) or a call it runs in, whether the call is still out or
+   * the callee carries on after it settled. What has a turn open right now.
+   */
+  async runningConversations(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<{ nodeId: string; inCall: string }[]> {
+    const db = (txEm ?? this.em.fork()).getKysely<ChatTextDatabase>({
+      convertValues: false,
+    });
+    const newest = await db
+      .selectFrom('items')
+      .select((eb) => eb.fn.max<number>('seq').as('seq'))
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'status')
+      .where('node_id', 'is not', null)
+      .where('deleted_at', 'is', null)
+      .groupBy(['node_id', 'in_call'])
+      .execute();
+    const seqs = newest.map((row) => Number(row.seq));
+    if (seqs.length === 0) {
+      return [];
+    }
+    const rows = await db
+      .selectFrom('items')
+      .select(['node_id', 'in_call', 'payload'])
+      .where('run_id', '=', runId)
+      .where('seq', 'in', seqs)
+      .execute();
+    return rows
+      .filter(
+        (row) =>
+          row.node_id !== null &&
+          row.in_call !== null &&
+          payloadString(parseJsonColumn(row.payload), 'status') === 'running',
+      )
+      .map((row) => ({ nodeId: row.node_id!, inCall: row.in_call! }));
   }
 
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */

@@ -821,6 +821,19 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * The id of every 1:1 chat run, a workflow's builder chats and archived
+   * chats included — what the wall-work boot sweep walks. Ids only: the sweep
+   * reads each chat's rows itself.
+   */
+  async listChatRunIds(txEm?: EntityManager): Promise<string[]> {
+    const rows = await this.getRepo(txEm).find(
+      { workflowId: null },
+      { fields: ['id'], disableIdentityMap: true },
+    );
+    return rows.map((row) => row.id);
+  }
+
+  /**
    * Workflow runs left in a non-terminal state by a crash / SIGKILL — the
    * graph executor's boot reconcile closes them (pending counts too: a
    * workflow run is created `running`, so anything non-terminal is orphaned).

@@ -2,7 +2,10 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ItemDao } from '../dao/item.dao';
-import { ItemSeqAllocator } from './item-seq.allocator';
+import {
+  ABANDONED_RESERVATION_MS,
+  ItemSeqAllocator,
+} from './item-seq.allocator';
 
 /** An `em` whose only use here is `fork()` for the seeding read. */
 const em = { fork: () => ({}) } as unknown as EntityManager;
@@ -116,5 +119,37 @@ describe('ItemSeqAllocator', () => {
     await expect(allocator.reserve('run', 0)).rejects.toBeInstanceOf(
       RangeError,
     );
+  });
+});
+
+describe('ItemSeqAllocator.writtenThrough', () => {
+  it('never reaches past a seq reserved and not yet written', async () => {
+    const { allocator } = setup(() => 10);
+    const first = await allocator.reserve('run-1');
+    const second = await allocator.reserve('run-1');
+    // The second writer is on disk first.
+    allocator.settle('run-1', second);
+
+    expect(allocator.writtenThrough('run-1', second)).toBe(first - 1);
+    allocator.settle('run-1', first);
+    expect(allocator.writtenThrough('run-1', second)).toBe(second);
+  });
+
+  it('answers the newest row on disk when nothing is in flight, or for another run', async () => {
+    const { allocator } = setup(() => 10);
+    await allocator.reserve('run-1');
+
+    expect(allocator.writtenThrough('run-2', 7)).toBe(7);
+  });
+
+  it('lets an abandoned reservation hold nothing back', async () => {
+    const { allocator } = setup(() => 10);
+    const seq = await allocator.reserve('run-1');
+    const now = Date.now();
+
+    expect(allocator.writtenThrough('run-1', seq, now)).toBe(seq - 1);
+    expect(
+      allocator.writtenThrough('run-1', seq, now + ABANDONED_RESERVATION_MS),
+    ).toBe(seq);
   });
 });

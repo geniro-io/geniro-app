@@ -153,7 +153,10 @@ function service(
       published.push(item);
     },
   } as unknown as AgentEventBus;
-  const seqs = { reserve: async () => 99 } as unknown as ItemSeqAllocator;
+  const seqs = {
+    reserve: async () => 99,
+    settle: () => undefined,
+  } as unknown as ItemSeqAllocator;
   const uncounted: {
     runId: string;
     workId: string | null;

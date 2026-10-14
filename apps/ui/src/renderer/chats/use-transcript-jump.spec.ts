@@ -3,6 +3,14 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const memory = vi.hoisted(() => ({
+  write: vi.fn<(runId: string, key: string, value: boolean) => void>(),
+}));
+vi.mock('./thread-ui-memory', async (original) => ({
+  ...(await original<typeof import('./thread-ui-memory')>()),
+  writeThreadFlag: memory.write,
+}));
+
 import {
   type CallJumps,
   pickJumpAnchor,
@@ -102,6 +110,7 @@ describe('useTranscriptJump into a call', () => {
   ): void {
     const el = document.createElement('div');
     el.dataset[key] = String(seq);
+    el.dataset.jumpKey = `${key}:${seq}`;
     el.textContent = `row ${seq}`;
     parent.append(el);
   }
@@ -185,8 +194,11 @@ describe('useTranscriptJump into a call', () => {
     expect(loadThrough).toHaveBeenCalledWith('call-1', 150);
     // The card's own row nearest at or below the hit — never the run's row
     // above the card (100) that a jump in the run's flow would pick.
-    expect(hook.result.current.mark).toEqual({ seq: 140, cardId: 'card-1' });
-    expect(hook.result.current.markedSeq).toBeNull();
+    expect(hook.result.current.mark).toEqual({
+      seq: 140,
+      cardId: 'card-1',
+      key: 'callSeq:140',
+    });
   });
 
   it('lands in the run’s own flow for a row filed under no call', async () => {
@@ -201,7 +213,7 @@ describe('useTranscriptJump into a call', () => {
     act(() => hook.result.current.jumpToSeq(150));
     await settle();
 
-    expect(hook.result.current.markedSeq).toBe(100);
+    expect(hook.result.current.mark?.seq ?? null).toBe(100);
   });
 
   it('lands in the run’s own flow when the row’s call cannot be learned', async () => {
@@ -216,7 +228,7 @@ describe('useTranscriptJump into a call', () => {
     act(() => hook.result.current.jumpToSeq(150));
     await settle();
 
-    expect(hook.result.current.markedSeq).toBe(100);
+    expect(hook.result.current.mark?.seq ?? null).toBe(100);
   });
 
   it('lands at the call’s start when its card never appears', async () => {
@@ -235,7 +247,7 @@ describe('useTranscriptJump into a call', () => {
     await settle();
 
     expect(loadAround).toHaveBeenCalledWith(200);
-    expect(hook.result.current.markedSeq).toBe(200);
+    expect(hook.result.current.mark?.seq ?? null).toBe(200);
   });
 
   it("lands on the row inside a turn of the run's own flow, not on the turn's first row", async () => {
@@ -253,7 +265,7 @@ describe('useTranscriptJump into a call', () => {
     act(() => hook.result.current.jumpToSeq(315));
     await settle();
 
-    expect(hook.result.current.markedSeq).toBe(310);
+    expect(hook.result.current.mark?.seq ?? null).toBe(310);
   });
 
   it("never lands a jump in the run's own flow on a row of an open card", async () => {
@@ -268,7 +280,7 @@ describe('useTranscriptJump into a call', () => {
     act(() => hook.result.current.jumpToSeq(150));
     await settle();
 
-    expect(hook.result.current.markedSeq).toBe(100);
+    expect(hook.result.current.mark?.seq ?? null).toBe(100);
   });
 
   it('opens every card around a card drawn inside another, reads each through the row, and lands in the innermost', async () => {
@@ -302,7 +314,11 @@ describe('useTranscriptJump into a call', () => {
       ['call-1', 150],
       ['call-2', 150],
     ]);
-    expect(hook.result.current.mark).toEqual({ seq: 145, cardId: 'card-2' });
+    expect(hook.result.current.mark).toEqual({
+      seq: 145,
+      cardId: 'card-2',
+      key: 'callSeq:145',
+    });
   });
 
   it("lands on a card's own rows, never on a row of a card open inside it", async () => {
@@ -324,7 +340,11 @@ describe('useTranscriptJump into a call', () => {
     act(() => hook.result.current.jumpToSeq(150));
     await settle();
 
-    expect(hook.result.current.mark).toEqual({ seq: 140, cardId: 'card-1' });
+    expect(hook.result.current.mark).toEqual({
+      seq: 140,
+      cardId: 'card-1',
+      key: 'callSeq:140',
+    });
   });
 
   it('drops a jump still on its way when another thread opens', async () => {
@@ -376,6 +396,117 @@ describe('useTranscriptJump into a call', () => {
     await settle();
 
     expect(loadThrough).not.toHaveBeenCalled();
-    expect(hook.result.current.markedSeq).toBe(200);
+    expect(hook.result.current.mark?.seq ?? null).toBe(200);
+  });
+});
+
+describe('useTranscriptJump into a fold', () => {
+  let scroller: HTMLElement;
+  let end: HTMLElement;
+  let hook: ReturnType<typeof renderJump> | null = null;
+
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', () => 0);
+    memory.write.mockReset();
+    scroller = document.createElement('div');
+    end = document.createElement('div');
+    scroller.append(end);
+    document.body.append(scroller);
+  });
+
+  afterEach(() => {
+    hook?.unmount();
+    hook = null;
+    scroller.remove();
+    vi.unstubAllGlobals();
+  });
+
+  function anchor(
+    parent: HTMLElement,
+    seq: number,
+    key: string,
+    also?: number,
+  ): HTMLElement {
+    const el = document.createElement('div');
+    el.dataset.rowSeq = String(seq);
+    el.dataset.jumpKey = key;
+    if (also !== undefined) {
+      el.dataset.seqAlso = String(also);
+    }
+    el.textContent = key;
+    parent.append(el);
+    return el;
+  }
+
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+  }
+
+  function mount(folds: (seq: number) => readonly string[]): void {
+    hook = renderJump({
+      threadId: 'run-1',
+      items: [{ seq: 300 }, { seq: 304 }],
+      endRef: { current: end },
+      followingRef: { current: true },
+      setAboveTail: () => undefined,
+      loadAround: async () => true,
+      returnToTail: async () => true,
+      foldsHolding: folds,
+    });
+  }
+
+  it('opens every fold the row is drawn inside, as a press would, then lands on the row', async () => {
+    const turn = anchor(scroller, 300, 'row:300');
+    scroller.insertBefore(turn, end);
+    // Opening draws the group's rows — what the folds' own render does.
+    memory.write.mockImplementation((_run, key) => {
+      if (key === 'tool:t303') {
+        anchor(turn, 303, 'tool:t303', 304);
+      }
+    });
+    mount((seq) => (seq === 304 ? ['tools:g1', 'tool:t303'] : []));
+
+    act(() => hook!.result.current.jumpToSeq(304));
+    await settle();
+
+    expect(memory.write.mock.calls).toEqual([
+      ['run-1', 'tools:g1', true],
+      ['run-1', 'tool:t303', true],
+    ]);
+    // The tool row that draws the hit (its result) — not the turn around it.
+    expect(hook!.result.current.mark).toEqual({
+      seq: 303,
+      cardId: null,
+      key: 'tool:t303',
+    });
+  });
+
+  it('opens nothing for a row drawn in no fold', async () => {
+    scroller.insertBefore(anchor(scroller, 300, 'row:300'), end);
+    mount(() => []);
+
+    act(() => hook!.result.current.jumpToSeq(300));
+    await settle();
+
+    expect(memory.write).not.toHaveBeenCalled();
+    expect(hook!.result.current.mark?.key).toBe('row:300');
+  });
+
+  it('lands on the row that draws the hit before a nearer start of another', async () => {
+    // Two delegates interleave: B's row 59 starts nearer the hit than A's tool
+    // row 58, but only A's draws row 60 (its result).
+    anchor(scroller, 58, 'tool:a58', 60);
+    anchor(scroller, 59, 'row:59');
+    scroller.append(end);
+    mount(() => []);
+
+    act(() => hook!.result.current.jumpToSeq(60));
+    await settle();
+
+    expect(hook!.result.current.mark?.key).toBe('tool:a58');
   });
 });

@@ -22,6 +22,7 @@ import {
 } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import type {
@@ -49,6 +50,7 @@ import type { CallContextDao } from '../../agents/dao/call-context.dao';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
+import type { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
@@ -63,7 +65,6 @@ import type { ChatUploadStoreService } from '../../agents/services/chat-upload-s
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
-import { NodeWallWorkService } from '../../agents/services/node-wall-work.service';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
@@ -72,6 +73,7 @@ import type { RunProcessReaper } from '../../agents/services/run-process-reaper.
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
 import {
   WALL_CLOCK_ROW_KINDS,
@@ -366,6 +368,7 @@ class FakeItemDao {
         seq: i.seq,
         kind: i.kind,
         nodeId: i.nodeId,
+        role: i.role,
         createdAt: i.createdAt,
         payload: i.payload,
       }));
@@ -391,8 +394,6 @@ interface FakeNodeRow {
   error: string | null;
   /** The CLI a turn start stamped, as the real column holds it. */
   agentKind?: string | null;
-  /** The wall ledger's mark (`NodeState.wallMeasuredThroughSeq`). */
-  wallMeasuredThroughSeq?: number | null;
 }
 
 class FakeNodeStateDao {
@@ -467,33 +468,6 @@ class FakeNodeStateDao {
     if (toolCalls !== null && toolCalls > 0) {
       found.toolCalls = (found.toolCalls ?? 0) + toolCalls;
     }
-  }
-  async wallMeasuredThroughSeq(
-    runId: string,
-    nodeId: string,
-  ): Promise<number | null | undefined> {
-    const found = this.row(runId, nodeId);
-    return found === undefined
-      ? undefined
-      : (found.wallMeasuredThroughSeq ?? null);
-  }
-  /** The ledger's compare-and-set, on the real DAO's terms (pinned in its spec). */
-  async addWallWork(
-    runId: string,
-    nodeId: string,
-    fromSeq: number | null,
-    throughSeq: number,
-    addMs: number,
-  ): Promise<boolean> {
-    const found = this.row(runId, nodeId);
-    if (!found || (found.wallMeasuredThroughSeq ?? null) !== fromSeq) {
-      return false;
-    }
-    found.wallMeasuredThroughSeq = throughSeq;
-    if (addMs > 0) {
-      found.workedMs = (found.workedMs ?? 0) + addMs;
-    }
-    return true;
   }
   /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
   readonly hardDeleted: unknown[] = [];
@@ -941,6 +915,7 @@ function setup(
   cursor: FakeAdapter;
   runDao: FakeRunDao;
   itemDao: FakeItemDao;
+  wallTurns: FakeWallTurnDao;
   nodeDao: FakeNodeStateDao;
   callContextDao: {
     hardDeleted: unknown[];
@@ -1181,6 +1156,7 @@ function setup(
   // The page store's answer, switchable per test: a refusal names the reason the
   // executor must hand back to the caller verbatim.
   const pageStore: { refusal: string | null } = { refusal: null };
+  const wallTurns = new FakeWallTurnDao();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -1210,6 +1186,7 @@ function setup(
     // Never real: a real one would read and signal this machine's process
     // table from a unit test. Reaping is `run-teardown.service.spec.ts`'s.
     { reapInBackground: () => undefined } as unknown as RunProcessReaper,
+    wallTurns as unknown as WallTurnDao,
   );
   const service = new GraphExecutorService(
     em,
@@ -1269,13 +1246,15 @@ function setup(
     NO_CALL_INDEX,
     // The real ledger over the fake DAOs: what the executor hands it, and when,
     // is what these cases pin; the fold and the compare-and-set have their own.
-    new NodeWallWorkService(
+    new WallWorkService(
       itemDao as unknown as ItemDao,
       nodeDao as unknown as NodeStateDao,
       runDao as unknown as RunDao,
+      wallTurns as unknown as WallTurnDao,
       em,
       join(dir, 'wall-work-marker'),
     ),
+    wallTurns as unknown as WallTurnDao,
     artifacts,
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.
@@ -1305,6 +1284,7 @@ function setup(
     cursor,
     runDao,
     itemDao,
+    wallTurns,
     nodeDao,
     callContextDao,
     registry,
@@ -11030,9 +11010,20 @@ describe('GraphExecutorService — a node’s context reading', () => {
       };
     }
 
-    it('adds the turn start-to-settle to worked_ms once its row is written', async () => {
+    /** The worked time the nodes route serves for one node. */
+    async function servedWorkedMs(
+      service: GraphExecutorService,
+      runId: string,
+      nodeId: string,
+    ): Promise<number | null | undefined> {
+      return (await service.getNodeStates(runId)).find(
+        (row) => row.nodeId === nodeId,
+      )?.workedMs;
+    }
+
+    it('serves the turn start-to-settle as worked time once its row is written', async () => {
       // A cursor turn reports no duration, so before the ledger this node's
-      // worked_ms stayed null and the card fell back to whatever history the
+      // worked time stayed null and the card fell back to whatever history the
       // client had loaded. Measured only if the catch-up runs AFTER the
       // `turn_complete` row exists — before it, the fold sees no settle.
       const { service, claude, itemDao, nodeDao } = setup();
@@ -11055,10 +11046,34 @@ describe('GraphExecutorService — a node’s context reading', () => {
       completeTurn(claude.starts[0]!, 'done');
       await drain();
 
+      expect(await servedWorkedMs(service, run.id, 'a')).toBe(15_000);
+      // The row keeps the CLI's own figure — none here — and the tool count.
       expect(nodeDao.row(run.id, 'a')).toMatchObject({
-        workedMs: 15_000,
+        workedMs: null,
         toolCalls: 1,
       });
+    });
+
+    it('serves the CLI total plus the wall turns for a node that has both', async () => {
+      // A pool or a CLI change can give one node both kinds of turn; the
+      // served figure is their sum, the row only the CLI's part.
+      const { service, claude, itemDao, nodeDao } = setup();
+      const time = clocked(itemDao);
+      time.at(1_000);
+      const run = await service.startRun({
+        slug: 'one',
+        workflow: triggered(ONE_NODE),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+      await nodeDao.rememberWork(run.id, 'a', 2_500, null);
+      time.at(5_000);
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+
+      expect(await servedWorkedMs(service, run.id, 'a')).toBe(6_500);
+      expect(nodeDao.row(run.id, 'a')?.workedMs).toBe(2_500);
     });
 
     it('adds a BETWEEN-TURNS turn the CLI did not time, once its row is written', async () => {
@@ -11067,7 +11082,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
       // `turn_complete` ends it. Only the off-turn sink's catch-up measures it
       // — the in-turn path never sees this event, and the root's later turn
       // catches up the root, not the callee.
-      const { service, claude, callBroker, itemDao, nodeDao } = setup();
+      const { service, claude, callBroker, itemDao } = setup();
       const time = clocked(itemDao);
       const run = await service.startRun({
         slug: 'bg',
@@ -11088,7 +11103,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
       completeTurn(claude.starts[1]!, 'build launched');
       await call;
       await drain();
-      expect(nodeDao.row(run.id, 'callee')?.workedMs).toBe(3_000);
+      expect(await servedWorkedMs(service, run.id, 'callee')).toBe(3_000);
 
       time.at(10_000);
       claude.starts[1]!.emitOffTurn({ type: 'text', text: 'the build passed' });
@@ -11102,7 +11117,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
       });
       await drain();
 
-      expect(nodeDao.row(run.id, 'callee')?.workedMs).toBe(10_000);
+      expect(await servedWorkedMs(service, run.id, 'callee')).toBe(10_000);
 
       completeTurn(claude.starts[0]!, 'done');
       await drain();
@@ -11132,13 +11147,14 @@ describe('GraphExecutorService — a node’s context reading', () => {
       await drain();
 
       expect(nodeDao.row(run.id, 'a')?.workedMs).toBe(5_000);
+      expect(await servedWorkedMs(service, run.id, 'a')).toBe(5_000);
     });
 
     it('a catch-up that fails is logged and never fails the run', async () => {
       // Bookkeeping: a failed ledger write must not mark the pass's
       // persistence failed, which would settle a finished run `failed`.
-      const { service, claude, nodeDao, runDao } = setup();
-      nodeDao.wallMeasuredThroughSeq = async () => {
+      const { service, claude, wallTurns, runDao } = setup();
+      wallTurns.record = async () => {
         throw new Error('SQLITE_BUSY');
       };
       const warn = vi

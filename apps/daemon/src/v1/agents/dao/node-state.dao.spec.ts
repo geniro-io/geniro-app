@@ -406,19 +406,23 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       expect(row).toBeNull();
     });
 
-    it('is a real increment: a wall-ledger addition landing beside it is kept', async () => {
-      // The boot sweep adds wall time off the executor's chain. A
-      // read-modify-write here reads 0, the ledger adds 300, and the write of
-      // 0 + 500 erases it — while the ledger's mark says it was added.
+    it('is a real increment: an addition landing beside it is kept', async () => {
+      // A read-modify-write reads 0, another writer adds 300, and the write of
+      // 0 + 500 erases it — a figure short for good.
       await dao.createPending('run-1', 'node-a');
-      // Land the ledger's addition at the worst moment there is: inside any
-      // read this write makes before it writes. A real increment makes none,
-      // and the addition then lands after it instead.
+      // Land the other addition at the worst moment there is: inside any read
+      // this write makes before it writes. A real increment makes none, and
+      // the addition then lands after it instead.
       let added = false;
       const addBeside = async (): Promise<void> => {
         if (!added) {
           added = true;
-          await dao.addWallWork('run-1', 'node-a', null, 7, 300, orm.em.fork());
+          await new NodeStateDao(orm.em.fork()).rememberWork(
+            'run-1',
+            'node-a',
+            300,
+            null,
+          );
         }
       };
       const findOne = SqlEntityRepository.prototype.findOne;
@@ -442,25 +446,6 @@ describe('NodeStateDao (in-memory sqlite)', () => {
         'node-a',
       );
       expect(row?.workedMs).toBe(800);
-      expect(row?.wallMeasuredThroughSeq).toBe(7);
-    });
-  });
-
-  describe('addWallWork', () => {
-    it('refuses a stale mark and writes nothing', async () => {
-      await dao.createPending('run-1', 'node-a');
-      expect(await dao.addWallWork('run-1', 'node-a', null, 5, 100)).toBe(true);
-
-      expect(await dao.addWallWork('run-1', 'node-a', null, 9, 400)).toBe(
-        false,
-      );
-      expect(await dao.addWallWork('run-1', 'node-a', 5, 9, 400)).toBe(true);
-
-      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
-        'run-1',
-        'node-a',
-      );
-      expect(row).toMatchObject({ workedMs: 500, wallMeasuredThroughSeq: 9 });
     });
   });
 });

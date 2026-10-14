@@ -4,6 +4,7 @@ import { InitialsAvatar } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
 import { CallBlock } from './call-block';
 import { EntryCard } from './entry-card';
+import { jumpAnchorProps } from './jump-target';
 import { liveRowKind } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { formatClockTime } from './relative-time';
@@ -75,9 +76,7 @@ export const TurnBlock = memo(function TurnBlock({
         sub-agent
       </span>
     );
-  const markedSeq = useContext(JumpMarkContext)?.seq ?? null;
-  /** The block's own first row, which the row around the whole block marks. */
-  const blockStart = entryStartSeq(block);
+  const mark = useContext(JumpMarkContext);
   /**
    * Each row of the block as a place a jump can land (`data-row-seq`), marked
    * the way the transcript marks its own rows — a turn runs to hundreds of
@@ -94,13 +93,8 @@ export const TurnBlock = memo(function TurnBlock({
     return (
       <TranscriptRow
         key={entry.type === 'item' ? entry.item.id : entry.id}
-        className={cn(
-          seq !== null &&
-            seq === markedSeq &&
-            seq !== blockStart &&
-            JUMP_MARK_CLASS,
-        )}
-        {...(seq === null ? {} : { 'data-row-seq': seq })}>
+        className={cn(mark?.key === `row:${seq}` && JUMP_MARK_CLASS)}
+        {...jumpAnchorProps('row', seq, `row:${seq}`)}>
         {drawn}
       </TranscriptRow>
     );

@@ -50,10 +50,18 @@ function replyId(item: ChatItem): string | null {
   return item.kind === 'tool_result' && typeof id === 'string' ? id : null;
 }
 
-/** The tool-call ids the state lists — delegates, workflows, artifacts. */
+/**
+ * The tool-call ids the state lists — delegates, workflows, artifacts, and the
+ * open turns' unanswered calls, whose reply ends a command the page may not
+ * hold.
+ */
 function listedIds(state: RunStateDto): Set<string> {
   const ids = new Set(state.delegates.map((delegate) => delegate.id));
-  for (const row of [...state.workflowRows, ...state.artifactRows]) {
+  for (const row of [
+    ...state.workflowRows,
+    ...state.artifactRows,
+    ...state.openToolCalls,
+  ]) {
     const id = (row.payload as { id?: unknown } | null)?.id;
     if (typeof id === 'string') {
       ids.add(id);
@@ -75,6 +83,9 @@ const EMPTY: RunStateDto = {
   workflowRows: [],
   artifactRows: [],
   shells: [],
+  openToolCalls: [],
+  // Nothing read yet: no ending is the daemon's to state.
+  throughSeq: -1,
   turnStartedAt: null,
 };
 

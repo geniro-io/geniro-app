@@ -1524,7 +1524,9 @@ export const ChatTotalsWireSchema = z
     workedMs: z
       .number()
       .nullable()
-      .describe("the CLI's own working time, where it reported one"),
+      .describe(
+        "the run's working time: the CLIs' own, plus the daemon's wall-clock measure of each turn a CLI timed nothing of",
+      ),
   })
   .meta({ id: 'ChatTotals' });
 export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
@@ -2422,7 +2424,20 @@ export const RunStateWireSchema = z.object({
   artifactRows: z
     .array(ItemWireSchema)
     .describe('every artifact-tool call and its reply'),
-  shells: z.array(OpenShellSchema).describe('every command still running'),
+  shells: z
+    .array(OpenShellSchema)
+    .describe('every DETACHED command still running'),
+  openToolCalls: z
+    .array(ItemWireSchema)
+    .describe(
+      "the unanswered tool calls of every conversation's open turn — the commands running in the foreground, whatever page a client holds",
+    ),
+  throughSeq: z
+    .number()
+    .int()
+    .describe(
+      "the run's newest seq when this was read: what it says ended, ended — for anything that started at or before it",
+    ),
   turnStartedAt: z
     .string()
     .nullable()

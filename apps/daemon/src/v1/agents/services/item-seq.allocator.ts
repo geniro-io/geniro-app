@@ -38,6 +38,13 @@ import { ItemDao } from '../dao/item.dao';
  * reply): what those processes do between passes is written by the pass that
  * spawned them while a later pass may already be writing.
  */
+/**
+ * How long a reserved seq may stay unwritten before it is taken as abandoned —
+ * a writer that reserved and then failed before the insert seam. Far past any
+ * real insert, which is milliseconds.
+ */
+export const ABANDONED_RESERVATION_MS = 60_000;
+
 @Injectable()
 export class ItemSeqAllocator {
   /** Highest seq RESERVED per run — not necessarily written yet. */
@@ -45,6 +52,14 @@ export class ItemSeqAllocator {
 
   /** Per-run serialization, so two concurrent reserves cannot interleave. */
   private readonly chains = new Map<string, Promise<unknown>>();
+
+  /**
+   * Seqs reserved and not yet written, per run, with when each was reserved —
+   * what {@link writtenThrough} must not reach past. A row's place is taken
+   * before it is inserted, so another writer's later row can be on disk while
+   * an earlier one is not.
+   */
+  private readonly unwritten = new Map<string, Map<number, number>>();
 
   constructor(
     private readonly em: EntityManager,
@@ -91,6 +106,35 @@ export class ItemSeqAllocator {
   forget(runId: string): void {
     this.tails.delete(runId);
     this.chains.delete(runId);
+    this.unwritten.delete(runId);
+  }
+
+  /**
+   * A reserved seq's insert is over, written or failed — called by the one
+   * insert seam, `persistItemAndEmit`. Either way it is no longer in flight.
+   */
+  settle(runId: string, seq: number): void {
+    const pending = this.unwritten.get(runId);
+    pending?.delete(seq);
+    if (pending?.size === 0) {
+      this.unwritten.delete(runId);
+    }
+  }
+
+  /**
+   * The highest seq at or below `maxSeq` (the run's newest row on disk) with
+   * every seq below it written — what a read of the whole run may claim to
+   * reflect. A reservation older than {@link ABANDONED_RESERVATION_MS} was
+   * never written and holds nothing back.
+   */
+  writtenThrough(runId: string, maxSeq: number, now = Date.now()): number {
+    let through = maxSeq;
+    for (const [seq, at] of this.unwritten.get(runId) ?? []) {
+      if (now - at < ABANDONED_RESERVATION_MS && seq <= through) {
+        through = seq - 1;
+      }
+    }
+    return through;
   }
 
   private async allocate(runId: string, count: number): Promise<number> {
@@ -101,6 +145,12 @@ export class ItemSeqAllocator {
     const reserved = this.tails.get(runId);
     const base = reserved ?? (await this.itemDao.maxSeq(runId, this.em.fork()));
     this.tails.set(runId, base + count);
+    const pending = this.unwritten.get(runId) ?? new Map<number, number>();
+    const at = Date.now();
+    for (let seq = base + 1; seq <= base + count; seq += 1) {
+      pending.set(seq, at);
+    }
+    this.unwritten.set(runId, pending);
     return base + 1;
   }
 }

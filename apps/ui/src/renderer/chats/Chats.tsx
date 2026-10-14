@@ -167,6 +167,8 @@ import {
 import { GlobalChatSearchDialog } from './global-chat-search-dialog';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { isCallRow, mergeAnchorRows, withAnchors } from './history-anchors';
+import { foldsHolding } from './jump-folds';
+import { jumpAnchorProps } from './jump-target';
 import { JumpToLatest } from './jump-to-latest';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import {
@@ -208,9 +210,12 @@ import {
 import { lastActivityOf, sortRunsForSidebar } from './run-order';
 import { effectiveConfigDir } from './run-profile';
 import {
+  callEndedPerDaemon,
   OFF_WINDOW_CALL_PREFIX,
+  withDaemonDelegateEndings,
   withDurableDelegates,
   withDurableShells,
+  withoutDaemonEndedShells,
 } from './run-state-readouts';
 import {
   displayRunStatus,
@@ -2899,17 +2904,22 @@ export function Chats({
           },
     [activeWorkflowId, activeRunIdRef, chatApi],
   );
-  const { markedSeq, mark, jumpToSeq, jumpToLatest, backToTail } =
-    useTranscriptJump({
-      threadId: activeRunId,
-      items,
-      endRef: transcriptEndRef,
-      followingRef,
-      setAboveTail,
-      loadAround,
-      returnToTail,
-      calls: callJumps,
-    });
+  /** The folds a row is drawn inside, from what the transcript holds now. */
+  const foldsOfRow = useCallback(
+    (seq: number) => foldsHolding(callJumpRef.current.entries, seq),
+    [],
+  );
+  const { mark, jumpToSeq, jumpToLatest, backToTail } = useTranscriptJump({
+    threadId: activeRunId,
+    items,
+    endRef: transcriptEndRef,
+    followingRef,
+    setAboveTail,
+    loadAround,
+    returnToTail,
+    calls: callJumps,
+    foldsHolding: foldsOfRow,
+  });
 
   useEffect(() => {
     // While another view is shown this screen is mounted but hidden, and a
@@ -5871,7 +5881,17 @@ export function Chats({
     const startOf = new Map(
       runState.calls.map((call) => [call.callId, Date.parse(call.startedAt)]),
     );
-    const blocks = openCallBlocks(durableEntries);
+    const callsById = new Map(
+      runState.calls.map((call) => [call.callId, call] as const),
+    );
+    // A card open on a page that holds its start and not its end is over by
+    // the daemon's word once every call it holds is (`callEndedPerDaemon`).
+    const blocks = openCallBlocks(durableEntries).filter(
+      (block) =>
+        !block.callIds.every(
+          (callId) => callEndedPerDaemon(callsById, runState, callId) !== null,
+        ),
+    );
     // EVERY call the window draws a card for, settled ones included: the
     // daemon's list is re-read a moment after a call settles, and until then
     // it still says `running` about a card that has already closed.
@@ -5913,7 +5933,7 @@ export function Chats({
         };
       });
     return [...elsewhere, ...fromWindow];
-  }, [activeRun, durableEntries, callBlockIndex, nodeMeta, runState.calls]);
+  }, [activeRun, durableEntries, callBlockIndex, nodeMeta, runState]);
   /**
    * Reveal what the Agents chip names: the call's card when the window draws
    * it, else the conversation around the call's own start row.
@@ -6328,17 +6348,20 @@ export function Chats({
    */
   const subagentThreads = useMemo(
     () =>
-      withDurableDelegates(
-        subagentThreadsByAgent(
-          collectSubagentBlocks(durableEntries),
+      withDaemonDelegateEndings(
+        withDurableDelegates(
+          subagentThreadsByAgent(
+            collectSubagentBlocks(durableEntries),
+            CHAT_AGENT_KEY,
+            runStoppedAt,
+            activeDelegatesOut,
+          ),
+          runState.delegates,
           CHAT_AGENT_KEY,
-          runStoppedAt,
-          activeDelegatesOut,
         ),
-        runState.delegates,
-        CHAT_AGENT_KEY,
+        runState,
       ),
-    [durableEntries, runStoppedAt, activeDelegatesOut, runState.delegates],
+    [durableEntries, runStoppedAt, activeDelegatesOut, runState],
   );
   const agents = useMemo((): AgentDisplay[] => {
     if (!activeRun) {
@@ -6528,6 +6551,19 @@ export function Chats({
           return thread;
         }
         const block = callBlockOfConversation(callBlockIndex, thread.callIds);
+        // A call the page reads as out but the daemon says is over — the page
+        // holds its start and not its end — is over (`callEndedPerDaemon`).
+        const openCallIds = thread.openCallIds.filter(
+          (callId) => callEndedPerDaemon(stateCalls, runState, callId) === null,
+        );
+        const status =
+          thread.status === 'running' && openCallIds.length === 0
+            ? (callEndedPerDaemon(
+                stateCalls,
+                runState,
+                thread.callIds[thread.callIds.length - 1] ?? '',
+              ) ?? thread.status)
+            : thread.status;
         // The daemon's whole-run figure first: the window's fold sums only the
         // turns it holds, so a conversation started above it read a fraction.
         const usage = withLiveCost(
@@ -6537,6 +6573,8 @@ export function Chats({
         );
         return {
           ...thread,
+          openCallIds,
+          status,
           // The conversation's newest call carrying a reading — the latest
           // call's, until a continuation that has not reported yet has one.
           ...resolveConversationContext(
@@ -6595,7 +6633,8 @@ export function Chats({
         const block = callBlockIndex.get(callId);
         const recorded = stateCalls.get(callId);
         return block !== undefined
-          ? callThreadStatusOf(block.status)
+          ? (callEndedPerDaemon(stateCalls, runState, callId) ??
+              callThreadStatusOf(block.status))
           : recorded !== undefined
             ? recorded.status
             : liveText.has(partialOwnerKey(nodeId, callId))
@@ -6828,7 +6867,7 @@ export function Chats({
     wfNodes,
     liveText,
     nodeReadings,
-    runState.calls,
+    runState,
     subagentThreads,
     threadTotals.costUsd,
     threadTotals.inputTokens,
@@ -6986,7 +7025,13 @@ export function Chats({
       }
     }
     const byAgent = new Map<string, ShellRun[]>();
-    const runs = shellRuns(transcriptRows);
+    // The open turns' unanswered calls the daemon read are folded in with the
+    // page — a foreground command running while the reader is elsewhere in the
+    // conversation — and what the daemon says has ended is dropped.
+    const runs = withoutDaemonEndedShells(
+      shellRuns(withAnchors(transcriptRows, runState.openToolCalls)),
+      runState,
+    );
     for (const [nodeId, shells] of withDurableShells(
       groupRunningShells(runs),
       runs,
@@ -7007,7 +7052,7 @@ export function Chats({
       }
     }
     return byAgent;
-  }, [agents, handle.startedAt, transcriptRows, runState.shells]);
+  }, [agents, handle.startedAt, transcriptRows, runState]);
   /**
    * Worked time and tool count per agent — the pair each card draws under its
    * spend line, keyed like `shellsByAgent` above.
@@ -9256,15 +9301,14 @@ export function Chats({
                               // geometry is instant, which is the right
                               // way round for a flash.
                               className={cn(
-                                startSeq !== null &&
-                                  startSeq === markedSeq &&
+                                mark?.key === `entry:${startSeq}` &&
                                   JUMP_MARK_CLASS,
                               )}
-                              {...(startSeq === null
-                                ? {}
-                                : {
-                                    'data-transcript-seq': startSeq,
-                                  })}>
+                              {...jumpAnchorProps(
+                                'transcript',
+                                startSeq,
+                                `entry:${startSeq}`,
+                              )}>
                               {children}
                             </TranscriptRow>
                           );

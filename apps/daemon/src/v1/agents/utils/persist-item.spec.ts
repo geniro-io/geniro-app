@@ -83,6 +83,8 @@ describe('persistItemAndEmit', () => {
     published: string[];
     statuses: RunStatusEvent[];
     wires: ItemWire[];
+    /** The seqs the seam said were no longer in flight. */
+    settled: number[];
   } {
     const created: Record<string, unknown>[] = [];
     // One ordered log across both channels, so "after the row is durable and
@@ -90,6 +92,7 @@ describe('persistItemAndEmit', () => {
     const published: string[] = [];
     const statuses: RunStatusEvent[] = [];
     const wires: ItemWire[] = [];
+    const settled: number[] = [];
     const deps = {
       itemDao: {
         create: (row: Record<string, unknown>) => {
@@ -109,11 +112,34 @@ describe('persistItemAndEmit', () => {
         },
       },
       calls: { inCallOf: () => Promise.resolve(inCall) },
+      seqs: { settle: (_runId: string, seq: number) => settled.push(seq) },
     } as unknown as Parameters<typeof persistItemAndEmit>[0];
-    return { deps, created, published, statuses, wires };
+    return { deps, created, published, statuses, wires, settled };
   }
 
   const em = { clear: () => undefined } as unknown as EntityManager;
+
+  it("settles the row's reserved seq once it is written, and when the write fails", async () => {
+    const { deps, settled } = fakeDeps();
+    const row = {
+      runId: 'run-1',
+      nodeId: null,
+      seq: 7,
+      kind: 'message' as const,
+      role: 'assistant',
+      payload: { text: 'hi' },
+    };
+
+    await persistItemAndEmit(deps, em, row);
+    expect(settled).toEqual([7]);
+
+    (deps.itemDao as unknown as { create: () => Promise<never> }).create = () =>
+      Promise.reject(new Error('disk full'));
+    await expect(
+      persistItemAndEmit(deps, em, { ...row, seq: 8 }),
+    ).rejects.toThrow('disk full');
+    expect(settled).toEqual([7, 8]);
+  });
 
   it("flattens a tool call's name and command into searchText", async () => {
     const { deps, created } = fakeDeps();

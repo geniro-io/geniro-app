@@ -71,6 +71,8 @@ function emptyRunState(): RunStateDto {
     workflowRows: [],
     artifactRows: [],
     shells: [],
+    openToolCalls: [],
+    throughSeq: -1,
     turnStartedAt: null,
   };
 }
@@ -1207,6 +1209,66 @@ describe('Chats — searching one conversation', () => {
     expect(api.listRunItems).not.toHaveBeenCalled();
   });
 
+  it('opens the tool group and the tool row a hit is inside, and marks that row', async () => {
+    // A hit in a command's OUTPUT is inside two folds: the group, shut by
+    // default, and the row, whose result is drawn only once it is open.
+    const tool = (
+      seq: number,
+      kind: 'tool_call' | 'tool_result',
+      payload: unknown,
+    ): ChatItem => ({
+      id: `i${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind,
+      role: null,
+      payload,
+      createdAt: 'now',
+    });
+    api.listRunItems.mockResolvedValue([
+      msg(900, 'user', 'check the disk'),
+      tool(901, 'tool_call', {
+        id: 't1',
+        name: 'Bash',
+        input: { command: 'df' },
+      }),
+      tool(902, 'tool_result', { id: 't1', result: 'the needle output' }),
+      tool(903, 'tool_call', {
+        id: 't2',
+        name: 'Bash',
+        input: { command: 'du' },
+      }),
+      tool(904, 'tool_result', { id: 't2', result: 'other output' }),
+      msg(905, 'assistant', 'all fine'),
+    ]);
+    api.searchChat.mockResolvedValue({
+      hits: [{ ...hit(902, 'the needle output'), kind: 'tool_result' }],
+      partialReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(container.textContent).not.toContain('the needle output');
+    const rows = await search(container, 'needle');
+
+    await act(async () => {
+      rows[0]!.click();
+    });
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    const marked = [
+      ...container.querySelectorAll<HTMLElement>('[data-jump-key]'),
+    ].filter((el) => classesOf(el).includes('bg-accent/60'));
+    // The tool row of the call whose result the hit is (item `i901`).
+    expect(marked.map((el) => el.dataset.jumpKey)).toEqual(['tool:i901']);
+    expect(marked[0]!.textContent).toContain('the needle output');
+  });
+
   it('marks the row a jump landed on, and unmarks it again', async () => {
     // The mark is on the ROW rather than the matched words, deliberately: a
     // message renders as markdown — which is most of what a search finds — and
@@ -1233,21 +1295,23 @@ describe('Chats — searching one conversation', () => {
     // while a user's bubble is `self-end`, so a ring drew a box around the empty
     // half and read as a stray rectangle rather than as "this row" — reported,
     // and replaced. The class is the whole of the mark, so it is what to assert.
-    const landed = container.querySelector('[data-transcript-seq="901"]')!;
-    expect(classesOf(landed)).toContain('bg-accent/60');
+    // ONE anchor is marked — the row itself, the innermost drawn at its seq
+    // — and nothing else: a mark on everything says nothing.
+    const marked = (): HTMLElement[] =>
+      [...container.querySelectorAll<HTMLElement>('[data-jump-key]')].filter(
+        (el) => classesOf(el).includes('bg-accent/60'),
+      );
+    expect(marked()).toHaveLength(1);
+    const landed = marked()[0]!;
+    expect(landed.dataset.transcriptSeq ?? landed.dataset.rowSeq).toBe('901');
+    expect(landed.textContent).toContain('sizing the bloom filter');
     // And NOT the ring it replaced, so the two cannot both quietly be applied.
     expect(classesOf(landed)).not.toContain('ring-2');
-    // Its neighbour is not marked — a mark on everything says nothing.
-    expect(
-      classesOf(container.querySelector('[data-transcript-seq="900"]')!),
-    ).not.toContain('bg-accent/60');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
-    expect(
-      classesOf(container.querySelector('[data-transcript-seq="901"]')!),
-    ).not.toContain('bg-accent/60');
+    expect(marked()).toHaveLength(0);
   });
 
   it('draws the conversation timeline and jumps the transcript from it', async () => {
@@ -4866,11 +4930,15 @@ describe('Chats workflow runs', () => {
           .querySelector('button[aria-expanded]')
           ?.getAttribute('aria-expanded'),
       ).toBe('true');
-      const landed = card.querySelector<HTMLElement>(
-        '[data-call-seq="20"], [data-row-seq="20"]',
+      const marked = [
+        ...container.querySelectorAll<HTMLElement>('[data-jump-key]'),
+      ].filter((el) => classesOf(el).includes('bg-accent/60'));
+      expect(marked).toHaveLength(1);
+      expect(card.contains(marked[0]!)).toBe(true);
+      expect(marked[0]!.dataset.callSeq ?? marked[0]!.dataset.rowSeq).toBe(
+        '20',
       );
-      expect(landed?.textContent).toContain('the hidden find');
-      expect(classesOf(landed!)).toContain('bg-accent/60');
+      expect(marked[0]!.textContent).toContain('the hidden find');
     } finally {
       vi.useRealTimers();
     }
@@ -13780,6 +13848,81 @@ describe('Chats — running shells', () => {
       await vi.advanceTimersByTimeAsync(REREAD_DELAY_MS);
     });
     expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
+  });
+
+  it("drops a command the page holds open once the daemon's read of the whole run says it is over", async () => {
+    // The page holds the launch and not the reply — after a jump, or on an
+    // older page — and its own fold would read the command as running for good.
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'build it'),
+      bashCall(1, 'pnpm build'),
+    ]);
+    api.readRunState.mockResolvedValue({ ...emptyRunState(), throughSeq: 5 });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
+  });
+
+  it('lists a command running in the foreground though the page holds none of it', async () => {
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'build it')]);
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      openToolCalls: [bashCall(9, 'pnpm test', 'sh-9')],
+      throughSeq: 9,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('1');
+    expect(
+      container.querySelector('[data-slot="agent-shell-list"]')?.textContent,
+    ).toContain('pnpm test');
+  });
+
+  it("drops a sub-agent the page holds running once the daemon's read says it finished", async () => {
+    // The page holds the delegate's launch and not its reply.
+    const launch: ChatItem = {
+      id: 'i1',
+      runId: 'r1',
+      nodeId: null,
+      seq: 1,
+      kind: 'tool_call',
+      role: 'assistant',
+      payload: { id: 'd1', name: 'Task', input: { description: 'review' } },
+      createdAt: 'now',
+    };
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'fan out'), launch]);
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      delegates: [
+        {
+          id: 'd1',
+          nodeId: null,
+          callId: null,
+          label: 'review',
+          kind: null,
+          status: 'completed',
+          launchSeq: 1,
+          startedAt: 'now',
+        },
+      ],
+      throughSeq: 5,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-subagents"]'),
+    ).toBeNull();
   });
 
   it('drops a command as soon as its reply lands', async () => {

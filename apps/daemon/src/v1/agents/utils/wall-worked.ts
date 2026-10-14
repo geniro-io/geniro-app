@@ -1,47 +1,54 @@
 import type { ItemKind } from '../../runs/runs.types';
 import { asRecord, parseJsonColumn, payloadString } from './json-util';
+import { positive } from './positive-figure';
 import { usageFiguresFrom } from './usage-figures';
 
 /**
- * How long a workflow node's turns WORKED by the wall clock, for the turns its
- * CLI did not time itself — what `NodeWallWorkService` adds to
- * `NodeState.workedMs`, so a cursor node's figure no longer depends on how much
+ * How long an agent's turns WORKED by the wall clock, for the turns its CLI did
+ * not time itself (every ACP agent) — what `WallWorkService` records in
+ * `wall_turns`, so a cursor agent's worked figure no longer depends on how much
  * history a client happened to load.
  *
- * TWIN PARSER: `apps/ui/src/renderer/chats/turn-duration.ts` → `scanTurns`
- * with `nodeScoped: true`, the renderer's wall-clock fallback over the rows it
- * has loaded. Both read the same durable rows the same way: a turn opens on its
- * conversation's first `running` status row after the previous terminal row,
- * an approval card parks the clock from its `approval_request` to the
- * `approval_verdict` / `unanswerable` with the same `id` (a card still open at
- * the settle is parked up to the settle), and the turn worked
- * `max(0, settle − start − parked)`. An `insideTurn` continuation carrying a
- * CLI figure moves the open turn's start to itself (its own stretch is inside
- * that figure), and a settle `answeredByContinuation` after such a row is no
- * second turn. A key renamed on either side must be renamed on both.
+ * TWIN PARSER: `apps/ui/src/renderer/chats/turn-duration.ts` → `scanTurns`,
+ * the renderer's wall-clock fallback over the rows it has loaded — its
+ * `nodeScoped: true` mode for a workflow's nodes (`scope: 'nodes'`) and its
+ * default mode for a 1:1 chat (`scope: 'chat'`). Both read the same durable
+ * rows the same way:
  *
- * Where this deliberately differs from the renderer:
+ * - a turn opens on a workflow node's `running` status row, or on a chat's
+ *   USER message, and a row of that kind arriving inside an open turn does not
+ *   restart it (`startedAt ??=`);
+ * - an approval card parks the clock from its `approval_request` to the
+ *   `approval_verdict` / `unanswerable` with the same `id`, and a card still
+ *   open at the settle is parked up to the settle;
+ * - the turn worked `max(0, settle − start − parked)`;
+ * - an `insideTurn` continuation carrying a CLI figure moves the open turn's
+ *   start to itself (its own stretch is inside that figure), and a settle
+ *   `answeredByContinuation` after such a row is no second turn.
  *
- * - A conversation is keyed by node AND the row's `callId`, as
- *   `activeSpansFrom` keys it: parallel calls run one node in several
+ * A key renamed on either side must be renamed on both. Where this deliberately
+ * differs from the renderer:
+ *
+ * - Nodes: a conversation is keyed by node AND the row's `callId`, as
+ *   `activeSpansFrom` keys it — parallel calls run one node in several
  *   conversations at once, and the renderer's node-only key measures the
  *   second call's turn from the first call's start. A card's close is paired by
  *   its `id` within the node rather than by conversation, because a verdict
  *   row carries no `callId`.
- * - A terminal `status` row (`completed` / `failed` / `cancelled` /
+ * - Nodes: a terminal `status` row (`completed` / `failed` / `cancelled` /
  *   `skipped`) closes an open turn UNMEASURED, as `activeSpansFrom` does. On
  *   ACP an off-turn stretch (`running` with `offTurn`) never gets a terminal
  *   row of its own — the executor answers it with a `completed` status when
  *   the next turn starts — so without this the next turn was measured from the
  *   stretch's start, idle gap included. A normal turn writes its
- *   `turn_complete` before its ending status, so nothing it measures moves.
+ *   `turn_complete` before its ending status, so nothing it measures moves. A
+ *   chat writes no status rows, so this has nothing to act on there.
  * - Only a `turn_complete` is measured. A turn ending in `error` or
- *   `turn_cancelled` closes unmeasured, which is what the CLI-timed path does
- *   for claude (the executor adds the duration only on `turn_complete`).
+ *   `turn_cancelled` closes unmeasured, which is the CLI-timed path's rule for
+ *   claude (only a `turn_complete` carries a duration to add).
  * - The renderer's `interrupted` rule (a boot-closed turn ends at its last
- *   row) has nothing to act on: only an `error` row carries the flag, the
- *   workflow boot reconcile writes it with no `nodeId`, and an `error` row is
- *   never measured here.
+ *   row) has nothing to act on: only an `error` row carries the flag (both boot
+ *   reconciles write `error`), and an `error` row is never measured here.
  */
 
 /** One row of the projection {@link wallMeasuredTurns} folds, in seq order. */
@@ -49,14 +56,15 @@ export interface WallClockRow {
   seq: number;
   kind: string;
   nodeId: string | null;
+  /** Read for `message` rows only: a chat's turn opens on the USER's. */
+  role: string | null;
   createdAt: Date;
   /** The row's JSON text, as stored (card rows: projected to `id` / `callId`). */
   payload: string;
 }
 
-/** Every kind the fold reads — what its DAO projection selects. */
-export const WALL_CLOCK_ROW_KINDS = [
-  'status',
+/** The kinds that end a turn, park it, or open a workflow node's turn. */
+const CLOCK_ROW_KINDS = [
   'turn_complete',
   'turn_cancelled',
   'error',
@@ -65,17 +73,37 @@ export const WALL_CLOCK_ROW_KINDS = [
   'unanswerable',
 ] as const satisfies readonly ItemKind[];
 
-/** The card kinds among {@link WALL_CLOCK_ROW_KINDS}: only `id` and `callId` are read. */
+/** Every kind the NODE fold reads — what its DAO projection selects. */
+export const WALL_CLOCK_ROW_KINDS = [
+  'status',
+  ...CLOCK_ROW_KINDS,
+] as const satisfies readonly ItemKind[];
+
+/**
+ * Every kind the CHAT fold reads. `message` rows are read for their role and
+ * time alone (only a user's opens a turn), so their payload is never selected.
+ */
+export const CHAT_WALL_CLOCK_ROW_KINDS = [
+  'message',
+  ...CLOCK_ROW_KINDS,
+] as const satisfies readonly ItemKind[];
+
+/** The card kinds among both: only `id` and `callId` are read. */
 export const WALL_CLOCK_CARD_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
   'approval_request',
   'approval_verdict',
   'unanswerable',
 ]);
 
+/** Which agent's turns a fold measures. */
+export type WallScope = 'nodes' | 'chat';
+
 /** One settled turn measured by the wall clock, keyed by its `turn_complete`. */
-export interface WallTurn {
+export interface MeasuredTurn {
   /** The seq of the `turn_complete` that ended the turn. */
   seq: number;
+  /** The workflow node that took it; null for a chat's agent. */
+  nodeId: string | null;
   ms: number;
 }
 
@@ -110,6 +138,21 @@ export function cliTurnDurationMs(payload: unknown): number | null {
   return ms !== null && ms >= 0 ? ms : null;
 }
 
+/**
+ * The worked time a reader is served: the CLI-reported total plus the wall
+ * ledger's sum. Null only when neither measured anything — null is "never
+ * measured", never zero.
+ */
+export function servedWorkedMs(
+  cliMs: number | null,
+  wallMs: number | null | undefined,
+): number | null {
+  if (!positive(wallMs)) {
+    return cliMs;
+  }
+  return (cliMs ?? 0) + wallMs;
+}
+
 interface ConversationClock {
   startedAt: number | null;
   /** Open approval cards, by id. */
@@ -121,16 +164,20 @@ interface ConversationClock {
 
 /**
  * Every settled, wall-measured turn of these rows: a `turn_complete` with no
- * CLI duration whose conversation had opened a turn. Rows of other nodes and
- * run-level rows (`nodeId` null) are ignored, so the input may be a whole
- * run's rows. A turn with no start in the rows yields nothing rather than a
- * figure measured from the epoch.
+ * CLI duration whose conversation had opened a turn. `scope` picks which rows
+ * count, as the renderer's two modes read disjoint halves of a transcript:
+ * `'nodes'` reads only rows with a `nodeId`, `'chat'` only those without. A
+ * turn with no start in the rows yields nothing rather than a figure measured
+ * from the epoch.
  */
-export function wallMeasuredTurns(rows: readonly WallClockRow[]): WallTurn[] {
+export function wallMeasuredTurns(
+  rows: readonly WallClockRow[],
+  scope: WallScope,
+): MeasuredTurn[] {
   const clocks = new Map<string, ConversationClock>();
   /** Which conversation each open card parks — `nodeId \0 cardId` → key. */
   const cardOwners = new Map<string, string>();
-  const measured: WallTurn[] = [];
+  const measured: MeasuredTurn[] = [];
   const clockOf = (key: string): ConversationClock => {
     const found = clocks.get(key);
     if (found !== undefined) {
@@ -145,9 +192,9 @@ export function wallMeasuredTurns(rows: readonly WallClockRow[]): WallTurn[] {
     clocks.set(key, fresh);
     return fresh;
   };
-  const reset = (nodeId: string, clock: ConversationClock): void => {
+  const reset = (owner: string, clock: ConversationClock): void => {
     for (const id of clock.parkedSince.keys()) {
-      cardOwners.delete(`${nodeId}\u0000${id}`);
+      cardOwners.delete(`${owner}\u0000${id}`);
     }
     clock.startedAt = null;
     clock.parkedSince.clear();
@@ -156,15 +203,27 @@ export function wallMeasuredTurns(rows: readonly WallClockRow[]): WallTurn[] {
   };
 
   for (const row of rows) {
-    if (row.nodeId === null) {
+    if ((scope === 'nodes') !== (row.nodeId !== null)) {
       continue;
     }
     const time = row.createdAt.getTime();
     const at = Number.isFinite(time) ? time : null;
     const body = parseJsonColumn(row.payload);
-    const key = `${row.nodeId}\u0000${payloadString(body, 'callId') ?? ''}`;
+    // A chat is one conversation; a node is one per call.
+    const owner = row.nodeId ?? '';
+    const key =
+      scope === 'chat'
+        ? ''
+        : `${owner}\u0000${payloadString(body, 'callId') ?? ''}`;
 
-    if (row.kind === 'status') {
+    if (scope === 'chat' && row.kind === 'message') {
+      if (row.role === 'user') {
+        const clock = clockOf(key);
+        clock.startedAt ??= at;
+      }
+      continue;
+    }
+    if (scope === 'nodes' && row.kind === 'status') {
       const status = asRecord(body)?.status;
       if (status === 'running') {
         const clock = clockOf(key);
@@ -172,7 +231,7 @@ export function wallMeasuredTurns(rows: readonly WallClockRow[]): WallTurn[] {
       } else if (ENDING_STATUSES.has(status)) {
         const clock = clocks.get(key);
         if (clock !== undefined) {
-          reset(row.nodeId, clock);
+          reset(owner, clock);
         }
       }
       continue;
@@ -181,7 +240,7 @@ export function wallMeasuredTurns(rows: readonly WallClockRow[]): WallTurn[] {
       const id = payloadString(body, 'id');
       if (id !== null && at !== null) {
         clockOf(key).parkedSince.set(id, at);
-        cardOwners.set(`${row.nodeId}\u0000${id}`, key);
+        cardOwners.set(`${owner}\u0000${id}`, key);
       }
       continue;
     }
@@ -190,9 +249,9 @@ export function wallMeasuredTurns(rows: readonly WallClockRow[]): WallTurn[] {
       if (id === null || at === null) {
         continue;
       }
-      const cardKey = `${row.nodeId}\u0000${id}`;
-      const owner = cardOwners.get(cardKey);
-      const clock = owner === undefined ? undefined : clocks.get(owner);
+      const cardKey = `${owner}\u0000${id}`;
+      const holder = cardOwners.get(cardKey);
+      const clock = holder === undefined ? undefined : clocks.get(holder);
       const since = clock?.parkedSince.get(id);
       if (clock !== undefined && since !== undefined) {
         clock.parkedSince.delete(id);
@@ -240,10 +299,11 @@ export function wallMeasuredTurns(rows: readonly WallClockRow[]): WallTurn[] {
     ) {
       measured.push({
         seq: row.seq,
+        nodeId: row.nodeId,
         ms: Math.max(0, at - clock.startedAt - clock.parkedMs),
       });
     }
-    reset(row.nodeId, clock);
+    reset(owner, clock);
   }
   return measured;
 }

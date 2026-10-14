@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   cliTurnDurationMs,
+  servedWorkedMs,
   type WallClockRow,
   wallMeasuredTurns,
 } from './wall-worked';
@@ -20,6 +21,7 @@ function row(
     seq,
     kind,
     nodeId,
+    role: null,
     createdAt: new Date(at),
     payload: JSON.stringify(payload),
   };
@@ -30,11 +32,13 @@ const running = (at: number, extra: Record<string, unknown> = {}) =>
 const settle = (at: number, extra: Record<string, unknown> = {}) =>
   row('turn_complete', at, { usage: null, stopReason: 'end_turn', ...extra });
 
-describe('wallMeasuredTurns', () => {
+describe("wallMeasuredTurns — a workflow's nodes", () => {
+  const nodes = (rows: WallClockRow[]) => wallMeasuredTurns(rows, 'nodes');
+
   it('measures a turn from its running row to its settle', () => {
     const end = settle(9_000);
-    expect(wallMeasuredTurns([running(1_000), end])).toEqual([
-      { seq: end.seq, ms: 8_000 },
+    expect(nodes([running(1_000), end])).toEqual([
+      { seq: end.seq, nodeId: 'a', ms: 8_000 },
     ]);
   });
 
@@ -46,7 +50,7 @@ describe('wallMeasuredTurns', () => {
       row('approval_verdict', 5_000, { id: 'card-1', allow: true }),
       end,
     ];
-    expect(wallMeasuredTurns(rows)).toEqual([{ seq: end.seq, ms: 7_000 }]);
+    expect(nodes(rows)).toEqual([{ seq: end.seq, nodeId: 'a', ms: 7_000 }]);
   });
 
   it('pairs a verdict that carries no callId with its call conversation card', () => {
@@ -60,7 +64,7 @@ describe('wallMeasuredTurns', () => {
       row('unanswerable', 3_000, { id: 'card-1' }),
       end,
     ];
-    expect(wallMeasuredTurns(rows)).toEqual([{ seq: end.seq, ms: 9_000 }]);
+    expect(nodes(rows)).toEqual([{ seq: end.seq, nodeId: 'a', ms: 9_000 }]);
   });
 
   it('parks a card still open at the settle up to the settle', () => {
@@ -70,15 +74,12 @@ describe('wallMeasuredTurns', () => {
       row('approval_request', 4_000, { id: 'card-1' }),
       end,
     ];
-    expect(wallMeasuredTurns(rows)).toEqual([{ seq: end.seq, ms: 4_000 }]);
+    expect(nodes(rows)).toEqual([{ seq: end.seq, nodeId: 'a', ms: 4_000 }]);
   });
 
   it('leaves a turn its CLI timed to the CLI figure', () => {
     expect(
-      wallMeasuredTurns([
-        running(0),
-        settle(9_000, { usage: { durationMs: 5_000 } }),
-      ]),
+      nodes([running(0), settle(9_000, { usage: { durationMs: 5_000 } })]),
     ).toEqual([]);
   });
 
@@ -93,9 +94,9 @@ describe('wallMeasuredTurns', () => {
       one,
       two,
     ];
-    expect(wallMeasuredTurns(rows)).toEqual([
-      { seq: one.seq, ms: 10_000 },
-      { seq: two.seq, ms: 6_000 },
+    expect(nodes(rows)).toEqual([
+      { seq: one.seq, nodeId: 'a', ms: 10_000 },
+      { seq: two.seq, nodeId: 'a', ms: 6_000 },
     ]);
   });
 
@@ -109,7 +110,7 @@ describe('wallMeasuredTurns', () => {
         running(20_000),
         next,
       ];
-      expect(wallMeasuredTurns(rows)).toEqual([{ seq: next.seq, ms: 10_000 }]);
+      expect(nodes(rows)).toEqual([{ seq: next.seq, nodeId: 'a', ms: 10_000 }]);
     },
   );
 
@@ -124,7 +125,7 @@ describe('wallMeasuredTurns', () => {
       running(60_000),
       end,
     ];
-    expect(wallMeasuredTurns(rows)).toEqual([{ seq: end.seq, ms: 10_000 }]);
+    expect(nodes(rows)).toEqual([{ seq: end.seq, nodeId: 'a', ms: 10_000 }]);
   });
 
   it('measures the open turn from a timed continuation inside it, and no second turn for a settle it answered', () => {
@@ -133,25 +134,102 @@ describe('wallMeasuredTurns', () => {
       settle(4_000, { insideTurn: true, usage: { durationMs: 3_000 } }),
       settle(9_000, { answeredByContinuation: true }),
     ];
-    expect(wallMeasuredTurns(rows)).toEqual([]);
+    expect(nodes(rows)).toEqual([]);
     const later = settle(9_000);
     expect(
-      wallMeasuredTurns([
+      nodes([
         running(0),
         settle(4_000, { insideTurn: true, usage: { durationMs: 3_000 } }),
         later,
       ]),
-    ).toEqual([{ seq: later.seq, ms: 5_000 }]);
+    ).toEqual([{ seq: later.seq, nodeId: 'a', ms: 5_000 }]);
   });
 
   it('measures nothing for a settle with no start, or a run-level row', () => {
-    expect(wallMeasuredTurns([settle(9_000)])).toEqual([]);
+    expect(nodes([settle(9_000)])).toEqual([]);
     expect(
-      wallMeasuredTurns([
+      nodes([
         row('status', 0, { status: 'running' }, null),
         row('turn_complete', 9_000, {}, null),
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("wallMeasuredTurns — a 1:1 chat's agent", () => {
+  const chat = (rows: WallClockRow[]) => wallMeasuredTurns(rows, 'chat');
+  /** A chat row: no node, and a role on a message. */
+  const chatRow = (
+    kind: string,
+    at: number,
+    payload: Record<string, unknown> = {},
+    role: string | null = null,
+  ): WallClockRow => ({ ...row(kind, at, payload, null), role });
+  const said = (at: number) => chatRow('message', at, {}, 'user');
+  const chatSettle = (at: number, extra: Record<string, unknown> = {}) =>
+    chatRow('turn_complete', at, { usage: null, ...extra });
+
+  it("measures a turn from the user's message to its settle", () => {
+    const end = chatSettle(9_000);
+    expect(chat([said(1_000), end])).toEqual([
+      { seq: end.seq, nodeId: null, ms: 8_000 },
+    ]);
+  });
+
+  it('does not restart the clock for a message delivered into a running turn', () => {
+    const end = chatSettle(10_000);
+    expect(chat([said(0), said(6_000), end])).toEqual([
+      { seq: end.seq, nodeId: null, ms: 10_000 },
+    ]);
+  });
+
+  it("opens no turn on the agent's own message", () => {
+    expect(
+      chat([chatRow('message', 0, {}, 'assistant'), chatSettle(9_000)]),
+    ).toEqual([]);
+  });
+
+  it('subtracts a parked card and leaves a CLI-timed turn to the CLI', () => {
+    const end = chatSettle(10_000);
+    expect(
+      chat([
+        said(0),
+        chatRow('approval_request', 2_000, { id: 'card-1' }),
+        chatRow('approval_verdict', 5_000, { id: 'card-1' }),
+        end,
+        said(20_000),
+        chatSettle(29_000, { usage: { durationMs: 4_000 } }),
+      ]),
+    ).toEqual([{ seq: end.seq, nodeId: null, ms: 7_000 }]);
+  });
+
+  it('does not measure a turn that ended in error, a boot-interrupted one included', () => {
+    const next = chatSettle(40_000);
+    expect(
+      chat([
+        said(0),
+        chatRow('error', 5_000, { interrupted: true }),
+        said(30_000),
+        next,
+      ]),
+    ).toEqual([{ seq: next.seq, nodeId: null, ms: 10_000 }]);
+  });
+
+  it("reads no workflow node's rows, and the node fold reads no chat rows", () => {
+    const rows = [running(0), settle(9_000)];
+    expect(chat(rows)).toEqual([]);
+    expect(wallMeasuredTurns([said(0), chatSettle(9_000)], 'nodes')).toEqual(
+      [],
+    );
+  });
+});
+
+describe('servedWorkedMs', () => {
+  it('adds the wall sum to the CLI total, and stays null when neither measured', () => {
+    expect(servedWorkedMs(5_000, 3_000)).toBe(8_000);
+    expect(servedWorkedMs(null, 3_000)).toBe(3_000);
+    expect(servedWorkedMs(5_000, undefined)).toBe(5_000);
+    expect(servedWorkedMs(null, null)).toBeNull();
   });
 });
 

@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { readClaudeSessionPullRequests } from './claude-pr-links.utils';
 
@@ -171,6 +171,60 @@ describe('readClaudeSessionPullRequests', () => {
     expect(
       (await readClaudeSessionPullRequests(profile, SESSION))[0]?.at,
     ).toBeNull();
+  });
+
+  it('answers a session it did not find as absent for a while, then looks again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-13T20:00:00.000Z'));
+      const profile = profileWith([prLink(5)]);
+      const later = 'later-session';
+      expect(await readClaudeSessionPullRequests(profile, later)).toEqual([]);
+
+      // Carried into this profile afterwards.
+      writeFileSync(
+        join(projectDir(profile), `${later}.jsonl`),
+        `${prLink(9, { sessionId: later })}\n`,
+      );
+      vi.setSystemTime(new Date('2026-10-13T20:05:00.000Z'));
+      expect(await readClaudeSessionPullRequests(profile, later)).toEqual([]);
+
+      vi.setSystemTime(new Date('2026-10-13T20:11:00.000Z'));
+      expect(
+        (await readClaudeSessionPullRequests(profile, later)).map(
+          (row) => row.number,
+        ),
+      ).toEqual([9]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forgets the least recently asked session past its bound', async () => {
+    const at = new Date('2026-10-13T20:00:00.000Z');
+    const sessions = ['s-a', 's-b', 's-c'];
+    const profile = profileWith([]);
+    const pathOf = (id: string) => join(projectDir(profile), `${id}.jsonl`);
+    for (const id of sessions) {
+      writeFileSync(pathOf(id), `${prLink(1, { sessionId: id })}\n`);
+      utimesSync(pathOf(id), at, at);
+    }
+    const ask = async (id: string) =>
+      (await readClaudeSessionPullRequests(profile, id, 2)).map(
+        (row) => row.number,
+      );
+    await ask('s-a');
+    await ask('s-b');
+    await ask('s-a'); // a hit: s-a is now the most recently asked
+    await ask('s-c'); // over the bound of two: s-b goes
+
+    // Same size and time, different content: only a forgotten session sees it.
+    for (const id of sessions) {
+      writeFileSync(pathOf(id), `${prLink(2, { sessionId: id })}\n`);
+      utimesSync(pathOf(id), at, at);
+    }
+    expect(await ask('s-a')).toEqual([1]);
+    expect(await ask('s-b')).toEqual([2]);
   });
 
   it('answers empty for a session the profile does not hold, or an id that is a path', async () => {

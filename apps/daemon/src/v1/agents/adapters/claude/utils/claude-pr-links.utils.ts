@@ -16,6 +16,15 @@ import { findSessionFile } from './claude-sessions.utils';
  */
 const MAX_REMEMBERED_SESSIONS = 2_000;
 
+/**
+ * How long a session the profile does NOT hold is answered as absent without
+ * looking again. A pooled node's sessions are asked about under every member's
+ * profile and exist under one, and each look is a stat in every project
+ * directory; it is a time rather than forever because a session can be carried
+ * into another profile later (`carrySessionToConfigDir`).
+ */
+const MISSING_SESSION_TTL_MS = 10 * 60_000;
+
 interface Remembered {
   path: string;
   size: number;
@@ -24,6 +33,7 @@ interface Remembered {
 }
 
 const remembered = new Map<string, Remembered>();
+const missingSince = new Map<string, number>();
 
 /**
  * The pull requests one session's transcript records as touched, oldest first,
@@ -39,8 +49,18 @@ const remembered = new Map<string, Remembered>();
 export async function readClaudeSessionPullRequests(
   profileDir: string,
   sessionId: string,
+  /** Override for {@link MAX_REMEMBERED_SESSIONS}, test-only. */
+  maxRemembered: number = MAX_REMEMBERED_SESSIONS,
 ): Promise<SessionPullRequest[]> {
   const key = `${profileDir}\u0000${sessionId}`;
+  const missedAt = missingSince.get(key);
+  if (
+    missedAt !== undefined &&
+    Date.now() - missedAt < MISSING_SESSION_TTL_MS
+  ) {
+    return [];
+  }
+  missingSince.delete(key);
   const known = remembered.get(key);
   let path = known?.path ?? null;
   let now = path === null ? null : await statOf(path);
@@ -50,6 +70,7 @@ export async function readClaudeSessionPullRequests(
   }
   if (path === null || now === null) {
     remembered.delete(key);
+    remember(missingSince, key, Date.now(), maxRemembered);
     return [];
   }
   if (
@@ -58,9 +79,8 @@ export async function readClaudeSessionPullRequests(
     known.size === now.size &&
     known.mtimeMs === now.mtimeMs
   ) {
-    // Re-inserted so the bound below drops the least recently ASKED session.
-    remembered.delete(key);
-    remembered.set(key, known);
+    // Re-inserted so the bound drops the least recently ASKED session.
+    remember(remembered, key, known, maxRemembered);
     return [...known.records];
   }
   const { records, complete } = await readRecords(path, sessionId);
@@ -70,14 +90,25 @@ export async function readClaudeSessionPullRequests(
     // a permission change moves no mtime, so it would stand until the next write.
     return records;
   }
-  remembered.set(key, { path, ...now, records });
-  if (remembered.size > MAX_REMEMBERED_SESSIONS) {
-    const oldest = remembered.keys().next().value;
-    if (oldest !== undefined) {
-      remembered.delete(oldest);
-    }
-  }
+  remember(remembered, key, { path, ...now, records }, maxRemembered);
   return [...records];
+}
+
+/** Set `key` as the newest entry, dropping the oldest past `limit`. */
+function remember<Value>(
+  map: Map<string, Value>,
+  key: string,
+  value: Value,
+  limit: number,
+): void {
+  map.delete(key);
+  map.set(key, value);
+  for (const oldest of map.keys()) {
+    if (map.size <= limit) {
+      break;
+    }
+    map.delete(oldest);
+  }
 }
 
 async function statOf(

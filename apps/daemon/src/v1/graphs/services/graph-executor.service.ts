@@ -57,6 +57,7 @@ import { ItemCallIndexService } from '../../agents/services/item-call-index.serv
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
+import { NodeWallWorkService } from '../../agents/services/node-wall-work.service';
 import {
   partialOwnerKey,
   PartialStreamService,
@@ -143,6 +144,7 @@ import {
   type UsageFigures,
   usageFiguresFrom,
 } from '../../agents/utils/usage-figures';
+import { cliTurnDurationMs } from '../../agents/utils/wall-worked';
 import {
   AgentKind,
   type ItemKind,
@@ -727,6 +729,7 @@ export class GraphExecutorService
     private readonly attachments: AttachmentStoreService,
     private readonly seqs: ItemSeqAllocator,
     private readonly calls: ItemCallIndexService,
+    private readonly wallWork: NodeWallWorkService,
     /**
      * The page tool (`show_artifact`) for workflow agents. Optional only so the
      * executor's specs, which construct it positionally, need not supply it.
@@ -2614,6 +2617,20 @@ export class GraphExecutorService
       );
 
     /**
+     * Add the wall time of this node's settled turns its CLI did not time
+     * (`NodeWallWorkService`). Run on this chain after the turn's
+     * `turn_complete` row is written. Bookkeeping, so a failure is logged and
+     * never fails the turn — the next catch-up (or the boot sweep) finds the
+     * turn still above the node's mark.
+     */
+    const catchUpWallWork = (nodeId: string): Promise<void> =>
+      this.wallWork.catchUp(runId, nodeId, em).catch((err: unknown) => {
+        this.logger.warn(
+          `wall work for workflow run ${runId} node ${nodeId} not measured: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+
+    /**
      * Drop one node's pending approvals NOW and hand back the work that
      * records each as `unanswerable`.
      *
@@ -3979,6 +3996,14 @@ export class GraphExecutorService
                 .rememberWork(runId, node.id, turnWorkedMs, turnToolCalls, em)
                 .catch(() => {}),
             );
+            // A turn the CLI did not time (every ACP agent) is measured by the
+            // wall clock from the node's durable rows instead. Queued from
+            // INSIDE this task, so it runs after the task has finished — and
+            // with it the `persistItem` below that writes this turn's
+            // `turn_complete` row, which the fold needs to see the turn end.
+            if (cliTurnDurationMs({ usage: event.usage }) === null) {
+              enqueue(() => catchUpWallWork(node.id));
+            }
           }
           if (event.type === 'error') {
             lastError = event.message;
@@ -4316,6 +4341,14 @@ export class GraphExecutorService
               contextTokens: event.usage?.contextTokens ?? null,
               contextWindowTokens: event.usage?.contextWindowTokens ?? null,
             });
+          }
+          // A continuation the CLI did not time is wall work like an in-turn
+          // one, and its row is durable by now (written just above).
+          if (
+            event.type === 'turn_complete' &&
+            cliTurnDurationMs({ usage: event.usage }) === null
+          ) {
+            await catchUpWallWork(node.id);
           }
           // AFTER the terminal row, which is the continuation ENDING: the badge
           // goes back to whatever this stretch took it from.

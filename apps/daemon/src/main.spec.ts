@@ -55,6 +55,16 @@ describe('the call-membership sweep stays OFF the boot path', () => {
   });
 });
 
+describe('the wall-work sweep stays OFF the boot path', () => {
+  it('is started un-awaited, after the ready print', () => {
+    expect(source).toContain('void wallWork?.sweepAllQuietly();');
+    expect(source).not.toMatch(/await\s+wallWork/);
+    expect(source.indexOf('sweepAllQuietly')).toBeGreaterThan(
+      source.indexOf('GENIRO_DAEMON_READY'),
+    );
+  });
+});
+
 describe('a crash leaves its mark', () => {
   it('hands the crash guards the writer of the crash mark', () => {
     // A crash exits by the same SIGTERM as the idle exit; without the mark the

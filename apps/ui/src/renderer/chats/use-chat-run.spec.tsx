@@ -3077,6 +3077,86 @@ describe('useChatRun — a workflow run’s calls', () => {
     });
   });
 
+  it("reads a card's conversation back page by page until a jump's row is held, and no further", async () => {
+    const { client } = makeClient();
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    chatApi.listRunItems
+      .mockResolvedValueOnce([
+        inCall(msg('r1', 9, 'assistant', 'c'), 'call-1'),
+        inCall(msg('r1', 10, 'assistant', 'd'), 'call-1'),
+      ])
+      .mockResolvedValueOnce([
+        inCall(msg('r1', 6, 'assistant', 'a'), 'call-1'),
+        inCall(msg('r1', 7, 'assistant', 'b'), 'call-1'),
+      ]);
+    const asked = chatApi.listRunItems.mock.calls.length;
+
+    let held = false;
+    await act(async () => {
+      held = await harness.state().callConversations.loadThrough('call-1', 7);
+    });
+
+    expect(held).toBe(true);
+    expect(chatApi.listRunItems.mock.calls.slice(asked)).toEqual([
+      [{ runId: 'r1', limit: 2, call: 'call-1' }],
+      [{ runId: 'r1', limit: 2, call: 'call-1', beforeSeq: 9 }],
+    ]);
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([
+      6, 7, 9, 10,
+    ]);
+  });
+
+  it("waits on the card's own first read rather than asking for the same page twice", async () => {
+    const { client } = makeClient();
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    let land: (rows: ChatItem[]) => void = () => undefined;
+    chatApi.listRunItems.mockImplementationOnce(
+      () =>
+        new Promise<ChatItem[]>((resolve) => {
+          land = resolve;
+        }),
+    );
+    const asked = chatApi.listRunItems.mock.calls.length;
+    act(() => {
+      harness.state().callConversations.load('call-1', false);
+    });
+
+    let held: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      held = harness.state().callConversations.loadThrough('call-1', 9);
+    });
+    await act(async () => {
+      land([inCall(msg('r1', 9, 'assistant', 'c'), 'call-1')]);
+      await held;
+    });
+
+    expect(await held).toBe(true);
+    expect(chatApi.listRunItems.mock.calls.length - asked).toBe(1);
+  });
+
+  it('answers that a jump cannot reach its row when an older page fails', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    chatApi.listRunItems
+      .mockResolvedValueOnce([
+        inCall(msg('r1', 9, 'assistant', 'c'), 'call-1'),
+        inCall(msg('r1', 10, 'assistant', 'd'), 'call-1'),
+      ])
+      .mockRejectedValueOnce(new Error('daemon down'));
+    const asked = chatApi.listRunItems.mock.calls.length;
+
+    let held = true;
+    await act(async () => {
+      held = await harness.state().callConversations.loadThrough('call-1', 3);
+    });
+
+    expect(held).toBe(false);
+    expect(chatApi.listRunItems.mock.calls.length - asked).toBe(2);
+  });
+
   it('drops an older page that fails after the thread was opened again', async () => {
     const { client } = makeClient();
     const harness = await mount(client, 2);

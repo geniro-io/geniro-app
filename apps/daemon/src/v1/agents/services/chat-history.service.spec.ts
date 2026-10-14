@@ -250,9 +250,9 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
         )
         .map((item) => item.seq);
       // Statuses, task list, turn end, notice and settle; the newest NAMED tool
-      // call, the newest words and the newest row. Never its older words, the
-      // tool result, the user's message or the rows that say nothing.
-      expect(qa).toEqual([9, 10, 12, 13, 14, 15, 16, 22, 23]);
+      // call and its reply, the newest words and the newest row. Never its
+      // older words, the user's message or the rows that say nothing.
+      expect(qa).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 22, 23]);
     });
 
     it('anchors older named tool calls too, for the card to pass over one it hides', async () => {
@@ -287,30 +287,225 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       ).toEqual([9, 10]);
     });
 
-    it("anchors at most a call's newest 150 card rows", async () => {
-      await workflowRun();
-      for (let seq = 100; seq < 260; seq += 1) {
-        await dao.create({
-          runId: 'run-a',
-          seq,
-          kind: 'status',
-          nodeId: 'qa',
-          payload: JSON.stringify({ callId: 'call-2', status: 'running' }),
-        });
-      }
+    /** One row of the run, written the way the tests above write theirs. */
+    const row = (
+      seq: number,
+      kind: ItemKind,
+      nodeId: string,
+      payload: unknown,
+    ): Promise<unknown> =>
+      dao.create({
+        runId: 'run-a',
+        seq,
+        kind,
+        nodeId,
+        payload: JSON.stringify(payload),
+      });
 
+    /** The seqs of `call`'s rows of `kinds` anchored to the run's newest root page. */
+    async function anchoredOf(
+      call: string,
+      kinds: readonly ItemKind[],
+    ): Promise<number[]> {
       const { anchors } = await readingService().read(
         'run-a',
         -1,
         { limit: 50 },
         { root: true },
       );
-
-      const statuses = anchors
-        .filter((item) => item.kind === 'status')
+      return anchors
+        .filter(
+          (item) =>
+            kinds.includes(item.kind) &&
+            (item.payload as { callId?: string } | null)?.callId === call,
+        )
         .map((item) => item.seq);
-      expect(statuses).toHaveLength(150);
+    }
+
+    it("caps a call's card rows per kind, so a flood of one kind never crowds out another", async () => {
+      await workflowRun();
+      await row(90, 'turn_complete', 'qa', { callId: 'call-2' });
+      for (let seq = 100; seq < 310; seq += 1) {
+        await row(seq, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      }
+
+      const statuses = await anchoredOf('call-2', ['status']);
+      expect(statuses).toHaveLength(200);
       expect(statuses[0]).toBe(110);
+      expect(await anchoredOf('call-2', ['turn_complete'])).toEqual([90]);
+    });
+
+    it('anchors a turn that ended in an error or was cancelled — without it the turn reads as still running', async () => {
+      await workflowRun();
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'error', 'qa', { callId: 'call-2', message: 'boom' });
+      await row(11, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(12, 'turn_cancelled', 'qa', { callId: 'call-2' });
+
+      expect(await anchoredOf('call-2', ['error', 'turn_cancelled'])).toEqual([
+        10, 12,
+      ]);
+    });
+
+    it("anchors a call's task lists from the newest one stating the whole list", async () => {
+      await workflowRun();
+      await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(10, 'task_list', 'qa', { callId: 'call-2', mode: 'snapshot' });
+      await row(11, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(12, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+
+      expect(await anchoredOf('call-2', ['task_list'])).toEqual([10, 11, 12]);
+    });
+
+    it('anchors every task list of a call that never stated a whole one', async () => {
+      await workflowRun();
+      await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(10, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+
+      expect(await anchoredOf('call-2', ['task_list'])).toEqual([9, 10]);
+    });
+
+    it("anchors every tool call of a call's turn still running — and not a settled turn's", async () => {
+      await workflowRun();
+      // A settled turn's tools, naming nothing: no reading needs them.
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'tool_call', 'qa', { id: 'old', callId: 'call-2' });
+      await row(11, 'status', 'qa', { callId: 'call-2', status: 'completed' });
+      // The turn in flight: more tools than the named reading keeps, unnamed.
+      await row(12, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      for (let seq = 13; seq < 33; seq += 1) {
+        await row(seq, 'tool_call', 'qa', { id: `t${seq}`, callId: 'call-2' });
+      }
+
+      const tools = await anchoredOf('call-2', ['tool_call']);
+      expect(tools).toHaveLength(20);
+      expect(tools).not.toContain(10);
+    });
+
+    it('anchors the calls that run across a page of the run’s own flow but began above it', async () => {
+      await workflowRun();
+      // call-2 settles before the page, call-4 below it; call-1 (continued by
+      // call-3) never settles.
+      await row(15, 'call_result', 'manager', { callId: 'call-2', ok: true });
+      await row(16, 'call_started', 'manager', {
+        callId: 'call-4',
+        calleeNodeId: 'qa',
+      });
+      await row(17, 'message', 'qa', { text: 'on it', callId: 'call-4' });
+      await row(19, 'message', 'manager', { text: 'waiting' });
+      await row(20, 'call_result', 'manager', { callId: 'call-4', ok: true });
+      const page = (await dao.getByRun('run-a', 18, orm.em.fork()))
+        .filter((item) => item.seq === 19)
+        .map(itemToWire);
+
+      const { anchors } = await service(page).read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      const starts = anchors
+        .filter((item) => item.kind === 'call_started')
+        .map((item) => (item.payload as { callId: string }).callId);
+      expect(starts).toEqual(['call-1', 'call-3', 'call-4']);
+      expect(anchors.map((item) => item.seq)).toEqual(
+        expect.arrayContaining([3, 8, 17, 20]),
+      );
+    });
+
+    it('anchors a call that began above the page and settled within it — its settle is filed under the call, never on the page', async () => {
+      await workflowRun();
+      await row(16, 'call_started', 'manager', {
+        callId: 'call-4',
+        calleeNodeId: 'qa',
+      });
+      await row(17, 'message', 'qa', { text: 'on it', callId: 'call-4' });
+      await row(19, 'message', 'manager', { text: 'waiting' });
+      await row(20, 'call_result', 'manager', { callId: 'call-4', ok: true });
+      await row(21, 'message', 'manager', { text: 'qa answered' });
+      const page = (await dao.getByRun('run-a', 18, orm.em.fork()))
+        .filter((item) => item.seq === 19 || item.seq === 21)
+        .map(itemToWire);
+
+      const { anchors } = await service(page).read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      expect(
+        anchors
+          .filter((item) => item.kind === 'call_started')
+          .map((item) => (item.payload as { callId: string }).callId),
+      ).toContain('call-4');
+      expect(anchors.map((item) => item.seq)).toEqual(
+        expect.arrayContaining([16, 17, 20]),
+      );
+    });
+
+    it("anchors what closes a call's anchored rows — a tool call's reply, its shells and delegates opened and ended", async () => {
+      await workflowRun();
+      await row(9, 'tool_call', 'qa', {
+        id: 't9',
+        name: 'Bash',
+        callId: 'call-2',
+      });
+      await row(10, 'tool_result', 'qa', { id: 't9', callId: 'call-2' });
+      // A reply to a tool call no reading anchors.
+      await row(11, 'tool_result', 'qa', { id: 't-old', callId: 'call-2' });
+      await row(12, 'shell_open', 'qa', { id: 's1', callId: 'call-2' });
+      await row(13, 'shell_info', 'qa', { id: 's1', callId: 'call-2' });
+      await row(14, 'subagent_info', 'qa', { id: 'd1', callId: 'call-2' });
+      await row(15, 'message', 'qa', { text: 'later', callId: 'call-2' });
+
+      const anchored = await anchoredOf('call-2', [
+        'tool_result',
+        'shell_open',
+        'shell_info',
+        'subagent_info',
+      ]);
+      expect(anchored).toEqual([10, 12, 13, 14]);
+    });
+
+    it("anchors the callee's own newest words, never a delegate's", async () => {
+      await workflowRun();
+      await row(9, 'message', 'qa', { text: 'mine', callId: 'call-2' });
+      await row(10, 'message', 'qa', {
+        text: "the delegate's",
+        callId: 'call-2',
+        parentToolUseId: 'task-1',
+      });
+      await row(11, 'reasoning', 'qa', { text: 'next', callId: 'call-2' });
+
+      expect(await anchoredOf('call-2', ['message'])).toEqual([9]);
+    });
+
+    it("anchors the row saying a callee's turn took its approval card down", async () => {
+      await workflowRun();
+      await row(29, 'unanswerable', 'eng', { id: 'req-0', callId: 'call-1' });
+      await row(30, 'approval_request', 'eng', {
+        id: 'req-9',
+        callId: 'call-1',
+      });
+      await row(31, 'unanswerable', 'eng', { id: 'req-9', callId: 'call-1' });
+      // The call's newest row, so neither is anchored as that.
+      await row(32, 'reasoning', 'eng', { text: 'next', callId: 'call-1' });
+
+      const { items, anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      expect(items.map((item) => item.seq)).toContain(30);
+      expect(
+        anchors
+          .filter((item) => item.kind === 'unanswerable')
+          .map((item) => item.seq),
+      ).toEqual([31]);
     });
 
     it("anchors none of a call's rows to a page of that call's own conversation", async () => {

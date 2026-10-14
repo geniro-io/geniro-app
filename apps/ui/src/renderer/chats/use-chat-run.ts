@@ -103,7 +103,7 @@ export const HISTORY_PAGE = DEFAULT_HISTORY_PAGE_SIZE;
 const JUMP_CONTEXT_AFTER = 50;
 
 /** Where an opened call card's conversation stands, and the oldest row it read. */
-type CallPage = CallConversationState & { oldestSeq: number | null };
+type CallPage = CallConversationState;
 
 /**
  * A WORKFLOW run that is `running` while every agent a message goes to has
@@ -1012,16 +1012,20 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     writeCallPages(() => new Map());
   }, [writeCallPages]);
 
+  /** The read each conversation has in flight, for a caller that must wait on it. */
+  const callPageReadsRef = useRef(new Map<string, Promise<void>>());
   const loadCallConversation = useCallback(
-    (conversation: string, older: boolean): void => {
+    (conversation: string, older: boolean): Promise<void> => {
       const runId = activeRunIdRef.current;
       const held = callPagesRef.current.get(conversation);
+      if (held?.loading === true) {
+        return callPageReadsRef.current.get(conversation) ?? Promise.resolve();
+      }
       if (
         runId === null ||
-        held?.loading === true ||
         (older ? held?.hasOlder !== true : held !== undefined)
       ) {
-        return;
+        return Promise.resolve();
       }
       const beforeSeq = older ? held?.oldestSeq : null;
       const generation = callPagesGenerationRef.current;
@@ -1038,7 +1042,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         oldestSeq: held?.oldestSeq ?? null,
       });
       const pageSize = pageSizeRef.current;
-      void chatApi
+      const read = chatApi
         .listRunItems({
           runId,
           limit: pageSize,
@@ -1081,25 +1085,85 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   oldestSeq: null,
                 },
           );
+        })
+        .finally(() => {
+          if (callPageReadsRef.current.get(conversation) === read) {
+            callPageReadsRef.current.delete(conversation);
+          }
         });
+      callPageReadsRef.current.set(conversation, read);
+      return read;
     },
     [chatApi, commitCallRows, writeCallPages],
+  );
+  /**
+   * Read a conversation's pages back from its newest until the oldest held
+   * reaches `seq` — a jump's way into a card, which keeps the card one stretch
+   * from the row it lands on to the conversation's tail, as paging older does.
+   * Answers whether `seq` is now held.
+   */
+  const loadCallConversationThrough = useCallback(
+    async (conversation: string, seq: number): Promise<boolean> => {
+      for (;;) {
+        const held = callPagesRef.current.get(conversation);
+        if (held?.loading === true) {
+          const inFlight = callPageReadsRef.current.get(conversation);
+          if (inFlight === undefined) {
+            return false;
+          }
+          await inFlight;
+          continue;
+        }
+        if (held?.failed === true) {
+          return false;
+        }
+        if (held !== undefined) {
+          if (
+            !held.hasOlder ||
+            held.oldestSeq === null ||
+            held.oldestSeq <= seq
+          ) {
+            return true;
+          }
+        }
+        const before = held?.oldestSeq ?? null;
+        await loadCallConversation(conversation, held !== undefined);
+        const after = callPagesRef.current.get(conversation);
+        // Nothing moved — the thread was switched or the read refused.
+        if (
+          after === undefined ||
+          after.failed ||
+          (held !== undefined && after.oldestSeq === before)
+        ) {
+          return false;
+        }
+      }
+    },
+    [loadCallConversation],
   );
 
   const callConversations = useMemo<CallConversationLoader>(
     () => ({
-      load: loadCallConversation,
+      load: (conversation, older) => {
+        void loadCallConversation(conversation, older);
+      },
+      loadThrough: loadCallConversationThrough,
       retry: (conversation) => {
         writeCallPages((prev) => {
           const next = new Map(prev);
           next.delete(conversation);
           return next;
         });
-        loadCallConversation(conversation, false);
+        void loadCallConversation(conversation, false);
       },
       stateOf: (conversation) => callPages.get(conversation) ?? null,
     }),
-    [loadCallConversation, writeCallPages, callPages],
+    [
+      loadCallConversation,
+      loadCallConversationThrough,
+      writeCallPages,
+      callPages,
+    ],
   );
 
   /**

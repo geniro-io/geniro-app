@@ -40,6 +40,7 @@ import { CollapseToolStepsContext } from './tool-group';
 import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
 import { CardBackedRequestsContext } from './transcript-item';
 import { type TurnDuration, TurnDurationContext } from './turn-duration';
+import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /**
  * The values only a transcript row reads. {@link TranscriptContexts} provides
@@ -102,6 +103,7 @@ export function ChatProviders({
   transcript,
   loadAttachment = null,
   callConversations = null,
+  jumpMark = null,
   children,
 }: {
   /**
@@ -153,6 +155,11 @@ export function ChatProviders({
    * drawn from three subtrees. Absent where the window holds every row.
    */
   callConversations?: CallConversationLoader | null;
+  /**
+   * Where a jump landed — see `JumpMarkContext`. Here for `callContext`'s
+   * reason: the rows that mark themselves are drawn deep inside call cards.
+   */
+  jumpMark?: JumpMark | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -160,25 +167,27 @@ export function ChatProviders({
       <RetryContext.Provider value={retry}>
         <CalleeContextResolverContext.Provider value={callContext}>
           <CallConversationContext.Provider value={callConversations}>
-            <CallMessageChannelContext.Provider value={callChannel}>
-              <ArtifactUrlContext.Provider value={artifactUrl}>
-                <ThreadUiMemoryContext.Provider value={threadId}>
-                  <AttachmentLoaderContext.Provider value={loadAttachment}>
-                    <RunSettledContext.Provider value={runSettledAt}>
-                      <DelegatesOutContext.Provider value={delegatesOut}>
-                        {transcript === undefined ? (
-                          children
-                        ) : (
-                          <SurfaceContexts {...transcript}>
-                            {children}
-                          </SurfaceContexts>
-                        )}
-                      </DelegatesOutContext.Provider>
-                    </RunSettledContext.Provider>
-                  </AttachmentLoaderContext.Provider>
-                </ThreadUiMemoryContext.Provider>
-              </ArtifactUrlContext.Provider>
-            </CallMessageChannelContext.Provider>
+            <JumpMarkContext.Provider value={jumpMark}>
+              <CallMessageChannelContext.Provider value={callChannel}>
+                <ArtifactUrlContext.Provider value={artifactUrl}>
+                  <ThreadUiMemoryContext.Provider value={threadId}>
+                    <AttachmentLoaderContext.Provider value={loadAttachment}>
+                      <RunSettledContext.Provider value={runSettledAt}>
+                        <DelegatesOutContext.Provider value={delegatesOut}>
+                          {transcript === undefined ? (
+                            children
+                          ) : (
+                            <SurfaceContexts {...transcript}>
+                              {children}
+                            </SurfaceContexts>
+                          )}
+                        </DelegatesOutContext.Provider>
+                      </RunSettledContext.Provider>
+                    </AttachmentLoaderContext.Provider>
+                  </ThreadUiMemoryContext.Provider>
+                </ArtifactUrlContext.Provider>
+              </CallMessageChannelContext.Provider>
+            </JumpMarkContext.Provider>
           </CallConversationContext.Provider>
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>

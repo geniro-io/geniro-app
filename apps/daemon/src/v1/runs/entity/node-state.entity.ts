@@ -85,6 +85,19 @@ export class NodeState extends TimestampsEntity {
   @Property({ type: 'integer', nullable: true })
   workedMs: number | null = null;
 
+  /**
+   * The seq of the newest `turn_complete` whose WALL time has been added to
+   * {@link workedMs} — the high-water mark of the wall ledger
+   * (`NodeWallWorkService`), for the turns a CLI did not time itself (every
+   * ACP agent). Null means no wall turn measured yet.
+   *
+   * A mark rather than a flag per turn, so the live path and the boot sweep can
+   * both catch up on the same node and never add one turn twice: each moves it
+   * by compare-and-set on the value it read (`NodeStateDao.addWallWork`).
+   */
+  @Property({ type: 'integer', nullable: true })
+  wallMeasuredThroughSeq: number | null = null;
+
   @Property({ type: 'integer', nullable: true })
   toolCalls: number | null = null;
 

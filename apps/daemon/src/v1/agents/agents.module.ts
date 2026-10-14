@@ -68,6 +68,7 @@ import { ModelParametersService } from './services/model-parameters.service';
 import { ModelPriceCatalog } from './services/model-price-catalog.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
+import { NodeWallWorkService } from './services/node-wall-work.service';
 import { NotifyBroker } from './services/notify.broker';
 import { OllamaService } from './services/ollama.service';
 import { PartialStreamService } from './services/partial-stream.service';
@@ -370,6 +371,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ShellOutputService,
     ItemSeqAllocator,
     ItemCallIndexService,
+    NodeWallWorkService,
     MessageSendService,
     ItemDao,
     NodeStateDao,
@@ -481,6 +483,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Exported for the graph executor's writes, which stamp each row's call
     // the way a chat's do.
     ItemCallIndexService,
+    // Exported for the graph executor, which catches a node's wall-clock work
+    // up after each turn its CLI did not time, and for the boot sweep.
+    NodeWallWorkService,
     MessageSendService,
     SkillHarvestStore,
     // Exported for the graph executor's own turn seam: a node's turn reports

@@ -4375,6 +4375,36 @@ describe('Chats workflow runs', () => {
     expect(reads()).toBe(before + 3);
   });
 
+  it("re-reads the clock's paused stretches when a CALLEE's turn starts — a row the window never holds", async () => {
+    // A workflow run's window is its own flow alone; a callee's rows land among
+    // the call rows, and a count over the window alone never moved for them.
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+    await act(async () => {
+      emitItem({
+        ...wfItem(5, 'call_started', 'orch'),
+        payload: { callId: 'call-5', calleeNodeId: 'helper', mode: 'async' },
+        inCall: '',
+      });
+    });
+    const reads = (): number =>
+      api.readChatTotals.mock.calls.filter(([req]) => req.runId === 'w1')
+        .length;
+    const before = reads();
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(6, 'status', 'helper'),
+        payload: { status: 'running', callId: 'call-5' },
+        inCall: 'call-5',
+      });
+    });
+
+    expect(reads()).toBe(before + 1);
+  });
+
   it('stands the header clock still through a paused stretch the daemon serves', async () => {
     // The coder's turn has run 60s; the daemon says the run has waited on the
     // user for the last 30s with nothing running.
@@ -4725,6 +4755,125 @@ describe('Chats workflow runs', () => {
     await clickRun(container, 'Review team');
 
     expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
+  });
+
+  it("opens the card of the call a search hit was written in, reads that call's conversation back to it, and marks the hit there", async () => {
+    // A workflow run's window is its own flow alone, so a hit a callee wrote
+    // is in no row the window holds: landing "near" it put the reader beside
+    // the card, or at the tail where the card is drawn.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+      const calleeRow = (seq: number, text: string): ChatItem => ({
+        ...wfItem(seq, 'message', 'helper'),
+        role: 'assistant',
+        payload: { text, callId: 'call-5' },
+        inCall: 'call-5',
+      });
+      api.listRunItems.mockImplementation(async (req) => {
+        if (req.call === 'call-5') {
+          return [
+            {
+              ...wfItem(15, 'status', 'helper'),
+              payload: { status: 'running', callId: 'call-5' },
+              inCall: 'call-5',
+            },
+            calleeRow(20, 'the hidden find'),
+          ];
+        }
+        if (req.take === 'oldest' && req.afterSeq === 19) {
+          return [calleeRow(20, 'the hidden find')];
+        }
+        return [
+          {
+            ...wfItem(10, 'call_started', 'orch'),
+            payload: {
+              callId: 'call-5',
+              calleeNodeId: 'helper',
+              mode: 'async',
+              message: 'look into it',
+            },
+            inCall: '',
+          },
+          {
+            ...wfItem(30, 'message', 'orch'),
+            role: 'assistant',
+            payload: { text: 'waiting on the helper' },
+            inCall: '',
+          },
+        ];
+      });
+      api.searchChat.mockResolvedValue({
+        hits: [
+          {
+            seq: 20,
+            kind: 'message',
+            role: 'assistant',
+            snippet: 'the hidden find',
+            createdAt: '2026-09-05T10:00:00.000Z',
+          },
+        ],
+        partialReason: null,
+      });
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'Review team');
+
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>(
+            'button[aria-label="Search this conversation"]',
+          )
+          ?.click();
+      });
+      await act(async () => {
+        typeInto(
+          container.querySelector<HTMLInputElement>(
+            'input[aria-label="Search this conversation"]',
+          )!,
+          'hidden',
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      const result = container
+        .querySelector('[data-slot="search-snippet"]')!
+        .closest('button')!;
+      await act(async () => {
+        result.click();
+      });
+      for (let i = 0; i < 5; i += 1) {
+        await act(async () => {
+          await Promise.resolve();
+        });
+      }
+
+      expect(api.listRunItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'w1',
+          afterSeq: 19,
+          limit: 1,
+          take: 'oldest',
+        }),
+      );
+      expect(api.listRunItems).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'w1', call: 'call-5' }),
+      );
+      const card = container.querySelector('[data-role="call-block"]')!;
+      expect(
+        card
+          .querySelector('button[aria-expanded]')
+          ?.getAttribute('aria-expanded'),
+      ).toBe('true');
+      const landed = card.querySelector<HTMLElement>(
+        '[data-call-seq="20"], [data-row-seq="20"]',
+      );
+      expect(landed?.textContent).toContain('the hidden find');
+      expect(classesOf(landed!)).toContain('bg-accent/60');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('lists a call the daemon holds open whose rows are all ABOVE the window, and jumps to it', async () => {

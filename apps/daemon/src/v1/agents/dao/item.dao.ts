@@ -14,6 +14,11 @@ import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
 import { messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
+import {
+  WALL_CLOCK_CARD_KINDS,
+  WALL_CLOCK_ROW_KINDS,
+  type WallClockRow,
+} from '../utils/wall-worked';
 
 /**
  * The SIDEBAR PREVIEW's one exclusion: a message a DELEGATE wrote.
@@ -672,6 +677,84 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * One workflow node's clock rows — its turn boundaries and approval cards
+   * (`WALL_CLOCK_ROW_KINDS`), every conversation of it, in `seq` order — what
+   * its wall-measured turns are folded from (`utils/wall-worked`).
+   *
+   * Cards projected to `id` and `callId` for {@link turnSpanRows}' reason: an
+   * `approval_request` carries the whole plan, patch or question set.
+   */
+  async nodeWallClockRows(
+    runId: string,
+    nodeId: string,
+    txEm?: EntityManager,
+  ): Promise<WallClockRow[]> {
+    const [rows, cards] = await Promise.all([
+      this.getRepo(txEm).find(
+        {
+          runId,
+          nodeId,
+          kind: {
+            $in: WALL_CLOCK_ROW_KINDS.filter(
+              (kind) => !WALL_CLOCK_CARD_KINDS.has(kind),
+            ),
+          },
+        },
+        {
+          orderBy: { seq: 'asc' },
+          fields: ['seq', 'kind', 'nodeId', 'createdAt', 'payload'],
+          disableIdentityMap: true,
+        },
+      ),
+      (txEm ?? this.em.fork())
+        .getKysely<ChatTextDatabase>({ convertValues: false })
+        .selectFrom('items')
+        .select((eb) => {
+          const field = (path: string) =>
+            eb.fn<string | null>('json_extract', [
+              eb
+                .case()
+                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                .then(eb.ref('payload'))
+                .else(eb.val('{}'))
+                .end(),
+              eb.val(path),
+            ]);
+          return [
+            'seq',
+            'kind',
+            'node_id',
+            'created_at',
+            field('$.id').as('card_id'),
+            field('$.callId').as('call_id'),
+          ];
+        })
+        .where('run_id', '=', runId)
+        .where('node_id', '=', nodeId)
+        .where('deleted_at', 'is', null)
+        .where('kind', 'in', [...WALL_CLOCK_CARD_KINDS])
+        .orderBy('seq', 'asc')
+        .execute(),
+    ]);
+    return [
+      ...rows.map(({ seq, kind, nodeId: node, createdAt, payload }) => ({
+        seq,
+        kind,
+        nodeId: node,
+        createdAt,
+        payload,
+      })),
+      ...cards.map((card) => ({
+        seq: card.seq,
+        kind: card.kind,
+        nodeId: card.node_id,
+        createdAt: new Date(card.created_at),
+        payload: JSON.stringify({ id: card.card_id, callId: card.call_id }),
+      })),
+    ].sort((a, b) => a.seq - b.seq);
+  }
+
+  /**
    * Every usage-bearing row of a run (`USAGE_ITEM_KINDS`) with the node that
    * ran it — what a workflow's per-node and per-CALL spend is summed from. The call a turn
    * belongs to rides its payload (`callId`), so one read answers both grains.
@@ -1156,7 +1239,8 @@ export class ItemDao extends BaseDao<Item> {
    * message the user wrote: a person writing to a quiet callee is not the
    * callee producing anything. Read newest first off the
    * `(runId, inCall, kind, seq)` index, so a long call is walked only as far as
-   * `limit` matching rows.
+   * `limit` matching rows. `fromSeq` keeps only rows at or after that seq, and
+   * `snapshot` only task lists that state the whole list (`mode: 'snapshot'`).
    */
   async newestRowsInCall(
     runId: string,
@@ -1164,6 +1248,10 @@ export class ItemDao extends BaseDao<Item> {
     pick: {
       kinds?: readonly ItemKind[];
       said?: 'name' | 'text';
+      fromSeq?: number;
+      snapshot?: boolean;
+      /** Only the callee's own rows, never a delegate's (`parentToolUseId`). */
+      ownThread?: boolean;
       limit: number;
     },
     txEm?: EntityManager,
@@ -1185,6 +1273,41 @@ export class ItemDao extends BaseDao<Item> {
       );
     if (pick.kinds !== undefined) {
       heads = heads.where('kind', 'in', [...pick.kinds]);
+    }
+    if (pick.fromSeq !== undefined) {
+      heads = heads.where('seq', '>=', pick.fromSeq);
+    }
+    if (pick.ownThread === true) {
+      heads = heads.where(
+        (eb) =>
+          eb.fn<string | null>('json_extract', [
+            eb
+              .case()
+              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+              .then(eb.ref('payload'))
+              .else(eb.val('{}'))
+              .end(),
+            eb.val('$.parentToolUseId'),
+          ]),
+        'is',
+        null,
+      );
+    }
+    if (pick.snapshot === true) {
+      heads = heads.where(
+        (eb) =>
+          eb.fn<string>('json_extract', [
+            eb
+              .case()
+              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+              .then(eb.ref('payload'))
+              .else(eb.val('{}'))
+              .end(),
+            eb.val('$.mode'),
+          ]),
+        '=',
+        'snapshot',
+      );
     }
     const said = pick.said;
     if (said !== undefined) {
@@ -1221,6 +1344,114 @@ export class ItemDao extends BaseDao<Item> {
       { id: { $in: ids } },
       { orderBy: { seq: 'asc' }, disableIdentityMap: true },
     );
+  }
+
+  /**
+   * ONE call's rows of `kinds` whose payload's top-level `id` is one of `ids` —
+   * the replies to tool calls a card anchors, read off the
+   * `(runId, inCall, kind, seq)` index rather than over the whole run.
+   */
+  async rowsInCallById(
+    runId: string,
+    callId: string,
+    kinds: readonly ItemKind[],
+    ids: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const em = txEm ?? this.em.fork();
+    const found: string[] = [];
+    for (let at = 0; at < ids.length; at += PAYLOAD_ID_BATCH) {
+      const heads = await em
+        .getKysely<ChatTextDatabase>({ convertValues: false })
+        .selectFrom('items')
+        .select('id')
+        .where('run_id', '=', runId)
+        .where('in_call', '=', callId)
+        .where('kind', 'in', [...kinds])
+        .where('deleted_at', 'is', null)
+        .where(
+          (eb) =>
+            eb.fn<string>('json_extract', [
+              eb
+                .case()
+                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+                .then(eb.ref('payload'))
+                .else(eb.val('{}'))
+                .end(),
+              eb.val('$.id'),
+            ]),
+          'in',
+          ids.slice(at, at + PAYLOAD_ID_BATCH),
+        )
+        .execute();
+      found.push(...heads.map((head) => head.id));
+    }
+    if (found.length === 0) {
+      return [];
+    }
+    return this.getRepo(em).find(
+      { id: { $in: found } },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * Where each call the run made starts and settles, as seqs — no payload
+   * beyond a start's call id is read, so a run's hundreds of calls cost a few
+   * numbers each. A call with no settle row is still open (or was cut off).
+   */
+  async callSpansOf(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<{ callId: string; startSeq: number; settleSeq: number | null }[]> {
+    const em = txEm ?? this.em.fork();
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => [
+        'kind',
+        'seq',
+        'in_call',
+        eb
+          .fn<string | null>('json_extract', [
+            eb
+              .case()
+              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+              .then(eb.ref('payload'))
+              .else(eb.val('{}'))
+              .end(),
+            eb.val('$.callId'),
+          ])
+          .as('call_id'),
+      ])
+      .where('run_id', '=', runId)
+      .where('kind', 'in', ['call_started', 'call_result'])
+      .where('deleted_at', 'is', null)
+      .orderBy('seq', 'asc')
+      .execute();
+    const spans = new Map<
+      string,
+      { callId: string; startSeq: number; settleSeq: number | null }
+    >();
+    for (const row of rows) {
+      const callId =
+        row.kind === 'call_result' && row.in_call ? row.in_call : row.call_id;
+      if (typeof callId !== 'string' || callId.length === 0) {
+        continue;
+      }
+      const span = spans.get(callId);
+      if (row.kind === 'call_started') {
+        if (span === undefined) {
+          spans.set(callId, { callId, startSeq: row.seq, settleSeq: null });
+        }
+      } else if (span !== undefined && span.settleSeq === null) {
+        span.settleSeq = row.seq;
+      }
+    }
+    return [...spans.values()];
   }
 
   /**

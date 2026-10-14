@@ -33,6 +33,7 @@ import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registr
 import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
 import { ItemCallIndexService } from './v1/agents/services/item-call-index.service';
+import { NodeWallWorkService } from './v1/agents/services/node-wall-work.service';
 import { PartialStreamService } from './v1/agents/services/partial-stream.service';
 import { SearchTextBackfillService } from './v1/agents/services/search-text-backfill.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
@@ -113,6 +114,7 @@ const bootstrapper = buildBootstrapper({
  */
 let searchTextBackfill: SearchTextBackfillService | null = null;
 let callIndex: ItemCallIndexService | null = null;
+let wallWork: NodeWallWorkService | null = null;
 bootstrapper.addExtension(
   buildHttpServerExtension(
     {
@@ -174,6 +176,10 @@ bootstrapper.addExtension(
         // workflow run written before `Item.inCall` existed, and a run it has
         // not reached yet is stamped on its first read anyway.
         void callIndex?.indexAllQuietly();
+        // Off the boot path too: it folds every node of every workflow run
+        // settled before the wall ledger existed, and each node's mark makes it
+        // safe beside the live catch-up.
+        void wallWork?.sweepAllQuietly();
       },
     },
     async (app: INestApplication) => {
@@ -279,6 +285,7 @@ bootstrapper.addExtension(
       // reads the container.
       searchTextBackfill = app.get(SearchTextBackfillService);
       callIndex = app.get(ItemCallIndexService);
+      wallWork = app.get(NodeWallWorkService);
 
       // Sweep what a prior crash left behind — per-turn files and directories
       // whose disposer only runs on a clean settle. Each adapter knows its own;

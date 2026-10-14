@@ -12,6 +12,7 @@ import {
   callBlockContext,
   type CallBlockEntry,
   callBlockOfConversation,
+  callBlockPath,
   callBlockSummary,
   callBlockTasks,
   callBlockUsage,
@@ -1873,6 +1874,32 @@ describe('groupTranscript — call blocks', () => {
         callBlockOfConversation(index, ['call-22', 'call-23', 'call-24']),
       ).toBe(block);
       expect(callBlockOfConversation(index, ['call-99'])).toBeUndefined();
+    });
+
+    it('names the cards to open, outermost first, to reach a card drawn inside another', () => {
+      // Only the shape the walk reads; the rest of each entry is irrelevant.
+      const card = (callIds: string[], entries: TranscriptEntry[]) =>
+        ({
+          type: 'call-block',
+          id: callIds[0],
+          callIds,
+          entries,
+        }) as unknown as CallBlockEntry;
+      const inner = card(['call-2'], []);
+      const outer = card(
+        ['call-1'],
+        [
+          {
+            type: 'turn-block',
+            entries: [inner],
+          } as unknown as TranscriptEntry,
+        ],
+      );
+      const entries: TranscriptEntry[] = [outer];
+
+      expect(callBlockPath(entries, 'call-2')).toEqual([outer, inner]);
+      expect(callBlockPath(entries, 'call-1')).toEqual([outer]);
+      expect(callBlockPath(entries, 'call-9')).toEqual([]);
     });
 
     it('spend sums and the context walks EVERY call, while time and a stall are the open calls’', () => {

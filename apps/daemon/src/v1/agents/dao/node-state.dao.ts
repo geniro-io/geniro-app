@@ -7,6 +7,23 @@ import type { AgentKind, NodeStatus } from '../../runs/runs.types';
 import { readNodeSessions, withNodeSession } from '../utils/node-sessions';
 import { positive } from '../utils/positive-figure';
 
+/**
+ * The `node_state` columns the increments below write, as SQLite stores them —
+ * the shape their typed Kysely builder is handed. Each column is typed off the
+ * entity property it stores, so a renamed or retyped field fails the build.
+ */
+interface NodeStateDatabase {
+  node_state: {
+    run_id: NodeState['runId'];
+    node_id: NodeState['nodeId'];
+    worked_ms: NodeState['workedMs'];
+    tool_calls: NodeState['toolCalls'];
+    wall_measured_through_seq: NodeState['wallMeasuredThroughSeq'];
+    /** Epoch milliseconds, since value conversion is off. */
+    deleted_at: number | null;
+  };
+}
+
 @Injectable()
 export class NodeStateDao extends BaseDao<NodeState> {
   constructor(em: EntityManager) {
@@ -299,15 +316,11 @@ export class NodeStateDao extends BaseDao<NodeState> {
    * answer — overwriting would report the last turn's work as the node's whole
    * history, and a lost write is a figure that is permanently short.
    *
-   * Read-modify-write rather than a SQL increment because nothing else in this
-   * daemon reaches past the ORM, and it is safe here for a reason that lives
-   * outside this method: the executor funnels these through the same serialized
-   * `enqueue()` chain its context writes use, and the DAG gives a node one turn
-   * at a time — so the writes that can touch one row never overlap. A second
-   * writer reaching this row from another path would break that assumption and
-   * needs a real increment instead, not a longer read. The read is also far
-   * cheaper than the one {@link rememberContext} refuses to make: this fires
-   * once per turn where that fires once per model response.
+   * A real increment in ONE statement, not a read-modify-write: the wall
+   * ledger ({@link addWallWork}) adds to the same column from the boot sweep,
+   * off the executor's serialized `enqueue()` chain, and a read-then-write here
+   * would overwrite an addition that landed between its two halves — a turn
+   * counted by the ledger's mark and lost from the figure for good.
    *
    * Neither figure is cleared by a turn that omits it, on that method's rule —
    * a CLI reporting no timing must not erase the time already counted, and the
@@ -325,21 +338,91 @@ export class NodeStateDao extends BaseDao<NodeState> {
     if (!positive(workedMs) && !positive(toolCalls)) {
       return;
     }
+    await (txEm ?? this.em.fork())
+      .getKysely<NodeStateDatabase>({ convertValues: false })
+      .updateTable('node_state')
+      .set((eb) => ({
+        ...(positive(workedMs)
+          ? {
+              worked_ms: eb(
+                eb.fn.coalesce('worked_ms', eb.val(0)),
+                '+',
+                workedMs,
+              ),
+            }
+          : {}),
+        ...(positive(toolCalls)
+          ? {
+              tool_calls: eb(
+                eb.fn.coalesce('tool_calls', eb.val(0)),
+                '+',
+                toolCalls,
+              ),
+            }
+          : {}),
+      }))
+      .where('run_id', '=', runId)
+      .where('node_id', '=', nodeId)
+      .where('deleted_at', 'is', null)
+      .execute();
+  }
+
+  /**
+   * Where this node's wall ledger stands: the seq of the newest `turn_complete`
+   * whose wall time {@link workedMs} already holds, `null` for none yet — or
+   * `undefined` when the node has no row at all (nothing to add to).
+   */
+  async wallMeasuredThroughSeq(
+    runId: string,
+    nodeId: string,
+    txEm?: EntityManager,
+  ): Promise<number | null | undefined> {
     const row = await this.getRepo(txEm).findOne(
       { runId, nodeId },
-      { disableIdentityMap: true },
+      { fields: ['wallMeasuredThroughSeq'], disableIdentityMap: true },
     );
-    if (row === null) {
-      return;
-    }
-    const data: Partial<NodeState> = {};
-    if (positive(workedMs)) {
-      data.workedMs = (row.workedMs ?? 0) + workedMs;
-    }
-    if (positive(toolCalls)) {
-      data.toolCalls = (row.toolCalls ?? 0) + toolCalls;
-    }
-    await this.getRepo(txEm).nativeUpdate({ runId, nodeId }, data);
+    return row === null ? undefined : row.wallMeasuredThroughSeq;
+  }
+
+  /**
+   * Add the wall time of the turns after `fromSeq` to this node's worked total
+   * and move the ledger's mark to `throughSeq` — in ONE statement, and only if
+   * the mark still reads `fromSeq` (a compare-and-set). False when it lost: a
+   * concurrent catch-up moved the mark first, and the caller re-reads and
+   * folds again rather than adding a turn that one already added.
+   *
+   * A non-positive `addMs` moves the mark and leaves the figure alone, on
+   * {@link rememberWork}'s rule: a turn that measured nothing is not a
+   * measurement, and null stays "never measured".
+   */
+  async addWallWork(
+    runId: string,
+    nodeId: string,
+    fromSeq: number | null,
+    throughSeq: number,
+    addMs: number,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    let update = (txEm ?? this.em.fork())
+      .getKysely<NodeStateDatabase>({ convertValues: false })
+      .updateTable('node_state')
+      .set((eb) => ({
+        wall_measured_through_seq: throughSeq,
+        ...(positive(addMs)
+          ? {
+              worked_ms: eb(eb.fn.coalesce('worked_ms', eb.val(0)), '+', addMs),
+            }
+          : {}),
+      }))
+      .where('run_id', '=', runId)
+      .where('node_id', '=', nodeId)
+      .where('deleted_at', 'is', null);
+    update =
+      fromSeq === null
+        ? update.where('wall_measured_through_seq', 'is', null)
+        : update.where('wall_measured_through_seq', '=', fromSeq);
+    const won = await update.returning('node_id').executeTakeFirst();
+    return won !== undefined;
   }
 
   /**

@@ -23,31 +23,50 @@ import {
   workflowEdgeRows,
 } from '../utils/history-anchors';
 import { itemToWire } from '../utils/item-wire';
+import { parseJsonColumn, payloadString } from '../utils/json-util';
 import { ChatService } from './chat.service';
 import { ItemCallIndexService } from './item-call-index.service';
 
 /**
- * The kinds of a call's rows a folded card reads whole — see `cardRowsFor`.
+ * The kinds of a call's rows a folded card and the readings beside it (each
+ * agent's turns and clock, `turn-duration.ts`) read whole — see `cardRowsFor` —
+ * each kind with its own cap, so a call that writes hundreds of one kind cannot
+ * crowd out another. A turn's ending is any of `TERMINAL_KINDS`: without its
+ * `error` or `turn_cancelled` row a failed turn reads as still running.
  *
  * TWIN PARSER: `buildCallBlock` and the stalled / held folds of
  * `groupTranscript` in apps/ui/src/renderer/chats/transcript-groups.ts, with
- * `callBlockSummary` / `callBlockActivity` / `callBlockTasks` — a reading a
- * folded card starts taking from another kind of row goes empty on a page of
- * the run's own flow until that kind is listed here.
+ * `callBlockSummary` / `callBlockActivity` / `callBlockTasks` / `callBlockUsage`,
+ * `scanTurns` in apps/ui/src/renderer/chats/turn-duration.ts, and the pairing
+ * readers `shellRuns` (shell-activity.ts) and `subagentBlockStatus` — a reading
+ * a folded card or a panel starts taking from another kind of row goes empty
+ * on a page of the run's own flow until that kind is read in `cardRowsFor`.
  */
-const CARD_KINDS: readonly ItemKind[] = [
-  'status',
-  'task_list',
-  'turn_complete',
-  'system',
+const CARD_READS: readonly { kinds: readonly ItemKind[]; limit: number }[] = [
+  { kinds: ['status'], limit: 200 },
+  // Every turn's spend is summed into the card's footer.
+  { kinds: ['turn_complete'], limit: 1000 },
+  { kinds: ['error', 'turn_cancelled'], limit: 200 },
+  { kinds: ['system'], limit: 50 },
 ];
 
 /**
- * A call's newest {@link CARD_KINDS} rows a page anchors, at most. A call with
- * more is one whose earliest readings no folded card shows any longer; its
- * settle states how it ended either way.
+ * The task lists a call's card folds: every one since the newest that states
+ * the whole list, which is where the fold restarts.
  */
-const CARD_ROWS_PER_CALL = 150;
+const TASK_LISTS_PER_CALL = 300;
+
+/**
+ * A call's background shells and delegates, as their open, report and close
+ * rows — what says a command or a delegate is still out, or has ended.
+ */
+const BACKGROUND_ROWS_PER_CALL = 300;
+
+/**
+ * Tool calls of a call's turn in flight, which each agent's tool count adds to
+ * the daemon's settled total.
+ */
+const OPEN_TURN_TOOLS_PER_CALL = 300;
 
 /**
  * A call's newest NAMED tool calls a page anchors. More than one, because the
@@ -105,9 +124,17 @@ export class ChatHistoryService {
       return { items, anchors };
     }
     const byId = new Map(anchors.map((row) => [row.id, row] as const));
-    for (const row of await this.cardRowsFor(runId, [...kept, ...anchors])) {
-      byId.set(row.id, row);
-    }
+    const held = new Set(kept.map((row) => row.id));
+    const add = (rows: readonly ItemWire[]): void => {
+      for (const row of rows) {
+        if (!held.has(row.id)) {
+          byId.set(row.id, row);
+        }
+      }
+    };
+    add(await this.callsAcross(runId, kept));
+    add(await this.cardRowsFor(runId, [...kept, ...byId.values()]));
+    add(await this.deadCardsOf(runId, kept));
     return {
       items,
       anchors: [...byId.values()].sort((a, b) => a.seq - b.seq),
@@ -115,12 +142,77 @@ export class ChatHistoryService {
   }
 
   /**
+   * The start and settle rows of the calls that were running while a page of
+   * the run's own flow was written but began above it — still open, or settled
+   * on or below it — with the rest of their conversations. The run's whole
+   * window drew their cards because it held their callees' rows; a page of the
+   * run's own flow holds none, and nothing on it names them: a call's settle is
+   * filed under the call itself.
+   */
+  private async callsAcross(
+    runId: string,
+    page: readonly ItemWire[],
+  ): Promise<ItemWire[]> {
+    const bounds = pageBoundsOf(page);
+    if (bounds === null) {
+      return [];
+    }
+    const across = (await this.itemDao.callSpansOf(runId))
+      .filter(
+        (span) =>
+          span.startSeq < bounds.firstSeq &&
+          (span.settleSeq === null || span.settleSeq >= bounds.firstSeq),
+      )
+      .map((span) => span.callId);
+    if (across.length === 0) {
+      return [];
+    }
+    const conversations = conversationCallIds(
+      await this.calls.callStartsOf(runId),
+      new Set(across),
+    );
+    return (await this.itemDao.callRowsOf(runId, [...conversations])).map(
+      itemToWire,
+    );
+  }
+
+  /**
+   * The `unanswerable` rows of the page's approval cards. A callee's card sits
+   * in the run's own flow, but the row that says its turn took it down is the
+   * callee's, filed under its call — and without it a dead card reads as one
+   * still waiting for an answer.
+   */
+  private async deadCardsOf(
+    runId: string,
+    page: readonly ItemWire[],
+  ): Promise<ItemWire[]> {
+    const requests = page.filter((row) => row.kind === 'approval_request');
+    const ids = new Set(
+      requests
+        .map((row) => payloadString(row.payload, 'id'))
+        .filter((id) => id !== null),
+    );
+    if (ids.size === 0) {
+      return [];
+    }
+    const rows = await this.itemDao.rowsByPayloadId(
+      runId,
+      ['unanswerable'],
+      [...ids],
+      { after: Math.min(...requests.map((row) => row.seq)) },
+    );
+    return rows.map(itemToWire);
+  }
+
+  /**
    * What the call cards a page of the run's own flow draws are folded from,
-   * when the page holds none of their conversations: each call's newest status
-   * rows, task lists, turn ends and notices, and its newest row, newest words
-   * and newest named tool calls — the readings a folded card shows. The rest of
-   * a call's conversation is read when its card is opened. One bounded read of
-   * each per call, newest first off the `(runId, inCall, kind, seq)` index.
+   * when the page holds none of their conversations: each call's
+   * {@link CARD_READS}, its task lists since the newest whole one, the tool
+   * calls of a turn still running, and its newest row, newest words and
+   * newest named tool calls — the readings a folded card and each agent's
+   * figures show. The rest of a call's conversation is read when its card is
+   * opened. Bounded reads per call, newest first off the
+   * `(runId, inCall, kind, seq)` index.
    */
   private async cardRowsFor(
     runId: string,
@@ -138,18 +230,50 @@ export class ChatHistoryService {
       return [];
     }
     const em = this.em.fork();
-    const rows = [];
+    const rows: Item[] = [];
     for (const callId of callIds) {
       const newest = (
         pick: Parameters<ItemDao['newestRowsInCall']>[2],
       ): Promise<Item[]> =>
         this.itemDao.newestRowsInCall(runId, callId, pick, em);
+      for (const read of CARD_READS) {
+        rows.push(...(await newest(read)));
+      }
+      const [whole] = await newest({
+        kinds: ['task_list'],
+        snapshot: true,
+        limit: 1,
+      });
       rows.push(
-        ...(await newest({ kinds: CARD_KINDS, limit: CARD_ROWS_PER_CALL })),
+        ...(await newest({
+          kinds: ['task_list'],
+          fromSeq: whole?.seq,
+          limit: TASK_LISTS_PER_CALL,
+        })),
+      );
+      const [status] = await newest({ kinds: ['status'], limit: 1 });
+      if (
+        status !== undefined &&
+        payloadString(parseJsonColumn(status.payload), 'status') === 'running'
+      ) {
+        rows.push(
+          ...(await newest({
+            kinds: ['tool_call'],
+            fromSeq: status.seq,
+            limit: OPEN_TURN_TOOLS_PER_CALL,
+          })),
+        );
+      }
+      rows.push(
         ...(await newest({ limit: 1 })),
         // The newest words and NAMED tools: the folded card's readings walk
         // back past a blank message and an ACP tool call naming nothing.
-        ...(await newest({ kinds: ['message'], said: 'text', limit: 1 })),
+        ...(await newest({
+          kinds: ['message'],
+          said: 'text',
+          ownThread: true,
+          limit: 1,
+        })),
         ...(await newest({
           kinds: ['tool_call'],
           said: 'name',
@@ -157,7 +281,39 @@ export class ChatHistoryService {
         })),
       );
     }
-    return rows.map(itemToWire);
+    const unique = new Map(rows.map((row) => [row.id, row] as const));
+    // What CLOSES the rows above: a tool call's reply (a command, a delegate's
+    // launch), and the call's background shells and delegates, opened and
+    // ended — without them a finished command or delegate reads as running.
+    for (const callId of callIds) {
+      const tools = [...unique.values()].filter(
+        (row) => row.inCall === callId && row.kind === 'tool_call',
+      );
+      const toolIds = tools
+        .map((row) => payloadString(parseJsonColumn(row.payload), 'id'))
+        .filter((id) => id !== null);
+      for (const row of [
+        ...(await this.itemDao.rowsInCallById(
+          runId,
+          callId,
+          ['tool_result'],
+          toolIds,
+          em,
+        )),
+        ...(await this.itemDao.newestRowsInCall(
+          runId,
+          callId,
+          {
+            kinds: ['shell_open', 'shell_info', 'subagent_info'],
+            limit: BACKGROUND_ROWS_PER_CALL,
+          },
+          em,
+        )),
+      ]) {
+        unique.set(row.id, row);
+      }
+    }
+    return [...unique.values()].map(itemToWire);
   }
 
   /** The `inCall` values one conversation's rows carry; undefined for every row of the run. */

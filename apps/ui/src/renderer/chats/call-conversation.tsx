@@ -11,6 +11,8 @@ export interface CallConversationState {
   failed: boolean;
   /** The newest page loaded was full, so older rows may lie behind it. */
   hasOlder: boolean;
+  /** The oldest row read so far; null before the first page lands. */
+  oldestSeq: number | null;
 }
 
 /**
@@ -20,6 +22,8 @@ export interface CallConversationState {
 export interface CallConversationLoader {
   /** The conversation's newest page, once — or, with `older`, the page before the oldest held. */
   load(conversation: string, older: boolean): void;
+  /** Its pages from the newest back until `seq` is held; whether it now is. */
+  loadThrough(conversation: string, seq: number): Promise<boolean>;
   /** Ask again for a conversation whose read failed. */
   retry(conversation: string): void;
   /** Null before the conversation was first asked for. */

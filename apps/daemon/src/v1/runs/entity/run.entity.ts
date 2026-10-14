@@ -568,6 +568,27 @@ export class Run extends TimestampsEntity {
   pullRequestsScannedSeq: number | null = null;
 
   /**
+   * Pull requests the run's CLI conversations only TOUCHED, by their own
+   * record (`AgentAdapter.readSessionPullRequests`: checked out, commented on,
+   * pushed to, merged) — JSON `RunPullRequest[]`, null when none. Kept apart
+   * from {@link pullRequests} because they are shown beside the opened ones
+   * and nothing else: a merge of one must not end the card, and Stats must not
+   * count it as opened. TEXT so the `safe: true` schema sync adds it.
+   */
+  @Property({ type: 'text', nullable: true })
+  touchedPullRequests: string | null = null;
+
+  /**
+   * Which capture rule {@link pullRequestsScannedSeq} was reached under
+   * (`PULL_REQUEST_SCAN_VERSION`), or null for a run scanned before rules were
+   * versioned. A marker reached under another rule says nothing about what the
+   * current rule would find behind it, so such a run is read again from the
+   * start, once.
+   */
+  @Property({ type: 'integer', nullable: true })
+  pullRequestsScanVersion: number | null = null;
+
+  /**
    * When this run was ARCHIVED — shelved out of the chat list but destroyed in
    * no way — or null while it is not.
    *

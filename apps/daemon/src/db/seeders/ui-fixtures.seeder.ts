@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Seeder } from '@mikro-orm/seeder';
 import type { EntityManager } from '@mikro-orm/sqlite';
 
+import { PULL_REQUEST_SCAN_VERSION } from '../../v1/agents/utils/pull-request-capture';
 import { searchIndexText } from '../../v1/agents/utils/searchable-text';
 import { Item } from '../../v1/runs/entity/item.entity';
 import { Run } from '../../v1/runs/entity/run.entity';
@@ -265,11 +266,11 @@ export class UiFixturesSeeder extends Seeder {
                 seq: index + 1,
               })),
             ),
-      // PAST the transcript, so the daemon's own capture pass reads `seq >
-      // marker`, finds nothing, and leaves these refs alone. Left at 0 it
-      // rescans from the start, captures none (no `gh pr create` here) and
-      // writes the empty result back over them.
+      // PAST the transcript, under the current scan version, so the daemon's
+      // own capture pass never reads these fixtures again — they hold no
+      // `gh pr create` for it to find.
       pullRequestsScannedSeq: 999_999,
+      pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION,
     });
     spec.items.forEach((item, index) => {
       const itemAt = new Date(Date.now() - (item.secondsAgo ?? 0) * 1000);

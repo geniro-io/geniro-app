@@ -3756,6 +3756,27 @@ export interface DeleteSessionTranscriptInput {
   readonly runCreatedAt: Date;
 }
 
+/** One conversation a run held, for {@link AgentAdapter.readSessionPullRequests}. */
+export interface SessionPullRequestsInput {
+  /** The conversation, in the CLI's own id namespace. */
+  readonly sessionId: string;
+  /** The profile that holds it — null for the CLI's own default. */
+  readonly configDir: string | null;
+}
+
+/**
+ * A github.com pull request the CLI's own record says one of its sessions
+ * touched — created, pushed to, checked out, commented on or merged.
+ */
+export interface SessionPullRequest {
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+  /** When the CLI recorded it, or null when the record carries no readable time. */
+  at: Date | null;
+}
+
 /**
  * Whether the conversation is gone. A refusal is DATA, as for
  * {@link CarrySessionResult}: deleting a run never fails over a transcript the

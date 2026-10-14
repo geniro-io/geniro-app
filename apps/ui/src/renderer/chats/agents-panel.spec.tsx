@@ -3181,7 +3181,7 @@ describe('AgentsPanel thread pull requests', () => {
     );
 
   const section = (el: HTMLDivElement): HTMLElement | null =>
-    el.querySelector('section[aria-label="Opened by this thread"]');
+    el.querySelector('section[aria-label="This thread’s pull requests"]');
 
   const foldControl = (el: HTMLDivElement): HTMLButtonElement | null =>
     [...el.querySelectorAll('button')].find((button) =>

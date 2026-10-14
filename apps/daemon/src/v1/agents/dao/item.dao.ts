@@ -759,6 +759,34 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * The tool result a moment belongs to: the run's newest `tool_result` written
+   * at or before `at`, else its oldest one after — null for a run with none.
+   *
+   * How a pull request the CLI's own record names (a time, no row of ours) gets
+   * a seq, so it is ordered among the captured ones and dated by
+   * {@link earliestToolResultTimes} like them.
+   */
+  async toolResultSeqAt(
+    runId: string,
+    at: Date,
+    txEm?: EntityManager,
+  ): Promise<number | null> {
+    const repo = this.getRepo(txEm);
+    const before = await repo.findOne(
+      { runId, kind: 'tool_result', createdAt: { $lte: at } },
+      { orderBy: { seq: 'desc' }, fields: ['seq'], disableIdentityMap: true },
+    );
+    if (before !== null) {
+      return before.seq;
+    }
+    const after = await repo.findOne(
+      { runId, kind: 'tool_result', createdAt: { $gt: at } },
+      { orderBy: { seq: 'asc' }, fields: ['seq'], disableIdentityMap: true },
+    );
+    return after?.seq ?? null;
+  }
+
+  /**
    * One batch of rows the search-text backfill has not reached yet, resuming
    * after `afterId`.
    *

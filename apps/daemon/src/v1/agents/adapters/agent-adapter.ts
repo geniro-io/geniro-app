@@ -86,6 +86,8 @@ import type {
   HandoffResult,
   InstalledApprovalSupport,
   NO_PLAN_LIMITS,
+  SessionPullRequest,
+  SessionPullRequestsInput,
   TurnDriver,
 } from './adapter.types';
 import {
@@ -495,6 +497,19 @@ export abstract class AgentAdapter {
       deleted: false,
       reason: `${this.getConfig().kind} has no measured way to delete a conversation it holds`,
     });
+  }
+
+  /**
+   * The pull requests this CLI's own record says one conversation touched, in
+   * the order it recorded them; empty for a CLI that keeps no such record.
+   * Shown beside the ones the transcript capture saw the thread open
+   * (`Run.touchedPullRequests`), never counted as opened. Must NEVER throw —
+   * an unreadable record costs its chips, not the chat list.
+   */
+  readSessionPullRequests(
+    _input: SessionPullRequestsInput,
+  ): Promise<SessionPullRequest[]> {
+    return Promise.resolve([]);
   }
 
   /**

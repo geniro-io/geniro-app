@@ -4925,7 +4925,7 @@ export interface RunDto {
      */
     lastActivityAt: string | null;
     /**
-     * Pull requests this run opened, oldest first, as captured from the agent output
+     * Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first
      * @type {Array<RunPullRequest>}
      * @memberof RunDto
      */

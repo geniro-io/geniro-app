@@ -30,6 +30,23 @@ describe('runToWire', () => {
     expect(runToWire(run).archivedAt).toBe('2026-08-30T12:34:56.000Z');
   });
 
+  it('projects the pull requests a run opened and those its CLI recorded it touching as one list, in thread order', () => {
+    const pr = (number: number, seq: number) => ({
+      owner: 'acme',
+      repo: 'platform',
+      number,
+      url: `https://github.com/acme/platform/pull/${number}`,
+      seq,
+    });
+    const run = new Run();
+    run.pullRequests = JSON.stringify([pr(87, 9)]);
+    run.touchedPullRequests = JSON.stringify([pr(6841, 4), pr(87, 12)]);
+
+    expect(
+      runToWire(run).pullRequests.map((row) => `#${row.number}@${row.seq}`),
+    ).toEqual(['#6841@4', '#87@9']);
+  });
+
   it('projects a run that was never archived as null', () => {
     expect(runToWire(new Run()).archivedAt).toBeNull();
   });

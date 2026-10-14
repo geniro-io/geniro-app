@@ -4,6 +4,7 @@ import {
   isPullRequestCreateCall,
   MAX_RUN_PULL_REQUESTS,
   mergePullRequests,
+  readDisplayedPullRequests,
   readPullRequestUrls,
   readRunPullRequests,
 } from './pull-request-capture';
@@ -68,6 +69,31 @@ describe('readPullRequestUrls', () => {
       readPullRequestUrls(
         'Opened https://github.com/acme/platform/pull/87 for review.',
       ),
+    ).toEqual([]);
+  });
+
+  it('reads a URL that ENDS its line after a label, a key or a column', () => {
+    // How an agent prints a `gh pr create` stdout it kept in a variable.
+    const result = [
+      'create rc=0 url=https://github.com/acme/platform/pull/87',
+      'PR: https://github.com/acme/api/pull/12',
+      'mobile-app  main  8c513837  https://github.com/acme/mobile-app/pull/14',
+      '{ "url": "https://github.com/acme/platform/pull/87", "draft": true }',
+    ].join('\n');
+    expect(
+      readPullRequestUrls(result).map((row) => `${row.repo}#${row.number}`),
+    ).toEqual(['platform#87', 'api#12', 'mobile-app#14']);
+    expect(readPullRequestUrls(result)[0]?.url).toBe(
+      'https://github.com/acme/platform/pull/87',
+    );
+  });
+
+  it('does NOT read a URL glued to the word in front of it, or a grep -n hit', () => {
+    expect(
+      readPullRequestUrls('seehttps://github.com/acme/platform/pull/87'),
+    ).toEqual([]);
+    expect(
+      readPullRequestUrls('12:https://github.com/acme/web/pull/5639'),
     ).toEqual([]);
   });
 
@@ -142,6 +168,11 @@ describe('isPullRequestCreateCall', () => {
       'mygh pr create --fill',
       'echo `gh pr create` in backticks',
       'Step 2 gh pr create',
+      "grep -n 'pull/5639\\|gh pr create' notes.md",
+      'grep -nE "gh pr view|gh pr create" log.txt',
+      "grep -nE 'gh pr view|gh pr create|gh pr merge' log.txt",
+      "grep -E '(gh pr create)' t.jsonl",
+      'How do we compose PR bodies today (gh pr create), and where?',
     ]) {
       expect(isPullRequestCreateCall({ command }), command).toBe(false);
     }
@@ -221,6 +252,29 @@ describe('mergePullRequests', () => {
     const merged = mergePullRequests([], many);
     expect(merged).toHaveLength(MAX_RUN_PULL_REQUESTS);
     expect(merged[0]?.number).toBe(1);
+  });
+});
+
+describe('readDisplayedPullRequests', () => {
+  it('shows every opened pull request however many touched ones sort ahead of it', () => {
+    const pr = (number: number, seq: number) => ({
+      owner: 'acme',
+      repo: 'platform',
+      number,
+      url: `https://github.com/acme/platform/pull/${number}`,
+      seq,
+    });
+    const touched = Array.from({ length: MAX_RUN_PULL_REQUESTS }, (_, i) =>
+      pr(1000 + i, i),
+    );
+
+    const shown = readDisplayedPullRequests(
+      JSON.stringify([pr(87, MAX_RUN_PULL_REQUESTS)]),
+      JSON.stringify(touched),
+    );
+
+    expect(shown).toHaveLength(MAX_RUN_PULL_REQUESTS + 1);
+    expect(shown.at(-1)?.number).toBe(87);
   });
 });
 

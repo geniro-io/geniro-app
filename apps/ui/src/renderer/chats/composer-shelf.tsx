@@ -322,7 +322,7 @@ export function ThreadPullRequestChips({
           widthClassName={PULL_REQUEST_CHIP_WIDTH[shown.length]}
         />
       ))}
-      {/* Counting what the THREAD opened, not what is left over: the button
+      {/* Counting the THREAD's pull requests, not what is left over: the button
           goes to a panel listing every one of them, merged included, so `All 6`
           beside three chips is the honest number even though only three are
           hidden. It appears only once something IS hidden. */}
@@ -330,8 +330,8 @@ export function ThreadPullRequestChips({
         <button
           type="button"
           data-slot="all-pull-requests"
-          title="Show every pull request this thread opened"
-          aria-label={`Show all ${results.length} pull requests this thread opened`}
+          title="Show every pull request of this thread"
+          aria-label={`Show all ${results.length} pull requests of this thread`}
           // A SEGMENT of the group, not a card standing beside it — which is
           // the whole point of the group. `font-normal` is an override:
           // `global.css` gives every bare `button` the base 15px at medium

@@ -342,8 +342,8 @@ export interface RunStatusEvent {
    */
   spendUpdatedAt?: number;
   /**
-   * The pull requests this run has been seen to OPEN, when a capture pass has
-   * just found one.
+   * The pull requests this run shows (opened, and touched by its CLI's own
+   * record), when a capture pass has just changed them.
    *
    * TWIN PARSER of the daemon's `RunStatusEvent` — absent asserts nothing, and
    * the daemon announces this only when a turn ENDED having changed the answer.

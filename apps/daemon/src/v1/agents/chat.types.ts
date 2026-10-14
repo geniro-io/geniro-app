@@ -3526,8 +3526,9 @@ export interface RunStatusEvent {
   contextWindowTokens?: number | null;
   title?: string;
   /**
-   * The pull requests this run has been seen to OPEN, when a capture pass has
-   * just found one.
+   * The pull requests this run SHOWS — the ones it was seen to open, and the
+   * ones its CLI recorded it touching — when a capture pass has just changed
+   * them.
    *
    * ABSENT asserts nothing, which is the normal case: this is announced only
    * when a turn ends having changed the answer, so a chat with none broadcasts
@@ -3924,7 +3925,8 @@ export type ConfigDirPinWire = z.infer<typeof ConfigDirPinSchema>;
 
 /** A run projected to the wire (chat and workflow runs share the shape). */
 /**
- * One pull request a run OPENED, as captured from the agent's own output.
+ * One pull request a run opened, as captured from the agent's own output — or,
+ * on the display lists, one its CLI recorded it touching.
  *
  * The IDENTITY only — owner, repo, number, url. Deliberately no title and no
  * state: those change on GitHub's side after the capture (a pull request is
@@ -3939,9 +3941,9 @@ export type ConfigDirPinWire = z.infer<typeof ConfigDirPinSchema>;
  * resolves from any working directory, so the UI never has to know where the
  * work happened.
  *
- * `seq` is the transcript position the URL was captured at — the order the
- * thread opened them, and the dedupe key's tie-breaker. See
- * `utils/pull-request-capture.ts`.
+ * `seq` is the transcript position the URL was captured at — for a touched
+ * one, the tool result its record's time falls on — which orders them and
+ * breaks the dedupe key's ties. See `utils/pull-request-capture.ts`.
  */
 export const RunPullRequestSchema = z
   .object({
@@ -4307,7 +4309,8 @@ export const RunWireSchema = z.object({
       "When the run's newest transcript row was written — its last activity",
     ),
   /**
-   * The pull requests this run OPENED, oldest first.
+   * The pull requests this run opened, and those its CLI recorded it touching
+   * (shown beside them, deciding nothing), oldest first.
    *
    * Captured from the transcript rather than derived from the checkout — see
    * {@link RunPullRequestSchema} and `utils/pull-request-capture.ts` for why
@@ -4316,7 +4319,7 @@ export const RunWireSchema = z.object({
   pullRequests: z
     .array(RunPullRequestSchema)
     .describe(
-      'Pull requests this run opened, oldest first, as captured from the agent output',
+      'Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first',
     ),
   /**
    * The continues geniro has promised this run and not yet made — calls a

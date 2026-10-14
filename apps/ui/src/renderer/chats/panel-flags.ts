@@ -12,7 +12,7 @@ export const THREAD_PULL_REQUESTS_SETTLED_FLAG =
   'agents-panel:pull-requests-settled-open';
 
 /**
- * Show the whole list of pull requests this thread opened — in the PANEL, which
+ * Show the whole list of this thread's pull requests — in the PANEL, which
  * is the surface that can hold thirty-one of them.
  *
  * Called from the shelf above the composer, where only the current one is

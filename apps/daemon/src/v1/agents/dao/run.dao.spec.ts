@@ -598,6 +598,30 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('pullRequestsOf', () => {
+    it('answers only the pull requests a run opened, never the ones it touched', async () => {
+      const pr = (number: number) => ({
+        owner: 'acme',
+        repo: 'platform',
+        number,
+        url: `https://github.com/acme/platform/pull/${number}`,
+        seq: 1,
+      });
+      const opened = await dao.create({
+        pullRequests: JSON.stringify([pr(87)]),
+        touchedPullRequests: JSON.stringify([pr(6841)]),
+      });
+      const touchedOnly = await dao.create({
+        touchedPullRequests: JSON.stringify([pr(6841)]),
+      });
+
+      const byRun = await dao.pullRequestsOf([opened.id, touchedOnly.id]);
+
+      expect(byRun.get(opened.id)?.map((row) => row.number)).toEqual([87]);
+      expect(byRun.has(touchedOnly.id)).toBe(false);
+    });
+  });
+
   describe('readWork (missing run)', () => {
     it('answers null for a run id that does not exist, and does not throw', async () => {
       // The settle path reads this AFTER writing the status, so a run torn down

@@ -189,7 +189,7 @@ function pullRequestLabel(
 }
 
 /**
- * One pull request THIS THREAD opened, in the right-hand panel.
+ * One pull request THIS THREAD opened or touched, in the right-hand panel.
  *
  * The state is the ICON's — its colour and its shape — never a word beside the
  * number: within the settled group a merged pull request and an abandoned one

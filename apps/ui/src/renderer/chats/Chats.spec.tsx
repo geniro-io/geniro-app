@@ -1412,6 +1412,22 @@ describe('Chats — searching one conversation', () => {
     // The forward read a jump makes (`take: 'oldest'`) is answered with MORE
     // rows than the window has room for, which is what a hit far above the
     // tail looks like — a short answer there means the window reaches the end.
+    //
+    // The smallest page size the user can pick, because the window that answer
+    // fills is drawn in full: at the default 1000 jsdom renders a thousand
+    // bubbles and the test outran its timeout on a loaded machine. 250 rows
+    // still overflow the room, so the window still lands away from the tail.
+    (
+      window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }
+    ).geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      historyPageSize: 250,
+    });
     api.listRunItems.mockImplementation(
       (args: { take?: string; limit?: number }) =>
         Promise.resolve(
@@ -1429,6 +1445,9 @@ describe('Chats — searching one conversation', () => {
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
+    expect(api.listRunItems).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r1', limit: 250 }),
+    );
     const rows = await search(container, 'bloom');
     await act(async () => {
       rows[0]!.click();

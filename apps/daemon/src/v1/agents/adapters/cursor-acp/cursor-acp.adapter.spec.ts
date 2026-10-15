@@ -18,7 +18,15 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import { AgentAdapterRegistry } from '../../services/agent-adapter.registry';
@@ -125,17 +133,36 @@ function hostBlock(instructions: string): string {
   return `<${HOST_CONTEXT_TAG}>\n\n${HOST_CONTEXT_NOTE}\n\n${instructions}\n\n</${HOST_CONTEXT_TAG}>`;
 }
 
+/**
+ * What these cases assert about the child env. A cursor-agent session exports
+ * `CURSOR_DATA_DIR` into the shell that then runs the suite, and the turn
+ * inherits whatever this process already holds — so an assertion that the
+ * child has none fails before the test has said anything. Cleared here, and
+ * put back after, rather than deleted for the rest of the worker.
+ */
+const ISOLATED_ENV = [
+  'CURSOR_DATA_DIR',
+  'CURSOR_CONFIG_DIR',
+  'CURSOR_API_KEY',
+  'GENIRO_CURSOR_API_KEY',
+  'GENIRO_CLI_PATHS',
+  'CURSOR_AUTH_TOKEN',
+  'ANTHROPIC_FOUNDRY_API_KEY',
+] as const;
+
+beforeEach(() => {
+  for (const name of ISOLATED_ENV) {
+    vi.stubEnv(name, undefined);
+  }
+});
+
 afterEach(() => {
   for (const dir of dirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
-  delete process.env.GENIRO_CURSOR_API_KEY;
-  // The adapter now sources the user's OWN inherited key, so a test that sets
-  // it would otherwise leak into every later case's child env.
-  delete process.env.CURSOR_API_KEY;
-  delete process.env.GENIRO_CLI_PATHS;
-  delete process.env.CURSOR_AUTH_TOKEN;
-  delete process.env.ANTHROPIC_FOUNDRY_API_KEY;
+  // Restores what `beforeEach` stubbed, including a key a case set for itself
+  // (`CURSOR_API_KEY` and the rest), so it cannot leak into the next one.
+  vi.unstubAllEnvs();
 });
 
 /**

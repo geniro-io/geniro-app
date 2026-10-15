@@ -39,6 +39,23 @@ let readyListeners: () => void = () => undefined;
 const base = () => `http://${info.host}:${info.port}`;
 const auth = () => ({ authorization: `Bearer ${info.token}` });
 
+/**
+ * `fetch`, with the response body read to its end before it is returned.
+ *
+ * A case that read only `status` left the body unread, and its connection
+ * with it. The SIGTERM case's graceful close then waited on those
+ * connections: at load average 90–180 the daemon was still up when the case
+ * timed out in 5 runs of 21, and exited only at its own idle exit a minute
+ * later. With every body read it exited in 36–226ms, 10 runs of 10.
+ */
+async function request(url: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(url, init);
+  return new Response(await res.arrayBuffer(), {
+    status: res.status,
+    headers: res.headers,
+  });
+}
+
 /** Bounds a socket wait below the test's own timeout, so a hang names its step. */
 function within<T>(promise: Promise<T>, step: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -151,21 +168,21 @@ describe('the daemon boots and serves', () => {
   });
 
   it('answers its readiness probe', async () => {
-    const res = await fetch(`${base()}/health/check`);
+    const res = await request(`${base()}/health/check`);
     expect(res.status).toBe(200);
   });
 
   it('gates the REST API behind the launch token', async () => {
-    expect((await fetch(`${base()}/v1/chats`)).status).toBe(403);
+    expect((await request(`${base()}/v1/chats`)).status).toBe(403);
     expect(
-      (await fetch(`${base()}/v1/chats`, { headers: auth() })).status,
+      (await request(`${base()}/v1/chats`, { headers: auth() })).status,
     ).toBe(200);
   });
 
   it('builds the chat search index at boot — a search answers', async () => {
     // A missing table would make this a 500: `ChatTextIndexService.ensure`
     // only logs its own failure.
-    const res = await fetch(`${base()}/v1/chats/search?query=hello`, {
+    const res = await request(`${base()}/v1/chats/search?query=hello`, {
       headers: auth(),
     });
     expect(res.status).toBe(200);
@@ -181,16 +198,18 @@ describe('the daemon boots and serves', () => {
       '/swagger-api-yaml',
       '/swagger-api/reference',
     ]) {
-      expect((await fetch(`${base()}${path}`)).status).toBe(403);
-      const wrong = await fetch(`${base()}${path}`, {
+      expect((await request(`${base()}${path}`)).status).toBe(403);
+      const wrong = await request(`${base()}${path}`, {
         headers: { authorization: 'Bearer wrong' },
       });
       expect(wrong.status).toBe(403);
       expect(
-        (await fetch(`${base()}${path}`, { headers: auth() })).status,
+        (await request(`${base()}${path}`, { headers: auth() })).status,
       ).toBe(200);
     }
-    const res = await fetch(`${base()}/swagger-api-json`, { headers: auth() });
+    const res = await request(`${base()}/swagger-api-json`, {
+      headers: auth(),
+    });
     expect(res.status).toBe(200);
     const doc = (await res.json()) as { paths?: Record<string, unknown> };
     expect(Object.keys(doc.paths ?? {}).length).toBeGreaterThan(50);

@@ -247,6 +247,59 @@ export interface AnalysisConfig {
   effort: string | null;
 }
 
+/**
+ * One place encrypted share links are uploaded to, reached through the user's
+ * own CLI and login (`gcloud`, `aws`, or a program of their own as argv).
+ *
+ * TWIN PARSER: `ShareDestinationSchema` in
+ * `apps/daemon/src/v1/shares/shares.types.ts`, which receives these values
+ * (`PUT /v1/shares/config`); the shape and its limits are restated in
+ * `main/ipc-schemas.ts`. A field added here goes in both.
+ */
+export type ShareDestination =
+  | {
+      kind: 'gcs';
+      id: string;
+      name: string;
+      /** https origin the objects are served from; the link is `<linkBase>/<path>#k=<key>`. */
+      linkBase: string;
+      bucket: string;
+      prefix?: string;
+    }
+  | {
+      kind: 's3';
+      id: string;
+      name: string;
+      linkBase: string;
+      bucket: string;
+      prefix?: string;
+      profile?: string;
+      region?: string;
+    }
+  | {
+      kind: 'command';
+      id: string;
+      name: string;
+      linkBase: string;
+      /** argv tokens; `{file}` and `{object}` are substituted, nothing runs through a shell. */
+      upload: string[];
+      remove: string[];
+    };
+
+export interface SharingSettings {
+  destinations: ShareDestination[];
+  /** Where a press (and an agent) shares to; null shares nowhere. */
+  defaultDestinationId: string | null;
+  /** Whether an agent's `show_artifact(share: true)` may upload. Off unless turned on. */
+  agentsMayShare: boolean;
+}
+
+export const DEFAULT_SHARING: SharingSettings = {
+  destinations: [],
+  defaultDestinationId: null,
+  agentsMayShare: false,
+};
+
 export interface Settings {
   /** First-run onboarding finished (gates the renderer's initial route). */
   onboardingComplete: boolean;
@@ -390,6 +443,13 @@ export interface Settings {
    * binding loopback only whatever this says.
    */
   remoteAccessEnabled: boolean;
+  /**
+   * Where artifacts are shared to as encrypted links, and whether agents may
+   * share. Owned here (settings.json) and pushed to every daemon this app
+   * starts; the daemon keeps it in memory only. Desktop only: a paired device
+   * may not write it.
+   */
+  sharing: SharingSettings;
   /**
    * Delete a chat this many days after it was ARCHIVED, or `null` to keep the
    * archive for ever.
@@ -560,6 +620,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarCollapsed: false,
   notificationsEnabled: true,
   remoteAccessEnabled: true,
+  sharing: DEFAULT_SHARING,
   archiveRetentionDays: null,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
   agentOptions: {},

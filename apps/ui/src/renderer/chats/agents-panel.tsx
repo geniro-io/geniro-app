@@ -6,6 +6,7 @@ import {
   Download,
   FileText,
   LayoutTemplate,
+  Link2,
   NotebookPen,
   Search,
   Sparkles,
@@ -52,6 +53,7 @@ import {
 } from './agent-instances';
 import { ArtifactDialog } from './artifact-dialog';
 import type { RunArtifact } from './artifact-payload';
+import { ArtifactShareContext } from './artifact-share';
 import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
 import { ContextMeter } from './context-meter';
 import { ConversationTimeline } from './conversation-timeline';
@@ -2032,6 +2034,7 @@ export function AgentsPanel({
   // a second card's trigger closes the first before it opens. A set of open
   // ids modelled a side-by-side comparison the pointer cannot actually reach.
   const [openMcp, setOpenMcp] = useState<string | null>(null);
+  const sharing = useContext(ArtifactShareContext);
   // Which published page the popup is showing, or null. Held here rather than
   // per row so the popup survives the row list re-rendering under it, which it
   // does on every streamed token.
@@ -2755,7 +2758,13 @@ export function AgentsPanel({
                       <LayoutTemplate className="size-3.5 shrink-0 text-muted-foreground" />
                     }
                     meta={
-                      artifact.version > 1 ? `v${artifact.version}` : undefined
+                      <PageMeta
+                        version={artifact.version}
+                        shared={
+                          sharing !== null &&
+                          sharing.shareOf(artifact.artifactId) !== null
+                        }
+                      />
                     }
                   />
                 </li>
@@ -2812,5 +2821,33 @@ export function AgentsPanel({
         ) : null}
       </div>
     </aside>
+  );
+}
+
+/**
+ * A Pages row's trailing note: its version past the first, and a link glyph
+ * while the page has a live share link — named for a screen reader, since the
+ * glyph alone says nothing to one.
+ */
+function PageMeta({
+  version,
+  shared,
+}: {
+  version: number;
+  shared: boolean;
+}): React.JSX.Element | null {
+  if (version <= 1 && !shared) {
+    return null;
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      {version > 1 ? `v${version}` : null}
+      {shared ? (
+        <>
+          <Link2 aria-hidden="true" className="size-3 text-primary" />
+          <span className="sr-only">(shared)</span>
+        </>
+      ) : null}
+    </span>
   );
 }

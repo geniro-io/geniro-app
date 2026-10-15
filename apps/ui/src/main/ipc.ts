@@ -191,6 +191,8 @@ export function registerIpc(
   updates: UpdateService,
   terminals: TerminalSessions,
   remoteAccess?: () => RemoteAccess,
+  /** Told after a restart from Settings, which the supervisor's `onStarted` does not cover. */
+  afterRestart?: (handle: DaemonHandle | null) => void,
 ): IpcRegistry {
   // One instance for the app's lifetime, reading settings through the same
   // function every other handler here does — so the toggle it consults is
@@ -262,6 +264,7 @@ export function registerIpc(
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(IPC.onDaemonRestarted, handle);
     }
+    afterRestart?.(handle);
   };
 
   handle(IPC.getStatus, allowRemotelyRedacted(redactDaemonToken), () => {
@@ -356,7 +359,9 @@ export function registerIpc(
   // path alone — the desktop keeps them, since `refuseRemoteArgs` is never
   // consulted for a plain `ipcMain.handle` call.
   const updateSettingsRemotePolicy = allowRemotelyExceptFields(
-    ['cliPaths', 'daemonInspect'],
+    // `sharing` names the commands an upload runs and lets agents publish
+    // pages through the user's own logins: the desktop's call alone.
+    ['cliPaths', 'daemonInspect', 'sharing'],
     'sets a field the desktop alone may set',
   );
   handle(

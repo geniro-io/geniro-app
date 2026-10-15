@@ -6,6 +6,7 @@ import { Button } from '../components/ui/button';
 import { ArtifactDialog } from './artifact-dialog';
 import { ArtifactFrame } from './artifact-frame';
 import { ArtifactSaveButton, useArtifactSaver } from './artifact-save';
+import { ArtifactShareButton } from './artifact-share';
 import { SectionLabel } from './block-shell';
 import type { PublishedArtifact } from './published-artifact';
 import { useThreadOverride } from './thread-ui-memory';
@@ -66,6 +67,7 @@ export function ArtifactCard({
         saver={saver}
         className="size-5"
       />
+      <ArtifactShareButton artifact={artifact} className="size-5" />
       <Button
         type="button"
         variant="ghost"
@@ -143,11 +145,14 @@ export function ArtifactCard({
         open={full}
         onClose={() => setFull(false)}
         action={
-          <ArtifactSaveButton
-            artifact={artifact}
-            saver={saver}
-            className="size-7"
-          />
+          <>
+            <ArtifactSaveButton
+              artifact={artifact}
+              saver={saver}
+              className="size-7"
+            />
+            <ArtifactShareButton artifact={artifact} className="size-7" />
+          </>
         }
       />
     </div>

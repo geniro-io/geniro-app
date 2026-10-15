@@ -9,6 +9,7 @@ import {
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
+import { cameViaRemote } from '../../../auth/remote-marker';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import type { CallEnvelope } from '../../graphs/graphs.types';
 import { callerKey } from '../../graphs/utils/caller-key';
@@ -108,6 +109,7 @@ export class McpServerService {
         nodeId,
         gone.signal,
         conversationId,
+        cameViaRemote(req.headers),
       );
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
@@ -226,6 +228,8 @@ export class McpServerService {
     gone?: AbortSignal,
     /** See `handlePost` — null for the node's own conversation. */
     conversationId: string | null = null,
+    /** Whether the gateway proxied the request from a paired device. */
+    remote = false,
   ): Server {
     // WHO calls, for the call tools: this node, in this conversation.
     const caller = callerKey(nodeId, conversationId);
@@ -287,6 +291,7 @@ export class McpServerService {
         caller,
         requestId: extra.requestId,
         gone,
+        remote,
         whileCancellable: (call) =>
           this.whileCancellable(runId, caller, extra.requestId, call),
       };

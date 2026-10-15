@@ -83,6 +83,27 @@ describe('proxyHttp', () => {
     );
   });
 
+  it('marks the request as from a paired device, replacing any mark the client forged', async () => {
+    let received: IncomingMessage | null = null;
+    const daemon = createServer((req, res) => {
+      received = req;
+      res.end();
+    });
+    servers.push(daemon);
+    const handle = makeHandle(await listen(daemon), 'real-daemon-token');
+    const gateway = createServer((req, res) => proxyHttp(req, res, handle));
+    servers.push(gateway);
+    const gatewayPort = await listen(gateway);
+
+    await fetch(`http://127.0.0.1:${gatewayPort}/v1/shares`, {
+      method: 'POST',
+      // A phone pretending to be the desktop.
+      headers: { 'x-geniro-via': 'desktop' },
+    });
+
+    expect(received!.headers['x-geniro-via']).toBe('remote');
+  });
+
   it("never puts the daemon's token anywhere in the response sent back to the client", async () => {
     const daemon = createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -178,6 +199,7 @@ describe('proxyUpgrade', () => {
             // a hand-rolled client) from sending them on this path as well.
             'Authorization: Bearer client-forged-token',
             'Cookie: geniro_remote=phone-session',
+            'X-Geniro-Via: desktop',
             '',
             '',
           ].join('\r\n'),
@@ -209,6 +231,8 @@ describe('proxyUpgrade', () => {
     // must never reach the daemon it did not authenticate to.
     expect(daemonRequestHeaders?.authorization).toBeUndefined();
     expect(daemonRequestHeaders?.cookie).toBeUndefined();
+    // The upgrade is marked too, and the client's own mark is dropped.
+    expect(daemonRequestHeaders?.['x-geniro-via']).toBe('remote');
   });
 
   it('destroys both sockets when the client side closes', async () => {

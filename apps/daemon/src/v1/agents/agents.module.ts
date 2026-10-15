@@ -459,6 +459,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // And the store behind it: a WORKFLOW node publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,
+    // For v1/shares, which encrypts the same document a saved file carries.
+    ArtifactPageService,
     PlanBroker,
     NotifyBroker,
     PartialStreamService,

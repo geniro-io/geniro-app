@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => mocks.userData) },
 }));
 
-import { readSettings, updateSettings } from './settings';
+import { onSettingsWritten, readSettings, updateSettings } from './settings';
 
 beforeEach(() => {
   mocks.userData = mkdtempSync(join(tmpdir(), 'geniro-settings-spec-'));
@@ -493,5 +493,88 @@ describe('updateSettings over a file that does not parse', () => {
       chmodSync(settingsFile(), 0o600);
     }
     expect(readFileSync(settingsFile(), 'utf8')).toBe(original);
+  });
+});
+
+describe('sharing settings', () => {
+  const GCS = {
+    kind: 'gcs',
+    id: 'company',
+    name: 'Company',
+    linkBase: 'https://artifacts.example.com',
+    bucket: 'company-share',
+  };
+
+  it('defaults to nowhere to share and agents not allowed', () => {
+    expect(readSettings().sharing).toEqual({
+      destinations: [],
+      defaultDestinationId: null,
+      agentsMayShare: false,
+    });
+  });
+
+  it('one broken destination costs only itself — the others and the switch survive', () => {
+    writeRaw({
+      sharing: {
+        destinations: [
+          GCS,
+          { ...GCS, id: 'plain-http', linkBase: 'http://insecure.example' },
+          { ...GCS, name: 'Duplicate id' },
+          {
+            kind: 'command',
+            id: 'shell',
+            name: 'Shell',
+            linkBase: 'https://x.example',
+            upload: ['/bin/sh', '-c', 'put {file}'],
+            remove: ['/bin/rm'],
+          },
+        ],
+        defaultDestinationId: 'company',
+        agentsMayShare: true,
+      },
+    });
+
+    expect(readSettings().sharing).toEqual({
+      destinations: [GCS],
+      defaultDestinationId: 'company',
+      agentsMayShare: true,
+    });
+  });
+
+  it('a default naming a dropped destination falls back to none', () => {
+    writeRaw({
+      sharing: {
+        destinations: [GCS],
+        defaultDestinationId: 'gone',
+        agentsMayShare: 'yes',
+      },
+    });
+
+    expect(readSettings().sharing).toEqual({
+      destinations: [GCS],
+      defaultDestinationId: null,
+      agentsMayShare: false,
+    });
+  });
+});
+
+describe('onSettingsWritten', () => {
+  it('tells a listener every write, with the settings as written', () => {
+    const seen: boolean[] = [];
+    const stop = onSettingsWritten((settings) =>
+      seen.push(settings.sharing.agentsMayShare),
+    );
+
+    updateSettings({
+      sharing: {
+        destinations: [],
+        defaultDestinationId: null,
+        agentsMayShare: true,
+      },
+    });
+    stop();
+    updateSettings({ sidebarCollapsed: true });
+
+    expect(seen).toEqual([true]);
   });
 });

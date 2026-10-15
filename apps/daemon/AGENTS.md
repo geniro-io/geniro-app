@@ -2,7 +2,7 @@
 
 The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent execution, workflow graphs and the call runtime, geniro's own MCP endpoint, the tasks board, stats and diagnostics. Project-wide commands, conventions and constraints are in the root `AGENTS.md`; the module layout is in `.claude/rules/daemon-module-structure.md`, adapters in `agent-adapters.md`, MCP tools in `mcp-tools.md`, queries in `database-queries.md`. This file holds only what those do not: the daemon's non-obvious invariants, by area.
 
-**Contents**: Boot, process and storage · Runs and runtime columns · Agents: adapters · Agents: turns and off-turn work · Host tools · Question cards · Pull requests and task lists · Workflows and passes · Workflow call runtime · v1/mcp · Projects and tasks · Stats · Diagnostics and notifications · Handoff and sign-in · Importing CLI conversations · ACP and cursor transport · Auto-compaction · Agent caches and MCP configuration · Plan limits · Daemon endpoints (loopback)
+**Contents**: Boot, process and storage · Runs and runtime columns · Agents: adapters · Agents: turns and off-turn work · Host tools · Question cards · Pull requests and task lists · Workflows and passes · Workflow call runtime · v1/mcp · Projects and tasks · Shares · Stats · Diagnostics and notifications · Handoff and sign-in · Importing CLI conversations · ACP and cursor transport · Auto-compaction · Agent caches and MCP configuration · Plan limits · Daemon endpoints (loopback)
 
 ---
 
@@ -114,7 +114,8 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - `show_comparison`: recommendation is matched to an option by name (case- and whitespace-insensitive).
 - `show_gallery` carries paths only; the daemon never opens them, and the renderer reads them through the image route's guards. `MAX_GALLERY_IMAGES` bounds reads per call.
 - `show_artifact`:
-  - Framed `sandbox="allow-scripts"`, never `allow-same-origin`, never `srcdoc`, under the route's own CSP.
+  - Framed `sandbox="allow-scripts"`, never `allow-same-origin`, never `srcdoc`, under the route's own CSP. The one `srcdoc` is inside a share envelope (`v1/shares`), where the page is decrypted in the reader's browser under the same CSP as a meta tag.
+  - `share: true` (listed only while agents may share) shares AFTER the publish; a refused share is a `Not shared:` line in the receipt and never fails the publish. `ShareService.shareForAgent` re-checks the switch itself, because a kept CLI can hold a description listed while it was on.
   - Caps refuse, never truncate. A refused page image refuses the whole page.
   - The serving key is registered with `registerSecret` at its mint site.
   - Workflow call-capable nodes publish too; publishers are dropped with the run, not at pass end.
@@ -233,6 +234,17 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - `create_task` defaults a new card to `backlog`; never default one into an intake column — an armed project starts an agent on it within seconds.
 - A reported merge (`POST /v1/tasks/:taskId/pull-request-merged`) moves only a card still `in_review`, only for a URL its run captured (else `TASK_PULL_REQUEST_UNKNOWN`); a card moved elsewhere is a no-op.
 - A task file is bound by PATH, never copied; `DELETE /v1/tasks/:taskId/files/:attachmentId` drops the reference only and never deletes the user's file.
+
+### Shares
+
+`v1/shares` — encrypted share links for artifacts (`ShareService`, `/v1/shares/*`, all behind `DesktopOnlyGuard`).
+
+- The config is pushed by Electron main (`PUT /v1/shares/config`) on every daemon start, after a Settings restart and after each settings write that changed it; it is held in memory only. Until the first push nothing is shared (`configReceivedAt` null).
+- A share reads the newest stored version (`ArtifactStoreService.latest`, in-process only), builds the saved-file document (`ArtifactPageService.document`) with the pressed theme baked in (`portable-artifact.ts`; an agent's share reuses the last press's theme), encrypts it (`share-envelope.ts`: AES-256-GCM, fresh IV per upload, AAD `geniro-share-v1`) and uploads only the envelope from a 0600 temp file.
+- One share per (run, artifact): sharing again re-uploads to the same object under the same key, so the link handed out keeps working. Operations on one page are serialized.
+- Keys: `ShareKeychain` (`services/share-keychain.service.ts`) writes through `security -i` on stdin (never argv), confirms by reading back, and `registerSecret`s every key it mints or reads.
+- Destination CLIs run through `runManagedCommand` (`v1/agents/utils/managed-command.ts`): argv only, ProcessRegistry, child journal, group kill at the deadline. Custom command tokens refuse shell characters and a shell program, on both sides of the settings twin.
+- Revoke: remote delete first, then the key, then the row. A failed remote delete keeps both and marks the row `revoke-failed`; an object already gone counts as revoked only where the CLI says so plainly — gcloud's "matched no objects", or `aws s3 rm`'s exit 0; a custom command is judged by its exit status alone, and a timeout never counts as gone. Never touched by run teardown or the archive sweep.
 
 ### Stats
 

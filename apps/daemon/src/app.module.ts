@@ -20,6 +20,7 @@ import { NotificationsModule } from './v1/notifications/notifications.module';
 import { WsPresenceService } from './v1/notifications/services/ws-presence.service';
 import { ProjectsModule } from './v1/projects/projects.module';
 import { RunsModule } from './v1/runs/runs.module';
+import { SharesModule } from './v1/shares/shares.module';
 import { StatsModule } from './v1/stats/stats.module';
 import { TasksModule } from './v1/tasks/tasks.module';
 
@@ -56,6 +57,7 @@ export class AppModule {
         StatsModule,
         ProjectsModule,
         TasksModule,
+        SharesModule,
       ],
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },

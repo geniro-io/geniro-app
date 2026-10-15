@@ -40,6 +40,11 @@ vi.mock('./daemon-client', () => ({
   DaemonClient: class {
     connect(): void {}
     close(): void {}
+    // The Stats page subscribes on mount, and a test can open on it: a
+    // phone-navigation test leaves `#/stats` in the URL for the next one.
+    onUsageRecorded(): () => void {
+      return () => {};
+    }
   },
 }));
 vi.mock('./terminal/terminal-panel', () => ({ TerminalPanel: () => null }));

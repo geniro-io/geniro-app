@@ -8,6 +8,7 @@ import type {
 } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { callIdOf, callNumber } from '../../agents/utils/call-seed';
+import { redactSecrets } from '../../diagnostics/utils/redact';
 import type {
   CalleePoolPlan,
   CalleeTurnOutcome,
@@ -29,7 +30,11 @@ import {
   poolSize,
 } from '../utils/agent-pool';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
-import { PUBLISHED_PAGES_NOTE } from '../utils/callee-text';
+import {
+  flattenText,
+  LEFT_RUNNING_COMMAND_MAX,
+  PUBLISHED_PAGES_NOTE,
+} from '../utils/callee-text';
 import {
   callerConversationOf,
   callerKey,
@@ -4768,6 +4773,20 @@ function poolEnvelopeFields(outcome: CalleeTurnOutcome): {
   };
 }
 
+/**
+ * `text` as a markdown code span that survives the backticks inside it: the
+ * fence is one longer than its longest run, padded where the text touches it.
+ */
+function inlineCode(text: string): string {
+  const longest = Math.max(
+    0,
+    ...[...text.matchAll(/`+/g)].map((run) => run[0].length),
+  );
+  const fence = '`'.repeat(longest + 1);
+  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
 function toEnvelope(
   callId: string,
   calleeId: string,
@@ -4777,6 +4796,16 @@ function toEnvelope(
   if (outcome.status === 'completed') {
     const stillOut = outcome.delegatesStillOut ?? 0;
     const callsOut = outcome.callsStillOut ?? 0;
+    const commandsOut = outcome.shellsStillOut?.length ?? 0;
+    // Redacted: the words go to the CALLER's provider, and a command line
+    // can carry a credential (`TOKEN=… pnpm dev`).
+    const commands = (outcome.shellsStillOut ?? []).flatMap((command) => {
+      const line =
+        command === null
+          ? ''
+          : flattenText(redactSecrets(command), LEFT_RUNNING_COMMAND_MAX);
+      return line === '' ? [] : [line];
+    });
     // Said IN the envelope, because the text alone reads as a finished
     // answer — which is exactly how a partial one was taken for done.
     const notes = [
@@ -4790,6 +4819,11 @@ function toEnvelope(
             `This call is NOT finished: ${calleeId} ended with ${callsOut} call(s) of its own still running, and this call could not wait for them any longer. Continue the conversation (call_agent with thread: '${callId}') to collect what they report.`,
           ]
         : []),
+      ...(commandsOut > 0
+        ? [
+            `${calleeId} left ${commandsOut} command(s) it started in this call running in the background${commands.length > 0 ? `: ${commands.map(inlineCode).join('; ')}` : ''}. They keep running after this result. To stop them, continue the conversation (call_agent with thread: '${callId}') and ask ${calleeId} to; otherwise tell the user they are still running.`,
+          ]
+        : []),
       ...(published.size > 0 ? [PUBLISHED_PAGES_NOTE] : []),
     ];
     const result: CallSettledResult = {
@@ -4799,6 +4833,8 @@ function toEnvelope(
       text: outcome.finalText ?? '',
       ...(stillOut > 0 ? { delegates_still_running: stillOut } : {}),
       ...(callsOut > 0 ? { calls_still_running: callsOut } : {}),
+      ...(commandsOut > 0 ? { commands_still_running: commandsOut } : {}),
+      ...(commands.length > 0 ? { running_commands: commands } : {}),
       ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
       ...(published.size > 0 ? { artifacts: [...published.values()] } : {}),
     };

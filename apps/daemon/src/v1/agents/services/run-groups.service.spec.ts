@@ -2,13 +2,20 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
-import type { EntityManager } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  defineConfig,
+  type EntityManager,
+  MikroORM,
+  UnderscoreNamingStrategy,
+} from '@mikro-orm/sqlite';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Run } from '../../runs/entity/run.entity';
-import type { RunGroup } from '../../runs/entity/run-group.entity';
-import type { RunDao } from '../dao/run.dao';
-import type { RunGroupDao } from '../dao/run-group.dao';
+import { ProjectDao } from '../../projects/dao/project.dao';
+import { Project } from '../../projects/entity/project.entity';
+import { Run } from '../../runs/entity/run.entity';
+import { RunGroup } from '../../runs/entity/run-group.entity';
+import { RunDao } from '../dao/run.dao';
+import { RunGroupDao } from '../dao/run-group.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { RunGroupsService } from './run-groups.service';
 
@@ -61,27 +68,50 @@ class FakeRunDao {
   }
 }
 
+type BoundProject = { id: string; groupId: string | null };
+
+class FakeProjectDao {
+  readonly projects: BoundProject[] = [];
+  async releaseGroupBinding(groupId: string): Promise<number> {
+    const matches = this.projects.filter(
+      (project) => project.groupId === groupId,
+    );
+    for (const project of matches) {
+      project.groupId = null;
+    }
+    return matches.length;
+  }
+}
+
 function setup(): {
   service: RunGroupsService;
   groupDao: FakeGroupDao;
   runDao: FakeRunDao;
+  projectDao: FakeProjectDao;
   bus: AgentEventBus;
 } {
   const groupDao = new FakeGroupDao();
   const bus = new AgentEventBus();
   const runDao = new FakeRunDao();
+  const projectDao = new FakeProjectDao();
   const em = {
-    fork: () => ({ flush: async () => undefined }),
+    fork: () => ({
+      flush: async () => undefined,
+      transactional: async (fn: (tx: EntityManager) => Promise<void>) =>
+        fn({} as EntityManager),
+    }),
   } as unknown as EntityManager;
   return {
     service: new RunGroupsService(
       em,
       groupDao as unknown as RunGroupDao,
       runDao as unknown as RunDao,
+      projectDao as unknown as ProjectDao,
       bus,
     ),
     groupDao,
     runDao,
+    projectDao,
     bus,
   };
 }
@@ -313,6 +343,26 @@ describe('RunGroupsService', () => {
     ]);
   });
 
+  it('deleting a group RELEASES every project bound to it and leaves the rest alone', async () => {
+    const { service, runDao, projectDao } = setup();
+    const group = await service.create({ name: 'Boards' });
+    const other = await service.create({ name: 'Other' });
+    projectDao.projects.push(
+      { id: 'p1', groupId: group.id },
+      { id: 'p2', groupId: group.id },
+      { id: 'p3', groupId: other.id },
+    );
+    runDao.runs.push({ id: 'r1', groupId: group.id } as Run);
+
+    await service.remove(group.id);
+
+    expect(projectDao.projects.map((project) => project.groupId)).toEqual([
+      null,
+      null,
+      other.id,
+    ]);
+  });
+
   it('404s rather than silently succeeding for a group that does not exist', async () => {
     const { service } = setup();
     await expect(service.assertExists('nope')).rejects.toThrow(/not found/);
@@ -368,5 +418,85 @@ describe('RunGroupsService', () => {
   it('separator handling is the platform’s, not a hardcoded slash', () => {
     // Guards the one assumption every path test above rests on.
     expect(sep).toBe('/');
+  });
+});
+
+describe('RunGroupsService.remove (in-memory sqlite)', () => {
+  let orm: MikroORM;
+  let service: RunGroupsService;
+  let projectDao: ProjectDao;
+
+  beforeAll(async () => {
+    orm = await MikroORM.init(
+      defineConfig({
+        dbName: ':memory:',
+        entities: [Project, Run, RunGroup],
+        ignoreUndefinedInQuery: true,
+        allowGlobalContext: true,
+        namingStrategy: UnderscoreNamingStrategy,
+        discovery: { checkDuplicateFieldNames: false },
+      }),
+    );
+    await orm.schema.create();
+  });
+
+  afterAll(async () => {
+    await orm.close(true);
+  });
+
+  beforeEach(async () => {
+    await orm.schema.clear();
+    const em = orm.em.fork();
+    projectDao = new ProjectDao(em);
+    service = new RunGroupsService(
+      em,
+      new RunGroupDao(em),
+      new RunDao(em),
+      projectDao,
+      new AgentEventBus(),
+    );
+  });
+
+  it('nulls every project.groupId when its sidebar group is deleted and leaves other bindings', async () => {
+    const bound = await service.create({ name: 'Board group' });
+    const other = await service.create({ name: 'Other' });
+    const project = await projectDao.create({
+      name: 'Geniro',
+      folder: '/tmp/geniro-run-groups-remove-spec',
+      taskKey: 'GEN',
+      groupId: bound.id,
+    });
+    const kept = await projectDao.create({
+      name: 'Other board',
+      folder: '/tmp/geniro-run-groups-remove-spec-other',
+      taskKey: 'OTH',
+      groupId: other.id,
+    });
+    const softBound = await projectDao.create({
+      name: 'Gone board',
+      folder: '/tmp/geniro-run-groups-remove-spec-gone',
+      taskKey: 'GON',
+      groupId: bound.id,
+    });
+    const em = orm.em.fork();
+    await em
+      .createQueryBuilder(Project)
+      .update({ deletedAt: new Date() })
+      .where({ id: softBound.id })
+      .execute();
+
+    await service.remove(bound.id);
+
+    const read = new ProjectDao(orm.em.fork());
+    expect((await read.getById(project.id))?.groupId).toBeNull();
+    expect((await read.getById(kept.id))?.groupId).toBe(other.id);
+    const softRow = await orm.em
+      .fork()
+      .findOne(
+        Project,
+        { id: softBound.id },
+        { filters: { softDelete: false } },
+      );
+    expect(softRow?.groupId).toBeNull();
   });
 });

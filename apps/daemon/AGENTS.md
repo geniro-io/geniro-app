@@ -365,4 +365,4 @@ Destructive or irreversible routes (and one that only looks it — `DELETE /v1/t
 - `POST /v1/chats/:runId/retry` — closes the kept session (refused while working).
 - `POST /v1/chats/:runId/shells/kill` — signals the agent's command tree.
 - `PUT /v1/agents/mcp`, `PUT /v1/agents/mcp/config`, `POST /v1/agents/mcp/servers`, `POST /v1/agents/mcp/plugin-servers` — write the user's own CLI config (see MCP config writes).
-- `DELETE /v1/groups/:groupId` releases its runs; it never deletes chats.
+- `DELETE /v1/groups/:groupId` releases its runs and the projects bound to it; it never deletes chats or boards.

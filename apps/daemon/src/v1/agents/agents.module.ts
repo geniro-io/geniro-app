@@ -6,6 +6,7 @@ import { Logger, Module } from '@nestjs/common';
 import { environment } from '../../environments';
 import { DAEMON_VERSION } from '../../utils/daemon-version';
 import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
+import { ProjectDao } from '../projects/dao/project.dao';
 import type { AdapterDaemonDeps } from './adapters/adapter.types';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { CodexAdapter } from './adapters/codex/codex.adapter';
@@ -390,6 +391,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     CallContextDao,
     RunDao,
     RunGroupDao,
+    ProjectDao,
     {
       // Every CLI the daemon drives, each built by its own `forDaemon` — which
       // is where that CLI decides its directories, its stores and its probes.

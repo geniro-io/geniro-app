@@ -77,6 +77,7 @@ export function Dialog({
   children,
   className,
   fullScreen = false,
+  flush = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -85,6 +86,11 @@ export function Dialog({
   className?: string;
   /** Fill the window, with no card border, rounded corners or content padding. */
   fullScreen?: boolean;
+  /**
+   * No content padding, in a card: the content draws its own edges and
+   * scrolls its own parts (a hosted chat's transcript over its composer).
+   */
+  flush?: boolean;
 }): React.JSX.Element | null {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   // Read through a ref rather than put in the effect's dependencies: callers
@@ -256,7 +262,7 @@ export function Dialog({
           <div
             className={cn(
               'min-h-0 flex-1 overflow-y-auto break-words',
-              !fullScreen && 'px-5 py-4',
+              !fullScreen && !flush && 'px-5 py-4',
             )}>
             {children}
           </div>

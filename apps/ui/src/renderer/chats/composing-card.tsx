@@ -6,6 +6,7 @@ import {
   LayoutTemplate,
   ListChecks,
   ScrollText,
+  Sparkles,
   Table2,
 } from 'lucide-react';
 
@@ -52,6 +53,11 @@ const KIND_META: Record<
   comparison: { icon: Table2, noun: 'a comparison', label: 'Comparison' },
   gallery: { icon: Images, noun: 'a gallery', label: 'Gallery' },
   findings: { icon: ScrollText, noun: 'a review', label: 'Findings' },
+  recommendations: {
+    icon: Sparkles,
+    noun: 'recommendations',
+    label: 'Recommendations',
+  },
   patch: { icon: FileDiff, noun: 'a change', label: 'Proposed change' },
   plan: { icon: ListChecks, noun: 'a plan', label: 'Proposed plan' },
 };
@@ -201,6 +207,7 @@ function Skeleton({ kind }: { kind: GeniroCardKind }): React.JSX.Element {
       );
     case 'plan':
     case 'findings':
+    case 'recommendations':
       // One silhouette for two cards, because they genuinely have one: an
       // ordered run of rows, each a marker and a line. Splitting them would be
       // two copies of the same JSX differing in nothing a reader could see.

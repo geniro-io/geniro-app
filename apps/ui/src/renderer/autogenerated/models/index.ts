@@ -1223,6 +1223,63 @@ export interface AgentUsageCapability {
 /**
  * 
  * @export
+ * @interface AnalyzeThreadDto
+ */
+export interface AnalyzeThreadDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AnalyzeThreadDto
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    cwd?: string;
+    /**
+     * The user's focus or extra instructions for this analysis
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    focus?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
+     * @memberof AnalyzeThreadDto
+     */
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+}
+
+
+/**
+ * 
+ * @export
  * @interface AppProcessThread
  */
 export interface AppProcessThread {
@@ -1305,6 +1362,37 @@ export interface AppProcessesDto {
      * @memberof AppProcessesDto
      */
     unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ApplyRecommendationsDto
+ */
+export interface ApplyRecommendationsDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof ApplyRecommendationsDto
+     */
+    cardSeq: number;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ApplyRecommendationsDto
+     */
+    ids: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ApplyRecommendationsDto
+     */
+    note?: string;
+    /**
+     * ID generated once per press and reused for retries
+     * @type {string}
+     * @memberof ApplyRecommendationsDto
+     */
+    clientMessageId: string;
 }
 
 /**
@@ -3500,7 +3588,9 @@ export const ItemKind = {
     ShowMetrics: 'show_metrics',
     ShowComparison: 'show_comparison',
     ShowGallery: 'show_gallery',
-    ShowArtifact: 'show_artifact'
+    ShowArtifact: 'show_artifact',
+    Recommendations: 'recommendations',
+    RecommendationOutcome: 'recommendation_outcome'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -4902,6 +4992,18 @@ export interface RunDto {
     taskIdentifier: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    analysisSourceRunId: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    analysisSourceSeq: number | null;
+    /**
+     * 
      * @type {number}
      * @memberof RunDto
      */
@@ -6003,6 +6105,12 @@ export interface SaveWorkflowDto {
      * @memberof SaveWorkflowDto
      */
     workflow: Workflow;
+    /**
+     * The `hash` of the version this save was made from; a file changed since is refused 409 WORKFLOW_CHANGED
+     * @type {string}
+     * @memberof SaveWorkflowDto
+     */
+    baseHash?: string;
 }
 /**
  * 
@@ -6705,6 +6813,310 @@ export const TaskStatus = {
     Failed: 'failed'
 } as const;
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
+
+/**
+ * 
+ * @export
+ * @interface ThreadAnalysisDto
+ */
+export interface ThreadAnalysisDto {
+    /**
+     * 
+     * @type {ThreadAnalysisDtoAnalysis}
+     * @memberof ThreadAnalysisDto
+     */
+    analysis: ThreadAnalysisDtoAnalysis | null;
+}
+/**
+ * 
+ * @export
+ * @interface ThreadAnalysisDtoAnalysis
+ */
+export interface ThreadAnalysisDtoAnalysis {
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    id: string;
+    /**
+     * 
+     * @type {RunStatus}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    status: RunStatus;
+    /**
+     * 
+     * @type {RunAwaiting}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    awaiting: RunAwaiting | null;
+    /**
+     * Units of background work this run is being held for; 0 when the agent itself is working
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    holdingFor: number;
+    /**
+     * Agents of this run waiting on their own calls; 0 when none is waiting
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    awaitingCalls: number;
+    /**
+     * DAG agents of this workflow run inside a turn (calls excluded); 0 when a message would be taken now
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    rootsWorking: number;
+    /**
+     * Detached commands this run still has running; 0 when none are out
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    shellsOpen: number;
+    /**
+     * Background sub-agents this run still has out; 0 when none are out
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    subagentsOut: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    workflowId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    cwd: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    startSha: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    startDirty: boolean | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    approval: ChatApprovalMode | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    effort: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    contextWindow: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    autoCompactPercent: number | null;
+    /**
+     * Every OTHER model setting this run's next turn asks for, keyed by the CLI's own parameter id; {} when none are set. Sent back verbatim — geniro holds no vocabulary for these
+     * @type {{ [key: string]: string; }}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    modelParameters: { [key: string]: string; };
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    contextTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    contextWindowTokens: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    configDir: string | null;
+    /**
+     * 
+     * @type {ConfigDirPin}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    configDirPin: ConfigDirPin | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    groupId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    taskId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    taskIdentifier: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    analysisSourceRunId: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    analysisSourceSeq: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    pinnedPosition: number | null;
+    /**
+     * 
+     * @type {RunGroupColor}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    color: RunGroupColor | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    createdAt: string;
+    /**
+     * The run's last-activity time
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    updatedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    lastMessage: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    lastActivityAt: string | null;
+    /**
+     * Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first
+     * @type {Array<RunPullRequest>}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    pullRequests: Array<RunPullRequest>;
+    /**
+     * Calls a usage limit stopped that geniro continues when the window reopens
+     * @type {Array<RunResetWake>}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    resetWakes: Array<RunResetWake>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    archivedAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    attentionAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    seenAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    notes: string | null;
+    /**
+     * Each agent's own task list as it stands now, folded from the whole transcript
+     * @type {Array<RunTaskGroup>}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    taskList: Array<RunTaskGroup>;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    workedMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    toolCalls: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    promptCacheExpiresAt: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    promptCacheTtlMs: number | null;
+    /**
+     * 
+     * @type {PromptCacheTtlReason}
+     * @memberof ThreadAnalysisDtoAnalysis
+     */
+    promptCacheTtlReason: PromptCacheTtlReason | null;
+}
+
 
 
 /**
@@ -7459,6 +7871,12 @@ export interface WorkflowFileDto {
      * @memberof WorkflowFileDto
      */
     workflow: Workflow;
+    /**
+     * The file's version as stored — send it back as a save's `baseHash` so a save over a newer file is refused
+     * @type {string}
+     * @memberof WorkflowFileDto
+     */
+    hash: string;
 }
 /**
  * 

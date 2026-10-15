@@ -2,7 +2,7 @@ import {
   type GlobalChatSearchQuery,
   HOST_SEARCH_CHATS_TOOL,
 } from '../../../agents/chat.types';
-import type { HistoryArgs } from '../../mcp.types';
+import type { ToolArgs } from '../../mcp.types';
 import { HistoryMcpTool } from '../history-mcp-tool';
 import { searchChatsInstructions } from './search-chats.instructions';
 import { readSearchChatsArgs } from './search-chats.reader';
@@ -22,7 +22,7 @@ export class SearchChatsTool extends HistoryMcpTool<GlobalChatSearchQuery> {
 
   protected read(
     args: Record<string, unknown>,
-  ): HistoryArgs<GlobalChatSearchQuery> {
+  ): ToolArgs<GlobalChatSearchQuery> {
     return readSearchChatsArgs(args);
   }
 

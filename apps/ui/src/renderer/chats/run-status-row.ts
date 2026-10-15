@@ -4,9 +4,10 @@ import type { RunStatusEvent } from '../daemon-client';
 /**
  * The run-row fields one `run_status` announce sets, the same way wherever the
  * row is held: the chat screen's sidebar patch (`patchRow` in use-chat-run.ts)
- * and the workflow dock's copy of its run (`runRowPatch` in
- * use-workflow-chat.ts). Each used to carry its own reading of these rules, and
- * nothing checked that the two agreed.
+ * a hosted chat's copy of its run (`runRowPatch` in use-hosted-chat.ts — the
+ * builder's dock and the analysis popup), and the Analyze button's reading of
+ * an analysis (`useThreadAnalysis`). Each used to carry its own reading of
+ * these rules, and nothing checked that they agreed.
  *
  * ABSENT asserts nothing, so an activity announce cannot lower a value it never
  * meant to touch: each field is set only when the event carries it. `status` is

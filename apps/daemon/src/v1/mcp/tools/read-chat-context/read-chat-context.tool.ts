@@ -2,7 +2,7 @@ import {
   type ChatContextQuery,
   HOST_READ_CHAT_CONTEXT_TOOL,
 } from '../../../agents/chat.types';
-import type { HistoryArgs } from '../../mcp.types';
+import type { ToolArgs } from '../../mcp.types';
 import { HistoryMcpTool } from '../history-mcp-tool';
 import { readChatContextInstructions } from './read-chat-context.instructions';
 import { readChatContextArgs } from './read-chat-context.reader';
@@ -20,7 +20,7 @@ export class ReadChatContextTool extends HistoryMcpTool<ChatContextQuery> {
     return readChatContextSchema();
   }
 
-  protected read(args: Record<string, unknown>): HistoryArgs<ChatContextQuery> {
+  protected read(args: Record<string, unknown>): ToolArgs<ChatContextQuery> {
     return readChatContextArgs(args);
   }
 

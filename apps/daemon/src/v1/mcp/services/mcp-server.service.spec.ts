@@ -11,6 +11,7 @@ import { chatSearchDb } from '../../agents/__tests__/chat-search-db';
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
   HISTORY_RESULT_PREFACE,
+  HOST_ANALYZED_THREAD_TOOL,
   HOST_ARTIFACT_TOOL,
   HOST_BOARD_TOOLS,
   HOST_CHART_TOOL,
@@ -23,10 +24,14 @@ import {
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_RECOMMENDATION_MARKS_TOOL,
+  HOST_RECOMMENDATIONS_TOOL,
   HOST_SEARCH_CHATS_TOOL,
+  HOST_WORKFLOW_CHANGE_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
 } from '../../agents/chat.types';
 import { ChatSearchIndexDao } from '../../agents/dao/chat-search-index.dao';
+import { AnalysisBroker } from '../../agents/services/analysis.broker';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
@@ -37,6 +42,7 @@ import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
+import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import {
   MAX_ARTIFACT_IMAGE_BYTES,
@@ -62,6 +68,7 @@ import {
 } from '../../graphs/graphs.types';
 import { CallBroker } from '../../graphs/services/call-broker.service';
 import { TaskBoardBroker } from '../../graphs/services/task-board.broker';
+import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
 import { ANSWERING_A_CALL } from '../../graphs/utils/callee-text';
 import { callerKey } from '../../graphs/utils/caller-key';
 import { AgentKind } from '../../runs/runs.types';
@@ -127,6 +134,10 @@ function service(
   taskBoard = new TaskBoardBroker(),
   // Never asked by the cases that pass none; the history cases hand a real one.
   chatSearch = new GlobalChatSearchService({} as ChatSearchIndexDao),
+  analysis = new AnalysisBroker(),
+  // Never asked by the cases that list tools; the analysis cases hand doubles.
+  threads = {} as ThreadReaderService,
+  workflowChanges = {} as WorkflowChangeService,
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -143,6 +154,9 @@ function service(
       notices,
       board: taskBoard,
       history: chatSearch,
+      analysis,
+      threads,
+      workflowChanges,
     }),
     {
       token: 'launch',
@@ -196,6 +210,17 @@ async function everyHostTool(): Promise<ToolListing[]> {
   }
   const board = new TaskBoardBroker();
   board.install({ tools: () => BOARD_TOOLS, call: noop });
+  const analysis = new AnalysisBroker();
+  analysis.register('run-1', 'agent', {
+    turn: {
+      analysisRunId: 'run-1',
+      sourceRunId: 'source',
+      snapshotSeq: 0,
+      sourceWorking: false,
+    },
+    report: noop,
+    mark: noop,
+  });
   const { json } = await post(
     service(
       new CallBroker(),
@@ -210,6 +235,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
       artifacts,
       notices,
       board,
+      undefined,
+      analysis,
     ),
     'run-1',
     'agent',
@@ -2763,6 +2790,10 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_NOTIFY_TOOL,
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
+      HOST_ANALYZED_THREAD_TOOL,
+      HOST_RECOMMENDATIONS_TOOL,
+      HOST_RECOMMENDATION_MARKS_TOOL,
+      HOST_WORKFLOW_CHANGE_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
@@ -2777,6 +2808,9 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_GALLERY_TOOL,
       HOST_ARTIFACT_TOOL,
       HOST_NOTIFY_TOOL,
+      HOST_RECOMMENDATIONS_TOOL,
+      HOST_RECOMMENDATION_MARKS_TOOL,
+      HOST_WORKFLOW_CHANGE_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when NOT`).toMatch(

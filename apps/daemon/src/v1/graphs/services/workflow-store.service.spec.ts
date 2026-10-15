@@ -57,6 +57,54 @@ describe('WorkflowStoreService', () => {
     });
   });
 
+  it('refuses a save made from a copy older than the file, and accepts one from the current copy', async () => {
+    const created = await store.create(WF, 'review-team');
+    const elsewhere = await store.save('review-team', {
+      ...WF,
+      description: 'changed by an analysis',
+    });
+
+    await expect(
+      store.save('review-team', { ...WF, name: 'Stale canvas' }, created.hash),
+    ).rejects.toMatchObject({ errorCode: 'WORKFLOW_CHANGED' });
+    expect((await store.get('review-team')).workflow.description).toBe(
+      'changed by an analysis',
+    );
+
+    const saved = await store.save(
+      'review-team',
+      { ...WF, name: 'Fresh canvas' },
+      elsewhere.hash,
+    );
+    expect(saved.hash).toBe((await store.get('review-team')).hash);
+    expect(saved.hash).not.toBe(elsewhere.hash);
+  });
+
+  it('lets only one of two saves from the same version win, even at the same moment', async () => {
+    const created = await store.create(WF, 'review-team');
+
+    const results = await Promise.allSettled([
+      store.save('review-team', { ...WF, name: 'Builder' }, created.hash),
+      store.save('review-team', { ...WF, name: 'Analysis' }, created.hash),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual([
+      'fulfilled',
+      'rejected',
+    ]);
+    expect((await store.get('review-team')).workflow.name).toBe('Builder');
+  });
+
+  it('refuses a save quoting a version of a file deleted since, and does not re-create it', async () => {
+    const created = await store.create(WF, 'review-team');
+    await store.delete('review-team');
+
+    await expect(
+      store.save('review-team', WF, created.hash),
+    ).rejects.toMatchObject({ errorCode: 'WORKFLOW_CHANGED' });
+    expect(await store.list()).toEqual([]);
+  });
+
   it('summarizes the per-agent-kind breakdown in a stable order', async () => {
     // The card badges read agentCounts directly — assert it is a real tally
     // (three same-kind nodes count as 3, not deduped to 1) and that the order

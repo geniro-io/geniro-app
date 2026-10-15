@@ -1,0 +1,165 @@
+import type { EntityManager } from '@mikro-orm/sqlite';
+import { describe, expect, it, vi } from 'vitest';
+
+import type { Item } from '../../runs/entity/item.entity';
+import type { Run } from '../../runs/entity/run.entity';
+import type {
+  ItemWire,
+  RecommendationItem,
+  RecommendationsPayload,
+} from '../chat.types';
+import type { ItemDao } from '../dao/item.dao';
+import type { RunDao } from '../dao/run.dao';
+import type { ChatService } from './chat.service';
+import { RecommendationsApplyService } from './recommendations-apply.service';
+
+function item(id: string, title: string): RecommendationItem {
+  return {
+    id,
+    target: id.startsWith('W') ? 'workflow' : 'repo',
+    kind: id.startsWith('W') ? 'parallelize' : 'ADD',
+    location: id.startsWith('W') ? 'reviewer' : 'AGENTS.md:12',
+    title,
+    change: `the exact change for ${id}`,
+    evidence: [{ seq: 4, quote: 'waited' }],
+    rootCause: 'serial calls',
+    impact: { minutesSaved: 12, basis: 'critical path', confidence: 4 },
+    risk: { level: 'low', note: 'none' },
+  };
+}
+
+const CARD: RecommendationsPayload = {
+  sourceRunId: 'source',
+  sourceKind: 'workflow',
+  timing: null,
+  items: [item('W-1', 'Run reviewers in parallel'), item('R-1', 'Add a rule')],
+};
+
+function build(
+  options: {
+    analysis?: boolean;
+    card?: Partial<Item> | null;
+    appliedCards?: number[];
+  } = {},
+) {
+  const sendMessage = vi.fn(() => Promise.resolve({ seq: 9 } as ItemWire));
+  const service = new RecommendationsApplyService(
+    { fork: () => ({}) } as unknown as EntityManager,
+    {
+      getById: () =>
+        Promise.resolve({
+          id: 'analysis',
+          analysisSourceRunId: options.analysis === false ? null : 'source',
+        } as Run),
+    } as unknown as RunDao,
+    {
+      rowAtSeq: () =>
+        Promise.resolve(
+          options.card === null
+            ? null
+            : ({
+                kind: 'recommendations',
+                payload: JSON.stringify(CARD),
+                ...options.card,
+              } as Item),
+        ),
+      userMessagesInOrder: () =>
+        Promise.resolve(
+          (options.appliedCards ?? []).map((cardSeq, index) => ({
+            seq: index,
+            payload: JSON.stringify({
+              text: 'apply',
+              apply: { cardSeq, ids: ['W-1'] },
+            }),
+          })),
+        ),
+    } as unknown as ItemDao,
+    { sendMessage } as unknown as ChatService,
+  );
+  return { service, sendMessage };
+}
+
+describe('RecommendationsApplyService.apply', () => {
+  it('sends the selected items in full and persists the selection with the press id', async () => {
+    const { service, sendMessage } = build();
+
+    await service.apply('analysis', {
+      cardSeq: 5,
+      ids: ['W-1'],
+      note: 'careful with the reviewer',
+      clientMessageId: 'press-1',
+    });
+
+    const [runId, text, images, options] = sendMessage.mock
+      .calls[0] as unknown as [
+      string,
+      string,
+      unknown[],
+      Record<string, unknown>,
+    ];
+    expect(runId).toBe('analysis');
+    expect(images).toEqual([]);
+    expect(text).toContain('### W-1 · Run reviewers in parallel');
+    expect(text).toContain('the exact change for W-1');
+    expect(text).not.toContain('the exact change for R-1');
+    expect(text).toContain('Not selected — leave alone: R-1.');
+    expect(text).toContain('Note from the user: careful with the reviewer');
+    expect(text).toContain('mark_recommendations with cardSeq 5');
+    expect(options).toEqual({
+      clientMessageId: 'press-1',
+      apply: { cardSeq: 5, ids: ['W-1'] },
+    });
+  });
+
+  it('refuses a second Apply of the same card, and sends nothing', async () => {
+    const { service, sendMessage } = build({ appliedCards: [5] });
+
+    await expect(
+      service.apply('analysis', {
+        cardSeq: 5,
+        ids: ['R-1'],
+        clientMessageId: 'press-2',
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ALREADY_APPLIED' });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('lets a different card be applied after another one was', async () => {
+    const { service, sendMessage } = build({ appliedCards: [3] });
+
+    await service.apply('analysis', {
+      cardSeq: 5,
+      ids: ['W-1'],
+      clientMessageId: 'press-3',
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an id the card does not hold', async () => {
+    await expect(
+      build().service.apply('analysis', {
+        cardSeq: 5,
+        ids: ['W-9'],
+        clientMessageId: 'press-1',
+      }),
+    ).rejects.toMatchObject({ errorCode: 'UNKNOWN_RECOMMENDATION' });
+  });
+
+  it('refuses a seq that is not a recommendations card, and a chat that is not an analysis', async () => {
+    await expect(
+      build({ card: { kind: 'message' } }).service.apply('analysis', {
+        cardSeq: 5,
+        ids: ['W-1'],
+        clientMessageId: 'press-1',
+      }),
+    ).rejects.toMatchObject({ errorCode: 'RECOMMENDATIONS_NOT_FOUND' });
+    await expect(
+      build({ analysis: false }).service.apply('analysis', {
+        cardSeq: 5,
+        ids: ['W-1'],
+        clientMessageId: 'press-1',
+      }),
+    ).rejects.toMatchObject({ errorCode: 'NOT_AN_ANALYSIS' });
+  });
+});

@@ -17,6 +17,9 @@
  * It walks the whole payload rather than knowing where a CLI puts its images: the
  * two shapes below are the ones both shipped transports produce, and the walk is
  * what makes a third one the caller's problem rather than this module's.
+ *
+ * TWIN PARSER: apps/daemon/src/v1/agents/utils/collapse-image-blocks.ts — the
+ * same collapse for a thread an analysis reads.
  */
 
 /** A base64 payload shorter than this is left alone — see {@link collapseImageBlocks}. */

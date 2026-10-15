@@ -466,6 +466,36 @@ export class Run extends TimestampsEntity {
   taskIdentifier: string | null = null;
 
   /**
+   * The run this chat was started to ANALYSE ("Analyze thread"), or null for
+   * every other chat.
+   *
+   * Its presence is what makes a chat an analysis chat: the analysis tools
+   * (`read_analyzed_thread` and its siblings) are installed for a turn only
+   * when it is set, and they read this one run and no other. Not a foreign
+   * key — deleting the source leaves the analysis readable, and its tools
+   * answer `SOURCE_GONE`.
+   */
+  @Property({ type: 'string', nullable: true })
+  analysisSourceRunId: string | null = null;
+
+  /**
+   * The source's highest seq at the moment the analysis started — the
+   * snapshot every read stops at, so a source still running when it was
+   * clicked is analysed as it stood then.
+   */
+  @Property({ type: 'integer', nullable: true })
+  analysisSourceSeq: number | null = null;
+
+  /**
+   * Whether the source was still working at that snapshot. Recorded at the
+   * start rather than read later, so the same snapshot always folds the same:
+   * a source continued afterwards would otherwise turn every span it left
+   * unclosed at the snapshot into one still running.
+   */
+  @Property({ type: 'boolean', nullable: true })
+  analysisSourceWorking: boolean | null = null;
+
+  /**
    * Where this run sits in the PINNED band at the top of its own scope, or
    * null for one that is not pinned at all.
    *

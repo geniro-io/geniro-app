@@ -251,6 +251,12 @@ One home for each concern:
 - A delegate's generic title is its id tail. `resultIsOwn` is decided structurally, never by matching a CLI's prose. A `SendMessage` is not a delegation (`isAgentToolName`).
 - Shells listed in the panel are the main thread's only, dropped at the item (`subagentIdOf`).
 
+**Thread analysis** (`analysis-dialog.tsx`, `use-thread-analysis.ts`):
+
+- A thread's analysis is never a sidebar row and never a search hit. Its home is its popup over the source (`AnalysisDialog`), where it is read, answered, applied and replaced; the Analyze button opens the popup when one exists, else the setup dialog, and marks it (tint; a dot while working or waiting on you). The popup and the setup dialog close when their thread is deleted (the analysis went with it).
+- A direct link (`#chats/<id>`) or the processes panel can still open an analysis as the thread on screen; its header's "Analyzing: <source> ↗" chip (`analysisSourceOf`) is kept for exactly that way back.
+- The popup and the builder's chat dock are one surface: `chats/hosted-chat.tsx` (`HostedChat`, transcript + composer + chips) over `chats/use-hosted-chat.ts`. Change a hosted-chat behaviour there, never in one frame.
+
 **Cards (agent-drawn payloads):**
 
 - Each card kind has a twin parser (`*-payload.ts`) of the daemon's schema.
@@ -404,6 +410,7 @@ One home for each concern:
 - The post-turn re-read compares against the last load or save, never against the canvas.
 - Delete and Backspace act only while the screen is on view (`deleteKeyCode` is null otherwise).
 - Leaving waits for `flush`. A late save or re-read answer for another workflow is dropped.
+- Every save quotes the `hash` the canvas was loaded or last saved at. A `WORKFLOW_CHANGED` refusal (an analysis changed the file) holds autosave and offers Reload, which replaces the unsaved canvas; nothing is written over the newer file.
 - A wire to a missing node is dropped on open and named. A data wire that closes a loop is refused (`closesDataCycle`).
 - After a socket reconnect, the dock reads back from the newest row held when the socket dropped. A turn ending is counted once, by row id. The dock holds anchors the way the chat screen does.
 - `RunDto.awaiting` follows the three-state rule: absent asserts nothing, and `null` clears.
@@ -413,7 +420,7 @@ One home for each concern:
 
 **Settings keys (`settings.json`).** `main/settings.ts` owns the file, and `shared/contracts.ts` holds `Settings`. Values whose vocabulary is the daemon's stay opaque strings here. The renderer validates them against the generated enum.
 
-- Composer memory: `lastChatTarget`, `lastApprovalMode`, `lastAutoCompactPercent`, `projectFolder`/`recentFolders`. `lastModels`, `lastEfforts`, `configDirs` and `recentConfigDirs` are keyed per CLI.
+- Composer memory: `lastChatTarget`, `lastApprovalMode`, `lastAutoCompactPercent`, `projectFolder`/`recentFolders`. The Analyze thread dialog's last choice: `lastAnalysisConfig` (agent, profile, model, effort). `lastModels`, `lastEfforts`, `configDirs` and `recentConfigDirs` are keyed per CLI.
 - Hand-managed lists, three different features: `fastActions`, `runConfigs` and `configProfiles`. Never fold any two together, or into `recentConfigDirs`.
   - Nothing adds or evicts an entry, and order is preserved.
   - `readSettings` salvages each list entry by entry (`salvageList`, twin of `salvageCliRecord`) and re-applies the cap.

@@ -27,6 +27,8 @@ const run1: ChatRun = {
   id: 'r1',
   status: 'running',
   taskIdentifier: null,
+  analysisSourceRunId: null,
+  analysisSourceSeq: null,
   awaiting: null,
   holdingFor: 0,
   awaitingCalls: 0,
@@ -294,6 +296,43 @@ describe('useChatRun', () => {
 
     expect(harness.state().runs.map((run) => run.id)).toEqual(['r1', 'r2']);
     expect(harness.state().runsLoaded).toBe(true);
+  });
+
+  it('adds a created run the listing already adopted once, at the top', async () => {
+    // An analysis is announced before its start route answers, so a re-list
+    // brings its row in before the creator's `addRun` does.
+    const { client } = makeClient();
+    const harness = await mount(client);
+
+    await act(async () => {
+      harness.state().addRun({ ...run2, title: 'from the creator' });
+    });
+
+    expect(harness.state().runs.map((run) => run.id)).toEqual(['r2', 'r1']);
+    expect(harness.state().runs[0]?.title).toBe('from the creator');
+  });
+
+  it('keeps the listed row over a created copy taken before the run started', async () => {
+    // The start route's copy predates its own first message: the re-list
+    // already says `running`, and nothing announces that again until the
+    // turn ends.
+    chatApi.listChats.mockResolvedValue([
+      { ...run2, status: 'running', updatedAt: '2026-10-15T00:00:05.000Z' },
+      run1,
+    ]);
+    const { client } = makeClient();
+    const harness = await mount(client);
+
+    await act(async () => {
+      harness.state().addRun({
+        ...run2,
+        status: 'pending',
+        updatedAt: '2026-10-15T00:00:01.000Z',
+      });
+    });
+
+    expect(harness.state().runs.map((run) => run.id)).toEqual(['r2', 'r1']);
+    expect(harness.state().runs[0]?.status).toBe('running');
   });
 
   it('keeps a workflow run’s live call counts when another window refiles its row', async () => {

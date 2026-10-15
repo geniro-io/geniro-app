@@ -7,6 +7,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Sparkles,
   Trash2,
   Workflow as WorkflowIcon,
 } from 'lucide-react';
@@ -151,6 +152,7 @@ export const ChatListItem = memo(function ChatListItem({
   onDelete,
   onArchive,
   onUnarchive,
+  onAnalyze,
   archived = false,
   pinned = false,
   notes = null,
@@ -259,6 +261,8 @@ export const ChatListItem = memo(function ChatListItem({
   onArchive?: (runId: string) => void;
   /** Put an archived chat back. Only ever passed in the archived view. */
   onUnarchive?: (runId: string) => void;
+  /** Open the Analyze thread dialog for this row; absent offers no item. */
+  onAnalyze?: (runId: string) => void;
   /**
    * This row is being drawn in the ARCHIVE, which decides which pair of
    * actions it offers: Archive on the desk, Unarchive + Delete on the shelf.
@@ -402,6 +406,17 @@ export const ChatListItem = memo(function ChatListItem({
     if (naming.length > 0) {
       groups.push({ items: naming });
     }
+    if (!archived && onAnalyze) {
+      groups.push({
+        items: [
+          {
+            value: 'analyze',
+            label: 'Analyze thread…',
+            icon: <Sparkles className="size-3.5 shrink-0" />,
+          },
+        ],
+      });
+    }
     const shelf: MenuItem[] = [];
     if (!archived && onArchive) {
       shelf.push({
@@ -441,6 +456,7 @@ export const ChatListItem = memo(function ChatListItem({
     onSetColor,
     onArchive,
     onUnarchive,
+    onAnalyze,
   ]);
 
   const startEditing = (): void => {
@@ -469,6 +485,8 @@ export const ChatListItem = memo(function ChatListItem({
       onUnarchive?.(runId);
     } else if (value === 'delete') {
       onDelete(runId);
+    } else if (value === 'analyze') {
+      onAnalyze?.(runId);
     } else if (value.startsWith(COLOR_ROW_PREFIX)) {
       const next = colorOfMenuValue(value);
       if (next !== undefined && next !== color) {

@@ -316,4 +316,28 @@ describe('Dialog — pickers inside the scrolling body', () => {
     expect(slot.className).toContain('flex-1');
     expect(slot.querySelector('button')?.className).toContain('ml-auto');
   });
+
+  it('pads its body unless flush, where the content draws its own edges', () => {
+    const bodyOf = (): Element =>
+      document.querySelector('[data-testid="content"]')!.parentElement!;
+    act(() => {
+      root.render(
+        <Dialog open onClose={vi.fn()} title="Padded">
+          <div data-testid="content" />
+        </Dialog>,
+      );
+    });
+    expect(bodyOf().className).toContain('px-5');
+
+    act(() => {
+      root.render(
+        <Dialog open flush onClose={vi.fn()} title="Flush">
+          <div data-testid="content" />
+        </Dialog>,
+      );
+    });
+    // Still the scrolling body, only without the padding.
+    expect(bodyOf().className).toContain('overflow-y-auto');
+    expect(bodyOf().className).not.toContain('px-5');
+  });
 });

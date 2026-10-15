@@ -44,6 +44,7 @@ const GENIRO_TOOL_PREFIX = 'mcp__geniro__';
  */
 export type GeniroCardKind =
   | 'findings'
+  | 'recommendations'
   | 'chart'
   | 'metrics'
   | 'comparison'
@@ -81,6 +82,8 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   answer_agent: null,
   ask_user_question: null,
   report_findings: 'findings',
+  report_recommendations: 'recommendations',
+  mark_recommendations: null,
   // None of these five was ever published under the legacy fixed key — the
   // per-run rename shipped first — but they are listed with their siblings so
   // this list and the daemon's cannot drift, and so a transcript exported from

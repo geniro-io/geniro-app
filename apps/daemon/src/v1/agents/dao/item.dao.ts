@@ -9,6 +9,7 @@ import type {
   HistoryWindow,
   RunPreview,
   SeqRange,
+  ToolCallTime,
 } from '../chat.types';
 import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
 import { parseJsonColumn, payloadString } from '../utils/json-util';
@@ -1014,9 +1015,11 @@ export class ItemDao extends BaseDao<Item> {
   async timelineSpine(
     runId: string,
     txEm?: EntityManager,
+    /** Stop at this seq — an analysis reads its source as it stood when clicked. */
+    maxSeq?: number,
   ): Promise<Pick<Item, 'seq' | 'kind' | 'role' | 'nodeId' | 'createdAt'>[]> {
     return this.getRepo(txEm).find(
-      { runId },
+      maxSeq === undefined ? { runId } : { runId, seq: { $lte: maxSeq } },
       {
         orderBy: { seq: 'asc' },
         fields: ['seq', 'kind', 'role', 'nodeId', 'createdAt'],
@@ -1138,12 +1141,15 @@ export class ItemDao extends BaseDao<Item> {
   async waterfallPayloadRows(
     runId: string,
     txEm?: EntityManager,
+    /** Stop at this seq, as {@link timelineSpine} does. */
+    maxSeq?: number,
   ): Promise<
     Pick<Item, 'seq' | 'kind' | 'payload' | 'nodeId' | 'createdAt'>[]
   > {
     return this.getRepo(txEm).find(
       {
         runId,
+        ...(maxSeq === undefined ? {} : { seq: { $lte: maxSeq } }),
         kind: {
           $in: [
             ...USAGE_ITEM_KINDS,
@@ -1222,6 +1228,138 @@ export class ItemDao extends BaseDao<Item> {
       toolKind: row.tool_kind === null ? null : String(row.tool_kind),
       calls: Number(row.calls),
     }));
+  }
+
+  /**
+   * Every `tool_call` and `tool_result` of one run up to `maxSeq`, as the id
+   * that pairs them and when each was written — and nothing of what they say.
+   *
+   * These two kinds are most of a long transcript's bytes, so the payload never
+   * leaves the engine: `json_extract` reads the id (and a call's name) in
+   * SQLite and only those strings come back. Pairing a call to its result by id
+   * is what gives a tool call its duration; `createdAt` is the daemon's persist
+   * time for each row, so the figure is the daemon's view of the call.
+   */
+  async toolCallTimes(
+    runId: string,
+    maxSeq: number,
+    txEm?: EntityManager,
+  ): Promise<ToolCallTime[]> {
+    const em = txEm ?? this.em.fork();
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => {
+        const payload = eb
+          .case()
+          .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+          .then(eb.ref('payload'))
+          .else(eb.val('{}'))
+          .end();
+        return [
+          'seq',
+          'kind',
+          'node_id',
+          'in_call',
+          'created_at',
+          eb
+            .fn<string | null>('json_extract', [payload, eb.val('$.id')])
+            .as('tool_id'),
+          eb
+            .fn<string | null>('json_extract', [payload, eb.val('$.name')])
+            .as('tool_name'),
+        ];
+      })
+      .where('run_id', '=', runId)
+      .where('kind', 'in', ['tool_call', 'tool_result'])
+      .where('seq', '<=', maxSeq)
+      .where('deleted_at', 'is', null)
+      .orderBy('seq', 'asc')
+      .execute();
+    return rows.map((row) => ({
+      seq: Number(row.seq),
+      kind: row.kind === 'tool_call' ? 'tool_call' : 'tool_result',
+      nodeId: row.node_id,
+      inCall: row.in_call,
+      at: Number(row.created_at),
+      toolId: row.tool_id === null ? null : String(row.tool_id),
+      name: row.tool_name === null ? null : String(row.tool_name),
+    }));
+  }
+
+  /**
+   * One page of a run's rows for an analysis, oldest first: after `afterSeq`
+   * (or from `fromTime`), never past `maxSeq`, optionally one node's and some
+   * kinds only. The caller budgets the page by bytes; `limit` bounds the read.
+   */
+  async analysisPage(
+    runId: string,
+    page: {
+      afterSeq: number;
+      maxSeq: number;
+      limit: number;
+      fromTime?: Date;
+      nodeId?: string | null;
+      kinds?: readonly ItemKind[];
+    },
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        seq: { $gt: page.afterSeq, $lte: page.maxSeq },
+        ...(page.fromTime === undefined
+          ? {}
+          : { createdAt: { $gte: page.fromTime } }),
+        ...(page.nodeId === undefined ? {} : { nodeId: page.nodeId }),
+        ...(page.kinds === undefined ? {} : { kind: { $in: [...page.kinds] } }),
+      },
+      { orderBy: { seq: 'asc' }, limit: page.limit, disableIdentityMap: true },
+    );
+  }
+
+  /** A run's live user messages as (seq, payload), oldest first. */
+  async userMessagesInOrder(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'message', role: 'user' },
+      {
+        fields: ['seq', 'payload'],
+        orderBy: { seq: 'asc' },
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /** One row of a run by seq, or null. */
+  async rowAtSeq(
+    runId: string,
+    seq: number,
+    txEm?: EntityManager,
+  ): Promise<Item | null> {
+    return this.getRepo(txEm).findOne(
+      { runId, seq },
+      { disableIdentityMap: true },
+    );
+  }
+
+  /** Which of `seqs` exist in the run at or below `maxSeq`. */
+  async existingSeqs(
+    runId: string,
+    seqs: readonly number[],
+    maxSeq: number,
+    txEm?: EntityManager,
+  ): Promise<Set<number>> {
+    if (seqs.length === 0) {
+      return new Set();
+    }
+    const rows = await this.getRepo(txEm).find(
+      { runId, seq: { $in: [...seqs], $lte: maxSeq } },
+      { fields: ['seq'], disableIdentityMap: true },
+    );
+    return new Set(rows.map((row) => row.seq));
   }
 
   /**

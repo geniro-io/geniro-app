@@ -203,6 +203,8 @@ export const ItemKindSchema = z
     'show_comparison',
     'show_gallery',
     'show_artifact',
+    'recommendations',
+    'recommendation_outcome',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

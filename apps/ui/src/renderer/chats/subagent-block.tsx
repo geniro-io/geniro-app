@@ -78,6 +78,7 @@ function shellStatusOf(
 const OPENS_BLOCK = {
   'task-list': false,
   findings: true,
+  recommendations: true,
   chart: true,
   metrics: true,
   comparison: true,
@@ -120,6 +121,7 @@ function renderCards(entries: SubagentBlockEntry['entries']): CardEntry[] {
 const CARD_NOUN = {
   'task-list': 'a task list',
   findings: 'findings',
+  recommendations: 'recommendations',
   chart: 'a chart',
   metrics: 'a scorecard',
   comparison: 'a comparison',

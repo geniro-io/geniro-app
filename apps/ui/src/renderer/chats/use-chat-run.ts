@@ -1509,7 +1509,14 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         showScope('active');
         return;
       }
-      setRuns((prev) => [run, ...prev]);
+      // The listing may hold it already: a route that sends the run's first
+      // message before answering has it announced, and so
+      // adopted by a re-list, before the creator gets its copy — which was
+      // taken before that send, so the fresher row of the two is kept.
+      setRuns((prev) => [
+        ...keepFresherRows([run], prev),
+        ...prev.filter((row) => row.id !== run.id),
+      ]);
     },
     [showScope],
   );

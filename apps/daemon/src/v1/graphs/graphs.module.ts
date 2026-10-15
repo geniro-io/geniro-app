@@ -8,6 +8,7 @@ import { CapabilitiesService } from './services/capabilities.service';
 import { GraphExecutorService } from './services/graph-executor.service';
 import { RunWorkflowService } from './services/run-workflow.service';
 import { TaskBoardBroker } from './services/task-board.broker';
+import { WorkflowChangeService } from './services/workflow-change.service';
 import { WorkflowChatService } from './services/workflow-chat.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
 import { WorkflowTitleBackfillService } from './services/workflow-title-backfill.service';
@@ -39,6 +40,7 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
     WorkflowTitleBackfillService,
     RunWorkflowService,
     WorkflowChatService,
+    WorkflowChangeService,
   ],
   // `GraphExecutorService` is exported for `TasksModule`, whose cards may name
   // a workflow instead of an agent — the graph twin of the `ChatService` export
@@ -57,6 +59,7 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
     CallBroker,
     TaskBoardBroker,
     RunWorkflowService,
+    WorkflowChangeService,
   ],
 })
 export class GraphsModule {}

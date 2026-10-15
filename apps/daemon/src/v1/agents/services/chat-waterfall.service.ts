@@ -11,7 +11,7 @@ import type {
   RunWaterfallWait,
   RunWaterfallWire,
 } from '../chat.types';
-import type { ChatTotalsWire } from '../chat.types';
+import type { ChatTotalsWire, RunWaterfallFold } from '../chat.types';
 import { HOST_QUESTION_TOOL } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -99,19 +99,77 @@ export class ChatWaterfallService {
 
   async read(runId: string): Promise<RunWaterfallWire> {
     const em = this.em.fork();
+    const [folded, toolUse] = await Promise.all([
+      this.fold(runId, undefined, em),
+      this.itemDao.toolUsage(runId, MAX_TOOL_GROUPS + 1, em),
+    ]);
+    if (folded === null) {
+      return empty();
+    }
+
+    const capped: string[] = [];
+    const cap = <T>(list: T[], name: string): T[] => {
+      if (list.length <= MAX_SPANS_PER_KIND) {
+        return list;
+      }
+      capped.push(name);
+      // The NEWEST are kept and stay in order: the card reads left to right
+      // through the run, so returning the tail reversed would draw it backwards.
+      return list.slice(-MAX_SPANS_PER_KIND);
+    };
+
+    const tools = foldToolUsage(toolUse, MAX_TOOL_NAMES);
+    if (tools.capped || toolUse.length > MAX_TOOL_GROUPS) {
+      capped.push('tools');
+    }
+
+    const { working: _working, ...spans } = folded;
+    return {
+      ...spans,
+      toolUse: tools.toolUse,
+      turns: cap(folded.turns, 'turns'),
+      calls: cap(folded.calls, 'calls'),
+      waits: cap(folded.waits, 'waits'),
+      delegates: cap(folded.delegates, 'delegates'),
+      partialReason:
+        capped.length === 0
+          ? null
+          : `showing the newest ${MAX_SPANS_PER_KIND} of this run's ${capped.join(' and ')} — it holds more than the card can draw`,
+    };
+  }
+
+  /**
+   * The whole run folded, UNCAPPED — every span the card would draw before
+   * {@link read} keeps the newest {@link MAX_SPANS_PER_KIND} of each kind.
+   * The thread analysis reads this, because a critical path computed over a
+   * capped tail would miss the start of a long run.
+   *
+   * `maxSeq` stops at a snapshot; null when the run (or the snapshot) has no
+   * rows.
+   */
+  async fold(
+    runId: string,
+    maxSeq?: number,
+    txEm?: EntityManager,
+    /**
+     * Whether the run was working at `maxSeq`, as recorded when the snapshot
+     * was taken; absent reads the live status.
+     */
+    workingAtSnapshot?: boolean,
+  ): Promise<RunWaterfallFold | null> {
+    const em = txEm ?? this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (run === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    const [spine, payloadRows, nodeStates, toolUse] = await Promise.all([
-      this.itemDao.timelineSpine(runId, em),
-      this.itemDao.waterfallPayloadRows(runId, em),
+    const [spine, payloadRows, nodeStates] = await Promise.all([
+      this.itemDao.timelineSpine(runId, em, maxSeq),
+      this.itemDao.waterfallPayloadRows(runId, em, maxSeq),
       this.nodeStateDao.listByRun(runId, em),
-      this.itemDao.toolUsage(runId, MAX_TOOL_GROUPS + 1, em),
     ]);
 
     if (spine.length === 0) {
-      return empty();
+      return null;
     }
     const from = spine[0]!.createdAt.getTime();
     const to = spine[spine.length - 1]!.createdAt.getTime();
@@ -119,7 +177,9 @@ export class ChatWaterfallService {
     // Whether a span still open at the last row is WORK IN PROGRESS or a
     // record that simply never got its ending. Only the first is drawn: on a
     // settled run an unclosed span has no honest end to be drawn to.
-    const working = !isTerminalRunStatus(run.status);
+    // A snapshot read takes the working flag recorded when the snapshot was
+    // taken, so the same snapshot always folds the same.
+    const working = workingAtSnapshot ?? !isTerminalRunStatus(run.status);
     const finished = foldTurns(payloadRows, laneRowTimes(spine));
     const unfinished =
       run.workflowId === null
@@ -188,32 +248,16 @@ export class ChatWaterfallService {
       polledByNode,
     });
 
-    const capped: string[] = [];
-    const cap = <T>(list: T[], name: string): T[] => {
-      if (list.length <= MAX_SPANS_PER_KIND) {
-        return list;
-      }
-      capped.push(name);
-      // The NEWEST are kept and stay in order: the card reads left to right
-      // through the run, so returning the tail reversed would draw it backwards.
-      return list.slice(-MAX_SPANS_PER_KIND);
-    };
-
-    const tools = foldToolUsage(toolUse, MAX_TOOL_NAMES);
-    if (tools.capped || toolUse.length > MAX_TOOL_GROUPS) {
-      capped.push('tools');
-    }
-
     const waitedMs = waits.reduce((sum, wait) => sum + wait.durationMs, 0);
     return {
       from: new Date(from).toISOString(),
       to: new Date(to).toISOString(),
+      working,
       lanes,
-      toolUse: tools.toolUse,
-      turns: cap(turns, 'turns'),
-      calls: cap(calls, 'calls'),
-      waits: cap(waits, 'waits'),
-      delegates: cap(delegates, 'delegates'),
+      turns,
+      calls,
+      waits,
+      delegates,
       // A polled-spend CLI prices no turn on its own wire — its only price is
       // the one polled onto the run and node rows — so the raw sum would report
       // its run as costing nothing while the panel beside this card shows the
@@ -250,10 +294,6 @@ export class ChatWaterfallService {
       // for anybody" and "every card was answered instantly" are different
       // facts, and only one of them is worth a tile.
       waitedOnUserMs: waits.length === 0 ? null : waitedMs,
-      partialReason:
-        capped.length === 0
-          ? null
-          : `showing the newest ${MAX_SPANS_PER_KIND} of this run's ${capped.join(' and ')} — it holds more than the card can draw`,
     };
   }
 }

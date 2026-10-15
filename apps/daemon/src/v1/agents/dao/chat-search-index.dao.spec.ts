@@ -173,15 +173,18 @@ describe('ChatSearchIndexDao (in-memory sqlite)', () => {
     expect(await ids('foo bar OR baz')).toEqual(['t0', 't2']);
   });
 
-  it('applies run, folder, archive, builder and soft-delete scopes before the limit', async () => {
+  it('applies run, folder, archive, builder, analysis and soft-delete scopes before the limit', async () => {
     await db.run(RUN_A, { cwd: '/one' });
     await db.run(RUN_B, { cwd: '/two', archivedAt: new Date() });
     await db.run('gone', { deletedAt: new Date() });
     await db.run('builder', { editsWorkflowSlug: 'dev-team' });
+    // An analysis quotes its source, so it would answer the same words.
+    await db.run('analysis', { analysisSourceRunId: RUN_A });
     await db.item('a', { runId: RUN_A, payload: said('shared word') });
     await db.item('b', { runId: RUN_B, payload: said('shared word') });
     await db.item('c', { runId: 'gone', payload: said('shared word') });
     await db.item('e', { runId: 'builder', payload: said('shared word') });
+    await db.item('f', { runId: 'analysis', payload: said('shared word') });
     await db.item('d', {
       runId: RUN_A,
       seq: 2,
@@ -273,6 +276,17 @@ describe('ChatSearchIndexDao (in-memory sqlite)', () => {
       db.item('twice', { runId: RUN_A, payload: said('written twice') }),
     ).resolves.toBeDefined();
     expect(await ids('twice')).toEqual(['twice']);
+  });
+
+  it('reads a run for a context read only where a search could have found it', async () => {
+    await db.run(RUN_A);
+    await db.run('builder', { editsWorkflowSlug: 'dev-team' });
+    await db.run('analysis', { analysisSourceRunId: RUN_A });
+    const dao = db.dao();
+
+    expect((await dao.run(RUN_A))?.id).toBe(RUN_A);
+    expect(await dao.run('builder')).toBeUndefined();
+    expect(await dao.run('analysis')).toBeUndefined();
   });
 
   it('reads neighbours nearest first, words only, breaking a seq tie by id', async () => {

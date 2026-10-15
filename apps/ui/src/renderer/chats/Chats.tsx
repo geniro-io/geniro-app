@@ -75,6 +75,7 @@ import {
   daemonErrorCode,
   daemonErrorDetail,
   daemonErrorStatus,
+  describeDaemonError,
   isRunBusyError,
 } from '../daemon-api';
 import { DaemonClient } from '../daemon-client';
@@ -106,6 +107,8 @@ import {
   type InstanceTaskList,
 } from './agent-instances';
 import { AgentsPanel } from './agents-panel';
+import { AnalysisDialog } from './analysis-dialog';
+import { AnalyzeThreadDialog } from './analyze-thread-dialog';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
@@ -191,6 +194,7 @@ import {
 } from './published-artifact';
 import { QueuedStrip } from './queued-strip';
 import { holdReadingPlace } from './reading-anchor';
+import type { RecommendationsApplier } from './recommendations-apply-context';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
 import {
@@ -339,6 +343,7 @@ import { useRunArtifacts } from './use-run-artifacts';
 import { useRunProcesses } from './use-run-processes';
 import { useRunState } from './use-run-state';
 import { useRunWaterfall } from './use-run-waterfall';
+import { useThreadAnalysis } from './use-thread-analysis';
 import {
   threadPullRequestsOf,
   useThreadPullRequests,
@@ -2064,6 +2069,66 @@ export function Chats({
     [chatApi, workflowNames],
   );
 
+  /** A recommendations card's Apply, for `RecommendationsApplyContext`. */
+  const applyRecommendations = useCallback<RecommendationsApplier>(
+    async (runId, cardSeq, ids) => {
+      await chatApi.applyRecommendations({
+        runId,
+        applyRecommendationsDto: { cardSeq, ids, clientMessageId: randomId() },
+      });
+    },
+    [chatApi],
+  );
+
+  /** An analysis chat's header chip: the thread it reads, one press away. */
+  const analysisSourceOf = useCallback(
+    (run: ChatRun): { label: string; onOpen: () => void } | null => {
+      const sourceId = run.analysisSourceRunId;
+      if (sourceId == null) {
+        return null;
+      }
+      const source = runsRef.current.find((r) => r.id === sourceId);
+      return {
+        label: source ? runLabel(source, workflowNames) : 'the analysed thread',
+        onOpen: () => void activateRun(sourceId),
+      };
+    },
+    [activateRun, workflowNames],
+  );
+
+  /** The thread the Analyze thread dialog is open for (null = closed). */
+  const [analyzingRun, setAnalyzingRun] = useState<ChatRun | null>(null);
+  /** The thread whose analysis popup is open (null = closed). */
+  const [analysisOf, setAnalysisOf] = useState<ChatRun | null>(null);
+  /**
+   * Bumped when an analysis starts and when its popup closes: a new analysis
+   * is a new conversation for the popup, and the Analyze button re-reads.
+   */
+  const [analysisGeneration, setAnalysisGeneration] = useState(0);
+  /**
+   * Analyze on a thread: its analysis's popup when it has one, else the setup
+   * dialog. The analysis is never on the sidebar — the popup is where it is.
+   */
+  const handleAnalyzeRun = useCallback(
+    (runId: string): void => {
+      const run = runsRef.current.find((r) => r.id === runId);
+      if (!run) {
+        return;
+      }
+      void chatApi
+        .getThreadAnalysis({ runId })
+        .then(({ analysis }) => {
+          if (analysis == null) {
+            setAnalyzingRun(run);
+          } else {
+            setAnalysisOf(run);
+          }
+        })
+        .catch((err: unknown) => setError(describeDaemonError(err)));
+    },
+    [chatApi, setError],
+  );
+
   // The run queued for deletion (null = no confirm open). Deleting is
   // IRREVERSIBLE — rows, attachments and PTY sessions all go — so it is the
   // one row action that asks first.
@@ -2147,7 +2212,8 @@ export function Chats({
 
   // The app's shared answer, and only the data — every read below is a plain
   // `capabilities?.…`, never a loading readout of its own.
-  const { capabilities } = useSharedCapabilities(capabilitiesApi);
+  const { capabilities, loading: capabilitiesLoading } =
+    useSharedCapabilities(capabilitiesApi);
   /**
    * Per CLI: `null` if it can reopen a conversation interactively
    * (`--resume`), else the daemon's own sentence for why it cannot. Derived,
@@ -3762,6 +3828,10 @@ export function Chats({
         forgetContextReading(runId);
         forgetThread(runId);
         dropRun(runId, newChat);
+        // A deleted thread's analysis went with it (the daemon's cascade), so
+        // neither its popup nor its setup dialog has a subject left.
+        setAnalysisOf((open) => (open?.id === runId ? null : open));
+        setAnalyzingRun((open) => (open?.id === runId ? null : open));
       }),
     [client, dropRun, newChat, forgetContextReading],
   );
@@ -4509,6 +4579,14 @@ export function Chats({
   );
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
+  // The open thread's analysis, for its Analyze button — see `useThreadAnalysis`.
+  const analysisMark = useThreadAnalysis({
+    chatApi,
+    client,
+    sourceRunId:
+      activeRun && activeRun.analysisSourceRunId == null ? activeRun.id : null,
+    refreshKey: analysisGeneration,
+  });
   /**
    * How many delegates the open run reports out — the daemon's fold over every
    * declaration the run wrote, which a block the loaded window knows only by
@@ -8331,7 +8409,8 @@ export function Chats({
         threadId={activeRunId}
         runSettledAt={activeRunSettledAt}
         delegatesOut={activeDelegatesOut}
-        callConversations={callConversations}>
+        callConversations={callConversations}
+        applyRecommendations={applyRecommendations}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -8578,6 +8657,12 @@ export function Chats({
                               // the desk but destroying it.
                               onArchive={handleArchiveRun}
                               onUnarchive={handleUnarchiveRun}
+                              // An analysis is not itself analysed.
+                              onAnalyze={
+                                run.analysisSourceRunId == null
+                                  ? handleAnalyzeRun
+                                  : undefined
+                              }
                               // Read off the ROW, like `archived` above and
                               // for its reason: under `Show all` the band and
                               // the rest are one list, so a flag derived from
@@ -9061,6 +9146,7 @@ export function Chats({
                     {activeRun ? (
                       <ChatHeader
                         label={runLabel(activeRun, workflowNames)}
+                        analysisSource={analysisSourceOf(activeRun)}
                         isWorkflow={activeRun.workflowId != null}
                         agentKind={activeRun.agentKind}
                         // Where this conversation happens. Beside the agent
@@ -9993,6 +10079,12 @@ export function Chats({
                           ? () => handleExportRun(activeRun.id)
                           : undefined
                       }
+                      onAnalyzeThread={
+                        activeRun && activeRun.analysisSourceRunId == null
+                          ? () => handleAnalyzeRun(activeRun.id)
+                          : undefined
+                      }
+                      analysisMark={analysisMark}
                       terminalReasons={terminalReasons}
                       // In the drawer the panel owns no column, so it drops
                       // the stored width, the resize handle and the fold —
@@ -10275,6 +10367,60 @@ export function Chats({
                   onDelete={deleteRunConfig}
                   onReorder={reorderRunConfigs}
                   onClose={() => setRunConfigPickerOpen(false)}
+                />
+                <AnalysisDialog
+                  key={`${analysisOf?.id ?? ''}:${analysisGeneration}`}
+                  source={analysisOf}
+                  sourceLabel={
+                    analysisOf ? runLabel(analysisOf, workflowNames) : ''
+                  }
+                  apis={apis}
+                  handle={handle}
+                  client={client}
+                  capabilities={capabilities}
+                  capabilitiesLoading={capabilitiesLoading}
+                  recentConfigDirs={recentConfigDirsByAgent}
+                  configProfiles={configProfiles}
+                  applyRecommendations={applyRecommendations}
+                  onNewAnalysis={() => setAnalyzingRun(analysisOf)}
+                  onClose={() => {
+                    setAnalysisOf(null);
+                    setAnalysisGeneration((n) => n + 1);
+                  }}
+                />
+                <AnalyzeThreadDialog
+                  source={analyzingRun}
+                  replaces={
+                    analyzingRun !== null && analysisOf?.id === analyzingRun.id
+                  }
+                  sourceLabel={
+                    analyzingRun ? runLabel(analyzingRun, workflowNames) : ''
+                  }
+                  chatApi={chatApi}
+                  agentsApi={agentsApi}
+                  cliDetections={cliDetections}
+                  composerSetup={{
+                    agent: agentKind,
+                    configDir: configDirs[agentKind] ?? null,
+                    model: models[agentKind] ?? null,
+                    effort: efforts[agentKind] ?? null,
+                  }}
+                  recentConfigDirsFor={(kind) =>
+                    recentConfigDirsByAgent[kind] ?? []
+                  }
+                  configProfilesFor={(kind) =>
+                    configProfiles.filter((profile) => profile.agent === kind)
+                  }
+                  configDirReasonFor={configDirReasonFor}
+                  runSettings={currentRunSettings}
+                  onClose={() => setAnalyzingRun(null)}
+                  onStarted={() => {
+                    // Opened in its popup over the thread, never as a sidebar
+                    // chat; the bump makes it a new conversation there.
+                    setAnalysisOf(analyzingRun);
+                    setAnalyzingRun(null);
+                    setAnalysisGeneration((n) => n + 1);
+                  }}
                 />
                 <GlobalChatSearchDialog
                   open={globalSearchOpen}

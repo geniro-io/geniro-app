@@ -32,8 +32,11 @@ import type {
   RunWire,
   ShellKillWire,
   ShellOutputWire,
+  ThreadAnalysisWire,
 } from '../chat.types';
 import {
+  AnalyzeThreadDto,
+  ApplyRecommendationsDto,
   AppProcessesDto,
   AttachmentDataDto,
   CancelledDto,
@@ -70,6 +73,7 @@ import {
   ShellOutputQueryDto,
   SweepArchivedDto,
   SweptArchivedDto,
+  ThreadAnalysisDto,
   UpdateChatSettingsDto,
   UploadChatFileDto,
 } from '../dto/chat.dto';
@@ -87,9 +91,11 @@ import { ChatTimelineService } from '../services/chat-timeline.service';
 import { ChatUploadStoreService } from '../services/chat-upload-store.service';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
 import { LocalImageService } from '../services/local-image.service';
+import { RecommendationsApplyService } from '../services/recommendations-apply.service';
 import { RunProcessesService } from '../services/run-processes.service';
 import { RunStateService } from '../services/run-state.service';
 import { ShellOutputService } from '../services/shell-output.service';
+import { ThreadAnalysisService } from '../services/thread-analysis.service';
 import { historyConversationOf } from '../utils/history-conversation';
 
 /**
@@ -119,6 +125,8 @@ export class ChatController {
     private readonly waterfall: ChatWaterfallService,
     private readonly processes: RunProcessesService,
     private readonly runState: RunStateService,
+    private readonly analyses: ThreadAnalysisService,
+    private readonly recommendations: RecommendationsApplyService,
   ) {}
 
   @Post()
@@ -428,6 +436,49 @@ export class ChatController {
   @ZodResponse({ status: 200, type: ChatExportDto })
   exportChat(@Param('runId') runId: string): Promise<ChatExportWire> {
     return this.chatExport.export(runId);
+  }
+
+  /**
+   * This thread's analysis — the chat its "Analyze thread" popup opens — or
+   * `analysis: null` while it has none. 404 for a thread that does not exist.
+   */
+  @Get(':runId/analysis')
+  @ApiOperation({ operationId: 'getThreadAnalysis' })
+  @ZodResponse({ status: 200, type: ThreadAnalysisDto })
+  async getThreadAnalysis(
+    @Param('runId') runId: string,
+  ): Promise<ThreadAnalysisWire> {
+    return { analysis: await this.analyses.find(runId) };
+  }
+
+  /**
+   * Start this thread's analysis ("Analyze thread"), replacing the one it had: linked to it,
+   * reading it through the analysis tools up to this moment's newest row.
+   * 409 `ANALYSIS_FOLDER_GONE` until a folder that exists is sent as `cwd`.
+   */
+  @Post(':runId/analyses')
+  @ApiOperation({ operationId: 'analyzeThread' })
+  @ZodResponse({ status: 201, type: RunDto })
+  analyzeThread(
+    @Param('runId') runId: string,
+    @Body() dto: AnalyzeThreadDto,
+  ): Promise<RunWire> {
+    return this.analyses.start(runId, dto);
+  }
+
+  /**
+   * The recommendations card's Apply: sends the analysis agent a message
+   * holding the selected items in full, with the selection persisted on it.
+   * 409 `RUN_BUSY` while the analysis is still working.
+   */
+  @Post(':runId/recommendations/apply')
+  @ApiOperation({ operationId: 'applyRecommendations' })
+  @ZodResponse({ status: 201, type: ItemDto })
+  applyRecommendations(
+    @Param('runId') runId: string,
+    @Body() dto: ApplyRecommendationsDto,
+  ): Promise<ItemWire> {
+    return this.recommendations.apply(runId, dto);
   }
 
   @Post(':runId/messages')

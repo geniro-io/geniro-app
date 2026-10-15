@@ -38,6 +38,14 @@ export class CreateWorkflowDto extends createZodDto(createWorkflowSchema) {}
 
 export const saveWorkflowSchema = z.object({
   workflow: WorkflowSchema,
+  baseHash: z
+    .string()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe(
+      'The `hash` of the version this save was made from; a file changed since is refused 409 WORKFLOW_CHANGED',
+    ),
 });
 export class SaveWorkflowDto extends createZodDto(saveWorkflowSchema) {}
 

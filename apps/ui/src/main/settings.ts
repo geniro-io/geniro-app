@@ -16,7 +16,6 @@ import {
   MAX_RUN_CONFIGS,
   type Settings,
 } from '../shared/contracts';
-import { AGENT_DESCRIPTORS } from './agents/agent-descriptors';
 import { settingsPatchSchema } from './ipc-schemas';
 
 /**
@@ -56,8 +55,8 @@ export function readSettings(): Settings {
     return { ...DEFAULT_SETTINGS };
   }
   try {
-    const parsed = parseSettingsObject(readFileSync(path, 'utf8'));
-    if (parsed === null) {
+    const record = parseSettingsObject(readFileSync(path, 'utf8'));
+    if (record === null) {
       return { ...DEFAULT_SETTINGS };
     }
     // Salvage per key. The strict schema keeps renderer WRITES honest (ipc.ts
@@ -67,7 +66,6 @@ export function readSettings(): Settings {
     // re-onboard the user, and the next updateSettings() write would make the
     // loss permanent. Merging over defaults also completes a file written by
     // an older version as the schema grows.
-    const record = scopeUnscopedConfigDirs(parsed);
     const salvaged: Record<string, unknown> = {};
     for (const key of Object.keys(settingsPatchSchema.shape)) {
       if (!(key in record)) {
@@ -125,44 +123,6 @@ export function readSettings(): Settings {
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
-}
-
-/**
- * A file written while the app remembered ONE config directory for every agent
- * holds `configDir` as a string, `recentConfigDirs` as a flat list and profiles
- * with no `agent`. Every one of them belongs to the CLI whose descriptor
- * declares `ownsUnscopedConfigDirs` — no other CLI could run under a config
- * directory then — so they are filed under it here, and the next write stores
- * the per-CLI shape. Without this the per-key salvage would drop all three,
- * and the named profiles are hand-made and unrecoverable.
- */
-function scopeUnscopedConfigDirs(
-  record: Record<string, unknown>,
-): Record<string, unknown> {
-  const owner = Object.values(AGENT_DESCRIPTORS).find(
-    (descriptor) => descriptor.ownsUnscopedConfigDirs,
-  )?.kind;
-  if (owner === undefined) {
-    return record;
-  }
-  const scoped = { ...record };
-  if (typeof record.configDir === 'string' && !('configDirs' in record)) {
-    scoped.configDirs = { [owner]: record.configDir };
-  }
-  if (Array.isArray(record.recentConfigDirs)) {
-    scoped.recentConfigDirs = { [owner]: record.recentConfigDirs };
-  }
-  if (Array.isArray(record.configProfiles)) {
-    scoped.configProfiles = record.configProfiles.map((profile: unknown) =>
-      typeof profile === 'object' &&
-      profile !== null &&
-      !Array.isArray(profile) &&
-      !('agent' in profile)
-        ? { ...profile, agent: owner }
-        : profile,
-    );
-  }
-  return scoped;
 }
 
 /**

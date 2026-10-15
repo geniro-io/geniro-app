@@ -72,7 +72,6 @@ Smaller rules:
 - The `entry` stamp is the only "is this the current build" signal. `version` is identical across rebuilds.
   - Same path with a changed mtime or size means a rebuild: replace it.
   - A different path (`pnpm daemon:dev`): leave it.
-  - No stamp: replace it.
 - Replace a stale daemon only when it is not busy and its identity is re-confirmed. The busy check fails toward busy, because replacing a daemon kills its agent children.
 - A pid that is alive but fails health or identity is refused, never signalled, and no second daemon starts. A recycled pid's pidfile is swept.
 - The root `dev` script must stay `turbo run dev --filter=@geniro/ui`. Turbo's `^build` edge, plus the otherwise-unused `@geniro/daemon` dependency in `apps/ui/package.json`, is what rebuilds `dist/` before launch.

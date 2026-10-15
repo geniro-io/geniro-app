@@ -25,8 +25,9 @@ const LOOKUP_CACHE_SIZE = 64;
 
 /**
  * Retires the boot sweep once it has run to the end under the current rule —
- * a file in the userData dir holding `CALL_MEMBERSHIP_VERSION`, for
- * `SearchTextBackfillService`'s reason. Only the SWEEP retires: every row
+ * a file in the userData dir holding `CALL_MEMBERSHIP_VERSION` (a file, not a
+ * settings key or a row: the daemon never opens `settings.json`, and a row
+ * would put a sweep's bookkeeping in the schema). Only the SWEEP retires: every row
  * written since is stamped, and a conversation read still stamps an unstamped
  * run on demand.
  */
@@ -35,7 +36,10 @@ const MARKER_FILE = 'call-membership-indexed';
 /** Rows stamped per transaction while indexing one run's older rows. */
 const STAMP_BATCH_SIZE = 500;
 
-/** A breath between batches, for `SearchTextBackfillService`'s reason. */
+/**
+ * A breath between batches: the sweep runs while the daemon is serving, and
+ * better-sqlite3 is synchronous, so the event loop turns only between batches.
+ */
 const STAMP_BATCH_PAUSE_MS = 10;
 
 /**

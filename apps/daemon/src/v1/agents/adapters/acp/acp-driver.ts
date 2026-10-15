@@ -1592,7 +1592,7 @@ export class AcpTurnDriver {
       // agent already had. Never silent, because a run the user set to `xhigh`
       // quietly thinking at `high` is a wrong turn that reports success — and
       // this arm is genuinely reachable, since a value is only offered for SOME
-      // models and a legacy chat's stored id can name one the model dropped.
+      // models and a chat's stored setting can name one the model dropped.
       //
       // A `warning`, not the default severity. Nothing failed: the turn ran and
       // went on running, which is precisely what made the full-width red panel

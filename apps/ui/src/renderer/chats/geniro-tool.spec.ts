@@ -14,12 +14,6 @@ describe('geniro’s own tool calls', () => {
     expect(isGeniroToolName(`mcp__${SERVER}__show_artifact`, RUN)).toBe(true);
   });
 
-  it('recognises the LEGACY fixed key, for transcripts stored before the rename', () => {
-    // claude published under this key before the per-run rename; without it an
-    // old conversation starts showing raw envelope rows on replay.
-    expect(isGeniroToolName('mcp__geniro__report_findings', RUN)).toBe(true);
-  });
-
   it('recognises cursor’s prose label, which carries no mcp__ name at all', () => {
     expect(isGeniroToolName(`Geniro ${SERVER}: show_chart`, RUN)).toBe(true);
   });

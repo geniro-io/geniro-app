@@ -7,7 +7,6 @@ import { ProjectsController } from './controllers/projects.controller';
 import { ProjectDao } from './dao/project.dao';
 import { ProjectQueueService } from './services/project-queue.service';
 import { ProjectsService } from './services/projects.service';
-import { TaskNumberBackfillService } from './services/task-number-backfill.service';
 
 /**
  * Projects — the folder a board's work happens in.
@@ -39,8 +38,7 @@ import { TaskNumberBackfillService } from './services/task-number-backfill.servi
     LabelInstructionDao,
     ProjectsService,
     ProjectQueueService,
-    TaskNumberBackfillService,
   ],
-  exports: [ProjectDao, ProjectQueueService, TaskNumberBackfillService],
+  exports: [ProjectDao, ProjectQueueService],
 })
 export class ProjectsModule {}

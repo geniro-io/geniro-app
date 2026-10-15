@@ -329,7 +329,7 @@ Daemon side of the contract (`v1/*`):
   - `archiveRetentionDays` defaults to `null` because it arms a sweep that permanently deletes archived chats. The daemon only executes it (`POST /v1/chats/sweep-archived`).
   - Values whose vocabulary belongs to the daemon stay opaque strings on the Electron side (`shared/contracts.ts` holds no daemon shapes).
 - **MCP config → each CLI's own config files**, the one exception to "geniro writes only its own files". Toggles and server definitions are written only on the user's press, through each CLI's own mechanism and lock, refusing an unparseable file and keeping no copy. Rules: `apps/daemon/AGENTS.md` → **MCP config writes**.
-- **Secrets → none.** Every CLI authenticates from its own login. Any future secret goes in the macOS Keychain only (see *Constraints*). `main/purge-legacy-secret.ts` removes the one entry earlier versions wrote.
+- **Secrets → none.** Every CLI authenticates from its own login. Any future secret goes in the macOS Keychain only (see *Constraints*).
 - **SQLite (`geniro.db`) → runtime and history only**: `runs`, `items`, `node_state`, and the usage tables.
   - Archive uses its own `archivedAt` column, never `deletedAt`: the `softDelete` filter is global and default-on, so an archived row would vanish from the read that unarchives it.
   - `usage_events`, `usage_activity` and `line_baselines` are exempt from run teardown so lifetime totals survive deleting a chat. `usage_events` is append-only and denormalizes agent/model/folder at write time.

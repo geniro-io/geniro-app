@@ -59,7 +59,4 @@ export const CLAUDE_DESCRIPTOR: CliAgentDescriptor = {
   // `~/.claude/downloads`, then `claude install` links it into `~/.local/bin`.
   // It refuses to run under sudo, and never asks anything.
   installer: { url: 'https://claude.ai/install.sh', shell: '/bin/bash' },
-  // It was the only CLI with a config directory (`CLAUDE_CONFIG_DIR`) while
-  // the app remembered one directory for every agent.
-  ownsUnscopedConfigDirs: true,
 };

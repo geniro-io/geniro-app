@@ -242,32 +242,6 @@ describe('readSettings', () => {
     expect(readSettings().runConfigs).toEqual([config]);
   });
 
-  it('reads a configuration written BEFORE the context-window and parameter fields existed', () => {
-    // The file on disk predates the field and `runConfigSchema` is strict, so
-    // required it would fail to parse — and the entry-by-entry salvage this
-    // suite exists for would then drop every configuration the user had. It
-    // reads as "no size chosen", which is what those entries mean.
-    //
-    // This is not hypothetical here: the configurations recovered after the
-    // key was dropped from the schema are exactly this shape.
-    const legacy = {
-      id: 'rc-old',
-      name: 'From an older build',
-      cwd: '/Users/dev/geniro-app',
-      branch: null,
-      target: 'claude',
-      model: null,
-      effort: null,
-      approval: null,
-      configDir: null,
-    };
-    writeRaw({ runConfigs: [legacy] });
-
-    expect(readSettings().runConfigs).toEqual([
-      { ...legacy, contextWindow: null, modelParameters: {} },
-    ]);
-  });
-
   it('a run configuration whose branch is argv-hostile is dropped, not stored', () => {
     // `branch` becomes an argv entry of `git switch`. A leading dash would be
     // read as a flag, so the refname guard is what keeps a hand-edited
@@ -303,6 +277,7 @@ describe('readSettings', () => {
       configProfiles: [
         {
           id: 'cp-1',
+          agent: 'claude',
           name: 'Work',
           dir: '/Users/x/.claude-work',
           color: 'blue',
@@ -311,14 +286,27 @@ describe('readSettings', () => {
         // rather than a bounded string, because the palette is the app's own.
         {
           id: 'cp-2',
+          agent: 'claude',
           name: 'Broken',
           dir: '/Users/x/.claude-b',
           color: 'chartreuse',
         },
         // A relative directory — `absolutePath` refuses it, and a run pointed
         // at one would resolve against whatever cwd the daemon happened to have.
-        { id: 'cp-3', name: 'Relative', dir: '.claude-rel', color: 'green' },
-        { id: 'cp-4', name: 'Lab', dir: '/Users/x/.claude-lab', color: 'teal' },
+        {
+          id: 'cp-3',
+          agent: 'claude',
+          name: 'Relative',
+          dir: '.claude-rel',
+          color: 'green',
+        },
+        {
+          id: 'cp-4',
+          agent: 'claude',
+          name: 'Lab',
+          dir: '/Users/x/.claude-lab',
+          color: 'teal',
+        },
       ],
     });
 
@@ -335,12 +323,14 @@ describe('readSettings', () => {
       configProfiles: [
         {
           id: 'cp-1',
+          agent: 'claude',
           name: 'Work',
           dir: '/Users/x/.claude-work',
           color: 'blue',
         },
         {
           id: 'cp-1',
+          agent: 'claude',
           name: 'Shadow',
           dir: '/Users/x/.claude-two',
           color: 'red',
@@ -353,70 +343,20 @@ describe('readSettings', () => {
     expect(kept[0]!.name).toBe('Work');
   });
 
-  describe('config directories written before they were per-agent', () => {
-    // claude was the only CLI that could run under a config directory then, so
-    // everything the file holds is claude's — and dropping it would lose the
-    // user's hand-named profiles for good.
-    it('files a single legacy configDir under claude', () => {
-      writeRaw({ configDir: '/Users/x/.claude-work' });
-
-      expect(readSettings().configDirs).toEqual({
-        claude: '/Users/x/.claude-work',
-      });
-    });
-
-    it('files a flat legacy recents list under claude', () => {
-      writeRaw({
-        recentConfigDirs: ['/Users/x/.claude-a', '/Users/x/.claude-b'],
-      });
-
-      expect(readSettings().recentConfigDirs).toEqual({
-        claude: ['/Users/x/.claude-a', '/Users/x/.claude-b'],
-      });
-    });
-
-    it('stamps a profile naming no agent as claude, and leaves a stamped one alone', () => {
-      writeRaw({
-        configProfiles: [
-          {
-            id: 'cp-1',
-            name: 'Work',
-            dir: '/Users/x/.claude-work',
-            color: 'blue',
-          },
-          {
-            id: 'cp-2',
-            name: 'Codex work',
-            agent: 'codex',
-            dir: '/Users/x/.codex-work',
-            color: 'teal',
-          },
-        ],
-      });
-
-      expect(readSettings().configProfiles.map((p) => [p.id, p.agent])).toEqual(
-        [
-          ['cp-1', 'claude'],
-          ['cp-2', 'codex'],
-        ],
-      );
-    });
-
-    it('reads the per-agent shape as written, and a bad entry costs only itself', () => {
-      writeRaw({
-        configDirs: { codex: '/Users/x/.codex-work', claude: 'relative' },
-        recentConfigDirs: {
-          codex: ['/Users/x/.codex-work'],
-          claude: ['/Users/x/.claude-a'],
-        },
-      });
-
-      const settings = readSettings();
-      expect(settings.configDirs).toEqual({ codex: '/Users/x/.codex-work' });
-      expect(settings.recentConfigDirs).toEqual({
+  it('reads the per-agent shape as written, and a bad entry costs only itself', () => {
+    writeRaw({
+      configDirs: { codex: '/Users/x/.codex-work', claude: 'relative' },
+      recentConfigDirs: {
         codex: ['/Users/x/.codex-work'],
         claude: ['/Users/x/.claude-a'],
-      });
+      },
+    });
+
+    const settings = readSettings();
+    expect(settings.configDirs).toEqual({ codex: '/Users/x/.codex-work' });
+    expect(settings.recentConfigDirs).toEqual({
+      codex: ['/Users/x/.codex-work'],
+      claude: ['/Users/x/.claude-a'],
     });
   });
 
@@ -435,6 +375,8 @@ describe('readSettings', () => {
           target: 'claude',
           model: null,
           effort: null,
+          contextWindow: null,
+          modelParameters: {},
           approval: null,
           configDir: null,
         },
@@ -447,6 +389,8 @@ describe('readSettings', () => {
           target: 'cursor-agent',
           model: null,
           effort: null,
+          contextWindow: null,
+          modelParameters: {},
           approval: null,
           configDir: null,
         },

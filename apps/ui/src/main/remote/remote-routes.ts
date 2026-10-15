@@ -339,5 +339,3 @@ export function createRemoteRoutes(deps: RemoteRoutesDeps) {
     },
   };
 }
-
-export type RemoteRoutes = ReturnType<typeof createRemoteRoutes>;

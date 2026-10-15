@@ -92,7 +92,6 @@ import { RunProcessSweep } from './services/run-process-sweep.service';
 import { RunProcessesService } from './services/run-processes.service';
 import { RunStateService } from './services/run-state.service';
 import { RunTeardownService } from './services/run-teardown.service';
-import { SearchTextBackfillService } from './services/search-text-backfill.service';
 import { SessionTranscriptsService } from './services/session-transcripts.service';
 import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
@@ -165,7 +164,6 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     PullRequestCaptureService,
     RunAttentionService,
-    SearchTextBackfillService,
     TaskListCaptureService,
     PolledSpendService,
     UserQuestionBroker,

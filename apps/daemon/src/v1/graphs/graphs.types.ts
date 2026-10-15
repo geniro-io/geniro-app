@@ -515,8 +515,7 @@ export const WorkflowInstructionNodeSchema = z
 
 /**
  * One node of a workflow DAG, discriminated by `kind`. Strict: `kind` is
- * required on every node — legacy kind-less files are normalized once by the
- * store (no compatibility shim lives in the schema).
+ * required on every node, and the store refuses a kind-less file.
  */
 export const WorkflowNodeSchema = z
   .discriminatedUnion('kind', [

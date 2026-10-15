@@ -905,13 +905,10 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     expect(endSpy).toHaveBeenCalled();
   });
 
-  it('leaves a legacy turn (no approval mode) byte-identical when asking is allowed', () => {
-    // A turn carrying no mode must keep the CLI's own defaults and no
-    // permission flags, even though every chat now asks for the question
-    // channel. NOT a probe, whatever the unset-mode population used to be
-    // called: a legacy chat row names no mode either, and it is a user's turn
-    // — which is why `internalProbe` exists as its own field rather than being
-    // read off this one.
+  it('leaves a turn with no approval mode byte-identical when asking is allowed', () => {
+    // A turn carrying no mode (a geniro-internal turn) must keep the CLI's own
+    // defaults and no permission flags, even though every chat now asks for
+    // the question channel.
     const plain = fakeSpawn();
     new ClaudeAdapter({ spawn: plain.spawn }).start(
       { prompt: 'p', cwd: '/proj' },

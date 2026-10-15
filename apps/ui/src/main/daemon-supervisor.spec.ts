@@ -64,6 +64,9 @@ function cliPathOf(
   return map[kind];
 }
 
+/** The start time every fake daemon records, and the kernel reports back by default. */
+const RECORDED_START = 5_000;
+
 function info(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
   return {
     pid: 1111,
@@ -73,10 +76,9 @@ function info(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
     version: '0.1.0',
     // The entry `make()` below resolves to. It does not exist on disk, so the
     // supervisor cannot stat its own copy and falls back to the version gate —
-    // which is what every test in this file is about. A NULL stamp would not do
-    // that: it means "older than the staleness check" and is replaced.
+    // which is what every test in this file is about.
     entry: { path: '/bundle/daemon/dist/main.js', mtimeMs: 1, size: 2 },
-    pidStartedAtMs: null,
+    pidStartedAtMs: RECORDED_START,
     startedAt: '2026-07-04T00:00:00Z',
     ...overrides,
   };
@@ -107,7 +109,7 @@ function harness(opts: {
   onKill?: (pid: number, signal: NodeJS.Signals) => void;
   graceMs?: number;
   pollMs?: number;
-  /** The kernel's start time for a pid — `ps`, unless a test says. */
+  /** The kernel's start time for a pid — the recorded one, unless a test says. */
   startTime?: (pid: number) => number | null;
   stopWaitMs?: number;
   onStarted?: DaemonSupervisorOptions['onStarted'];
@@ -156,7 +158,7 @@ function harness(opts: {
       }),
     pollIntervalMs: opts.pollMs ?? 1,
     shutdownGraceMs: opts.graceMs ?? 15,
-    ...(opts.startTime ? { readStartTime: opts.startTime } : {}),
+    readStartTime: opts.startTime ?? (() => RECORDED_START),
     ...(opts.stopWaitMs === undefined ? {} : { stopWaitMs: opts.stopWaitMs }),
     ...(opts.onStarted ? { onStarted: opts.onStarted } : {}),
   };
@@ -744,6 +746,7 @@ describe('DaemonSupervisor — a rebuilt daemon must not be adopted', () => {
     const killed = new Set<number>();
     let pidfile = initial;
     return new DaemonSupervisor({
+      readStartTime: () => RECORDED_START,
       spawn: ((): FakeChild => {
         spawned.count += 1;
         const child = new FakeChild();
@@ -836,26 +839,6 @@ describe('DaemonSupervisor — a rebuilt daemon must not be adopted', () => {
 
     expect(spawned.count).toBe(0);
     expect(kills).toEqual([]);
-  });
-
-  it('REPLACES a daemon that reported no entry at all', async () => {
-    // The launch this whole check exists for. Only this app writes the pidfile
-    // and the field has been written since it existed, so its absence dates the
-    // daemon to before the check — i.e. it is the multi-day-stale one, running
-    // on the one launch where it is guaranteed to be there. Adopting it here
-    // would make the feature miss its own target case.
-    const kills: { pid: number; signal: NodeJS.Signals }[] = [];
-    const spawned = { count: 0 };
-    const supervisor = supervisorFor(
-      info({ pid: 2222, entry: null }),
-      kills,
-      spawned,
-    );
-
-    await supervisor.start();
-
-    expect(spawned.count).toBe(1);
-    expect(kills.map((k) => k.pid)).toContain(2222);
   });
 
   it('adopts when it cannot stat its OWN entry', async () => {
@@ -1026,18 +1009,6 @@ describe('DaemonSupervisor — guards on replacing a daemon we do not own', () =
     expect(sink.spawned.count).toBe(1);
     expect(sink.kills.map((k) => k.pid)).toContain(3333);
   });
-
-  it('still replaces a daemon that recorded no start time', async () => {
-    // A daemon older than the field. It cannot be confirmed, but it also cannot
-    // be a recycled pid FOR this record — there is no record. Refusing here
-    // would make the staleness check unreachable for exactly those daemons.
-    const sink = newSink();
-    await supervisor(stale({ pidStartedAtMs: null }), sink, {
-      startTime: null,
-    }).start();
-
-    expect(sink.spawned.count).toBe(1);
-  });
 });
 
 describe('DaemonSupervisor — a pidfile whose pid now belongs to someone else', () => {
@@ -1143,6 +1114,7 @@ describe('DaemonSupervisor — start() is safe to call on a daemon it already ho
     const child = new FakeChild();
     const logs: string[] = [];
     const supervisor = new DaemonSupervisor({
+      readStartTime: () => RECORDED_START,
       spawn: (() => child) as unknown as DaemonSupervisorOptions['spawn'],
       readDaemonInfo: () => info({ pid: child.pid, version: '0.2.0' }),
       isAlive: () => false,
@@ -1325,6 +1297,7 @@ function respawner(
   };
   const die = (child: FakeChild): void => exit(child, 1, null);
   const supervisor = new DaemonSupervisor({
+    readStartTime: () => RECORDED_START,
     spawn: ((): FakeChild => {
       const index = children.length;
       const child = new FakeChild(5_000 + index);
@@ -1437,6 +1410,7 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     const crashMarksRead: number[] = [];
     let spawned = false;
     const supervisor = new DaemonSupervisor({
+      readStartTime: () => RECORDED_START,
       spawn: (() => {
         spawned = true;
         return child;

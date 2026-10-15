@@ -64,7 +64,6 @@ The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent exec
 - MCP harvest is age-bounded (it shadows the live listing); skill harvest is keyed `(agent, cwd)`. MCP listing cache key includes `configDir`, the read runs under that profile's env, with a keyed single-flight (it launches the user's servers).
 - `chat-metrics` composes only: it hands the adapter `{live, sessionId}` and each adapter answers from its own channel.
 - `chat-title`: writes a title only while it is still exactly what this service derived (manual renames are permanent); checks ownership before any spawn. Do not reintroduce asking cursor for a title. claude's title ask is a throwaway `haiku` turn, MCP withheld, temp cwd, once per conversation.
-- `WorkflowTitleBackfillService` runs once ever (marker file). Never make it repeat; it would erase user renames.
 - `run-teardown` is the ONE delete teardown (cancel, wait, revoke tokens, purge rows with `softDelete` off, drop attachments and artifacts, announce `runDeleted`), shared by chat and workflow delete.
   - It never touches `usage_events`, `usage_activity` or `line_baselines`.
   - Only an ARCHIVED run's own CLI transcripts are deleted with it (`session-transcripts.service.ts`). It keeps a session another run names, or one that began before the run (an import). It never throws.

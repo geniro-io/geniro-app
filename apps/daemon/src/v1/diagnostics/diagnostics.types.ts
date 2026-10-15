@@ -10,14 +10,6 @@ export const DebugChannelSchema = z
   .meta({ id: 'DebugChannel' });
 export type DebugChannel = z.infer<typeof DebugChannelSchema>;
 
-/** Every channel, in the order the panel offers them. */
-export const DEBUG_CHANNELS = [
-  'daemon',
-  'transcript',
-  'agent-stdio',
-  'ui',
-] as const satisfies readonly DebugChannel[];
-
 /**
  * The channels a fresh daemon records.
  *
@@ -86,7 +78,6 @@ export type DebugLogPage = z.infer<typeof DebugLogPageSchema>;
 export const DebugSettingsSchema = z.object({
   channels: z.array(DebugChannelSchema),
 });
-export type DebugSettings = z.infer<typeof DebugSettingsSchema>;
 
 /** One line the RENDERER recorded, handed to the daemon so it reaches the file. */
 export const UiLogInputSchema = z.object({

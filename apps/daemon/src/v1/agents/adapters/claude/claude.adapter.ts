@@ -136,7 +136,6 @@ import {
   CLAUDE_TITLE_MODEL,
   CLAUDE_TITLE_TIMEOUT_MS,
   CLAUDE_TODO_TOOLS_ENV,
-  CLAUDE_UNSET_MODE_FALLBACK,
 } from './claude.const';
 import type { ClaudeAdapterOptions, ClaudeModeProbe } from './claude.types';
 import {
@@ -1973,7 +1972,7 @@ export class ClaudeAdapter extends AgentAdapter {
         CLAUDE_PERMISSION_MODE_FLAG,
         input.approvalMode === 'ask' || input.approvalMode === 'auto'
           ? CLAUDE_PERMISSION_MODE_DEFAULT
-          : (input.approvalMode ?? CLAUDE_UNSET_MODE_FALLBACK),
+          : (input.approvalMode ?? CLAUDE_PERMISSION_MODE_DEFAULT),
       );
       args.push(
         CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
@@ -2183,9 +2182,8 @@ export class ClaudeAdapter extends AgentAdapter {
    *
    * Two turns are outside it: an `auto` turn that will not ask (it spawns
    * under `--dangerously-skip-permissions`, which wires no prompt tool at
-   * all), and a turn that named no mode at all — which after
-   * {@link CLAUDE_UNSET_MODE_FALLBACK} means a geniro-INTERNAL turn, never a
-   * user's chat. Those probes read one `system/init` line and are cancelled;
+   * all), and a turn that named no mode at all — a geniro-INTERNAL turn,
+   * never a user's chat (`ChatService` gives every chat turn a mode). Those probes read one `system/init` line and are cancelled;
    * handing them a permission dialogue and an open stdin buys nothing.
    */
   private spawnsOnPermissionDialogue(input: AgentTurnInput): boolean {
@@ -2376,18 +2374,13 @@ export class ClaudeAdapter extends AgentAdapter {
    * loads no server and every poll would return the same empty list until the
    * grace ran out. An `internalProbe` turn reads one `system/init` line and is
    * cancelled; it never reaches a tool, so a tool surface is nothing to it.
-   * And a turn naming NO approval mode keeps its own exemption — the same
-   * population {@link CLAUDE_UNSET_MODE_FALLBACK} describes, which is a LEGACY
-   * chat row rather than a probe, and whose opening write has always been
-   * synchronous.
+   * And a turn naming NO approval mode keeps its own exemption: it is a
+   * geniro-internal turn (the command-list probe), whose opening write has
+   * always been synchronous.
    *
    * `internalProbe` is listed SEPARATELY rather than replacing the unset-mode
-   * arm, and the distinction is load-bearing: the permission-mode probe names
-   * a mode, so the old condition classified it as a user's turn, while a
-   * legacy chat row names none and is a user's turn. Collapsing the two onto
-   * one field moves every legacy row into the gate — measured, and caught by
-   * `leaves a legacy turn (no approval mode) byte-identical when asking is
-   * allowed`.
+   * arm: the permission-mode probe names a mode, so the mode alone cannot tell
+   * it from a user's turn.
    */
   private waitsForMcpServers(input: AgentTurnInput): boolean {
     if (this.claudeOptions.waitForMcpServers === false) {

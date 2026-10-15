@@ -58,8 +58,7 @@ export const CHAT_TITLE_UPGRADE_TURNS = 5;
 /**
  * Chat-level tool-approval modes. `plan` is chat-only by design decision —
  * the graph node schema stops at `acceptEdits` (graphs.types.ts
- * ApprovalModeSchema). A run row whose `approval` is null predates the mode
- * selector and keeps the legacy behavior: no permission flags on the CLI.
+ * ApprovalModeSchema).
  */
 export const CHAT_APPROVAL_MODES = [
   'auto',
@@ -4599,7 +4598,7 @@ export const RunWireSchema = z.object({
     ),
   model: z.string().nullable(),
   approval: ChatApprovalModeSchema.nullable().describe(
-    'Chat approval mode; null = legacy row (no permission flags, pre-selector)',
+    'Chat approval mode; null for a workflow run',
   ),
   effort: z
     .string()

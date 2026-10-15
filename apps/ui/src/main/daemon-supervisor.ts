@@ -490,17 +490,8 @@ export class DaemonSupervisor {
    * - a recorded stamp that is unreadable on both sides, which would otherwise
    *   terminate and respawn a daemon that records the same unreadable stamp
    *   again, every launch, forever.
-   *
-   * A daemon that reported NO stamp is the one unidentifiable case that is
-   * still replaced: only this app writes this pidfile, and the field has been
-   * written since it existed, so its absence dates the daemon to before this
-   * check — which is exactly the multi-day-stale daemon the check exists for,
-   * running on the one launch where it is guaranteed to be there.
    */
   private mayAdopt(existing: DaemonInfo, entry: string): boolean {
-    if (existing.entry === null) {
-      return false;
-    }
     const mine = stampEntry(entry, statSync);
     if (existing.entry.path !== mine.path) {
       return true;
@@ -552,9 +543,6 @@ export class DaemonSupervisor {
    * signal — the same direction that module takes, and for the same reason.
    */
   private confirmIdentity(existing: DaemonInfo): boolean {
-    if (existing.pidStartedAtMs === null) {
-      return true;
-    }
     const actual = this.readStartTime(existing.pid);
     if (actual === null) {
       return false;
@@ -569,17 +557,13 @@ export class DaemonSupervisor {
    * Whether the live process at the recorded pid is POSITIVELY someone else —
    * the kernel's start time was read and it is not the one the daemon wrote.
    *
-   * Stricter than `!confirmIdentity`, deliberately: an unreadable start time,
-   * or a record older than the field, is "cannot tell", and that still fails
-   * closed below. Only a proven mismatch is licence to treat the pidfile as a
+   * Stricter than `!confirmIdentity`, deliberately: an unreadable start time
+   * is "cannot tell", and that still fails closed below. Only a proven mismatch is licence to treat the pidfile as a
    * leftover — a daemon that died without cleaning up (a SIGKILL, a crash)
    * whose pid macOS has since handed to something else. Before this, that
    * stranger failing the health check blocked every launch, forever.
    */
   private isRecycledPid(existing: DaemonInfo): boolean {
-    if (existing.pidStartedAtMs === null) {
-      return false;
-    }
     const actual = this.readStartTime(existing.pid);
     return (
       actual !== null &&

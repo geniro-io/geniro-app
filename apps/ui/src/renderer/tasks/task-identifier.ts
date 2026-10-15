@@ -10,8 +10,7 @@
  * because the two values arrive on different rows and only the client holds
  * both at once.
  *
- * Null while either half is missing — a card the backfill has not reached — so
- * a caller draws NOTHING rather than `GEN-0`, which names a card that does not
+ * Null while either half is missing, so a caller draws NOTHING rather than `GEN-0`, which names a card that does not
  * exist, or a bare `-12`, which names no board.
  */
 export function taskIdentifier(

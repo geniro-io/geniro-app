@@ -31,7 +31,6 @@ import {
 } from './network-lockdown';
 import { adoptLoginShellPath } from './process-path';
 import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
-import { purgeLegacySecret } from './purge-legacy-secret';
 import { teardownThenQuit } from './quit-teardown';
 import { RemoteAccess } from './remote/remote-access';
 import { readSettings } from './settings';
@@ -560,10 +559,6 @@ function focusMainWindow(): void {
 }
 
 function main(): void {
-  // Unconditional, not gated behind whenReady or any settings flag — see
-  // purge-legacy-secret.ts for why that is both safe and the point.
-  purgeLegacySecret();
-
   // The app is the single owner of the daemon and its pidfile. A second launch
   // focuses the existing window instead of double-spawning the daemon and
   // clobbering the shared pidfile. macOS already enforces single-instance for

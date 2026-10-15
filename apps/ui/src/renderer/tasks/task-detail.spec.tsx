@@ -1119,7 +1119,7 @@ describe('TaskDetail — the panel’s remaining corrections', () => {
     ).toBeTruthy();
   });
 
-  it('draws no identifier for a card the backfill has not reached', () => {
+  it('draws no identifier for a card with no number', () => {
     expect(
       detail({ number: null, projectTaskKey: 'GEN' }).textContent,
     ).not.toContain('GEN-');

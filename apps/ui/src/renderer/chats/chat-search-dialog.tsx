@@ -116,11 +116,7 @@ export function ChatSearchDialog({
           }>
           <ul className="m-0 flex list-none flex-col p-1">
             {hits.map((hit) => (
-              // Keyed on the pair, not the seq alone: transcripts written before
-              // the daemon's seq allocator hold two rows sharing one seq — the
-              // transcript itself de-dupes by `id` for that reason — and two such
-              // hits would collide here.
-              <li key={`${hit.seq}:${hit.createdAt}`}>
+              <li key={hit.seq}>
                 <button
                   type="button"
                   className="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left hover:bg-sidebar-accent"

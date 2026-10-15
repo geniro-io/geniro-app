@@ -109,11 +109,8 @@ export const CURSOR_ACP_CLIENT_META: Readonly<Record<string, unknown>> = {
  * spelling before it is measured. This stays the PREFERRED reading: a name the
  * vendor has actually been seen to use beats an inference from a category.
  *
- * `cursorModelEffort` has read both original spellings out of a legacy composed
- * id since that id existed; this is the same fact on the WRITE side, which is
- * where it was missing. Named rather than inline because three readers now
- * spell it — the listing, the selection builder and the driver's alias
- * resolution.
+ * Named rather than inline because three readers spell it — the listing, the
+ * selection builder and the driver's alias resolution.
  */
 export const CURSOR_EFFORT_PARAMETER_IDS = [
   'effort',

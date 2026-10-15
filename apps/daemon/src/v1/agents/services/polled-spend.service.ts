@@ -17,7 +17,6 @@ import {
   ledgerTotals,
   type PolledSpendLedger,
   readPolledSpendLedger,
-  spendBucket,
   unpricedConversation,
   withAccountEvents,
   writePolledSpendLedger,
@@ -325,7 +324,7 @@ export class PolledSpendService implements OnModuleInit {
       // Ask nothing at all unless this machine holds a conversation of this
       // CLI: a user who never ran it must never see its credential prompt, and
       // an account with no runs here has nothing to attribute.
-      const targets = await this.targetsFor(kind, adapter, em, now);
+      const targets = await this.targetsFor(kind, adapter, em);
       const owners = new Map<string, NodeTarget>();
       let startMs = now;
       for (const target of targets.values()) {
@@ -383,7 +382,6 @@ export class PolledSpendService implements OnModuleInit {
     kind: AgentKind,
     adapter: AgentAdapter,
     em: EntityManager,
-    now: number,
   ): Promise<Map<string, NodeTarget>> {
     const targets = new Map<string, NodeTarget>();
     const claimed = new Set<string>();
@@ -438,7 +436,7 @@ export class PolledSpendService implements OnModuleInit {
           sessions.push(state.agentSessionId);
         }
         for (const sessionId of sessions) {
-          this.claim(target, sessionId, claimed, now);
+          this.claim(target, sessionId, claimed);
         }
       }
       if (byNode.size === 0) {
@@ -460,7 +458,7 @@ export class PolledSpendService implements OnModuleInit {
       }
     }
     for (const { target, sessionId } of calls) {
-      this.claim(target, sessionId, claimed, now);
+      this.claim(target, sessionId, claimed);
     }
     // The delegates every claimed conversation launched, billed under their
     // own ids — attributed to the node whose conversation launched them.
@@ -482,7 +480,7 @@ export class PolledSpendService implements OnModuleInit {
       // through weeks of the account.
       const from = target.conversations.get(parent)?.settledThroughMs;
       for (const child of children) {
-        this.claim(target, child, claimed, now, from);
+        this.claim(target, child, claimed, from);
       }
     }
     return targets;
@@ -492,18 +490,11 @@ export class PolledSpendService implements OnModuleInit {
    * File one conversation under a node, unless another node already has it,
    * with its ledger entry so far — or, for one never priced, an empty entry
    * starting at `fromMs`, else where the node did.
-   *
-   * A node priced before the per-event ledger existed holds a total and no
-   * ledger. If it began inside the account's window, that total is re-derived
-   * from scratch, which is the point. If it began BEFORE, the account can no
-   * longer answer for its start, so its old total is kept as settled and only
-   * what is billed from now on is added to it.
    */
   private claim(
     target: NodeTarget,
     conversationId: string,
     claimed: Set<string>,
-    now: number,
     fromMs?: number,
   ): void {
     if (claimed.has(conversationId)) {
@@ -516,30 +507,6 @@ export class PolledSpendService implements OnModuleInit {
       return;
     }
     const createdAtMs = target.state.createdAt.getTime();
-    const legacyCents = target.state.polledCostCents ?? 0;
-    const predatesWindow = createdAtMs < now - ACCOUNT_LOOKBACK_MS;
-    if (target.stored.size === 0 && legacyCents > 0 && predatesWindow) {
-      const carried = [...target.conversations.values()].some(
-        (spend) => Object.keys(spend.settled).length > 0,
-      );
-      target.conversations.set(conversationId, {
-        ...unpricedConversation(now),
-        ...(carried
-          ? {}
-          : {
-              // The account no longer lists these charges, so neither their
-              // days nor their models are known: dated at the node's start,
-              // under no model.
-              settled: {
-                [spendBucket(createdAtMs, '')]: [
-                  legacyCents,
-                  target.state.polledCostEvents ?? 0,
-                ] as [number, number],
-              },
-            }),
-      });
-      return;
-    }
     target.conversations.set(
       conversationId,
       unpricedConversation(fromMs ?? createdAtMs - NODE_START_SLACK_MS),

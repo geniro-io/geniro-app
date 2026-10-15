@@ -1314,22 +1314,9 @@ export interface FileSaveResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * `KEYCHAIN_SERVICE` and `SecretName` are deliberately GONE, along with
- * `keychain.ts` and the save/has/delete IPC channels.
- *
- * `cursor.apiKey` was the only secret this app ever held, and it stopped being
- * needed once `cursor-agent` was confirmed to authenticate from its own
- * `~/.cursor` login. `SecretName` could not simply lose its one member — zod
- * rejects an empty enum, so the IPC schema had no valid shape — which is what
- * made removing the surface the honest option rather than keeping a scaffold
- * with a placeholder member no caller could ever pass.
- *
- * The service name lives on as a literal in `purge-legacy-secret.ts`, whose one
- * job is deleting the entry earlier versions wrote.
- *
- * The project's "secrets live in the macOS Keychain only — never in SQLite,
- * never in a file" rule is NOT repealed by this. It still governs the moment a
- * second secret is ever needed; there simply is no first one now.
+ * Every CLI authenticates from its own login, so the app holds no credential.
+ * The "secrets live in the macOS Keychain only — never in SQLite, never in a
+ * file" rule still governs the moment one is ever needed.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────

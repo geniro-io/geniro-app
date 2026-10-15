@@ -102,20 +102,11 @@ const runConfigSchema = z.strictObject({
   target: chatTarget,
   model: z.string().min(1).max(64).nullable(),
   effort: z.string().min(1).max(64).nullable(),
-  // `.default(null)` and not a bare `.nullable()`, unlike its neighbours: this
-  // field arrived after users already had saved configurations on disk, and
-  // `runConfigSchema` is strict — required, every entry written before it
-  // would fail to parse and `salvageRunConfigs` would drop the lot. A
-  // configuration is hand-made and unrecoverable, which is the whole reason
-  // that salvage is entry-by-entry. The default reads an older file as "no
-  // size chosen", which is what those entries mean.
-  contextWindow: z.string().min(1).max(64).nullable().default(null),
-  // Defaulted, not optional: a configuration saved before this field existed
-  // must salvage rather than fail the entry, which `salvageRunConfigs` grades
-  // one row at a time.
-  modelParameters: z
-    .record(z.string().min(1).max(64), z.string().min(1).max(200))
-    .default({}),
+  contextWindow: z.string().min(1).max(64).nullable(),
+  modelParameters: z.record(
+    z.string().min(1).max(64),
+    z.string().min(1).max(200),
+  ),
   approval: z.string().min(1).max(32).nullable(),
   configDir: absolutePath.nullable(),
 });

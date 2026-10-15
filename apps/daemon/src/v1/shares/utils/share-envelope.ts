@@ -73,6 +73,9 @@ const DECRYPT_SCRIPT = `
     show(${JSON.stringify(NOTICE_MISSING_KEY)});
     return;
   }
+  // Out of the address bar before anything else runs: a key left there stays
+  // in history and in sight of anything that can read this tab's URL.
+  history.replaceState(null, '', location.pathname + location.search);
   function bytes(text) {
     var b64 = text.replace(/-/g, '+').replace(/_/g, '/');
     while (b64.length % 4) b64 += '=';

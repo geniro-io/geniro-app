@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import {
   DEFAULT_SHARING,
@@ -10,6 +10,7 @@ import { revokeFailedMessage } from '../chats/use-artifact-sharing';
 import { ConfirmButton } from '../components/confirm-button';
 import { CopyButton } from '../components/copy-button';
 import { ErrorBanner } from '../components/error-banner';
+import { Field } from '../components/field';
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -469,67 +470,82 @@ function DestinationForm({
   onSave: () => void;
   saving: boolean;
 }): React.JSX.Element {
+  const id = useId();
   const field = (
     key: Exclude<keyof Draft, 'kind'>,
     label: string,
     placeholder: string,
+    hint?: React.ReactNode,
   ): React.JSX.Element => (
-    <Input
-      aria-label={label}
-      placeholder={placeholder}
-      value={draft[key]}
-      onChange={(event) => onChange({ ...draft, [key]: event.target.value })}
-    />
+    <Field label={label} htmlFor={`${id}-${key}`} hint={hint}>
+      <Input
+        id={`${id}-${key}`}
+        placeholder={placeholder}
+        value={draft[key]}
+        onChange={(event) => onChange({ ...draft, [key]: event.target.value })}
+      />
+    </Field>
   );
   return (
-    <div className="mt-2 flex flex-col gap-2" data-slot="sharing-form">
-      <Select
-        aria-label="Kind of place"
-        value={draft.kind}
-        groups={[
-          {
-            label: 'Upload with',
-            items: (Object.keys(KIND_LABEL) as Kind[]).map((kind) => ({
-              value: kind,
-              label: KIND_LABEL[kind],
-            })),
-          },
-        ]}
-        onValueChange={(kind) => onChange({ ...draft, kind: kind as Kind })}
-      />
+    <div className="mt-2 flex flex-col gap-3" data-slot="sharing-form">
+      <Field label="Kind of place" htmlFor={`${id}-kind`}>
+        <Select
+          id={`${id}-kind`}
+          value={draft.kind}
+          groups={[
+            {
+              label: 'Upload with',
+              items: (Object.keys(KIND_LABEL) as Kind[]).map((kind) => ({
+                value: kind,
+                label: KIND_LABEL[kind],
+              })),
+            },
+          ]}
+          onValueChange={(kind) => onChange({ ...draft, kind: kind as Kind })}
+        />
+      </Field>
       {field('name', 'Name', 'Company artifacts')}
-      {field('linkBase', 'Link address', 'https://artifacts.example.com')}
-      <p className="text-xs text-muted-foreground">
-        Use a domain of your own. A shared one (storage.googleapis.com,
-        s3.amazonaws.com) lets any other page on it read the key from a link.
-      </p>
+      {field(
+        'linkBase',
+        'Link address',
+        'https://artifacts.example.com',
+        'Use a domain of your own. A shared one (storage.googleapis.com, s3.amazonaws.com) lets any other page on it read the key from a link.',
+      )}
       {draft.kind === 'command' ? (
         <>
-          <Textarea
-            aria-label="Upload command"
-            placeholder={'/usr/local/bin/upload\n--src={file}\n{object}'}
-            value={draft.upload}
-            onChange={(event) =>
-              onChange({ ...draft, upload: event.target.value })
-            }
-          />
-          <Textarea
-            aria-label="Remove command"
-            placeholder={'/usr/local/bin/delete\n{object}'}
-            value={draft.remove}
-            onChange={(event) =>
-              onChange({ ...draft, remove: event.target.value })
-            }
-          />
-          <p className="text-xs text-muted-foreground">
-            One argument per line; run directly, never through a shell.
-            {' {file}'} is the encrypted page, {'{object}'} where it goes.
-          </p>
+          <Field label="Upload command" htmlFor={`${id}-upload`}>
+            <Textarea
+              id={`${id}-upload`}
+              placeholder={'/usr/local/bin/upload\n--src={file}\n{object}'}
+              value={draft.upload}
+              onChange={(event) =>
+                onChange({ ...draft, upload: event.target.value })
+              }
+            />
+          </Field>
+          <Field
+            label="Remove command"
+            htmlFor={`${id}-remove`}
+            hint={
+              <>
+                One argument per line; run directly, never through a shell.
+                {' {file}'} is the encrypted page, {'{object}'} where it goes.
+              </>
+            }>
+            <Textarea
+              id={`${id}-remove`}
+              placeholder={'/usr/local/bin/delete\n{object}'}
+              value={draft.remove}
+              onChange={(event) =>
+                onChange({ ...draft, remove: event.target.value })
+              }
+            />
+          </Field>
         </>
       ) : (
         <>
           {field('bucket', 'Bucket', 'company-share')}
-          {field('prefix', 'Folder in the bucket', 'geniro (optional)')}
+          {field('prefix', 'Folder in the bucket', 'reports (optional)')}
           {draft.kind === 's3' && (
             <>
               {field('profile', 'AWS profile', 'default (optional)')}

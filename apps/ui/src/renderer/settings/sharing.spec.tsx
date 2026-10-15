@@ -103,10 +103,19 @@ async function press(element: HTMLElement): Promise<void> {
   });
 }
 
-async function type(label: string, value: string): Promise<void> {
-  const input = container.querySelector<HTMLInputElement>(
-    `[aria-label="${label}"]`,
+/** The control a visible `<label>` reading exactly `text` points at. */
+function labelled(text: string): HTMLInputElement | null {
+  const label = Array.from(container.querySelectorAll('label')).find(
+    (candidate) => candidate.textContent === text,
   );
+  const control = label?.htmlFor
+    ? document.getElementById(label.htmlFor)
+    : null;
+  return control instanceof HTMLInputElement ? control : null;
+}
+
+async function type(label: string, value: string): Promise<void> {
+  const input = labelled(label);
   if (!input) {
     throw new Error(`no field "${label}"`);
   }
@@ -172,6 +181,33 @@ describe('Settings → Sharing', () => {
     expect(saved?.defaultDestinationId).toBe(saved?.destinations[0]?.id);
   });
 
+  it('labels every field visibly, so a filled-in form still says which is which', async () => {
+    install({
+      destinations: [],
+      defaultDestinationId: null,
+      agentsMayShare: false,
+    });
+    await render(fakeApi());
+    await press(button('Add a place'));
+
+    for (const text of [
+      'Kind of place',
+      'Name',
+      'Link address',
+      'Bucket',
+      'Folder in the bucket',
+    ]) {
+      const label = Array.from(container.querySelectorAll('label')).find(
+        (candidate) => candidate.textContent === text,
+      );
+      expect(label?.htmlFor, text).toBeTruthy();
+      expect(
+        document.getElementById(label?.htmlFor ?? ''),
+        text,
+      ).not.toBeNull();
+    }
+  });
+
   it('refuses a link address that is not https, writing nothing', async () => {
     install({
       destinations: [],
@@ -209,9 +245,7 @@ describe('Settings → Sharing', () => {
     await press(button('Save place'));
 
     expect(container.textContent).toContain('Invalid prefix');
-    expect(
-      container.querySelector<HTMLInputElement>('[aria-label="Name"]')?.value,
-    ).toBe('Company');
+    expect(labelled('Name')?.value).toBe('Company');
     expect(button('Save place').disabled).toBe(false);
   });
 

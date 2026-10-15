@@ -2,7 +2,7 @@
 
 The Electron app: main process, preload and React renderer (electron-vite). Project-wide commands, conventions and constraints are in the root `AGENTS.md`. Renderer styling and reuse rules are in `.claude/rules/renderer-*.md`.
 
-**Contents**: [Main process](#main-process) · [Renderer shell](#renderer-shell) · [Design system](#design-system) · [Chats](#chats) · [Workflows](#workflows) · [Settings](#settings) (incl. *Settings keys*) · [macOS packaging](#macos-packaging) · [App updates](#app-updates) · [System notifications](#system-notifications) · [Sidebar](#sidebar) · [Security](#security)
+**Contents**: [Main process](#main-process) · [Renderer shell](#renderer-shell) · [Design system](#design-system) · [Chats](#chats) · [Workflows](#workflows) · [Settings](#settings) (incl. _Settings keys_) · [macOS packaging](#macos-packaging) · [App updates](#app-updates) · [System notifications](#system-notifications) · [Sidebar](#sidebar) · [Security](#security)
 
 ---
 
@@ -32,7 +32,7 @@ Child processes and environment:
 - `cli-install.ts` runs the descriptor's `installer` as `curl -fsSL <url> | <shell>`, and only on the user's press. It reports success only once detection resolves the new binary's `--version`.
 - Main's own failures go to the daemon's log (`reportMainLog`, the `ui` channel), never to stdout. A packaged Finder launch discards main's stdout.
 
-Git (the hardening is under *Security*):
+Git (the hardening is under _Security_):
 
 - Switch a branch with `git switch` behind a re-read dirty check, never `git checkout` (which treats a branch name as a pathspec and restores a file).
 - `pullBranch` is stash, then `git pull --ff-only`, then stash pop. The pop runs on every path, a failed pull included. A failed stash push aborts the pull.
@@ -96,7 +96,7 @@ Smaller rules:
 - node-pty is an app `dependency` with an N-API prebuild. Never add it to `rebuild:native`. `spawn-helper` is unpacked from the asar, and `build-mac.mjs` restores its exec bit.
 - The in-app terminal is a different feature from the "continue in your terminal" handoff.
 
-**LAN gateway** (`main/remote/`). The hard rules (daemon stays loopback-only, pairing gate, Origin check, injected token, Host guard, tunnel on a press only) are in the root `AGENTS.md` → *Constraints*. In code:
+**LAN gateway** (`main/remote/`). The hard rules (daemon stays loopback-only, pairing gate, Origin check, injected token, Host guard, tunnel on a press only) are in the root `AGENTS.md` → _Constraints_. In code:
 
 - `gateway.ts` binds IPv4 only on `REMOTE_PREFERRED_PORT` (47616), with a free-port fallback. Routing order: its own routes, then `/v1/*` and `/health` proxied, then `/ws` upgraded, then the bundle, all behind one path-traversal guard.
 - Match the upgrade as `/ws` or `/ws/…`. engine.io requests the trailing-slash form, so an exact match breaks live streaming while every unit test still passes.

@@ -4831,6 +4831,18 @@ export const RunWireSchema = z.object({
 export type RunWire = z.infer<typeof RunWireSchema>;
 
 /**
+ * A thread's analysis, as its popup opens it: the analysis chat, or null when
+ * the thread has none yet. Wrapped so "none" is an answer, not a 404 a client
+ * would have to tell from a thread that does not exist.
+ */
+export const ThreadAnalysisWireSchema = z.object({
+  analysis: RunWireSchema.nullable().describe(
+    'The analysis chat started on this thread, or null when it has none',
+  ),
+});
+export type ThreadAnalysisWire = z.infer<typeof ThreadAnalysisWireSchema>;
+
+/**
  * A run's UNREAD moments after a device reported LOOKING at it — what
  * `POST /v1/chats/:runId/seen` answers. Just the two halves rather than the
  * whole row: the row is not what changed, and every other window learns the
@@ -5236,6 +5248,7 @@ export interface ChatTextDatabase {
     cwd: Run['cwd'];
     archived_at: StoredDate | null;
     edits_workflow_slug: Run['editsWorkflowSlug'];
+    analysis_source_run_id: Run['analysisSourceRunId'];
     deleted_at: StoredDate | null;
   };
   chat_text: {

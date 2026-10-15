@@ -33,15 +33,19 @@ export class RunDao extends BaseDao<Run> {
    * it is about from a sidebar row — it belongs to that one page, and the panel
    * finds it through {@link listEditingWorkflow} rather than through this
    * listing. REPORTED as "этот тред здесь быть не должен! Он должен быть только
-   * там, на той странице, то есть это special тред." Nothing else is hidden by
-   * kind here, and nothing should be: this is the one run the app creates on
-   * the user's behalf without their asking for a conversation.
+   * там, на той странице, то есть это special тред."
+   *
+   * **A thread's analysis is hidden for the same reason** ("I should not see
+   * this thread in shared list - same as for thread with changing workflow"):
+   * it belongs to the thread it reads, opens in that thread's popup, and is
+   * found through {@link listAnalysesOf}. Nothing else is hidden by kind.
    */
   async listChats(scope: ChatListScope, txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
       {
         workflowId: null,
         editsWorkflowSlug: null,
+        analysisSourceRunId: null,
         ...(scope === 'all'
           ? {}
           : { archivedAt: scope === 'archived' ? { $ne: null } : null }),
@@ -68,6 +72,46 @@ export class RunDao extends BaseDao<Run> {
       { editsWorkflowSlug: slug },
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
     );
+  }
+
+  /**
+   * Every analysis started on one thread, newest first. A thread keeps one —
+   * a new one replaces it — so more than one means a replace that did not
+   * finish, and the reader takes the newest. Archived rows are included: the
+   * source's delete must take them all.
+   */
+  async listAnalysesOf(
+    sourceRunId: string,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { analysisSourceRunId: sourceRunId },
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * Every analysis whose source thread no longer exists — what a missed
+   * cascade leaves behind (`ThreadAnalysisService.sweepOrphans`).
+   */
+  async listOrphanedAnalyses(txEm?: EntityManager): Promise<Run[]> {
+    const analyses = await this.getRepo(txEm).find(
+      { analysisSourceRunId: { $ne: null } },
+      { disableIdentityMap: true },
+    );
+    if (analyses.length === 0) {
+      return [];
+    }
+    const sources = await this.getRepo(txEm).find(
+      {
+        id: {
+          $in: [...new Set(analyses.map((run) => run.analysisSourceRunId!))],
+        },
+      },
+      { fields: ['id'], disableIdentityMap: true },
+    );
+    const alive = new Set(sources.map((run) => run.id));
+    return analyses.filter((run) => !alive.has(run.analysisSourceRunId!));
   }
 
   /**

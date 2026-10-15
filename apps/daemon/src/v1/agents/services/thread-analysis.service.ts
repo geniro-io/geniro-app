@@ -1,6 +1,13 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnApplicationBootstrap,
+  type OnModuleDestroy,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { ConflictException, NotFoundException } from '@packages/common';
+import type { Subscription } from 'rxjs';
 
 import { type AgentKind, isTerminalRunStatus } from '../../runs/runs.types';
 import type { RunWire } from '../chat.types';
@@ -13,6 +20,7 @@ import {
   threadAnalysisBrief,
   threadAnalysisGuide,
 } from '../utils/thread-analysis-guide';
+import { AgentEventBus } from './agent-events.bus';
 import { ChatService } from './chat.service';
 
 /** What the "Analyze thread" dialog sends — see `AnalyzeThreadDto`. */
@@ -40,19 +48,83 @@ function existingFolder(path: string): string | null {
 }
 
 /**
- * Starts an analysis of one thread: a NEW chat, linked to its source, carrying
- * the analysis method as its task instructions and sent the brief as its first
+ * A thread's analysis: ONE chat per thread, linked to its source, carrying the
+ * analysis method as its task instructions and sent the brief as its first
  * message — the board's own "create a chat, then message it" pattern
  * (`TaskRunsService.start`).
+ *
+ * It belongs to the thread it reads, the way the builder's chat belongs to its
+ * workflow: the sidebar never lists it (`RunDao.listChats`), the source's
+ * popup finds it ({@link find}), a new one replaces it, and it goes when the
+ * source is deleted.
  */
 @Injectable()
-export class ThreadAnalysisService {
+export class ThreadAnalysisService
+  implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy
+{
+  private readonly logger = new Logger(ThreadAnalysisService.name);
+  private deletedSubscription: Subscription | null = null;
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly chats: ChatService,
+    private readonly bus: AgentEventBus,
   ) {}
+
+  /**
+   * A deleted thread takes its analysis with it — nothing else could reach it.
+   * Announced after the source's rows are gone, whichever route deleted it (a
+   * chat, a workflow run, the archive's retention sweep).
+   */
+  onModuleInit(): void {
+    this.deletedSubscription = this.bus.allDeleted().subscribe((runId) => {
+      // Off the delete's own path, so nothing awaits it: a failed read of the
+      // analyses is logged here rather than left an unhandled rejection.
+      this.deleteAnalysesOf(runId).catch((err: unknown) => {
+        this.logger.warn(
+          `analyses of deleted ${runId} not looked up: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    });
+  }
+
+  /**
+   * An analysis whose source is already gone — the delete above missed it:
+   * the daemon stopped before the announce was handled, or the delete failed —
+   * is reachable from nowhere and still holds the deleted thread's words.
+   * Swept once per boot, off the ready path.
+   */
+  onApplicationBootstrap(): void {
+    void this.sweepOrphans().catch((err: unknown) => {
+      this.logger.warn(
+        `orphaned analyses not swept: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+
+  onModuleDestroy(): void {
+    this.deletedSubscription?.unsubscribe();
+  }
+
+  /** Delete every analysis whose source thread no longer exists. */
+  async sweepOrphans(): Promise<void> {
+    const orphans = await this.runDao.listOrphanedAnalyses(this.em.fork());
+    await this.deleteRuns(
+      'a deleted thread',
+      orphans.map((run) => run.id),
+    );
+  }
+
+  /** The thread's analysis as it reads now, or null when it has none. */
+  async find(sourceRunId: string): Promise<RunWire | null> {
+    const source = await this.runDao.getById(sourceRunId, this.em.fork());
+    if (source === null) {
+      throw new NotFoundException('RUN_NOT_FOUND', `no run: ${sourceRunId}`);
+    }
+    return this.chats.findAnalysis(sourceRunId);
+  }
 
   async start(
     sourceRunId: string,
@@ -102,6 +174,13 @@ export class ThreadAnalysisService {
         'the thread has nothing in it to analyse yet',
       );
     }
+    // The analyses this start replaces, read BEFORE it creates its own: a
+    // start racing it (a second window, the phone) creates one too, and
+    // deleting "every analysis but mine" afterwards would delete each
+    // other's. The newest then wins `findAnalysis`, and both survive.
+    const earlier = (await this.runDao.listAnalysesOf(source.id, em)).map(
+      (analysis) => analysis.id,
+    );
     const kind = analysedThreadKindOf(source);
     const run = await this.chats.createChat({
       agentKind: input.agentKind,
@@ -131,7 +210,41 @@ export class ThreadAnalysisService {
       await this.chats.delete(run.id).catch(() => undefined);
       throw error;
     }
-    return run;
+    // Only now is the earlier analysis replaced: a start that fails above
+    // leaves the thread the one it had.
+    await this.deleteRuns(source.id, earlier);
+    // Its own row as it reads after the brief, not the copy taken before it —
+    // the popup opens on this, and a `pending` copy would show no Stop.
+    return (await this.chats.findAnalysis(source.id, run.id)) ?? run;
+  }
+
+  /** Delete every analysis of a thread. */
+  private async deleteAnalysesOf(sourceRunId: string): Promise<void> {
+    const analyses = await this.runDao.listAnalysesOf(
+      sourceRunId,
+      this.em.fork(),
+    );
+    await this.deleteRuns(
+      sourceRunId,
+      analyses.map((analysis) => analysis.id),
+    );
+  }
+
+  /**
+   * Delete these analyses. One failing is logged and the rest still go: an
+   * analysis nothing lists is reachable from nowhere else.
+   */
+  private async deleteRuns(
+    sourceLabel: string,
+    analysisIds: readonly string[],
+  ): Promise<void> {
+    for (const id of analysisIds) {
+      await this.chats.delete(id).catch((err: unknown) => {
+        this.logger.warn(
+          `analysis ${id} of ${sourceLabel} not deleted: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }
   }
 
   /**

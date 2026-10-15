@@ -61,6 +61,8 @@ const api = vi.hoisted(() => ({
   readRunArtifacts: vi.fn(),
   readRunWaterfall: vi.fn(),
   readRunProcesses: vi.fn(),
+  getThreadAnalysis: vi.fn(),
+  analyzeThread: vi.fn(),
 }));
 /** What the run-state route answers for a run that holds nothing outside its window. */
 function emptyRunState(): RunStateDto {
@@ -748,6 +750,9 @@ beforeEach(() => {
   groupApi.reorderRunGroups.mockReset();
   groupApi.deleteRunGroup.mockReset();
   api.listRunItems.mockReset().mockResolvedValue([]);
+  // No thread has an analysis unless a test gives it one.
+  api.getThreadAnalysis.mockReset().mockResolvedValue({ analysis: null });
+  api.analyzeThread.mockReset();
   api.searchChat
     .mockReset()
     .mockResolvedValue({ hits: [], partialReason: null });
@@ -17218,6 +17223,174 @@ describe('Chats — sweeping the archive on the user’s own clock', () => {
     expect(api.listChats.mock.calls.length).toBeGreaterThan(
       listingsWhenNothingWent,
     );
+  });
+});
+
+describe('Chats — a thread’s analysis lives in its popup', () => {
+  // REPORTED: "I should not see this thread in shared list - same as for
+  // thread with changing workflow. It should be just in different popup."
+  const ANALYSIS = {
+    ...run1,
+    id: 'analysis-1',
+    title: 'Analysis: My chat',
+    analysisSourceRunId: 'r1',
+    status: 'completed',
+  } as ChatRun;
+
+  const analyzeButton = (container: HTMLElement): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('button[data-analysis]');
+  /** What a reader of the button gets: its name, and whether the dot is drawn. */
+  const buttonReads = (
+    container: HTMLElement,
+  ): { label: string | null; dot: boolean } => {
+    const button = analyzeButton(container);
+    return {
+      label: button?.getAttribute('aria-label') ?? null,
+      dot: button?.querySelector('span[aria-hidden]') != null,
+    };
+  };
+  const pressButton = async (name: string): Promise<void> => {
+    await act(async () => {
+      [...document.querySelectorAll<HTMLButtonElement>('button')]
+        .find((b) => b.textContent?.includes(name))!
+        .click();
+    });
+  };
+
+  it('opens the existing analysis in its popup, and names it on the button', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.getThreadAnalysis.mockResolvedValue({ analysis: ANALYSIS });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(analyzeButton(container)?.dataset.analysis).toBe('idle');
+    expect(buttonReads(container)).toEqual({
+      label: 'Open the analysis',
+      dot: false,
+    });
+    await act(async () => {
+      analyzeButton(container)!.click();
+    });
+
+    expect(
+      document.querySelector('[data-slot="analysis-dialog"]'),
+    ).not.toBeNull();
+    // The setup dialog stays shut: there is an analysis to read.
+    expect(document.querySelector('[data-slot="analyze-thread"]')).toBeNull();
+  });
+
+  it('marks an analysis waiting on the user, and warns that New analysis replaces it', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.getThreadAnalysis.mockResolvedValue({
+      analysis: {
+        ...ANALYSIS,
+        status: 'running',
+        awaiting: { kind: 'approval' },
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(buttonReads(container)).toEqual({
+      label: 'Open the analysis (waiting on you)',
+      dot: true,
+    });
+    await act(async () => {
+      analyzeButton(container)!.click();
+    });
+    await pressButton('New analysis');
+
+    expect(
+      document.querySelector('[data-slot="replaces-note"]')?.textContent,
+    ).toContain('replaces');
+  });
+
+  it('sets up an analysis when there is none, then opens it in the popup, not the sidebar', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(analyzeButton(container)?.dataset.analysis).toBe('none');
+    expect(buttonReads(container)).toEqual({
+      label: 'Analyze thread',
+      dot: false,
+    });
+
+    await act(async () => {
+      analyzeButton(container)!.click();
+    });
+    expect(
+      document.querySelector('[data-slot="analyze-thread"]'),
+    ).not.toBeNull();
+    // Nothing to replace: the thread has no analysis yet.
+    expect(document.querySelector('[data-slot="replaces-note"]')).toBeNull();
+
+    api.analyzeThread.mockResolvedValue({ ...ANALYSIS, status: 'running' });
+    api.getThreadAnalysis.mockResolvedValue({
+      analysis: { ...ANALYSIS, status: 'running' },
+    });
+    await act(async () => {
+      [...document.querySelectorAll<HTMLButtonElement>('button')]
+        .find((b) => b.textContent?.includes('Start analysis'))!
+        .click();
+    });
+
+    expect(api.analyzeThread).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r1' }),
+    );
+    expect(
+      document.querySelector('[data-slot="analysis-dialog"]'),
+    ).not.toBeNull();
+    expect(
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].map(
+        (row) => row.textContent ?? '',
+      ),
+    ).not.toContainEqual(expect.stringContaining('Analysis: My chat'));
+    expect(analyzeButton(container)?.dataset.analysis).toBe('working');
+    expect(buttonReads(container)).toEqual({
+      label: 'Open the analysis (working)',
+      dot: true,
+    });
+  });
+
+  it('closes the popup when its thread is deleted, the analysis having gone with it', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.getThreadAnalysis.mockResolvedValue({ analysis: ANALYSIS });
+    const { client, emitRunDeleted } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      analyzeButton(container)!.click();
+    });
+    expect(
+      document.querySelector('[data-slot="analysis-dialog"]'),
+    ).not.toBeNull();
+
+    await act(async () => {
+      emitRunDeleted('r1');
+    });
+
+    expect(document.querySelector('[data-slot="analysis-dialog"]')).toBeNull();
+  });
+
+  it('says why when the thread’s analysis cannot be asked for', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    api.getThreadAnalysis.mockRejectedValue(
+      new Error('daemon GET failed (404): no run: r1'),
+    );
+
+    await act(async () => {
+      analyzeButton(container)!.click();
+    });
+
+    expect(container.textContent).toContain('no run: r1');
+    expect(document.querySelector('[data-slot="analysis-dialog"]')).toBeNull();
+    expect(document.querySelector('[data-slot="analyze-thread"]')).toBeNull();
   });
 });
 

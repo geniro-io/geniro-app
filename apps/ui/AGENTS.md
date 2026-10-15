@@ -251,6 +251,12 @@ One home for each concern:
 - A delegate's generic title is its id tail. `resultIsOwn` is decided structurally, never by matching a CLI's prose. A `SendMessage` is not a delegation (`isAgentToolName`).
 - Shells listed in the panel are the main thread's only, dropped at the item (`subagentIdOf`).
 
+**Thread analysis** (`analysis-dialog.tsx`, `use-thread-analysis.ts`):
+
+- A thread's analysis is never a sidebar row and never a search hit. Its home is its popup over the source (`AnalysisDialog`), where it is read, answered, applied and replaced; the Analyze button opens the popup when one exists, else the setup dialog, and marks it (tint; a dot while working or waiting on you). The popup and the setup dialog close when their thread is deleted (the analysis went with it).
+- A direct link (`#chats/<id>`) or the processes panel can still open an analysis as the thread on screen; its header's "Analyzing: <source> ↗" chip (`analysisSourceOf`) is kept for exactly that way back.
+- The popup and the builder's chat dock are one surface: `chats/hosted-chat.tsx` (`HostedChat`, transcript + composer + chips) over `chats/use-hosted-chat.ts`. Change a hosted-chat behaviour there, never in one frame.
+
 **Cards (agent-drawn payloads):**
 
 - Each card kind has a twin parser (`*-payload.ts`) of the daemon's schema.

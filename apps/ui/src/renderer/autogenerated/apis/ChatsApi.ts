@@ -51,6 +51,7 @@ import type {
   ShellOutputDto,
   SweepArchivedDto,
   SweptArchivedDto,
+  ThreadAnalysisDto,
   UpdateChatSettingsDto,
   UploadChatFileDto,
 } from '../models/index';
@@ -82,6 +83,10 @@ export interface ChatsApiDeleteChatRequest {
 }
 
 export interface ChatsApiExportChatRequest {
+    runId: string;
+}
+
+export interface ChatsApiGetThreadAnalysisRequest {
     runId: string;
 }
 
@@ -600,6 +605,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async forgetCustomInstructions(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ForgottenInstructionsDto> {
         const response = await this.forgetCustomInstructionsRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async getThreadAnalysisRaw(requestParameters: ChatsApiGetThreadAnalysisRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ThreadAnalysisDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling getThreadAnalysis().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/analysis`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async getThreadAnalysis(requestParameters: ChatsApiGetThreadAnalysisRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ThreadAnalysisDto> {
+        const response = await this.getThreadAnalysisRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

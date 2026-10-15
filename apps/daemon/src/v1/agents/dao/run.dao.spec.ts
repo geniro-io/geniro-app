@@ -154,6 +154,56 @@ describe('RunDao (in-memory sqlite)', () => {
         (await dao.listEditingWorkflow('review-team')).map((run) => run.id),
       ).toHaveLength(2);
     });
+
+    it('leaves a thread’s analysis out of EVERY scope, and finds it by its source', async () => {
+      // Opened from its source thread's popup, never from the sidebar: only
+      // `analysisSourceRunId` tells it from an ordinary chat.
+      const source = await dao.create({ createdAt: new Date(1_000) });
+      const older = await dao.create({
+        createdAt: new Date(2_000),
+        analysisSourceRunId: source.id,
+      });
+      const newer = await dao.create({
+        createdAt: new Date(3_000),
+        analysisSourceRunId: source.id,
+        archivedAt: new Date(9_000),
+      });
+      await dao.create({
+        createdAt: new Date(4_000),
+        analysisSourceRunId: 'another-thread',
+      });
+
+      for (const scope of ['active', 'archived', 'all'] as const) {
+        expect(
+          (await dao.listChats(scope))
+            .map((run) => run.id)
+            .filter((id) => id !== source.id),
+        ).toEqual([]);
+      }
+      expect(
+        (await dao.listAnalysesOf(source.id)).map((run) => run.id),
+      ).toEqual([newer.id, older.id]);
+    });
+  });
+
+  describe('listOrphanedAnalyses', () => {
+    it('answers only the analyses whose source thread is gone', async () => {
+      const source = await dao.create({});
+      // An analysis whose source is alive stays.
+      await dao.create({ analysisSourceRunId: source.id });
+      const orphan = await dao.create({ analysisSourceRunId: 'deleted-run' });
+      await dao.create({});
+
+      expect((await dao.listOrphanedAnalyses()).map((run) => run.id)).toEqual([
+        orphan.id,
+      ]);
+    });
+
+    it('answers none when no thread has an analysis', async () => {
+      await dao.create({});
+
+      expect(await dao.listOrphanedAnalyses()).toEqual([]);
+    });
   });
 
   describe('archivedRunsBefore', () => {

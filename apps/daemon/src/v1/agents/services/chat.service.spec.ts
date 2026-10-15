@@ -243,6 +243,12 @@ class FakeRunDao {
       run.updatedAt = at;
     }
   }
+  /** Newest first, as the real one orders by `createdAt` (insertion here). */
+  async listAnalysesOf(sourceRunId: string): Promise<Run[]> {
+    return [...this.runs.values()]
+      .filter((run) => run.analysisSourceRunId === sourceRunId)
+      .reverse();
+  }
   /** Mirrors the real query — chat runs only, filtered by archive scope. */
   async listChats(scope: ChatListScope): Promise<Run[]> {
     return [...this.runs.values()].filter(
@@ -4129,6 +4135,32 @@ describe('ChatService', () => {
       });
       cursor.finish();
       await drain();
+    });
+  });
+
+  describe('findAnalysis', () => {
+    it("answers the thread's newest analysis, or the caller's own while it exists", async () => {
+      const { service } = setup();
+      const analysisSource = { runId: 'source', seq: 3, working: false };
+      expect(await service.findAnalysis('source')).toBeNull();
+      const older = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        analysisSource,
+      });
+      const newer = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        analysisSource,
+      });
+
+      expect((await service.findAnalysis('source'))?.id).toBe(newer.id);
+      // Two starts raced: the one that lost still opens what it started.
+      expect((await service.findAnalysis('source', older.id))?.id).toBe(
+        older.id,
+      );
+      // Its own was replaced meanwhile: the thread's analysis is the answer.
+      expect((await service.findAnalysis('source', 'gone'))?.id).toBe(newer.id);
     });
   });
 

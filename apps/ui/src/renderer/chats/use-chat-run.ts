@@ -1510,7 +1510,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         return;
       }
       // The listing may hold it already: a route that sends the run's first
-      // message before answering (an analysis) has it announced, and so
+      // message before answering has it announced, and so
       // adopted by a re-list, before the creator gets its copy — which was
       // taken before that send, so the fresher row of the two is kept.
       setRuns((prev) => [

@@ -1977,6 +1977,27 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
+   * A thread's analysis, or null if it has none — newest wins, for the reason
+   * {@link findWorkflowChat} gives: two starts racing (two windows) leave two.
+   * `prefer` is the caller's own, answered while it still exists, so the
+   * start that loses the race opens what it started.
+   */
+  async findAnalysis(
+    sourceRunId: string,
+    prefer?: string,
+  ): Promise<RunWire | null> {
+    const em = this.em.fork();
+    const analyses = await this.runDao.listAnalysesOf(sourceRunId, em);
+    const run =
+      analyses.find((analysis) => analysis.id === prefer) ?? analyses[0];
+    if (!run) {
+      return null;
+    }
+    const previews = await this.wireReads([run.id], em);
+    return this.toRunWire(run, previews.of(run.id));
+  }
+
+  /**
    * Bring an open workflow chat's brief (`Run.workflowInstructions`) up to
    * date with the one `WorkflowChatService` composes now.
    *

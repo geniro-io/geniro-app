@@ -50,6 +50,7 @@ export interface AnalysisRunSettings {
  */
 export function AnalyzeThreadDialog({
   source,
+  replaces = false,
   sourceLabel,
   chatApi,
   agentsApi,
@@ -64,6 +65,8 @@ export function AnalyzeThreadDialog({
 }: {
   /** The thread to analyse; the dialog is open while it is non-null. */
   source: RunDto | null;
+  /** The thread already has an analysis, which starting this one replaces. */
+  replaces?: boolean;
   sourceLabel: string;
   chatApi: DaemonApis['chats'];
   agentsApi: DaemonApis['agents'] | null;
@@ -212,6 +215,12 @@ export function AnalyzeThreadDialog({
               ? 'Finds where the time went and suggests workflow changes (roles, models, parallel calls, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
               : 'Finds where the time went and suggests repository changes (AGENTS.md, rules, checks). You choose which to apply.'}
           </p>
+          {replaces ? (
+            <p className="text-xs text-warning" data-slot="replaces-note">
+              Starting replaces this thread&apos;s current analysis — its
+              conversation and card are deleted.
+            </p>
+          ) : null}
         </div>
 
         <div className="flex flex-col divide-y divide-border rounded-md border border-border">

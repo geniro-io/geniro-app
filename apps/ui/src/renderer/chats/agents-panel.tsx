@@ -80,6 +80,7 @@ import {
 import { type AgentMcpScope, mcpScopeKey } from './use-agent-mcp';
 import type { RunProcessesState } from './use-run-processes';
 import type { RunWaterfallState } from './use-run-waterfall';
+import type { ThreadAnalysisMark } from './use-thread-analysis';
 import { WorkflowPanelRow } from './workflow-block';
 
 /**
@@ -296,28 +297,71 @@ function ExportChatButton({
   );
 }
 
+/** What the Analyze button says about the thread's analysis, by its mark. */
+const ANALYSIS_BUTTON: Record<
+  ThreadAnalysisMark,
+  { label: string; title: string }
+> = {
+  none: {
+    label: 'Analyze thread',
+    title: 'Analyze thread — where the time went, and what to change',
+  },
+  idle: {
+    label: 'Open the analysis',
+    title: "Open this thread's analysis",
+  },
+  working: {
+    label: 'Open the analysis (working)',
+    title: "Open this thread's analysis — it is working",
+  },
+  waiting: {
+    label: 'Open the analysis (waiting on you)',
+    title: "Open this thread's analysis — it is waiting on you",
+  },
+};
+
 /**
- * "Analyze thread": opens the dialog that starts a linked analysis chat over
- * this run — where its time went, and what to change. A panel control beside
- * Export for Export's reason: it acts on the whole run, not on one agent.
+ * "Analyze thread": opens the thread's analysis in its popup, or the setup
+ * dialog when it has none — where the time went, and what to change. A panel
+ * control beside Export for Export's reason: it acts on the whole run, not on
+ * one agent. The analysis is never on the sidebar, so this is where it says it
+ * exists (tinted) and that it is working or waiting on you (a dot), the way
+ * the notes button marks written notes.
  */
 function AnalyzeThreadButton({
   onAnalyze,
+  mark,
   className,
 }: {
   onAnalyze: () => void;
+  mark: ThreadAnalysisMark;
   className?: string;
 }): React.JSX.Element {
+  const { label, title } = ANALYSIS_BUTTON[mark];
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon"
-      aria-label="Analyze thread"
-      title="Analyze thread — where the time went, and what to change"
+      aria-label={label}
+      title={title}
+      data-analysis={mark}
       onClick={onAnalyze}
-      className={cn('shrink-0 text-muted-foreground', className)}>
+      className={cn(
+        'relative shrink-0',
+        mark === 'none' ? 'text-muted-foreground' : 'text-primary',
+        className,
+      )}>
       <Sparkles className="size-4" />
+      {mark === 'working' || mark === 'waiting' ? (
+        <span
+          aria-hidden
+          className={cn(
+            'absolute top-1 right-1 size-1.5 rounded-full bg-primary',
+            mark === 'working' && 'animate-pulse',
+          )}
+        />
+      ) : null}
     </Button>
   );
 }
@@ -1588,6 +1632,7 @@ export function AgentsPanel({
   onOpenFolderTerminal,
   onExportChat,
   onAnalyzeThread,
+  analysisMark = 'none',
   onResolveHandoff,
   terminalReasons,
   fill = false,
@@ -1821,6 +1866,8 @@ export function AgentsPanel({
    * Chats withholds it on an analysis chat, which is not analysed again.
    */
   onAnalyzeThread?: () => void;
+  /** What the thread's analysis is doing, for that button — see `useThreadAnalysis`. */
+  analysisMark?: ThreadAnalysisMark;
   /**
    * Each agent's OWN current task list, keyed by `AgentDisplay.id` — the
    * checklist its CLI keeps while working a multi-step job.
@@ -2117,6 +2164,7 @@ export function AgentsPanel({
             {onAnalyzeThread ? (
               <AnalyzeThreadButton
                 onAnalyze={onAnalyzeThread}
+                mark={analysisMark}
                 className="size-7"
               />
             ) : null}
@@ -2195,7 +2243,11 @@ export function AgentsPanel({
           <ExportChatButton onExport={onExportChat} className="size-6" />
         ) : null}
         {onAnalyzeThread ? (
-          <AnalyzeThreadButton onAnalyze={onAnalyzeThread} className="size-6" />
+          <AnalyzeThreadButton
+            onAnalyze={onAnalyzeThread}
+            mark={analysisMark}
+            className="size-6"
+          />
         ) : null}
         {/* Withheld while filling a drawer: the fold is dropped there (see
             `fill`), so this would be a control that does nothing — and the

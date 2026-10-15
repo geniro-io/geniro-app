@@ -32,6 +32,7 @@ import type {
   RunWire,
   ShellKillWire,
   ShellOutputWire,
+  ThreadAnalysisWire,
 } from '../chat.types';
 import {
   AnalyzeThreadDto,
@@ -72,6 +73,7 @@ import {
   ShellOutputQueryDto,
   SweepArchivedDto,
   SweptArchivedDto,
+  ThreadAnalysisDto,
   UpdateChatSettingsDto,
   UploadChatFileDto,
 } from '../dto/chat.dto';
@@ -437,7 +439,20 @@ export class ChatController {
   }
 
   /**
-   * Start a NEW chat that analyses this one ("Analyze thread"): linked to it,
+   * This thread's analysis — the chat its "Analyze thread" popup opens — or
+   * `analysis: null` while it has none. 404 for a thread that does not exist.
+   */
+  @Get(':runId/analysis')
+  @ApiOperation({ operationId: 'getThreadAnalysis' })
+  @ZodResponse({ status: 200, type: ThreadAnalysisDto })
+  async getThreadAnalysis(
+    @Param('runId') runId: string,
+  ): Promise<ThreadAnalysisWire> {
+    return { analysis: await this.analyses.find(runId) };
+  }
+
+  /**
+   * Start this thread's analysis ("Analyze thread"), replacing the one it had: linked to it,
    * reading it through the analysis tools up to this moment's newest row.
    * 409 `ANALYSIS_FOLDER_GONE` until a folder that exists is sent as `cwd`.
    */

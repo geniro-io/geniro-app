@@ -32,6 +32,7 @@ import {
   RunWireSchema,
   ShellKillWireSchema,
   ShellOutputWireSchema,
+  ThreadAnalysisWireSchema,
 } from '../chat.types';
 
 /**
@@ -406,6 +407,9 @@ export class SearchChatQueryDto extends createZodDto(searchChatQuerySchema) {}
 
 /** A run — a single-agent chat or a workflow execution. */
 export class RunDto extends createZodDto(RunWireSchema) {}
+
+/** A thread's analysis, or null when it has none — see `ThreadAnalysisWireSchema`. */
+export class ThreadAnalysisDto extends createZodDto(ThreadAnalysisWireSchema) {}
 
 /** A run's unread moments once a device has opened it. */
 export class RunSeenDto extends createZodDto(RunSeenWireSchema) {}

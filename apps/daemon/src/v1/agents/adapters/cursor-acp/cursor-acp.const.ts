@@ -1364,9 +1364,15 @@ export const CURSOR_TRANSIENT_FAILURE_PATTERN =
  * `success` at 08:35 and 08:36 with nowhere to send their results, and the
  * agent — told to relaunch — ran all seven again, including five that had
  * finished before the drop and whose results the server never checkpointed.
+ *
+ * The last sentence is for a conversation that does not hold the request at
+ * all. The driver re-sends the prompt when the turn had produced nothing
+ * (`AcpSession.sendResume`), but a checkpoint can still lag the agent's steps;
+ * on run `1b0f91aa` an agent with nothing to continue searched other sessions'
+ * transcripts, found another conversation's unfinished work and carried it out.
  */
 export const CURSOR_TRANSIENT_RESUME_PROMPT =
-  'Your last response was cut off before it finished — the model service interrupted the request. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back.';
+  'Your last response was cut off before it finished — the model service interrupted the request. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back. If you cannot see the request you were working on, say so and end your turn — never look for it in other conversations, their transcripts or their files.';
 
 /**
  * The pause before each resume of one turn — three attempts, and then the

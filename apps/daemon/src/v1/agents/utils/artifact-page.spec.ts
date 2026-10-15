@@ -173,7 +173,7 @@ describe('renderArtifactPage', () => {
     // utility: a link styled as a button had primary text on a primary ground.
     const page = renderArtifactPage('<p>x</p>');
     expect(page).toMatch(
-      /<style>@layer geniro-base \{\n[\s\S]*html, body \{ background: transparent; \}/,
+      /<style data-geniro="base">@layer geniro-base \{\n[\s\S]*html, body \{ background: transparent; \}/,
     );
   });
 
@@ -181,6 +181,14 @@ describe('renderArtifactPage', () => {
     expect(renderArtifactPage('<p>x</p>')).toContain(
       'html, body { background: transparent; }',
     );
+  });
+
+  it('centres a body capped narrower than the frame, from `html` so a page’s `margin: 0` cannot undo it', () => {
+    // Agents cap `body` with `max-width` beside `margin: 0`; a `margin-inline:
+    // auto` floor loses to that, so the flex row on `html` does the centring.
+    const page = renderArtifactPage('<p>x</p>');
+    expect(page).toContain('html { display: flex; justify-content: center; }');
+    expect(page).toMatch(/body \{\n\s*flex: 1 1 auto;\n\s*min-width: 0;/);
   });
 
   it('gives every theme token a fallback, so the page reads before any message', () => {
@@ -214,6 +222,40 @@ describe('renderArtifactDocument', () => {
     expect(doc).toContain('data-geniro="kit"');
     expect(doc).not.toContain(ARTIFACT_HOST_SOURCE);
     expect(doc).not.toContain(ARTIFACT_FRAME_SOURCE);
+  });
+
+  it('carries the SAME base style the frame does, so a saved page looks as it did in the app', () => {
+    // Without it a saved page lost the font, size, padding, box-sizing and
+    // centring the framed one had, and opened in the browser's defaults.
+    const baseOf = (page: string): string =>
+      /<style data-geniro="base">@layer geniro-base \{\n([\s\S]*?)\n\}<\/style>/.exec(
+        page,
+      )?.[1] ?? '';
+    const framed = baseOf(renderArtifactPage('<body><p>x</p></body>'));
+    const saved = baseOf(renderArtifactDocument('<body><p>x</p></body>'));
+    expect(saved).toContain('html { display: flex; justify-content: center; }');
+    expect(saved).toContain('font-size: 14px;');
+    expect(framed).toBe(`html, body { background: transparent; }\n${saved}`);
+  });
+
+  it('leaves out the frame’s transparent ground, which would undo the file’s own', () => {
+    // The export bakes the theme's background into the head; this block comes
+    // later in the same layer, so a transparent ground here would win and put
+    // a dark-theme page on the browser's white.
+    const doc = renderArtifactDocument('<body><p>x</p></body>');
+    const base = doc.slice(doc.indexOf('<style data-geniro="base">'));
+    expect(base).toContain('@layer geniro-base');
+    expect(base).not.toContain('html, body { background: transparent; }');
+  });
+
+  it('puts the base style before the document’s last `</body>`', () => {
+    const doc = renderArtifactDocument('<html><body><p>x</p></body></html>');
+    expect(doc.indexOf('data-geniro="base"')).toBeLessThan(
+      doc.lastIndexOf('</body>'),
+    );
+    expect(doc.indexOf('data-geniro="base"')).toBeGreaterThan(
+      doc.indexOf('<p>x</p>'),
+    );
   });
 });
 

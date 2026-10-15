@@ -42,6 +42,11 @@ jobs:
         env:
           HUSKY: 0
 
+      # Cursor reads each .claude/rules/<name>.md through a tracked
+      # .cursor/rules/<name>.mdc symlink; fail before the build if they drift.
+      - name: Check .cursor/rules symlinks
+        run: pnpm -s check:cursor-rules
+
       - name: Build packages
         run: pnpm build:packages
 

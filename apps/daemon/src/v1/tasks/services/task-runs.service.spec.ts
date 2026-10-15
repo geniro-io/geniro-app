@@ -23,6 +23,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import type { GraphExecutorService } from '../../graphs/services/graph-executor.service';
+import type { RunWorkflowService } from '../../graphs/services/run-workflow.service';
 import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
@@ -85,6 +86,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let offeredApproval: ReturnType<typeof vi.fn>;
   let startWorkflowRun: ReturnType<typeof vi.fn>;
   let deleteWorkflowRun: ReturnType<typeof vi.fn>;
+  let sendWorkflowMessage: ReturnType<typeof vi.fn>;
+  /** What each workflow run's own SNAPSHOT says its agent nodes approve with. */
+  let snapshotApprovals: Record<string, string>;
   let deleteChat: ReturnType<typeof vi.fn>;
   let resolveAutoGroupId: ReturnType<typeof vi.fn>;
   let forTask: ReturnType<typeof vi.fn>;
@@ -270,10 +274,28 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       },
     );
     deleteWorkflowRun = vi.fn(async () => ({ deleted: true }));
+    sendWorkflowMessage = vi.fn(async () => undefined);
     const executor = {
       startRunBySlug: startWorkflowRun,
       deleteRun: deleteWorkflowRun,
+      sendMessage: sendWorkflowMessage,
     } as unknown as GraphExecutorService;
+    // The graph each existing workflow run was STARTED with, which a continued
+    // run walks — told apart from the library's copy above by its own field.
+    snapshotApprovals = {};
+    const runWorkflows = {
+      workflowOf: vi.fn(async (run: { workflowId: string }) => {
+        const approval = snapshotApprovals[run.workflowId];
+        if (approval === undefined) {
+          throw new Error(`no snapshot for ${run.workflowId}`);
+        }
+        return {
+          name: run.workflowId,
+          nodes: [{ id: 'coder', kind: 'agent', agent: 'claude', approval }],
+          edges: [],
+        };
+      }),
+    } as unknown as RunWorkflowService;
     // No sidebar rule claims anything by default; a test that needs one says so.
     resolveAutoGroupId = vi.fn(async () => null);
     const groups = { resolveAutoGroupId } as unknown as RunGroupsService;
@@ -311,6 +333,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
           };
         }),
       } as unknown as WorkflowStoreService,
+      runWorkflows,
     );
     // Asks by default, so a workflow card is unattended-incapable unless a test
     // says otherwise.
@@ -394,8 +417,8 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
       await service.start(task.id, start());
 
-      // A graph's seed prompt IS its opening message — there is no
-      // `POST /messages` for a workflow run to follow up on.
+      // A graph's seed prompt IS its opening message, so a NEW run is sent
+      // nothing after it — a later press continues it instead (below).
       expect(startWorkflowRun.mock.calls[0]?.[1]).toMatchObject({
         prompt: 'ship it',
       });
@@ -1124,16 +1147,168 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     startWorkflowRun.mockClear();
   };
 
-  it('opens a second WORKFLOW run rather than continuing the old one', async () => {
-    // A workflow target never resumes: the two engines share no channel, so a
-    // re-run of a graph card is a second walk of the graph.
-    const task = await seed();
-    await runWorkflowAndReturn(task.id);
+  describe('a workflow card run again', () => {
+    it('continues the run it already has, with the user’s own words, and makes no second run', async () => {
+      // Follow up and a second Run press both say they continue the card's
+      // thread. A fresh walk made a second thread for one card and a team
+      // with no memory of the first pass; the executor's own follow-up path
+      // walks the settled run again, every node resuming its session.
+      const task = await seed();
+      await runWorkflowAndReturn(task.id);
 
-    await service.start(task.id, start());
+      const continued = await service.start(
+        task.id,
+        start({ prompt: 'Now add the tests.', branch: 'geniro/task-1b' }),
+      );
 
-    expect(startWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(sendMessage).not.toHaveBeenCalled();
+      expect(sendWorkflowMessage).toHaveBeenCalledTimes(1);
+      expect(sendWorkflowMessage).toHaveBeenCalledWith(
+        'wf-run-1',
+        'Now add the tests.',
+      );
+      expect(startWorkflowRun).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(await runDao.count({ taskId: task.id })).toBe(1);
+      // Everything else a start does still happens: the card is worked again
+      // and names the run, with the worktree and branch this press prepared.
+      expect(continued).toMatchObject({
+        status: 'in_progress',
+        runId: 'wf-run-1',
+        branch: 'geniro/task-1b',
+        worktreePath: worktree,
+      });
+      // Read on a fresh fork: this spec's own `em` still holds the card as the
+      // helper above loaded it.
+      const stored = await taskDao.getById(task.id, orm.em.fork());
+      expect(stored?.status).toBe('in_progress');
+      expect(stored?.runId).toBe('wf-run-1');
+    });
+
+    it('sends the brief again when the press says nothing, as the agent arm does', async () => {
+      const task = await seed({
+        title: 'Fix the cap',
+        description: 'Off by one.',
+      });
+      await runWorkflowAndReturn(task.id);
+
+      await service.start(task.id, start());
+
+      expect(sendWorkflowMessage).toHaveBeenCalledWith(
+        'wf-run-1',
+        'Fix the cap\n\nOff by one.',
+      );
+    });
+
+    it('starts a new run when the card has been re-pointed at ANOTHER workflow', async () => {
+      // Continuing would walk the old graph for good, with the panel showing
+      // the new one and no way out short of deleting the run.
+      const task = await seed();
+      await runWorkflowAndReturn(task.id);
+      const row = await taskDao.getById(task.id);
+      (row as Task).workflowSlug = 'review-team';
+      await em.flush();
+
+      const started = await service.start(task.id, start());
+
+      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(startWorkflowRun.mock.calls[0]?.[0]).toBe('review-team');
+      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+      expect(started.runId).not.toBe('wf-run-1');
+    });
+
+    it('starts a new run when the card held a CHAT and now names a workflow', async () => {
+      const task = await seed();
+      await service.start(task.id, start());
+      await settleAndReturn(task.id);
+      const row = await taskDao.getById(task.id);
+      (row as Task).workflowSlug = 'dev-team';
+      await em.flush();
+
+      await service.start(task.id, start());
+
+      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+    });
+
+    it('starts a new run when the old one is ARCHIVED', async () => {
+      // `assertRunTakesMessage` refuses an archived run with `RUN_ARCHIVED`,
+      // which the board could do nothing about.
+      const task = await seed();
+      await runWorkflowAndReturn(task.id);
+      const shelved = await runDao.getById('wf-run-1');
+      (shelved as Run).archivedAt = new Date();
+      await em.flush();
+
+      await service.start(task.id, start());
+
+      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+    });
+
+    it('starts a new run when the old one was DELETED', async () => {
+      const task = await seed();
+      await runWorkflowAndReturn(task.id);
+      await runDao.hardDeleteIncludingSoftDeleted({ id: 'wf-run-1' }, em);
+
+      await service.start(task.id, start());
+
+      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+    });
+
+    it('returns the card and keeps the run when the send is refused', async () => {
+      // `resume`'s rule: the run is the card's history, and a send that
+      // failed (a pass still tearing down answers RUN_BUSY) destroys nothing.
+      const task = await seed();
+      await runWorkflowAndReturn(task.id);
+      sendWorkflowMessage.mockRejectedValueOnce(new Error('RUN_BUSY'));
+
+      await expect(service.start(task.id, start())).rejects.toThrow('RUN_BUSY');
+
+      expect(deleteWorkflowRun).not.toHaveBeenCalled();
+      expect(await runDao.getById('wf-run-1')).not.toBeNull();
+      const stored = await taskDao.getById(task.id, orm.em.fork());
+      expect(stored?.status).toBe('todo');
+      expect(stored?.runId).toBe('wf-run-1');
+    });
+
+    it('lets the AUTOPILOT continue a run whose own graph never asks', async () => {
+      workflowApprovals = { 'dev-team': 'auto' };
+      snapshotApprovals = { 'dev-team': 'auto' };
+      const task = await seed();
+      await runWorkflowAndReturn(task.id);
+
+      await service.start(task.id, start({ startedBy: 'autopilot' }));
+
+      expect(sendWorkflowMessage).toHaveBeenCalledWith('wf-run-1', 'ship it');
+      expect(startWorkflowRun).not.toHaveBeenCalled();
+    });
+
+    it('starts the AUTOPILOT a new run when the run’s own graph can still ask', async () => {
+      // The library copy was vetted as unattended; the run walks its SNAPSHOT,
+      // started before the workflow was edited, whose node would park on a
+      // permission card nobody is there to answer.
+      workflowApprovals = { 'dev-team': 'auto' };
+      snapshotApprovals = { 'dev-team': 'ask' };
+      const task = await seed();
+      await runWorkflowAndReturn(task.id);
+
+      await service.start(task.id, start({ startedBy: 'autopilot' }));
+
+      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts the AUTOPILOT a new run when the run’s own graph cannot be read', async () => {
+      workflowApprovals = { 'dev-team': 'auto' };
+      const task = await seed();
+      await runWorkflowAndReturn(task.id);
+
+      await service.start(task.id, start({ startedBy: 'autopilot' }));
+
+      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('refuses to send a chat message into a WORKFLOW run', async () => {

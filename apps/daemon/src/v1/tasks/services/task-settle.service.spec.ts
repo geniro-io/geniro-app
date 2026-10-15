@@ -636,6 +636,49 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await statusOf(task.id)).toBe('failed');
   });
 
+  // A Run press or a Follow up moves the card to `in_progress` BEFORE its run
+  // is working, and until then the card names a settled run — the one being
+  // continued, or the previous one. The board reconciles on that very move.
+  it('leaves a card alone while a run start for it is in flight', async () => {
+    await armProject({ enabled: true, streak: 0 });
+    const task = await working();
+    await settleRowOnly('failed');
+    expect(tasks.claimStart(task.id)).toBe(true);
+
+    await service.reconcileProject(projectId);
+
+    expect(await statusOf(task.id)).toBe('in_progress');
+    expect(await streak()).toBe(0);
+
+    // And once the start is over, the reconcile answers for it again.
+    tasks.releaseStart(task.id);
+    await service.reconcileProject(projectId);
+
+    expect(await statusOf(task.id)).toBe('failed');
+  });
+
+  // The reconcile the start held off is OWED, not dropped. A press from
+  // `in_progress` (a card the board had not caught up on yet) that then fails
+  // moves the card from `in_progress` to `in_progress`: no event, so nothing
+  // else would settle it until the board reloads — its slot held, its failure
+  // uncounted.
+  it('settles the card once the start lets go, when a reconcile was held off during it', async () => {
+    service.onModuleInit();
+    await armProject({ enabled: true, streak: 0 });
+    const task = await working();
+    await settleRowOnly('failed');
+    expect(tasks.claimStart(task.id)).toBe(true);
+    await service.reconcileProject(projectId);
+    expect(await statusOf(task.id)).toBe('in_progress');
+
+    tasks.releaseStart(task.id);
+
+    await vi.waitFor(async () => {
+      expect(await statusOf(task.id)).toBe('failed');
+    });
+    expect(await streak()).toBe(1);
+  });
+
   // A refused move is someone else having moved the card first — a second
   // board reconciling the same row, or the agent itself — and whoever moved it
   // is the one that counts it. Counting before the move counted it twice.

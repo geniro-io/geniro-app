@@ -22,6 +22,7 @@ import {
   readChangesTotals,
   readLinkedWorktrees,
 } from './git-changes';
+import { gitFailureLine } from './git-failure';
 import {
   pullBranch,
   readGitHead,
@@ -622,22 +623,15 @@ export function registerIpc(
         // Shaped rather than rethrown: an exception crossing IPC arrives as a
         // string with its structure gone, and the caller must be able to tell a
         // failed worktree from a made one before it starts a run against it.
-        const stderr =
-          error instanceof Error && 'stderr' in error
-            ? String((error as { stderr: unknown }).stderr).trim()
-            : '';
-        const message =
-          stderr === ''
-            ? error instanceof Error
-              ? error.message
-              : String(error)
-            : stderr.split('\n')[0]!;
         return {
           ok: false,
           path: null,
           branch: null,
           reused: false,
-          error: message,
+          error: gitFailureLine(
+            error,
+            error instanceof Error ? error.message : String(error),
+          ),
         };
       }
     },

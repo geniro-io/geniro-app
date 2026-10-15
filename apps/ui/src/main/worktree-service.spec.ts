@@ -297,6 +297,55 @@ describe('prepareWorktree', () => {
     TIMEOUT_MS,
   );
 
+  it(
+    'takes its branch back from a worktree elsewhere whose directory is gone',
+    async () => {
+      // Another copy of the app (a dev build on its own userData) cut this
+      // task's worktree somewhere else, and that directory was deleted without
+      // `git worktree remove`: git still records the branch as checked out
+      // there, and a plain `worktree add` refuses it.
+      const elsewhere = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-worktree-elsewhere-')),
+      );
+      const stale = join(elsewhere, 't1');
+      git(repo, 'worktree', 'add', '-b', 'geniro/task-t1', stale);
+      rmSync(elsewhere, { recursive: true, force: true });
+
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(made.reused).toBe(false);
+      const listed = git(repo, 'worktree', 'list', '--porcelain');
+      expect(listed).toContain(`worktree ${made.path}`);
+      expect(listed).not.toContain(`worktree ${stale}`);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'leaves a LIVE checkout of its branch elsewhere alone, and says where it is',
+    async () => {
+      const elsewhere = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-worktree-elsewhere-')),
+      );
+      const live = join(elsewhere, 't1');
+      git(repo, 'worktree', 'add', '-b', 'geniro/task-t1', live);
+      writeFileSync(join(live, 'theirs.txt'), 'uncommitted\n');
+
+      try {
+        await expect(
+          prepareWorktree({ taskId: 't1', folder: repo }),
+        ).rejects.toThrow(/already used by worktree/);
+        expect(existsSync(join(live, 'theirs.txt'))).toBe(true);
+        expect(git(repo, 'worktree', 'list', '--porcelain')).toContain(
+          `worktree ${live}`,
+        );
+      } finally {
+        rmSync(elsewhere, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS,
+  );
+
   it('names the branch from the task id, never from anything a user typed', () => {
     expect(taskBranchName('a-b-c')).toBe('geniro/task-a-b-c');
   });

@@ -403,6 +403,39 @@ function gitStdoutIn(
 }
 
 /**
+ * Let go of this task's branch where a worktree whose DIRECTORY IS GONE still
+ * holds it — or `worktree add` refuses with "'<branch>' is already used by
+ * worktree at …" and the card can never run again.
+ *
+ * The ordinary way to get here: another copy of the app (a dev build on its
+ * own userData, a throwaway profile) cut this task's worktree somewhere else
+ * and that directory was deleted without `git worktree remove`. git still
+ * records it and marks it `prunable`.
+ *
+ * Only that one registration is dropped, and only when git calls it prunable
+ * AND the path is missing here too — so there is nothing on disk to lose. A
+ * live checkout of the branch elsewhere is left alone, and the add then fails
+ * naming it. A locked one is never `prunable`.
+ */
+async function releaseBranchFromMissingWorktree(
+  folder: string,
+  branch: string,
+): Promise<void> {
+  // Null is unanswerable: leave it to the add, whose own refusal says what is
+  // wrong.
+  const entries = (await readWorktreeEntries(gitStdoutIn(folder))) ?? [];
+  for (const entry of entries) {
+    if (
+      entry.branch === `refs/heads/${branch}` &&
+      entry.prunable &&
+      !existsSync(entry.path)
+    ) {
+      await git(folder, ['worktree', 'remove', '--force', '--', entry.path]);
+    }
+  }
+}
+
+/**
  * Make the worktree and branch a task's agent will work in — or hand back the
  * one this task already has.
  *
@@ -489,9 +522,13 @@ export async function prepareWorktree(input: {
     }
   }
 
+  const reuseBranch = await branchExists(input.folder, branch);
+  if (reuseBranch) {
+    await releaseBranchFromMissingWorktree(input.folder, branch);
+  }
   await git(
     input.folder,
-    (await branchExists(input.folder, branch))
+    reuseBranch
       ? ['worktree', 'add', path, branch]
       : ['worktree', 'add', '-b', branch, path],
   );

@@ -85,6 +85,18 @@ describe('TaskMergeService (in-memory sqlite)', () => {
     projectId = project.id;
   });
 
+  /** `urls` as the run row stores the pull requests it opened. */
+  const opened = (urls: string[]): string =>
+    JSON.stringify(
+      urls.map((url, index) => ({
+        owner: 'geniro-io',
+        repo: 'geniro-app',
+        number: 7 + index,
+        url,
+        seq: index,
+      })),
+    );
+
   /** A card in review, whose run captured `urls` as the pull requests it opened. */
   const inReview = async (urls: string[] = [PR_URL], title = 'ship it') => {
     runSeq += 1;
@@ -97,19 +109,59 @@ describe('TaskMergeService (in-memory sqlite)', () => {
       status: 'completed',
       agentKind: 'claude',
       taskId: task.id,
-      pullRequests: JSON.stringify(
-        urls.map((url, index) => ({
-          owner: 'geniro-io',
-          repo: 'geniro-app',
-          number: 7 + index,
-          url,
-          seq: index,
-        })),
-      ),
+      pullRequests: opened(urls),
     });
     await tasks.update(task.id, { runId });
     await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
     return { task, runId };
+  };
+
+  /**
+   * `count` cards in review, card `index` with a run that opened
+   * `urlsOf(index)`, written in one flush per table — for the cases that need
+   * a column past the cap.
+   *
+   * Through {@link inReview} that is five writes a card and 101 cards a case:
+   * ~0.7s on an idle machine, and past the 5s timeout on a loaded one. What
+   * these cases check is which stored cards a sweep hands out, so the rows are
+   * the ones `inReview` leaves, written directly. Each card is a millisecond
+   * newer than the one before, as cards made one after another are.
+   */
+  const manyInReview = async (
+    count: number,
+    urlsOf: (index: number) => string[],
+  ): Promise<string[]> => {
+    const from = Date.now();
+    const cards = Array.from({ length: count }, (_, index) => {
+      runSeq += 1;
+      return {
+        runId: `run-${runSeq}`,
+        at: new Date(from + index),
+        urls: urlsOf(index),
+      };
+    });
+    const created = await taskDao.createMany(
+      cards.map(({ runId, at }, index) => ({
+        projectId,
+        title: `card ${index}`,
+        number: index + 1,
+        status: 'in_review' as const,
+        runId,
+        createdAt: at,
+        updatedAt: at,
+      })),
+    );
+    await runDao.createMany(
+      cards.map(({ runId, urls }, index) => ({
+        id: runId,
+        workflowId: null,
+        status: 'completed' as const,
+        agentKind: 'claude' as const,
+        taskId: created[index]!.id,
+        pullRequests: opened(urls),
+      })),
+    );
+    return created.map((task) => task.id);
   };
 
   describe('listAwaitingMerge', () => {
@@ -172,9 +224,9 @@ describe('TaskMergeService (in-memory sqlite)', () => {
     });
 
     it('caps how many cards one sweep hands out', async () => {
-      for (let index = 0; index <= TASKS_AWAITING_MERGE_MAX; index += 1) {
-        await inReview([`${PR_URL}${index}`], `card ${index}`);
-      }
+      await manyInReview(TASKS_AWAITING_MERGE_MAX + 1, (index) => [
+        `${PR_URL}${index}`,
+      ]);
 
       // An unattended tick must not grow with a column somebody left in review
       // for a year — each card costs the watcher a lookup against GitHub.
@@ -195,9 +247,7 @@ describe('TaskMergeService (in-memory sqlite)', () => {
     // The cap applies AFTER the cards with nothing to watch are dropped, or a
     // full window of them hides every card that has a pull request.
     it('finds a card to watch behind a full window of cards with none', async () => {
-      for (let index = 0; index < TASKS_AWAITING_MERGE_MAX; index += 1) {
-        await inReview([], `nothing to watch ${index}`);
-      }
+      await manyInReview(TASKS_AWAITING_MERGE_MAX, () => []);
       const { task } = await inReview([PR_URL], 'watch me');
       await newest(task.id);
 
@@ -210,12 +260,9 @@ describe('TaskMergeService (in-memory sqlite)', () => {
     // card in review and its `updatedAt` untouched — so a handout that always
     // began at the oldest named the same cards on every sweep.
     it('reaches a card past the cap on a later sweep', async () => {
-      const ids: string[] = [];
-      for (let index = 0; index <= TASKS_AWAITING_MERGE_MAX; index += 1) {
-        ids.push(
-          (await inReview([`${PR_URL}${index}`], `card ${index}`)).task.id,
-        );
-      }
+      const ids = await manyInReview(TASKS_AWAITING_MERGE_MAX + 1, (index) => [
+        `${PR_URL}${index}`,
+      ]);
       await newest(ids[ids.length - 1]!);
 
       const first = await service.listAwaitingMerge();

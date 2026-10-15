@@ -183,6 +183,14 @@ describe('renderArtifactPage', () => {
     );
   });
 
+  it('centres a body capped narrower than the frame, from `html` so a page’s `margin: 0` cannot undo it', () => {
+    // Agents cap `body` with `max-width` beside `margin: 0`; a `margin-inline:
+    // auto` floor loses to that, so the flex row on `html` does the centring.
+    const page = renderArtifactPage('<p>x</p>');
+    expect(page).toContain('html { display: flex; justify-content: center; }');
+    expect(page).toMatch(/body \{\n\s*flex: 1 1 auto;\n\s*min-width: 0;/);
+  });
+
   it('gives every theme token a fallback, so the page reads before any message', () => {
     const page = renderArtifactPage('<p>x</p>');
     for (const token of ['--geniro-fg', '--geniro-font', '--geniro-primary']) {

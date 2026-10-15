@@ -240,12 +240,23 @@ const ARTIFACT_WRAPPER_SCRIPT = `
  * Every value is a `var(--geniro-*)` with a fallback, so the page is legible
  * before the host's theme message arrives and if it never does.
  *
- * The two RESET lines are the only rules here that are not about colour, and
- * they are floors against the two ways an agent's page routinely overflows its
+ * The two RESET lines are not about colour: they are floors against the two ways an agent's page routinely overflows its
  * frame: a width plus padding measured content-box, and an image wider than the
  * column. Both are what every modern stylesheet already declares, so a page
  * that sets them itself sets the same values; a page that forgot them is the
- * one this catches. Everything else about how a page LOOKS is the agent's, and
+ * one this catches.
+ *
+ * The CENTRING lines are the third floor. An agent routinely caps its reading
+ * column on `body` (`max-width: 880px`) while also writing `margin: 0`, which
+ * pins the column to the left edge once the frame is wider than the cap — the
+ * full-screen view, every time. A `margin-inline: auto` here would lose to that
+ * `margin: 0`, so the centring lives on `html`, which pages leave alone: a flex
+ * row that centres its one child. `flex: 1` keeps an uncapped body exactly as
+ * wide as before, and `min-width: 0` keeps a wide table from stretching the body
+ * past the frame, as block layout never did. A page that styles `html` or
+ * `body` itself still wins.
+ *
+ * Everything else about how a page LOOKS is the agent's, and
  * is asked for where the agent can act on it — the `show_artifact` tool's own
  * description — rather than legislated here, since a page's own CSS wins by
  * construction and a floor cannot reach inside its markup.
@@ -254,7 +265,10 @@ const BASE_STYLE = `
 html, body { background: transparent; }
 *, *::before, *::after { box-sizing: border-box; }
 img, svg, video, canvas { max-width: 100%; }
+html { display: flex; justify-content: center; }
 body {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   padding: 16px;
   color: ${themeVar('fg')};

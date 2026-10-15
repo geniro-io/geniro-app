@@ -343,6 +343,7 @@ import { useRunArtifacts } from './use-run-artifacts';
 import { useRunProcesses } from './use-run-processes';
 import { useRunState } from './use-run-state';
 import { useRunWaterfall } from './use-run-waterfall';
+import { useRunWorkFolders } from './use-run-work-folders';
 import { useThreadAnalysis } from './use-thread-analysis';
 import {
   threadPullRequestsOf,
@@ -4741,12 +4742,21 @@ export function Chats({
    */
   const activeRunArchived = activeRun?.archivedAt != null;
 
-  // ONE read of the run's folder, feeding the header's changes chip AND the
-  // dialog behind it. Kept here rather than inside the dialog because the chip
-  // states the figures without anything being opened — see `useChatChanges`.
+  // ONE read of the run's folder and the worktrees its agents worked in,
+  // feeding the header's changes chip AND the dialog behind it. Kept here
+  // rather than inside the dialog because the chip states the figures without
+  // anything being opened — see `useChatChanges`.
+  const workFolders = useRunWorkFolders(
+    chatApi,
+    activeRunId,
+    activeRun?.cwd ?? null,
+    activeRun?.createdAt ?? null,
+    streaming,
+  );
   const chatChanges = useChatChanges(
     activeRun?.cwd ?? null,
     activeRun?.startSha ?? null,
+    workFolders,
   );
   const refreshChatChanges = chatChanges.refresh;
   // What the DIALOG asks for when it opens: past the freshness floor, because
@@ -10466,6 +10476,7 @@ export function Chats({
                     open
                     startSha={activeRun.startSha}
                     changes={chatChanges.changes}
+                    elsewhere={chatChanges.elsewhere}
                     truncated={chatChanges.truncated}
                     unavailableReason={chatChanges.unavailableReason}
                     movedOffStart={chatChanges.movedOffStart}

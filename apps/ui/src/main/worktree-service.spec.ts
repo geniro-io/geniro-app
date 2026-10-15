@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -182,6 +182,40 @@ describe('prepareWorktree', () => {
       expect(git(again.path, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe(
         'geniro/task-t1',
       );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'does NOT hand back its slot because ANOTHER worktree holds the task branch',
+    async () => {
+      // The slot is on someone else's branch while the task's branch sits in a
+      // different worktree: path and branch are both in git's listing, but in
+      // two records — neither vouches for the slot.
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      git(made.path, 'switch', '-c', 'somebody-elses');
+      git(
+        repo,
+        'worktree',
+        'add',
+        '-q',
+        join(repo, '..', `${basename(repo)}-elsewhere`),
+        'geniro/task-t1',
+      );
+
+      try {
+        const again = await prepareWorktree({
+          taskId: 't1',
+          folder: repo,
+        }).catch((error: unknown) => error);
+        // Refused or rebuilt — never handed back as the task's own.
+        expect(again).not.toMatchObject({ reused: true });
+      } finally {
+        rmSync(join(repo, '..', `${basename(repo)}-elsewhere`), {
+          recursive: true,
+          force: true,
+        });
+      }
     },
     TIMEOUT_MS,
   );
@@ -819,6 +853,25 @@ describe('reapFinishedWorktrees', () => {
       expect(removed).toEqual([]);
       expect(kept).toEqual([made.path]);
       expect(existsSync(made.path)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'leaves a registered folder git does not list as a worktree, however clean',
+    async () => {
+      // A clean, standalone checkout in a task slot: its own repository, not a
+      // worktree of the project. Only git's listing can tell the two apart.
+      const slot = join(mocks.userData, 'worktrees', 't1');
+      cleanRepoAt(slot, 'own.txt');
+      // On the branch the row names, so the listing is the one guard left.
+      git(slot, 'switch', '-q', '-c', 'b');
+      registerRow(slot);
+
+      const { removed } = await reapFinishedWorktrees(allFinished);
+
+      expect(removed).toEqual([]);
+      expect(existsSync(join(slot, 'own.txt'))).toBe(true);
     },
     TIMEOUT_MS,
   );

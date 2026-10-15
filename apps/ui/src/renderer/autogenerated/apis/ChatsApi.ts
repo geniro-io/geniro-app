@@ -33,6 +33,8 @@ import type {
   GlobalChatSearchResultDto,
   ItemDto,
   LocalImageDto,
+  NamedPathsDto,
+  NamedPathsResultDto,
   RenameRunDto,
   ReorderPinnedDto,
   RetriedDto,
@@ -141,6 +143,11 @@ export interface ChatsApiReadLocalImageRequest {
 
 export interface ChatsApiReadRunArtifactsRequest {
     runId: string;
+}
+
+export interface ChatsApiReadRunNamedPathsRequest {
+    runId: string;
+    namedPathsDto: NamedPathsDto;
 }
 
 export interface ChatsApiReadRunProcessesRequest {
@@ -1203,6 +1210,61 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readRunArtifacts(requestParameters: ChatsApiReadRunArtifactsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunArtifactsDto> {
         const response = await this.readRunArtifactsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readRunNamedPathsRaw(requestParameters: ChatsApiReadRunNamedPathsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<NamedPathsResultDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readRunNamedPaths().'
+            );
+        }
+
+        if (requestParameters['namedPathsDto'] == null) {
+            throw new runtime.RequiredError(
+                'namedPathsDto',
+                'Required parameter "namedPathsDto" was null or undefined when calling readRunNamedPaths().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/named-paths`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['namedPathsDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readRunNamedPaths(requestParameters: ChatsApiReadRunNamedPathsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<NamedPathsResultDto> {
+        const response = await this.readRunNamedPathsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

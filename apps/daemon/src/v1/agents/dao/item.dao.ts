@@ -963,6 +963,57 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
+  /** The seq of the run's newest `tool_call` row, or 0 when it has none. */
+  async lastToolCallSeq(runId: string, txEm?: EntityManager): Promise<number> {
+    const em = txEm ?? this.em.fork();
+    const row = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => eb.fn.max('seq').as('last'))
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'tool_call')
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    return row?.last == null ? 0 : Number(row.last);
+  }
+
+  /**
+   * The run's `tool_call` rows in `(afterSeq, throughSeq]` whose stored payload
+   * text contains any of `texts`. `instr` rather than `LIKE`: a path holds `_`,
+   * which LIKE reads as a wildcard, and LIKE ignores ASCII case where paths do
+   * not.
+   */
+  async toolCallsContainingAny(
+    runId: string,
+    afterSeq: number,
+    throughSeq: number,
+    texts: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<{ seq: number; payload: string }[]> {
+    const em = txEm ?? this.em.fork();
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select(['seq', 'payload'])
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'tool_call')
+      .where('deleted_at', 'is', null)
+      .where('seq', '>', afterSeq)
+      .where('seq', '<=', throughSeq)
+      .where((eb) =>
+        eb.or(
+          texts.map((text) =>
+            eb(eb.fn('instr', [eb.ref('payload'), eb.val(text)]), '>', 0),
+          ),
+        ),
+      )
+      .execute();
+    return rows.map((row) => ({
+      seq: Number(row.seq),
+      payload: String(row.payload),
+    }));
+  }
+
   /**
    * Every row of one run as (seq, kind, role, nodeId, createdAt) — the
    * conversation's SHAPE, with none of its content.

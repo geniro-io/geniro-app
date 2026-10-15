@@ -1,3 +1,7 @@
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ZodError } from 'zod';
 
@@ -67,6 +71,8 @@ const mocks = vi.hoisted(() => {
       ...settings,
       ...patch,
     })),
+    readLinkedWorktrees: vi.fn(async (): Promise<string[]> => []),
+    worktreesRoot: vi.fn(() => '/no/such/userData/worktrees'),
   };
 });
 
@@ -83,6 +89,14 @@ vi.mock('./native-appearance', () => ({ applyTheme: mocks.applyTheme }));
 vi.mock('./settings', () => ({
   readSettings: mocks.readSettings,
   updateSettings: mocks.updateSettings,
+}));
+vi.mock('./git-changes', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./git-changes')>()),
+  readLinkedWorktrees: mocks.readLinkedWorktrees,
+}));
+vi.mock('./worktree-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./worktree-service')>()),
+  worktreesRoot: mocks.worktreesRoot,
 }));
 
 import { registerIpc } from './ipc';
@@ -579,5 +593,55 @@ describe('registerIpc remote-access channels', () => {
       // And nothing else about the state is withheld.
       expect(redacted.hostUrl).toBe(rawState.hostUrl);
     }
+  });
+});
+
+describe('registerIpc listWorktrees', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    registerIpc({} as DaemonSupervisor, {} as UpdateService, noTerminals);
+  });
+
+  it('narrows the listing to worktrees made since the thread started, never geniro’s task worktrees', async () => {
+    // The user's ownership rule lives here: a candidate must be made during
+    // the thread, and a task worktree is another card's however often named.
+    await handler(IPC.listWorktrees)({}, '/repo', 1_792_064_959_590);
+
+    expect(mocks.readLinkedWorktrees).toHaveBeenCalledWith('/repo', {
+      createdAfterMs: 1_792_064_959_590,
+      // Unresolvable here, so it falls back to the root as given.
+      tasksRoot: '/no/such/userData/worktrees',
+    });
+  });
+
+  it('names geniro’s task worktrees by their resolved folder, as git lists them', async () => {
+    // userData can sit behind a symlink; git prints real paths, so an
+    // unresolved root would match no worktree and exclude nothing.
+    const real = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-tasks-')));
+    const link = `${real}-link`;
+    symlinkSync(real, link);
+    mocks.worktreesRoot.mockReturnValueOnce(link).mockReturnValueOnce(link);
+    try {
+      await handler(IPC.listWorktrees)({}, '/repo', 1);
+
+      expect(mocks.readLinkedWorktrees).toHaveBeenCalledWith('/repo', {
+        createdAfterMs: 1,
+        tasksRoot: real,
+      });
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a thread start that is not an instant', async () => {
+    await expect(
+      handler(IPC.listWorktrees)({}, '/repo', -1),
+    ).rejects.toBeInstanceOf(ZodError);
+    await expect(
+      handler(IPC.listWorktrees)({}, '/repo', 1.5),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(mocks.readLinkedWorktrees).not.toHaveBeenCalled();
   });
 });

@@ -342,6 +342,12 @@ export const taskWorktreeSchema = z.object({
  */
 export const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
 
+/** `getChangesSince`'s optional third argument — see `readChangesSince`. */
+export const workFolderFlagSchema = z.boolean().optional();
+
+/** An instant as epoch milliseconds — `listWorktrees`' thread start. */
+export const epochMsSchema = z.number().int().nonnegative();
+
 /**
  * How many pull requests one resolve may be asked about.
  *

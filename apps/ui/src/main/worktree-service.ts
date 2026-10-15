@@ -18,6 +18,7 @@ import {
   readSafeConfig,
   SAFE_CONFIG,
 } from './git-safe-config';
+import { readWorktreeEntries } from './worktree-list';
 
 const execFileAsync = promisify(execFile);
 
@@ -68,7 +69,7 @@ export function taskBranchName(taskId: string): string {
   return `geniro/task-${taskId}`;
 }
 
-function worktreesRoot(): string {
+export function worktreesRoot(): string {
   return join(app.getPath('userData'), 'worktrees');
 }
 
@@ -378,25 +379,27 @@ async function holdsBranch(
   path: string,
   branch: string,
 ): Promise<boolean> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      [...SAFE_CONFIG, 'worktree', 'list', '--porcelain'],
-      { cwd: folder, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+  const entries = await readWorktreeEntries(gitStdoutIn(folder));
+  return (
+    entries?.some(
+      (entry) => entry.path === path && entry.branch === `refs/heads/${branch}`,
+    ) ?? false
+  );
+}
+
+/** A git runner for {@link readWorktreeEntries}, null on any failure. */
+function gitStdoutIn(
+  folder: string,
+): (args: string[]) => Promise<string | null> {
+  return (args) =>
+    execFileAsync('git', [...SAFE_CONFIG, ...args], {
+      cwd: folder,
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    }).then(
+      ({ stdout }) => stdout,
+      () => null,
     );
-    // One block per worktree, separated by a blank line — so the path and the
-    // branch have to be read off the SAME block, or a stray branch line from a
-    // neighbour would vouch for this path.
-    return stdout.split(/\n\s*\n/).some((block) => {
-      const lines = block.split('\n').map((line) => line.trim());
-      return (
-        lines.includes(`worktree ${path}`) &&
-        lines.includes(`branch refs/heads/${branch}`)
-      );
-    });
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -514,22 +517,14 @@ export async function prepareWorktree(input: {
 async function inspect(
   record: WorktreeRecord,
 ): Promise<{ registered: boolean; dirty: boolean } | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      [...SAFE_CONFIG, 'worktree', 'list', '--porcelain'],
-      { cwd: record.folder, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
-    );
-    const registered = stdout
-      .split('\n')
-      .some((line) => line.trim() === `worktree ${record.path}`);
-    if (!registered) {
-      return { registered: false, dirty: false };
-    }
-    return { registered: true, dirty: (await isDirty(record.path)) !== false };
-  } catch {
+  const entries = await readWorktreeEntries(gitStdoutIn(record.folder));
+  if (entries === null) {
     return null;
   }
+  if (!entries.some((entry) => entry.path === record.path)) {
+    return { registered: false, dirty: false };
+  }
+  return { registered: true, dirty: (await isDirty(record.path)) !== false };
 }
 
 /**

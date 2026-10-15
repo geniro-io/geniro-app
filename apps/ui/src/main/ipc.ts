@@ -1,3 +1,5 @@
+import { realpath } from 'node:fs/promises';
+
 import {
   app,
   BrowserWindow,
@@ -15,7 +17,11 @@ import { detectClis } from './cli-detect';
 import { runCliInstall } from './cli-install';
 import { runCliUpdate } from './cli-update';
 import type { DaemonSupervisor } from './daemon-supervisor';
-import { readChangesSince, readChangesTotals } from './git-changes';
+import {
+  readChangesSince,
+  readChangesTotals,
+  readLinkedWorktrees,
+} from './git-changes';
 import {
   pullBranch,
   readGitHead,
@@ -39,6 +45,7 @@ import {
   chatExportSaveSchema,
   cliKindSchema,
   commitShaSchema,
+  epochMsSchema,
   gitDirSchema,
   lineFlushRequestIdSchema,
   notificationSchema,
@@ -57,6 +64,7 @@ import {
   terminalIdSchema,
   terminalRowsSchema,
   terminalWriteDataSchema,
+  workFolderFlagSchema,
 } from './ipc-schemas';
 import {
   flushWindowsThen,
@@ -78,6 +86,7 @@ import {
   prepareWorktree,
   pruneWorktreeForTask,
   settleWorktreeForTask,
+  worktreesRoot,
 } from './worktree-service';
 
 /**
@@ -460,8 +469,23 @@ export function registerIpc(
   handle(
     IPC.getChangesSince,
     ALLOW_REMOTELY,
-    (_event, dir: unknown, sha: unknown) =>
-      readChangesSince(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
+    (_event, dir: unknown, sha: unknown, workFolder: unknown) =>
+      readChangesSince(
+        gitDirSchema.parse(dir),
+        commitShaSchema.parse(sha),
+        workFolderFlagSchema.parse(workFolder) === true,
+      ),
+  );
+  // The candidates `getChangesSince` above is then asked about, so it reaches as far.
+  handle(
+    IPC.listWorktrees,
+    ALLOW_REMOTELY,
+    async (_event, dir: unknown, startedAt: unknown) =>
+      readLinkedWorktrees(gitDirSchema.parse(dir), {
+        createdAfterMs: epochMsSchema.parse(startedAt),
+        // Resolved, as git names worktrees by their real path.
+        tasksRoot: await realpath(worktreesRoot()).catch(() => worktreesRoot()),
+      }),
   );
   // The line measurement's two reads are the desktop window's alone: the hook that makes them
   // is silent on a remote device, and a total reads every untracked file in the tree, which a

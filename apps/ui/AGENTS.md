@@ -38,6 +38,7 @@ Git (the hardening is under _Security_):
 - `pullBranch` is stash, then `git pull --ff-only`, then stash pop. The pop runs on every path, a failed pull included. A failed stash push aborts the pull.
 - `pullStashIsOurs` requires both that the stash ref moved and that the tip's subject ends `geniro: pull`.
 - Decide which branches are checked out in another worktree from `git worktree list --porcelain`. Never parse git's translated error prose.
+- Every `git worktree list` read goes through `worktree-list.ts` (`readWorktreeEntries`: `--porcelain -z`, newline framing only on git < 2.36); never hand-parse the listing. Path and branch are read off one record.
 - `github-prs.ts` fails closed. Every failure (no `gh`, signed out, not GitHub, query error) is the empty list, with no "did it work" flag on the wire.
 
 Task worktrees (`worktree-service.ts`):
@@ -329,6 +330,7 @@ One home for each concern:
 - Do not reintroduce a branch-scoped pull-request list.
 - `keepFresherRows`: a pin, colour or pull-request list written without moving `updatedAt` is decided by the listing.
 - "Changed since this chat started" uses `upstreamBaseSince` and excludes what a pull brought in. The header names the ref and claims no cause.
+- The changes chip and dialog also count the worktrees the thread's agents made (`use-run-work-folders.ts`). A worktree is the thread's only if all three hold: main lists it (`listWorktrees(cwd, startedAtMs)`: a linked worktree made after the thread started — birth of its `.git` link file — never the main checkout and never a geniro task worktree, the direct children of `worktreesRoot()`), and the run's own tool calls name it (`POST /v1/chats/:runId/named-paths`). Each is read as a work folder (`getChangesSince(…, true)`: from where its history meets the start, past what upstream already has). Found folders are only ever added; each lists in its own dialog section. Listings go through `worktree-list.ts` (see *Git*).
 
 **Thread UI memory** (`chats/thread-ui-memory.ts`):
 

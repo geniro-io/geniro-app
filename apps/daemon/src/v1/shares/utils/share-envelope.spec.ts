@@ -1,6 +1,7 @@
-import { createDecipheriv } from 'node:crypto';
+import { createDecipheriv, webcrypto } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ARTIFACT_PAGE_CSP } from '../../agents/utils/artifact-page';
 import { buildShareEnvelope, mintShareKey } from './share-envelope';
@@ -37,6 +38,51 @@ function decrypt(
     decipher.update(data.subarray(0, data.length - 16)),
     decipher.final(),
   ]).toString('utf8');
+}
+
+interface OpenedEnvelope {
+  notice: { textContent: string; hidden: boolean };
+  frame: { srcdoc?: string } | undefined;
+  replacedUrls: string[];
+}
+
+/** Runs the envelope's own decrypt script against a minimal browser stand-in. */
+function openEnvelope(envelope: string, hash: string): OpenedEnvelope {
+  const script = /<script>([\s\S]*)<\/script>\s*<\/body>/.exec(envelope)?.[1];
+  if (script === undefined) {
+    throw new Error('no decrypt script');
+  }
+  const opened: OpenedEnvelope = {
+    notice: { textContent: '', hidden: true },
+    frame: undefined,
+    replacedUrls: [],
+  };
+  const payload = { textContent: JSON.stringify(payloadOf(envelope)) };
+  const browser = {
+    window: { isSecureContext: true, crypto: webcrypto, TextDecoder },
+    crypto: webcrypto,
+    TextDecoder,
+    TextEncoder,
+    atob,
+    location: { hash, pathname: '/pr-reports/abc/index.html', search: '?x=1' },
+    history: {
+      replaceState: (_state: unknown, _title: string, url: string) => {
+        opened.replacedUrls.push(url);
+      },
+    },
+    document: {
+      getElementById: (id: string) =>
+        id === 'notice' ? opened.notice : id === 'payload' ? payload : null,
+      createElement: () => ({ setAttribute: () => undefined }),
+      body: {
+        appendChild: (frame: { srcdoc?: string }) => {
+          opened.frame = frame;
+        },
+      },
+    },
+  };
+  runInNewContext(script, browser);
+  return opened;
 }
 
 describe('buildShareEnvelope', () => {
@@ -78,6 +124,29 @@ describe('buildShareEnvelope', () => {
     expect(envelope).toContain('<meta name="referrer" content="no-referrer">');
     expect(envelope).toContain("'sandbox', 'allow-scripts allow-popups");
     expect(envelope).not.toContain('allow-same-origin');
+  });
+
+  it('decrypts in the reader’s browser and takes the key out of the address bar', async () => {
+    const key = mintShareKey();
+    const page = openEnvelope(
+      buildShareEnvelope(SECRET_PAGE, key),
+      `#k=${key}`,
+    );
+
+    await vi.waitFor(() => expect(page.frame?.srcdoc).toBe(SECRET_PAGE));
+    expect(page.replacedUrls).toEqual(['/pr-reports/abc/index.html?x=1']);
+    expect(page.notice.hidden).toBe(true);
+  });
+
+  it('leaves the address alone and says so when the link carries no key', () => {
+    const page = openEnvelope(
+      buildShareEnvelope(SECRET_PAGE, mintShareKey()),
+      '',
+    );
+
+    expect(page.notice.hidden).toBe(false);
+    expect(page.notice.textContent).toContain('missing its key');
+    expect(page.replacedUrls).toEqual([]);
   });
 
   it('refuses a key of the wrong length rather than encrypting under it', () => {

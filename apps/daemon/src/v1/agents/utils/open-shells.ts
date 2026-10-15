@@ -82,6 +82,19 @@ export function strandedShells(rows: readonly ShellRow[]): StrandedShell[] {
   return [...open.values()];
 }
 
+/**
+ * The words a detached command runs, read from the tool call that launched it
+ * — its `input.command`, else the tool's own name. Null when the call carries
+ * neither. Every reader that names a shell goes through here, so the Terminals
+ * list and a caller's call result can never name one command two ways.
+ */
+export function shellCommandOf(toolCallPayload: unknown): string | null {
+  const record = asRecord(parseJsonColumn(toolCallPayload));
+  const command =
+    asString(asRecord(record?.input)?.command) ?? asString(record?.name);
+  return command === null || command === '' ? null : command;
+}
+
 /** The close `spawn-cli` would have written had its process exit been heard. */
 export function shellCloseEvent(shell: StrandedShell): AgentEvent {
   return {

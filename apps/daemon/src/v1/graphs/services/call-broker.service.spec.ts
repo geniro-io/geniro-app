@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RunCallSeed } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { readCallSeed } from '../../agents/utils/call-seed';
+import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { ItemKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
 import type {
@@ -10,7 +11,10 @@ import type {
   RunCallCapability,
   WorkflowAgentNode,
 } from '../graphs.types';
-import { PUBLISHED_PAGES_NOTE } from '../utils/callee-text';
+import {
+  LEFT_RUNNING_COMMAND_MAX,
+  PUBLISHED_PAGES_NOTE,
+} from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 
@@ -6443,6 +6447,65 @@ describe('CallBroker — pages published inside a call', () => {
     const { result } = (await pending) as { result: { note: string } };
     expect(result.note).toContain('This call is NOT finished');
     expect(result.note).toContain("already in the user's chat");
+  });
+
+  it('names the commands a callee left running, each cut to one bounded line', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'bring it up',
+    });
+    const long = `pnpm dev ${'--flag '.repeat(40)}`;
+    deferred[0]!.resolve(
+      completed('up', {
+        shellsStillOut: ['cd api &&\n pnpm dev:api', null, long],
+      }),
+    );
+    const { result } = (await pending) as {
+      result: {
+        note: string;
+        commands_still_running: number;
+        running_commands: string[];
+      };
+    };
+    const cut = `${long.replaceAll(/\s+/g, ' ').trim().slice(0, LEFT_RUNNING_COMMAND_MAX)}…`;
+    // Counted whole; listed only where the words were recorded.
+    expect(result.commands_still_running).toBe(3);
+    expect(result.running_commands).toEqual(['cd api && pnpm dev:api', cut]);
+    expect(result.note).toBe(
+      `helper left 3 command(s) it started in this call running in the background: \`cd api && pnpm dev:api\`; \`${cut}\`. They keep running after this result. To stop them, continue the conversation (call_agent with thread: 'call-1') and ask helper to; otherwise tell the user they are still running.`,
+    );
+  });
+
+  it('masks a registered secret in a command left running, and fences one carrying backticks', async () => {
+    registerSecret('tok-0123456789abcdef', 'test token');
+    try {
+      const { broker, deferred } = harness({ launch: 'defer' });
+      const pending = broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'bring it up',
+      });
+      deferred[0]!.resolve(
+        completed('up', {
+          shellsStillOut: [
+            'TOKEN=tok-0123456789abcdef pnpm dev',
+            'echo `git rev-parse HEAD` && pnpm dev',
+          ],
+        }),
+      );
+      const { result } = (await pending) as {
+        result: { note: string; running_commands: string[] };
+      };
+      expect(result.running_commands[0]).not.toContain('tok-0123456789abcdef');
+      expect(result.note).not.toContain('tok-0123456789abcdef');
+      expect(result.note).toContain(
+        '; ``echo `git rev-parse HEAD` && pnpm dev``.',
+      );
+    } finally {
+      clearSecrets();
+    }
   });
 
   it('an await_agent collection names the pages too', async () => {

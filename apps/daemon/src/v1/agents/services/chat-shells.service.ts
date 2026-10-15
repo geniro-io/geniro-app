@@ -5,6 +5,7 @@ import type { ChatShellsWire, OpenShell, ShellKillWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { asRecord, asString } from '../utils/json-util';
 import { GROUP_KILL_GRACE_MS, killProcessGroup } from '../utils/kill-tree';
+import { shellCommandOf } from '../utils/open-shells';
 import { persistItemAndEmit } from '../utils/persist-item';
 import {
   commandNeedles,
@@ -150,9 +151,8 @@ export class ChatShellsService {
       if (parent !== null && parent !== '') {
         delegates.add(id);
       }
-      const command =
-        asString(asRecord(payload?.input)?.command) ?? asString(payload?.name);
-      if (command !== null && command !== '') {
+      const command = shellCommandOf(payload);
+      if (command !== null) {
         commands.set(id, command);
       }
     }

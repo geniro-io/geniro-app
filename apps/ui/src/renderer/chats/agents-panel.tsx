@@ -707,18 +707,26 @@ function ShellBand({
   shells,
   onOpenShell,
   onKillShell,
+  leftRunningOf,
   className,
 }: {
   shells: readonly ShellRun[];
   onOpenShell?: (shell: ShellRun) => void;
   onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  /** The commands whose call has finished — see `ShellRows`. */
+  leftRunningOf?: ReadonlyMap<string, string>;
   className?: string;
 }): React.JSX.Element {
   return (
     <div
       data-slot="agent-shell-list"
       className={cn('flex flex-col gap-1', className)}>
-      <ShellRows shells={shells} onOpen={onOpenShell} onKill={onKillShell} />
+      <ShellRows
+        shells={shells}
+        leftRunningOf={leftRunningOf}
+        onOpen={onOpenShell}
+        onKill={onKillShell}
+      />
     </div>
   );
 }
@@ -857,6 +865,7 @@ function ConversationSections({
   onResolveHandoff,
   onOpenShell,
   onKillShell,
+  leftRunningOf,
   className,
 }: {
   agent: AgentDisplay;
@@ -875,6 +884,8 @@ function ConversationSections({
   ) => Promise<HandoffTargetDto>;
   onOpenShell?: (shell: ShellRun) => void;
   onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  /** The commands whose call has finished — see `ShellRows`. */
+  leftRunningOf?: ReadonlyMap<string, string>;
   className?: string;
 }): React.JSX.Element | null {
   const [pressed, setPressed] = useState<
@@ -937,6 +948,7 @@ function ConversationSections({
             shells={shells}
             onOpenShell={onOpenShell}
             onKillShell={onKillShell}
+            leftRunningOf={leftRunningOf}
           />
         </ConversationSection>
       ) : null}
@@ -1224,6 +1236,7 @@ function InstanceBlock({
   onResolveHandoff,
   onOpenShell,
   onKillShell,
+  leftRunningOf,
 }: {
   agent: AgentDisplay;
   instance: AgentInstance;
@@ -1246,6 +1259,8 @@ function InstanceBlock({
   ) => Promise<HandoffTargetDto>;
   onOpenShell?: (shell: ShellRun) => void;
   onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  /** The commands whose call has finished — see `ShellRows`. */
+  leftRunningOf?: ReadonlyMap<string, string>;
 }): React.JSX.Element {
   const { thread } = instance;
   const content = hasInstanceContent(instance);
@@ -1335,6 +1350,7 @@ function InstanceBlock({
             onResolveHandoff={onResolveHandoff}
             onOpenShell={onOpenShell}
             onKillShell={onKillShell}
+            leftRunningOf={leftRunningOf}
           />
           {/* The heading's chevron is a screen away once sub-agents and a plan
               are open under it, so the body carries its own way back. */}
@@ -1612,6 +1628,7 @@ export function AgentsPanel({
   openTurns,
   onOpenShell,
   onKillShell,
+  leftRunningOf,
   mcpByScope,
   mcpLoading = false,
   onRefreshMcp,
@@ -1914,6 +1931,8 @@ export function AgentsPanel({
   onOpenShell?: (shell: ShellRun) => void;
   /** Stop one — see `ShellRows`. */
   onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  /** The commands whose call has finished — see `ShellRows`. */
+  leftRunningOf?: ReadonlyMap<string, string>;
   /*
    * There was a `subagentUnavailableReason` here — a panel-level paragraph
    * saying why a CLI lists no delegates. It has been removed: on cursor it was
@@ -2624,6 +2643,7 @@ export function AgentsPanel({
                     onResolveHandoff={onResolveHandoff}
                     onOpenShell={onOpenShell}
                     onKillShell={onKillShell}
+                    leftRunningOf={leftRunningOf}
                     className="border-t border-border px-2 py-1.5"
                   />
                   {shownInstances.length > 0 ? (
@@ -2693,6 +2713,7 @@ export function AgentsPanel({
                               onResolveHandoff={onResolveHandoff}
                               onOpenShell={onOpenShell}
                               onKillShell={onKillShell}
+                              leftRunningOf={leftRunningOf}
                             />
                           );
                         })}

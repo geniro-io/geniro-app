@@ -227,7 +227,7 @@ pnpm commit             # conventional commit via commitizen
 
 ## Constraints (local-first & security)
 
-**No cloud service of geniro's own and no remote code paths.** No geniro backend, telemetry, account or sync. geniro never holds a credential of its own, syncs user data anywhere, or talks to a machine on someone else's say-so. Exactly five kinds of outbound call are allowed:
+**No cloud service of geniro's own and no remote code paths.** No geniro backend, telemetry, account or sync. geniro never holds a credential of its own, syncs user data anywhere, or talks to a machine on someone else's say-so. Exactly six kinds of outbound call are allowed:
 
 1. **The user's own login, the user's own data.**
    - `main/github-prs.ts` runs the user's `gh` CLI; geniro holds no token and degrades to silence without login or network.
@@ -244,6 +244,11 @@ pnpm commit             # conventional commit via commitizen
    - At most one refresh per ~12 h, never blocking boot. The last good copy is kept at `<userData>/model-prices.json`; every failure is logged and swallowed.
    - An unlisted model has no price ("not measured", never $0). Tests set `fetchModelPrices: false`.
 5. **A CLI vendor's installer, on the user's press** (`main/cli-install.ts`): `curl -fsSL <url> | <shell>` with the one script URL from the CLI's descriptor (`main/agents/<cli>.ts` → `installer`). A constant, never run unasked.
+6. **An encrypted artifact page, to a place the user configured, through the user's own CLI** (`apps/daemon/src/v1/shares/`).
+   - Only the AES-256-GCM envelope leaves the Mac; the page is encrypted in the daemon and the key travels in the link's `#fragment`, which no browser sends (and, for an agent's own share, in that agent's transcript — see *Storage split*). Never upload plaintext.
+   - The destination is one the user added in Settings → Sharing (`gcloud`, `aws`, or their own program as argv, never a shell). geniro holds no credential and runs no host of its own.
+   - Only on a press, or by an agent's `show_artifact(share: true)` while the user's "Let agents share pages" switch is on (off by default).
+   - The share routes and settings are desktop only: the gateway stamps proxied requests `x-geniro-via: remote` (`main/remote/daemon-proxy.ts`), the daemon's `DesktopOnlyGuard` refuses them, and a paired device may not write `Settings.sharing`. Accepted by decision: while agents may share, a message sent from a paired device can still ask an agent to share, because the agent's own MCP call is loopback.
 
 **LAN gateway** (`apps/ui/src/main/remote/`, `Settings.remoteAccessEnabled`) is the one inbound exception: the Mac serves the app to the user's own devices on the same network.
 
@@ -264,10 +269,10 @@ pnpm commit             # conventional commit via commitizen
 **Other hard rules**
 
 - No Python runtime; the whole stack is TypeScript.
-- Secrets live in the macOS Keychain only, never SQLite or a file. (The app currently stores none; the loopback token in `daemon.json` is not a user secret.)
+- Secrets live in the macOS Keychain only, never SQLite or a file. The one kind the app stores is a share key (service `geniro.share`, account = share id), written through `/usr/bin/security -i` on stdin so it never rides argv. The loopback token in `daemon.json` is not a user secret.
 - Child env: `buildChildEnv` (`utils/child-env.ts`) strips every `GENIRO_`-prefixed key and every adapter's `auth.isolatedEnvKeys`, then each adapter re-injects only its own `auth.inheritedEnvKeys`. Never un-strip a name: an inherited user credential must not reach another CLI's child.
 - Every child process the daemon spawns registers with `ProcessRegistry` (claim → register → auto-unregister on settle). Never spawn an unmanaged child.
-- Every detached child group is also recorded in the child journal (`v1/agents/utils/child-journal.ts` → `<userData>/children.json`) inside the spawn helper itself (`defaultSpawn`, `AgentAdapter.runAsProcessGroup`). The next boot reaps survivors (`services/stranded-child-reaper.service.ts`, first in `main.ts`).
+- Every detached child group is also recorded in the child journal (`v1/agents/utils/child-journal.ts` → `<userData>/children.json`) inside the spawn helper itself (`defaultSpawn`, `AgentAdapter.runAsProcessGroup`, `runManagedCommand`). The next boot reaps survivors (`services/stranded-child-reaper.service.ts`, first in `main.ts`).
 - The reaper never kills on a pid alone: it re-confirms identity through `utils/process-identity`, and leaves an unconfirmable entry alone. A plain short `execFile` utility child is not journaled.
 - Run-scoped CLIs carry a deliberate run tag (`GENIRO_RUN_ID` + `GENIRO_RUN_OWNER`, set after `buildChildEnv`'s strip). Archive, delete and the leftover sweep stop what a run's agents left running by that tag, with explicit pids only. The safety rules (never the daemon, pid 1, another uid, anything on an open terminal, system or installed-app executables, the container VM; cap; start-time check) are in `apps/daemon/AGENTS.md` → _Run processes_; never widen the kill past them.
 - Workflow definitions are YAML; SQLite holds runtime/history only.
@@ -359,10 +364,11 @@ Daemon side of the contract (`v1/*`):
   - `archiveRetentionDays` defaults to `null` because it arms a sweep that permanently deletes archived chats. The daemon only executes it (`POST /v1/chats/sweep-archived`).
   - Values whose vocabulary belongs to the daemon stay opaque strings on the Electron side (`shared/contracts.ts` holds no daemon shapes).
 - **MCP config → each CLI's own config files**, the one exception to "geniro writes only its own files". Toggles and server definitions are written only on the user's press, through each CLI's own mechanism and lock, refusing an unparseable file and keeping no copy. Rules: `apps/daemon/AGENTS.md` → **MCP config writes**.
-- **Secrets → none.** Every CLI authenticates from its own login. Any future secret goes in the macOS Keychain only (see _Constraints_).
+- **Secrets → the Keychain only.** Every CLI authenticates from its own login. Share keys are the one secret geniro keeps (see _Constraints_).
 - **SQLite (`geniro.db`) → runtime and history only**: `runs`, `items`, `node_state`, and the usage tables.
   - Archive uses its own `archivedAt` column, never `deletedAt`: the `softDelete` filter is global and default-on, so an archived row would vanish from the read that unarchives it.
   - `usage_events`, `usage_activity` and `line_baselines` are exempt from run teardown so lifetime totals survive deleting a chat. `usage_events` is append-only and denormalizes agent/model/folder at write time.
+  - `artifact_shares` is exempt too: a shared link outlives its chat, and the row (with the destination it was shared to) is the only way to revoke it. Its key is in the Keychain, never the row. One accepted exception: an agent's `show_artifact(share: true)` receipt carries the whole link, so the key also lives in that agent's transcript: the `items` row (readable from a paired device), the CLI's own session file, and the model provider's copy of the conversation — the agent needs the link to place it where it was asked to.
 - **Pasted images → `<userData>/attachments/<runId>/`.** Only `{id, mediaType}` rides the item payload; never put blobs in the DB.
   - On ACP, send image blocks only to an agent that advertised `promptCapabilities.image`; otherwise send the text plus a `notice` naming what was withheld.
 - **Uploaded files (phone) → `<userData>/chat-uploads/<uuid>/<name>`** (`POST /v1/chats/uploads`), collected by the teardown of the run whose user messages name them.
@@ -378,7 +384,7 @@ Daemon side of the contract (`v1/*`):
 - **Persist-then-emit** for streamed, replayable data (chat and graph-node items): allocate the monotonic `seq`, write the row, then publish. Clients replay through an `afterSeq` cursor, so nothing is emitted before it is durable.
 - The per-launch token in `daemon.json` is allowed on disk; it is a session token, not a user secret.
 - **Debug log → 0600 JSONL** under `<userData>/logs/`, rotated. Every entry is scrubbed of registered secrets (`v1/diagnostics/utils/redact.ts`).
-  - Redaction is by registration, never by pattern: register a new credential at its mint site, before it can be logged (the launch token in `main.ts`, inherited CLI credentials in `AgentAdapterRegistry`, call tokens in `CallTokenRegistry.issue()`).
+  - Redaction is by registration, never by pattern: register a new credential at its mint site, before it can be logged (the launch token in `main.ts`, inherited CLI credentials in `AgentAdapterRegistry`, call tokens in `CallTokenRegistry.issue()`, share keys in `ShareKeychain` and the artifact key in `ArtifactStoreService`).
   - The `agent-stdio` channel records the user's raw CLI conversation, so it stays off unless switched on.
 - **Daemon inspector**: the `daemonInspect` setting (off by default) spawns the daemon with `--inspect=127.0.0.1:9229`. The flag goes before the entry script, or node passes it to the daemon as an argument.
 

@@ -4424,7 +4424,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // and its CSP opens no channel of its own. Its one way out is a
         // library request to the fixed CDNs, whose URL a page could fill with
         // data it holds — a residual risk accepted by decision, see
-        // `isHostArtifactCall`.
+        // `isHostArtifactCall`, which also says why an encrypted share
+        // (`share: true`) needs no card either.
         isHostArtifactCall(hostServerName, toolName) ||
         // The notify tool, on the render family's reading: a banner the agent
         // asks for is not something a permission card meaningfully guards.

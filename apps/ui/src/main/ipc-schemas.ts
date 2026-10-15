@@ -144,6 +144,102 @@ const configProfileSchema = z.strictObject({
   color: z.enum(PROFILE_COLORS),
 });
 
+/** Characters only a shell gives meaning to — refused in a share command's argv. */
+const SHELL_METACHARACTERS = /[|;&$`<>\\\n\r*?(){}[\]!~#'"]/;
+const SHELL_PROGRAMS = new Set([
+  'sh',
+  'bash',
+  'zsh',
+  'dash',
+  'ksh',
+  'fish',
+  'csh',
+  'tcsh',
+  'env',
+]);
+
+const shareArgvSchema = z
+  .array(z.string().min(1).max(500))
+  .min(1)
+  .max(40)
+  .refine(
+    (tokens) =>
+      tokens.every(
+        (token) =>
+          !SHELL_METACHARACTERS.test(
+            token.split('{file}').join('').split('{object}').join(''),
+          ),
+      ),
+    { message: 'a command token may not contain shell characters' },
+  )
+  .refine((tokens) => !SHELL_PROGRAMS.has(tokens[0]?.split('/').pop() ?? ''), {
+    message: 'a destination command may not be a shell',
+  });
+
+const objectPrefixSchema = z
+  .string()
+  .max(200)
+  .regex(/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/)
+  .refine((value) => !value.split('/').includes('..'));
+
+const bucketSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/);
+
+const destinationBase = {
+  id: z.string().min(1).max(64),
+  name: z.string().trim().min(1).max(80),
+  linkBase: z
+    .string()
+    .url()
+    .refine((value) => value.startsWith('https://'), {
+      message: 'the link base must be an https URL',
+    }),
+};
+
+/**
+ * One share destination (`ShareDestination` in shared/contracts.ts).
+ *
+ * TWIN PARSER: `ShareDestinationSchema` in
+ * `apps/daemon/src/v1/shares/shares.types.ts`. Restated rather than shared —
+ * main imports no daemon source — and kept to the SAME limits, because a value
+ * this accepts and the daemon refuses would leave sharing silently off.
+ */
+export const shareDestinationSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('gcs'),
+    ...destinationBase,
+    bucket: bucketSchema,
+    prefix: objectPrefixSchema.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal('s3'),
+    ...destinationBase,
+    bucket: bucketSchema,
+    prefix: objectPrefixSchema.optional(),
+    profile: z
+      .string()
+      .regex(/^[A-Za-z0-9._-]{1,64}$/)
+      .optional(),
+    region: z
+      .string()
+      .regex(/^[a-z0-9-]{1,32}$/)
+      .optional(),
+  }),
+  z.strictObject({
+    kind: z.literal('command'),
+    ...destinationBase,
+    upload: shareArgvSchema,
+    remove: shareArgvSchema,
+  }),
+]);
+
+export const MAX_SHARE_DESTINATIONS = 20;
+
+export const sharingSchema = z.strictObject({
+  destinations: z.array(shareDestinationSchema).max(MAX_SHARE_DESTINATIONS),
+  defaultDestinationId: z.string().min(1).max(64).nullable(),
+  agentsMayShare: z.boolean(),
+});
+
 /**
  * A `Partial<Settings>` patch. `strictObject` rejects unknown keys, so the
  * renderer can't write arbitrary fields into settings.json.
@@ -233,6 +329,7 @@ export const settingsPatchSchema = z.strictObject({
   sidebarCollapsed: z.boolean().optional(),
   notificationsEnabled: z.boolean().optional(),
   remoteAccessEnabled: z.boolean().optional(),
+  sharing: sharingSchema.optional(),
   // The retention window, or null for "keep the archive". Bounded to exactly
   // what the daemon's own schema accepts, so a value this side lets through can
   // never be one that route refuses — and NULLABLE rather than absent, because

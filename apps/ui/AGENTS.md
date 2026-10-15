@@ -10,7 +10,7 @@ The Electron app: main process, preload and React renderer (electron-vite). Proj
 
 Where things live:
 
-- `src/main/` is the Electron main process, `src/preload/index.ts` exposes the typed `window.geniro`, and `src/shared/contracts.ts` holds the Electron-internal contracts (IPC, Settings, CLI detection, `DaemonHandle`). Never add a daemon wire type to `shared/contracts.ts`; those are generated.
+- `src/main/` is the Electron main process, `src/preload/index.ts` exposes the typed `window.geniro`, and `src/shared/contracts.ts` holds the Electron-internal contracts (IPC, Settings, CLI detection, `DaemonHandle`). Never add a daemon wire type to `shared/contracts.ts`; those are generated. One deliberate exception: `ShareDestination` inside `Settings.sharing`, which main owns in settings.json and pushes to the daemon as a twin (`shareDestinationSchema` in `ipc-schemas.ts` ↔ the daemon's `ShareDestinationSchema`).
 - `main/agents/` holds one descriptor per CLI, collected as a total `Record<CliKind, …>`. No other main file names a CLI. The daemon's twin of each fact is that CLI's `AdapterConfig`.
 - `main/remote/` is the LAN gateway (below). `main/notifications/` is system notifications. `updater.ts`, `update-installer.ts` and `update-service.ts` are app updates.
 - Every git call this app makes belongs to main: `git-info.ts`, `git-changes.ts`, `worktree-service.ts`, `github-prs.ts`. The daemon runs no git.
@@ -18,7 +18,7 @@ Where things live:
 IPC:
 
 - Every IPC argument is validated against its zod schema in `ipc-schemas.ts` before main acts on it. The renderer is the untrusted side.
-- Every channel declares a `RemotePolicy` in `ipc-registry.ts`: `ALLOW_REMOTELY`, `allowRemotelyRedacted` (strip a secret from the answer), `allowRemotelyExceptFields` (refuse fields a phone must never set, such as `updateSettings`' `cliPaths`/`daemonInspect`) or `denyRemotely`.
+- Every channel declares a `RemotePolicy` in `ipc-registry.ts`: `ALLOW_REMOTELY`, `allowRemotelyRedacted` (strip a secret from the answer), `allowRemotelyExceptFields` (refuse fields a phone must never set, such as `updateSettings`' `cliPaths`/`daemonInspect`/`sharing`) or `denyRemotely`.
 - Use `allow` only for a handler that never reads its event. The remote bridge hands handlers a Proxy that throws on any read.
 - `toggleDevTools` acts on `event.sender` only, so one window cannot open another's devtools.
 - `GeniroApi.filePath` is the one preload-local member (`webUtils.getPathForFile`). It is excluded from the IPC exhaustiveness check through `PreloadLocalMethod`.
@@ -100,7 +100,7 @@ Smaller rules:
 
 - `gateway.ts` binds IPv4 only on `REMOTE_PREFERRED_PORT` (47616), with a free-port fallback. Routing order: its own routes, then `/v1/*` and `/health` proxied, then `/ws` upgraded, then the bundle, all behind one path-traversal guard.
 - Match the upgrade as `/ws` or `/ws/…`. engine.io requests the trailing-slash form, so an exact match breaks live streaming while every unit test still passes.
-- `daemon-proxy.ts` strips the browser's `Authorization` and injects the daemon token. On `/ws` it rewrites the `token` query param.
+- `daemon-proxy.ts` strips the browser's `Authorization` and injects the daemon token. On `/ws` it rewrites the `token` query param. It drops any client `x-geniro-via` and stamps `x-geniro-via: remote` on every request and upgrade it forwards (twin of the daemon's `auth/remote-marker.ts`).
 - `host-guard.ts` admits a `*.suffix` only while a tunnel is open. The match is at a label boundary. A bare `*` and one-label suffixes are refused.
 - The tunnel mask is derived from the URL the client printed, never stored per provider.
 - `tunnel.ts` providers are a table in preference order (cloudflared, then ngrok). The client is spawned with only `PATH` and `HOME`.
@@ -287,6 +287,7 @@ One home for each concern:
 - A saved file bakes in the theme and restates the CSP as `ARTIFACT_FILE_CSP`, a twin of the daemon's `artifact-page.ts`. Insert them into a parsed `<head>` (`DOMParser`), never by text splice.
 - A saved file must look like the framed page. The daemon's raw reading (`renderArtifactDocument`) carries the frame's base style (font, padding, box-sizing, centring) but not its transparent ground, and the export supplies the ground.
 - Links are opened by the host, only for `http:`, `https:` and `mailto:` (`shared/link-schemes.ts`). Main's `guardArtifactFrameNavigations` cancels any frame navigation away from the artifact route.
+- Share (`artifact-share.tsx` over `use-artifact-sharing.ts`, provided as `ArtifactShareContext` by `Chats`): beside Save on the card and in the dialog header; null on a paired phone, which draws nothing. A press sends the current `themeVars()`. The link (key in its `#fragment`) is read from the daemon when the panel opens, never kept in the list. Settings → Sharing (`settings/sharing.tsx`) edits the places and the agents switch, and lists every shared page with Copy link and Revoke.
 
 **Shells** (`chats/shell-activity.ts`):
 
@@ -430,6 +431,7 @@ One home for each concern:
 - `customInstructions`: see below.
 - `theme`: read by main before any window exists, and enumerated in `settingsPatchSchema`. An unknown value falls back to `'system'`.
 - `historyPageSize`, `checkForUpdates`, `remoteAccessEnabled`, `daemonInspect`, `cliPaths`.
+- `sharing`: `{destinations, defaultDestinationId, agentsMayShare}` — where pages are shared to and whether agents may share (off by default). Salvaged destination by destination (`salvageSharing`); the shape is a twin of the daemon's `ShareDestinationSchema` (`ipc-schemas.ts` restates its limits). Every write that changes it is pushed to the daemon (`share-config-push.ts`, through `onSettingsWritten`), as is every daemon start. Desktop only.
 
 Data-loss rules:
 

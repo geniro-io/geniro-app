@@ -317,6 +317,10 @@ import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { type SkillTarget, useAgentSkills } from './use-agent-skills';
 import {
+  latestShowArtifactResultSeq,
+  useArtifactSharing,
+} from './use-artifact-sharing';
+import {
   MAX_ATTACHMENTS,
   readAsBase64,
   type StagedAttachment,
@@ -6186,6 +6190,26 @@ export function Chats({
     activeRunId,
     latestArtifactSeq,
   ).artifacts;
+  const latestShowArtifactResult = useMemo(
+    () =>
+      activeRunId === null
+        ? latestArtifactSeq
+        : latestShowArtifactResultSeq(
+            transcriptRows,
+            activeRunId,
+            latestArtifactSeq,
+          ),
+    [transcriptRows, activeRunId, latestArtifactSeq],
+  );
+  /**
+   * The open run's shared pages and the Share control's actions. Desktop only:
+   * a paired phone gets no control, and the daemon refuses it anyway.
+   */
+  const artifactSharing = useArtifactSharing(
+    isRemoteRuntime() ? null : apis.shares,
+    activeRunId,
+    latestShowArtifactResult,
+  );
   /**
    * Stop one of this thread's running commands — ASKED FOR as "i wanna have an
    * ability to kill terminals".
@@ -8425,6 +8449,7 @@ export function Chats({
         callContext={resolveCallReading}
         callChannel={callChannel}
         artifactUrl={artifactUrl}
+        artifactSharing={artifactSharing}
         // What the reader folded and opened is remembered per THREAD — see
         // `thread-ui-memory.ts`.
         threadId={activeRunId}

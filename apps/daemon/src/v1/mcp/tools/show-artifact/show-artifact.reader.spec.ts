@@ -7,6 +7,7 @@ import {
 import {
   hostArtifactResultText,
   readHostArtifact,
+  readShareRequested,
 } from './show-artifact.reader';
 
 const PAGE = '<!doctype html><title>x</title><p>hello';
@@ -206,5 +207,43 @@ describe('hostArtifactResultText', () => {
     ] as const) {
       expect(hostArtifactResultText(outcome)).not.toContain('<');
     }
+  });
+});
+
+describe('readShareRequested', () => {
+  it('counts only a literal yes as a request to share', () => {
+    expect(readShareRequested({ share: true })).toBe(true);
+    expect(readShareRequested({ share: 'true' })).toBe(true);
+    for (const share of [false, 'yes', 1, null, undefined]) {
+      expect(readShareRequested({ share })).toBe(false);
+    }
+  });
+});
+
+describe('hostArtifactResultText with a share', () => {
+  const published = {
+    status: 'published',
+    artifactId: 'report',
+    version: 1,
+  } as const;
+
+  it('adds the link on its own line under the receipt', () => {
+    expect(
+      hostArtifactResultText(published, {
+        kind: 'shared',
+        url: 'https://x.example/a/index.html#k=KEY',
+      }),
+    ).toMatch(
+      /artifact_id: report\)[^\n]*\nShared link: https:\/\/x\.example\/a\/index\.html#k=KEY$/,
+    );
+  });
+
+  it('says why nothing was shared', () => {
+    expect(
+      hostArtifactResultText(published, {
+        kind: 'not-shared',
+        reason: 'the switch is off',
+      }),
+    ).toContain('\nNot shared: the switch is off.');
   });
 });

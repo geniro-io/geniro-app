@@ -18,7 +18,10 @@ import {
  * `inWorkflowRun` adds what only holds in a workflow run: a page reaches the
  * user from whichever agent publishes it, and its id is the RUN's.
  */
-export function showArtifactInstructions(inWorkflowRun: boolean): string {
+export function showArtifactInstructions(
+  inWorkflowRun: boolean,
+  shareOffered: boolean,
+): string {
   return (
     'Publish a PAGE you have written — one HTML document this app shows beside the ' +
     'conversation and opens full-screen, with your own layout, your own styling and working ' +
@@ -102,6 +105,7 @@ export function showArtifactInstructions(inWorkflowRun: boolean): string {
     'Call it ONCE per page, and do not also write the content out as text: the user sees the page, so ' +
     'restating it shows the same thing twice. Say what it SHOWS, and what you want them to notice. ' +
     (inWorkflowRun ? `${WORKFLOW_RUN_PAGES} ` : '') +
+    (shareOffered ? `${SHARING} ` : '') +
     'The result is a short receipt naming the artifact_id and version, never the document.'
   );
 }
@@ -113,3 +117,10 @@ const WORKFLOW_RUN_PAGES =
   'content publishes the page itself — never hand the HTML to your caller to publish for you. ' +
   'Ids belong to the whole run: publishing an artifact_id any agent of this run already used revises ' +
   'that one page, across calls and thread continuations, instead of adding a second.';
+
+const SHARING =
+  'SHARING: with share: true the page is also encrypted on this machine and uploaded to the place the ' +
+  'user set up, and the receipt carries "Shared link: <url>" — a link anyone holding it can open, so ' +
+  'put it only where the user asked for it (a pull request, a message they named), never in a file ' +
+  'committed to a repository. Share only when asked to. When the receipt says "Not shared", say so ' +
+  'and why; never invent a link.';

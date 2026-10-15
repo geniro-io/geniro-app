@@ -11,6 +11,7 @@ import {
   LabelInstructionsApi,
   type Middleware,
   ProjectsApi,
+  SharesApi,
   StatsApi,
   TasksApi,
   WorkflowsApi,
@@ -234,6 +235,8 @@ export interface DaemonApis {
    * (`/v1/label-instructions`); a run on a card carrying the label gets them.
    */
   labelInstructions: LabelInstructionsApi;
+  /** Encrypted share links for artifacts (`/v1/shares`) — desktop only. */
+  shares: SharesApi;
 }
 
 /**
@@ -287,5 +290,6 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     projects: new ProjectsApi(config),
     tasks: new TasksApi(config),
     labelInstructions: new LabelInstructionsApi(config),
+    shares: new SharesApi(config),
   };
 }

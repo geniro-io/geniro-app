@@ -1,5 +1,6 @@
 import { HOST_ARTIFACT_TOOL } from '../../../agents/chat.types';
 import type { ArtifactBroker } from '../../../agents/services/artifact.broker';
+import type { ShareService } from '../../../shares/services/share.service';
 import type {
   McpCallContext,
   McpListContext,
@@ -10,6 +11,7 @@ import { showArtifactInstructions } from './show-artifact.instructions';
 import {
   hostArtifactResultText,
   readHostArtifact,
+  readShareRequested,
 } from './show-artifact.reader';
 import { showArtifactSchema } from './show-artifact.schema';
 
@@ -17,7 +19,10 @@ import { showArtifactSchema } from './show-artifact.schema';
 export class ShowArtifactTool extends BaseMcpTool {
   readonly name = HOST_ARTIFACT_TOOL;
 
-  constructor(private readonly artifacts: ArtifactBroker) {
+  constructor(
+    private readonly artifacts: ArtifactBroker,
+    private readonly shares: ShareService,
+  ) {
     super();
   }
 
@@ -26,11 +31,14 @@ export class ShowArtifactTool extends BaseMcpTool {
   }
 
   protected instructions({ runId }: McpListContext): string {
-    return showArtifactInstructions(this.artifacts.inWorkflowRun(runId));
+    return showArtifactInstructions(
+      this.artifacts.inWorkflowRun(runId),
+      this.shares.agentsMayShare(),
+    );
   }
 
   protected inputSchema(): Record<string, unknown> {
-    return showArtifactSchema();
+    return showArtifactSchema(this.shares.agentsMayShare());
   }
 
   protected async run(
@@ -53,9 +61,21 @@ export class ShowArtifactTool extends BaseMcpTool {
       artifact,
       caller,
     );
+    // Shared only AFTER the page is published, and a failed share never
+    // fails the publish: the page is on the user's screen either way, and
+    // the receipt says why there is no link. The share service re-checks the
+    // user's switch itself, because a kept CLI may still hold a description
+    // listed while it was on.
+    const share =
+      outcome.status === 'published' && readShareRequested(args)
+        ? await this.shares.shareForAgent(
+            { runId, artifactId: outcome.artifactId, title: artifact.title },
+            context.remote,
+          )
+        : null;
     // Same reading as its drawing siblings, and it covers `rejected` too:
     // an oversize page is an answer the agent acts on by writing a
     // smaller one, not a call it got wrong.
-    return this.text(hostArtifactResultText(outcome));
+    return this.text(hostArtifactResultText(outcome, share));
   }
 }

@@ -1477,8 +1477,23 @@ export interface GeniroApi {
    * READ-ONLY, and the view built on it offers no revert: it says what happened,
    * and undoing any of it is the user's own git, where they can see what they
    * are undoing.
+   *
+   * `workFolder` marks a worktree one of the thread's agents made, measured
+   * from where its history meets `sha` when it does not descend from it.
    */
-  getChangesSince(dir: string, sha: string): Promise<GitChanges>;
+  getChangesSince(
+    dir: string,
+    sha: string,
+    workFolder?: boolean,
+  ): Promise<GitChanges>;
+  /**
+   * The repository's LINKED worktrees other than `dir`'s own — never the main
+   * checkout, nor one whose directory is gone — as real paths, empty when git
+   * cannot answer. Candidates only: which of them a thread worked in is the
+   * daemon's answer from the thread's own transcript. Only worktrees made
+   * since `startedAtMs` (the thread's start), never geniro's own task ones.
+   */
+  listWorktrees(dir: string, startedAtMs: number): Promise<string[]>;
   /**
    * The lines a folder has added and removed since `sha`, tracked and untracked files
    * together — for a readout that wants the figures and not the diffs, so it is counted
@@ -1819,6 +1834,7 @@ export const IPC = {
   getGitStamp: 'geniro:getGitStamp',
   getGitHead: 'geniro:getGitHead',
   getChangesSince: 'geniro:getChangesSince',
+  listWorktrees: 'geniro:listWorktrees',
   getChangesTotals: 'geniro:getChangesTotals',
   lineMeasurementsFlushed: 'geniro:lineMeasurementsFlushed',
   prepareTaskWorktree: 'geniro:prepareTaskWorktree',

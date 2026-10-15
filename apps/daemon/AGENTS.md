@@ -158,6 +158,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - A record has no row of ours: it takes the seq of the tool result its time falls on (`ItemDao.toolResultSeqAt`), so ordering stays seq-based.
   - Incremental: the marker advances even when nothing was captured. Errors are swallowed per run. No repeating re-scan sweep; a rule change bumps `PULL_REQUEST_SCAN_VERSION`, and a run scanned under another version is re-read from the start once.
   - Store identity only (owner, repo, number, url), never title or state.
+- Worktrees a thread worked in (`RunNamedPathsService`, `POST /v1/chats/:runId/named-paths`): of the candidate folders the desktop app lists, the ones a `tool_call` of the run names — the path or its run-folder-relative form (two segments or more), followed by a path boundary; a relative form must also begin one (a shell word boundary, a quote, an escaped newline or tab, or `./`), so it is never found inside another repository's path. Never the run's folder or one holding it. Each run's reading is remembered in memory (scanned seq, clamped to `writtenThrough`, + verdicts), so a later ask reads only newer rows — a folder asked about for the first time reads the whole history once, in seq windows that yield the event loop. Asks for one run are serialized.
 - `task_list` rows: `mode` says snapshot vs patch and is never inferred; absent means patch. The run fold is keyed by node AND `callId` and skips delegate rows (`parentToolUseId`).
 - What `v1/agents` exports is whatever `agents.module.ts`'s `exports` names.
 

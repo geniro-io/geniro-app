@@ -83,6 +83,7 @@ import { RecommendationsApplyService } from './services/recommendations-apply.se
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import { RunNamedPathsService } from './services/run-named-paths.service';
 import {
   currentRunOwner,
   RunProcessAttribution,
@@ -135,6 +136,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunStateService,
     ChatService,
     ChatSearchService,
+    RunNamedPathsService,
     ChatSearchIndexDao,
     ChatTextIndexService,
     GlobalChatSearchService,

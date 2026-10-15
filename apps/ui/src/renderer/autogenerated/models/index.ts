@@ -3913,6 +3913,32 @@ export interface MoveTaskStatusDto {
 /**
  * 
  * @export
+ * @interface NamedPathsDto
+ */
+export interface NamedPathsDto {
+    /**
+     * Candidate folders, absolute
+     * @type {Array<string>}
+     * @memberof NamedPathsDto
+     */
+    paths: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface NamedPathsResultDto
+ */
+export interface NamedPathsResultDto {
+    /**
+     * The asked-for paths a tool call of this run names
+     * @type {Array<string>}
+     * @memberof NamedPathsResultDto
+     */
+    named: Array<string>;
+}
+/**
+ * 
+ * @export
  * @interface NodePosition
  */
 export interface NodePosition {

@@ -684,59 +684,6 @@ describe('PolledSpendService', () => {
     ]);
   });
 
-  it('keeps the total of a node priced before the ledger existed whose start the account no longer covers', async () => {
-    // Re-deriving it from a window that cannot see its start would replace a
-    // real figure with a fraction of it.
-    at(NOW);
-    const h = harness({
-      runs: [cursorRun({ polledCostCents: 500, polledCostEvents: 5 })],
-      nodes: {
-        'run-1': [
-          holding('conv-1', {
-            createdAt: new Date(NOW - 45 * DAY),
-            polledCostCents: 500,
-            polledCostEvents: 5,
-          }),
-        ],
-      },
-    });
-    answerWith(
-      event('conv-1', 20, NOW - 10 * DAY),
-      event('conv-1', 7, NOW + 1),
-    );
-
-    await h.service.refresh(true);
-
-    // The old event is behind the carried total's boundary; the new one adds.
-    expect(h.runWrites).toMatchObject([
-      { id: 'run-1', data: { polledCostCents: 507, polledCostEvents: 6 } },
-    ]);
-  });
-
-  it('RE-DERIVES the total of a node priced before the ledger existed, when the account still covers its start', async () => {
-    // Its old figure was the undercount; this is the fix reaching history.
-    at(NOW);
-    const h = harness({
-      runs: [cursorRun({ polledCostCents: 8.44, polledCostEvents: 10 })],
-      nodes: {
-        'run-1': [
-          holding('conv-1', {
-            createdAt: new Date(NOW - 5 * DAY),
-            polledCostCents: 8.44,
-            polledCostEvents: 10,
-          }),
-        ],
-      },
-    });
-    answerWith(event('conv-1', 13_486, NOW - 4 * DAY));
-
-    await h.service.refresh(true);
-
-    expect(h.runWrites).toMatchObject([
-      { id: 'run-1', data: { polledCostCents: 13_486, polledCostEvents: 1 } },
-    ]);
-  });
-
   it('prices a cursor node inside a WORKFLOW, whose run names no agent', async () => {
     at(NOW);
     const workflow = cursorRun({

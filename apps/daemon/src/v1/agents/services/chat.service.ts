@@ -4357,21 +4357,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // for a PATCH that deliberately cleared it back to the CLI default.
       const settings =
         (await this.runDao.getById(runId, this.em.fork())) ?? run;
-      // A null `approval` is a chat row created before the mode selector
-      // existed. It used to ride through as `undefined`, which spawns the CLI
-      // with no permission flag at all and inherits whatever that CLI defaults
-      // to — safe while claude's default was "ask about everything", and no
-      // longer: probed on 2.1.227, a headless turn with no flag now reports
-      // `permissionMode: "auto"`, the new default Anthropic is rolling out.
-      // So an old chat would have started approving every tool call
-      // unattended, on a decision the vendor made and the user never saw.
-      //
-      // Resolved HERE rather than in the adapter because this is the layer
-      // that knows what a null row MEANS. The same undefined reaching an
-      // adapter from a geniro-internal probe turn means something else
-      // entirely, and pinning it there would put a permission dialogue on
-      // turns that exist only to read one `system/init` line.
-      //
+      // Every chat row is created with a mode; the column is nullable only for
+      // workflow runs. Never let a null ride through as `undefined`: a turn
+      // with no permission flag inherits the CLI's own default, which for
+      // claude (2.1.227) is now `auto` — approving every tool call unattended.
       // `ask` is the answer because "the user never chose a posture" and "do
       // not act unattended" are the same statement.
       const approvalDefault: ChatApprovalMode = 'ask';

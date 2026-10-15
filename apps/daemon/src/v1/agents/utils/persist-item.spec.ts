@@ -85,11 +85,9 @@ describe('runToWire', () => {
 /**
  * The one insert seam every shipping `Item` write goes through.
  *
- * The backfill that fills this column for existing rows is marker-retired, so
- * it never comes back: a row created after it ran is searchable only because
- * the write itself flattens. That makes this the pin the whole feature rests
- * on — drop the field here and search goes on working against old history
- * while silently missing everything said from then on.
+ * A row is searchable only because the write itself flattens. That makes this
+ * the pin the whole feature rests on — drop the field here and search
+ * silently misses everything said from then on.
  */
 describe('persistItemAndEmit', () => {
   function fakeDeps(inCall = ''): {
@@ -174,9 +172,8 @@ describe('persistItemAndEmit', () => {
   });
 
   it('writes an empty string — not null — for a payload with nothing to match', async () => {
-    // Null is the backfill's "never flattened" predicate. A row this seam DID
-    // write must never read as null, or the sweep would keep coming back for
-    // rows that are already done.
+    // Null means "never flattened". A row this seam DID write must never read
+    // as null.
     const { deps, created } = fakeDeps();
 
     await persistItemAndEmit(deps, em, {

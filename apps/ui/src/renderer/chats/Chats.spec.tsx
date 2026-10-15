@@ -10050,7 +10050,7 @@ describe('Chats queued messages — a workflow run', () => {
           { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
           { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
         ],
-        edges: [{ from: 'start', to: 'manager' }],
+        edges: [{ from: 'start', to: 'manager', kind: 'data' }],
       },
     });
     workflowApi.listWorkflows.mockResolvedValue([
@@ -10114,7 +10114,7 @@ describe('Chats queued messages — a workflow run', () => {
           { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
           { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
         ],
-        edges: [{ from: 'start', to: 'manager' }],
+        edges: [{ from: 'start', to: 'manager', kind: 'data' }],
       },
     });
     workflowApi.listWorkflows.mockResolvedValue([
@@ -11792,7 +11792,7 @@ describe('Chats sidebar list', () => {
         // The trigger EDGE is what makes `w-a` the root — `rootAgentOf` reads
         // the graph's routes, not its node list, so a workflow whose agent the
         // trigger does not feed has no root at all.
-        edges: [{ from: 'start', to: 'w-a' }],
+        edges: [{ from: 'start', to: 'w-a', kind: 'data' }],
       },
     });
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
@@ -11873,8 +11873,8 @@ describe('Chats sidebar list', () => {
         ],
         // A trigger feeding TWO agents: two conversations at the top level.
         edges: [
-          { from: 'start', to: 'w-a' },
-          { from: 'start', to: 'w-b' },
+          { from: 'start', to: 'w-a', kind: 'data' },
+          { from: 'start', to: 'w-b', kind: 'data' },
         ],
       },
     });

@@ -84,7 +84,7 @@ export function ApprovalModeSelect({
    * its name.
    */
   capability: AgentApprovalCapability | undefined;
-  /** Current mode; null = legacy run created before the selector existed. */
+  /** Current mode; null = unset. */
   value: ChatApprovalMode | null;
   /**
    * Modes this surface never offers regardless of what the CLI honours — a

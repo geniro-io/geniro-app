@@ -2,10 +2,10 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import * as React from 'react';
 
 import { ChipChevron, chipVariants } from './chip';
-import { Menu, type MenuGroup, type MenuItem } from './menu';
+import { Menu, type MenuGroup } from './menu';
 import { cn } from './utils';
 
-export type { MenuGroup as SelectGroup, MenuItem as SelectOption };
+export type { MenuGroup as SelectGroup };
 
 const triggerVariants = cva(
   'inline-flex min-w-0 cursor-pointer items-center outline-none disabled:cursor-not-allowed',
@@ -69,7 +69,7 @@ export function Select({
   groups: MenuGroup[];
   value: string | null;
   onValueChange: (value: string) => void;
-  /** Shown when `value` matches no option (a legacy/unset value). */
+  /** Shown when `value` matches no option (an unset value). */
   placeholder?: string;
   /**
    * Overrides what the TRIGGER shows, when a compact form of the value reads

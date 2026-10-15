@@ -167,9 +167,8 @@ export class ContextWindowStore {
             typeof value === 'number' &&
             Number.isFinite(value) &&
             value > 0 &&
-            // Exactly three parts, so an entry written before the window
-            // choice joined the key is DROPPED rather than kept as a row no
-            // lookup can ever match. Left in, such a row would hold one of the
+            // Exactly three parts: a key of any other shape is a row no lookup
+            // can ever match, and left in it would hold one of the
             // {@link MAX_ENTRIES} slots for the life of the install.
             key.split('\u0000').length === 3
           ) {

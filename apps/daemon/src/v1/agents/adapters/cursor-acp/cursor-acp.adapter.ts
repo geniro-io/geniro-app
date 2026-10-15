@@ -154,9 +154,9 @@ import {
 } from './utils/cursor-mcp-scope.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
 import {
+  cursorBareModel,
   cursorEffortOption,
   cursorModelSelection,
-  splitCursorModelId,
 } from './utils/cursor-model.utils';
 import {
   buildPluginServerEntry,
@@ -242,7 +242,7 @@ export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
  * Decide a permission request without the user, from the turn's approval mode.
  * Exported so a spec can drive the policy directly, without a live agent.
  *
- * - `auto` (and a legacy chat turn with no mode at all) auto-approves
+ * - `auto` (and a geniro-internal turn with no mode at all) auto-approves
  *   everything, preserving the unattended semantics the `-p --force` path had.
  * - Every other mode asks for everything that reaches here.
  *
@@ -2736,11 +2736,9 @@ export class CursorAcpAdapter extends AgentAdapter {
       baseDir: this.profileBaseDir(),
       sessionStoreDir: this.sessionStoreDir(),
       homeDir: this.cursorOptions.homeDir,
-      // The BARE name: a legacy stored id carries its parameters in brackets,
-      // and `cli-config.json` names a model, not a variant.
-      ...(splitCursorModelId(input.model).model
-        ? { model: splitCursorModelId(input.model).model! }
-        : {}),
+      ...(cursorBareModel(input.model) === null
+        ? {}
+        : { model: cursorBareModel(input.model)! }),
       // Max Mode — the user's own option, snapshotted onto the run and carried
       // here; {@link CURSOR_MAX_MODE_CONFIG_KEY} holds the measurements.
       // Written EXPLICITLY either way, never left to the copied config — an

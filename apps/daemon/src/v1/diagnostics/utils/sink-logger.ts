@@ -1,4 +1,4 @@
-import { ConsoleLogger, type LogLevel as NestLogLevel } from '@nestjs/common';
+import { ConsoleLogger } from '@nestjs/common';
 
 import type { DebugLevel } from '../diagnostics.types';
 import { debugSink } from './debug-sink';
@@ -103,26 +103,4 @@ function text(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-/** The Nest levels this logger should emit, derived from the daemon's own. */
-export function nestLevelsFor(level: string): NestLogLevel[] {
-  const order: NestLogLevel[] = [
-    'verbose',
-    'debug',
-    'log',
-    'warn',
-    'error',
-    'fatal',
-  ];
-  const from: Record<string, NestLogLevel> = {
-    trace: 'verbose',
-    debug: 'debug',
-    info: 'log',
-    warn: 'warn',
-    error: 'error',
-    fatal: 'fatal',
-  };
-  const floor = from[level] ?? 'log';
-  return order.slice(order.indexOf(floor));
 }

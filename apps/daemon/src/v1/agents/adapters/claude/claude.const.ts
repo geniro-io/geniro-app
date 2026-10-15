@@ -210,32 +210,6 @@ export const CLAUDE_PERMISSION_PROMPT_TOOL_FLAG = '--permission-prompt-tool';
  */
 export const CLAUDE_PERMISSION_MODE_DEFAULT = 'default';
 
-/**
- * The mode named on argv when a turn holding the permission dialogue somehow
- * carries no `approvalMode` — the type permits it, so the argv answers it
- * rather than letting a `--permission-mode undefined` reach the CLI.
- *
- * WHY THE UNSET CASE STOPPED BEING FREE. A turn with no mode passes no
- * `--permission-mode` at all and inherits whatever the installed CLI defaults
- * to. That was safe while claude's default was `default` (ask about
- * everything); it is not any more. Probed on 2.1.227: a `-p` turn with NO
- * permission flag reports `permissionMode: "auto"`, the new default Anthropic
- * is rolling out to Pro/Max/Team sessions. Inheriting it turns "nobody chose a
- * posture" into "approve everything unattended", decided by the vendor and
- * never seen by the user.
- *
- * The USER-facing half of that is fixed where a null mode actually has a
- * meaning — `ChatService` resolves a pre-selector chat row's null `approval`
- * to `ask` before the turn is built. It is deliberately NOT fixed here: the
- * same `undefined` also reaches this adapter from geniro's own probe turns,
- * which read one `system/init` line and are cancelled, and handing those a
- * permission dialogue and an open stdin buys nothing. So an unset mode still
- * means "no permission flags" (see `spawnsOnPermissionDialogue`), and this
- * constant only names the value for the branch that cannot be reached with an
- * unset mode today.
- */
-export const CLAUDE_UNSET_MODE_FALLBACK = CLAUDE_PERMISSION_MODE_DEFAULT;
-
 // ── Stdin control protocol (UNDOCUMENTED — probe evidence) ────────────────
 //
 // WHERE THESE FIELD NAMES CAME FROM. The stdin control protocol these two

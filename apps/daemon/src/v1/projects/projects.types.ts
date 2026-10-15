@@ -68,7 +68,7 @@ export const ProjectWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      'The short prefix this board’s cards are numbered under — the GEN of GEN-12. Null only for a row the backfill has not reached',
+      'The short prefix this board’s cards are numbered under — the GEN of GEN-12',
     ),
   agentKind: AgentKindSchema.nullable(),
   model: z.string().nullable(),

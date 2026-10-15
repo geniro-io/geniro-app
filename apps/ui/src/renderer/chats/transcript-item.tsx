@@ -555,8 +555,8 @@ export const TranscriptItem = memo(function TranscriptItem({
         nodeName(payloadString(item.payload, 'calleeNodeId')) ?? 'agent';
       if (payloadString(item.payload, 'status') === 'ok') {
         // A compact receipt only: the result TEXT lives in the call block's
-        // RESULT card (or, in legacy flat transcripts, in the callee's own
-        // final bubble right above) — repeating it here doubled the payoff.
+        // RESULT card (or, in a flat transcript, in the callee's own final
+        // bubble right above) — repeating it here doubled the payoff.
         return (
           <MessageBubble variant="note">
             {tag(`✓ result from ${callee}`)}

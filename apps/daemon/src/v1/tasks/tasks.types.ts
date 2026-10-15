@@ -224,9 +224,7 @@ export const TaskWireSchema = z.object({
     .number()
     .int()
     .nullable()
-    .describe(
-      'This card’s number within its project — the 12 of GEN-12. Null only for a row the backfill has not reached',
-    ),
+    .describe('This card’s number within its project — the 12 of GEN-12'),
   description: z.string().nullable(),
   attachments: z
     .array(TaskFileSchema)

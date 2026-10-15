@@ -2467,20 +2467,6 @@ export interface AgentMcpServerHealth {
 }
 
 /**
- * Where a server came from, which is what decides whether geniro may switch it
- * off at all.
- *
- * `project` — defined in the folder's own MCP config, and the ONLY scope any
- * verified mechanism can disable. Everything else is `other`: user- and
- * local-scope servers have no non-destructive disable on claude 2.1.220
- * (probe-verified), so a control for them would be a switch that does nothing.
- *
- * `unknown` is not "probably other" — it is a CLI whose config layout has not
- * been verified, and it renders read-only for the same reason.
- */
-export type AgentMcpServerScope = 'project' | 'other' | 'unknown';
-
-/**
  * What a CLI's own config files say about a folder, beyond the health listing.
  *
  * They exist because the LISTING cannot answer either question: `claude mcp
@@ -3204,8 +3190,8 @@ export interface AgentTurnInput {
    * user verdict (elicitation card); `acceptEdits` auto-approves file edits
    * and asks for everything else; `plan` (chat-only) has the agent plan
    * without executing; `auto` runs unattended with permission checks
-   * bypassed. Undefined (legacy chat rows) keeps the CLI's own defaults —
-   * no extra permission flags.
+   * bypassed. Undefined (a geniro-internal turn) keeps the CLI's own
+   * defaults — no extra permission flags.
    */
   approvalMode?: AgentApprovalMode;
   /**

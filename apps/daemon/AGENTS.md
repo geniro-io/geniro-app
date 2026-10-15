@@ -64,7 +64,6 @@ The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent exec
 - MCP harvest is age-bounded (it shadows the live listing); skill harvest is keyed `(agent, cwd)`. MCP listing cache key includes `configDir`, the read runs under that profile's env, with a keyed single-flight (it launches the user's servers).
 - `chat-metrics` composes only: it hands the adapter `{live, sessionId}` and each adapter answers from its own channel.
 - `chat-title`: writes a title only while it is still exactly what this service derived (manual renames are permanent); checks ownership before any spawn. Do not reintroduce asking cursor for a title. claude's title ask is a throwaway `haiku` turn, MCP withheld, temp cwd, once per conversation.
-- `WorkflowTitleBackfillService` runs once ever (marker file). Never make it repeat; it would erase user renames.
 - `run-teardown` is the ONE delete teardown (cancel, wait, revoke tokens, purge rows with `softDelete` off, drop attachments and artifacts, announce `runDeleted`), shared by chat and workflow delete.
   - It never touches `usage_events`, `usage_activity` or `line_baselines`.
   - Only an ARCHIVED run's own CLI transcripts are deleted with it (`session-transcripts.service.ts`). It keeps a session another run names, or one that began before the run (an import). It never throws.
@@ -330,12 +329,14 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 The OpenAPI document at `/swagger-api` (source of `pnpm generate:api`) is authoritative for every route and shape; read the controllers for behaviour. Bind, public allowlist and token rules are in the root `AGENTS.md`.
 
 Auth by prefix:
+
 - Public: `/health`. `/v1/artifacts/*` is checked by the per-artifact `key` query (an iframe cannot send headers): one uniform 404 for every failure, `Referrer-Policy: no-referrer`, `?raw=1` matched as the literal `1`. `@ApiExcludeController`.
 - Launch token (`LoopbackTokenGuard`): every other `/v1/*`, `/metrics`. `/swagger-api*` uses `swagger.guard`.
 - `/ws`: handshake `auth` token (`enforceWsHandshakeAuth`).
 - `/v1/mcp/<runId>/<nodeId>[/<conversationId>]`: that node's call token or the launch token.
 
 Rules when adding or changing routes:
+
 - Declare static segments (`forget-custom-instructions`, `sweep-archived`, `reorder-pinned`, `processes`, `reconcile`, `awaiting-merge`, `reorder`) before `:param` routes. Workflow slugs `runs` and `import` are reserved.
 - Take query filters through a Zod DTO, never a bare `@Query` (an absent value lists everything; `fastify-qs` parses operators). List `scope` is an enum, never a boolean.
 - `configDir` and `customInstructions` are snapshotted onto the run. `configDir` travels as env, never argv, and must exist; a CLI without the mechanism refuses it (`CONFIG_DIR_UNSUPPORTED`). Text reaching argv (custom instructions, label instructions) refuses control characters.
@@ -351,6 +352,7 @@ Rules when adding or changing routes:
 - `/ws` counts (`holdingFor`, `shellsOpen`, `subagentsOut`) are announced on transitions; every path that ends one must announce. `run_status.status` is nullable (activity announces assert none). `runs_changed` rows carry 0 for `rootsWorking` / `awaitingCalls`. `task_changed` is a twin of the UI's `parseTaskChanged`; the renderer collects worktrees only off `reason: 'work-finished'`.
 
 Destructive or irreversible routes (and one that only looks it — `DELETE /v1/tasks/:taskId/files/:attachmentId` drops a reference, never the file):
+
 - `DELETE /v1/chats/:runId` — hard-deletes a chat run through `RunTeardownService` (chat runs only; reached from the archive).
 - `POST /v1/chats/sweep-archived` — deletes chats archived ≥ `olderThanDays` (1 day–10 years) from `archivedAt`; one at a time, failures logged and skipped. The policy is the client's.
 - `DELETE /v1/workflows/runs/:runId` — one workflow run's history (never the library workflow).

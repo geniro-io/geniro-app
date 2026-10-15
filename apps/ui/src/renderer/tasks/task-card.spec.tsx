@@ -315,7 +315,7 @@ describe('TaskCard — the identifier', () => {
     expect(el.getAttribute('aria-label')?.startsWith('GEN-12')).toBe(true);
   });
 
-  it('draws nothing for a card the backfill has not reached', () => {
+  it('draws nothing for a card with no number', () => {
     // `GEN-0` names a card that does not exist; the two halves also arrive on
     // different rows, so either can be missing on its own.
     expect(

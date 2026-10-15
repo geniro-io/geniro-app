@@ -229,22 +229,17 @@ const ARTIFACT_WRAPPER_SCRIPT = `
 `.trim();
 
 /**
- * The base styling every artifact starts from.
- *
- * Transparent rather than white, which is the one line that makes an artifact
- * look like part of the app instead of a document pasted into it: the frame
- * shows the app's own background through, so a page that sets none inherits the
- * user's theme. A page that sets its own still wins — this is a floor, not a
- * policy.
+ * The base styling every artifact starts from — in the app's frame AND in the
+ * file the user saves, so the two look the same.
  *
  * Every value is a `var(--geniro-*)` with a fallback, so the page is legible
  * before the host's theme message arrives and if it never does.
  *
- * The two RESET lines are not about colour: they are floors against the two ways an agent's page routinely overflows its
- * frame: a width plus padding measured content-box, and an image wider than the
- * column. Both are what every modern stylesheet already declares, so a page
- * that sets them itself sets the same values; a page that forgot them is the
- * one this catches.
+ * The two RESET lines are floors against the two ways an agent's page routinely
+ * overflows its frame: a width plus padding measured content-box, and an image
+ * wider than the column. Both are what every modern stylesheet already
+ * declares, so a page that sets them itself sets the same values; a page that
+ * forgot them is the one this catches.
  *
  * The CENTRING lines are the third floor. An agent routinely caps its reading
  * column on `body` (`max-width: 880px`) while also writing `margin: 0`, which
@@ -256,13 +251,15 @@ const ARTIFACT_WRAPPER_SCRIPT = `
  * past the frame, as block layout never did. A page that styles `html` or
  * `body` itself still wins.
  *
- * Everything else about how a page LOOKS is the agent's, and
- * is asked for where the agent can act on it — the `show_artifact` tool's own
- * description — rather than legislated here, since a page's own CSS wins by
- * construction and a floor cannot reach inside its markup.
+ * Everything else about how a page LOOKS is the agent's, and is asked for where
+ * the agent can act on it — the `show_artifact` tool's own description — rather
+ * than legislated here, since a page's own CSS wins by construction and a floor
+ * cannot reach inside its markup.
+ *
+ * The GROUND is not here, because the two readings need different ones: see
+ * {@link FRAME_GROUND}.
  */
 const BASE_STYLE = `
-html, body { background: transparent; }
 *, *::before, *::after { box-sizing: border-box; }
 img, svg, video, canvas { max-width: 100%; }
 html { display: flex; justify-content: center; }
@@ -282,6 +279,20 @@ a { color: ${themeVar('primary')}; }
 `.trim();
 
 /**
+ * The framed page's ground: transparent rather than white, which is the one
+ * line that makes an artifact look like part of the app instead of a document
+ * pasted into it — the frame shows the app's own background through, so a page
+ * that sets none inherits the user's theme. A page that sets its own still wins.
+ *
+ * The saved file must NOT carry it: a file has nothing behind it, so it would
+ * land on the browser's white. Its ground is baked in by the renderer's export
+ * (`artifact-export.ts`), with the theme the user was looking at; this block is
+ * appended after that one in the same layer, so carrying this line there would
+ * win and undo it.
+ */
+const FRAME_GROUND = 'html, body { background: transparent; }';
+
+/**
  * Where geniro's own block goes, if the document gave it a place to go.
  *
  * The LAST such tag, not the first — the negative lookahead is what makes it
@@ -292,6 +303,26 @@ a { color: ${themeVar('primary')}; }
  * with it.
  */
 const BODY_CLOSE = /<\/body\s*>(?![\s\S]*<\/body\s*>)/i;
+
+/**
+ * The base style as a `<style>` in the `geniro-base` layer
+ * (ARTIFACT_LAYER_ORDER): above Tailwind's reset, below the kit and Tailwind's
+ * utilities, so both outrank this floor and the page's own unlayered CSS
+ * outranks all of it.
+ */
+function baseStyleBlock(ground: string | null): string {
+  const css = ground === null ? BASE_STYLE : `${ground}\n${BASE_STYLE}`;
+  return `<style data-geniro="base">@layer geniro-base {\n${css}\n}</style>`;
+}
+
+/** `block` spliced in just before the document's last `</body>`, or appended. */
+function appendBlock(html: string, block: string): string {
+  // A function replacer, so a `$&` or `$1` occurring in the agent's own styles
+  // or script is not read as a replacement pattern.
+  return BODY_CLOSE.test(html)
+    ? html.replace(BODY_CLOSE, (close) => `${block}${close}`)
+    : `${html}\n${block}`;
+}
 
 /**
  * One agent-authored document, wrapped for serving.
@@ -315,23 +346,19 @@ const BODY_CLOSE = /<\/body\s*>(?![\s\S]*<\/body\s*>)/i;
  * it defines helpers the page's own script calls, so it has to exist first.
  */
 export function renderArtifactPage(html: string): string {
-  const withRuntime = withArtifactRuntime(html);
-  // In the `geniro-base` layer (ARTIFACT_LAYER_ORDER): above Tailwind's reset,
-  // below the kit and Tailwind's utilities, so both outrank this floor and the
-  // page's own unlayered CSS outranks all of it.
-  const block = `<style>@layer geniro-base {\n${BASE_STYLE}\n}</style><script>${ARTIFACT_WRAPPER_SCRIPT}</script>`;
-  // A function replacer, so a `$&` or `$1` occurring in the agent's own styles
-  // or script is not read as a replacement pattern.
-  return BODY_CLOSE.test(withRuntime)
-    ? withRuntime.replace(BODY_CLOSE, (close) => `${block}${close}`)
-    : `${withRuntime}\n${block}`;
+  return appendBlock(
+    withArtifactRuntime(html),
+    `${baseStyleBlock(FRAME_GROUND)}<script>${ARTIFACT_WRAPPER_SCRIPT}</script>`,
+  );
 }
 
 /**
  * The agent's document for a saved file: with the page runtime its script
- * calls, and without the frame wrapper, which is a handshake with an embedder a
- * file opened on its own will never have.
+ * calls and the same base style the frame gives it — a saved page must look as
+ * it did in the app — but without the frame wrapper, which is a handshake with
+ * an embedder a file opened on its own will never have, and without the
+ * frame's transparent ground ({@link FRAME_GROUND}).
  */
 export function renderArtifactDocument(html: string): string {
-  return withArtifactRuntime(html);
+  return appendBlock(withArtifactRuntime(html), baseStyleBlock(null));
 }

@@ -903,6 +903,14 @@ export type CalleeMessageOutcome =
   | { delivered: true; interrupts: boolean }
   | { delivered: false; reason: 'not_started' | 'refused' };
 
+/** One command a callee left running, as {@link CalleeTurnOutcome} names it. */
+export interface ShellStillOut {
+  /** The words its tool call ran it with; null when they were never recorded. */
+  command: string | null;
+  /** The call it was started in — an earlier one on a continued thread. */
+  callId: string;
+}
+
 /** How one callee sub-turn ended, as the executor reports it to the broker. */
 export interface CalleeTurnOutcome {
   status: 'completed' | 'failed' | 'cancelled';
@@ -956,13 +964,15 @@ export interface CalleeTurnOutcome {
    */
   callsStillOut?: number;
   /**
-   * The commands the callee detached in this call that were still running
-   * when it settled — a dev server it left up, say — oldest first, null for
-   * one whose words were never recorded. They keep running after the result
-   * is handed back, inside the callee's kept process, so the caller is told
-   * rather than left to find them. Absent or empty means none.
+   * The commands the callee's conversation detached that were still running
+   * when it settled — a dev server it left up, a test run it answered over —
+   * oldest first, an earlier call's on the same thread included. They keep
+   * running after the result is handed back, inside the callee's kept
+   * process, and what they print arrives in that conversation, so the caller
+   * is told rather than left to take the answer as finished. Absent or empty
+   * means none.
    */
-  shellsStillOut?: (string | null)[];
+  shellsStillOut?: ShellStillOut[];
   /**
    * Which pool member (1-based) this outcome is from. Absent for a callee with
    * no pool, where there is nothing to choose between.

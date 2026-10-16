@@ -1267,6 +1267,36 @@ describe('ItemDao (in-memory sqlite)', () => {
     ]);
   });
 
+  it('reads the named tool calls of one run, in seq order, and nothing else', async () => {
+    // What every listing of open commands reads its words from: a shell row
+    // names only its launching call.
+    const call = (
+      runId: string,
+      seq: number,
+      id: string,
+      kind: ItemKind = 'tool_call',
+    ) =>
+      dao.create({
+        runId,
+        seq,
+        kind,
+        nodeId: 'callee',
+        payload: JSON.stringify({ id, name: 'Bash', input: { command: id } }),
+      });
+    await call('run-a', 2, 'toolu_b');
+    await call('run-a', 0, 'toolu_a');
+    await call('run-a', 1, 'toolu_other');
+    await call('run-a', 3, 'toolu_a', 'tool_result');
+    await call('run-b', 4, 'toolu_a');
+
+    const ids = (rows: { payload: unknown }[]): unknown[] =>
+      rows.map((row) => JSON.parse(String(row.payload)).id);
+    expect(
+      ids(await dao.toolCallsByIds('run-a', ['toolu_a', 'toolu_b'])),
+    ).toEqual(['toolu_a', 'toolu_b']);
+    expect(await dao.toolCallsByIds('run-a', [])).toEqual([]);
+  });
+
   it("reads a run's call rows in seq order — starts and results, and nothing else", async () => {
     // What the call seed folds after a daemon restart: the start (id, parties,
     // the thread it continued) and the result (the callee's session), in the

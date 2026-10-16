@@ -13,7 +13,7 @@ import type {
 } from '../chat.types';
 import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
 import { parseJsonColumn, payloadString } from '../utils/json-util';
-import { messageText } from '../utils/message-preview';
+import { messagePreview, messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
 import {
@@ -321,8 +321,9 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Text of each run's LATEST message, whoever said it — the chat list's
-   * preview line.
+   * Each run's LATEST message, whoever said it, as the chat list's preview
+   * line ({@link messagePreview}: its text, or a label for a message that is
+   * pictures alone).
    *
    * TWIN PARSER: `apps/ui/src/renderer/chats/chat-preview.ts` decides the same
    * thing in the renderer (`previewsThread` for the open thread's live items,
@@ -346,8 +347,8 @@ export class ItemDao extends BaseDao<Item> {
    * pairs of message items (integers + ids only, no payloads), reduced to the
    * per-run head in memory, then just those head rows' payloads — in slices of
    * {@link PREVIEW_HEADS_PER_QUERY}, which is what keeps a long chat list under
-   * SQLite's expression-depth limit. Runs with no message items (or a non-text
-   * payload) are simply absent from the map.
+   * SQLite's expression-depth limit. Runs with no message items (or a head
+   * with neither text nor pictures) are simply absent from the map.
    */
   async latestMessageTextPerRun(
     runIds: string[],
@@ -390,7 +391,7 @@ export class ItemDao extends BaseDao<Item> {
           // The kind is repeated deliberately. `(runId, seq)` is not a key: a
           // transcript written before `ItemSeqAllocator` can hold two rows on
           // one seq, and without this filter a tool row sharing the head's
-          // number comes back too — `messageText` reads null off it, and
+          // number comes back too — `messagePreview` reads null off it, and
           // whichever of the pair the database returned last decided whether
           // the run had a preview line at all.
           kind: 'message',
@@ -418,9 +419,9 @@ export class ItemDao extends BaseDao<Item> {
         },
       );
       for (const row of rows) {
-        const text = messageText(row.payload);
-        if (text !== null) {
-          previews.set(row.runId, text);
+        const preview = messagePreview(row.payload);
+        if (preview !== null) {
+          previews.set(row.runId, preview);
         }
       }
     }

@@ -36,14 +36,17 @@ import type {
   CallConversationLoader,
   CallConversationState,
 } from './call-conversation';
-import { previewMessageOf, previewsThread } from './chat-preview';
+import {
+  previewMessageOf,
+  previewsThread,
+  previewTextOf,
+} from './chat-preview';
 import { discardsContextReading } from './compaction-payload';
 import { isCallRow, mergeAnchorRows } from './history-anchors';
 import type { LiveState } from './live-text';
 import { activityAfterAnnounce, isSettledRunStatus } from './run-status';
 import { runStatusRowFields } from './run-status-row';
 import { replayTail, settledRunStatus } from './settled-status';
-import { payloadString } from './transcript-item';
 import { laterInstant } from './unread';
 import { EMPTY_LIVE_TEXT, useRunStream } from './use-run-stream';
 
@@ -846,7 +849,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // message" (see {@link previewMessageOf}), and a lone message row IS the
         // newest of the batch it arrived in. The role test that used to stand
         // here is what kept the user's own last message off the row.
-        const preview = payloadString(item.payload, 'text');
+        const preview = previewTextOf(item.payload);
         if (preview !== null) {
           setRuns((prev) =>
             prev.map((run) =>
@@ -1204,9 +1207,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       const settled = settledRunStatus(lastItem);
       const lastMessage = previewMessageOf(own);
       const previewText =
-        lastMessage === undefined
-          ? null
-          : payloadString(lastMessage.payload, 'text');
+        lastMessage === undefined ? null : previewTextOf(lastMessage.payload);
       if (settled === null && previewText === null) {
         return;
       }

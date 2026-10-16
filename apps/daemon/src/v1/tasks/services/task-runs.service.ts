@@ -278,8 +278,14 @@ export class TaskRunsService {
     // to the run's own cwd filed every task run as Ungrouped — REPORTED
     // against the autopilot as "tasks have no folder of their own … they land
     // in UNGROUPED although they belong to the geniro folder".
+    // A project can still name a group deleted before the delete released
+    // its projects; that binding counts as none, so the folder rule decides.
+    const projectGroupId =
+      project.groupId !== null && (await this.groups.exists(project.groupId))
+        ? project.groupId
+        : null;
     const groupId =
-      project.groupId ??
+      projectGroupId ??
       (await this.groups.resolveAutoGroupId({
         cwd: task.folder ?? project.folder,
         workflowId: target.kind === 'workflow' ? target.workflowSlug : null,

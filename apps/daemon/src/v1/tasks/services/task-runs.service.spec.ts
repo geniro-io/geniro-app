@@ -20,8 +20,10 @@ import {
 
 import { type RunWire } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
+import { RunGroupDao } from '../../agents/dao/run-group.dao';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ChatService } from '../../agents/services/chat.service';
-import type { RunGroupsService } from '../../agents/services/run-groups.service';
+import { RunGroupsService } from '../../agents/services/run-groups.service';
 import type { GraphExecutorService } from '../../graphs/services/graph-executor.service';
 import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
@@ -29,6 +31,7 @@ import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { Run } from '../../runs/entity/run.entity';
+import { RunGroup } from '../../runs/entity/run-group.entity';
 import { aLabelInstruction } from '../__tests__/fixtures';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
@@ -159,7 +162,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Project, Task, Run],
+        entities: [Project, Task, Run, RunGroup],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -276,7 +279,11 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     } as unknown as GraphExecutorService;
     // No sidebar rule claims anything by default; a test that needs one says so.
     resolveAutoGroupId = vi.fn(async () => null);
-    const groups = { resolveAutoGroupId } as unknown as RunGroupsService;
+    // Only the project's own group exists in the sidebar by default.
+    const groups = {
+      resolveAutoGroupId,
+      exists: vi.fn(async (id: string) => id === 'group-7'),
+    } as unknown as RunGroupsService;
     // No label attaches anything by default; a test that needs one says so.
     forTask = vi.fn(async () => [] as LabelInstructionWire[]);
     const labelInstructions = {
@@ -601,6 +608,47 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       cwd: '/tmp/geniro-task-runs-loose',
       workflowId: null,
     });
+    expect(createChat).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.id, groupId: 'folder-group' }),
+    );
+  });
+
+  it('consults the folder rule when the project still names a group that no longer exists', async () => {
+    // A binding left by a group deleted before the delete released projects.
+    await projectDao.updateById(projectId, { groupId: 'ghost-group' });
+    const task = await seed();
+    resolveAutoGroupId.mockResolvedValueOnce('folder-group');
+
+    await service.start(task.id, start());
+
+    expect(resolveAutoGroupId).toHaveBeenCalledWith({
+      cwd: '/tmp/geniro-task-runs-spec',
+      workflowId: null,
+    });
+    expect(createChat).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.id, groupId: 'folder-group' }),
+    );
+  });
+
+  it('consults the folder rule once deleting the project’s group released it', async () => {
+    const sidebar = new RunGroupsService(
+      em,
+      new RunGroupDao(em),
+      runDao,
+      projectDao,
+      new AgentEventBus(),
+    );
+    const bound = await sidebar.create({ name: 'Boards' });
+    await projectDao.updateById(projectId, { groupId: bound.id });
+    await sidebar.remove(bound.id);
+    expect(
+      (await new ProjectDao(orm.em.fork()).getById(projectId))?.groupId,
+    ).toBeNull();
+    const task = await seed();
+    resolveAutoGroupId.mockResolvedValueOnce('folder-group');
+
+    await service.start(task.id, start());
+
     expect(createChat).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: task.id, groupId: 'folder-group' }),
     );

@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import { RunDao } from '../../agents/dao/run.dao';
+import { RunGroupDao } from '../../agents/dao/run-group.dao';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { LabelInstructionDao } from '../../tasks/dao/label-instruction.dao';
 import { TaskDao } from '../../tasks/dao/task.dao';
@@ -27,7 +28,8 @@ const MAX_PROJECTS = 200;
  * `forwardRef`. {@link LabelInstructionDao} is here on the same terms: a
  * deleted project's label instructions go with its tasks. So is
  * {@link RunDao}, already provided for the queue: the chats that worked those
- * tasks are released from them.
+ * tasks are released from them. {@link RunGroupDao} answers whether a
+ * `groupId` names a sidebar group at all.
  */
 @Injectable()
 export class ProjectsService {
@@ -39,6 +41,7 @@ export class ProjectsService {
     private readonly taskDao: TaskDao,
     private readonly labelInstructionDao: LabelInstructionDao,
     private readonly runDao: RunDao,
+    private readonly groupDao: RunGroupDao,
   ) {}
 
   async list(): Promise<ProjectWire[]> {
@@ -78,6 +81,9 @@ export class ProjectsService {
       noun: 'project folder',
     });
     await this.refuseTakenFolder(folder, null, em);
+    if (input.groupId !== undefined) {
+      await this.refuseUnknownGroup(input.groupId, em);
+    }
     const created = await this.projectDao.create(
       {
         name: input.name,
@@ -152,6 +158,9 @@ export class ProjectsService {
       project.folder = folder;
     }
     if (patch.groupId !== undefined) {
+      if (patch.groupId !== null) {
+        await this.refuseUnknownGroup(patch.groupId, em);
+      }
       project.groupId = patch.groupId;
     }
     if (patch.agentKind !== undefined) {
@@ -334,6 +343,23 @@ export class ProjectsService {
       throw new BadRequestException(
         'FOLDER_ALREADY_A_PROJECT',
         `${holder.name} already uses that folder`,
+      );
+    }
+  }
+
+  /**
+   * Refuse a sidebar group id that names nothing, with the 404 the assign route
+   * gives. A binding to a missing group files every task run as Ungrouped with
+   * no sign of why.
+   */
+  private async refuseUnknownGroup(
+    groupId: string,
+    em: EntityManager,
+  ): Promise<void> {
+    if (!(await this.groupDao.getById(groupId, em))) {
+      throw new NotFoundException(
+        'GROUP_NOT_FOUND',
+        `group ${groupId} not found`,
       );
     }
   }

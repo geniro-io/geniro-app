@@ -24,6 +24,14 @@ export class PlanBroker extends HostSinkBroker<PlanProposer> {
   }
 
   /**
+   * Whether the listing for this node says the call returns at once — set by
+   * `register`'s `answersAtOnce`, and gone with the sink.
+   */
+  answersAtOnce(runId: string, nodeId: string): boolean {
+    return this.sinkAnswersAtOnce(runId, nodeId);
+  }
+
+  /**
    * Put the plan to the user and resolve with the verdict. Never throws.
    *
    * `signal` is the CALLER abandoning its own call — `UserQuestionBroker.ask`

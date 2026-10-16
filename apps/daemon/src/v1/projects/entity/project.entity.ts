@@ -51,8 +51,7 @@ export class Project extends TimestampsEntity {
    *
    * DERIVED from the name at creation (`projectKey`) and then owned by the row:
    * renaming a project must not renumber cards that have already been quoted
-   * in a commit message or a chat. Nullable only for rows that predate
-   * numbering, which the backfill fills in on the next launch.
+   * in a commit message or a chat.
    */
   @Property({ type: 'string', nullable: true })
   taskKey: string | null = null;

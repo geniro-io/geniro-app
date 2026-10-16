@@ -59,6 +59,12 @@ export interface McpCallContext extends McpListContext {
    */
   gone?: AbortSignal;
   /**
+   * True when the LAN gateway proxied this request from a paired device
+   * (`auth/remote-marker.ts`). A tool that acts with the Mac user's own
+   * logins (sharing a page) refuses on it.
+   */
+  remote: boolean;
+  /**
    * Run a PARKING call under a signal the client's own
    * `notifications/cancelled` for this request can trip. Only a tool that
    * waits — on a person, or on a callee — needs it.

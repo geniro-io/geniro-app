@@ -68,7 +68,7 @@ export const ProjectWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      'The short prefix this board’s cards are numbered under — the GEN of GEN-12. Null only for a row the backfill has not reached',
+      'The short prefix this board’s cards are numbered under — the GEN of GEN-12',
     ),
   agentKind: AgentKindSchema.nullable(),
   model: z.string().nullable(),
@@ -144,6 +144,20 @@ export const BlockedTaskSchema = z
     reason: z
       .string()
       .describe('Why this card cannot start, in words a user can act on'),
+    kind: z
+      .enum(['run-target', 'missing-workflow', 'stopped', 'worktree'])
+      .meta({ id: 'BlockedTaskKind' })
+      .describe(
+        'Where the answer lies: the run settings (run-target, missing-workflow), or a Run press on the card itself (stopped, worktree)',
+      ),
+    retryInMs: z
+      .number()
+      .int()
+      .min(0)
+      .nullable()
+      .describe(
+        'How long from this answer until the autopilot tries this card again by itself — relative, so a client on another clock times it right; null for a card it never retries',
+      ),
   })
   .meta({ id: 'BlockedTask' });
 export type BlockedTask = z.infer<typeof BlockedTaskSchema>;

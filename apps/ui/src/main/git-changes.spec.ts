@@ -3,8 +3,10 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -20,6 +22,8 @@ import {
   countDiffLines,
   readChangesSince,
   readChangesTotals,
+  readLinkedWorktrees,
+  worktreeMadeAt,
 } from './git-changes';
 
 /**
@@ -571,10 +575,191 @@ describe('readChangesSince', () => {
     expect(result.unavailableReason).toContain('no longer in this checkout');
   });
 
+  it('measures an agent’s worktree cut from before the start from where the two meet, keeping its commits', async () => {
+    // The chat started on a commit `origin/main` does not have yet; the agent
+    // cut its worktree from the older one and committed there. Read as the
+    // thread's own folder, that is a switched branch with nothing uncommitted.
+    const before = initRepo();
+    writeFileSync(join(dir, 'unpushed.md'), 'local\n');
+    run(['add', '.']);
+    run(['commit', '-q', '-m', 'unpushed']);
+    const start = run(['rev-parse', 'HEAD']);
+    const linked = join(dir, 'wt');
+    run(['worktree', 'add', '-q', '-b', 'agent', linked, before]);
+    writeFileSync(join(linked, 'card.tsx'), 'padded\n');
+    execFileSync('git', ['-C', linked, 'add', '.']);
+    execFileSync('git', ['-C', linked, 'commit', '-q', '-m', 'work']);
+
+    const asWorkFolder = await readChangesSince(linked, start, true);
+    expect(asWorkFolder.changes.map((change) => change.path)).toEqual([
+      'card.tsx',
+    ]);
+    expect(asWorkFolder.movedOffStart).toBe(false);
+
+    const asOwnFolder = await readChangesSince(linked, start);
+    expect(asOwnFolder.changes).toEqual([]);
+    expect(asOwnFolder.movedOffStart).toBe(true);
+  });
+
+  it('leaves out what upstream gained past the fork point of a worktree cut from the fetched remote', async () => {
+    // The agent fetched and cut its worktree from `origin/main`, which others
+    // had moved on since the chat's unpushed start: their commits sit between
+    // the fork point and the worktree's base, and are not this thread's work.
+    initRepo();
+    const remote = addOrigin();
+    const other = mkdtempSync(join(tmpdir(), 'geniro-other-'));
+    try {
+      run(['push', '-q', 'origin', 'main']);
+      const start = commitFile('unpushed.md', 'local\n', 'unpushed');
+      execFileSync('git', ['clone', '-q', '-b', 'main', remote, other]);
+      for (const name of ['up1.txt', 'up2.txt']) {
+        writeFileSync(join(other, name), 'someone else\n');
+        execFileSync('git', ['-C', other, 'add', '.']);
+        execFileSync('git', [
+          '-C',
+          other,
+          '-c',
+          'user.email=other@example.com',
+          '-c',
+          'user.name=Other',
+          'commit',
+          '-q',
+          '-m',
+          name,
+        ]);
+      }
+      execFileSync('git', ['-C', other, 'push', '-q', 'origin', 'main']);
+      run(['fetch', '-q', 'origin']);
+      const linked = join(dir, 'wt');
+      run(['worktree', 'add', '-q', '-b', 'agent', linked, 'origin/main']);
+      writeFileSync(join(linked, 'card.tsx'), 'padded\n');
+      execFileSync('git', ['-C', linked, 'add', '.']);
+      execFileSync('git', ['-C', linked, 'commit', '-q', '-m', 'work']);
+
+      const result = await readChangesSince(linked, start, true);
+
+      expect(result.changes.map((change) => change.path)).toEqual(['card.tsx']);
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it('says a plain folder is not a repository', async () => {
     const result = await readChangesSince(dir, 'c'.repeat(40));
 
     expect(result.unavailableReason).toBe('Not a git repository.');
+  });
+});
+
+describe('readLinkedWorktrees', () => {
+  it('lists a worktree an agent nested under the checkout, by its real path, and not the checkout itself', async () => {
+    // The shape a workflow agent leaves: `git worktree add` under a gitignored
+    // folder of the run's own checkout. git prints real paths, and the temp dir
+    // is a symlink on macOS (/var → /private/var), so the expectation is too.
+    initRepo();
+    writeFileSync(join(dir, '.gitignore'), '.claude/worktrees/\n');
+    run(['add', '.gitignore']);
+    run(['commit', '-q', '-m', 'ignore worktrees']);
+    run(['worktree', 'add', '-q', '-b', 'cw-1', '.claude/worktrees/cw-1']);
+
+    expect(await readLinkedWorktrees(dir)).toEqual([
+      join(realpathSync(dir), '.claude/worktrees/cw-1'),
+    ]);
+  });
+
+  it('never lists the main checkout, even from inside a linked worktree nested in it', async () => {
+    // A thread in a nested worktree names the main checkout's path in every
+    // absolute path it touches; listed, the user's own uncommitted work there
+    // would land on that thread's chip.
+    initRepo();
+    const nested = join(dir, '.claude/worktrees/x');
+    const sibling = join(dir, '.claude/worktrees/y');
+    run(['worktree', 'add', '-q', '-b', 'x', nested]);
+    run(['worktree', 'add', '-q', '-b', 'y', sibling]);
+
+    expect(await readLinkedWorktrees(nested)).toEqual([
+      join(realpathSync(dir), '.claude/worktrees/y'),
+    ]);
+  });
+
+  it('lists only worktrees made since the given instant, and never a task worktree itself', async () => {
+    // A sibling made before the thread started, and one of geniro's own task
+    // worktrees, are other threads' work however often this one names them.
+    // One an agent nests INSIDE a task worktree is its own.
+    initRepo();
+    const stamp = (path: string): number => {
+      const stat = lstatSync(path);
+      return stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.mtimeMs;
+    };
+    const before = join(dir, '.claude/worktrees/before');
+    run(['worktree', 'add', '-q', '-b', 'before', before]);
+    // A birth time cannot be set, so the thread "starts" after the first
+    // worktree, and the next ones wait until the FILESYSTEM's clock — which can
+    // trail the wall clock by a tick — has passed that instant.
+    const startedAt = Math.floor(stamp(join(before, '.git'))) + 1;
+    const probe = join(dir, '.clock-probe');
+    do {
+      writeFileSync(probe, '');
+      rmSync(probe);
+      writeFileSync(probe, '');
+    } while (stamp(probe) <= startedAt);
+    const made = join(dir, '.claude/worktrees/made');
+    run(['worktree', 'add', '-q', '-b', 'made', made]);
+    const tasks = join(dir, 'tasks');
+    const task = join(tasks, 'task-1');
+    run(['worktree', 'add', '-q', '-b', 'task-1', task]);
+    const nested = join(task, '.claude/worktrees/n');
+    execFileSync('git', [
+      '-C',
+      task,
+      'worktree',
+      'add',
+      '-q',
+      '-b',
+      'n',
+      nested,
+    ]);
+
+    expect(
+      await readLinkedWorktrees(dir, {
+        createdAfterMs: startedAt,
+        tasksRoot: realpathSync(tasks),
+      }),
+    ).toEqual([
+      join(realpathSync(dir), '.claude/worktrees/made'),
+      join(realpathSync(task), '.claude/worktrees/n'),
+    ]);
+  });
+
+  it('times a worktree by its `.git` link, and gives no time for one gone since it was listed', async () => {
+    // The folder's own times move with whatever is written in it; the link is
+    // written once. git lists a worktree it cannot reach as prunable, so the
+    // one way to an unreadable link is a removal between listing and read.
+    initRepo();
+    const linked = join(dir, 'linked');
+    run(['worktree', 'add', '-q', '-b', 'linked', linked]);
+    const link = lstatSync(join(linked, '.git'));
+
+    expect(await worktreeMadeAt(linked)).toBe(
+      link.birthtimeMs > 0 ? link.birthtimeMs : link.mtimeMs,
+    );
+    rmSync(linked, { recursive: true, force: true });
+    expect(await worktreeMadeAt(linked)).toBeNull();
+  });
+
+  it('leaves out a worktree whose directory is gone', async () => {
+    // `prunable`: git still lists it until a prune, and there is nothing in it
+    // to read.
+    initRepo();
+    run(['worktree', 'add', '-q', '-b', 'gone', join(dir, 'gone')]);
+    rmSync(join(dir, 'gone'), { recursive: true, force: true });
+
+    expect(await readLinkedWorktrees(dir)).toEqual([]);
+  });
+
+  it('answers empty for a plain folder', async () => {
+    expect(await readLinkedWorktrees(dir)).toEqual([]);
   });
 });
 

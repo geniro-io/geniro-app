@@ -69,4 +69,22 @@ export class ProjectDao extends BaseDao<Project> {
   ): Promise<Project | null> {
     return this.getOne({ folder }, undefined, txEm);
   }
+
+  /**
+   * Release every project filed under a sidebar group, for the group's delete.
+   *
+   * The projects stay; only the binding goes, which is why `groupId` carries no
+   * FK to cascade. Soft-deleted rows are released too, so no row is left naming
+   * a group that is gone.
+   */
+  async releaseGroupBinding(
+    groupId: string,
+    txEm?: EntityManager,
+  ): Promise<number> {
+    return this.getRepo(txEm).nativeUpdate(
+      { groupId },
+      { groupId: null },
+      { filters: { softDelete: false } },
+    );
+  }
 }

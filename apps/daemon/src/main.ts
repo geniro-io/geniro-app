@@ -34,7 +34,6 @@ import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
 import { ItemCallIndexService } from './v1/agents/services/item-call-index.service';
 import { PartialStreamService } from './v1/agents/services/partial-stream.service';
-import { SearchTextBackfillService } from './v1/agents/services/search-text-backfill.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
 import { WallWorkService } from './v1/agents/services/wall-work.service';
 import {
@@ -49,8 +48,6 @@ import { createPinoSinkStream } from './v1/diagnostics/utils/pino-sink-stream';
 import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
-import { WorkflowTitleBackfillService } from './v1/graphs/services/workflow-title-backfill.service';
-import { TaskNumberBackfillService } from './v1/projects/services/task-number-backfill.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 
 installCrashGuards({
@@ -112,7 +109,6 @@ const bootstrapper = buildBootstrapper({
  * `buildHttpNestApp` → appChangeCb → `runHttpApp` → `listen` → `onListening` —
  * so this is always assigned by the time the listen callback fires.
  */
-let searchTextBackfill: SearchTextBackfillService | null = null;
 let callIndex: ItemCallIndexService | null = null;
 let wallWork: WallWorkService | null = null;
 bootstrapper.addExtension(
@@ -164,17 +160,12 @@ bootstrapper.addExtension(
         process.stdout.write(
           `GENIRO_DAEMON_READY ${JSON.stringify({ port })}\n`,
         );
-        // AFTER the ready print, and deliberately NOT awaited, unlike the
-        // backfills on the boot path below. It walks every transcript row the app has ever
-        // written (~160,000 on a real profile), and Nest awaits `onModuleInit`
-        // before the socket binds, so giving it either of the shapes its two
-        // siblings use would hold the pidfile write and this print behind it.
-        // The app would look hung on the first launch after an update; search
-        // being incomplete for a minute is the cheaper failure.
-        void searchTextBackfill?.backfillQuietly();
-        // Off the boot path for the same reason: it stamps every row of every
-        // workflow run written before `Item.inCall` existed, and a run it has
-        // not reached yet is stamped on its first read anyway.
+        // AFTER the ready print, and deliberately NOT awaited: it stamps every
+        // row of every workflow run written before `Item.inCall` existed, and
+        // Nest awaits `onModuleInit` before the socket binds, so awaiting it
+        // would hold the pidfile write and this print behind it — the app would
+        // look hung on the first launch after an update. A run it has not
+        // reached yet is stamped on its first read anyway.
         void callIndex?.indexAllQuietly();
         // Off the boot path too: it folds every agent of every run settled
         // before the wall ledger existed, and the ledger's per-turn key makes
@@ -266,24 +257,9 @@ bootstrapper.addExtension(
       // column is the only place geniro still knows it.
       await app.get(PartialStreamService).rehydrateUnrecordedSpend();
 
-      // Forget the titles the executor used to stamp from the workflow's own
-      // name: the derivation that replaced it reads any title as "already
-      // named", so without this every run made before it keeps saying which
-      // workflow twice and which task not once. Boot is the only moment —
-      // nothing revisits a settled run.
-      await app.get(WorkflowTitleBackfillService).backfillQuietly();
-
-      // Cards gained an identifier (`GEN-12`) after boards already held cards,
-      // and both halves of it are written at CREATION — so without this every
-      // card made beforehand draws none for the rest of its life, on the one
-      // board the user has actually been working. Boot is the only moment: a
-      // card is not re-saved when it is looked at.
-      await app.get(TaskNumberBackfillService).backfillQuietly();
-
       // Resolved here, STARTED from `onListening` — see that comment. This is
       // the only line of it that may run before the server is up, and it only
       // reads the container.
-      searchTextBackfill = app.get(SearchTextBackfillService);
       callIndex = app.get(ItemCallIndexService);
       wallWork = app.get(WallWorkService);
 

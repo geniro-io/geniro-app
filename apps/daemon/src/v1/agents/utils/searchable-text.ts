@@ -113,9 +113,9 @@ function taskTitles(value: unknown): string[] {
  * The searchable text for one persisted item, or null when it carries none.
  *
  * Null rather than an empty string, so `searchText IS NULL` stays the honest
- * predicate for "this row has not been through the flattener" — which is what
- * the backfill sweeps on. A row with genuinely nothing to match gets an empty
- * string instead of null for that same reason.
+ * predicate for "this row has not been through the flattener". A row with
+ * genuinely nothing to match gets an empty string instead of null for that
+ * same reason.
  */
 export function searchableText(payload: unknown): string | null {
   const record = asRecord(payload);

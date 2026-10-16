@@ -24,7 +24,6 @@ export function agentActionOf(pair: ToolPair): AgentAction | null {
   for (const action of ['message', 'cancel'] as const) {
     const tool = `${action}_agent`;
     if (
-      name === `mcp__geniro__${tool}` ||
       name === `mcp__${server}__${tool}` ||
       name.toLowerCase() === `${server}: ${tool}` ||
       name.toLowerCase() === `${server}: ${tool.replace('_', ' ')}`

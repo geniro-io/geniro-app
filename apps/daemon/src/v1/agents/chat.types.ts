@@ -58,8 +58,7 @@ export const CHAT_TITLE_UPGRADE_TURNS = 5;
 /**
  * Chat-level tool-approval modes. `plan` is chat-only by design decision —
  * the graph node schema stops at `acceptEdits` (graphs.types.ts
- * ApprovalModeSchema). A run row whose `approval` is null predates the mode
- * selector and keeps the legacy behavior: no permission flags on the CLI.
+ * ApprovalModeSchema).
  */
 export const CHAT_APPROVAL_MODES = [
   'auto',
@@ -443,17 +442,36 @@ export type ReadAnalyzedThreadArgs = z.infer<
   typeof ReadAnalyzedThreadArgsSchema
 >;
 
+/**
+ * What a recommendation changes: the analysed workflow, the repository it
+ * worked in, or the user's own standing-instructions file of an agent it ran
+ * (`AdapterConfig.userInstructions`).
+ */
+export const RECOMMENDATION_TARGETS = ['workflow', 'repo', 'user'] as const;
+export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
+
+/** Each target's id prefix — `W-1`, `R-1`, `U-1`. */
+export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
+  workflow: 'W-',
+  repo: 'R-',
+  user: 'U-',
+};
+
 /** At most this many items per target on one card; zero is a valid report. */
 export const MAX_RECOMMENDATIONS_PER_TARGET = 5;
+
+/** At most this many items on one card, every target together. */
+export const MAX_RECOMMENDATIONS =
+  RECOMMENDATION_TARGETS.length * MAX_RECOMMENDATIONS_PER_TARGET;
 
 export const RecommendationIdSchema = z
   .string()
   .regex(
-    /^[WR]-\d{1,3}$/,
-    'an id is W-<n> for a workflow item, R-<n> for repo',
+    /^[WRU]-\d{1,3}$/,
+    'an id is W-<n> for a workflow item, R-<n> for repo, U-<n> for a user-instructions file',
   );
 
-export const RecommendationTargetSchema = z.enum(['workflow', 'repo']);
+export const RecommendationTargetSchema = z.enum(RECOMMENDATION_TARGETS);
 
 export const RecommendationRiskLevelSchema = z.enum(['low', 'medium', 'high']);
 
@@ -473,20 +491,24 @@ export const RecommendationEvidenceSchema = z.object({
 });
 
 export const RecommendationItemSchema = z.object({
-  id: RecommendationIdSchema.describe('W-1, W-2… workflow; R-1, R-2… repo'),
+  id: RecommendationIdSchema.describe(
+    'W-1, W-2… workflow; R-1, R-2… repo; U-1, U-2… user-instructions file',
+  ),
   target: RecommendationTargetSchema,
   kind: z
     .string()
     .min(1)
     .max(40)
     .describe(
-      'workflow: role|edge|parallelize|model|effort|termination|node; repo: ADD|UPDATE|REMOVE|WIRE',
+      'workflow: role|edge|parallelize|model|effort|termination|node; repo/user: check|standard|rule|skill|pointer|access|remove',
     ),
   location: z
     .string()
     .min(1)
     .max(300)
-    .describe('A workflow node id, or a repo file:line'),
+    .describe(
+      'A workflow node id, a repo file:line, or the user-instructions file path',
+    ),
   title: z.string().min(1).max(200),
   change: z
     .string()
@@ -518,10 +540,6 @@ export const RecommendationItemSchema = z.object({
       .max(600)
       .describe('What breaks if this is wrong, and what must be preserved'),
   }),
-  standsAlone: z
-    .boolean()
-    .optional()
-    .describe('False when it only works together with another item'),
 });
 export type RecommendationItem = z.infer<typeof RecommendationItemSchema>;
 
@@ -532,9 +550,7 @@ export const RecommendationsReportSchema = z.object({
     .max(2000)
     .optional()
     .describe('One or two sentences on where the time went'),
-  items: z
-    .array(RecommendationItemSchema)
-    .max(2 * MAX_RECOMMENDATIONS_PER_TARGET),
+  items: z.array(RecommendationItemSchema).max(MAX_RECOMMENDATIONS),
 });
 export type RecommendationsReport = z.infer<typeof RecommendationsReportSchema>;
 
@@ -597,7 +613,7 @@ export const RecommendationMarksSchema = z.object({
       }),
     )
     .min(1)
-    .max(2 * MAX_RECOMMENDATIONS_PER_TARGET),
+    .max(MAX_RECOMMENDATIONS),
 });
 export type RecommendationMarks = z.infer<typeof RecommendationMarksSchema>;
 
@@ -609,10 +625,7 @@ export type RecommendationMarks = z.infer<typeof RecommendationMarksSchema>;
  */
 export const RecommendationApplySchema = z.object({
   cardSeq: z.number().int().min(0),
-  ids: z
-    .array(RecommendationIdSchema)
-    .min(1)
-    .max(2 * MAX_RECOMMENDATIONS_PER_TARGET),
+  ids: z.array(RecommendationIdSchema).min(1).max(MAX_RECOMMENDATIONS),
 });
 export type RecommendationApply = z.infer<typeof RecommendationApplySchema>;
 
@@ -628,6 +641,8 @@ export interface ToolCallTime {
   at: number;
   toolId: string | null;
   name: string | null;
+  /** A `tool_result` the CLI marked as an error; always false on a call. */
+  isError: boolean;
 }
 
 /** A tool call and how long it took to be answered. */
@@ -641,6 +656,8 @@ export interface ToolSpan {
   durationMs: number | null;
   /** True when it was still unanswered at the last row of a working run. */
   open: boolean;
+  /** Its result was marked an error by the CLI. */
+  failed: boolean;
 }
 
 /** The waterfall spans `foldThreadTimeline` reads, as `ChatWaterfallService.fold` returns them. */
@@ -695,6 +712,8 @@ export interface ToolTotal {
   calls: number;
   totalMs: number;
   maxMs: number;
+  /** Of `calls`, how many came back as errors. */
+  failed: number;
 }
 
 export interface ThreadTimeline {
@@ -4599,7 +4618,7 @@ export const RunWireSchema = z.object({
     ),
   model: z.string().nullable(),
   approval: ChatApprovalModeSchema.nullable().describe(
-    'Chat approval mode; null = legacy row (no permission flags, pre-selector)',
+    'Chat approval mode; null for a workflow run',
   ),
   effort: z
     .string()

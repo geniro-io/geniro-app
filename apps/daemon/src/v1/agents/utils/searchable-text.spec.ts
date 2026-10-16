@@ -76,8 +76,8 @@ describe('searchableText', () => {
   });
 
   it('returns null for a payload that is not a record', () => {
-    // Null, not '' — `searchText IS NULL` is the backfill's own predicate for
-    // "never flattened", so a row that WAS flattened must never read as null.
+    // Null, not '' — `searchText IS NULL` means "never flattened", so a row
+    // that WAS flattened must never read as null.
     expect(searchableText(null)).toBeNull();
     expect(searchableText('a bare string')).toBeNull();
     expect(searchableText(['an', 'array'])).toBeNull();
@@ -126,8 +126,8 @@ describe('searchIndexText', () => {
   });
 
   it('passes a non-record payload through as null', () => {
-    // Still the backfill's "never flattened" sentinel — the fold must not turn
-    // a null into an empty string.
+    // Still the "never flattened" sentinel — the fold must not turn a null
+    // into an empty string.
     expect(searchIndexText(null)).toBeNull();
   });
 });

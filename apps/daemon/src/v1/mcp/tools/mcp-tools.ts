@@ -14,6 +14,7 @@ import type { UserQuestionBroker } from '../../agents/services/user-question.bro
 import type { CallBroker } from '../../graphs/services/call-broker.service';
 import type { TaskBoardBroker } from '../../graphs/services/task-board.broker';
 import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
+import type { ShareService } from '../../shares/services/share.service';
 import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
 import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
@@ -60,6 +61,7 @@ export interface McpToolDeps {
   analysis: AnalysisBroker;
   threads: ThreadReaderService;
   workflowChanges: WorkflowChangeService;
+  shares: ShareService;
 }
 
 /**
@@ -85,7 +87,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new ShowMetricsTool(deps.metrics),
     new ShowComparisonTool(deps.comparisons),
     new ShowGalleryTool(deps.galleries),
-    new ShowArtifactTool(deps.artifacts),
+    new ShowArtifactTool(deps.artifacts, deps.shares),
     new ProposePatchTool(deps.patches),
     new ProposePlanTool(deps.plans),
     new BoardTools(deps.board),

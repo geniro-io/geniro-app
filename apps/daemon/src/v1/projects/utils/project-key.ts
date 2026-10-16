@@ -16,7 +16,7 @@ const FALLBACK = 'TSK';
  * DERIVED once and then STORED on the row, never recomputed: renaming a
  * project must not silently renumber every card that was ever mentioned in a
  * commit message or a chat. That is also why this takes a name rather than a
- * project — it runs at creation and at the backfill, and nowhere else.
+ * project — it runs at creation, and nowhere else.
  *
  * Multi-word names take one letter per word, single words take the leading
  * letters; digits count as letters here, so `M2 Cases` keeps its `M2`. A name
@@ -49,9 +49,8 @@ export function projectKey(name: string): string {
  * panel and the accessible name — and `${key}-${number}` written three times
  * is how one of them comes to say `GEN #12`.
  *
- * Null when the card predates numbering and the backfill has not reached it,
- * so a caller draws nothing rather than `GEN-0`, which names a card that does
- * not exist.
+ * Null when either half is missing, so a caller draws nothing rather than
+ * `GEN-0`, which names a card that does not exist.
  */
 export function taskIdentifier(
   key: string | null,

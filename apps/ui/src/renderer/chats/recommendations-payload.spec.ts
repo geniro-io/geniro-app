@@ -50,6 +50,18 @@ const CARD = {
       impact: { minutesSaved: 12, basis: 'critical path', confidence: 4 },
       risk: { level: 'low', note: 'none' },
     },
+    {
+      id: 'U-1',
+      target: 'user',
+      kind: 'pointer',
+      location: '~/.claude/CLAUDE.md',
+      title: 'Name the check command',
+      change: 'WHEN … → …',
+      evidence: [{ seq: 4, quote: 'waiting' }],
+      rootCause: 'guessed',
+      impact: { minutesSaved: 2, basis: 'one retry', confidence: 3 },
+      risk: { level: 'low', note: 'none' },
+    },
     { id: 'W-2' },
   ],
 };
@@ -60,7 +72,8 @@ describe('recommendations payload readers', () => {
 
     expect(card?.sourceKind).toBe('workflow');
     expect(card?.timing?.sinks).toEqual([{ label: 'reviewer', ms: 600 }]);
-    expect(card?.items.map((entry) => entry.id)).toEqual(['W-1']);
+    expect(card?.items.map((entry) => entry.id)).toEqual(['W-1', 'U-1']);
+    expect(card?.items[1]?.target).toBe('user');
     expect(card?.items[0]).toMatchObject({ minutesSaved: 12, risk: 'low' });
   });
 

@@ -8,6 +8,7 @@ apis/GroupsApi.ts
 apis/HandoffApi.ts
 apis/LabelInstructionsApi.ts
 apis/ProjectsApi.ts
+apis/SharesApi.ts
 apis/StatsApi.ts
 apis/TasksApi.ts
 apis/WorkflowsApi.ts

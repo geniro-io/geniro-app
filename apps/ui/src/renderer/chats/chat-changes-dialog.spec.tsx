@@ -85,3 +85,52 @@ describe('ChatChangesDialog — what the list is measured against', () => {
     expect(text).not.toContain(`Working tree against ${'b'.repeat(12)}`);
   });
 });
+
+describe('ChatChangesDialog — the thread’s other work folders', () => {
+  const file = (path: string) => ({
+    path,
+    status: 'modified' as const,
+    diff: null,
+    added: 1,
+    removed: 1,
+  });
+  const WORKTREE = '/repo/.claude/worktrees/cw-1256-padding';
+
+  it('lists a worktree’s files under the worktree’s name, apart from the folder’s own', async () => {
+    // The same repository-relative path is a different file in each folder, so
+    // both rows must be drawn — one tree would merge them into one.
+    const text = await dialogText({
+      changes: [file('apps/web/card.tsx')],
+      elsewhere: [{ folder: WORKTREE, changes: [file('apps/web/card.tsx')] }],
+    });
+
+    expect(text).toContain('cw-1256-padding');
+    expect(text).toContain('a worktree this chat’s agents worked in');
+    expect(text.match(/card\.tsx/g)).toHaveLength(2);
+  });
+
+  it('still lists a worktree when the thread’s own folder could not be read, and says why', async () => {
+    // The chip counts the worktree either way; a dialog showing only the
+    // folder's reason would hide what the chip just stated.
+    const text = await dialogText({
+      changes: [],
+      unavailableReason: 'The commit this chat started at is no longer here.',
+      elsewhere: [{ folder: WORKTREE, changes: [file('apps/web/card.tsx')] }],
+    });
+
+    expect(text).toContain(
+      'The commit this chat started at is no longer here.',
+    );
+    expect(text).toContain('card.tsx');
+  });
+
+  it('is not empty when only a worktree changed', async () => {
+    const text = await dialogText({
+      changes: [],
+      elsewhere: [{ folder: WORKTREE, changes: [file('apps/web/card.tsx')] }],
+    });
+
+    expect(text).not.toContain('Nothing has changed in this folder');
+    expect(text).toContain('card.tsx');
+  });
+});

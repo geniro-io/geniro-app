@@ -72,6 +72,8 @@ import type { WorkflowChangeService } from '../../graphs/services/workflow-chang
 import { ANSWERING_A_CALL } from '../../graphs/utils/callee-text';
 import { callerKey } from '../../graphs/utils/caller-key';
 import { AgentKind } from '../../runs/runs.types';
+import type { ShareService } from '../../shares/services/share.service';
+import type { AgentShareOutcome } from '../../shares/shares.types';
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import { createMcpTools } from '../tools/mcp-tools';
 import { McpServerService } from './mcp-server.service';
@@ -138,6 +140,7 @@ function service(
   // Never asked by the cases that list tools; the analysis cases hand doubles.
   threads = {} as ThreadReaderService,
   workflowChanges = {} as WorkflowChangeService,
+  shares = fakeShares(false).service,
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -157,6 +160,7 @@ function service(
       analysis,
       threads,
       workflowChanges,
+      shares,
     }),
     {
       token: 'launch',
@@ -269,7 +273,32 @@ function galleryService(galleries: GalleryBroker): McpServerService {
   );
 }
 
-function artifactService(artifacts: ArtifactBroker): McpServerService {
+/** A ShareService double: the user's switch, and every agent share it was asked for. */
+function fakeShares(
+  agentsMayShare: boolean,
+  outcome: AgentShareOutcome = {
+    kind: 'shared',
+    url: 'https://pages.example.com/x/index.html#k=KEY',
+  },
+) {
+  const asked: { artifactId: string; title: string; remote: boolean }[] = [];
+  const service = {
+    agentsMayShare: () => agentsMayShare,
+    shareForAgent: (
+      input: { artifactId: string; title: string },
+      remote: boolean,
+    ) => {
+      asked.push({ artifactId: input.artifactId, title: input.title, remote });
+      return Promise.resolve(outcome);
+    },
+  } as unknown as ShareService;
+  return { service, asked };
+}
+
+function artifactService(
+  artifacts: ArtifactBroker,
+  shares?: ShareService,
+): McpServerService {
   return service(
     new CallBroker(),
     new UserQuestionBroker(),
@@ -281,6 +310,13 @@ function artifactService(artifacts: ArtifactBroker): McpServerService {
     new ComparisonBroker(),
     new GalleryBroker(),
     artifacts,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    shares,
   );
 }
 
@@ -297,6 +333,7 @@ async function post(
   payload: unknown,
   /** The route's conversation segment, for a turn answering a call. */
   conversationId: string | null = null,
+  headers: Record<string, string> = {},
 ): Promise<{ status: number; json: () => Record<string, unknown> }> {
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -305,7 +342,11 @@ async function post(
       const body: unknown = chunks.length
         ? JSON.parse(Buffer.concat(chunks).toString('utf8'))
         : undefined;
-      const fastifyReq = { raw: req, body } as unknown as FastifyRequest;
+      const fastifyReq = {
+        raw: req,
+        body,
+        headers: req.headers,
+      } as unknown as FastifyRequest;
       const fastifyReply = {
         raw: res,
         hijack: () => {},
@@ -331,6 +372,7 @@ async function post(
         headers: {
           'content-type': 'application/json',
           accept: 'application/json, text/event-stream',
+          ...headers,
         },
         body: JSON.stringify(payload),
       },
@@ -369,7 +411,7 @@ async function serving(target: McpServerService): Promise<{
       void target.handlePost(
         'run-1',
         'agent',
-        { raw: req, body } as unknown as FastifyRequest,
+        { raw: req, body, headers: req.headers } as unknown as FastifyRequest,
         { raw: res, hijack: () => {} } as unknown as FastifyReply,
       );
     });
@@ -1551,6 +1593,7 @@ describe('McpServerService', () => {
     const req = {
       raw: undefined,
       body: rpc('tools/list', {}),
+      headers: {},
     } as unknown as FastifyRequest;
     const reply = { raw: res, hijack: () => {} } as unknown as FastifyReply;
     await service().handlePost('run-1', 'orch', req, reply);
@@ -2183,6 +2226,131 @@ describe('McpServerService', () => {
       expect(text).toContain('"artifacts"');
       expect(text).toContain('never publish them again');
     }
+  });
+
+  describe('show_artifact share', () => {
+    const publishing = (): ArtifactBroker => {
+      const artifacts = new ArtifactBroker();
+      artifacts.register('run-1', 'agent', async () => ({
+        status: 'published',
+        artifactId: 'report',
+        version: 2,
+      }));
+      return artifacts;
+    };
+    const shareCall = (share: unknown) =>
+      rpc('tools/call', {
+        name: HOST_ARTIFACT_TOOL,
+        arguments: { title: 'Report', html: '<p>x', share },
+      });
+    const listing = async (agentsMayShare: boolean) => {
+      const { json } = await post(
+        artifactService(publishing(), fakeShares(agentsMayShare).service),
+        'run-1',
+        'agent',
+        rpc('tools/list', {}),
+      );
+      return (
+        json().result as {
+          tools: {
+            name: string;
+            description: string;
+            inputSchema: { properties: Record<string, unknown> };
+          }[];
+        }
+      ).tools.find((t) => t.name === HOST_ARTIFACT_TOOL)!;
+    };
+
+    it('offers the share switch only while the user lets agents share', async () => {
+      const off = await listing(false);
+      expect(off.inputSchema.properties).not.toHaveProperty('share');
+      expect(off.description).not.toContain('SHARING');
+      const on = await listing(true);
+      expect(on.inputSchema.properties).toHaveProperty('share');
+      expect(on.description).toContain('Shared link: <url>');
+    });
+
+    it('shares after publishing and hands the agent the link', async () => {
+      const shares = fakeShares(true);
+      const { json } = await post(
+        artifactService(publishing(), shares.service),
+        'run-1',
+        'agent',
+        shareCall(true),
+      );
+      const text = (json().result as { content: { text: string }[] })
+        .content[0]!.text;
+      expect(shares.asked).toEqual([
+        { artifactId: 'report', title: 'Report', remote: false },
+      ]);
+      expect(text).toContain(
+        'Shared link: https://pages.example.com/x/index.html#k=KEY',
+      );
+    });
+
+    it('tells the share a call came through the gateway from a paired device', async () => {
+      const shares = fakeShares(true);
+      await post(
+        artifactService(publishing(), shares.service),
+        'run-1',
+        'agent',
+        shareCall(true),
+        null,
+        { 'x-geniro-via': 'remote' },
+      );
+      expect(shares.asked).toEqual([
+        { artifactId: 'report', title: 'Report', remote: true },
+      ]);
+    });
+
+    it('answers a refused share as a reason on a successful publish, never an error', async () => {
+      const shares = fakeShares(true, {
+        kind: 'not-shared',
+        reason: 'the upload failed',
+      });
+      const { json } = await post(
+        artifactService(publishing(), shares.service),
+        'run-1',
+        'agent',
+        shareCall(true),
+      );
+      const result = json().result as {
+        content: { text: string }[];
+        isError: boolean;
+      };
+      expect(result.isError).toBe(false);
+      expect(result.content[0]!.text).toContain('updated to version 2');
+      expect(result.content[0]!.text).toContain(
+        'Not shared: the upload failed.',
+      );
+    });
+
+    it('shares nothing when the publish itself was refused', async () => {
+      const shares = fakeShares(true);
+      const artifacts = new ArtifactBroker();
+      artifacts.register('run-1', 'agent', async () => ({
+        status: 'rejected',
+        reason: 'over the limit',
+      }));
+      await post(
+        artifactService(artifacts, shares.service),
+        'run-1',
+        'agent',
+        shareCall(true),
+      );
+      expect(shares.asked).toEqual([]);
+    });
+
+    it('shares nothing unless the call asks', async () => {
+      const shares = fakeShares(true);
+      await post(
+        artifactService(publishing(), shares.service),
+        'run-1',
+        'agent',
+        shareCall(false),
+      );
+      expect(shares.asked).toEqual([]);
+    });
   });
 
   it('refuses a show_artifact call carrying no document, without reaching the run', async () => {

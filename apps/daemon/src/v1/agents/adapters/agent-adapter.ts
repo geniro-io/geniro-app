@@ -1,7 +1,7 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { registerSecret } from '../../diagnostics/utils/redact';
@@ -239,6 +239,22 @@ export abstract class AgentAdapter {
    * inline beside the field it answers when this literal is its only reader.
    */
   abstract getConfig(): AdapterConfig;
+
+  /**
+   * The user's own standing-instructions file for a run under `configDir`
+   * (null = the CLI's default profile), or why this CLI has none.
+   */
+  userInstructionsFile(
+    configDir: string | null,
+  ): { path: string } | { unavailableReason: string } {
+    const where = this.getConfig().userInstructions;
+    if (where.kind === 'unavailable') {
+      return { unavailableReason: where.reason };
+    }
+    return {
+      path: join(configDir ?? join(homedir(), where.homeDir), where.fileName),
+    };
+  }
 
   /**
    * The CLI binary invoked for each turn. Resolved per access so the Settings

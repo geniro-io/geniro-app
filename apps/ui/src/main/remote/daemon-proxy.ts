@@ -17,15 +17,32 @@ const DAEMON_RESPONSE_TIMEOUT_MS = 30_000;
 /** How long a WebSocket upgrade has to reach the daemon's loopback port. */
 const DAEMON_CONNECT_TIMEOUT_MS = 10_000;
 
-const STRIPPED_REQUEST_HEADERS = new Set(['authorization', 'cookie', 'host']);
+/**
+ * Stamped on every request this gateway forwards, so the daemon can refuse
+ * what only the Mac's own user may do (sharing a page through their CLI
+ * logins) however the phone phrases the request.
+ *
+ * TWIN PARSER: `REMOTE_VIA_HEADER` in `apps/daemon/src/auth/remote-marker.ts`,
+ * which reads it.
+ */
+export const REMOTE_VIA_HEADER = 'x-geniro-via';
+const REMOTE_VIA_VALUE = 'remote';
+
+const STRIPPED_REQUEST_HEADERS = new Set([
+  'authorization',
+  'cookie',
+  'host',
+  REMOTE_VIA_HEADER,
+]);
 
 /**
- * Copies every header from a browser's request EXCEPT the three that must
+ * Copies every header from a browser's request EXCEPT the four that must
  * never reach the daemon as the phone sent them: `authorization` and
  * `cookie` (the phone never holds the daemon's bearer token, and the
  * gateway's own pairing cookie is a fact about pairing with THIS gateway,
- * not with the daemon behind it) and `host` (restated below for the
- * upstream address rather than forwarded as the phone addressed it).
+ * not with the daemon behind it), `host` (restated below for the
+ * upstream address rather than forwarded as the phone addressed it), and
+ * the remote marker, which only this gateway may set.
  */
 function forwardableHeaders(
   source: IncomingMessage['headers'],
@@ -58,6 +75,7 @@ export function proxyHttp(
   const headers = forwardableHeaders(req.headers);
   headers.authorization = `Bearer ${handle.token}`;
   headers.host = `${handle.host}:${handle.port}`;
+  headers[REMOTE_VIA_HEADER] = REMOTE_VIA_VALUE;
 
   const upstream = httpRequest({
     host: handle.host,
@@ -180,6 +198,7 @@ export function proxyUpgrade(
       }
     }
     headerLines.push(`Host: ${handle.host}:${handle.port}`);
+    headerLines.push(`${REMOTE_VIA_HEADER}: ${REMOTE_VIA_VALUE}`);
     upstream.write(`${headerLines.join('\r\n')}\r\n\r\n`);
     if (head.length > 0) {
       upstream.write(head);

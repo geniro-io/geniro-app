@@ -19,18 +19,7 @@
  * rides it for the same reason: each draws its own card — a findings table, a
  * chart, a scorecard, a decision table, a diff with Apply, a plan with Approve
  * — and the raw call beside it is the same row twice.
- *
- * A row STORED before geniro's server was renamed per run — claude published it
- * under this fixed key then, so old transcripts carry `mcp__geniro__<tool>` and
- * would otherwise start showing raw envelope rows on replay. Live turns are
- * matched by the run-scoped rule in {@link isGeniroToolName} instead.
- *
- * Paired with the TOOL NAMES rather than used as a bare prefix, because
- * `geniro` is a name a user's own MCP server may legitimately carry: matching
- * the prefix alone hid every call to THEIR server as well, so an agent would
- * work through it while the transcript showed nothing.
  */
-const GENIRO_TOOL_PREFIX = 'mcp__geniro__';
 
 /**
  * The CARD each drawing tool produces — the shape a placeholder should take
@@ -84,10 +73,6 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   report_findings: 'findings',
   report_recommendations: 'recommendations',
   mark_recommendations: null,
-  // None of these five was ever published under the legacy fixed key — the
-  // per-run rename shipped first — but they are listed with their siblings so
-  // this list and the daemon's cannot drift, and so a transcript exported from
-  // a build in between still hides them.
   show_chart: 'chart',
   show_metrics: 'metrics',
   show_comparison: 'comparison',
@@ -102,7 +87,7 @@ const GENIRO_TOOL_NAMES = Object.keys(GENIRO_TOOLS);
 
 /**
  * The bare tool a call NAMES, when it is one of geniro's own on geniro's own
- * server — under EITHER of that server's two names — else null.
+ * server — the run's own `geniro-<runId8>` — else null.
  *
  * TWIN PARSER: `apps/daemon/src/v1/agents/utils/host-tool.ts` decides the same
  * question daemon-side, for the permission gate, and its doc block carries the
@@ -119,7 +104,6 @@ export function geniroToolOf(name: string, runId: string): string | null {
   return (
     GENIRO_TOOL_NAMES.find(
       (tool) =>
-        name === `${GENIRO_TOOL_PREFIX}${tool}` ||
         name === `mcp__${server}__${tool}` ||
         (!name.startsWith('mcp__') &&
           name.includes(server) &&

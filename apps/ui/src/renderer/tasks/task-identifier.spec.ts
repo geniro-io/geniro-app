@@ -7,7 +7,7 @@ describe('taskIdentifier', () => {
     expect(taskIdentifier('GEN', 12)).toBe('GEN-12');
   });
 
-  it('draws nothing for a card the backfill has not reached', () => {
+  it('draws nothing for a card with no number', () => {
     // `GEN-0` names a card that does not exist and a bare `-12` names no
     // board, so the absence is the honest answer. The two halves arrive on
     // different rows, which is why both have to be checked here.

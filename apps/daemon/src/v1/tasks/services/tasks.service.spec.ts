@@ -664,6 +664,93 @@ describe('TasksService (in-memory sqlite)', () => {
     expect(await taskDao.countInProject('no-such-project')).toBe(0);
   });
 
+  it('records a prepare failure on the card, stamped with the daemon’s clock', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'no worktree',
+      status: 'todo',
+    });
+    const before = Date.now();
+
+    await service.recordPrepareFailure(task.id, "fatal: 'b' is already used");
+    const after = Date.now();
+
+    const row = await taskDao.getById(task.id, orm.em.fork() as EntityManager);
+    expect(row?.prepareFailedReason).toBe("fatal: 'b' is already used");
+    expect(row?.prepareFailedAt?.getTime()).toBeGreaterThanOrEqual(before);
+    expect(row?.prepareFailedAt?.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it('announces a recorded prepare failure, so an open board re-reads its queue', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'no worktree',
+      status: 'todo',
+    });
+    changes.length = 0;
+
+    await service.recordPrepareFailure(task.id, 'fatal: x');
+
+    expect(changes).toEqual([{ taskId: task.id, projectId, status: 'todo' }]);
+  });
+
+  it('ignores a late report for a card another start already took out of the intake column', async () => {
+    // A Run press preparing the same worktree wins, moves the card to
+    // in_progress and clears the mark; the losing tick's report lands after.
+    const task = await service.create({
+      projectId,
+      title: 'being worked',
+      status: 'in_progress',
+    });
+    changes.length = 0;
+
+    await service.recordPrepareFailure(task.id, 'fatal: x');
+
+    const row = await taskDao.getById(task.id, orm.em.fork() as EntityManager);
+    expect(row?.prepareFailedAt).toBeNull();
+    expect(changes).toEqual([]);
+  });
+
+  it('refuses a prepare failure for a card that does not exist', async () => {
+    await expect(
+      service.recordPrepareFailure('no-such-task', 'fatal: x'),
+    ).rejects.toMatchObject({ errorCode: 'TASK_NOT_FOUND' });
+  });
+
+  it('re-stamps the mark on a repeat failure, so a retry that failed again is held again', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'still broken',
+      status: 'todo',
+    });
+    await taskDao.setPrepareFailure(
+      task.id,
+      { at: new Date(Date.now() - 6 * 60_000), reason: 'fatal: first' },
+      em,
+    );
+    const before = Date.now();
+
+    await service.recordPrepareFailure(task.id, 'fatal: again');
+
+    const row = await taskDao.getById(task.id, orm.em.fork() as EntityManager);
+    expect(row?.prepareFailedReason).toBe('fatal: again');
+    expect(row?.prepareFailedAt?.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it('records a report on a board whose intake column is not the default', async () => {
+    await projectDao.updateById(
+      projectId,
+      { autopilotIntakeStatus: 'backlog' },
+      em,
+    );
+    const task = await service.create({ projectId, title: 'from backlog' });
+
+    await service.recordPrepareFailure(task.id, 'fatal: x');
+
+    const row = await taskDao.getById(task.id, orm.em.fork() as EntityManager);
+    expect(row?.prepareFailedReason).toBe('fatal: x');
+  });
+
   it('round-trips labels through the JSON text column', async () => {
     const task = await service.create({
       projectId,

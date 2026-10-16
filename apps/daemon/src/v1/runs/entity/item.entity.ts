@@ -58,11 +58,8 @@ export class Item extends TimestampsEntity {
   /**
    * The payload's text flattened for search — see `utils/searchable-text.ts`.
    *
-   * NULL means "never flattened", which is exactly what the one-shot backfill
-   * sweeps on: the column is added additively to a table that already holds
-   * every row this app has ever written. A row that WAS flattened and had
-   * nothing to match carries an empty string instead, so the two stay
-   * distinguishable and a swept row is never swept twice.
+   * NULL means "never flattened". A row that WAS flattened and had nothing to
+   * match carries an empty string instead, so the two stay distinguishable.
    *
    * Deliberately NOT indexed. The search is a `$like` with a leading wildcard,
    * which no B-tree can serve, so an index here would cost every insert and be

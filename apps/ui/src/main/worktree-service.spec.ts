@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -187,6 +187,40 @@ describe('prepareWorktree', () => {
   );
 
   it(
+    'does NOT hand back its slot because ANOTHER worktree holds the task branch',
+    async () => {
+      // The slot is on someone else's branch while the task's branch sits in a
+      // different worktree: path and branch are both in git's listing, but in
+      // two records — neither vouches for the slot.
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      git(made.path, 'switch', '-c', 'somebody-elses');
+      git(
+        repo,
+        'worktree',
+        'add',
+        '-q',
+        join(repo, '..', `${basename(repo)}-elsewhere`),
+        'geniro/task-t1',
+      );
+
+      try {
+        const again = await prepareWorktree({
+          taskId: 't1',
+          folder: repo,
+        }).catch((error: unknown) => error);
+        // Refused or rebuilt — never handed back as the task's own.
+        expect(again).not.toMatchObject({ reused: true });
+      } finally {
+        rmSync(join(repo, '..', `${basename(repo)}-elsewhere`), {
+          recursive: true,
+          force: true,
+        });
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
     'REFUSES to clear its own worktree left on a DETACHED HEAD, however clean',
     async () => {
       const made = await prepareWorktree({ taskId: 't1', folder: repo });
@@ -259,6 +293,55 @@ describe('prepareWorktree', () => {
       expect(again.path).toBe(made.path);
       expect(again.reused).toBe(false);
       expect(existsSync(again.path)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'takes its branch back from a worktree elsewhere whose directory is gone',
+    async () => {
+      // Another copy of the app (a dev build on its own userData) cut this
+      // task's worktree somewhere else, and that directory was deleted without
+      // `git worktree remove`: git still records the branch as checked out
+      // there, and a plain `worktree add` refuses it.
+      const elsewhere = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-worktree-elsewhere-')),
+      );
+      const stale = join(elsewhere, 't1');
+      git(repo, 'worktree', 'add', '-b', 'geniro/task-t1', stale);
+      rmSync(elsewhere, { recursive: true, force: true });
+
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(made.reused).toBe(false);
+      const listed = git(repo, 'worktree', 'list', '--porcelain');
+      expect(listed).toContain(`worktree ${made.path}`);
+      expect(listed).not.toContain(`worktree ${stale}`);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'leaves a LIVE checkout of its branch elsewhere alone, and says where it is',
+    async () => {
+      const elsewhere = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-worktree-elsewhere-')),
+      );
+      const live = join(elsewhere, 't1');
+      git(repo, 'worktree', 'add', '-b', 'geniro/task-t1', live);
+      writeFileSync(join(live, 'theirs.txt'), 'uncommitted\n');
+
+      try {
+        await expect(
+          prepareWorktree({ taskId: 't1', folder: repo }),
+        ).rejects.toThrow(/already used by worktree/);
+        expect(existsSync(join(live, 'theirs.txt'))).toBe(true);
+        expect(git(repo, 'worktree', 'list', '--porcelain')).toContain(
+          `worktree ${live}`,
+        );
+      } finally {
+        rmSync(elsewhere, { recursive: true, force: true });
+      }
     },
     TIMEOUT_MS,
   );
@@ -819,6 +902,25 @@ describe('reapFinishedWorktrees', () => {
       expect(removed).toEqual([]);
       expect(kept).toEqual([made.path]);
       expect(existsSync(made.path)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'leaves a registered folder git does not list as a worktree, however clean',
+    async () => {
+      // A clean, standalone checkout in a task slot: its own repository, not a
+      // worktree of the project. Only git's listing can tell the two apart.
+      const slot = join(mocks.userData, 'worktrees', 't1');
+      cleanRepoAt(slot, 'own.txt');
+      // On the branch the row names, so the listing is the one guard left.
+      git(slot, 'switch', '-q', '-c', 'b');
+      registerRow(slot);
+
+      const { removed } = await reapFinishedWorktrees(allFinished);
+
+      expect(removed).toEqual([]);
+      expect(existsSync(join(slot, 'own.txt'))).toBe(true);
     },
     TIMEOUT_MS,
   );

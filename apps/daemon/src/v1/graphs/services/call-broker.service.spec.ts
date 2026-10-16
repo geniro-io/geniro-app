@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import type { RunCallSeed } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { readCallSeed } from '../../agents/utils/call-seed';
+import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { ItemKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
 import type {
@@ -10,7 +12,10 @@ import type {
   RunCallCapability,
   WorkflowAgentNode,
 } from '../graphs.types';
-import { PUBLISHED_PAGES_NOTE } from '../utils/callee-text';
+import {
+  LEFT_RUNNING_COMMAND_MAX,
+  PUBLISHED_PAGES_NOTE,
+} from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 
@@ -4002,6 +4007,32 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
     ).toBe(true);
   });
 
+  it('fires at the wake when the reset came due while the machine slept', async () => {
+    // The opposite of a silence deadline: this names an INSTANT, and once it
+    // has passed the promised continue is owed — a sleep through it must not
+    // push it another window later. Sleeping 17:00 → 21:00 over an 18:11 wake.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const woken: string[] = [];
+    const { broker } = harness({
+      isNodeLive: () => false,
+      wakeNode: (node) => {
+        woken.push(node);
+        return true;
+      },
+      instantOutcome: RATE_LIMITED,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    await simulateSleep(4 * 60 * 60_000);
+
+    expect(woken).toEqual(['orch']);
+  });
+
   it('wakes a caller ONCE for every call one reset stopped', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
@@ -6445,6 +6476,65 @@ describe('CallBroker — pages published inside a call', () => {
     expect(result.note).toContain("already in the user's chat");
   });
 
+  it('names the commands a callee left running, each cut to one bounded line', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'bring it up',
+    });
+    const long = `pnpm dev ${'--flag '.repeat(40)}`;
+    deferred[0]!.resolve(
+      completed('up', {
+        shellsStillOut: ['cd api &&\n pnpm dev:api', null, long],
+      }),
+    );
+    const { result } = (await pending) as {
+      result: {
+        note: string;
+        commands_still_running: number;
+        running_commands: string[];
+      };
+    };
+    const cut = `${long.replaceAll(/\s+/g, ' ').trim().slice(0, LEFT_RUNNING_COMMAND_MAX)}…`;
+    // Counted whole; listed only where the words were recorded.
+    expect(result.commands_still_running).toBe(3);
+    expect(result.running_commands).toEqual(['cd api && pnpm dev:api', cut]);
+    expect(result.note).toBe(
+      `helper left 3 command(s) it started in this call running in the background: \`cd api && pnpm dev:api\`; \`${cut}\`. They keep running after this result. To stop them, continue the conversation (call_agent with thread: 'call-1') and ask helper to; otherwise tell the user they are still running.`,
+    );
+  });
+
+  it('masks a registered secret in a command left running, and fences one carrying backticks', async () => {
+    registerSecret('tok-0123456789abcdef', 'test token');
+    try {
+      const { broker, deferred } = harness({ launch: 'defer' });
+      const pending = broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'bring it up',
+      });
+      deferred[0]!.resolve(
+        completed('up', {
+          shellsStillOut: [
+            'TOKEN=tok-0123456789abcdef pnpm dev',
+            'echo `git rev-parse HEAD` && pnpm dev',
+          ],
+        }),
+      );
+      const { result } = (await pending) as {
+        result: { note: string; running_commands: string[] };
+      };
+      expect(result.running_commands[0]).not.toContain('tok-0123456789abcdef');
+      expect(result.note).not.toContain('tok-0123456789abcdef');
+      expect(result.note).toContain(
+        '; ``echo `git rev-parse HEAD` && pnpm dev``.',
+      );
+    } finally {
+      clearSecrets();
+    }
+  });
+
   it('an await_agent collection names the pages too', async () => {
     const { broker, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
@@ -6714,5 +6804,70 @@ describe('CallBroker — pages published inside a call', () => {
       status: 'error',
       artifacts: [{ artifact_id: 'plan', title: 'Plan', version: 1 }],
     });
+  });
+});
+
+describe('CallBroker — the machine sleeping through a deadline', () => {
+  // node's timers count through a macOS sleep, so every window that ran out
+  // while the lid was shut fired the instant it opened (2026-10-10). Time
+  // asleep is not a callee going quiet, nor a caller failing to answer.
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const stalls = (items: { payload: Record<string, unknown> }[]) =>
+    items.filter((i) => i.payload.stalledCall === true);
+
+  it('does not report a callee as stalled at the wake, and gives it a full window from there', async () => {
+    vi.useFakeTimers();
+    const { broker, items } = harness({ launch: 'defer' });
+    void broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    await vi.advanceTimersByTimeAsync(45_000);
+    await simulateSleep(4 * HOUR);
+    expect(stalls(items)).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10 * MINUTE - 1_000);
+    expect(stalls(items)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(stalls(items)).toHaveLength(1);
+  });
+
+  it('does not time a parked question out at the wake; its TTL starts again from there', async () => {
+    vi.useFakeTimers();
+    const { broker } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const fail = vi.fn();
+    expect(
+      broker.parkQuestion('run-1', 'call-1', {
+        question: 'Which color?',
+        options: ['Red', 'Blue'],
+        payload: { questions: [{ question: 'Which color?' }] },
+        ttlMs: 30 * MINUTE,
+        deliver: () => true,
+        fail,
+      }),
+    ).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(45_000);
+    await simulateSleep(4 * HOUR);
+    expect(fail).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30 * MINUTE - 1_000);
+    expect(fail).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fail).toHaveBeenCalledTimes(1);
   });
 });

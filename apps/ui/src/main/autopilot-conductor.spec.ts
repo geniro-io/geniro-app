@@ -26,6 +26,12 @@ interface QueueBody {
     status: string;
     folder?: string;
   }[];
+  /**
+   * The free slots, when a test needs the daemon's narrowing: the handout is
+   * then `eligible` minus every card reported as failing to prepare, cut to
+   * this many — what the real queue does with a card it holds in `blocked`.
+   */
+  freeSlots?: number;
 }
 
 /** The folder the stand-in daemon resolves a card to unless a test says. */
@@ -40,6 +46,8 @@ const QUEUE_FOLDER = '/repo';
  */
 function daemon(queues: Record<string, QueueBody>) {
   const starts: { path: string; body: Record<string, unknown> }[] = [];
+  /** Every `POST /v1/tasks/:id/prepare-failed`, kept apart from the starts. */
+  const reports: { taskId: string; reason: unknown }[] = [];
   const refuse = new Set<string>();
   /** A refusal that carries the daemon's own body, by route. */
   const refuseWith = new Map<string, { status: number; body: string }>();
@@ -64,6 +72,11 @@ function daemon(queues: Record<string, QueueBody>) {
         if (refuse.has(path)) {
           return { ok: false, status: 409 } as Response;
         }
+        const reported = /^\/v1\/tasks\/([^/]+)\/prepare-failed$/.exec(path);
+        if (reported?.[1] !== undefined) {
+          reports.push({ taskId: reported[1], reason: body.reason });
+          return { ok: true, status: 200 } as Response;
+        }
         starts.push({ path, body });
         return { ok: true, status: 201 } as Response;
       }
@@ -84,6 +97,13 @@ function daemon(queues: Record<string, QueueBody>) {
       if (!queue) {
         return { ok: false, status: 404 } as Response;
       }
+      const held = new Set(reports.map((report) => report.taskId));
+      const handout =
+        queue.freeSlots === undefined
+          ? (queue.eligible ?? [])
+          : (queue.eligible ?? [])
+              .filter((task) => !held.has(task.id))
+              .slice(0, queue.freeSlots);
       return {
         ok: true,
         status: 200,
@@ -91,7 +111,7 @@ function daemon(queues: Record<string, QueueBody>) {
           enabled: true,
           breakerOpen: false,
           ...queue,
-          eligible: (queue.eligible ?? []).map((task) => ({
+          eligible: handout.map((task) => ({
             folder: QUEUE_FOLDER,
             ...task,
           })),
@@ -99,7 +119,7 @@ function daemon(queues: Record<string, QueueBody>) {
       } as Response;
     },
   );
-  return { fetchMock, starts, refuse, refuseWith, cards };
+  return { fetchMock, starts, reports, refuse, refuseWith, cards };
 }
 
 /** The commit the stub reports every worktree standing on. */
@@ -495,6 +515,137 @@ describe('AutopilotConductor', () => {
     await new AutopilotConductor(deps({ prepareWorktree })).tick();
 
     expect(starts).toEqual([]);
+  });
+
+  describe('a card whose worktree could not be made', () => {
+    /** What `execFile` throws for a failed `git worktree add`: stderr kept. */
+    const gitError = (stderr: string): Error =>
+      Object.assign(new Error('Command failed: git worktree add'), { stderr });
+    const ALREADY_USED =
+      "fatal: 'geniro/task-t1' is already used by worktree at '/tmp/x'";
+    /** The stub `deps()` makes, except that `id`'s worktree cannot be made. */
+    const failsFor = (id: string) =>
+      vi.fn(async ({ taskId }: { taskId: string; folder: string }) => {
+        if (taskId === id) {
+          throw gitError(ALREADY_USED);
+        }
+        return {
+          path: `/wt/${taskId}`,
+          branch: `geniro/${taskId}`,
+          reused: false,
+        };
+      });
+
+    it('reports git’s own line to the daemon, not “Command failed”', async () => {
+      const { fetchMock, reports, starts } = daemon({
+        p1: {
+          projectId: 'p1',
+          eligible: [{ id: 't1', title: 'head', status: 'todo' }],
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const prepareWorktree = vi.fn(async () => {
+        throw gitError(
+          `Preparing worktree (checking out 'geniro/task-t1')\n${ALREADY_USED}\n`,
+        );
+      });
+
+      await new AutopilotConductor(deps({ prepareWorktree })).tick();
+
+      expect(reports).toEqual([{ taskId: 't1', reason: ALREADY_USED }]);
+      expect(starts).toEqual([]);
+    });
+
+    it('starts the card behind it on the next tick, against a daemon that holds what was reported', async () => {
+      // Cap 1, the failing card at the head. The stand-in daemon holds a
+      // reported card the way the real queue does (pinned in
+      // `task-queue.service.spec.ts`); this pins the conductor's half — the
+      // report lands within the tick, before the next queue read.
+      const { fetchMock, starts } = daemon({
+        p1: {
+          projectId: 'p1',
+          freeSlots: 1,
+          eligible: [
+            { id: 't1', title: 'head', status: 'todo' },
+            { id: 't2', title: 'behind', status: 'todo' },
+          ],
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const prepareWorktree = failsFor('t1');
+      const conductor = new AutopilotConductor(deps({ prepareWorktree }));
+
+      await conductor.tick();
+      expect(starts).toEqual([]);
+      await conductor.tick();
+
+      expect(starts.map((start) => start.path)).toEqual(['/v1/tasks/t2/runs']);
+    });
+
+    it('cuts a reason past the daemon’s cap rather than have the report refused', async () => {
+      const { fetchMock, reports } = daemon({
+        p1: {
+          projectId: 'p1',
+          eligible: [{ id: 't1', title: 'head', status: 'todo' }],
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const long = `fatal: ${'x'.repeat(2_000)}`;
+      const prepareWorktree = vi.fn(async () => {
+        throw gitError(long);
+      });
+
+      await new AutopilotConductor(deps({ prepareWorktree })).tick();
+
+      expect(reports).toEqual([{ taskId: 't1', reason: long.slice(0, 1000) }]);
+    });
+
+    it('sends a fixed line when the failure says nothing, rather than an empty reason the daemon refuses', async () => {
+      const { fetchMock, reports } = daemon({
+        p1: {
+          projectId: 'p1',
+          eligible: [{ id: 't1', title: 'head', status: 'todo' }],
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const prepareWorktree = vi.fn(async () => {
+        throw new Error('');
+      });
+
+      await new AutopilotConductor(deps({ prepareWorktree })).tick();
+
+      expect(reports).toEqual([
+        { taskId: 't1', reason: 'git failed without saying why' },
+      ]);
+    });
+
+    it('logs a report the daemon refused and goes on to the next card', async () => {
+      const { fetchMock, refuseWith, starts } = daemon({
+        p1: {
+          projectId: 'p1',
+          eligible: [
+            { id: 't1', title: 'head', status: 'todo' },
+            { id: 't2', title: 'behind', status: 'todo' },
+          ],
+        },
+      });
+      refuseWith.set('/v1/tasks/t1/prepare-failed', {
+        status: 404,
+        body: JSON.stringify({ code: 'TASK_NOT_FOUND', message: 'gone' }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const log = vi.fn();
+      const prepareWorktree = failsFor('t1');
+
+      await new AutopilotConductor(deps({ prepareWorktree, log })).tick();
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'could not report the worktree failure for "head": POST /v1/tasks/t1/prepare-failed answered 404: TASK_NOT_FOUND — gone',
+        ),
+      );
+      expect(starts.map((start) => start.path)).toEqual(['/v1/tasks/t2/runs']);
+    });
   });
 
   // Nobody is watching a timer, so one bad project must not end the sweep.

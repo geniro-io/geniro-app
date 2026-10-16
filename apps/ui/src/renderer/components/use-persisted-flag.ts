@@ -32,18 +32,6 @@ function readFlag(storageKey: string, fallback: boolean): boolean {
 }
 
 /**
- * Set one of these flags from OUTSIDE the component that renders it.
- *
- * The one caller shape this exists for: a control that reveals something it
- * does not itself draw. It writes through the same key and wakes every reader,
- * so the surface it revealed is open by the time the user looks at it.
- */
-export function setPersistedFlag(storageKey: string, value: boolean): void {
-  localStorage.setItem(storageKey, value ? '1' : '0');
-  announce(storageKey);
-}
-
-/**
  * A boolean the user SET and expects to find again — a panel folded shut, a
  * section left open — kept in localStorage under `storageKey`.
  *

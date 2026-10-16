@@ -1,4 +1,5 @@
 import type { DaemonHandle, GitStamp, Settings } from '../shared/contracts';
+import { gitFailureLine } from './git-failure';
 
 /**
  * How often an armed project's queue is read.
@@ -14,6 +15,15 @@ const FETCH_TIMEOUT_MS = 10_000;
 
 /** How much of an unparseable error body one log line may carry. */
 const MAX_DETAIL_CHARS = 300;
+
+/**
+ * The longest prepare-failure reason the daemon takes.
+ *
+ * TWIN PARSER: `reportPrepareFailureSchema` in
+ * `apps/daemon/src/v1/tasks/dto/task.dto.ts` (`reason` `.max`). Cut here so a
+ * long git line is never refused; change one and change the other.
+ */
+const MAX_PREPARE_FAILURE_CHARS = 1000;
 
 /**
  * The approval mode an autopilot run is forced to.
@@ -217,9 +227,15 @@ export class AutopilotConductor {
         folder: task.folder,
       });
     } catch (error) {
+      // Never empty: the daemon refuses an empty reason, and a refused report
+      // leaves the card taking the slot again.
+      const gitLine =
+        gitFailureLine(error, reason(error)).trim() ||
+        'git failed without saying why';
       this.deps.log(
-        `autopilot could not prepare a worktree for "${task.title}": ${reason(error)}`,
+        `autopilot could not prepare a worktree for "${task.title}": ${gitLine}`,
       );
+      await this.reportPrepareFailure(handle, task, gitLine);
       return;
     }
 
@@ -265,6 +281,31 @@ export class AutopilotConductor {
             `autopilot could not release the worktree for "${task.title}": ${reason(cleanupError)}`,
           );
         });
+    }
+  }
+
+  /**
+   * Tell the daemon this card's worktree could not be made — it cannot see
+   * that otherwise, since no run was started — so it holds the card in
+   * `blocked` instead of handing it out on every tick, and decides the retry
+   * itself (`Task.prepareFailedAt`). A report that fails is logged, never
+   * thrown: the sweep goes on.
+   */
+  private async reportPrepareFailure(
+    handle: DaemonHandle,
+    task: QueuedTask,
+    gitLine: string,
+  ): Promise<void> {
+    try {
+      await this.post(
+        handle,
+        `/v1/tasks/${encodeURIComponent(task.id)}/prepare-failed`,
+        { reason: gitLine.slice(0, MAX_PREPARE_FAILURE_CHARS) },
+      );
+    } catch (error) {
+      this.deps.log(
+        `autopilot could not report the worktree failure for "${task.title}": ${reason(error)}`,
+      );
     }
   }
 

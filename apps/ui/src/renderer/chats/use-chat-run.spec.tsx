@@ -706,6 +706,53 @@ describe('useChatRun', () => {
     expect(harness.state().items.map((item) => item.id)).toEqual(['r1-i1']);
   });
 
+  it('labels the open thread’s preview as an image when the newest message is image-only', async () => {
+    // REPORTED as "Thread doesnt have last message, but other have": the user
+    // answered a question with a screenshot alone, the live message carried
+    // `text: ""`, and that empty string became the row's preview — so the
+    // thread being worked in was the one row with no line under its title.
+    const imageOnly: ChatItem = {
+      ...msg('r1', 1, 'user', ''),
+      payload: {
+        text: '',
+        images: [{ id: 'shot.png', mediaType: 'image/png' }],
+      },
+    };
+    const { client, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitItem(imageOnly);
+    });
+
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.lastMessage).toBe(
+      '🖼 Image',
+    );
+  });
+
+  it('labels a replayed image-only newest message as an image on open', async () => {
+    // The same message reached through the history replay instead of live:
+    // `reconcileFromTail` wrote its empty text over the list's preview.
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 0, 'assistant', 'Open this link'),
+      {
+        ...msg('r1', 1, 'user', ''),
+        payload: {
+          text: '',
+          images: [{ id: 'shot.png', mediaType: 'image/png' }],
+        },
+      },
+    ]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.lastMessage).toBe(
+      '🖼 Image',
+    );
+  });
+
   it('de-dupes a re-delivered item by ID and keeps the transcript seq-ordered', async () => {
     const { client, emitItem } = makeClient();
     const harness = await mount(client);

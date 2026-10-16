@@ -7853,7 +7853,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
   });
 
-  it("sendMessage passes the run row mode to the adapter; a legacy null row runs as 'ask'", async () => {
+  it("sendMessage passes the run row mode to the adapter; a null row runs as 'ask'", async () => {
     const { service, claude, runDao } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -7867,12 +7867,9 @@ describe('ChatService — approval modes (parity M1)', () => {
     claude.finish();
     await drain();
 
-    // A pre-selector row (approval null) used to pass `undefined`, which
-    // spawns the CLI with no permission flag and inherits ITS default. That
-    // default moved: probed on claude 2.1.227, a headless turn with no flag
-    // reports `permissionMode: "auto"`. So the old behaviour silently turned
-    // an unattended-approval posture on for every legacy chat, decided by the
-    // vendor. `undefined` here is the regression.
+    // A null approval must never pass `undefined`, which spawns the CLI with
+    // no permission flag and inherits ITS default — on claude 2.1.227 that is
+    // `permissionMode: "auto"`. `undefined` here is the regression.
     const legacy = await runDao.create({
       workflowId: null,
       status: 'pending',
@@ -12460,6 +12457,35 @@ describe('ChatService — pointing an open chat at another account', () => {
     // The conversation CAME ALONG, so the count still measures it — clearing
     // here would blank a meter that is telling the truth.
     expect(runDao.runs.get(run.id)?.contextTokens).toBe(4321);
+  });
+
+  it('starts the prompt-cache countdown over on the new account', async () => {
+    // A prompt cache is per ACCOUNT: the expiry and lifetime the old profile's
+    // turns reported say nothing about the new one, which starts cold. Kept,
+    // the composer counted down to an expiry that belonged to another account.
+    const { service, claude, nodeDao, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir: profileA,
+    });
+    await service.sendMessage(run.id, 'hello');
+    claude.finish();
+    await drain();
+    await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, SESSION);
+    seedSession(profileA, 'the codeword is PLUM');
+    await runDao.rememberPromptCache(
+      run.id,
+      { ttlMs: 3_600_000, reason: null },
+      new Date(),
+    );
+    expect(runDao.runs.get(run.id)?.promptCacheExpiresAt).not.toBeNull();
+
+    await service.updateSettings(run.id, { configDir: profileB });
+
+    expect(runDao.runs.get(run.id)?.configDir).toBe(profileB);
+    expect(runDao.runs.get(run.id)?.promptCacheExpiresAt).toBeNull();
+    expect(runDao.runs.get(run.id)?.promptCacheTtlMs).toBeNull();
   });
 
   it('refuses mid-turn, because the turn is writing into the profile being left', async () => {

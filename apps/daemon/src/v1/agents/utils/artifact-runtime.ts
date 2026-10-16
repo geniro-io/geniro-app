@@ -573,10 +573,16 @@ function inOpenComment(text: string): boolean {
 
 /** The agent's document with geniro's runtime, kit and Tailwind bridge in front of it. */
 export function withArtifactRuntime(html: string): string {
-  const block =
+  return atHeadStart(
+    html,
     `<style data-geniro="kit">${ARTIFACT_LAYER_ORDER}\n@layer geniro {\n${ARTIFACT_KIT_STYLE}\n}</style>` +
-    `<style type="text/tailwindcss" data-geniro="tailwind">${ARTIFACT_TAILWIND_THEME}</style>` +
-    `<script data-geniro="runtime">${ARTIFACT_RUNTIME_SCRIPT}</script>`;
+      `<style type="text/tailwindcss" data-geniro="tailwind">${ARTIFACT_TAILWIND_THEME}</style>` +
+      `<script data-geniro="runtime">${ARTIFACT_RUNTIME_SCRIPT}</script>`,
+  );
+}
+
+/** `block` placed where {@link withArtifactRuntime} places the runtime. */
+export function atHeadStart(html: string, block: string): string {
   const head = HEAD_OPEN.exec(html);
   const before = head === null ? '' : html.slice(0, head.index);
   if (

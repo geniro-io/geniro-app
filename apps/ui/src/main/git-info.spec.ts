@@ -14,6 +14,7 @@ import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  carryChangesToBranch,
   pullBranch,
   pullStashIsOurs,
   readGitHead,
@@ -870,6 +871,99 @@ describe('pullBranch', () => {
     const stashList = run(['stash', 'list']);
     expect(stashList).toContain('not this pull');
     expect(run(['status', '--porcelain'])).not.toContain('OTHER.md');
+  });
+});
+
+describe('carryChangesToBranch', () => {
+  it('switches a dirty tree and brings the work along, untracked files too', async () => {
+    // The reported ask: the switch the dirty guard refused, done without
+    // losing the work — it lands on the PICKED branch, not the one left.
+    initRepo();
+    run(['branch', 'dev']);
+    writeFileSync(join(dir, 'README.md'), 'work in progress\n');
+    writeFileSync(join(dir, 'NEW.md'), 'not even added yet\n');
+
+    expect(await carryChangesToBranch(dir, 'dev')).toEqual({
+      ok: true,
+      branch: 'dev',
+      error: null,
+      stashLeft: null,
+    });
+    expect(run(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('dev');
+    const status = run(['status', '--porcelain']);
+    expect(status).toContain('README.md');
+    expect(status).toContain('NEW.md');
+    expect(run(['stash', 'list'])).toBe('');
+  });
+
+  it('switches a clean tree without stashing anything', async () => {
+    initRepo();
+    run(['branch', 'dev']);
+
+    const result = await carryChangesToBranch(dir, 'dev');
+
+    expect(result.ok).toBe(true);
+    expect(run(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('dev');
+    expect(run(['stash', 'list'])).toBe('');
+  });
+
+  it('puts the work back where it was when the switch itself fails', async () => {
+    initRepo();
+    writeFileSync(join(dir, 'README.md'), 'work in progress\n');
+
+    const result = await carryChangesToBranch(dir, 'nope');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.branch).toBe('main');
+    expect(result.stashLeft).toBeNull();
+    expect(run(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('main');
+    expect(run(['status', '--porcelain'])).toContain('README.md');
+    expect(run(['stash', 'list'])).toBe('');
+  });
+
+  it('keeps the stash and says where when the work cannot be restored there', async () => {
+    // `dev` changed the same line the uncommitted edit did, so the pop
+    // conflicts: the branch moved, and the work must stay reachable.
+    initRepo();
+    run(['checkout', '-q', '-b', 'dev']);
+    writeFileSync(join(dir, 'README.md'), 'dev version\n');
+    run(['commit', '-q', '-am', 'dev edit']);
+    run(['checkout', '-q', 'main']);
+    writeFileSync(join(dir, 'README.md'), 'work in progress\n');
+
+    const result = await carryChangesToBranch(dir, 'dev');
+
+    expect(result.ok).toBe(false);
+    expect(result.branch).toBe('dev');
+    expect(result.stashLeft).toBe('stash@{0}');
+    expect(result.error).toContain('kept in stash@{0}');
+    expect(run(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('dev');
+    expect(run(['stash', 'list'])).toContain('geniro: bring changes along');
+  });
+
+  it('refuses a branch another worktree holds before moving anything', async () => {
+    initRepo();
+    const other = join(dir, '..', `${basename(dir)}-wt`);
+    run(['worktree', 'add', '-q', '-b', 'feat/elsewhere', other]);
+    worktrees.push(other);
+    writeFileSync(join(dir, 'README.md'), 'work in progress\n');
+
+    const result = await carryChangesToBranch(dir, 'feat/elsewhere');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('checked out in another worktree');
+    expect(run(['stash', 'list'])).toBe('');
+    expect(run(['status', '--porcelain'])).toContain('README.md');
+  });
+
+  it('refuses a folder that is not a repository', async () => {
+    expect(await carryChangesToBranch(dir, 'main')).toEqual({
+      ok: false,
+      branch: null,
+      error: 'Not a git repository',
+      stashLeft: null,
+    });
   });
 });
 

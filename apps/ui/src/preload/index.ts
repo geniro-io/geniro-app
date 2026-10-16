@@ -118,9 +118,13 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getGitHead, dir) as ReturnType<
       GeniroApi['getGitHead']
     >,
-  getChangesSince: (dir, sha) =>
-    ipcRenderer.invoke(IPC.getChangesSince, dir, sha) as ReturnType<
+  getChangesSince: (dir, sha, workFolder) =>
+    ipcRenderer.invoke(IPC.getChangesSince, dir, sha, workFolder) as ReturnType<
       GeniroApi['getChangesSince']
+    >,
+  listWorktrees: (dir, startedAtMs) =>
+    ipcRenderer.invoke(IPC.listWorktrees, dir, startedAtMs) as ReturnType<
+      GeniroApi['listWorktrees']
     >,
   getChangesTotals: (dir, sha) =>
     ipcRenderer.invoke(IPC.getChangesTotals, dir, sha) as ReturnType<
@@ -199,6 +203,10 @@ const api: GeniroApi = {
   pullBranch: (dir) =>
     ipcRenderer.invoke(IPC.pullBranch, dir) as ReturnType<
       GeniroApi['pullBranch']
+    >,
+  carryChangesToBranch: (dir, branch) =>
+    ipcRenderer.invoke(IPC.carryChangesToBranch, dir, branch) as ReturnType<
+      GeniroApi['carryChangesToBranch']
     >,
   revealPath: (path) =>
     ipcRenderer.invoke(IPC.revealPath, path) as ReturnType<

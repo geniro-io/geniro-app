@@ -36,14 +36,6 @@ export interface CliAgentDescriptor {
   readonly updateArgs: readonly string[];
   /** How to put this CLI on a machine that does not have it. */
   readonly installer: CliInstaller;
-  /**
-   * True for the one CLI that could run under a config directory before
-   * config directories were remembered PER CLI. A settings file written then
-   * holds a single `configDir`, a flat `recentConfigDirs` and profiles naming
-   * no agent, and `settings.ts` files all three under this CLI on read — no
-   * other CLI could have been pointed at them.
-   */
-  readonly ownsUnscopedConfigDirs?: true;
 }
 
 /**

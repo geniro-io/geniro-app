@@ -94,7 +94,11 @@ import {
   terminalStatus,
 } from '../../agents/utils/event-to-item';
 import { hostMcpServerName } from '../../agents/utils/host-question';
-import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
+import {
+  asRecord,
+  asString,
+  parseJsonColumn,
+} from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { readNodePoolMembers } from '../../agents/utils/node-pool-members';
 import {
@@ -104,6 +108,7 @@ import {
 } from '../../agents/utils/open-delegates';
 import {
   shellCloseEvent,
+  shellCommandOf,
   strandedShells,
 } from '../../agents/utils/open-shells';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
@@ -4598,6 +4603,48 @@ export class GraphExecutorService
         });
       });
 
+    /**
+     * The commands ONE call detached that its transcript still declares
+     * running, oldest first, in the words its tool call ran them with — null
+     * for one whose words were never recorded. A call settling closes none of
+     * them — they end only with the process — so this is what the call leaves
+     * running. Read on the write chain, and a failed read answers none, for the
+     * reason {@link delegatesOutOfCall} gives.
+     */
+    const shellsOutOfCall = (callId: string): Promise<(string | null)[]> =>
+      new Promise((resolve) => {
+        enqueue(async () => {
+          try {
+            const shells = strandedShells(
+              await this.itemDao.shellRows(runId, em),
+            ).filter((shell) => shell.callId === callId);
+            const words = new Map<string, string>();
+            for (const row of await this.itemDao.toolCallsByIds(
+              runId,
+              shells.flatMap((shell) =>
+                shell.toolCallId === null ? [] : [shell.toolCallId],
+              ),
+              em,
+            )) {
+              const id = asString(asRecord(parseJsonColumn(row.payload))?.id);
+              const command = shellCommandOf(row.payload);
+              if (id && command !== null) {
+                words.set(id, command);
+              }
+            }
+            resolve(
+              shells.map((shell) =>
+                shell.toolCallId === null
+                  ? null
+                  : (words.get(shell.toolCallId) ?? null),
+              ),
+            );
+          } catch {
+            resolve([]);
+          }
+        });
+      });
+
     const compactIfDue = async (
       node: WorkflowAgentNode,
       turn: NodeTurnResult,
@@ -5394,6 +5441,10 @@ export class GraphExecutorService
           settledCall.outcome === 'completed'
             ? await delegatesOutOfCall(callId)
             : 0;
+        const shellsStillOut =
+          settledCall.outcome === 'completed'
+            ? await shellsOutOfCall(callId)
+            : [];
         // As the member that filled the window: the compaction is that
         // member's turn, not member 1's, and must leave member 1's row alone.
         const compaction = { started: false };
@@ -5463,6 +5514,7 @@ export class GraphExecutorService
                   : { error: null, failureClass: null, resetsAt: null }),
                 sessionId,
                 ...(delegatesStillOut > 0 ? { delegatesStillOut } : {}),
+                ...(shellsStillOut.length > 0 ? { shellsStillOut } : {}),
                 // A compaction that ran after the turn left a conversation
                 // nothing has measured yet, so its old size says nothing.
                 promptCacheTtlMs: settledCall.promptCacheTtlMs,
@@ -5601,13 +5653,26 @@ export class GraphExecutorService
             waitingCalls.delete(callId);
             // Asked again AFTER the slot: a stop can land while the wake
             // waits for one, and must not reach a turn start.
+            if (release.kind === 'settle' && !callStopped()) {
+              // Read again: a command can end while the call is held, and
+              // the caller is told what is running when it actually settles.
+              return settleHeldCall(
+                node,
+                callId,
+                reported.status === 'completed'
+                  ? {
+                      ...reported,
+                      shellsStillOut: await shellsOutOfCall(callId),
+                    }
+                  : reported,
+                waiting.messages,
+              );
+            }
             if (release.kind !== 'wake' || callStopped()) {
               return settleHeldCall(
                 node,
                 callId,
-                release.kind === 'settle' && !callStopped()
-                  ? reported
-                  : stoppedOutcome(reported.sessionId),
+                stoppedOutcome(reported.sessionId),
                 waiting.messages,
               );
             }

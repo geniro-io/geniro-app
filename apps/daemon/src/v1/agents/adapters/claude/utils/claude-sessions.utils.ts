@@ -1,12 +1,16 @@
-import { constants } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { constants, type Dirent } from 'node:fs';
 import {
   copyFile,
   mkdir,
   open,
   readdir,
+  readFile,
   realpath,
+  rename,
   rm,
   stat,
+  writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -819,7 +823,9 @@ function feed(
  * A COPY, not a move. The old profile keeps the conversation it genuinely held,
  * which is what the user sees if they open that account’s own `claude` — and a
  * switch that deleted history out of an account nobody asked about would be
- * doing something no button was pressed for.
+ * doing something no button was pressed for. A target that already holds the
+ * conversation is brought up to date rather than skipped ({@link carryFile}),
+ * or the carry is refused when the two copies have diverged.
  */
 export async function carryClaudeSession(input: {
   sessionId: string;
@@ -842,26 +848,112 @@ export async function carryClaudeSession(input: {
   );
   try {
     await mkdir(targetDir, { recursive: true });
-    // `COPYFILE_EXCL` rather than an overwrite: an id already present in the
-    // target is the SAME conversation (the ids are the CLI’s own), so the copy
-    // has been made before — a switch back and forth, or a retry. Overwriting
-    // would replace whatever that profile has since appended with an older
-    // prefix of the same thread.
-    await copyFile(
-      source,
-      join(targetDir, basename(source)),
-      constants.COPYFILE_EXCL,
-    );
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      return { carried: true };
+    // The `<id>/` folder beside the transcript holds the sub-agents'
+    // transcripts and the tool results the turns spilled to disk (measured on
+    // 2.1.284). A resume reads them, so it comes along on the same rule.
+    const diverged =
+      (await carryFile(source, join(targetDir, basename(source)))) ===
+        'diverged' ||
+      (await carryTree(
+        join(dirname(source), sessionId),
+        join(targetDir, sessionId),
+      )) === 'diverged';
+    if (diverged) {
+      return {
+        carried: false,
+        reason:
+          'the two profiles hold different continuations of this conversation',
+      };
     }
+  } catch (error) {
     return {
       carried: false,
       reason: `the conversation could not be copied into the new profile: ${(error as Error).message}`,
     };
   }
   return { carried: true };
+}
+
+/**
+ * Copy one transcript file into the other profile, or bring an older copy
+ * there up to date.
+ *
+ * A file of that name already in the target is the SAME conversation (the ids
+ * are the CLI's own), carried there before. The files are append-only, so
+ * which copy is current is a question of which one extends the other: a target
+ * that is a shorter prefix of the source is the copy the conversation moved
+ * AWAY from (A→B→A) and is replaced, while one that is as long or longer was
+ * appended to since and is kept. Two copies that differ inside their shared
+ * length are different continuations, and neither is overwritten. The same
+ * rule as codex's carry (`carryCodexSession`).
+ *
+ * A replacement is written beside the target and renamed over it, so a failure
+ * never leaves half a transcript. Two profiles sharing one projects folder
+ * through a symlink reach the same file here, which is never shorter than
+ * itself, so it is left alone.
+ */
+async function carryFile(
+  from: string,
+  to: string,
+): Promise<'carried' | 'diverged'> {
+  try {
+    await copyFile(from, to, constants.COPYFILE_EXCL);
+    return 'carried';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      throw error;
+    }
+  }
+  const [latest, existing] = await Promise.all([readFile(from), readFile(to)]);
+  const shared = Math.min(latest.length, existing.length);
+  if (!latest.subarray(0, shared).equals(existing.subarray(0, shared))) {
+    return 'diverged';
+  }
+  if (existing.length >= latest.length) {
+    return 'carried';
+  }
+  const staged = join(dirname(to), `.geniro-carry-${randomUUID()}.tmp`);
+  try {
+    await writeFile(staged, latest, { flag: 'wx' });
+    await rename(staged, to);
+  } finally {
+    await rm(staged, { force: true });
+  }
+  return 'carried';
+}
+
+/**
+ * {@link carryFile} over a whole directory, file by file. An absent folder is
+ * fine: a conversation that never delegated or spilled a result has none.
+ */
+async function carryTree(
+  from: string,
+  to: string,
+): Promise<'carried' | 'diverged'> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(from, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return 'carried';
+    }
+    throw error;
+  }
+  await mkdir(to, { recursive: true });
+  let outcome: 'carried' | 'diverged' = 'carried';
+  for (const entry of entries) {
+    const source = join(from, entry.name);
+    const target = join(to, entry.name);
+    const carried = entry.isDirectory()
+      ? await carryTree(source, target)
+      : entry.isFile()
+        ? await carryFile(source, target)
+        : 'carried';
+    if (carried === 'diverged') {
+      outcome = 'diverged';
+    }
+  }
+  return outcome;
 }
 
 /**

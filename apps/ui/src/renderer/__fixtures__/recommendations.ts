@@ -32,8 +32,8 @@ export function recommendation(
   const workflow = id.startsWith('W');
   return {
     id,
-    target: workflow ? 'workflow' : 'repo',
-    kind: workflow ? 'parallelize' : 'ADD',
+    target: workflow ? 'workflow' : id.startsWith('U') ? 'user' : 'repo',
+    kind: workflow ? 'parallelize' : 'check',
     location: workflow ? 'reviewer' : 'AGENTS.md:42',
     title: workflow
       ? 'Run the two reviewers in parallel'
@@ -69,4 +69,13 @@ export const ITEMS: RecommendationView[] = [
     risk: 'low',
   }),
   recommendation('R-1'),
+  recommendation('U-1', {
+    kind: 'pointer',
+    location: '~/.claude/CLAUDE.md',
+    title: 'Point at the repo’s check command instead of guessing one',
+    change:
+      'WHEN a repository has a `full-check` script → run it before reporting done',
+    minutesSaved: 4,
+    confidence: 3,
+  }),
 ];

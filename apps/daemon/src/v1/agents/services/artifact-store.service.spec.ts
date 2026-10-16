@@ -555,6 +555,28 @@ describe('ArtifactStoreService', () => {
     });
   });
 
+  describe('latest', () => {
+    it('names the newest version and the key that reads it', async () => {
+      await publish({ id: 'plan', html: '<p>one</p>' });
+      const second = await publish({ id: 'plan', html: '<p>two</p>' });
+      if (!second.ok) {
+        throw new Error('publish failed');
+      }
+
+      const latest = store.latest(RUN, 'plan');
+
+      expect(latest).toEqual({ version: 2, key: second.stored.key });
+      expect(store.read(RUN, 'plan', 2, latest?.key ?? '')).toContain('two');
+    });
+
+    it('answers null for an artifact the run never published, or a hostile id', async () => {
+      await publish({ id: 'plan' });
+      expect(store.latest(RUN, 'other')).toBeNull();
+      expect(store.latest(OTHER_RUN, 'plan')).toBeNull();
+      expect(store.latest(RUN, '../plan')).toBeNull();
+    });
+  });
+
   describe('read', () => {
     it('refuses the wrong key', async () => {
       const result = await publish({ id: 'plan' });

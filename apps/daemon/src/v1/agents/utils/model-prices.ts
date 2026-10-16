@@ -77,9 +77,6 @@ export interface ModelPriceLookup {
   priceOf(provider: ModelPriceProvider, model: string): ModelPrice | null;
 }
 
-/** A lookup that knows no prices — every model reads as "not measured". */
-export const NO_MODEL_PRICES: ModelPriceLookup = { priceOf: () => null };
-
 /** The parsed catalog: provider → model id → price. */
 export type ModelPriceTable = ReadonlyMap<
   ModelPriceProvider,

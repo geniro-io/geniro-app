@@ -10,8 +10,22 @@ import {
   listTasksQuerySchema,
   MAX_REORDER_IDS,
   reorderTasksSchema,
+  reportPrepareFailureSchema,
   updateTaskSchema,
 } from './task.dto';
+
+describe('reportPrepareFailureSchema', () => {
+  // The conductor cuts its reason to this cap (`MAX_PREPARE_FAILURE_CHARS`);
+  // a schema tighter than that would refuse the report and starve the queue.
+  it('takes a reason up to 1000 characters and refuses an empty or longer one', () => {
+    const at = (length: number) =>
+      reportPrepareFailureSchema.safeParse({ reason: 'x'.repeat(length) })
+        .success;
+    expect(at(1000)).toBe(true);
+    expect(at(1001)).toBe(false);
+    expect(at(0)).toBe(false);
+  });
+});
 
 /**
  * The schemas rather than the route, deliberately: what a controller binds is

@@ -246,8 +246,8 @@ export class HandoffService {
    * A chat run carries its agent kind on the row and keys `node_state` under
    * the single-agent constant; a workflow run's node kind comes from the
    * `agent_kind` stamped on its `node_state` row at turn start — run history,
-   * immune to later workflow-YAML edits. Only legacy rows (stamped before the
-   * column existed) fall back to the CURRENT YAML definition.
+   * immune to later workflow-YAML edits. Only a row not stamped yet (a node
+   * that never started a turn) falls back to the CURRENT YAML definition.
    */
   private async resolveNode(
     run: Run,
@@ -259,8 +259,8 @@ export class HandoffService {
     model: string | null;
     /**
      * A pooled own conversation's directory comes from its member record and
-     * the run's immutable snapshot. Other workflow nodes retain the legacy
-     * null: their state stamps no directory, and today's YAML cannot identify
+     * the run's immutable snapshot. Other workflow nodes carry null: their
+     * state stamps no directory, and today's YAML cannot identify
      * a historical account. Chats carry their directory on the run itself.
      */
     configDir: string | null;

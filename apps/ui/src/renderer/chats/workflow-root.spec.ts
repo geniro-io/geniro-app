@@ -8,12 +8,8 @@ const node = (
   kind: 'agent' | 'trigger' | 'instruction',
 ): WorkflowNode => ({ id, kind }) as unknown as WorkflowNode;
 
-const edge = (from: string, to: string, kind?: string): WorkflowEdge =>
-  ({
-    from,
-    to,
-    ...(kind === undefined ? {} : { kind }),
-  }) as unknown as WorkflowEdge;
+const edge = (from: string, to: string, kind: string): WorkflowEdge =>
+  ({ from, to, kind }) as unknown as WorkflowEdge;
 
 const workflow = (nodes: WorkflowNode[], edges: WorkflowEdge[]): Workflow =>
   ({ nodes, edges }) as unknown as Workflow;
@@ -29,20 +25,6 @@ describe('rootAgentOf', () => {
             node('eng', 'agent'),
           ],
           [edge('t', 'manager', 'data'), edge('manager', 'eng', 'call')],
-        ),
-      ),
-    ).toBe('manager');
-  });
-
-  it('reads an edge with NO kind as data — the oldest graphs carry none', () => {
-    // The same rule the canvas reads edges by (`flowEdgeKind`): every edge
-    // persisted before the kind existed omits it, and a trigger edge is
-    // exactly the kind of edge those graphs have.
-    expect(
-      rootAgentOf(
-        workflow(
-          [node('t', 'trigger'), node('manager', 'agent')],
-          [edge('t', 'manager')],
         ),
       ),
     ).toBe('manager');

@@ -48,7 +48,7 @@ describe('taskIdentifier', () => {
     expect(taskIdentifier('GEN', 12)).toBe('GEN-12');
   });
 
-  it('answers null for a card the backfill has not reached', () => {
+  it('answers null for a card with no number', () => {
     // `GEN-0` names a card that does not exist, and a bare `-12` names no
     // board — so a caller draws nothing instead.
     expect(taskIdentifier('GEN', null)).toBeNull();

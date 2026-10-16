@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { simulateSleep } from '../../../../__tests__/simulate-sleep';
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import { AgentAdapterRegistry } from '../../services/agent-adapter.registry';
 import { AgentVersionService } from '../../services/agent-version.service';
@@ -824,7 +825,7 @@ describe('CursorAcpAdapter turn shaping', () => {
     new CursorAcpAdapter({
       vocabularyStore: freshVocabularyStore(),
       spawn,
-    }).start({ ...BASE, model: 'claude-opus-5[thinking=true]' }, (event) =>
+    }).start({ ...BASE, model: 'claude-opus-5' }, (event) =>
       events.push(event),
     );
     child.stdout.emitData(
@@ -857,13 +858,10 @@ describe('CursorAcpAdapter turn shaping', () => {
     expect(events.filter((event) => event.type === 'notice')).toEqual([]);
   });
 
-  it('splits a LEGACY bracketed id and applies the model before its parameters', () => {
-    // Every cursor chat created before the parameterized handshake stored the
-    // composed form, and that form is `-32602 Invalid params` in the mode a turn
-    // now speaks. Splitting it is what keeps those chats running on exactly the
-    // settings they were made with. ORDER is load-bearing and not cosmetic: a
-    // parameter's existence depends on the current model, so `effort` before
-    // `model` is "Unknown model config option".
+  it('applies the model before its parameters', () => {
+    // ORDER is load-bearing and not cosmetic: a parameter's existence depends
+    // on the current model, so `effort` before `model` is "Unknown model
+    // config option".
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
     new CursorAcpAdapter({
@@ -872,11 +870,7 @@ describe('CursorAcpAdapter turn shaping', () => {
     }).start(
       {
         ...BASE,
-        model:
-          'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
-        // The turn's OWN effort, which must WIN over the one baked into the id
-        // months ago — otherwise the new picker could never change anything on
-        // an existing chat.
+        model: 'claude-opus-5',
         effort: 'xhigh',
       },
       (event) => events.push(event),
@@ -909,10 +903,6 @@ describe('CursorAcpAdapter turn shaping', () => {
       .map((params) => [params.configId, params.value]);
     expect(settings).toEqual([
       ['model', 'claude-opus-5'],
-      ['thinking', 'true'],
-      ['context', '300k'],
-      ['fast', 'false'],
-      // Last, and `xhigh` rather than the id's `high`.
       ['effort', 'xhigh'],
     ]);
     const methods = framesOn(child).map((frame) => frame.method);
@@ -1091,33 +1081,6 @@ describe('CursorAcpAdapter turn shaping', () => {
       ),
     ) as { maxMode?: unknown };
     expect(config.maxMode).toBe(true);
-  });
-
-  it('seeds the BARE name out of a legacy composed id', () => {
-    // Existing chats store `claude-opus-5[thinking=true,…]`, and
-    // `cli-config.json` names a model rather than a variant — writing the
-    // bracketed form is a name the CLI does not know, which falls back to
-    // `auto-smart` and describes the wrong model's options.
-    const { spawn, captured } = fakeSpawn();
-    const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
-    dirs.push(profileDir);
-
-    new CursorAcpAdapter({
-      vocabularyStore: freshVocabularyStore(),
-      spawn,
-      profileDir,
-    }).start(
-      { ...BASE, model: 'claude-opus-5[thinking=true,effort=high]' },
-      () => {},
-    );
-
-    const config = JSON.parse(
-      readFileSync(
-        join(captured.env!.CURSOR_CONFIG_DIR!, 'cli-config.json'),
-        'utf8',
-      ),
-    ) as { model?: { modelId?: string } };
-    expect(config.model?.modelId).toBe('claude-opus-5');
   });
 
   it('links that config dir’s conversation store at one the turn cannot delete', () => {
@@ -1328,7 +1291,7 @@ describe('cursorAutoDecision', () => {
     expect(cursorAutoDecision('auto')).toBe('allow');
   });
 
-  it('auto-approves a legacy turn that carries no mode at all', () => {
+  it('auto-approves a turn that carries no mode at all', () => {
     expect(cursorAutoDecision(undefined)).toBe('allow');
   });
 
@@ -2250,6 +2213,33 @@ ${RESUMED}
       // Still watched, not closed: nothing says it is over.
       expect(closes(events)).toEqual([]);
       expect(wakes(child)).toEqual([]);
+    });
+
+    it('does not settle a held turn because the machine slept through the window', async () => {
+      // node's timers count through a macOS sleep: the hold ran out at the
+      // wake and the turn ended on its partial answer, over delegates that had
+      // been asleep with the machine, not idle.
+      const { child, events, warn } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      endTurn(child);
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      await simulateSleep(4 * 60 * 60_000);
+      expect(events.some((event) => event.type === 'turn_complete')).toBe(
+        false,
+      );
+
+      // The window starts again, whole, from the wake.
+      await vi.advanceTimersByTimeAsync(DELEGATE_HOLD_IDLE_MS - 1);
+      expect(events.some((event) => event.type === 'turn_complete')).toBe(
+        false,
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('settling a turn held for 1 background'),
+      );
+      expect(events.at(-1)?.type).toBe('turn_complete');
     });
 
     it('closes it with the outcome its transcript states, and the time it really took', async () => {

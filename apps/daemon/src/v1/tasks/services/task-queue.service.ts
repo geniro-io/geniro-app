@@ -41,6 +41,22 @@ export const STOPPED_BY_USER_REASON =
   'you stopped its last run — the autopilot leaves a stopped task alone; press Run to start it again';
 
 /**
+ * How long a card whose worktree could not be prepared is held in `blocked`
+ * before the autopilot tries it again (`Task.prepareFailedAt`). Long enough
+ * that a lasting failure costs the cards behind it one tick in this many
+ * minutes rather than every tick; short enough that one which heals on its own
+ * (a folder that comes back, another checkout letting go of the branch) does
+ * not wait on a press.
+ */
+export const PREPARE_FAILURE_RETRY_MS = 5 * 60_000;
+
+/** Why a card is held after its worktree could not be prepared. */
+export function worktreeUnpreparedReason(gitLine: string | null): string {
+  const cause = gitLine === null ? '' : `: ${gitLine}`;
+  return `its worktree could not be prepared${cause} — the autopilot tries again in a few minutes, or press Run once that is fixed`;
+}
+
+/**
  * Splits a project's waiting cards into what the autopilot may start now and
  * what it cannot, joining `ProjectQueueService`'s raw read against the
  * workflow library.
@@ -89,6 +105,7 @@ export class TaskQueueService {
     const blocked: BlockedTask[] = [];
     const stopped = new Set(raw.stoppedTaskIds);
     const working = new Set(raw.active.map((active) => active.id));
+    const now = Date.now();
     for (const task of raw.waitingTasks) {
       // A card sitting in the intake column whose run is still LIVE is not
       // waiting work: it is being worked — in the thread, by the user, or
@@ -120,6 +137,8 @@ export class TaskQueueService {
             cause === undefined
               ? STOPPED_BY_USER_REASON
               : interruptedReason(cause),
+          kind: 'stopped',
+          retryInMs: null,
         });
         continue;
       }
@@ -160,6 +179,8 @@ export class TaskQueueService {
           id: task.id,
           title: task.title,
           reason: missingWorkflowReason(asUser.workflowSlug),
+          kind: 'missing-workflow',
+          retryInMs: null,
         });
         continue;
       }
@@ -178,6 +199,29 @@ export class TaskQueueService {
           id: task.id,
           title: task.title,
           reason: RUN_TARGET_PROBLEM_REASON[resolution.reason],
+          kind: 'run-target',
+          retryInMs: null,
+        });
+        continue;
+      }
+      // Main could not make this card's worktree on an earlier tick — see
+      // `Task.prepareFailedAt`. Asked LAST, so a card that also has a problem
+      // the run settings answer is reported as that, not as a timed hold. A
+      // stamp in the future (the clock was set back) counts as expired, or it
+      // would hold the card until the clock caught up.
+      const failedAt = task.prepareFailedAt?.getTime() ?? null;
+      if (
+        raw.enabled &&
+        failedAt !== null &&
+        now >= failedAt &&
+        now - failedAt < PREPARE_FAILURE_RETRY_MS
+      ) {
+        blocked.push({
+          id: task.id,
+          title: task.title,
+          reason: worktreeUnpreparedReason(task.prepareFailedReason),
+          kind: 'worktree',
+          retryInMs: PREPARE_FAILURE_RETRY_MS - (now - failedAt),
         });
         continue;
       }

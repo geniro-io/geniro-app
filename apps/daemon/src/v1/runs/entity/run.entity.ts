@@ -77,10 +77,7 @@ export class Run extends TimestampsEntity {
 
   /**
    * Chat approval mode for a single-agent run; null for graph runs (their
-   * modes live in the workflow YAML) and for legacy chat rows created before
-   * the selector existed — null keeps the exact pre-selector behavior (no
-   * permission flags on the CLI). Plain TEXT so the `safe: true` schema sync
-   * adds it additively, no migration.
+   * modes live in the workflow YAML).
    */
   @Property({ type: 'string', nullable: true })
   approval: ChatApprovalMode | null = null;

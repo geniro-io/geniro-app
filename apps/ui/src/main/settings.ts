@@ -11,13 +11,19 @@ import { app } from 'electron';
 
 import {
   DEFAULT_SETTINGS,
+  DEFAULT_SHARING,
   MAX_CONFIG_PROFILES,
   MAX_FAST_ACTIONS,
   MAX_RUN_CONFIGS,
   type Settings,
+  type ShareDestination,
+  type SharingSettings,
 } from '../shared/contracts';
-import { AGENT_DESCRIPTORS } from './agents/agent-descriptors';
-import { settingsPatchSchema } from './ipc-schemas';
+import {
+  MAX_SHARE_DESTINATIONS,
+  settingsPatchSchema,
+  shareDestinationSchema,
+} from './ipc-schemas';
 
 /**
  * Non-secret app settings, persisted as a plain JSON file in Electron's
@@ -56,8 +62,8 @@ export function readSettings(): Settings {
     return { ...DEFAULT_SETTINGS };
   }
   try {
-    const parsed = parseSettingsObject(readFileSync(path, 'utf8'));
-    if (parsed === null) {
+    const record = parseSettingsObject(readFileSync(path, 'utf8'));
+    if (record === null) {
       return { ...DEFAULT_SETTINGS };
     }
     // Salvage per key. The strict schema keeps renderer WRITES honest (ipc.ts
@@ -67,7 +73,6 @@ export function readSettings(): Settings {
     // re-onboard the user, and the next updateSettings() write would make the
     // loss permanent. Merging over defaults also completes a file written by
     // an older version as the schema grows.
-    const record = scopeUnscopedConfigDirs(parsed);
     const salvaged: Record<string, unknown> = {};
     for (const key of Object.keys(settingsPatchSchema.shape)) {
       if (!(key in record)) {
@@ -103,6 +108,10 @@ export function readSettings(): Settings {
         }
         continue;
       }
+      if (key === 'sharing') {
+        salvaged[key] = salvageSharing(record[key]);
+        continue;
+      }
       if (key === 'configProfiles') {
         const profiles = salvageList(
           'configProfiles',
@@ -125,44 +134,6 @@ export function readSettings(): Settings {
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
-}
-
-/**
- * A file written while the app remembered ONE config directory for every agent
- * holds `configDir` as a string, `recentConfigDirs` as a flat list and profiles
- * with no `agent`. Every one of them belongs to the CLI whose descriptor
- * declares `ownsUnscopedConfigDirs` — no other CLI could run under a config
- * directory then — so they are filed under it here, and the next write stores
- * the per-CLI shape. Without this the per-key salvage would drop all three,
- * and the named profiles are hand-made and unrecoverable.
- */
-function scopeUnscopedConfigDirs(
-  record: Record<string, unknown>,
-): Record<string, unknown> {
-  const owner = Object.values(AGENT_DESCRIPTORS).find(
-    (descriptor) => descriptor.ownsUnscopedConfigDirs,
-  )?.kind;
-  if (owner === undefined) {
-    return record;
-  }
-  const scoped = { ...record };
-  if (typeof record.configDir === 'string' && !('configDirs' in record)) {
-    scoped.configDirs = { [owner]: record.configDir };
-  }
-  if (Array.isArray(record.recentConfigDirs)) {
-    scoped.recentConfigDirs = { [owner]: record.recentConfigDirs };
-  }
-  if (Array.isArray(record.configProfiles)) {
-    scoped.configProfiles = record.configProfiles.map((profile: unknown) =>
-      typeof profile === 'object' &&
-      profile !== null &&
-      !Array.isArray(profile) &&
-      !('agent' in profile)
-        ? { ...profile, agent: owner }
-        : profile,
-    );
-  }
-  return scoped;
 }
 
 /**
@@ -236,6 +207,41 @@ function salvageList<K extends 'runConfigs' | 'fastActions' | 'configProfiles'>(
 }
 
 /**
+ * The sharing settings, kept destination by destination: one destination a
+ * newer build wrote, or a hand edit broke, must not cost the user every other
+ * one — nor the switch beside them. Ids stay unique, and a default that names
+ * a dropped destination falls back to none rather than pointing nowhere.
+ */
+function salvageSharing(value: unknown): SharingSettings {
+  if (typeof value !== 'object' || value === null) {
+    return DEFAULT_SHARING;
+  }
+  const record = value as Record<string, unknown>;
+  const destinations: ShareDestination[] = [];
+  const seen = new Set<string>();
+  for (const candidate of Array.isArray(record.destinations)
+    ? record.destinations
+    : []) {
+    const parsed = shareDestinationSchema.safeParse(candidate);
+    if (!parsed.success || seen.has(parsed.data.id)) {
+      continue;
+    }
+    seen.add(parsed.data.id);
+    destinations.push(parsed.data);
+  }
+  const kept = destinations.slice(0, MAX_SHARE_DESTINATIONS);
+  const defaultId = record.defaultDestinationId;
+  return {
+    destinations: kept,
+    defaultDestinationId:
+      typeof defaultId === 'string' && kept.some((d) => d.id === defaultId)
+        ? defaultId
+        : null,
+    agentsMayShare: record.agentsMayShare === true,
+  };
+}
+
+/**
  * Copies a settings.json that does not parse as an object to
  * `settings.json.corrupt-<timestamp>` beside it, before a write replaces it.
  *
@@ -275,6 +281,19 @@ function preserveUnparseableSettings(path: string): void {
   });
 }
 
+type SettingsListener = (settings: Settings) => void;
+const settingsListeners = new Set<SettingsListener>();
+
+/**
+ * Told after every write that reached the file — the one seam every write
+ * passes through, so a listener cannot miss a writer added later. A listener
+ * must not throw: the write has already happened.
+ */
+export function onSettingsWritten(listener: SettingsListener): () => void {
+  settingsListeners.add(listener);
+  return () => settingsListeners.delete(listener);
+}
+
 export function writeSettings(next: Settings): Settings {
   const path = settingsPath();
   mkdirSync(dirname(path), { recursive: true });
@@ -282,6 +301,9 @@ export function writeSettings(next: Settings): Settings {
   writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8');
   preserveUnparseableSettings(path);
   renameSync(tmp, path);
+  for (const listener of settingsListeners) {
+    listener(next);
+  }
   return next;
 }
 

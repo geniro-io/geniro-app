@@ -13,7 +13,7 @@ import type {
 } from '../chat.types';
 import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
 import { parseJsonColumn, payloadString } from '../utils/json-util';
-import { messageText } from '../utils/message-preview';
+import { messagePreview, messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
 import {
@@ -321,8 +321,9 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Text of each run's LATEST message, whoever said it — the chat list's
-   * preview line.
+   * Each run's LATEST message, whoever said it, as the chat list's preview
+   * line ({@link messagePreview}: its text, or a label for a message that is
+   * pictures alone).
    *
    * TWIN PARSER: `apps/ui/src/renderer/chats/chat-preview.ts` decides the same
    * thing in the renderer (`previewsThread` for the open thread's live items,
@@ -346,8 +347,8 @@ export class ItemDao extends BaseDao<Item> {
    * pairs of message items (integers + ids only, no payloads), reduced to the
    * per-run head in memory, then just those head rows' payloads — in slices of
    * {@link PREVIEW_HEADS_PER_QUERY}, which is what keeps a long chat list under
-   * SQLite's expression-depth limit. Runs with no message items (or a non-text
-   * payload) are simply absent from the map.
+   * SQLite's expression-depth limit. Runs with no message items (or a head
+   * with neither text nor pictures) are simply absent from the map.
    */
   async latestMessageTextPerRun(
     runIds: string[],
@@ -390,7 +391,7 @@ export class ItemDao extends BaseDao<Item> {
           // The kind is repeated deliberately. `(runId, seq)` is not a key: a
           // transcript written before `ItemSeqAllocator` can hold two rows on
           // one seq, and without this filter a tool row sharing the head's
-          // number comes back too — `messageText` reads null off it, and
+          // number comes back too — `messagePreview` reads null off it, and
           // whichever of the pair the database returned last decided whether
           // the run had a preview line at all.
           kind: 'message',
@@ -418,9 +419,9 @@ export class ItemDao extends BaseDao<Item> {
         },
       );
       for (const row of rows) {
-        const text = messageText(row.payload);
-        if (text !== null) {
-          previews.set(row.runId, text);
+        const preview = messagePreview(row.payload);
+        if (preview !== null) {
+          previews.set(row.runId, preview);
         }
       }
     }
@@ -922,45 +923,6 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * One batch of rows the search-text backfill has not reached yet, resuming
-   * after `afterId`.
-   *
-   * `searchText IS NULL` alone would be enough to DRAIN — every row the sweep
-   * writes leaves the set — but not to stay cheap: the column is deliberately
-   * unindexed (see {@link Item.searchText}), so each batch would re-scan the
-   * whole filled prefix before reaching an unfilled row, which is linear per
-   * batch and therefore quadratic over the table. Measured on a 188k-row replica
-   * of a real profile: 4ms per batch at 10% filled rising to 34ms at 99%, 11.4s
-   * of pure re-scanning across the run.
-   *
-   * The cursor is the PRIMARY KEY, so it needs no index of its own and the order
-   * is stable across batches. A row skipped because it was written between two
-   * batches is simply picked up by the next launch — the sweep is idempotent and
-   * only retires when a pass finds nothing.
-   *
-   * Projected to the two columns the flattener needs, because the payload of a
-   * long transcript is most of the database and this reads every row of it once.
-   */
-  async missingSearchText(
-    limit: number,
-    afterId: string | null = null,
-    txEm?: EntityManager,
-  ): Promise<Pick<Item, 'id' | 'payload'>[]> {
-    return this.getRepo(txEm).find(
-      {
-        searchText: null,
-        ...(afterId === null ? {} : { id: { $gt: afterId } }),
-      },
-      {
-        limit,
-        orderBy: { id: 'asc' },
-        fields: ['id', 'payload'],
-        disableIdentityMap: true,
-      },
-    );
-  }
-
-  /**
    * Rows of ONE run whose flattened text answers for EVERY term, newest first.
    *
    * All terms rather than any, matching how `searchTerms` splits a query and
@@ -1000,6 +962,57 @@ export class ItemDao extends BaseDao<Item> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /** The seq of the run's newest `tool_call` row, or 0 when it has none. */
+  async lastToolCallSeq(runId: string, txEm?: EntityManager): Promise<number> {
+    const em = txEm ?? this.em.fork();
+    const row = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => eb.fn.max('seq').as('last'))
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'tool_call')
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    return row?.last == null ? 0 : Number(row.last);
+  }
+
+  /**
+   * The run's `tool_call` rows in `(afterSeq, throughSeq]` whose stored payload
+   * text contains any of `texts`. `instr` rather than `LIKE`: a path holds `_`,
+   * which LIKE reads as a wildcard, and LIKE ignores ASCII case where paths do
+   * not.
+   */
+  async toolCallsContainingAny(
+    runId: string,
+    afterSeq: number,
+    throughSeq: number,
+    texts: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<{ seq: number; payload: string }[]> {
+    const em = txEm ?? this.em.fork();
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select(['seq', 'payload'])
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'tool_call')
+      .where('deleted_at', 'is', null)
+      .where('seq', '>', afterSeq)
+      .where('seq', '<=', throughSeq)
+      .where((eb) =>
+        eb.or(
+          texts.map((text) =>
+            eb(eb.fn('instr', [eb.ref('payload'), eb.val(text)]), '>', 0),
+          ),
+        ),
+      )
+      .execute();
+    return rows.map((row) => ({
+      seq: Number(row.seq),
+      payload: String(row.payload),
+    }));
   }
 
   /**
@@ -1268,6 +1281,9 @@ export class ItemDao extends BaseDao<Item> {
           eb
             .fn<string | null>('json_extract', [payload, eb.val('$.name')])
             .as('tool_name'),
+          eb
+            .fn<number | null>('json_extract', [payload, eb.val('$.isError')])
+            .as('tool_is_error'),
         ];
       })
       .where('run_id', '=', runId)
@@ -1284,6 +1300,8 @@ export class ItemDao extends BaseDao<Item> {
       at: Number(row.created_at),
       toolId: row.tool_id === null ? null : String(row.tool_id),
       name: row.tool_name === null ? null : String(row.tool_name),
+      // SQLite's json_extract answers a JSON `true` as 1.
+      isError: row.kind === 'tool_result' && Number(row.tool_is_error) === 1,
     }));
   }
 
@@ -1406,15 +1424,6 @@ export class ItemDao extends BaseDao<Item> {
       },
     );
     return row ?? null;
-  }
-
-  /** Fill in one row's flattened search text. */
-  async rememberSearchText(
-    id: string,
-    searchText: string,
-    txEm?: EntityManager,
-  ): Promise<void> {
-    await this.getRepo(txEm).nativeUpdate({ id }, { searchText });
   }
 
   /**

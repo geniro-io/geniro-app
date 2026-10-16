@@ -65,6 +65,7 @@ import { ConfigProfileList } from './config-profiles';
 import { type FastActionDraft, FastActionsPane } from './fast-actions';
 import { ProjectsPane } from './projects';
 import { RemoteAccess } from './remote-access';
+import { Sharing } from './sharing';
 
 /**
  * The value the `Keep for ever` row carries.
@@ -195,7 +196,8 @@ export type SettingsSection =
   | 'run-configurations'
   | 'fast-actions'
   | 'projects'
-  | 'remote-access';
+  | 'remote-access'
+  | 'sharing';
 
 const SECTION_LABEL: Record<SettingsSection, string> = {
   general: 'General',
@@ -203,6 +205,7 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
   'fast-actions': 'Fast actions',
   projects: 'Projects',
   'remote-access': 'Remote access',
+  sharing: 'Sharing',
 };
 
 /**
@@ -221,6 +224,8 @@ const SECTION_NOTE: Record<SettingsSection, string> = {
     'Your own buttons under the composer. Each one is a name and a piece of text; pressing it writes that text into the message box, whatever agent and folder you happen to be set to.',
   'remote-access':
     'Serve this app to your Wi-Fi so a phone can open the same live chats — a device pairs with a code shown here.',
+  sharing:
+    'Share a page as an encrypted link anyone holding it can open — uploaded through your own gcloud, aws or command, never a Geniro server.',
 };
 
 /** Nav order — General first, because it is what Settings has always been. */
@@ -230,6 +235,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'fast-actions',
   'projects',
   'remote-access',
+  'sharing',
 ];
 
 export function Settings({
@@ -1350,6 +1356,8 @@ export function Settings({
             />
           ) : section === 'remote-access' ? (
             <RemoteAccess />
+          ) : section === 'sharing' ? (
+            <Sharing api={apis?.shares ?? null} />
           ) : (
             <>
               {/* The sign-in's own error lives in its progress panel — but a sign-in that

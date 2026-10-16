@@ -15,8 +15,21 @@ import { type ChangesSummary, summarizeChanges } from './changes-tree';
  */
 const CHANGES_FRESHNESS_MS = 15_000;
 
-export interface ChatChanges {
+/** What changed in one of the thread's work folders other than its own. */
+export interface WorkFolderChanges {
+  folder: string;
   changes: GitChange[];
+}
+
+export interface ChatChanges {
+  /** The run folder's own changes. */
+  changes: GitChange[];
+  /**
+   * The other folders the thread's agents worked in that hold changes — a
+   * worktree one of them made — each read against the same start. Apart from
+   * `changes` because paths are repository-relative and collide across them.
+   */
+  elsewhere: WorkFolderChanges[];
   /** More files changed than one read returns — the list is real but short. */
   truncated: boolean;
   /** Why there is no answer at all, from the reader itself. */
@@ -35,7 +48,8 @@ export interface ChatChanges {
   error: string | null;
   loading: boolean;
   /**
-   * The totals, or null until the FIRST read of this folder lands.
+   * The totals over `changes` and `elsewhere` together, or null until the
+   * FIRST read of this folder lands.
    *
    * Null and `{files: 0}` are different states and the difference is visible:
    * null is "not read yet", zero is "read, and nothing has changed". A chip that
@@ -61,12 +75,20 @@ export interface ChatChanges {
  * the thread being opened and a turn ending, and the caller drives both. That is
  * the same shape `use-pull-requests.ts` uses for the same reason, freshness
  * floor included.
+ *
+ * `workFolders` are the other folders the thread's agents worked in
+ * (`useRunWorkFolders`), read in the same pass against the same start, since
+ * an agent that commits in a worktree of its own leaves `cwd` untouched.
  */
 export function useChatChanges(
   cwd: string | null,
   startSha: string | null,
+  workFolders: readonly string[] = [],
 ): ChatChanges {
+  // Callers rebuild the array every render; the key is what stays stable.
+  const foldersKey = workFolders.join('\0');
   const [changes, setChanges] = useState<GitChange[]>([]);
+  const [elsewhere, setElsewhere] = useState<WorkFolderChanges[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [unavailableReason, setReason] = useState<string | null>(null);
   const [movedOffStart, setMovedOffStart] = useState(false);
@@ -96,14 +118,38 @@ export function useChatChanges(
       const mine = (generation.current += 1);
       setLoading(true);
       setError(null);
-      void window.geniro
-        .getChangesSince(cwd, startSha)
-        .then((result) => {
+      const folders = foldersKey === '' ? [] : foldersKey.split('\0');
+      void Promise.all([
+        window.geniro.getChangesSince(cwd, startSha),
+        Promise.all(
+          folders.map((folder) =>
+            window.geniro.getChangesSince(folder, startSha, true).then(
+              (result) =>
+                // A worktree removed since it was listed, or one git cannot
+                // read (an empty list with a reason), simply has nothing to
+                // add — the run folder's own reading is the one whose failure
+                // the dialog explains.
+                result.changes.length > 0
+                  ? {
+                      entry: { folder, changes: result.changes },
+                      truncated: result.truncated,
+                    }
+                  : null,
+              () => null,
+            ),
+          ),
+        ),
+      ])
+        .then(([result, others]) => {
           if (generation.current !== mine) {
             return;
           }
+          const held = others.filter((other) => other !== null);
           setChanges(result.changes);
-          setTruncated(result.truncated);
+          setElsewhere(held.map((other) => other.entry));
+          setTruncated(
+            result.truncated || held.some((other) => other.truncated),
+          );
           setReason(result.unavailableReason);
           setMovedOffStart(result.movedOffStart);
           setUpstreamBase(result.upstreamBase);
@@ -120,7 +166,7 @@ export function useChatChanges(
           }
         });
     },
-    [cwd, startSha],
+    [cwd, startSha, foldersKey],
   );
 
   useEffect(() => {
@@ -129,6 +175,7 @@ export function useChatChanges(
     // totals until its own read landed.
     generation.current += 1;
     setChanges([]);
+    setElsewhere([]);
     setTruncated(false);
     setReason(null);
     setMovedOffStart(false);
@@ -136,18 +183,38 @@ export function useChatChanges(
     setError(null);
     setRead(false);
     lastReadAt.current = 0;
+  }, [cwd, startSha]);
+
+  // Apart from the reset above, and after it: a work folder found later re-reads
+  // WITHOUT clearing, so the chip keeps its figures until the wider ones land.
+  useEffect(() => {
     if (cwd !== null && startSha !== null) {
       refresh(true);
     }
   }, [cwd, startSha, refresh]);
 
+  // Only folders the caller still names: two threads in one folder share the
+  // reset key above, and the previous one's worktree must not stand under the
+  // next until its own read lands.
+  const shown = useMemo(() => {
+    const current = new Set(foldersKey === '' ? [] : foldersKey.split('\0'));
+    return elsewhere.filter((held) => current.has(held.folder));
+  }, [elsewhere, foldersKey]);
+
   const summary = useMemo(
-    () => (read ? summarizeChanges(changes) : null),
-    [read, changes],
+    () =>
+      read
+        ? summarizeChanges([
+            ...changes,
+            ...shown.flatMap((folder) => folder.changes),
+          ])
+        : null,
+    [read, changes, shown],
   );
 
   return {
     changes,
+    elsewhere: shown,
     truncated,
     unavailableReason,
     movedOffStart,

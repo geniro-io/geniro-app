@@ -156,7 +156,7 @@ export class UsageBackfillService implements OnModuleInit {
     }
     // The activity sweep reads every run on every launch, and the window is not
     // answered until this method returns. Nothing needs it before then, so it runs
-    // behind the boot, as the search-text backfill does.
+    // behind the boot.
     void this.backfillActivityQuietly();
   }
 

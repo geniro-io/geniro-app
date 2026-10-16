@@ -273,6 +273,32 @@ export class ArtifactStoreService {
   }
 
   /**
+   * The newest stored version of an artifact and its serving key, or null when
+   * the run holds no such artifact.
+   *
+   * For an in-process caller that already has the right to the page — the
+   * share path, acting on the user's press or a switch the user turned on. No
+   * route may hand this out: the key is the only thing guarding the page.
+   */
+  latest(
+    runId: string,
+    artifactId: string,
+  ): { version: number; key: string } | null {
+    if (
+      !UUID.test(runId) ||
+      !ARTIFACT_ID_PATTERN.test(artifactId) ||
+      artifactId.length > MAX_ARTIFACT_ID_LENGTH
+    ) {
+      return null;
+    }
+    const meta = this.readMeta(join(this.root, runId, artifactId));
+    if (meta !== null) {
+      registerSecret(meta.key, 'artifact key');
+    }
+    return meta;
+  }
+
+  /**
    * One image a stored page refers to, or null when the request names nothing
    * this store holds or presents the wrong key.
    *

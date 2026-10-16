@@ -48,11 +48,8 @@ export function triggerFedAgentIds(workflow: Workflow): string[] {
   }
   const fed = new Set(
     workflow.edges
-      // An ABSENT kind reads as `data`, the same rule the canvas reads edges
-      // by (`flowEdgeKind`): every edge persisted before the kind existed
-      // carries none, and those are exactly the trigger edges of the oldest
-      // graphs. A `call` or `instruction` edge is not a route into the run.
-      .filter((edge) => (edge.kind ?? 'data') === 'data')
+      // A `call` or `instruction` edge is not a route into the run.
+      .filter((edge) => edge.kind === 'data')
       .filter((edge) => triggers.has(edge.from))
       .map((edge) => edge.to),
   );

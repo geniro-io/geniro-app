@@ -1,4 +1,5 @@
 import {
+  type BranchCarryResult,
   type BranchPullResult,
   type BranchSwitchResult,
   CLI_KINDS,
@@ -247,6 +248,10 @@ export function createPreloadStub(
         upstreamBase: null,
       });
     },
+    listWorktrees: () => {
+      note('listWorktrees');
+      return Promise.resolve([]);
+    },
     getChangesTotals: () => {
       note('getChangesTotals');
       // Null, as a folder that is not a repository gives nothing to measure
@@ -296,6 +301,18 @@ export function createPreloadStub(
       return Promise.resolve({
         ok: true,
         branch: null,
+        error: null,
+        stashLeft: null,
+      });
+    },
+    carryChangesToBranch: (
+      _dir: string,
+      branch: string,
+    ): Promise<BranchCarryResult> => {
+      note('carryChangesToBranch');
+      return Promise.resolve({
+        ok: true,
+        branch,
         error: null,
         stashLeft: null,
       });

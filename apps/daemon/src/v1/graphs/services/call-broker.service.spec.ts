@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import type { RunCallSeed } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { readCallSeed } from '../../agents/utils/call-seed';
@@ -4006,6 +4007,32 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
     ).toBe(true);
   });
 
+  it('fires at the wake when the reset came due while the machine slept', async () => {
+    // The opposite of a silence deadline: this names an INSTANT, and once it
+    // has passed the promised continue is owed — a sleep through it must not
+    // push it another window later. Sleeping 17:00 → 21:00 over an 18:11 wake.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const woken: string[] = [];
+    const { broker } = harness({
+      isNodeLive: () => false,
+      wakeNode: (node) => {
+        woken.push(node);
+        return true;
+      },
+      instantOutcome: RATE_LIMITED,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    await simulateSleep(4 * 60 * 60_000);
+
+    expect(woken).toEqual(['orch']);
+  });
+
   it('wakes a caller ONCE for every call one reset stopped', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
@@ -6777,5 +6804,70 @@ describe('CallBroker — pages published inside a call', () => {
       status: 'error',
       artifacts: [{ artifact_id: 'plan', title: 'Plan', version: 1 }],
     });
+  });
+});
+
+describe('CallBroker — the machine sleeping through a deadline', () => {
+  // node's timers count through a macOS sleep, so every window that ran out
+  // while the lid was shut fired the instant it opened (2026-10-10). Time
+  // asleep is not a callee going quiet, nor a caller failing to answer.
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const stalls = (items: { payload: Record<string, unknown> }[]) =>
+    items.filter((i) => i.payload.stalledCall === true);
+
+  it('does not report a callee as stalled at the wake, and gives it a full window from there', async () => {
+    vi.useFakeTimers();
+    const { broker, items } = harness({ launch: 'defer' });
+    void broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    await vi.advanceTimersByTimeAsync(45_000);
+    await simulateSleep(4 * HOUR);
+    expect(stalls(items)).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10 * MINUTE - 1_000);
+    expect(stalls(items)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(stalls(items)).toHaveLength(1);
+  });
+
+  it('does not time a parked question out at the wake; its TTL starts again from there', async () => {
+    vi.useFakeTimers();
+    const { broker } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const fail = vi.fn();
+    expect(
+      broker.parkQuestion('run-1', 'call-1', {
+        question: 'Which color?',
+        options: ['Red', 'Blue'],
+        payload: { questions: [{ question: 'Which color?' }] },
+        ttlMs: 30 * MINUTE,
+        deliver: () => true,
+        fail,
+      }),
+    ).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(45_000);
+    await simulateSleep(4 * HOUR);
+    expect(fail).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30 * MINUTE - 1_000);
+    expect(fail).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fail).toHaveBeenCalledTimes(1);
   });
 });

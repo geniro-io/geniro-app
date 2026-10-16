@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import { environment } from '../../../environments';
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
@@ -604,6 +605,31 @@ describe('AgentSessionRegistry — ending a process', () => {
     // must not turn into a session that lives for ever.
     vi.advanceTimersByTime(SESSION_IDLE_MS);
 
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
+  it('does not reap off-turn work for time the machine spent asleep', async () => {
+    // The window above was refreshed by the last off-turn row, then the Mac
+    // slept for longer than the window. Those hours are not silence: at the
+    // wake the process is still there, and the window runs again from then
+    // rather than closing the CLI with no note.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-1', adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).emitBetweenTurn('Bash-1');
+
+    await simulateSleep(4 * 60 * 60_000);
+
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(registry.liveCount).toBe(1);
+
+    // A full window from the wake, so a timer that never fires does not pass.
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS - 1);
+    expect(at(sessions, 0).closes).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
     expect(at(sessions, 0).closes).toBe(1);
   });
 

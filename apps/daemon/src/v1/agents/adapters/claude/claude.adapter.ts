@@ -384,6 +384,15 @@ export class ClaudeAdapter extends AgentAdapter {
         // The Task tool, and the Agent name the CLI also launches one under.
         launchToolNames: ['Task', 'Agent'],
       },
+      backgroundWork: {
+        // spawn-cli holds the turn (and so the call it answers) while a
+        // delegate is out, and the CLI itself starts the next turn with the
+        // `task-notification` continuation — on every user-facing turn, since
+        // each runs on a kept process (`canHostSession`). A backgrounded
+        // command holds nothing.
+        agentNote:
+          '## Work you leave running\n\nSub-agents you start in the background keep running after you end your turn. This conversation — and the call you are answering, if any — stays open until they report, and you are started again automatically with their results. With nothing else to do, say briefly what you launched and END YOUR TURN instead of waiting: never poll with sleep, date, ls or until/tail loops, never start a background timer to check on them, never read their output files, and never predict what they will report. Your answer is the reply you give in the turn that has nothing left running. Background COMMANDS are different: they are not waited for — run a command whose result you need in the foreground.',
+      },
       // The Artifact tool, whose reply carries the published page's URL.
       artifactToolNames: ['Artifact'],
       approval: {
@@ -2261,14 +2270,17 @@ export class ClaudeAdapter extends AgentAdapter {
    * stdin was closed. `system/init` is re-emitted at the head of each turn, so
    * the session saver and the MCP harvest keep seeing what they read today.
    *
-   * The predicate is `keepStdinOpen`'s, deliberately reused rather than
-   * restated, exactly as `buildApprovalModePayload` reuses it: "can this turn
-   * carry a dialogue" and "can this process take another prompt" are the same
-   * question about the same open pipe, and a second copy of the condition is
-   * how the two would come to disagree.
+   * Every turn that carries the dialogue, and every `auto` turn without it:
+   * a kept process is what holds a turn — and the call it answers — while its
+   * background sub-agents run, which is what the background-work note tells
+   * the agent to rely on. An `auto` workflow node spawned one-shot with its
+   * stdin closed got none of that: it settled on its launching result and
+   * passed "the reviewers are running" downstream. Its stdin carries no
+   * dialogue, so the base serves a later turn in another mode on a fresh
+   * spawn rather than re-moding it.
    */
   protected override canHostSession(input: AgentTurnInput): boolean {
-    return this.keepStdinOpen(input);
+    return this.keepStdinOpen(input) || input.approvalMode === 'auto';
   }
 
   /**
@@ -2303,13 +2315,16 @@ export class ClaudeAdapter extends AgentAdapter {
    * the process still alive. That is what lets Stop leave the run's MCP
    * servers — and a browser one of them owns — running.
    *
-   * Gated on the same open-stdin predicate as its neighbours: a turn spawned
-   * under `--dangerously-skip-permissions` has no channel to be told anything.
+   * Offered wherever stdin can still be open — a kept `auto` process
+   * included: on 2.1.295 one spawned under `--dangerously-skip-permissions`
+   * answered this request `success` and went on to serve the next prompt. A
+   * one-shot turn's stdin is already closed, so the write fails and the turn
+   * is stopped by killing its group, as before.
    */
   protected override buildInterruptPayload(
     input: AgentTurnInput,
   ): string | undefined {
-    if (!this.keepStdinOpen(input)) {
+    if (!this.canHostSession(input)) {
       return undefined;
     }
     return `${JSON.stringify({
@@ -2399,11 +2414,12 @@ export class ClaudeAdapter extends AgentAdapter {
     mode: AgentApprovalMode,
   ): string | undefined {
     // The predicate is `keepStdinOpen`'s, deliberately reused rather than
-    // restated: "can this turn be re-moded" and "does this turn hold the stdin
-    // dialogue" are the SAME question, and a second copy of the condition is
-    // how the two would come to disagree after a change to buildArgs. A turn
-    // spawned under --dangerously-skip-permissions has no prompt tool, so a
-    // gate cannot be reintroduced into it by any message.
+    // restated: "can this turn be re-moded into" and "does this turn hold the
+    // stdin dialogue" are the SAME question, and a second copy of the
+    // condition is how the two would come to disagree after a change to
+    // buildArgs. A process spawned under --dangerously-skip-permissions has no
+    // prompt tool, so a gate cannot be reintroduced into it by any message —
+    // the base refuses that switch itself (`spawnedOnDialogue`).
     if (!this.keepStdinOpen(input)) {
       return undefined;
     }

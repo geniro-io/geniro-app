@@ -2148,11 +2148,13 @@ export abstract class AgentAdapter {
     return composeTurnInstructions({
       // An `internalProbe` turn has no transcript for the preamble to describe.
       includePreamble: input.internalProbe !== true,
+      backgroundWorkNote: this.getConfig().backgroundWork.agentNote,
       customInstructions: input.customInstructions,
       taskInstructions: input.taskInstructions,
       workflowInstructions: input.workflowInstructions,
       instructionBlocks: input.instructionBlocks,
       systemPrompt: input.systemPrompt,
+      answeringACallPrompt: input.answeringACallPrompt,
       callSurfacePrompt: granted ? input.callSurfacePrompt : null,
     });
   }
@@ -2299,7 +2301,8 @@ export abstract class AgentAdapter {
   /**
    * Whether the child's stdin stays open past the payload for a mid-turn
    * dialogue. Default false (stdin closes immediately); the Claude adapter
-   * returns true in `ask` approval mode for its control protocol.
+   * returns true for every turn spawned on its permission dialogue. A process
+   * spawned without it is never re-moded between turns (`startSession`).
    */
   protected keepStdinOpen(_input: AgentTurnInput): boolean {
     return false;
@@ -2471,6 +2474,7 @@ export abstract class AgentAdapter {
       // On the same composed block and the same reasoning: two graph nodes
       // wired to different instruction blocks must not share a process.
       input.instructionBlocks ?? null,
+      input.answeringACallPrompt ?? null,
       input.callSurfacePrompt ?? null,
       // Decides whether the host preamble is composed, so it is argv too. No
       // internal probe uses a kept session today (they all call `start()`),
@@ -2730,6 +2734,11 @@ export abstract class AgentAdapter {
     // new mode is simply never applied — the run row and the chip would both
     // read a posture the CLI was never told about.
     let spawnedMode = input.approvalMode;
+    // Whether the process holds the stdin permission dialogue at all. One that
+    // does not (claude under --dangerously-skip-permissions) has no prompt
+    // tool, so no message can re-mode it into asking — a turn wanting another
+    // mode has to be served by a fresh spawn.
+    const spawnedOnDialogue = this.keepStdinOpen(input);
     // The DIRECTORY this process was spawned in, not its path — see the
     // refusal in `startTurn` below.
     const spawnedCwd = directoryIdentity(input.cwd);
@@ -2874,9 +2883,10 @@ export abstract class AgentAdapter {
           firstTurnTaken &&
           turnInput.approvalMode !== spawnedMode
         ) {
-          if (turnInput.approvalMode === undefined) {
+          if (turnInput.approvalMode === undefined || !spawnedOnDialogue) {
             // "No mode at all" is the CLI's own default, which no message can
-            // ask a running process to return to.
+            // ask a running process to return to; nor can one spawned without
+            // the dialogue be given it.
             return null;
           }
           const line = this.buildApprovalModePayload(

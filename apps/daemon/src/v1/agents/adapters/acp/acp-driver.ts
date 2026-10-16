@@ -3059,6 +3059,13 @@ export class AcpTurnDriver {
    * Only delegates the session can WATCH hold it: one whose record cannot be
    * found would hold the turn for a report that never comes, so it is closed
    * with the turn as before.
+   *
+   * The agent is TOLD it can rely on this hold (`AdapterConfig.backgroundWork
+   * .agentNote` of every adapter declaring a `wakePrompt`): a change to what
+   * it holds for, or when it wakes, changes what that note may promise. Its
+   * bounds ({@link DELEGATE_HOLD_IDLE_MS}, {@link MAX_DELEGATE_WAKES}) are
+   * deliberately NOT in the note: they are safety valves the agent cannot act
+   * on, and a stated wait limit is what agents turn into a polling rhythm.
    */
   private holdForDelegates(
     stopReason: string | null,

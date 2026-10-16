@@ -315,12 +315,13 @@ Full guide: `apps/ui/AGENTS.md` (main process, renderer, chats, workflows, setti
 ### Agent instructions — the host preamble and the user's own
 
 - Every turn's instruction block is composed at one seam: `AgentAdapter.composeSystemPrompt` → `composeTurnInstructions` (`v1/agents/utils/agent-instructions.ts`). Adapters never join the parts themselves (`.claude/rules/agent-adapters.md`).
-- Order, general → specific: host preamble (`GENIRO_UI_PREAMBLE`), the user's custom instructions, a board card's `taskInstructions`, wired `instructionBlocks`, the node's `role`, then the "May call" block.
+- Order, general → specific: host preamble (`GENIRO_UI_PREAMBLE`), the CLI's background-work note (`AdapterConfig.backgroundWork.agentNote`), the user's custom instructions, a board card's `taskInstructions`, wired `instructionBlocks`, the node's `role`, the callee sentence (`ANSWERING_A_CALL`, on every turn that answers a call, a leaf callee included), then the "May call" block.
+- The background-work note is per CLI because the truth differs: a claude or cursor turn (and the call it answers) is held while its background sub-agents run and the agent is started again with their reports, so it is told to end its turn rather than poll; a codex turn is not held, so it is told to `wait_agent`. Every sentence must stay true of its adapter's hold; never inject a reminder mid-turn instead (it arrives as a user message).
 - Delivery: claude on `--append-system-prompt`; codex as the thread's `developerInstructions`; ACP inside the prompt text, after the user's words, wrapped in `<host-context>` (`HOST_CONTEXT_TAG`). Never lead the ACP prompt with it: the CLI names the chat from the prompt text.
 - On ACP the block is sent once per session and re-sent only when its text changes (`apps/daemon/AGENTS.md` → **ACP instruction delivery**).
 - The preamble exists to contradict the CLI's own claim that output goes to a terminal. Every claim in it must match this renderer: GFM renders, local-path images render, remote images do not (CSP `img-src 'self' data:`). Never promise remote images or image output blocks, and say nothing about response length.
-- `internalProbe` turns get no preamble.
-- The Settings screen reads the preamble from `GET /v1/capabilities` (`hostPreamble`); never restate it in the renderer.
+- `internalProbe` turns get no preamble and no background-work note.
+- The Settings screen reads the preamble and the per-CLI notes from `GET /v1/capabilities` (`hostPreamble`, `backgroundWorkNotes`); never restate them in the renderer.
 - Custom instructions are one global value, `Settings.customInstructions`, sent on chat create and workflow start under `CustomInstructionsSchema` (no length limit; refuses C0 control characters, since a NUL in argv makes `spawn` throw on every turn).
 - They are snapshotted onto `Run.customInstructions`, never read live: `AgentAdapter.sessionKey` hashes them, so a live read would respawn the kept CLI and its MCP servers mid-conversation. Editing them affects the next chat.
 - A node's `role` outranks them; keep them as peer fields, not one joined string.

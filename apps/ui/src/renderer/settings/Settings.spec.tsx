@@ -951,6 +951,38 @@ describe('Settings — custom instructions', () => {
     ).toContain('PREAMBLE FROM THE DAEMON');
   });
 
+  it('previews each CLI’s background-work note under the preamble, by its own name', async () => {
+    // The disclosure says what geniro tells every agent first; the per-CLI
+    // note is composed right after the preamble, so leaving it out would make
+    // that claim false. A CLI with no note gets no empty box.
+    capabilitiesApi.getCapabilities.mockResolvedValue({
+      hostPreamble: 'PREAMBLE FROM THE DAEMON',
+      approvals: [],
+      configDirs: [],
+      agents: [
+        { agent: 'claude', displayName: 'Claude Code' },
+        { agent: 'codex', displayName: 'Codex' },
+      ],
+      backgroundWorkNotes: [
+        { agent: 'claude', note: 'CLAUDE IS HELD' },
+        { agent: 'codex', note: null },
+      ],
+    } as unknown as Awaited<
+      ReturnType<typeof capabilitiesApi.getCapabilities>
+    >);
+    await mount();
+
+    const previews = Array.from(
+      container.querySelectorAll(
+        '[data-slot="host-preamble"] [data-slot="instruction-preview"]',
+      ),
+    ).map((preview) => preview.textContent);
+    expect(previews).toEqual([
+      'PREAMBLE FROM THE DAEMON',
+      'Claude CodeCLAUDE IS HELD',
+    ]);
+  });
+
   it('shows no preamble block at all while the daemon has not answered', async () => {
     // The honest rendering before the read lands: nothing. An empty box
     // captioned "geniro already tells every agent this" would state that the

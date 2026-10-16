@@ -4,6 +4,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { GENIRO_UI_PREAMBLE } from '../../agents/utils/agent-instructions';
 import type {
   AgentApprovalCapability,
+  AgentBackgroundWorkNote,
   AgentConfigDirCapability,
   AgentFollowUpCapability,
   AgentIdentityCapability,
@@ -38,7 +39,20 @@ export class CapabilitiesService {
       // Served verbatim from the one constant the adapters compose, so the
       // Settings preview cannot describe a preamble the CLIs stopped getting.
       hostPreamble: GENIRO_UI_PREAMBLE,
+      backgroundWorkNotes: this.backgroundWorkNotes(),
     };
+  }
+
+  /**
+   * Every registered CLI's background-work note, read off its own config —
+   * the text composed right after the preamble, so the Settings preview shows
+   * what each CLI actually receives.
+   */
+  private backgroundWorkNotes(): AgentBackgroundWorkNote[] {
+    return [...this.adapters.all()].map(([agent, adapter]) => ({
+      agent,
+      note: adapter.getConfig().backgroundWork.agentNote,
+    }));
   }
 
   /**

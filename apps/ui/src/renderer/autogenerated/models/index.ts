@@ -288,6 +288,27 @@ export interface AgentApprovalProbeModesInner {
 /**
  * 
  * @export
+ * @interface AgentBackgroundWorkNote
+ */
+export interface AgentBackgroundWorkNote {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentBackgroundWorkNote
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentBackgroundWorkNote
+     */
+    note: string | null;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AgentCacheResetDto
  */
 export interface AgentCacheResetDto {
@@ -1694,6 +1715,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     hostPreamble: string;
+    /**
+     * Per-CLI note on background work, composed right after the host preamble, one entry per known agent
+     * @type {Array<AgentBackgroundWorkNote>}
+     * @memberof CapabilitiesDto
+     */
+    backgroundWorkNotes: Array<AgentBackgroundWorkNote>;
 }
 
 /**

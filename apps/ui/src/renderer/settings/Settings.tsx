@@ -29,6 +29,7 @@ import {
   DEFAULT_THEME_PREFERENCE,
   type ThemePreference,
 } from '../../shared/themes';
+import { agentDisplayName } from '../agent-identity';
 import type {
   AgentApprovalCapability,
   CreateProjectDto,
@@ -41,6 +42,7 @@ import type { TargetWorkflow } from '../chats/target-select';
 import { AgentConfigList } from '../components/agent-config-list';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
+import { InstructionPreview } from '../components/instruction-preview';
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { ThemePicker } from '../components/theme-picker';
 import { Badge } from '../components/ui/badge';
@@ -399,6 +401,10 @@ export function Settings({
   // lands (and when no daemon is connected) — the honest rendering then is to
   // show nothing, not an empty box captioned as the app's instructions.
   const hostPreamble = capabilities?.hostPreamble;
+  // The per-CLI half of the same block, composed right after the preamble.
+  const backgroundWorkNotes = (capabilities?.backgroundWorkNotes ?? []).filter(
+    (entry): entry is typeof entry & { note: string } => entry.note !== null,
+  );
   const hasControlChars = hasControlCharacters(customInstructions);
 
   useEffect(() => {
@@ -1724,9 +1730,23 @@ export function Settings({
                           instructions. You cannot edit it — it describes how
                           this app actually renders a reply.
                         </p>
-                        <pre className="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap text-muted-foreground">
-                          {hostPreamble}
-                        </pre>
+                        <InstructionPreview text={hostPreamble} />
+                        {backgroundWorkNotes.length > 0 ? (
+                          <p className="mt-3 text-xs text-muted-foreground">
+                            Then each CLI is told what happens to work it leaves
+                            running when its turn ends:
+                          </p>
+                        ) : null}
+                        {backgroundWorkNotes.map((entry) => (
+                          <InstructionPreview
+                            key={entry.agent}
+                            caption={agentDisplayName(
+                              capabilities?.agents ?? [],
+                              entry.agent,
+                            )}
+                            text={entry.note}
+                          />
+                        ))}
                       </details>
                     </SettingsPanelRow>
                   ) : null}

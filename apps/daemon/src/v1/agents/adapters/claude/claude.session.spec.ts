@@ -226,14 +226,11 @@ describe('a run-scoped claude session', () => {
     ).toBeNull();
   });
 
-  it('never hosts a session it could not re-mode, so the refusal cannot arise here', () => {
-    // Both answers come from `keepStdinOpen`, deliberately: an `auto` turn
-    // spawns under --dangerously-skip-permissions with no prompt tool, and it
-    // is the same missing dialogue that makes the process unable to take a
-    // second prompt at all. So claude never reaches the base's
-    // cannot-be-re-moded refusal — that branch is pinned at the base instead
-    // (`agent-adapter.spec.ts`), on an adapter that CAN host a session and has
-    // no mode message.
+  it('keeps an auto turn’s process for the next turn, as every user-facing turn’s', async () => {
+    // Probed on 2.1.295: one --dangerously-skip-permissions process with its
+    // stdin held open answered two user lines under one session id. Kept, the
+    // turn is held while its background sub-agents run — the one-shot process
+    // an auto workflow node used to get settled on its launching result.
     const AUTO: AgentTurnInput = {
       prompt: 'first',
       cwd: '/proj',
@@ -247,13 +244,76 @@ describe('a run-scoped claude session', () => {
       runScoped: true,
     });
 
-    session.startTurn(AUTO, () => {});
+    const first = session.startTurn(AUTO, () => {});
+    expect(child.stdin.ended).toBe(false);
+    endTurn(child);
+    await first?.done;
 
-    // stdin closed with the payload — a one-turn process, not a session.
-    expect(child.stdin.ended).toBe(true);
     expect(
       session.startTurn({ ...AUTO, prompt: 'second' }, () => {}),
+    ).not.toBeNull();
+  });
+
+  it('serves an auto turn on a fresh spawn after a turn on the dialogue', async () => {
+    // The reverse switch: `auto` without questions spawns under
+    // --dangerously-skip-permissions, which argv decides and no message can
+    // turn a dialogue process into.
+    const { spawn, child } = fakeSpawn();
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
+      runScoped: true,
+    });
+
+    const first = session.startTurn(CHAT, () => {});
+    endTurn(child);
+    await first?.done;
+    const written = child.stdin.written.length;
+
+    expect(
+      session.startTurn(
+        {
+          ...CHAT,
+          approvalMode: 'auto',
+          allowUserQuestions: false,
+          prompt: 'second',
+        },
+        () => {},
+      ),
     ).toBeNull();
+    expect(after(child, written)).toBe('');
+  });
+
+  it('serves a turn in another mode on a fresh spawn, never by re-moding an auto process', async () => {
+    // Spawned under --dangerously-skip-permissions, the process has no prompt
+    // tool: a `set_permission_mode` into `ask` would be accepted and gate
+    // nothing, running the turn un-gated under a chip that reads `ask`.
+    const AUTO: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      approvalMode: 'auto',
+    };
+    const { spawn, child } = fakeSpawn();
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(AUTO, {
+      runScoped: true,
+    });
+
+    const first = session.startTurn(AUTO, () => {});
+    endTurn(child);
+    await first?.done;
+    const written = child.stdin.written.length;
+
+    expect(
+      session.startTurn(
+        { ...AUTO, approvalMode: 'ask', prompt: 'second' },
+        () => {},
+      ),
+    ).toBeNull();
+    expect(after(child, written)).toBe('');
   });
 
   it('stops a turn in protocol, leaving the process and its MCP servers alive', async () => {
@@ -276,6 +336,34 @@ describe('a run-scoped claude session', () => {
     });
     expect(child.kills).toBe(0);
     expect(session.alive).toBe(true);
+  });
+
+  it('stops a kept auto turn in protocol too, rather than killing its process', () => {
+    // A workflow node in `auto` holds no dialogue but now keeps its process;
+    // killing it on Stop would take its MCP servers and sub-agents with it.
+    const AUTO: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      approvalMode: 'auto',
+    };
+    const { spawn, child } = fakeSpawn();
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(AUTO, {
+      runScoped: true,
+    });
+    const handle = session.startTurn(AUTO, () => {});
+    const openingBytes = child.stdin.written.length;
+
+    handle?.cancel();
+
+    expect(JSON.parse(after(child, openingBytes))).toEqual({
+      type: 'control_request',
+      request_id: 'geniro-interrupt',
+      request: { subtype: 'interrupt' },
+    });
+    expect(child.kills).toBe(0);
   });
 
   it('kills the process group on close — nothing else ever will', () => {
@@ -341,9 +429,9 @@ describe('a session the caller did not ask to keep', () => {
 
 describe('a CLI that cannot host a session', () => {
   it('serves one turn even when the caller asks for a run-scoped one', async () => {
-    // A turn with no permission dialogue has stdin closed after its prompt, so
-    // there is no channel for a second one. `canHostSession` reuses exactly
-    // that predicate, and the caller's opt-in cannot override a CLI fact.
+    // A turn with no mode at all — a geniro probe — has no dialogue and is no
+    // user's turn, so its stdin is closed after its prompt and there is no
+    // channel for a second one. The caller's opt-in cannot override that.
     const { spawn, child } = fakeSpawn();
     const session = new ClaudeAdapter({
       spawn,

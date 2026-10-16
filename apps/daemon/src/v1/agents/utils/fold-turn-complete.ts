@@ -1,4 +1,9 @@
-import type { AgentEvent, AgentUsage } from '../adapters/adapter.types';
+import type {
+  AgentEvent,
+  AgentModelCost,
+  AgentUsage,
+} from '../adapters/adapter.types';
+import { mergeModelCosts, splitOf } from './model-costs';
 
 type TurnComplete = Extract<AgentEvent, { type: 'turn_complete' }>;
 
@@ -75,7 +80,28 @@ export function foldUsage(
       later.promptCacheTtlMs != null
         ? later.promptCacheTtlReason
         : earlier.promptCacheTtlReason,
+    modelCosts: foldModelCosts(earlier, later),
   };
+}
+
+/**
+ * Both segments' splits merged — and none when either segment spent money it
+ * did not split, since the merged split would then not add up to the sum.
+ */
+function foldModelCosts(
+  earlier: AgentUsage,
+  later: AgentUsage,
+): AgentModelCost[] | null {
+  const parts: AgentModelCost[][] = [];
+  for (const segment of [earlier, later]) {
+    const split = splitOf(segment.modelCosts, segment.costUsd);
+    if (split !== null) {
+      parts.push(split);
+    } else if ((segment.costUsd ?? 0) !== 0) {
+      return null;
+    }
+  }
+  return parts.length === 0 ? null : mergeModelCosts(parts);
 }
 
 /** Null only when NEITHER segment measured it — null means "not measured". */

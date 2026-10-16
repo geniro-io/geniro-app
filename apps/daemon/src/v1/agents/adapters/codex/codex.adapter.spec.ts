@@ -207,6 +207,26 @@ describe('CodexAdapter config', () => {
     expect(config.auth.inheritedEnvKeys).not.toContain('CODEX_HOME');
   });
 
+  it('never sizes a turn from the catalog, whose window codex does not enforce', async () => {
+    // models.dev states gpt-6.1-sol at 1,050,000; codex enforces 475,000 by
+    // default and 828,400 at `872k` (measured 2026-10-16).
+    const adapter = adapterWith({
+      prices: {
+        priceOf: () => ({
+          input: 1,
+          output: 5,
+          cacheRead: null,
+          cacheWrite: null,
+          tiers: [],
+          contextTokens: 1_050_000,
+        }),
+      },
+    });
+    expect(adapter.catalogWindow('gpt-6.1-sol')).toBeNull();
+    // codex's model names are its ids: nothing to resolve.
+    expect(await adapter.resolveModel('gpt-6.1-sol', null)).toBe('gpt-6.1-sol');
+  });
+
   it('recognises codex’s own usage-limit wording and when it resets', () => {
     const adapter = adapterWith();
     expect(

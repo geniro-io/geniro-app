@@ -263,6 +263,23 @@ export interface AgentUsage {
    * reason was given, the ordinary case.
    */
   promptCacheTtlReason?: PromptCacheTtlReason | null;
+  /**
+   * {@link costUsd} split by the model that spent it — the turn's own model
+   * beside every model its sub-agents and side calls ran on — costliest first.
+   *
+   * The split exists because a turn's TOKEN fields can be its main thread's
+   * alone (claude's `usage`) while its cost covers everything, so tokens times
+   * price does not reproduce the cost without it. Reported only when the parts
+   * sum to {@link costUsd}; optional and null alike mean no CLI-stated split.
+   */
+  modelCosts?: AgentModelCost[] | null;
+}
+
+/** One model's share of a turn's cost — see {@link AgentUsage.modelCosts}. */
+export interface AgentModelCost {
+  /** The model id as the CLI keyed it. */
+  model: string;
+  costUsd: number;
 }
 
 // ── What the window currently HOLDS ─────────────────────────────────────────
@@ -1841,6 +1858,9 @@ export interface FollowUpMessage {
 export interface AgentModel {
   id: string;
   label: string;
+  resolvedModel?: string;
+  /** Numeric window reported by the CLI; never inferred from a choice label. */
+  contextTokens?: number;
   /** How this entry was obtained — the UI says so when it is not live. */
   source: 'cli' | 'builtin' | 'ollama';
   unavailableReason?: string;
@@ -2997,7 +3017,10 @@ export interface ApprovalResolution {
 export interface TurnAutoCompact {
   /** Whole percent of the window, 10–95 — `AutoCompactPercentSchema`'s range. */
   percent: number;
-  /** The MODEL's own window in tokens, as this conversation last measured it. */
+  /**
+   * The MODEL's own window in tokens: as this conversation last measured it,
+   * or before its first reading, as that model was last measured anywhere.
+   */
   windowTokens: number;
 }
 
@@ -5133,6 +5156,13 @@ export type AdapterListPrice =
       readonly kind: 'catalog';
       /** The catalog provider the CLI's model ids are that provider's API ids under. */
       readonly provider: ModelPriceProvider;
+      /**
+       * Whether the catalog's context window for a model is the window this
+       * CLI enforces — what a turn's `--autocompact` threshold may be a share
+       * of before the CLI has reported one itself. A MEASUREMENT per CLI: the
+       * catalog states the vendor API's limit, and a CLI can apply its own.
+       */
+      readonly catalogWindows: boolean;
     }
   | {
       readonly kind: 'unavailable';

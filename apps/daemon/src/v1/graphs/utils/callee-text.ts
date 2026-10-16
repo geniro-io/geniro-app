@@ -1,3 +1,4 @@
+import { redactSecrets } from '../../diagnostics/utils/redact';
 import type { WorkflowAgentNode } from '../graphs.types';
 import { poolMemberLabel, poolMembersOf, poolSize } from './agent-pool';
 
@@ -50,6 +51,30 @@ export const PUBLISHED_PAGES_NOTE =
  * fan-out of servers cannot swamp the result text it sits beside.
  */
 export const LEFT_RUNNING_COMMAND_MAX = 160;
+
+/**
+ * A shell word `NAME=value` wherever a word starts — in front of a command,
+ * after `&&` / `;` / `|`, behind `env` or `export` — with its whole value: quoted
+ * runs, escapes, `$(…)` and backtick substitutions as one value.
+ */
+const ENV_ASSIGNMENT =
+  /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=(?:'[^']*'|"(?:[^"\\]|\\.)*"|`[^`]*`|\$\([^)]*\)|\\.|[^\s'"`\\;&|()])*/g;
+
+/**
+ * A command a callee left running, as its caller is shown it — on one line,
+ * capped, with every env assignment's value shown as `…` and registered
+ * secrets masked. The words go to the CALLER's provider, which need not be the
+ * callee's, and an assignment is where an unregistered token sits
+ * (`GITHUB_TOKEN=… pnpm dev`); its name still says what was set. Assignments
+ * go first, so a mask's own words are never cut as a value.
+ */
+export function quotedCommand(command: string): string {
+  const assignmentsMasked = command.replace(ENV_ASSIGNMENT, '$1$2=…');
+  return flattenText(
+    redactSecrets(assignmentsMasked),
+    LEFT_RUNNING_COMMAND_MAX,
+  );
+}
 
 /**
  * Collapse free-form node text to a single line, capped at `max` characters

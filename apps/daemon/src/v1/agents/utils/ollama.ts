@@ -160,7 +160,14 @@ export function qualifyOllamaEvent(
   if (event.type === 'turn_complete' && event.usage) {
     return {
       ...event,
-      usage: { ...event.usage, contextModel: model, costUsd: 0 },
+      // The CLI priced the turn at a hosted model's rates; its per-model split
+      // of that figure goes with it.
+      usage: {
+        ...event.usage,
+        contextModel: model,
+        costUsd: 0,
+        modelCosts: null,
+      },
     };
   }
   return event;

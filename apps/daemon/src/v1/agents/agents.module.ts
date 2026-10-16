@@ -250,13 +250,19 @@ import { defaultSpawn } from './utils/spawn-cli';
         versions: AgentVersionService,
         store: ModelVocabularyStore,
         ollama: OllamaService,
-      ) => new ModelsService(adapters, processes, versions, store, { ollama }),
+        windows: ContextWindowStore,
+      ) =>
+        new ModelsService(adapters, processes, versions, store, {
+          ollama,
+          windows,
+        }),
       inject: [
         AgentAdapterRegistry,
         ProcessRegistry,
         AgentVersionService,
         ModelVocabularyStore,
         OllamaService,
+        ContextWindowStore,
       ],
     },
     OllamaService,

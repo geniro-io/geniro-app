@@ -6577,7 +6577,11 @@ describe('CallBroker — pages published inside a call', () => {
     const long = `pnpm dev ${'--flag '.repeat(40)}`;
     deferred[0]!.resolve(
       completed('up', {
-        shellsStillOut: ['cd api &&\n pnpm dev:api', null, long],
+        shellsStillOut: [
+          { command: 'cd api &&\n pnpm dev:api', callId: 'call-1' },
+          { command: null, callId: 'call-1' },
+          { command: long, callId: 'call-1' },
+        ],
       }),
     );
     const { result } = (await pending) as {
@@ -6592,8 +6596,78 @@ describe('CallBroker — pages published inside a call', () => {
     expect(result.commands_still_running).toBe(3);
     expect(result.running_commands).toEqual(['cd api && pnpm dev:api', cut]);
     expect(result.note).toBe(
-      `helper left 3 command(s) it started in this call running in the background: \`cd api && pnpm dev:api\`; \`${cut}\`. They keep running after this result. To stop them, continue the conversation (call_agent with thread: 'call-1') and ask helper to; otherwise tell the user they are still running.`,
+      `helper answered while 3 command(s) it started in the background were still running: \`cd api && pnpm dev:api\`; \`${cut}\`. Its work may not be finished: they keep running after this result, and what they print arrives in its conversation (call_agent with thread: 'call-1'), which is also where it can be asked to stop them.`,
     );
+  });
+
+  it('says which earlier call on the thread started a command still running', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'hit it',
+    });
+    deferred[0]!.resolve(
+      completed('200', {
+        shellsStillOut: [
+          { command: 'pnpm dev:api', callId: 'call-0' },
+          { command: 'pnpm test', callId: 'call-1' },
+        ],
+      }),
+    );
+    const { result } = (await pending) as {
+      result: { note: string; running_commands: string[] };
+    };
+    expect(result.running_commands).toEqual(['pnpm dev:api', 'pnpm test']);
+    expect(result.note).toContain(
+      ': `pnpm dev:api` (started in call-0); `pnpm test`. Its work',
+    );
+  });
+
+  it('shows no env assignment’s value in a command left running, wherever it is set', async () => {
+    registerSecret('tok-0123456789abcdef', 'test token');
+    try {
+      const { broker, deferred } = harness({ launch: 'defer' });
+      const pending = broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'bring it up',
+      });
+      const commands = [
+        `GITHUB_TOKEN=ghp_unregistered PORT="4000 1" pnpm dev:api`,
+        'cd api && API_KEY=sk-unregistered pnpm dev',
+        'env GH_TOKEN=gh-unregistered pnpm dev',
+        'export TOKEN=x-unregistered; pnpm dev',
+        'TOKEN=tok-0123456789abcdef pnpm dev',
+        'AUTH=$(cat key file) pnpm dev',
+        'FOO=bar',
+      ];
+      deferred[0]!.resolve(
+        completed('up', {
+          shellsStillOut: commands.map((command) => ({
+            command,
+            callId: 'call-1',
+          })),
+        }),
+      );
+      const { result } = (await pending) as {
+        result: { note: string; running_commands: string[] };
+      };
+      expect(result.running_commands).toEqual([
+        'GITHUB_TOKEN=… PORT=… pnpm dev:api',
+        'cd api && API_KEY=… pnpm dev',
+        'env GH_TOKEN=… pnpm dev',
+        'export TOKEN=…; pnpm dev',
+        'TOKEN=… pnpm dev',
+        'AUTH=… pnpm dev',
+        'FOO=…',
+      ]);
+      expect(result.note).not.toMatch(
+        /unregistered|tok-0123|redacted|key file/,
+      );
+    } finally {
+      clearSecrets();
+    }
   });
 
   it('masks a registered secret in a command left running, and fences one carrying backticks', async () => {
@@ -6608,8 +6682,14 @@ describe('CallBroker — pages published inside a call', () => {
       deferred[0]!.resolve(
         completed('up', {
           shellsStillOut: [
-            'TOKEN=tok-0123456789abcdef pnpm dev',
-            'echo `git rev-parse HEAD` && pnpm dev',
+            {
+              command: 'curl -H "Bearer tok-0123456789abcdef" localhost',
+              callId: 'call-1',
+            },
+            {
+              command: 'echo `git rev-parse HEAD` && pnpm dev',
+              callId: 'call-1',
+            },
           ],
         }),
       );

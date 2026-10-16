@@ -2694,6 +2694,7 @@ describe('AgentAdapter.listPriceOf — the catalog provider is the ADAPTER’s f
             cacheRead: null,
             cacheWrite: null,
             tiers: [],
+            contextTokens: null,
           };
         },
       },

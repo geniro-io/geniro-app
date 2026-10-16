@@ -78,8 +78,9 @@ describe('statusFor', () => {
     'not-found %s is bad regardless of loggedIn',
     (kind) => {
       expect(statusFor(noneFound, kind)).toEqual({
-        label: 'not installed',
+        label: 'Not installed',
         tone: 'bad',
+        version: null,
       });
       // A kind with no detection entry at all reads the same as not-found.
       expect(statusFor([], kind).tone).toBe('bad');
@@ -91,24 +92,33 @@ describe('statusFor', () => {
       expect(statusFor(null, kind)).toEqual({
         label: 'Checking…',
         tone: 'unknown',
+        version: null,
       });
     }
   });
 
-  it('labels carry the probed version when present', () => {
-    expect(statusFor(bothFound, 'claude').label).toBe('ready · 1.2.3');
+  it('carries the probed version beside the label, when present', () => {
+    expect(statusFor(bothFound, 'claude')).toEqual({
+      label: 'Ready',
+      tone: 'ok',
+      version: '1.2.3',
+    });
     expect(
       statusFor(
         [det('claude'), det('cursor-agent', { loggedIn: false })],
         'cursor-agent',
-      ).label,
-    ).toBe('detected · 1.2.3 · not signed in');
+      ),
+    ).toEqual({ label: 'Not signed in', tone: 'warn', version: '1.2.3' });
 
     const versionless = [
       det('claude', { version: null }),
       det('cursor-agent', { version: null }),
     ];
-    expect(statusFor(versionless, 'claude').label).toBe('ready');
+    expect(statusFor(versionless, 'claude')).toEqual({
+      label: 'Ready',
+      tone: 'ok',
+      version: null,
+    });
   });
 });
 
@@ -850,9 +860,9 @@ describe('AgentConfigList — the card header', () => {
       'Codex',
     ]);
     // The readiness beside the name is untouched by the rename.
-    expect(names(el)[1]!.closest('button')!.textContent).toContain(
-      'ready · 1.2.3',
-    );
+    const header = names(el)[1]!.closest('button')!.textContent;
+    expect(header).toContain('Ready');
+    expect(header).toContain('1.2.3');
   });
 
   it('draws the published glyph beside the name', () => {

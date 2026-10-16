@@ -22,11 +22,17 @@ import { CliLoginProgress } from './cli-login-progress';
 import { CollapsibleCard } from './collapsible-card';
 import { Field } from './field';
 import { StatusDot, type StatusTone } from './status-dot';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { cn } from './ui/utils';
 
-export type AgentStatus = { label: string; tone: StatusTone };
+export type AgentStatus = {
+  label: string;
+  tone: StatusTone;
+  /** The probed version, drawn beside the status; null when none answered. */
+  version: string | null;
+};
 
 /**
  * Readiness of one agent. "Ready" (green) means the binary was detected AND,
@@ -44,27 +50,27 @@ export function statusFor(
   kind: CliKind,
 ): AgentStatus {
   if (clis === null) {
-    return { label: 'Checking…', tone: 'unknown' };
+    return { label: 'Checking…', tone: 'unknown', version: null };
   }
   const detection = clis.find((c) => c.kind === kind) ?? null;
   if (!detection?.found) {
     // Said as what it means to the user. "not found on PATH" described the
     // lookup, and read as a configuration problem to fix by hand on a machine
     // that simply does not have the CLI — which the card can now install.
-    return { label: 'not installed', tone: 'bad' };
+    return { label: 'Not installed', tone: 'bad', version: null };
   }
-  const version = detection.version ? ` · ${detection.version}` : '';
+  const version = detection.version ?? null;
   if (detection.loggedIn === false) {
-    return { label: `detected${version} · not signed in`, tone: 'warn' };
+    return { label: 'Not signed in', tone: 'warn', version };
   }
-  return { label: `ready${version}`, tone: 'ok' };
+  return { label: 'Ready', tone: 'ok', version };
 }
 
-const STATUS_TEXT: Record<StatusTone, string> = {
-  ok: 'text-sm text-success',
-  warn: 'text-sm text-warning',
-  bad: 'text-sm text-destructive',
-  unknown: 'text-sm text-muted-foreground',
+const STATUS_BADGE: Record<StatusTone, string> = {
+  ok: 'bg-success/10 text-success',
+  warn: 'bg-warning/10 text-warning',
+  bad: 'bg-destructive/10 text-destructive',
+  unknown: 'bg-muted text-muted-foreground',
 };
 
 export interface AgentConfigListProps {
@@ -480,19 +486,31 @@ export function AgentConfigList({
             onToggle={() => onToggle(kind)}
             header={
               <>
-                <StatusDot tone={status.tone} />
                 {/* Named by the published identity; the body below keeps
                     saying `kind` because those lines are about the binary. */}
                 <span
                   data-slot="agent-name"
-                  className="flex items-center gap-1.5 font-medium">
-                  <AgentGlyph
-                    icon={agentIconName(identities, kind)}
-                    className="text-muted-foreground"
-                  />
+                  className="flex min-w-0 items-center gap-3 font-medium">
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-secondary-foreground">
+                    <AgentGlyph icon={agentIconName(identities, kind)} />
+                  </span>
                   {agentShortName(identities, kind)}
                 </span>
-                <span className={STATUS_TEXT[status.tone]}>{status.label}</span>
+                <span className="flex min-w-0 flex-1 items-center justify-end gap-3">
+                  {status.version ? (
+                    <span className="truncate text-xs text-muted-foreground">
+                      {status.version}
+                    </span>
+                  ) : null}
+                  <Badge
+                    className={cn(
+                      'gap-1.5 rounded-full border-transparent',
+                      STATUS_BADGE[status.tone],
+                    )}>
+                    <StatusDot tone={status.tone} className="size-1.5" />
+                    {status.label}
+                  </Badge>
+                </span>
               </>
             }>
             {offerInstall && onInstall ? (

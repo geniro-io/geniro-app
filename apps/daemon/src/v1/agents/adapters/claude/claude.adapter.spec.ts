@@ -22,9 +22,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import { tempDir } from '../../__tests__/temp-dir';
 import { AgentAdapterRegistry } from '../../services/agent-adapter.registry';
+import type { AgentVersionService } from '../../services/agent-version.service';
+import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
 import { GENIRO_UI_PREAMBLE } from '../../utils/agent-instructions';
+import type { ModelPrice } from '../../utils/model-prices';
 import type { SpawnFn } from '../../utils/spawn-cli';
-import { spawnAnswering } from '../__tests__/fake-group-child';
+import { fakeGroupChild, spawnAnswering } from '../__tests__/fake-group-child';
+import { freshVocabularyStore } from '../__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
   AgentEvent,
@@ -46,6 +50,8 @@ import {
   CLAUDE_FAST_MODE_PARAMETER_ID,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MODEL_FLAG,
+  CLAUDE_MODEL_RESOLUTION_ARGS,
+  CLAUDE_MODEL_RESOLUTION_REQUEST_ID,
   CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RELOAD_COMMANDS_SUBTYPE,
   CLAUDE_RESUME_FLAG,
@@ -142,6 +148,7 @@ describe('ClaudeAdapter', () => {
           numTurns: null,
           promptCacheTtlMs: null,
           promptCacheTtlReason: null,
+          modelCosts: null,
         },
         stopReason: 'end_turn',
         finalText: 'hi',
@@ -2617,6 +2624,9 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
 
 describe('ClaudeAdapter — models', () => {
   const dirs: string[] = [];
+  const unavailableSpawn = (() => {
+    throw new Error('CLI unavailable');
+  }) as typeof spawn;
 
   afterEach(() => {});
 
@@ -2650,6 +2660,7 @@ describe('ClaudeAdapter — models', () => {
 
     const models = await new ConfiguredClaudeAdapter({
       homeDir: emptyHome(),
+      groupSpawnFn: unavailableSpawn,
     }).listModels({ configDir: null });
 
     expect(models).toEqual([
@@ -2689,7 +2700,10 @@ describe('ClaudeAdapter — models', () => {
       }),
     );
 
-    const models = await new ClaudeAdapter({ homeDir }).listModels({
+    const models = await new ClaudeAdapter({
+      homeDir,
+      groupSpawnFn: unavailableSpawn,
+    }).listModels({
       configDir: profile,
     });
 
@@ -2704,6 +2718,7 @@ describe('ClaudeAdapter — models', () => {
     // documented tier aliases, so a real install's picker is never empty.
     const models = await new ClaudeAdapter({
       homeDir: emptyHome(),
+      groupSpawnFn: unavailableSpawn,
     }).listModels({ configDir: null });
 
     expect(models.map((model) => model.id)).toEqual([
@@ -4059,5 +4074,290 @@ describe('ClaudeAdapter — forgetting a server’s needs-auth record', () => {
 
     expect(forgot).toEqual([]);
     expect(readFileSync(file, 'utf8')).toBe('{"claude.ai Figma": {');
+  });
+});
+
+describe('ClaudeAdapter — what a model name resolves to', () => {
+  /** The `initialize` reply as 2.1.295 printed it, trimmed to what is read. */
+  const INITIALIZE_REPLY = `${JSON.stringify({
+    type: 'control_response',
+    response: {
+      subtype: 'success',
+      request_id: CLAUDE_MODEL_RESOLUTION_REQUEST_ID,
+      response: {
+        models: [
+          { value: 'default', resolvedModel: 'claude-opus-5-5' },
+          {
+            value: 'haiku',
+            resolvedModel: 'claude-haiku-5-5',
+            displayName: 'Haiku 5.5',
+          },
+          { value: 'sonnet', resolvedModel: 'claude-sonnet-5-5' },
+        ],
+      },
+    },
+  })}\n`;
+  const versionOf = (version: string): AgentVersionService =>
+    ({
+      resolve: () => Promise.resolve(version),
+    }) as unknown as AgentVersionService;
+  const VERSION = versionOf('2.1.295 (Claude Code)');
+
+  interface ProbeSpawn {
+    args: readonly string[];
+    options: Record<string, unknown>;
+    /** What the adapter wrote to the probe's stdin. */
+    stdin: string[];
+    /** Answer `stdout` and end the process — already done unless held. */
+    answer: () => void;
+  }
+
+  /**
+   * An adapter whose probe answers `stdout`, recording each process spawned.
+   * A `held` probe answers only when the case calls its `answer`.
+   */
+  const probing = (
+    stdout: string,
+    vocabularyStore: ModelVocabularyStore = freshVocabularyStore(),
+    options: { held?: boolean; versions?: AgentVersionService } = {},
+  ): { adapter: ClaudeAdapter; spawns: ProbeSpawn[] } => {
+    const spawns: ProbeSpawn[] = [];
+    const groupSpawnFn = ((
+      _command: string,
+      args: readonly string[],
+      spawnOptions: Record<string, unknown>,
+    ) => {
+      const fake = fakeGroupChild();
+      const answer = (): void => {
+        if (stdout) {
+          fake.writeStdout(stdout);
+        }
+        fake.close(0);
+      };
+      spawns.push({
+        args,
+        options: spawnOptions,
+        stdin: fake.stdinChunks,
+        answer,
+      });
+      if (!options.held) {
+        queueMicrotask(answer);
+      }
+      return fake.child;
+    }) as unknown as typeof spawn;
+    return {
+      adapter: new ClaudeAdapter({
+        groupSpawnFn,
+        versions: options.versions ?? VERSION,
+        vocabularyStore,
+      }),
+      spawns,
+    };
+  };
+  /** Let a background probe spawn, or a held one take its answer. */
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+
+  it('lists the CLI display names and resolved identities, also after a daemon restart', async () => {
+    const store = freshVocabularyStore();
+    const first = probing(INITIALIZE_REPLY, store);
+    expect(await first.adapter.listModels({ configDir: null })).toContainEqual({
+      id: 'haiku',
+      label: 'Haiku 5.5',
+      resolvedModel: 'claude-haiku-5-5',
+      source: 'cli',
+    });
+    const restarted = probing('', store);
+    expect(
+      await restarted.adapter.modelDetails(
+        { id: 'haiku', label: 'haiku', source: 'builtin' },
+        null,
+      ),
+    ).toEqual({
+      id: 'haiku',
+      label: 'Haiku 5.5',
+      resolvedModel: 'claude-haiku-5-5',
+      source: 'cli',
+    });
+    expect(restarted.spawns).toHaveLength(0);
+  });
+
+  it('answers an alias and the default with what the CLI’s own initialize names, asked under the profile', async () => {
+    const { adapter, spawns } = probing(INITIALIZE_REPLY);
+
+    expect(await adapter.resolveModel('haiku', '/profiles/work')).toBe(
+      'claude-haiku-5-5',
+    );
+    expect(await adapter.resolveModel(null, '/profiles/work')).toBe(
+      'claude-opus-5-5',
+    );
+    expect(spawns[0]!.args).toEqual([...CLAUDE_MODEL_RESOLUTION_ARGS]);
+    expect(
+      (spawns[0]!.options.env as Record<string, string> | undefined)?.[
+        CLAUDE_CONFIG_DIR_ENV
+      ],
+    ).toBe('/profiles/work');
+    // The question itself: one `initialize` request, under the id the reader
+    // waits for.
+    expect(
+      spawns[0]!.stdin
+        .join('')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as unknown),
+    ).toEqual([
+      {
+        type: 'control_request',
+        request_id: CLAUDE_MODEL_RESOLUTION_REQUEST_ID,
+        request: { subtype: 'initialize' },
+      },
+    ]);
+  });
+
+  it('answers the name itself when the CLI refuses the question', async () => {
+    const { adapter } = probing(
+      `${JSON.stringify({
+        type: 'control_response',
+        response: {
+          subtype: 'error',
+          request_id: CLAUDE_MODEL_RESOLUTION_REQUEST_ID,
+          error: 'unsupported',
+        },
+      })}\n`,
+    );
+
+    expect(await adapter.resolveModel('haiku', null)).toBe('haiku');
+  });
+
+  it('answers a name the reply does not list with the name itself', async () => {
+    const { adapter } = probing(INITIALIZE_REPLY);
+
+    expect(await adapter.resolveModel('claude-opus-5[1m]', null)).toBe(
+      'claude-opus-5[1m]',
+    );
+  });
+
+  it('asks once per profile and version, and serves the next launch from the store', async () => {
+    const store = freshVocabularyStore();
+    const first = probing(INITIALIZE_REPLY, store);
+    await first.adapter.resolveModel('haiku', null);
+    await first.adapter.resolveModel('sonnet', null);
+    expect(first.spawns).toHaveLength(1);
+    // Another profile is another answer.
+    await first.adapter.resolveModel('haiku', '/profiles/work');
+    expect(first.spawns).toHaveLength(2);
+
+    const relaunched = probing(INITIALIZE_REPLY, store);
+    expect(await relaunched.adapter.resolveModel('haiku', null)).toBe(
+      'claude-haiku-5-5',
+    );
+    expect(relaunched.spawns).toHaveLength(0);
+
+    // An upgraded CLI may resolve its aliases differently: asked again.
+    const upgraded = probing(INITIALIZE_REPLY, store, {
+      versions: versionOf('2.1.296 (Claude Code)'),
+    });
+    await upgraded.adapter.resolveModel('haiku', null);
+    expect(upgraded.spawns).toHaveLength(1);
+  });
+
+  it('serves an aged answer at once and refreshes it behind the turn', async () => {
+    const file = join(tempDir('claude-resolutions-'), 'vocabularies.json');
+    let now = 1_000_000;
+    const store = (): ModelVocabularyStore =>
+      new ModelVocabularyStore({ file, now: () => now });
+    await probing(INITIALIZE_REPLY, store()).adapter.resolveModel(
+      'haiku',
+      null,
+    );
+
+    now += 2 * 60 * 60_000;
+    const later = probing(INITIALIZE_REPLY, store(), { held: true });
+    expect(await later.adapter.resolveModel('haiku', null)).toBe(
+      'claude-haiku-5-5',
+    );
+    await settle();
+    expect(later.spawns).toHaveLength(1);
+    later.spawns[0]!.answer();
+    await settle();
+  });
+
+  it('keeps no answer whose probe straddled a sign-in', async () => {
+    const store = freshVocabularyStore();
+    const straddling = probing(INITIALIZE_REPLY, store, { held: true });
+    const pending = straddling.adapter.resolveModel('haiku', null);
+    await settle();
+    // The account changed while the CLI was being asked.
+    store.forget('claude');
+    straddling.spawns[0]!.answer();
+    await pending;
+
+    const relaunched = probing(INITIALIZE_REPLY, store);
+    await relaunched.adapter.resolveModel('haiku', null);
+    expect(relaunched.spawns).toHaveLength(1);
+  });
+
+  it('keeps nothing from a probe that could not be read, and does not make every turn wait on it again', async () => {
+    const { adapter, spawns } = probing('not json\n');
+
+    expect(await adapter.resolveModel('haiku', null)).toBe('haiku');
+    // A turn waits on this probe: a CLI that cannot answer is not re-asked
+    // before every first turn.
+    expect(await adapter.resolveModel('haiku', null)).toBe('haiku');
+    expect(spawns).toHaveLength(1);
+    // Clear Agent Cache asks again at once.
+    adapter.clearCaches();
+    await adapter.resolveModel('haiku', null);
+    expect(spawns).toHaveLength(2);
+  });
+
+  it('asks again after a sign-in and after Clear Agent Cache, as the reset service makes them', async () => {
+    const store = freshVocabularyStore();
+    const { adapter, spawns } = probing(INITIALIZE_REPLY, store);
+    await adapter.resolveModel('haiku', null);
+    expect(spawns).toHaveLength(1);
+
+    // A sign-in: `CacheResetService.forgetAgent` forgets the store's half and
+    // asks the adapter to forget its own.
+    store.forget('claude');
+    expect(adapter.forgetAccountCaches()).toBe(1);
+    await adapter.resolveModel('haiku', null);
+    expect(spawns).toHaveLength(2);
+
+    // Clear Agent Cache: `clearCaches` on both halves.
+    store.clear();
+    expect(adapter.clearCaches()).toBe(1);
+    await adapter.resolveModel('haiku', null);
+    expect(spawns).toHaveLength(3);
+  });
+
+  it('answers a window from the catalog for a bare id, never for a variant', () => {
+    const price: ModelPrice = {
+      input: 1,
+      output: 5,
+      cacheRead: null,
+      cacheWrite: null,
+      tiers: [],
+      contextTokens: 1_000_000,
+    };
+    // The catalog's own lookup, by exact id under claude's provider.
+    const catalog: Record<string, ModelPrice> = {
+      'claude-haiku-5-5': price,
+      'claude-opus-5': price,
+    };
+    const adapter = new ClaudeAdapter({
+      prices: {
+        priceOf: (provider, model) =>
+          provider === 'anthropic' ? (catalog[model] ?? null) : null,
+      },
+    });
+
+    expect(adapter.catalogWindow('claude-haiku-5-5')).toBe(1_000_000);
+    // `[1m]` selects a window tier the catalog's id does not name, so the
+    // variant is looked up as itself and misses.
+    expect(adapter.catalogWindow('claude-opus-5[1m]')).toBeNull();
   });
 });

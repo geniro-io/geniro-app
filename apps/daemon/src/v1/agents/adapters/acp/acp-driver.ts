@@ -2471,7 +2471,9 @@ export class AcpTurnDriver {
     // what moves it — while `turn_model` reports what this turn asked to run
     // as. The two differ exactly while a switch is unconfirmed, and that
     // difference is load-bearing downstream: it is what
-    // `PartialStreamService.rememberWindow`'s anti-poisoning guard compares.
+    // `PartialStreamService.rememberWindow`'s anti-poisoning guard compares —
+    // a settle reading labelled with the unconfirmed model is refused, and the
+    // owner keeps the window it already had.
     // Writing `wanted` here would collapse both of that guard's operands onto
     // this one field — cursor's context reading names no model, so a window's
     // own label falls back to it too — leaving the guard comparing a value

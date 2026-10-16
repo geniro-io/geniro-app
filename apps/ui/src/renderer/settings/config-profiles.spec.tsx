@@ -87,7 +87,8 @@ describe('ConfigProfileList', () => {
       'claude',
       true,
     );
-    expect(el.textContent).toContain('No extra profiles yet.');
+    // The onboarding row says "Default setup" itself; the list adds no sentence.
+    expect(el.textContent).not.toContain('None yet');
     expect(el.textContent).not.toContain('Configurations');
     expect(el.textContent).not.toContain('Name the config directories');
     const add = el.querySelector('button')!;

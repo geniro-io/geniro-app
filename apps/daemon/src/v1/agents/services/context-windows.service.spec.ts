@@ -4,8 +4,8 @@ import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-sto
 import type { AgentContextWindowListing } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
+import { UnknownAgentVersion } from './__tests__/unknown-agent-version';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
-import { AgentVersionService } from './agent-version.service';
 import {
   ContextWindowsService,
   type ContextWindowsServiceOptions,
@@ -27,9 +27,9 @@ function service(options: ContextWindowsServiceOptions = {}): {
     windows: new ContextWindowsService(
       new AgentAdapterRegistry([claude, cursor]),
       new ProcessRegistry(),
-      // Real: `--version` on a binary that is absent in CI resolves to null,
-      // which is a legitimate cache key and never throws.
-      new AgentVersionService(),
+      // `null`, what CI's missing binary answers, without forking the
+      // installed CLI's `--version` here.
+      new UnknownAgentVersion(),
       options,
     ),
   };

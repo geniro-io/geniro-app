@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   RunProcess,
@@ -249,6 +249,145 @@ describe('RunProcesses — what the agents left detached', () => {
       el.querySelector('[data-slot="share-stack"]')?.getAttribute('aria-label'),
     ).toContain('node /usr/local/bin/pnpm dev');
     expect(el.querySelector('[data-slot="processes-detached"]')).not.toBeNull();
+  });
+
+  it.each([false, true])(
+    'confirms the exact group or all detached pids (all=%s)',
+    async (all) => {
+      const stop = vi.fn(async () => undefined);
+      const el = mount({
+        data: reading({
+          detached: [
+            ...DEV,
+            proc({ pid: 600, name: 'sleep', args: 'sleep 600' }),
+          ],
+        }),
+        loading: false,
+        error: null,
+        onStopDetached: stop,
+      });
+      const section = el.querySelector(
+        '[data-slot="processes-detached"]',
+      ) as HTMLElement;
+      const buttons = [...section.querySelectorAll('button')];
+      expect(
+        buttons.filter((button) => button.textContent === 'Stop'),
+      ).toHaveLength(2);
+      expect(
+        buttons.filter((button) => button.textContent === 'Stop all'),
+      ).toHaveLength(1);
+      expect(
+        el.querySelectorAll('[data-role="cli"] [aria-label^="Stop "]'),
+      ).toHaveLength(0);
+      const trigger = buttons.find((button) =>
+        all
+          ? button.textContent === 'Stop all'
+          : button.getAttribute('aria-label') ===
+            'Stop node /usr/local/bin/pnpm dev',
+      ) as HTMLButtonElement;
+      act(() => trigger.click());
+      expect(stop).not.toHaveBeenCalled();
+      const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
+      expect(dialog.textContent).toContain('will become unavailable');
+      await act(async () => {
+        (
+          [...dialog.querySelectorAll('button')].find(
+            (button) =>
+              button.textContent === (all ? 'Stop all' : 'Stop group'),
+          ) as HTMLButtonElement
+        ).click();
+      });
+      expect(stop).toHaveBeenCalledExactlyOnceWith(
+        all ? [500, 501, 600] : [500, 501],
+      );
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    },
+  );
+
+  it('cancels without calling stop and keeps a failed confirmation open for retry', async () => {
+    const stop = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('process no longer detached'))
+      .mockResolvedValue(undefined);
+    const el = mount({
+      data: reading({ detached: DEV }),
+      loading: false,
+      error: null,
+      onStopDetached: stop,
+    });
+    const trigger = el.querySelector(
+      '[aria-label="Stop node /usr/local/bin/pnpm dev"]',
+    ) as HTMLButtonElement;
+    act(() => trigger.click());
+    const clickDialog = async (label: string) => {
+      await act(async () => {
+        (
+          [...document.querySelectorAll('[role="dialog"] button')].find(
+            (button) => button.textContent === label,
+          ) as HTMLButtonElement
+        ).click();
+      });
+    };
+    await clickDialog('Cancel');
+    expect(stop).not.toHaveBeenCalled();
+    act(() => trigger.click());
+    await clickDialog('Stop group');
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      'process no longer detached',
+    );
+    await clickDialog('Stop group');
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('locks the confirmation while the stop is pending', async () => {
+    let resolveStop: () => void = () => undefined;
+    const stop = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStop = resolve;
+        }),
+    );
+    const el = mount({
+      data: reading({ detached: DEV }),
+      loading: false,
+      error: null,
+      onStopDetached: stop,
+    });
+    act(() =>
+      (
+        el.querySelector(
+          '[aria-label="Stop node /usr/local/bin/pnpm dev"]',
+        ) as HTMLButtonElement
+      ).click(),
+    );
+    act(() =>
+      (
+        [...document.querySelectorAll('[role="dialog"] button')].find(
+          (button) => button.textContent === 'Stop group',
+        ) as HTMLButtonElement
+      ).click(),
+    );
+    const buttons = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ];
+    expect(
+      buttons.filter(
+        (button) =>
+          button.textContent === 'Cancel' || button.textContent === 'Stopping…',
+      ),
+    ).toHaveLength(2);
+    expect(
+      buttons
+        .filter(
+          (button) =>
+            button.textContent === 'Cancel' ||
+            button.textContent === 'Stopping…',
+        )
+        .every((button) => button.disabled),
+    ).toBe(true);
+    await act(async () => resolveStop());
+    expect(stop).toHaveBeenCalledOnce();
   });
 });
 

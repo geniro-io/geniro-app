@@ -2,12 +2,18 @@ import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException } from '@packages/common';
 
 import {
   isSameProcess,
   parseStartTimes,
 } from '../../../utils/process-identity';
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
+import {
+  listProcessUsage,
+  processTreeOf,
+  type ProcessUsageRow,
+} from '../utils/process-usage';
 import { capSelection, type ScannedProcess } from '../utils/run-process-scan';
 import { runPs } from '../utils/run-ps';
 import type { RunProcessAttribution } from './run-process-attribution.service';
@@ -20,6 +26,8 @@ export interface RunProcessReaperOptions {
    * a working agent's, not leftovers.
    */
   held?: (runId: string) => boolean;
+  processRoots?: () => readonly number[];
+  listUsage?: () => Promise<ProcessUsageRow[] | null>;
   /**
    * Which of these runs are still deleted or archived. Asked after the scan
    * for a reap the SWEEP queued, whose verdict may be minutes old — never for
@@ -28,7 +36,7 @@ export interface RunProcessReaperOptions {
   stillGone?: (runIds: string[]) => Promise<ReadonlySet<string>>;
   signal?: (pid: number, signal: NodeJS.Signals) => void;
   /** Start times (epoch ms) of whichever of `pids` are alive. */
-  startTimes?: (pids: number[]) => Promise<Map<number, number>>;
+  startTimes?: (pids: number[]) => Promise<Map<number, number> | null>;
   wait?: (ms: number) => Promise<void>;
   logger?: { log(msg: string): void; warn(msg: string): void };
   selfPid?: number;
@@ -72,9 +80,13 @@ export class RunProcessReaper {
     runIds: string[],
   ) => Promise<ReadonlySet<string>>;
   private readonly signal: (pid: number, signal: NodeJS.Signals) => void;
-  private readonly startTimes: (pids: number[]) => Promise<Map<number, number>>;
+  private readonly startTimes: (
+    pids: number[],
+  ) => Promise<Map<number, number> | null>;
   private readonly wait: (ms: number) => Promise<void>;
   private readonly selfPid: number;
+  private readonly processRoots: () => readonly number[];
+  private readonly listUsage: () => Promise<ProcessUsageRow[] | null>;
   /**
    * Runs waiting for the next reap, each with whether it is reaped only if
    * still gone; one reap runs at a time, over one scan.
@@ -94,6 +106,8 @@ export class RunProcessReaper {
     this.startTimes = options.startTimes ?? readStartTimes;
     this.wait = options.wait ?? ((ms) => sleep(ms));
     this.selfPid = options.selfPid ?? process.pid;
+    this.processRoots = options.processRoots ?? (() => []);
+    this.listUsage = options.listUsage ?? listProcessUsage;
   }
 
   /**
@@ -191,12 +205,94 @@ export class RunProcessReaper {
       }
       targets.push(...selected.map((row) => ({ row, runId })));
     }
-    const terminated = await this.signalConfirmed(targets, 'SIGTERM');
+    return this.stopTargets(targets, wanted);
+  }
+
+  async stopDetached(
+    runId: string,
+    pids: readonly number[],
+  ): Promise<number[]> {
+    const [reading, usage] = await Promise.all([
+      this.attribution.attribute('fresh'),
+      this.listUsage(),
+    ]);
+    if (reading === null || usage === null) {
+      throw new BadRequestException(
+        'PROCESS_TABLE_UNREADABLE',
+        'could not safely read the process table; try again',
+      );
+    }
+    const { targets, overCap } = capSelection(reading.get(runId) ?? []);
+    if (overCap !== null) {
+      throw new BadRequestException(
+        'RUN_PROCESS_CAP',
+        'too many processes belong to this thread; stopped none',
+      );
+    }
+    // The registry is read after both tables: a newly held CLI must never be
+    // mistaken for a stand, including orphaned members of its process group.
+    const roots = this.processRoots();
+    if (roots.some((pid) => !usage.some((row) => row.pid === pid))) {
+      throw new BadRequestException(
+        'PROCESS_TABLE_CHANGED',
+        'an agent process changed while reading; try again',
+      );
+    }
+    const held = new Set(
+      roots.flatMap((pid) => processTreeOf(usage, pid).map((row) => row.pid)),
+    );
+    const detached = new Map(
+      targets.filter((row) => !held.has(row.pid)).map((row) => [row.pid, row]),
+    );
+    const selected = [...new Set(pids)];
+    if (selected.some((pid) => !detached.has(pid))) {
+      throw new BadRequestException(
+        'PROCESS_NOT_DETACHED',
+        'a selected process is no longer detached from this thread; refresh and try again',
+      );
+    }
+    if (
+      selected.some((pid) => {
+        const usageRow = usage.find((row) => row.pid === pid);
+        return (
+          usageRow === undefined || usageRow.ppid !== detached.get(pid)?.ppid
+        );
+      })
+    ) {
+      throw new BadRequestException(
+        'PROCESS_TABLE_CHANGED',
+        'a selected process changed while reading; refresh and try again',
+      );
+    }
+    return this.stopTargets(
+      selected.map((pid) => ({
+        row: detached.get(pid) as ScannedProcess,
+        runId,
+      })),
+      [runId],
+      true,
+    );
+  }
+
+  private async stopTargets(
+    targets: readonly Target[],
+    wanted: readonly string[],
+    reportFailure = false,
+  ): Promise<number[]> {
+    const terminated = await this.signalConfirmed(
+      targets,
+      'SIGTERM',
+      reportFailure,
+    );
     if (terminated.length === 0) {
       return [];
     }
     await this.wait(GROUP_KILL_GRACE_MS);
-    const killed = await this.signalConfirmed(terminated, 'SIGKILL');
+    const killed = await this.signalConfirmed(
+      terminated,
+      'SIGKILL',
+      reportFailure,
+    );
     this.logger.log(
       `stopped ${terminated.length} process(es) of run(s) ${wanted.join(', ')}; ${killed.length} needed SIGKILL`,
     );
@@ -210,11 +306,21 @@ export class RunProcessReaper {
   private async signalConfirmed(
     targets: readonly Target[],
     sig: NodeJS.Signals,
+    reportFailure = false,
   ): Promise<Target[]> {
     if (targets.length === 0) {
       return [];
     }
     const alive = await this.startTimes(targets.map(({ row }) => row.pid));
+    if (alive === null) {
+      if (reportFailure) {
+        throw new BadRequestException(
+          'PROCESS_IDENTITY_UNREADABLE',
+          'could not confirm process identities; refresh and try again',
+        );
+      }
+      return [];
+    }
     const signalled: Target[] = [];
     for (const target of targets) {
       const { row, runId } = target;
@@ -234,6 +340,12 @@ export class RunProcessReaper {
               err instanceof Error ? err.message : String(err)
             }`,
           );
+          if (reportFailure) {
+            throw new BadRequestException(
+              'PROCESS_SIGNAL_FAILED',
+              `could not stop pid ${row.pid} (${nameOf(row)}); refresh and try again`,
+            );
+          }
         }
         continue;
       }
@@ -256,10 +368,12 @@ function nameOf(row: ScannedProcess): string {
  * when none of them is alive — the normal case after a SIGTERM — which would
  * stall the daemon for every run it serves.
  */
-async function readStartTimes(pids: number[]): Promise<Map<number, number>> {
+async function readStartTimes(
+  pids: number[],
+): Promise<Map<number, number> | null> {
   const out = await runPs(['-axww', '-o', 'pid=,lstart=']);
   if (out === null) {
-    return new Map();
+    return null;
   }
   const wanted = new Set(pids);
   return new Map([...parseStartTimes(out)].filter(([pid]) => wanted.has(pid)));

@@ -155,12 +155,14 @@ import { defaultSpawn } from './utils/spawn-cli';
         runDao: RunDao,
         sessions: AgentSessionRegistry,
         attribution: RunProcessAttribution,
-      ) => new RunProcessesService(em, runDao, sessions, attribution),
+        reaper: RunProcessReaper,
+      ) => new RunProcessesService(em, runDao, sessions, attribution, reaper),
       inject: [
         EntityManager,
         RunDao,
         AgentSessionRegistry,
         RunProcessAttribution,
+        RunProcessReaper,
       ],
     },
     PullRequestCaptureService,
@@ -344,6 +346,7 @@ import { defaultSpawn } from './utils/spawn-cli';
       ) =>
         new RunProcessReaper(attribution, {
           held: (runId) => sessions.processRoots(runId).length > 0,
+          processRoots: () => sessions.processRoots().map((root) => root.pid),
           stillGone: async (runIds) => {
             const live = await runDao.getAll(
               { id: { $in: runIds }, archivedAt: null },

@@ -11932,7 +11932,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       'cd web && pnpm dev:web',
     ]);
     expect(envelope.result.note).toBe(
-      "callee left 1 command(s) it started in this call running in the background: `cd web && pnpm dev:web`. They keep running after this result. To stop them, continue the conversation (call_agent with thread: 'call-1') and ask callee to; otherwise tell the user they are still running.",
+      "callee answered while 1 command(s) it started in the background were still running: `cd web && pnpm dev:web`. Its work may not be finished: they keep running after this result, and what they print arrives in its conversation (call_agent with thread: 'call-1'), which is also where it can be asked to stop them.",
     );
   });
 
@@ -11962,7 +11962,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     expect(envelope.result.commands_still_running).toBe(1);
     expect(envelope.result).not.toHaveProperty('running_commands');
     expect(envelope.result.note).toContain(
-      'callee left 1 command(s) it started in this call running in the background. ',
+      'callee answered while 1 command(s) it started in the background were still running. ',
     );
     expect(envelope.result.note).not.toContain('b7');
   });
@@ -11993,6 +11993,9 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     vi.spyOn(itemDao, 'toolCallsByIds').mockRejectedValueOnce(
       new Error('database is locked'),
     );
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => {});
     completeTurn(callee, 'up on :3050');
     const envelope = (await call) as { result: Record<string, unknown> };
 
@@ -12001,6 +12004,92 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       result: { text: 'up on :3050' },
     });
     expect(envelope.result).not.toHaveProperty('commands_still_running');
+    // Not swallowed: a note that silently stops appearing must leave a trace.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('commands left running failed'),
+    );
+    warn.mockRestore();
+  });
+
+  describe('commands an earlier call on the thread left running', () => {
+    /** The callee's first call, which leaves `pnpm dev:api` up. */
+    const firstCallLeavesServer = async (): Promise<{
+      run: { id: string };
+      claude: FakeAdapter;
+      callBroker: CallBroker;
+    }> => {
+      const { service, claude, callBroker } = setup();
+      const run = await service.startRun({
+        slug: 'bg',
+        workflow: triggered(CALL_WORKFLOW),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const first = callBroker.callAgent(run.id, 'a', {
+        title: 'up',
+        agent: 'callee',
+        message: 'bring the API up',
+      });
+      await drain();
+      const callee = claude.starts[1]!;
+      callee.emit({ type: 'session', sessionId: 'sess-callee' });
+      callee.emit({
+        type: 'tool_call',
+        id: 'toolu_srv',
+        name: 'Bash',
+        input: { command: 'pnpm dev:api', run_in_background: true },
+      });
+      callee.emit({
+        type: 'shell_open',
+        toolCallId: 'toolu_srv',
+        workId: 'b1',
+      });
+      completeTurn(callee, 'the API is up');
+      await first;
+      await drain();
+      return { run, claude, callBroker };
+    };
+
+    it('names one in a continuation’s result, with the call that started it', async () => {
+      // A continued thread answers in the same kept process: the server its
+      // first call started is still out when the second one answers.
+      const { run, claude, callBroker } = await firstCallLeavesServer();
+      const second = callBroker.callAgent(run.id, 'a', {
+        title: 'hit',
+        agent: 'callee',
+        message: 'now hit it',
+        thread: 'call-1',
+      });
+      await drain();
+      completeTurn(claude.starts[2]!, 'it answers 200');
+      const envelope = (await second) as {
+        result: Record<string, unknown> & { note: string };
+      };
+
+      expect(envelope.result.call_id).toBe('call-2');
+      expect(envelope.result.running_commands).toEqual(['pnpm dev:api']);
+      expect(envelope.result.note).toContain(
+        ': `pnpm dev:api` (started in call-1). Its work may not be finished',
+      );
+    });
+
+    it('names none in another conversation of the same agent', async () => {
+      const { run, claude, callBroker } = await firstCallLeavesServer();
+      // A fresh call, not a continuation: its own conversation and process.
+      const fresh = callBroker.callAgent(run.id, 'a', {
+        title: 'other',
+        agent: 'callee',
+        message: 'something else',
+      });
+      await drain();
+      completeTurn(claude.starts[2]!, 'done with that');
+      const envelope = (await fresh) as { result: Record<string, unknown> };
+
+      expect(envelope.result.call_id).toBe('call-2');
+      expect(envelope.result).not.toHaveProperty('commands_still_running');
+      expect(envelope.result).not.toHaveProperty('note');
+    });
   });
 
   it('hands the broker the callee’s cache lifetime and context, so a caller can judge a resume', async () => {

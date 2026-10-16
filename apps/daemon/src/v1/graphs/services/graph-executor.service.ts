@@ -110,6 +110,7 @@ import {
 import {
   shellCloseEvent,
   shellCommandOf,
+  type StrandedShell,
   strandedShells,
 } from '../../agents/utils/open-shells';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
@@ -167,6 +168,7 @@ import type {
   NodeStateWire,
   PoolSkip,
   ResetWakesCancelled,
+  ShellStillOut,
   Workflow,
   WorkflowAgentNode,
   WorkflowAgentPoolMember,
@@ -4623,20 +4625,38 @@ export class GraphExecutorService
       });
 
     /**
-     * The commands ONE call detached that its transcript still declares
-     * running, oldest first, in the words its tool call ran them with — null
-     * for one whose words were never recorded. A call settling closes none of
-     * them — they end only with the process — so this is what the call leaves
-     * running. Read on the write chain, and a failed read answers none, for the
-     * reason {@link delegatesOutOfCall} gives.
+     * The commands a callee CONVERSATION detached that its transcript still
+     * declares running, oldest first, each with the call it was started in and
+     * the words its tool call ran it with (null where those were never
+     * recorded). An earlier call's count: a continued thread answers in the
+     * same kept process, so what its first call started is still the thread's
+     * — and a continuation resumed in a fresh process finds none open, since
+     * the old process's exit wrote their closes. A call settling closes none
+     * of them; they end only with the process. Read on the write chain, and a
+     * failed read answers none, for the reason {@link delegatesOutOfCall}
+     * gives.
      */
-    const shellsOutOfCall = (callId: string): Promise<(string | null)[]> =>
+    const shellsOutOfConversation = (
+      nodeId: string,
+      callId: string,
+      conversationId: string,
+    ): Promise<ShellStillOut[]> =>
       new Promise((resolve) => {
         enqueue(async () => {
           try {
+            // The call settling now is not recorded on its thread yet.
+            const calls = new Set([
+              callId,
+              ...this.callBroker.recordedCallsOf(runId, conversationId),
+            ]);
             const shells = strandedShells(
               await this.itemDao.shellRows(runId, em),
-            ).filter((shell) => shell.callId === callId);
+            ).filter(
+              (shell): shell is StrandedShell & { callId: string } =>
+                shell.nodeId === nodeId &&
+                shell.callId !== null &&
+                calls.has(shell.callId),
+            );
             const words = new Map<string, string>();
             for (const row of await this.itemDao.toolCallsByIds(
               runId,
@@ -4652,13 +4672,18 @@ export class GraphExecutorService
               }
             }
             resolve(
-              shells.map((shell) =>
-                shell.toolCallId === null
-                  ? null
-                  : (words.get(shell.toolCallId) ?? null),
-              ),
+              shells.map((shell) => ({
+                command:
+                  shell.toolCallId === null
+                    ? null
+                    : (words.get(shell.toolCallId) ?? null),
+                callId: shell.callId,
+              })),
             );
-          } catch {
+          } catch (err) {
+            this.logger.warn(
+              `workflow run ${runId} call ${callId}: the read of commands left running failed, so its result names none: ${err instanceof Error ? err.message : String(err)}`,
+            );
             resolve([]);
           }
         });
@@ -5462,7 +5487,7 @@ export class GraphExecutorService
             : 0;
         const shellsStillOut =
           settledCall.outcome === 'completed'
-            ? await shellsOutOfCall(callId)
+            ? await shellsOutOfConversation(callee.id, callId, conversationId)
             : [];
         // As the member that filled the window: the compaction is that
         // member's turn, not member 1's, and must leave member 1's row alone.
@@ -5681,7 +5706,11 @@ export class GraphExecutorService
                 reported.status === 'completed'
                   ? {
                       ...reported,
-                      shellsStillOut: await shellsOutOfCall(callId),
+                      shellsStillOut: await shellsOutOfConversation(
+                        node.id,
+                        callId,
+                        conversationId,
+                      ),
                     }
                   : reported,
                 waiting.messages,

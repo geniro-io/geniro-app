@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   type ActiveTask,
+  type BlockedTask,
   type CreateProjectDto,
   type CreateTaskDto,
   type ProjectDto,
@@ -31,6 +32,23 @@ const NOTHING_STAGED: NewTaskAttachments = {
   files: [],
   uploads: [],
 };
+
+/**
+ * How long past a blocked card's `retryInMs` the queue is re-read: the hold
+ * ends then on the daemon's clock, and a read landing exactly on it could
+ * still find the card held.
+ */
+const RETRY_READ_SLACK_MS = 1_000;
+
+/** How soon, from the answer that named them, any of these cards is released. */
+export function soonestRetryInMs(
+  blocked: readonly BlockedTask[],
+): number | null {
+  const waits = blocked.flatMap((task) =>
+    task.retryInMs === null ? [] : [task.retryInMs],
+  );
+  return waits.length === 0 ? null : Math.min(...waits);
+}
 
 /**
  * The board's columns, left to right.
@@ -475,6 +493,27 @@ export function useBoard(
   // render that produced the callback.
   const reloadRef = useRef(reload);
   reloadRef.current = reload;
+
+  // A card held for a worktree failure is held only for its `retryInMs`, and
+  // nothing announces the moment that passes — the daemon simply stops holding
+  // it. Without a re-read then, a board with no free slot would go on calling
+  // it "cannot start" until some unrelated card event arrived. Keyed on the
+  // ANSWER, not the number: every read re-arms from its own remainder, so a
+  // re-read that still finds the card held (latency, or a read landing just
+  // before the daemon's own instant) schedules the next one rather than going
+  // quiet.
+  useEffect(() => {
+    const retryInMs = soonestRetryInMs(queue?.blocked ?? []);
+    if (retryInMs === null) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      reloadRef.current();
+    }, retryInMs + RETRY_READ_SLACK_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [queue]);
   const selectedRef = useRef(selectedProjectId);
   selectedRef.current = selectedProjectId;
   /**

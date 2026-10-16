@@ -31,9 +31,9 @@ export const MAX_CONCURRENT_CEILING = 5;
 /**
  * How many blocked cards the panel names before it counts the rest.
  *
- * They share ONE reason in every case this can produce today, so listing forty
- * of them would be the same sentence forty times in a 20rem popover; the count
- * says how big the problem is and the board says which cards.
+ * A 20rem popover cannot hold forty reasons, and each card may carry its own
+ * (a worktree failure quotes git's line). The count says how big the problem
+ * is; the column's "cannot start" panel lists every card with its reason.
  */
 const MAX_BLOCKED_SHOWN = 4;
 

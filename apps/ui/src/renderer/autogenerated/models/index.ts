@@ -1483,7 +1483,34 @@ export interface BlockedTask {
      * @memberof BlockedTask
      */
     reason: string;
+    /**
+     * Where the answer lies: the run settings (run-target, missing-workflow), or a Run press on the card itself (stopped, worktree)
+     * @type {BlockedTaskKind}
+     * @memberof BlockedTask
+     */
+    kind: BlockedTaskKind;
+    /**
+     * 
+     * @type {number}
+     * @memberof BlockedTask
+     */
+    retryInMs: number | null;
 }
+
+
+
+/**
+ * 
+ * @export
+ */
+export const BlockedTaskKind = {
+    RunTarget: 'run-target',
+    MissingWorkflow: 'missing-workflow',
+    Stopped: 'stopped',
+    Worktree: 'worktree'
+} as const;
+export type BlockedTaskKind = typeof BlockedTaskKind[keyof typeof BlockedTaskKind];
+
 /**
  * 
  * @export
@@ -4646,6 +4673,19 @@ export interface ReorderTasksDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface ReportPrepareFailureDto
+ */
+export interface ReportPrepareFailureDto {
+    /**
+     * git's own line for why the worktree could not be made, shown on the board as the reason the card is held
+     * @type {string}
+     * @memberof ReportPrepareFailureDto
+     */
+    reason: string;
+}
 /**
  * 
  * @export

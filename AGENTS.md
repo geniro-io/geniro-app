@@ -29,7 +29,7 @@ The rules under `.claude/rules/` are part of this file's contract. Claude Code l
 | [`packaging-config.md`](.claude/rules/packaging-config.md) | `scripts/**`, `apps/ui/electron-builder.yml` | An env-signal branch owns every config value it controls |
 | [`testing.md`](.claude/rules/testing.md) | `**/*.spec.ts`, `**/*.spec.tsx` | No false pins: a claimed behaviour has an assertion that fails when it breaks |
 
-Add a new rule file to this table in the same change, with the paths its frontmatter declares, and give it its `.cursor/rules/<name>.mdc` symlink (`ln -s ../../.claude/rules/<name>.md .cursor/rules/<name>.mdc`). The table is the only way a rule reaches Codex.
+Add a new rule file to this table in the same change, with the paths its frontmatter declares, and give it its `.cursor/rules/<name>.mdc` symlink (`ln -s ../../.claude/rules/<name>.md .cursor/rules/<name>.mdc`); `pnpm check:cursor-rules` (in CI and `full-check`) fails on a missing, wrong or extra link. The table is the only way a rule reaches Codex.
 
 ---
 

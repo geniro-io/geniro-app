@@ -3,6 +3,7 @@ import {
   Check,
   ChevronLeft,
   GitBranch,
+  Info,
   MessageSquare,
   RefreshCw,
   ShieldCheck,
@@ -36,7 +37,7 @@ import { AgentGlyph } from '../components/agent-glyph';
 import { CliLoginProgress } from '../components/cli-login-progress';
 import { ErrorBanner } from '../components/error-banner';
 import { Logo } from '../components/logo';
-import { NoteBox } from '../components/note-box';
+import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { ProgressBar } from '../components/ui/progress-bar';
@@ -538,70 +539,101 @@ export function Onboarding({
                 ) : null}
                 {progress.step === 2 ? (
                   <>
-                    <NoteBox className="mb-5 px-4 py-3 leading-relaxed">
-                      Using one account? You can skip this step. Manage profiles
-                      anytime in Settings → Agents.
-                    </NoteBox>
-                    <div className="flex flex-col gap-4">
+                    <Card className="divide-y divide-border p-0 shadow-none">
                       {CLI_KINDS.map((kind) => {
                         const reason =
                           configDirCapability.unavailableReasonFor(kind);
+                        const own = profiles.filter(
+                          (profile) => profile.agent === kind,
+                        );
+                        const list =
+                          reason === null ? (
+                            <ConfigProfileList
+                              compact
+                              agent={kind}
+                              profiles={own}
+                              onChange={(next) => changeProfiles(kind, next)}
+                              onPickDirectory={() =>
+                                window.geniro.pickProjectFolder()
+                              }
+                              onSignIn={
+                                apis
+                                  ? (dir) => void login.start(kind, dir)
+                                  : undefined
+                              }
+                              signingIn={
+                                login.starting?.kind === kind
+                                  ? login.starting.configDir
+                                  : null
+                              }
+                              busy={blocked}
+                              logins={
+                                clis?.find((cli) => cli.kind === kind)
+                                  ?.profileLogins ?? {}
+                              }
+                            />
+                          ) : null;
                         return (
-                          <Card key={kind} className="p-5 shadow-none">
-                            <h2 className="mb-3 text-sm font-semibold">
-                              {nameOf(kind)}
-                            </h2>
-                            {reason === null ? (
-                              <ConfigProfileList
-                                compact
-                                agent={kind}
-                                profiles={profiles.filter(
-                                  (profile) => profile.agent === kind,
-                                )}
-                                onChange={(next) => changeProfiles(kind, next)}
-                                onPickDirectory={() =>
-                                  window.geniro.pickProjectFolder()
-                                }
-                                onSignIn={
-                                  apis
-                                    ? (dir) => void login.start(kind, dir)
-                                    : undefined
-                                }
-                                signingIn={
-                                  login.starting?.kind === kind
-                                    ? login.starting.configDir
-                                    : null
-                                }
-                                busy={blocked}
-                                logins={
-                                  clis?.find((cli) => cli.kind === kind)
-                                    ?.profileLogins ?? {}
-                                }
-                              />
-                            ) : (
-                              <p className="text-sm text-muted-foreground">
-                                {reason ??
-                                  (loading
-                                    ? 'Checking profile support…'
-                                    : 'Profile support is unavailable. You can configure profiles later in Settings.')}
-                              </p>
-                            )}
-                            {login.login?.kind === kind ? (
-                              <CliLoginProgress
-                                variant="inline"
-                                session={login.login.session}
-                                error={login.error}
-                                onSubmitCode={(code) =>
-                                  void login.submitCode(code)
-                                }
-                                onCancel={() => void login.cancel()}
-                                onDismiss={login.dismiss}
-                              />
+                          <div key={kind} className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-secondary-foreground">
+                                <AgentGlyph
+                                  icon={agentIconName(identities, kind)}
+                                />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <h2 className="text-sm font-medium">
+                                  {nameOf(kind)}
+                                </h2>
+                                <p
+                                  className="truncate text-xs text-muted-foreground"
+                                  title={reason ?? undefined}>
+                                  {reason !== null
+                                    ? 'Profiles aren’t available for this agent'
+                                    : loading
+                                      ? 'Checking profile support…'
+                                      : own.length === 0
+                                        ? 'Default setup'
+                                        : `Default setup + ${own.length} ${own.length === 1 ? 'profile' : 'profiles'}`}
+                                </p>
+                              </div>
+                              {reason !== null ? (
+                                <Badge
+                                  variant="muted"
+                                  className="rounded-full"
+                                  title={reason}>
+                                  Not available
+                                </Badge>
+                              ) : own.length === 0 ? (
+                                list
+                              ) : null}
+                            </div>
+                            {own.length > 0 ? (
+                              <div className="mt-3 pl-11">{list}</div>
                             ) : null}
-                          </Card>
+                            {login.login?.kind === kind ? (
+                              <div className="mt-3 pl-11">
+                                <CliLoginProgress
+                                  variant="inline"
+                                  session={login.login.session}
+                                  error={login.error}
+                                  onSubmitCode={(code) =>
+                                    void login.submitCode(code)
+                                  }
+                                  onCancel={() => void login.cancel()}
+                                  onDismiss={login.dismiss}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
                         );
                       })}
-                    </div>
+                    </Card>
+                    <p className="mt-3 flex items-center gap-2 pl-1 text-xs text-muted-foreground">
+                      <Info aria-hidden="true" className="size-3.5 shrink-0" />
+                      Using one account per agent? Skip this step — profiles
+                      live in Settings → Agents too.
+                    </p>
                   </>
                 ) : null}
                 {progress.step === 3 ? (

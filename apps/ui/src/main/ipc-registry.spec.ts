@@ -129,6 +129,7 @@ const DENIED_CHANNEL_KEYS: (keyof typeof IPC)[] = [
   'completeOnboarding',
   'switchBranch',
   'pullBranch',
+  'carryChangesToBranch',
   // Not "acts on the desktop" in the WebContents sense the others are — these
   // change WHERE this machine is reachable from. Opening a public address is a
   // decision for somebody at the Mac, never for whoever holds a paired phone's

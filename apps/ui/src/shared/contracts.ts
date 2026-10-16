@@ -1247,6 +1247,20 @@ export interface BranchPullResult {
   stashLeft: string | null;
 }
 
+/**
+ * Outcome of "switch to that branch and bring my changes along" — a stash, the
+ * switch, and the stash put back on the new branch.
+ */
+export interface BranchCarryResult {
+  ok: boolean;
+  /** The branch now checked out, or null when the folder is no repository. */
+  branch: string | null;
+  /** git's own first line when it refused; null on success. */
+  error: string | null;
+  /** As {@link BranchPullResult.stashLeft}. */
+  stashLeft: string | null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Pull requests (read from the folder a run works in, through the user's own gh)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1694,6 +1708,11 @@ export interface GeniroApi {
    */
   pullBranch(dir: string): Promise<BranchPullResult>;
   /**
+   * Switch the folder to a branch and keep uncommitted work, moving it along:
+   * stash → `git switch` → stash pop.
+   */
+  carryChangesToBranch(dir: string, branch: string): Promise<BranchCarryResult>;
+  /**
    * Live state for the pull requests a THREAD opened, addressed by URL.
    *
    * A batch rather than one call per thread: the sidebar draws many rows and
@@ -1913,6 +1932,7 @@ export const IPC = {
   saveArtifact: 'geniro:saveArtifact',
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',
+  carryChangesToBranch: 'geniro:carryChangesToBranch',
   getPullRequestsByRef: 'geniro:getPullRequestsByRef',
   revealPath: 'geniro:revealPath',
   toggleDevTools: 'geniro:toggleDevTools',

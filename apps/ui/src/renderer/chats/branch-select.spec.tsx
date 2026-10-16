@@ -112,6 +112,26 @@ describe('BranchSelect', () => {
     const plain = rows.find((row) => row.textContent?.includes('main'));
     expect(plain!.textContent).not.toContain('in ');
   });
+
+  it('lists the main branches first, under their own label', () => {
+    // REPORTED: a long list of feature branches with `main` and `dev` lost
+    // somewhere in git's alphabetical order.
+    const el = render({
+      ...REPO,
+      branch: 'feat/a',
+      branches: ['feat/a', 'dev', 'fix/b', 'main'],
+    });
+    const trigger = el.querySelector<HTMLElement>('[data-menu-trigger]')!;
+    act(() => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const rows = [...el.querySelectorAll<HTMLElement>('[role="option"]')].map(
+      (row) => row.textContent?.trim(),
+    );
+    expect(rows).toEqual(['main', 'dev', 'feat/a', 'fix/b']);
+    expect(el.textContent).toContain('Main branches');
+  });
 });
 
 describe('BranchValueSelect', () => {

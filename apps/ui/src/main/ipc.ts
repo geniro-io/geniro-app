@@ -24,6 +24,7 @@ import {
 } from './git-changes';
 import { gitFailureLine } from './git-failure';
 import {
+  carryChangesToBranch,
   pullBranch,
   readGitHead,
   readGitInfo,
@@ -645,7 +646,7 @@ export function registerIpc(
     settleWorktreeForTask(taskIdSchema.parse(taskId)),
   );
 
-  // Both mutate the USER's own checkout — not an app-owned worktree — with
+  // All three mutate the USER's own checkout — not an app-owned worktree — with
   // no one at the Mac to notice files changing under an editor that has that
   // folder open. `prepareTaskWorktree`/`settleTaskWorktree` below are the
   // safe half of this same list: they act on a directory this app made under
@@ -664,6 +665,17 @@ export function registerIpc(
       "pulls into the user's own working folder on the computer running geniro",
     ),
     (_event, dir: unknown) => pullBranch(gitDirSchema.parse(dir)),
+  );
+  handle(
+    IPC.carryChangesToBranch,
+    denyRemotely(
+      "switches the branch checked out in the user's own working folder on the computer running geniro",
+    ),
+    (_event, dir: unknown, branch: unknown) =>
+      carryChangesToBranch(
+        gitDirSchema.parse(dir),
+        branchNameSchema.parse(branch),
+      ),
   );
 
   // Reveals, never opens, and only inside the daemon's log directory — the

@@ -722,6 +722,12 @@ beforeEach(() => {
       error: null,
       stashLeft: null,
     }),
+    carryChangesToBranch: vi.fn().mockResolvedValue({
+      ok: true,
+      branch: 'dev',
+      error: null,
+      stashLeft: null,
+    }),
     // Both CLIs present by default; a test opts into a missing one to check
     // that the picker refuses an agent this machine cannot run.
     detectClis: vi.fn().mockResolvedValue([
@@ -13030,18 +13036,24 @@ describe('Chats — the open thread lays its composer out differently', () => {
     });
 
     expect(window.geniro.pullBranch).toHaveBeenCalledWith('/proj');
-    // The pull exists to unblock a SWITCH, so the switch is retried — and this
-    // mock refuses it again, because the pull put the same uncommitted work
-    // back. The strip therefore STAYS.
-    //
-    // Clearing it on a successful pull is what got fixed: the pull
-    // fast-forwards the branch the user is LEAVING, so re-selecting the target
-    // was refused identically while the sentence explaining why had vanished —
-    // which reads as though the switch went through.
-    expect(window.geniro.switchBranch).toHaveBeenCalledTimes(2);
+    // REPORTED: the button spun, then the same sentence came back and nothing
+    // had changed. The pull puts the work back on the branch the user is
+    // LEAVING, so retrying the switch was refused identically every time. No
+    // retry now — the strip says what the pull did instead.
+    expect(window.geniro.switchBranch).toHaveBeenCalledTimes(1);
     const after = container.querySelector('[data-tone]');
     expect(after?.getAttribute('data-tone')).toBe('warning');
-    expect(after?.textContent).toContain('Uncommitted changes in this folder');
+    expect(after?.textContent).toContain(
+      'Pulled main up to date and kept your changes — still not on dev',
+    );
+    expect(after?.textContent).not.toContain('Uncommitted changes');
+    // The pull is done, so it is not offered again; the move that reaches the
+    // picked branch still is.
+    const labels = [...container.querySelectorAll('button')].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(labels).not.toContain('Pull latest');
+    expect(labels).toContain('Bring changes along');
   });
 
   it('offers the WORKTREE that holds a branch instead of reporting git’s fatal', async () => {
@@ -13102,10 +13114,9 @@ describe('Chats — the open thread lays its composer out differently', () => {
     expect(container.querySelector('[data-tone]')).toBeNull();
   });
 
-  it('clears the strip when the pull DOES unblock the switch', async () => {
-    // The other half of the retry, and the case the offer promises: once the
-    // refusal is gone the switch lands, and only then is the sentence that sent
-    // the user here describing nothing.
+  it('brings the changes along to the refused branch and clears the strip', async () => {
+    // The way out that reaches the branch the user picked: stash, switch,
+    // restore there. Once it lands the sentence describes nothing.
     window.geniro.getGitInfo = vi.fn().mockResolvedValue({
       isRepo: true,
       branch: 'main',
@@ -13113,20 +13124,12 @@ describe('Chats — the open thread lays its composer out differently', () => {
       dirty: true,
       worktrees: [],
     });
-    window.geniro.switchBranch = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: false,
-        branch: 'main',
-        error: 'Uncommitted changes in this folder — the branch stays put',
-        dirty: true,
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        branch: 'dev',
-        error: null,
-        dirty: false,
-      });
+    window.geniro.switchBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: 'main',
+      error: 'Uncommitted changes in this folder — the branch stays put',
+      dirty: true,
+    });
     const { client } = makeClient();
     const container = await mount(client);
 
@@ -13136,15 +13139,64 @@ describe('Chats — the open thread lays its composer out differently', () => {
     await pickMenuRow(container, branch, 'dev');
     expect(container.querySelector('[data-tone]')).not.toBeNull();
 
-    const pull = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent?.trim() === 'Pull latest',
+    const carry = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Bring changes along',
     );
+    expect(carry).toBeDefined();
     await act(async () => {
-      pull?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      carry?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(window.geniro.switchBranch).toHaveBeenCalledTimes(2);
+    expect(window.geniro.carryChangesToBranch).toHaveBeenCalledWith(
+      '/proj',
+      'dev',
+    );
+    expect(window.geniro.pullBranch).not.toHaveBeenCalled();
     expect(container.querySelector('[data-tone]')).toBeNull();
+  });
+
+  it('reports a refused bring-along as a real error, with nothing left to press', async () => {
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'dev'],
+      dirty: true,
+      worktrees: [],
+    });
+    window.geniro.switchBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: 'main',
+      error: 'Uncommitted changes in this folder — the branch stays put',
+      dirty: true,
+    });
+    window.geniro.carryChangesToBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: 'dev',
+      error:
+        'Switched to dev, but your changes could not be restored — they are kept in stash@{0}',
+      stashLeft: 'stash@{0}',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const branch = [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find((trigger) => trigger.getAttribute('aria-label') === 'Git branch')!;
+    await pickMenuRow(container, branch, 'dev');
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((button) => button.textContent?.trim() === 'Bring changes along')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const strip = container.querySelector('[data-tone]');
+    expect(strip?.getAttribute('data-tone')).toBe('error');
+    expect(strip?.textContent).toContain('kept in stash@{0}');
+    const labels = [...container.querySelectorAll('button')].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(labels).not.toContain('Bring changes along');
+    expect(labels).not.toContain('Pull latest');
   });
 
   it('reports a refused pull as a real error, with no second Pull to press', async () => {
@@ -13192,6 +13244,13 @@ describe('Chats — the open thread lays its composer out differently', () => {
         (button) => button.textContent?.trim() === 'Pull latest',
       ),
     ).toBe(false);
+    // A refused pull closes only its own door: bringing the work along to the
+    // picked branch is a different move, and still on offer.
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (button) => button.textContent?.trim() === 'Bring changes along',
+      ),
+    ).toBe(true);
   });
 
   it('shows no branch control once a thread is open, even in a real repo', async () => {

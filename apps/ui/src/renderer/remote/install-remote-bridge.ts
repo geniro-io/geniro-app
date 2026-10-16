@@ -306,6 +306,10 @@ export function installRemoteBridge(): void {
       >,
     pullBranch: (dir) =>
       invoke(IPC.pullBranch, [dir]) as ReturnType<GeniroApi['pullBranch']>,
+    carryChangesToBranch: (dir, branch) =>
+      invoke(IPC.carryChangesToBranch, [dir, branch]) as ReturnType<
+        GeniroApi['carryChangesToBranch']
+      >,
     revealPath: (path) =>
       invoke(IPC.revealPath, [path]) as ReturnType<GeniroApi['revealPath']>,
     toggleDevTools: () =>

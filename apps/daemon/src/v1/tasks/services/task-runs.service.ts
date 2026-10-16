@@ -10,7 +10,9 @@ import { interruptedReason } from '../../../utils/stop-cause';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
+import { assertWorkflowRun } from '../../agents/utils/run-kind';
 import { GraphExecutorService } from '../../graphs/services/graph-executor.service';
+import { RunWorkflowService } from '../../graphs/services/run-workflow.service';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { nodesThatAsk } from '../../graphs/utils/unattended';
 import { ProjectDao } from '../../projects/dao/project.dao';
@@ -24,6 +26,7 @@ import { Task } from '../entity/task.entity';
 import {
   type ResolvedAgentTarget,
   type ResolvedRunTarget,
+  type ResolvedWorkflowTarget,
   type StartTaskRun,
   type TaskWire,
 } from '../tasks.types';
@@ -59,22 +62,9 @@ export class TaskRunsService {
   private readonly logger = new Logger(TaskRunsService.name);
 
   /**
-   * Tasks whose start is in flight, claimed synchronously.
-   *
-   * `TasksService.moveStatus` is a compare-and-set, and it is what stops two
-   * BOARDS double-starting one card — but it reads and then writes with an
-   * await between, so two requests arriving together can both find the card in
-   * `todo` and both pass. `ChatService.sendMessage` closes the identical
-   * window with the identical mechanism, and its reasoning applies unchanged:
-   * reserve before the first await, since the cost of losing the race is two
-   * agents in two worktrees working one task.
-   */
-  private readonly starting = new Set<string>();
-
-  /**
    * One project's starts, serialized.
    *
-   * The `starting` Set above stops one CARD being started twice; this stops
+   * `TasksService.claimStart` stops one CARD being started twice; this stops
    * one PROJECT exceeding its cap, which is a different race and is not
    * covered by it. Two conductors picking two DIFFERENT eligible tasks both
    * count the running runs, both find a slot free, and both start — the cap is
@@ -100,16 +90,16 @@ export class TaskRunsService {
     private readonly groups: RunGroupsService,
     private readonly labelInstructions: LabelInstructionsService,
     private readonly workflows: WorkflowStoreService,
+    private readonly runWorkflows: RunWorkflowService,
   ) {}
 
   async start(taskId: string, input: StartTaskRun): Promise<TaskWire> {
-    if (this.starting.has(taskId)) {
+    if (!this.tasks.claimStart(taskId)) {
       throw new ConflictException(
         'TASK_RUN_STARTING',
         `task ${taskId} is already starting a run`,
       );
     }
-    this.starting.add(taskId);
     try {
       const projectId = await this.projectIdOf(taskId);
       const wire = await this.queued(projectId, () =>
@@ -125,7 +115,7 @@ export class TaskRunsService {
       await this.taskDao.setPrepareFailure(taskId, null, em);
       return wire;
     } finally {
-      this.starting.delete(taskId);
+      this.tasks.releaseStart(taskId);
     }
   }
 
@@ -254,21 +244,15 @@ export class TaskRunsService {
     //
     // Before the create arms rather than inside them, because both are the
     // same decision: the run this card already holds is the run it should be
-    // worked in, whichever engine made it.
-    // A workflow target never continues a chat thread — the two engines share
-    // no channel — and the reverse is ruled out inside `resumableRun`. Between
-    // them a press only ever resumes a run of the engine it resolved to.
-    if (target.kind === 'agent') {
-      const resumed = await this.resume(
-        task,
-        input,
-        target,
-        labelInstructions,
-        em,
-      );
-      if (resumed !== null) {
-        return resumed;
-      }
+    // worked in, whichever engine made it. `resumableRun` only ever hands back
+    // a run of the engine AND the target this press resolved to, so a chat is
+    // never sent into a workflow run, nor the reverse.
+    const resumed =
+      target.kind === 'agent'
+        ? await this.resume(task, input, target, labelInstructions, em)
+        : await this.resumeWorkflow(task, input, target, em);
+    if (resumed !== null) {
+      return resumed;
     }
 
     // Where the run is FILED in the sidebar. The project's group when it names
@@ -307,8 +291,8 @@ export class TaskRunsService {
         runId = run.id;
         // No `sendMessage` here, and that is the arm's whole difference: a
         // graph's seed prompt IS its opening message, persisted by the
-        // executor before it walks. There is no second channel to send on —
-        // `POST /v1/chats/:runId/messages` is chat-only.
+        // executor before it walks. A LATER press sends into this run instead
+        // — see `resumeWorkflow`.
         return await this.recordRun(taskId, run.id, input);
       }
 
@@ -493,21 +477,92 @@ export class TaskRunsService {
   }
 
   /**
+   * Continue the card's existing WORKFLOW run, or answer null when there is
+   * none to continue and a new one has to be made — `resume`'s twin for the
+   * graph arm.
+   *
+   * The press goes through `GraphExecutorService.sendMessage`, the channel the
+   * run's own composer uses: a settled run is walked again from its trigger,
+   * every node resuming its own session, so the team remembers the earlier
+   * pass instead of starting cold in a second thread beside the first. The
+   * text is `continuation`'s, on the agent arm's reasoning.
+   *
+   * The run keeps the graph it was started with — its snapshot, never the
+   * library's current copy (`RunWorkflowService`) — and the settings it was
+   * started with: a workflow run has no settings patch to re-resolve the
+   * card's label instructions or the board's switches onto.
+   *
+   * Failure is handled exactly as `resume` handles it: the card goes back,
+   * the run is never deleted.
+   */
+  private async resumeWorkflow(
+    task: Task,
+    input: StartTaskRun,
+    target: ResolvedWorkflowTarget,
+    em: EntityManager,
+  ): Promise<TaskWire | null> {
+    const run = await this.resumableRun(task, target, em);
+    if (run === null || !(await this.continuesUnattended(run, input, em))) {
+      return null;
+    }
+    try {
+      // Before the send, on `resume`'s reasoning: the worktree and branch this
+      // press prepared are written onto the card, and the settle path reads
+      // them.
+      const wire = await this.recordRun(task.id, run.id, input);
+      await this.executor.sendMessage(run.id, this.continuation(task, input));
+      return wire;
+    } catch (error) {
+      await this.tasks.moveStatus(task.id, {
+        from: 'in_progress',
+        to: input.from,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Whether this press may continue `run` with nobody watching.
+   *
+   * A person's press always may. The autopilot's was vetted by
+   * `unattendedWorkflow` against the LIBRARY's copy, but a continued run walks
+   * its own snapshot, which may still hold a node that asks — and a card the
+   * autopilot holds must never reach a permission card nobody will answer. So
+   * the snapshot is asked too; one that asks, or cannot be read, makes a new
+   * run from the vetted library copy instead.
+   */
+  private async continuesUnattended(
+    run: Run,
+    input: StartTaskRun,
+    em: EntityManager,
+  ): Promise<boolean> {
+    if ((input.startedBy ?? 'user') !== 'autopilot') {
+      return true;
+    }
+    return this.runWorkflows
+      .workflowOf(assertWorkflowRun(run, run.id), em)
+      .then((workflow) => nodesThatAsk(workflow).length === 0)
+      .catch(() => false);
+  }
+
+  /**
    * The card's own run, when it is one this press can actually continue.
    *
-   * FIVE states disqualify a run, and each one is a real card rather than a
+   * FOUR states disqualify a run, and each one is a real card rather than a
    * defensive branch: the card has never been run; its run was DELETED by the
    * user (the conversation is gone, so there is nothing to continue); its run
-   * is a WORKFLOW run, which has no chat channel to send on — `sendMessage` is
-   * guarded by `assertChatRun` and would throw `NOT_A_CHAT_RUN`; its run is
-   * ARCHIVED, which the daemon holds inert on purpose (`RUN_ARCHIVED`); or the
-   * card has since been re-pointed at a DIFFERENT agent, so continuing would
-   * send the new target's brief to the old CLI. In every one of them the answer
-   * is the same and it is not an error: make a new thread.
+   * is ARCHIVED, which the daemon holds inert on purpose (`RUN_ARCHIVED`); or
+   * the run is not one of the target this press resolved to — a card
+   * re-pointed at a different agent, at a different workflow, or from one
+   * engine to the other. Continuing then would send the new target's
+   * words into the old one: a chat into a workflow run is refused outright
+   * (`NOT_A_CHAT_RUN`), and the rest would run the old target for good, with
+   * the panel showing the new one. In every one of them the answer is the
+   * same and it is not an error: make a new run.
    */
   private async resumableRun(
     task: Task,
-    target: ResolvedAgentTarget,
+    target: ResolvedRunTarget,
     em: EntityManager,
   ): Promise<Run | null> {
     if (task.runId === null) {
@@ -516,10 +571,9 @@ export class TaskRunsService {
     const run = await this.runDao.getById(task.runId, em);
     if (
       !run ||
-      run.workflowId !== null ||
       run.archivedAt !== null ||
       !isTerminalRunStatus(run.status) ||
-      run.agentKind !== target.agentKind
+      !isRunOf(run, target)
     ) {
       return null;
     }
@@ -781,6 +835,16 @@ export class TaskRunsService {
     }
     return project;
   }
+}
+
+/**
+ * Whether `run` was made for `target`: a workflow run of the same workflow,
+ * or a chat on the same CLI.
+ */
+function isRunOf(run: Run, target: ResolvedRunTarget): boolean {
+  return target.kind === 'workflow'
+    ? run.workflowId === target.workflowSlug
+    : run.workflowId === null && run.agentKind === target.agentKind;
 }
 
 /** The card's end of the run↔task edge — the three fields a start writes. */

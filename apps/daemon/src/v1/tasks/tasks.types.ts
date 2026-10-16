@@ -468,6 +468,12 @@ export type ResolvedRunTarget =
 /** The AGENT arm of {@link ResolvedRunTarget}, which alone carries CLI fields. */
 export type ResolvedAgentTarget = Extract<ResolvedRunTarget, { kind: 'agent' }>;
 
+/** The WORKFLOW arm of {@link ResolvedRunTarget}. */
+export type ResolvedWorkflowTarget = Extract<
+  ResolvedRunTarget,
+  { kind: 'workflow' }
+>;
+
 /**
  * Why a card cannot be started as it stands.
  *

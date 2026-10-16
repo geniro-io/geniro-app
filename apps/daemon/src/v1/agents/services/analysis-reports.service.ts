@@ -9,6 +9,8 @@ import {
   type AnalysisTurn,
   type ItemWire,
   MAX_RECOMMENDATIONS_PER_TARGET,
+  RECOMMENDATION_ID_PREFIX,
+  RECOMMENDATION_TARGETS,
   type RecommendationMarks,
   type RecommendationsPayload,
   type RecommendationsReport,
@@ -160,15 +162,15 @@ export function checkItems(
       return `duplicate id ${item.id}`;
     }
     seen.add(item.id);
-    const prefix = item.target === 'workflow' ? 'W-' : 'R-';
+    const prefix = RECOMMENDATION_ID_PREFIX[item.target];
     if (!item.id.startsWith(prefix)) {
       return `${item.id} is a ${item.target} item — its id starts with ${prefix}`;
     }
     if (item.target === 'workflow' && sourceKind === 'chat') {
-      return `${item.id}: the analysed thread is a plain chat, so only repo recommendations apply`;
+      return `${item.id}: the analysed thread is a plain chat, so only repo and user recommendations apply`;
     }
   }
-  for (const target of ['workflow', 'repo'] as const) {
+  for (const target of RECOMMENDATION_TARGETS) {
     const count = report.items.filter((item) => item.target === target).length;
     if (count > MAX_RECOMMENDATIONS_PER_TARGET) {
       return `${count} ${target} items — keep the strongest ${MAX_RECOMMENDATIONS_PER_TARGET} at most`;

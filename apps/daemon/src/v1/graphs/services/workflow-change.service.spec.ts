@@ -6,6 +6,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ItemDao } from '../../agents/dao/item.dao';
+import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { Workflow } from '../graphs.types';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import {
@@ -56,6 +57,13 @@ describe('WorkflowChangeService', () => {
             })),
           ]),
       } as unknown as ItemDao,
+      {
+        for: (agent: string) => ({
+          userInstructionsFile: (configDir: string | null) => ({
+            path: `${configDir ?? `home-of-${agent}`}/RULES.md`,
+          }),
+        }),
+      } as unknown as AgentAdapterRegistry,
     );
   });
 
@@ -119,10 +127,14 @@ describe('WorkflowChangeService', () => {
     expect(await change()).toMatchObject({ error: 'NOT_APPLIED' });
   });
 
-  it('refuses a repo item even when the user applied it', async () => {
-    applies = [{ cardSeq: 3, ids: ['R-1'] }];
+  it('refuses a repo or user item even when the user applied it', async () => {
+    applies = [{ cardSeq: 3, ids: ['R-1', 'U-1'] }];
 
     expect(await change({ ids: ['R-1'] })).toMatchObject({
+      saved: false,
+      error: 'NOT_A_WORKFLOW_ITEM',
+    });
+    expect(await change({ ids: ['U-1'] })).toMatchObject({
       saved: false,
       error: 'NOT_A_WORKFLOW_ITEM',
     });
@@ -206,5 +218,34 @@ describe('WorkflowChangeService', () => {
       changedSinceThisRun: { changedNodes: [{ id: 'reviewer' }] },
     });
     expect(typeof described.hash).toBe('string');
+  });
+
+  it('lists the instructions file of every agent and pool member the run itself ran', async () => {
+    const ran: Workflow = {
+      ...WF,
+      nodes: [
+        WF.nodes[0]!,
+        {
+          ...WF.nodes[1]!,
+          agent: 'codex',
+          pool: [{ agent: 'claude', configDir: '/profiles/work' }],
+        } as Workflow['nodes'][number],
+      ],
+    };
+
+    const described = await service.describe(
+      'dev-team',
+      workflowSnapshotOf(ran),
+    );
+
+    expect(described.userInstructions).toEqual([
+      { agent: 'claude', configDir: null, path: 'home-of-claude/RULES.md' },
+      { agent: 'codex', configDir: null, path: 'home-of-codex/RULES.md' },
+      {
+        agent: 'claude',
+        configDir: '/profiles/work',
+        path: '/profiles/work/RULES.md',
+      },
+    ]);
   });
 });

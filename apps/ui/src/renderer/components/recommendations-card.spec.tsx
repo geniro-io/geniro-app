@@ -76,13 +76,13 @@ describe('RecommendationsCard', () => {
         onApply={onApply}
       />,
     );
-    expect(footer(el)).toContain('0 of 3 selected');
+    expect(footer(el)).toContain('0 of 4 selected');
     expect(button(el, 'Apply selected').disabled).toBe(true);
 
     click(button(el, 'W-1'));
     click(button(el, 'R-1'));
 
-    expect(footer(el)).toContain('2 of 3 selected · ≈ 30 min/run saved');
+    expect(footer(el)).toContain('2 of 4 selected · ≈ 30 min/run saved');
     click(button(el, 'Apply selected'));
     expect(onApply).toHaveBeenCalledWith(['W-1', 'R-1']);
   });
@@ -162,22 +162,29 @@ describe('RecommendationsCard', () => {
     expect(el.querySelector('[data-slot="recommendations-footer"]')).toBeNull();
   });
 
-  it('draws no Workflow group for a plain chat', () => {
+  it('draws no Workflow group for a plain chat, and the user-instruction items in their own', () => {
     const el = render(
       <RecommendationsCard
         look={LOOK}
         summary={null}
         timing={null}
         workflow={false}
-        items={[recommendation('R-1'), recommendation('W-9')]}
+        items={[
+          recommendation('U-1'),
+          recommendation('R-1'),
+          recommendation('W-9'),
+        ]}
         applied={null}
         outcomes={{}}
         onApply={vi.fn()}
       />,
     );
     const headings = [...el.querySelectorAll('h4')].map((h) => h.textContent);
-    expect(headings).toEqual(['Repository']);
+    expect(headings).toEqual(['Repository', 'Your agent instructions']);
     expect(el.querySelector('[data-id="W-9"]')).toBeNull();
+    expect(
+      el.querySelector('section:last-of-type [data-id="U-1"]'),
+    ).not.toBeNull();
   });
 
   it('closes the estimate once, whether or not the agent ended it with a period', () => {

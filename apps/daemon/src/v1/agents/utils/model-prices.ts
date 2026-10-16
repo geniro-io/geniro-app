@@ -59,6 +59,12 @@ export interface ModelPriceTier extends ModelPriceRates {
 export interface ModelPrice extends ModelPriceRates {
   /** Ascending by {@link ModelPriceTier.aboveContextTokens}. */
   readonly tiers: readonly ModelPriceTier[];
+  /**
+   * The model's context window as the catalog states it (`limit.context`), or
+   * null when it states none. The vendor API's figure, which a CLI may not
+   * enforce — see `AdapterListPrice.catalogWindows`.
+   */
+  readonly contextTokens: number | null;
 }
 
 /**
@@ -115,9 +121,14 @@ export function parseModelPriceCatalog(raw: unknown): ModelPriceTable {
     }
     const prices = new Map<string, ModelPrice>();
     for (const [id, entry] of Object.entries(models)) {
-      const price = readPrice(asRecord(asRecord(entry)?.cost));
+      const record = asRecord(entry);
+      const price = readPrice(asRecord(record?.cost));
       if (price !== null) {
-        prices.set(id, price);
+        const context = rate(asRecord(record?.limit)?.context);
+        prices.set(id, {
+          ...price,
+          contextTokens: context !== null && context > 0 ? context : null,
+        });
       }
     }
     if (prices.size > 0) {
@@ -152,11 +163,16 @@ export function lookupModelPrice(
  */
 export function modelPriceCatalogShape(
   table: ModelPriceTable,
-): Record<string, { models: Record<string, { cost: unknown }> }> {
-  const shape: Record<string, { models: Record<string, { cost: unknown }> }> =
-    {};
+): Record<
+  string,
+  { models: Record<string, { cost: unknown; limit?: unknown }> }
+> {
+  const shape: Record<
+    string,
+    { models: Record<string, { cost: unknown; limit?: unknown }> }
+  > = {};
   for (const [provider, prices] of table) {
-    const models: Record<string, { cost: unknown }> = {};
+    const models: Record<string, { cost: unknown; limit?: unknown }> = {};
     for (const [id, price] of prices) {
       models[id] = {
         cost: {
@@ -166,6 +182,9 @@ export function modelPriceCatalogShape(
             tier: { type: 'context', size: tier.aboveContextTokens },
           })),
         },
+        ...(price.contextTokens === null
+          ? {}
+          : { limit: { context: price.contextTokens } }),
       };
     }
     shape[provider] = { models };
@@ -216,7 +235,9 @@ export function tokenCostUsd(
   return perMillion / 1_000_000;
 }
 
-function readPrice(cost: Record<string, unknown> | null): ModelPrice | null {
+function readPrice(
+  cost: Record<string, unknown> | null,
+): Omit<ModelPrice, 'contextTokens'> | null {
   const base = readRates(cost);
   if (base === null) {
     return null;

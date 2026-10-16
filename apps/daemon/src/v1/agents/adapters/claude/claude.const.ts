@@ -1941,6 +1941,48 @@ export const CLAUDE_CONTEXT_USAGE_SUBTYPE = 'get_context_usage';
  */
 export const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 8_000;
 
+// ── What a model name resolves to (probe block) ──────────────────────────────
+//
+// PROBED 2026-10-16 on 2.1.295: an `initialize` control request alone on the
+// stream-json stdin is answered with every model the profile offers and the id
+// each one runs as — `{"value":"haiku","resolvedModel":"claude-haiku-5-5"}`,
+// `{"value":"default","resolvedModel":"claude-opus-5-5"}` — and the process
+// exits once stdin closes: ~4s (the profile's SessionStart hooks included),
+// nothing reaching the API. The account's own extra models are in the same
+// list. It carries no window; the window is looked up by the resolved id.
+
+/** The argv of the one-shot `initialize` probe: no turn, no MCP servers. */
+export const CLAUDE_MODEL_RESOLUTION_ARGS: readonly string[] = [
+  '-p',
+  '--output-format',
+  'stream-json',
+  '--verbose',
+  '--input-format',
+  'stream-json',
+  CLAUDE_STRICT_MCP_CONFIG_FLAG,
+];
+
+/** The control subtype whose reply lists the models. */
+export const CLAUDE_INITIALIZE_SUBTYPE = 'initialize';
+
+/** The `value` the reply files the profile's default model under. */
+export const CLAUDE_DEFAULT_MODEL_VALUE = 'default';
+
+/** The probe's request id — one question per process, so a constant. */
+export const CLAUDE_MODEL_RESOLUTION_REQUEST_ID = 'geniro-model-resolution';
+
+/** The model segment the answer is filed under in `ModelVocabularyStore`. */
+export const CLAUDE_MODEL_RESOLUTION_STORE_MODEL = 'initialize:resolved-models';
+
+/** Hooks run first, so the ceiling is the cold start's, not the reply's. */
+export const CLAUDE_MODEL_RESOLUTION_TIMEOUT_MS = 30_000;
+
+/** How long one process trusts an answer before asking the store again. */
+export const CLAUDE_MODEL_RESOLUTION_TTL_MS = 10 * 60_000;
+
+/** How long a profile whose probe failed is answered "unknown" without asking. */
+export const CLAUDE_MODEL_RESOLUTION_RETRY_AFTER_MS = 5 * 60_000;
+
 // ── The account's plan limits (probe block) ─────────────────────────────────
 //
 // `get_usage` is the THIRD undocumented control request this adapter drives,

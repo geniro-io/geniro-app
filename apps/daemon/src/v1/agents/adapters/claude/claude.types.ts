@@ -1,4 +1,5 @@
 import type { AgentVersionService } from '../../services/agent-version.service';
+import type { ModelVocabularyStore } from '../../services/model-vocabulary.store';
 import type { ApprovalProbeStatus } from '../adapter.types';
 import type { AgentAdapterOptions } from '../agent-adapter';
 
@@ -42,6 +43,11 @@ export interface ClaudeAdapterOptions extends AgentAdapterOptions {
   costTotalsPath?: string;
   /** A replacement probe for specs — the verdict a test wants to decide on. */
   modeProbe?: ClaudeModeProbe;
+  /**
+   * Where `resolveModel`'s answers survive a daemon restart. Absent, each
+   * launch asks the CLI once per profile.
+   */
+  vocabularyStore?: ModelVocabularyStore;
 }
 
 /** One Messages-API image content block, as claude's stream-json input takes it. */

@@ -311,6 +311,34 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * The model id a turn spawned with `model` will run as, under that profile —
+   * what an alias (`haiku`) or the CLI's default (null) resolves to, asked
+   * BEFORE the turn exists. Null when it cannot be known.
+   *
+   * The default answers with the name itself: a CLI whose model names are its
+   * ids. A CLI with aliases of its own resolves them here.
+   */
+  resolveModel(
+    model: string | null,
+    _configDir: string | null,
+  ): Promise<string | null> {
+    return Promise.resolve(model === '' ? null : model);
+  }
+
+  /**
+   * The catalog's context window for one of this CLI's model ids, or null —
+   * only where the config declares the catalog's figure is the one this CLI
+   * enforces (`usage.listPrice.catalogWindows`).
+   */
+  catalogWindow(model: string): number | null {
+    const listPrice = this.getConfig().usage.listPrice;
+    if (listPrice.kind !== 'catalog' || !listPrice.catalogWindows) {
+      return null;
+    }
+    return this.listPriceOf(model)?.contextTokens ?? null;
+  }
+
+  /**
    * What a probe has established about THIS installed binary's approval
    * modes, as it stands right now — never waiting for one to run.
    *

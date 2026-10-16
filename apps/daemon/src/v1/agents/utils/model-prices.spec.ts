@@ -56,6 +56,11 @@ const CATALOG = {
     models: {
       'claude-opus-5': {
         cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        limit: { context: 1_000_000, output: 128_000 },
+      },
+      'claude-zero-window': {
+        cost: { input: 1, output: 5 },
+        limit: { context: 0 },
       },
     },
   },
@@ -82,11 +87,25 @@ describe('parseModelPriceCatalog', () => {
           aboveContextTokens: 272_000,
         },
       ],
+      contextTokens: null,
     });
     expect(lookupModelPrice(table, 'anthropic', 'claude-opus-5')).toMatchObject(
       { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, tiers: [] },
     );
-    expect(countModelPrices(table)).toBe(3);
+    expect(countModelPrices(table)).toBe(4);
+  });
+
+  it('reads a model’s window from `limit.context`, and no window from a missing or zero one', () => {
+    const table = parseModelPriceCatalog(CATALOG);
+    expect(
+      lookupModelPrice(table, 'anthropic', 'claude-opus-5')?.contextTokens,
+    ).toBe(1_000_000);
+    expect(
+      lookupModelPrice(table, 'anthropic', 'claude-zero-window')?.contextTokens,
+    ).toBeNull();
+    expect(
+      lookupModelPrice(table, 'openai', 'gpt-6-astra')?.contextTokens,
+    ).toBeNull();
   });
 
   it('keeps a cache rate the catalog omits as unknown, not as zero', () => {

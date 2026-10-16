@@ -75,6 +75,7 @@ import { SessionTranscriptsService } from '../../agents/services/session-transcr
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
+import type { ModelPriceLookup } from '../../agents/utils/model-prices';
 import {
   WALL_CLOCK_ROW_KINDS,
   type WallClockRow,
@@ -624,6 +625,16 @@ class FakeAdapter {
   sessionsOpened = 0;
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
+
+  /**
+   * The SHIPPED adapter's session key for a turn — what decides whether a kept
+   * process may serve it, which this double's spawn never compares.
+   */
+  sessionKeyOf(input: AgentTurnInput): string {
+    return (
+      this.real as unknown as { sessionKey(input: AgentTurnInput): string }
+    ).sessionKey(input);
+  }
   /**
    * The REAL adapter for this kind, delegated to for every CLI-fact
    * declaration. The double fakes the SPAWN, never the contract: a
@@ -642,16 +653,44 @@ class FakeAdapter {
    * question on a caller.
    */
   projectsNoQuestion = false;
+  /**
+   * What `resolveModel` answers, by the name a turn asked for (`default` for
+   * none) — the stand-in for claude's `initialize` probe, which spawns. The
+   * probe itself is pinned in `claude.adapter.spec.ts`.
+   */
+  resolutions: Record<string, string> = {};
+  /** Every `resolveModel` the executor made, in order. */
+  readonly resolveCalls: { model: string | null; configDir: string | null }[] =
+    [];
+
   constructor(
     readonly kind: 'claude' | 'cursor-agent',
     modeProbe?: ClaudeModeProbe,
+    prices?: ModelPriceLookup,
   ) {
     this.real =
       kind === 'claude'
-        ? new ClaudeAdapter(modeProbe ? { modeProbe } : {})
+        ? new ClaudeAdapter({
+            ...(modeProbe ? { modeProbe } : {}),
+            ...(prices ? { prices } : {}),
+          })
         : new CursorAcpAdapter({
             vocabularyStore: freshVocabularyStore(),
           });
+  }
+  /** When set, `resolveModel` answers only once it settles — a slow probe. */
+  resolveGate: Promise<void> | null = null;
+  async resolveModel(
+    model: string | null,
+    configDir: string | null,
+  ): Promise<string | null> {
+    this.resolveCalls.push({ model, configDir });
+    await this.resolveGate;
+    return this.resolutions[model ?? 'default'] ?? model;
+  }
+  /** The SHIPPED adapter's answer, over the catalog the setup hands it. */
+  catalogWindow(model: string): number | null {
+    return this.real.catalogWindow(model);
   }
   getConfig(): AdapterConfig {
     return this.real.getConfig();
@@ -931,6 +970,12 @@ function setup(
     autoGroupId?: string | null;
     /** The MCP service a node turn's server report is checked against. */
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
+    /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
+    contextWindows?: Record<string, number>;
+    /** What claude resolves each name to — see `FakeAdapter.resolutions`. */
+    resolutions?: Record<string, string>;
+    /** The model catalog the claude adapter prices and sizes models from. */
+    prices?: ModelPriceLookup;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -999,7 +1044,8 @@ function setup(
     ensureVerdict: claudeEnsureVerdict,
     wireCapability: () => claudeModes,
   };
-  const claude = new FakeAdapter('claude', claudeProbe);
+  const claude = new FakeAdapter('claude', claudeProbe, opts.prices);
+  claude.resolutions = opts.resolutions ?? {};
   const cursor = new FakeAdapter('cursor-agent');
   const runDao = new FakeRunDao();
   const itemDao = new FakeItemDao();
@@ -1127,7 +1173,7 @@ function setup(
   const spendStore = new FakeUnrecordedSpendStore();
   const partials = new PartialStreamService(
     bus,
-    new FakeContextWindowStore().asStore(),
+    new FakeContextWindowStore(opts.contextWindows).asStore(),
     spendStore.asStore(),
   );
   const deltas: RunDeltaEvent[] = [];
@@ -12789,6 +12835,67 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
   });
 
+  it('keeps a callee thread’s own window when a turn it ran on its own reports a delegate’s', async () => {
+    // The thread listing and the cold-resume refusal read this window: a
+    // delegate's smaller one would show the thread fuller than it is.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('helper')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'Helper',
+      message: 'build it',
+    });
+    await drain();
+    const helper = claude.starts[1]!;
+    helper.emit({ type: 'session', sessionId: 'sess-helper' });
+    helper.emit({ type: 'turn_model', model: 'claude-own-model' });
+    helper.emit({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextTokens: 50_000,
+        contextWindowTokens: 1_000_000,
+        contextModel: 'claude-own-model',
+      },
+      stopReason: 'end_turn',
+      finalText: 'started the build',
+    });
+    helper.finish();
+    await envelope;
+    await drain();
+
+    helper.emitOffTurn({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextTokens: 60_000,
+        contextWindowTokens: 200_000,
+        contextModel: 'a-delegate-model',
+      },
+      stopReason: 'end_turn',
+      finalText: 'the build passed',
+    });
+    await drain();
+
+    const listing = callBroker.listThreads(run.id, 'orch') as {
+      result: { threads: Record<string, unknown>[] };
+    };
+    expect(listing.result.threads).toEqual([
+      expect.objectContaining({
+        agent: 'helper',
+        context: expect.objectContaining({ tokens: 60_000, window: 1_000_000 }),
+      }),
+    ]);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('compacts a callee whose call WOKE the run after its pass ended', async () => {
     // A Dev Team run spends nearly all of its life AWAKE rather than in its
     // pass: the Manager dispatches, ends its turn, and every call after that
@@ -13079,6 +13186,399 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
     completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
     await drain();
+  });
+
+  /** CHAIN with `a` naming its model by the alias claude resolves itself. */
+  const HAIKU_CHAIN: Workflow = {
+    ...CHAIN,
+    nodes: CHAIN.nodes.map((node) =>
+      node.id === 'a' && node.kind === 'agent'
+        ? { ...node, model: 'haiku' }
+        : node,
+    ),
+  };
+  /** What claude's own `initialize` says the aliases run as. */
+  const RESOLVES = {
+    haiku: 'claude-haiku-5-5',
+    default: 'claude-opus-5-5',
+  };
+  /** The window a turn of `claude-haiku-5-5` once measured. */
+  const HAIKU_MEASURED = {
+    [FakeContextWindowStore.key('claude', 'claude-haiku-5-5')]: 200_000,
+  };
+  /** Run CHAIN-shaped `workflow` once and hand back `a`'s first turn. */
+  const firstTurnOfA = async (
+    harness: ReturnType<typeof setup>,
+    workflow: Workflow,
+    prompt = 'go',
+  ): Promise<FakeTurn> => {
+    const before = turnsOf(harness.claude, 'role-a').length;
+    await harness.service.startRun({
+      slug: 'chain',
+      workflow: triggered(workflow),
+      cwd: dir,
+      prompt,
+    });
+    await drain();
+    return turnsOf(harness.claude, 'role-a')[before]!;
+  };
+  /** Settle `a`'s turn as `model`, reporting `window`, then settle `b`. */
+  const settleAs = async (
+    harness: ReturnType<typeof setup>,
+    turn: FakeTurn,
+    model: string,
+    window: number,
+  ): Promise<void> => {
+    turn.emit({ type: 'turn_model', model });
+    turn.emit({
+      type: 'turn_complete',
+      usage: { ...NO_USAGE, contextWindowTokens: window, contextModel: model },
+      stopReason: 'end_turn',
+      finalText: 'A done',
+    });
+    turn.finish();
+    await drain();
+    const b = turnsOf(harness.claude, 'role-b');
+    completeTurn(b[b.length - 1]!, 'B done');
+    await drain();
+  };
+
+  it('hands the CLI its threshold on a node’s FIRST turn, from the window the model it resolves to was measured at', async () => {
+    const harness = setup(undefined, {
+      contextWindows: HAIKU_MEASURED,
+      resolutions: RESOLVES,
+    });
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 200_000);
+  });
+
+  it('arms a node that names NO model from what the profile’s default resolves to', async () => {
+    const harness = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'claude-opus-5-5')]: 200_000,
+      },
+      resolutions: RESOLVES,
+    });
+    const first = await firstTurnOfA(harness, CHAIN);
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    await settleAs(harness, first, 'claude-opus-5-5', 200_000);
+  });
+
+  it('resolves the node’s model under the node’s own profile, and only for a node with a threshold', async () => {
+    const harness = setup(undefined, { resolutions: RESOLVES });
+    const first = await firstTurnOfA(harness, {
+      ...HAIKU_CHAIN,
+      nodes: HAIKU_CHAIN.nodes.map((node) =>
+        node.id === 'a' && node.kind === 'agent'
+          ? { ...node, configDir: dir }
+          : node,
+      ),
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 200_000);
+
+    // `b` has no threshold, so nothing was resolved for it.
+    expect(harness.claude.resolveCalls).toEqual([
+      { model: 'haiku', configDir: dir },
+    ]);
+  });
+
+  it('falls back to the catalog’s window for a model no turn has measured', async () => {
+    const harness = setup(undefined, {
+      resolutions: RESOLVES,
+      prices: {
+        priceOf: (provider, model) =>
+          provider === 'anthropic' && model === 'claude-haiku-5-5'
+            ? {
+                input: 1,
+                output: 5,
+                cacheRead: null,
+                cacheWrite: null,
+                tiers: [],
+                contextTokens: 1_000_000,
+              }
+            : null,
+      },
+    });
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 1_000_000);
+  });
+
+  /** models.dev listing `claude-haiku-5-5` at 1M. */
+  const HAIKU_CATALOG: ModelPriceLookup = {
+    priceOf: (provider, model) =>
+      provider === 'anthropic' && model === 'claude-haiku-5-5'
+        ? {
+            input: 1,
+            output: 5,
+            cacheRead: null,
+            cacheWrite: null,
+            tiers: [],
+            contextTokens: 1_000_000,
+          }
+        : null,
+  };
+
+  it('prefers the window a turn measured over the catalog’s', async () => {
+    const harness = setup(undefined, {
+      contextWindows: HAIKU_MEASURED,
+      resolutions: RESOLVES,
+      prices: HAIKU_CATALOG,
+    });
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 200_000);
+  });
+
+  it('never sizes a node with a window CHOICE from the catalog', async () => {
+    // The catalog states one window per model; a choice selects another.
+    const harness = setup(undefined, {
+      resolutions: RESOLVES,
+      prices: HAIKU_CATALOG,
+    });
+    const first = await firstTurnOfA(harness, {
+      ...HAIKU_CHAIN,
+      nodes: HAIKU_CHAIN.nodes.map((node) =>
+        node.id === 'a' && node.kind === 'agent'
+          ? { ...node, contextWindow: '1m' }
+          : node,
+      ),
+    });
+
+    expect(first.input.autoCompact).toBeUndefined();
+    await settleAs(harness, first, 'claude-haiku-5-5', 1_000_000);
+  });
+
+  it('launches no turn for a node whose run is stopped while its model is resolved', async () => {
+    const harness = setup(undefined, { resolutions: RESOLVES });
+    let release!: () => void;
+    harness.claude.resolveGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const run = await harness.service.startRun({
+      slug: 'chain',
+      workflow: triggered(HAIKU_CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(harness.claude.resolveCalls).toHaveLength(1);
+
+    await harness.service.cancel(run.id);
+    release();
+    await drain();
+
+    expect(turnsOf(harness.claude, 'role-a')).toHaveLength(0);
+  });
+
+  it('keeps the node’s own window when a delegate’s reading arrives in a turn that then fails', async () => {
+    // No settle overwrites the mid-turn reading here, so it is the guard on
+    // that reading alone that keeps the delegate's window off the node.
+    const harness = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'claude-haiku-5-5')]: 1_000_000,
+      },
+      resolutions: RESOLVES,
+    });
+    const { service, claude } = harness;
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    first.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+    first.emit({
+      type: 'context_progress',
+      contextTokens: 10_000,
+      contextWindowTokens: 200_000,
+      contextModel: 'a-delegate-model',
+    });
+    first.emit({ type: 'error', message: 'boom' });
+    first.finish();
+    await drain();
+    const run = [...harness.runDao.runs.values()][0]!;
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    completeTurn(second, 'ok');
+    await drain();
+    const b = turnsOf(claude, 'role-b');
+    if (b.length > 0) {
+      completeTurn(b[b.length - 1]!, 'ok');
+      await drain();
+    }
+  });
+
+  it('looks the first-turn window up at the node’s window CHOICE', async () => {
+    const harness = setup(undefined, {
+      contextWindows: {
+        ...HAIKU_MEASURED,
+        [FakeContextWindowStore.key('claude', 'claude-haiku-5-5', '1m')]:
+          1_000_000,
+      },
+      resolutions: RESOLVES,
+    });
+    const first = await firstTurnOfA(harness, {
+      ...HAIKU_CHAIN,
+      nodes: HAIKU_CHAIN.nodes.map((node) =>
+        node.id === 'a' && node.kind === 'agent'
+          ? { ...node, contextWindow: '1m' }
+          : node,
+      ),
+    });
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 1_000_000);
+  });
+
+  it('serves a node’s second turn under the session key its first was spawned with', async () => {
+    // The flag is argv and joins `sessionKey`: a threshold first appearing on
+    // turn two would respawn the node's CLI there.
+    const harness = setup(undefined, {
+      contextWindows: HAIKU_MEASURED,
+      resolutions: RESOLVES,
+    });
+    const { service, claude } = harness;
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    first.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+    fillAndComplete(first, 10_000, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+    const run = [...harness.runDao.runs.values()][0]!;
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.prompt).toContain('next');
+    expect(second.input.autoCompact).toEqual(first.input.autoCompact);
+    expect(claude.sessionKeyOf(second.input)).toBe(
+      claude.sessionKeyOf(first.input),
+    );
+    completeTurn(second, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  it('lets the node’s own reading override its model’s known window when the two differ', async () => {
+    const harness = setup(undefined, {
+      contextWindows: HAIKU_MEASURED,
+      resolutions: RESOLVES,
+    });
+    const { service, claude } = harness;
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    first.emit({
+      type: 'context_progress',
+      contextTokens: 10_000,
+      contextWindowTokens: 1_000_000,
+    });
+    completeTurn(first, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+    const run = [...harness.runDao.runs.values()][0]!;
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    completeTurn(second, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  it('keeps the node’s own window when a delegate’s model out-spends it', async () => {
+    // `modelUsage` names the model that spent the most, and that can be a
+    // delegate on a smaller window: taken as the node's, it would compact the
+    // node at a share of the DELEGATE's window and respawn its CLI.
+    const harness = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'claude-haiku-5-5')]: 1_000_000,
+      },
+      resolutions: RESOLVES,
+    });
+    const { service, claude } = harness;
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    first.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+    // 150k is 15% of the node's window and 75% of the delegate's — over the
+    // node's 50% only if a delegate's window is taken as the node's.
+    first.emit({
+      type: 'context_progress',
+      contextTokens: 150_000,
+      contextWindowTokens: 200_000,
+      contextModel: 'a-delegate-model',
+    });
+    first.emit({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextTokens: 150_000,
+        contextWindowTokens: 200_000,
+        contextModel: 'a-delegate-model',
+      },
+      stopReason: 'end_turn',
+      finalText: 'A done',
+    });
+    first.finish();
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+    const run = [...harness.runDao.runs.values()][0]!;
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    // The node's next turn is the message, not a compaction.
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.prompt).toContain('next');
+    expect(second.input.autoCompact).toEqual(first.input.autoCompact);
+    expect(second.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    completeTurn(second, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  it('arms the next run’s first turn from the window its model measured in this one', async () => {
+    const harness = setup(undefined, { resolutions: RESOLVES });
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    expect(first.input.autoCompact).toBeUndefined();
+    await settleAs(harness, first, 'claude-haiku-5-5', 200_000);
+
+    const next = await firstTurnOfA(harness, HAIKU_CHAIN, 'again');
+    expect(next.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    await settleAs(harness, next, 'claude-haiku-5-5', 200_000);
   });
 
   it('a run cancelled mid-compaction cancels the compaction and settles', async () => {

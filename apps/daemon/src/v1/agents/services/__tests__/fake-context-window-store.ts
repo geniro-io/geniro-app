@@ -13,8 +13,13 @@ import {
  * the real contract rather than on a mock's convenience.
  */
 export class FakeContextWindowStore {
-  /** Every (agent, model) window written, in call order — for assertions. */
-  readonly writes: { agent: string; model: string; window: number }[] = [];
+  /** Every window written and the key it went to, in call order. */
+  readonly writes: {
+    agent: string;
+    model: string;
+    window: number;
+    contextWindow: string | null;
+  }[] = [];
   private readonly records = new Map<string, number>();
 
   constructor(seed: Record<string, number> = {}) {
@@ -23,22 +28,37 @@ export class FakeContextWindowStore {
     }
   }
 
-  get(agent: string, model: string): number | null {
-    return this.records.get(contextWindowKey(agent, model)) ?? null;
+  get(
+    agent: string,
+    model: string,
+    contextWindow: string | null = null,
+  ): number | null {
+    return (
+      this.records.get(contextWindowKey(agent, model, contextWindow)) ?? null
+    );
   }
 
-  remember(agent: string, model: string, window: number): void {
+  remember(
+    agent: string,
+    model: string,
+    window: number,
+    contextWindow: string | null = null,
+  ): void {
     // Deliberately WITHOUT the real store's reject guard. `writes` exists to
     // record what the live plane ASKED for; re-implementing the rejection here
     // would hide a caller that hands the store a zero, and the rejection
     // itself belongs to the real store's own spec.
-    this.writes.push({ agent, model, window });
-    this.records.set(contextWindowKey(agent, model), window);
+    this.writes.push({ agent, model, window, contextWindow });
+    this.records.set(contextWindowKey(agent, model, contextWindow), window);
   }
 
   /** The seed key shape, so a spec never spells the separator itself. */
-  static key(agent: string, model: string): string {
-    return contextWindowKey(agent, model);
+  static key(
+    agent: string,
+    model: string,
+    contextWindow: string | null = null,
+  ): string {
+    return contextWindowKey(agent, model, contextWindow);
   }
 
   /** Typed as the real store for constructor injection. */

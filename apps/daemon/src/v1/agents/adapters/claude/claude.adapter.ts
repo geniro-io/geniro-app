@@ -1951,7 +1951,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // argv is built only for a process about to START, so this is the one
       // moment the restored totals are known to apply: the process resumes the
       // session from its transcript's last `cost-state`, and its first result
-      // is that figure plus the turn.
+      // is that figure plus the turn. Registered here, read at its `init`.
       this.seedRestoredCost(input);
     }
     // Claude's endpoint is a per-turn config file `prepareTurn` writes from
@@ -2298,30 +2298,23 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * See {@link ClaudeSessionCostLedger.seedForResume}. Never throws: a read
-   * that fails costs the seed, never the turn.
+   * See {@link ClaudeSessionCostLedger.expectResume}: the read runs when the
+   * new process reports `init`, and the ledger owns its failure.
    */
   private seedRestoredCost(input: AgentTurnInput): void {
     const sessionId = input.resumeSessionId;
     if (!sessionId) {
       return;
     }
-    try {
-      const file = findClaudeSessionFileSync(
-        this.profileDir(input.configDir ?? null),
-        sessionId,
-      );
+    const profileDir = this.profileDir(input.configDir ?? null);
+    this.costLedger.expectResume(sessionId, () => {
+      const file = findClaudeSessionFileSync(profileDir, sessionId);
       // A transcript that cannot be found says nothing about what the CLI
       // restores — leave the base alone rather than reading it as zero.
-      if (file !== null) {
-        this.costLedger.seedForResume(
-          sessionId,
-          readLastClaudeCostState(file, sessionId),
-        );
-      }
-    } catch {
-      // The guard in `perTurn` still bounds what this turn can be billed.
-    }
+      return file === null
+        ? undefined
+        : readLastClaudeCostState(file, sessionId);
+    });
   }
 
   /**

@@ -260,7 +260,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - Polled spend: Stats reads it only from the ledger rows (`seq ≤ POLLED_SPEND_SEQ`), never from `runs`.
 - The spend fold is `v1/agents/utils/usage-figures.ts`, shared; never copy it. No price means `costUsd: null`, never $0.
 - Lines are measured by the desktop app per folder against one `line_baselines` commit. Day lines are growth past the series peak, never a client delta.
-- `ClaudeSessionCostLedger` persists session totals to disk (`claude-session-costs.json`); seed from the transcript's `cost-state` on resume.
+- `ClaudeSessionCostLedger` persists session totals to disk (`claude-session-costs.json`). A resume's seed is registered at spawn and read from the transcript's last `cost-state` at the new process's `system/init`, never at spawn (the replaced process writes its line as it exits). A read that finds no line keeps a known total, and leaves the process's first result untrusted.
 - List prices come only from `ModelPriceCatalog` (models.dev, persisted to `model-prices.json`); never a hand-written price table. Provider is an adapter fact (`usage.listPrice`).
 
 ### Diagnostics and notifications

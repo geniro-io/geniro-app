@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +20,16 @@ function costState(total: number, sessionId = SESSION): string {
     totalCostUSD: total,
     totalAPIDuration: 2254,
   });
+}
+
+/** A FIFO named like a transcript: opening it for reading blocks for good. */
+function fifo(): string {
+  const path = join(
+    mkdtempSync(join(tmpdir(), 'claude-cost-state-')),
+    `${SESSION}.jsonl`,
+  );
+  execFileSync('mkfifo', [path]);
+  return path;
 }
 
 function sessionFile(lines: string[]): string {
@@ -65,6 +76,10 @@ describe('readLastClaudeCostState', () => {
 
   it('answers null for a file it cannot read', () => {
     expect(readLastClaudeCostState('/nonexistent/x.jsonl', SESSION)).toBeNull();
+  });
+
+  it('answers null for a FIFO instead of blocking on it', () => {
+    expect(readLastClaudeCostState(fifo(), SESSION)).toBeNull();
   });
 });
 

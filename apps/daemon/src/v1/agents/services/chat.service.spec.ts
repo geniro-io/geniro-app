@@ -79,6 +79,7 @@ import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import type { WallTurnDao } from '../dao/wall-turn.dao';
 import { hostCardQuestions, hostMcpServerName } from '../utils/host-question';
+import { serializePendingQuestion } from '../utils/pending-question';
 import {
   CHAT_WALL_CLOCK_ROW_KINDS,
   type WallClockRow,
@@ -187,6 +188,15 @@ class FakeRunDao {
     if (run) {
       run.pendingQuestion = value;
     }
+  }
+  /** The real one is a conditional UPDATE; so is this. */
+  async clearPendingQuestionIf(id: string, expected: string): Promise<boolean> {
+    const run = this.runs.get(id);
+    if (run?.pendingQuestion !== expected) {
+      return false;
+    }
+    run.pendingQuestion = null;
+    return true;
   }
   async listRunsWithPendingQuestion(): Promise<Run[]> {
     return [...this.runs.values()].filter(
@@ -3439,6 +3449,368 @@ describe('ChatService', () => {
               item.kind === 'message' && item.payload.includes('Postgres'),
           ),
         ).toBe(true);
+      });
+
+      const PLAN = {
+        title: 'Make the queue test deterministic',
+        steps: [{ title: 'Replace the sleep', detail: 'wait for the queue' }],
+      };
+
+      /**
+       * The call against a sentinel that resolves on the next flush.
+       *
+       * A blocking plan or patch never settles until the user answers, so
+       * awaiting it hangs the suite. Racing it makes the missing `posted`
+       * arm fail as an assertion (`still-pending`) instead.
+       */
+      function postedOrPending<T>(
+        call: Promise<T>,
+      ): Promise<T | 'still-pending'> {
+        return Promise.race([
+          call,
+          drain().then(() => 'still-pending' as const),
+        ]);
+      }
+
+      it('answers a deferred plan at once instead of parking the call', async () => {
+        const { service, plans } = setup();
+        const run = await asking(service);
+
+        const outcome = await postedOrPending(
+          plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
+        );
+
+        expect(outcome).toEqual({ status: 'posted' });
+      });
+
+      it('leaves a deferred plan standing after the turn and parks the run on an approval', async () => {
+        // The badge and the banner read `awaiting` off the status channel.
+        // A question announces itself as `question`; a plan is an approval,
+        // and the announce has to still be the last word once the turn's own
+        // settle has said the run is parked on nothing.
+        const { service, cursor, plans, approvals, itemDao, statuses, runDao } =
+          setup();
+        const run = await asking(service);
+
+        const outcome = await postedOrPending(
+          plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(cursor);
+
+        expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+          false,
+        );
+        expect(approvals.awaitingFor(run.id)).toBe('approval');
+        expect(approvals.listByRun(run.id)[0]?.question).toBe(false);
+        expect(approvals.listByRun(run.id)[0]?.deferred).toBe(true);
+        expect(runDao.runs.get(run.id)?.pendingQuestion).toContain(PLAN.title);
+        const awaiting = statuses.filter(
+          (event) => event.runId === run.id && event.awaiting !== undefined,
+        );
+        expect(awaiting.at(-1)).toEqual({
+          runId: run.id,
+          status: null,
+          activity: null,
+          awaiting: 'approval',
+        });
+      });
+
+      it('sends the plan verdict and the note as the run’s next message', async () => {
+        const { service, cursor, plans, approvals, itemDao } = setup();
+        const run = await asking(service);
+        const outcome = await postedOrPending(
+          plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(cursor);
+        const turnsBefore = cursor.start.mock.calls.length;
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+
+        expect(
+          approvals.resolve(run.id, requestId, true, 'skip the sleep'),
+        ).toBe(true);
+        await drain();
+        await drain();
+        await drain();
+
+        expect(
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'message' &&
+              item.payload.includes('approved') &&
+              item.payload.includes('skip the sleep'),
+          ),
+        ).toBe(true);
+        expect(cursor.start.mock.calls.length).toBe(turnsBefore + 1);
+      });
+
+      it('answers a deferred patch at once, and Apply writes the file', async () => {
+        const { service, cursor, patches, approvals, itemDao } = setup();
+        const run = await asking(service);
+        writeFileSync(join(dir, 'a.ts'), 'const timeout = 30;\n', 'utf8');
+
+        const outcome = await postedOrPending(
+          patches.propose(run.id, SINGLE_AGENT_NODE, {
+            filePath: 'a.ts',
+            oldString: 'const timeout = 30;',
+            newString: 'const timeout = 60;',
+            summary: 'Raise the timeout',
+          }),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(cursor);
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+
+        expect(approvals.resolve(run.id, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(readFileSync(join(dir, 'a.ts'), 'utf8')).toBe(
+            'const timeout = 60;\n',
+          );
+          expect(
+            itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes('Applied to a.ts'),
+            ),
+          ).toBe(true);
+        });
+      });
+
+      it('reports a deferred patch stale after a restart when the file moved, and writes nothing', async () => {
+        // The body in the column is what Apply runs, and it runs through the
+        // same write the blocking path uses — so a target that changed after
+        // the card went up is `stale`, not a second copy of the file.
+        const { service, cursor, patches, approvals, itemDao } = setup();
+        const run = await asking(service);
+        writeFileSync(join(dir, 'c.ts'), 'const timeout = 30;\n', 'utf8');
+
+        const outcome = await postedOrPending(
+          patches.propose(run.id, SINGLE_AGENT_NODE, {
+            filePath: 'c.ts',
+            oldString: 'const timeout = 30;',
+            newString: 'const timeout = 60;',
+          }),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(cursor);
+        writeFileSync(
+          join(dir, 'c.ts'),
+          'somebody else changed this\n',
+          'utf8',
+        );
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+        approvals.sweepDeferred(run.id);
+
+        await service.rehydrateDeferredQuestions();
+        expect(approvals.resolve(run.id, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(
+            itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes('could not be applied') &&
+                item.payload.includes('no longer in the file'),
+            ),
+          ).toBe(true);
+        });
+
+        expect(readFileSync(join(dir, 'c.ts'), 'utf8')).toBe(
+          'somebody else changed this\n',
+        );
+      });
+
+      /** A deferred patch on `file`, posted, with its turn settled. */
+      async function deferredPatch(
+        ctx: ReturnType<typeof setup>,
+        file: string,
+      ): Promise<{ runId: string; requestId: string }> {
+        const run = await asking(ctx.service);
+        writeFileSync(join(dir, file), 'const timeout = 30;\n', 'utf8');
+        const outcome = await postedOrPending(
+          ctx.patches.propose(run.id, SINGLE_AGENT_NODE, {
+            filePath: file,
+            oldString: 'const timeout = 30;',
+            newString: 'const timeout = 60;',
+          }),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(ctx.cursor);
+        return {
+          runId: run.id,
+          requestId: ctx.approvals.listByRun(run.id)[0]!.requestId,
+        };
+      }
+
+      it('writes nothing on a Reject of a deferred patch, and says it was rejected', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'r.ts');
+
+        expect(ctx.approvals.resolve(runId, requestId, false)).toBe(true);
+        await vi.waitFor(() => {
+          expect(
+            ctx.itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes('The user rejected the patch'),
+            ),
+          ).toBe(true);
+        });
+
+        expect(readFileSync(join(dir, 'r.ts'), 'utf8')).toBe(
+          'const timeout = 30;\n',
+        );
+        const verdict = ctx.itemDao.items.find(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(JSON.parse(verdict!.payload)).toEqual({
+          id: requestId,
+          allow: false,
+        });
+      });
+
+      it('records what Apply did, and clears the column before the verdict goes out', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'v.ts');
+        const send = ctx.service.sendMessage.bind(ctx.service);
+        const seenAtSend: { column: unknown; verdict: boolean }[] = [];
+        vi.spyOn(ctx.service, 'sendMessage').mockImplementation(
+          async (id, text, ...rest) => {
+            seenAtSend.push({
+              column: ctx.runDao.runs.get(id)?.pendingQuestion,
+              verdict: ctx.itemDao.items.some(
+                (item) => item.kind === 'approval_verdict',
+              ),
+            });
+            return send(id, text, ...rest);
+          },
+        );
+
+        expect(ctx.approvals.resolve(runId, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(seenAtSend).toHaveLength(1);
+        });
+
+        expect(seenAtSend[0]).toEqual({ column: null, verdict: true });
+        const verdict = ctx.itemDao.items.find(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(JSON.parse(verdict!.payload)).toEqual({
+          id: requestId,
+          allow: true,
+          answer: 'applied to v.ts',
+        });
+      });
+
+      it('leaves alone a DIFFERENT card that went up while Apply was writing', async () => {
+        // The user pressed Apply and typed on; the new turn put up card X
+        // before the delivery got to its clear. X's pointer is what brings it
+        // back after a restart, so the delivery must not clear it. The send
+        // is refused here as it is for a run that is busy with that turn.
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'x.ts');
+        const other = serializePendingQuestion({
+          requestId: 'card-x',
+          title: null,
+          questions: QUESTIONS,
+        });
+        vi.spyOn(ctx.runDao, 'getById').mockImplementationOnce(
+          async (id: string) => {
+            const row = ctx.runDao.runs.get(id)!;
+            row.pendingQuestion = other;
+            return row;
+          },
+        );
+        const sent = vi
+          .spyOn(ctx.service, 'sendMessage')
+          .mockRejectedValueOnce(new Error('RUN_BUSY'));
+
+        expect(ctx.approvals.resolve(runId, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(sent).toHaveBeenCalledTimes(1);
+        });
+
+        expect(ctx.runDao.runs.get(runId)?.pendingQuestion).toBe(other);
+      });
+
+      it('refuses a plan while a question of the same run is standing', async () => {
+        const { service, userQuestions, plans, itemDao } = setup();
+        const run = await asking(service);
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null);
+        await drain();
+
+        const outcome = await postedOrPending(
+          plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
+        );
+
+        expect(outcome).toEqual({
+          status: 'unavailable',
+          reason: expect.stringContaining('already on the user’s screen'),
+        });
+        expect(
+          itemDao.items.filter((item) => item.kind === 'approval_request'),
+        ).toHaveLength(1);
+      });
+
+      it('answers Apply as unavailable when the chat has no folder by then', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'n.ts');
+        ctx.runDao.runs.get(runId)!.cwd = null;
+        // A run with no folder refuses the turn itself, so the words are read
+        // where the delivery hands them over.
+        const sent = vi
+          .spyOn(ctx.service, 'sendMessage')
+          .mockResolvedValueOnce(undefined as never);
+
+        expect(ctx.approvals.resolve(runId, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(sent).toHaveBeenCalledTimes(1);
+        });
+        expect(sent.mock.calls[0]?.[1]).toContain(
+          'the chat has no working folder',
+        );
+        expect(readFileSync(join(dir, 'n.ts'), 'utf8')).toBe(
+          'const timeout = 30;\n',
+        );
+      });
+
+      it('answers Apply as unavailable, without the storage error, when the run cannot be read', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'e.ts');
+        vi.spyOn(ctx.runDao, 'getById').mockRejectedValueOnce(
+          new Error('SQLITE_IOERR /Users/someone/geniro.db'),
+        );
+
+        expect(ctx.approvals.resolve(runId, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(
+            ctx.itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes('the file could not be written'),
+            ),
+          ).toBe(true);
+        });
+        expect(
+          ctx.itemDao.items.some((item) => item.payload.includes('SQLITE')),
+        ).toBe(false);
+        expect(readFileSync(join(dir, 'e.ts'), 'utf8')).toBe(
+          'const timeout = 30;\n',
+        );
+      });
+
+      it('describes the call as returning at once only while the deferring turn holds the sink', async () => {
+        const { service, cursor, plans, patches } = setup();
+        const run = await asking(service);
+
+        expect(plans.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(true);
+        expect(patches.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(true);
+        await settle(cursor);
+
+        // The sink is gone with the turn, so the flag goes too: whatever turn
+        // registers next is described from its own adapter.
+        expect(plans.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(false);
+        expect(patches.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(false);
       });
     });
   });

@@ -454,6 +454,29 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Forget the deferred card this run is parked on, but only if the column
+   * still holds exactly `expected` — the text the caller just read and
+   * checked. Answers whether it cleared it.
+   *
+   * A compare-and-swap rather than {@link setPendingQuestion}'s bare write,
+   * because the caller is an answer delivery that awaited a file write first:
+   * in that window the user may have typed on, and a new turn put a DIFFERENT
+   * card in the column. Clearing that one would leave it on screen with
+   * nothing to bring it back after a restart.
+   */
+  async clearPendingQuestionIf(
+    runId: string,
+    expected: string,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const cleared = await this.getRepo(txEm).nativeUpdate(
+      { id: runId, pendingQuestion: expected },
+      { pendingQuestion: null },
+    );
+    return cleared > 0;
+  }
+
+  /**
    * Record — or, with null, forget — the usage-limit continues geniro has
    * promised this run and not yet made (`Run.resetWakes`).
    *

@@ -199,6 +199,10 @@ describe('TaskDetail', () => {
     expect(folder.textContent).not.toContain(long);
 
     act(() => {
+      // A keyboard user tabbing onto it.
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+      );
       folder.querySelector('button')!.focus();
     });
 

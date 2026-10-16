@@ -235,6 +235,21 @@ describe('RunWaterfallDialog', () => {
     expect(view.textContent).toContain('so far');
   });
 
+  it('opens with no tile’s help showing, though its first control has focus', () => {
+    // The dialog focuses its first control on open — the "spent" tile's `?` —
+    // and that focus is the dialog's, not the user's: the press that opened it
+    // was a pointer's.
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    const view = show(dto());
+
+    expect(document.activeElement?.getAttribute('aria-label')).toBe(
+      'What spent means',
+    );
+    expect(view.textContent).not.toContain(
+      'What the CLIs reported this run cost',
+    );
+  });
+
   it('hovers a turn’s cost by model and its sub-agents’ tool calls', () => {
     const view = show(
       dto({

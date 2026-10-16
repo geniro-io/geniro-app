@@ -6,6 +6,7 @@ import { Logger, Module } from '@nestjs/common';
 import { environment } from '../../environments';
 import { DAEMON_VERSION } from '../../utils/daemon-version';
 import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
+import { ProjectDao } from '../projects/dao/project.dao';
 import type { AdapterDaemonDeps } from './adapters/adapter.types';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { CodexAdapter } from './adapters/codex/codex.adapter';
@@ -83,6 +84,7 @@ import { RecommendationsApplyService } from './services/recommendations-apply.se
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import { RunNamedPathsService } from './services/run-named-paths.service';
 import {
   currentRunOwner,
   RunProcessAttribution,
@@ -92,7 +94,6 @@ import { RunProcessSweep } from './services/run-process-sweep.service';
 import { RunProcessesService } from './services/run-processes.service';
 import { RunStateService } from './services/run-state.service';
 import { RunTeardownService } from './services/run-teardown.service';
-import { SearchTextBackfillService } from './services/search-text-backfill.service';
 import { SessionTranscriptsService } from './services/session-transcripts.service';
 import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
@@ -136,6 +137,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunStateService,
     ChatService,
     ChatSearchService,
+    RunNamedPathsService,
     ChatSearchIndexDao,
     ChatTextIndexService,
     GlobalChatSearchService,
@@ -155,17 +157,18 @@ import { defaultSpawn } from './utils/spawn-cli';
         runDao: RunDao,
         sessions: AgentSessionRegistry,
         attribution: RunProcessAttribution,
-      ) => new RunProcessesService(em, runDao, sessions, attribution),
+        reaper: RunProcessReaper,
+      ) => new RunProcessesService(em, runDao, sessions, attribution, reaper),
       inject: [
         EntityManager,
         RunDao,
         AgentSessionRegistry,
         RunProcessAttribution,
+        RunProcessReaper,
       ],
     },
     PullRequestCaptureService,
     RunAttentionService,
-    SearchTextBackfillService,
     TaskListCaptureService,
     PolledSpendService,
     UserQuestionBroker,
@@ -344,6 +347,7 @@ import { defaultSpawn } from './utils/spawn-cli';
       ) =>
         new RunProcessReaper(attribution, {
           held: (runId) => sessions.processRoots(runId).length > 0,
+          processRoots: () => sessions.processRoots().map((root) => root.pid),
           stillGone: async (runIds) => {
             const live = await runDao.getAll(
               { id: { $in: runIds }, archivedAt: null },
@@ -392,6 +396,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     CallContextDao,
     RunDao,
     RunGroupDao,
+    ProjectDao,
     {
       // Every CLI the daemon drives, each built by its own `forDaemon` — which
       // is where that CLI decides its directories, its stores and its probes.
@@ -459,6 +464,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // And the store behind it: a WORKFLOW node publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,
+    // For v1/shares, which encrypts the same document a saved file carries.
+    ArtifactPageService,
     PlanBroker,
     NotifyBroker,
     PartialStreamService,

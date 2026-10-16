@@ -10,21 +10,37 @@ import {
 } from './thread-analysis-guide';
 
 describe('threadAnalysisGuide', () => {
-  it('offers workflow and repo changes, and the workflow save, for a workflow thread', () => {
+  it('offers workflow, repo and user changes, and the workflow save, for a workflow thread', () => {
     const guide = threadAnalysisGuide('workflow', null);
 
     expect(guide).toContain('This is a WORKFLOW thread');
     expect(guide).toContain(HOST_WORKFLOW_CHANGE_TOOL);
     expect(guide).toContain('W-1, W-2');
+    expect(guide).toContain('U-1, U-2');
+    expect(guide).toContain(
+      'view=workflow lists them under `userInstructions`',
+    );
   });
 
-  it('keeps a plain chat to repo changes and never names the workflow save', () => {
+  it('keeps a plain chat to repo and user changes and never names the workflow save', () => {
     const guide = threadAnalysisGuide('chat', null);
 
-    expect(guide).toContain('repository changes only');
+    expect(guide).toContain('Never recommend a workflow change');
+    expect(guide).toContain('U-1, U-2');
+    expect(guide).toContain('`source.userInstructions`');
     expect(guide).not.toContain(HOST_WORKFLOW_CHANGE_TOOL);
     expect(guide).not.toContain('W-1');
     expect(guide).toContain(HOST_RECOMMENDATIONS_TOOL);
+  });
+
+  it("has the analyst read the repo's own checks and place each fix on the lowest rung", () => {
+    for (const kind of ['chat', 'workflow'] as const) {
+      const guide = threadAnalysisGuide(kind, null);
+
+      expect(guide).toContain("Read the working folder's package.json scripts");
+      expect(guide).toContain('## Where a fix belongs');
+      expect(guide).toContain('1. A deterministic check');
+    }
   });
 
   it("adds the user's focus as its own section, and nothing for a blank one", () => {
@@ -40,7 +56,7 @@ describe('threadAnalysisBrief', () => {
     expect(
       threadAnalysisBrief({ title: 'Dev Team run', kind: 'workflow' }),
     ).toBe(
-      'Analyse "Dev Team run" (a workflow thread): find where its time went and what would make the next run faster. Start with read_analyzed_thread view=overview.',
+      'Analyse "Dev Team run" (a workflow thread): find where its time went and what in its environment would make the next run faster or less error-prone. Start with read_analyzed_thread view=overview.',
     );
   });
 });

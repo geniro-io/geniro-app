@@ -313,6 +313,22 @@ class FakeItemDao {
       nodeId: i.nodeId,
     }));
   }
+  async toolCallsByIds(
+    runId: string,
+    ids: readonly string[],
+  ): Promise<Pick<Item, 'payload' | 'nodeId' | 'createdAt'>[]> {
+    return this.ofKinds(runId, ['tool_call'])
+      .filter((i) =>
+        ids.includes(
+          String((JSON.parse(i.payload as string) as { id?: unknown }).id),
+        ),
+      )
+      .map((i) => ({
+        payload: i.payload,
+        nodeId: i.nodeId,
+        createdAt: i.createdAt,
+      }));
+  }
   async usageRowsWithNode(
     runId: string,
   ): Promise<Pick<Item, 'nodeId' | 'payload' | 'createdAt'>[]> {
@@ -752,6 +768,8 @@ class FakeAdapter {
       retired: false,
       parked: false,
       shellsRunning: 0,
+      runningCommands: [],
+      endedRunning: null,
       pid: null,
       close: () => {
         if (closed) {
@@ -4653,10 +4671,12 @@ describe('GraphExecutorService — agent calls', () => {
     // ...and never how it does it. A callee's role is private, so a caller
     // routes by description alone instead of restating its team in its role.
     expect(caller.input.callSurfacePrompt).not.toContain('SECRET_PLAYBOOK');
-    // ...and the standing rule for choosing between resuming an instance and
-    // starting a fresh one, which only the listing tool can apply live.
+    // ...and what resuming an instance costs against starting a fresh one,
+    // pointing at the listing tool for the live figures.
     expect(caller.input.callSurfacePrompt).toContain('list_agent_threads');
-    expect(caller.input.callSurfacePrompt).toContain('start a new instance');
+    expect(caller.input.callSurfacePrompt).toContain('cache-read price');
+    expect(caller.input.callSurfacePrompt).toContain('A new instance');
+    expect(caller.input.callSurfacePrompt).toContain('CACHE_EXPIRED');
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
       title: 'why',
@@ -6361,6 +6381,52 @@ describe('GraphExecutorService — agent calls', () => {
         await callBroker.awaitAgent(run.id, 'mgr', { call_id: 'call-1' }),
       ).toMatchObject({ status: 'ok', result: { text: 'ENGINEER ANSWER' } });
       expect(claude.starts).toHaveLength(before);
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('names only the commands still running when a held call settles, not those that ended while it was held', async () => {
+      const { claude, callBroker, run, eng } = await engineerDelegating();
+      void callBroker.callAgent(run.id, engIn, {
+        title: 'r',
+        agent: 'res',
+        message: 'quick check',
+        mode: 'sync',
+      });
+      await drain();
+      const research = claude.starts.at(-1)!;
+      completeTurn(claude.starts[2]!, 'r1');
+      await drain();
+      await callBroker.awaitAgent(run.id, engIn, { call_id: 'call-2' });
+      for (const [id, command, workId] of [
+        ['toolu_dev', 'pnpm dev', 'b1'],
+        ['toolu_test', 'pnpm test', 'b2'],
+      ] as const) {
+        eng.emit({
+          type: 'tool_call',
+          id,
+          name: 'Bash',
+          input: { command, run_in_background: true },
+        });
+        eng.emit({ type: 'shell_open', toolCallId: id, workId });
+      }
+      completeTurn(eng, 'ENGINEER ANSWER');
+      await drain();
+      // The tests finish while the call is held on the research.
+      eng.emitOffTurn({
+        type: 'shell_info',
+        toolCallId: 'toolu_test',
+        workId: 'b2',
+      });
+      await drain();
+      completeTurn(research, 'checked');
+      await drain();
+
+      const envelope = (await callBroker.awaitAgent(run.id, 'mgr', {
+        call_id: 'call-1',
+      })) as { result: Record<string, unknown> };
+      expect(envelope.result.commands_still_running).toBe(1);
+      expect(envelope.result.running_commands).toEqual(['pnpm dev']);
       completeTurn(claude.starts[0]!, 'done');
       await drain();
     });
@@ -9574,7 +9640,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
     // Reaped as unused, evicted, replaced — the registry closes a kept process
     // on its own account, and the conversation then lives on disk alone.
-    sessions.close(`${run.id}::call:call-1`);
+    sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
     expect(callee.sessionClosed).toBe(true);
     const opened = claude.sessionsOpened;
@@ -11765,6 +11831,132 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     );
   });
 
+  it('tells the caller which commands its callee left running when the call settled', async () => {
+    // REPORTED as a "ghost terminal": a callee started a dev server in the
+    // background, its call settled 20 minutes before the server stopped, and
+    // nothing told its caller — or the user — that it was still up.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    // The CALLER's own server, still up: not this call's to report.
+    const caller = claude.starts[0]!;
+    caller.emit({
+      type: 'tool_call',
+      id: 'toolu_api',
+      name: 'Bash',
+      input: { command: 'pnpm dev:api', run_in_background: true },
+    });
+    caller.emit({ type: 'shell_open', toolCallId: 'toolu_api', workId: 'a1' });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'bring the preview up',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({
+      type: 'tool_call',
+      id: 'toolu_web',
+      name: 'Bash',
+      input: { command: 'cd web &&\n  pnpm dev:web', run_in_background: true },
+    });
+    callee.emit({ type: 'shell_open', toolCallId: 'toolu_web', workId: 'b1' });
+    callee.emit({
+      type: 'tool_call',
+      id: 'toolu_lint',
+      name: 'Bash',
+      input: { command: 'pnpm lint', run_in_background: true },
+    });
+    callee.emit({ type: 'shell_open', toolCallId: 'toolu_lint', workId: 'b2' });
+    // One of the two ends inside the turn: only the other is left running.
+    callee.emit({ type: 'shell_info', toolCallId: 'toolu_lint', workId: 'b2' });
+    completeTurn(callee, 'the preview is up on :3050');
+    const envelope = (await call) as {
+      result: Record<string, unknown> & { note: string };
+    };
+
+    expect(envelope.result.commands_still_running).toBe(1);
+    expect(envelope.result.running_commands).toEqual([
+      'cd web && pnpm dev:web',
+    ]);
+    expect(envelope.result.note).toBe(
+      "callee left 1 command(s) it started in this call running in the background: `cd web && pnpm dev:web`. They keep running after this result. To stop them, continue the conversation (call_agent with thread: 'call-1') and ask callee to; otherwise tell the user they are still running.",
+    );
+  });
+
+  it('counts a command left running whose words were never recorded, without inventing any', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'bring it up',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    // A detach whose launching call has no row: its CLI work id is no command.
+    callee.emit({ type: 'shell_open', toolCallId: 'toolu_gone', workId: 'b7' });
+    completeTurn(callee, 'up');
+    const envelope = (await call) as {
+      result: Record<string, unknown> & { note: string };
+    };
+
+    expect(envelope.result.commands_still_running).toBe(1);
+    expect(envelope.result).not.toHaveProperty('running_commands');
+    expect(envelope.result.note).toContain(
+      'callee left 1 command(s) it started in this call running in the background. ',
+    );
+    expect(envelope.result.note).not.toContain('b7');
+  });
+
+  it('still hands back the result when the read of commands left running fails', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'bring it up',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({
+      type: 'tool_call',
+      id: 'toolu_web',
+      name: 'Bash',
+      input: { command: 'pnpm dev:web', run_in_background: true },
+    });
+    callee.emit({ type: 'shell_open', toolCallId: 'toolu_web', workId: 'b1' });
+    vi.spyOn(itemDao, 'toolCallsByIds').mockRejectedValueOnce(
+      new Error('database is locked'),
+    );
+    completeTurn(callee, 'up on :3050');
+    const envelope = (await call) as { result: Record<string, unknown> };
+
+    expect(envelope).toMatchObject({
+      status: 'ok',
+      result: { text: 'up on :3050' },
+    });
+    expect(envelope.result).not.toHaveProperty('commands_still_running');
+  });
+
   it('hands the broker the callee’s cache lifetime and context, so a caller can judge a resume', async () => {
     const { service, claude, callBroker } = setup();
     const run = await service.startRun({
@@ -11806,7 +11998,6 @@ describe('GraphExecutorService — work still out when a process ends', () => {
         thread: 'call-1',
         context: { tokens: 640_000, window: 1_000_000, percent: 64 },
         cache: expect.objectContaining({ state: 'warm' }),
-        advice: 'continue',
       }),
     ]);
   });
@@ -11863,7 +12054,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     await call;
     await drain();
 
-    sessions.close(`${run.id}::call:call-1`);
+    sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
 
     const stopped = stoppedDelegates(itemDao, run.id);
@@ -11884,7 +12075,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee']);
     // It is closed when the caller's OWN process goes.
-    sessions.close(`${run.id}::node:a`);
+    sessions.close(`${run.id}::node:a`, 'closed');
     await drain();
     expect(
       stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
@@ -11929,7 +12120,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     await continueWith('one', undefined, 'task-one');
     await continueWith('two', 'call-1', 'task-two');
     // One process served both calls; reaping it stops call-1's delegate too.
-    sessions.close(`${run.id}::call:call-1`);
+    sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
     expect(stoppedIds().sort()).toEqual(['task-one', 'task-two']);
 
@@ -11937,14 +12128,14 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     // after it: the replacement stops what the old process left out…
     await continueWith('three', 'call-2', 'task-three');
     expect(
-      sessions.markStale('claude', dir, 'its MCP servers changed'),
+      sessions.markStale('claude', dir, 'you signed in', 'account'),
     ).toBeGreaterThan(0);
     await continueWith('four', 'call-3', 'task-four');
     expect(stoppedIds()).toContain('task-three');
     expect(stoppedIds()).not.toContain('task-four');
 
     // …and the process that replaced it still stops its own when it is reaped.
-    sessions.close(`${run.id}::call:call-1`);
+    sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
     expect(stoppedIds()).toContain('task-four');
 
@@ -12591,8 +12782,9 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
       result: { threads: Record<string, unknown>[] };
     };
     expect(listing.result.threads).toEqual([
-      expect.objectContaining({ agent: 'helper', context: null }),
+      expect.objectContaining({ agent: 'helper' }),
     ]);
+    expect(listing.result.threads[0]).not.toHaveProperty('context');
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });

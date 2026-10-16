@@ -32,6 +32,8 @@ import {
   RunWireSchema,
   ShellKillWireSchema,
   ShellOutputWireSchema,
+  StopDetachedProcessesSchema,
+  StoppedDetachedProcessesSchema,
   ThreadAnalysisWireSchema,
 } from '../chat.types';
 
@@ -681,5 +683,47 @@ export class RunWaterfallDto extends createZodDto(RunWaterfallWireSchema) {}
 /** What a run has running right now — see `RunProcessesWireSchema`. */
 export class RunProcessesDto extends createZodDto(RunProcessesWireSchema) {}
 
+export class StopDetachedProcessesDto extends createZodDto(
+  StopDetachedProcessesSchema,
+) {}
+export class StoppedDetachedProcessesDto extends createZodDto(
+  StoppedDetachedProcessesSchema,
+) {}
+
 /** What the whole app is running, by thread — see `AppProcessesWireSchema`. */
 export class AppProcessesDto extends createZodDto(AppProcessesWireSchema) {}
+
+/**
+ * How many folders one named-paths ask may carry. TWIN: the renderer's
+ * `CANDIDATES_PER_ASK` (`chats/use-run-work-folders.ts`) batches by it; the
+ * generated client does not carry the bound.
+ */
+export const MAX_NAMED_PATHS_PER_ASK = 64;
+
+/**
+ * Folders the client wants checked against this run's own tool calls — the
+ * repository's other working trees, as git names them.
+ */
+export const namedPathsSchema = z.object({
+  paths: z
+    .array(
+      z
+        .string()
+        .min(2)
+        .max(4096)
+        .startsWith('/')
+        .describe('An absolute folder path'),
+    )
+    .max(MAX_NAMED_PATHS_PER_ASK)
+    .describe('Candidate folders, absolute'),
+});
+export class NamedPathsDto extends createZodDto(namedPathsSchema) {}
+
+/** The subset of the asked-for paths this run's tool calls name. */
+export class NamedPathsResultDto extends createZodDto(
+  z.object({
+    named: z
+      .array(z.string())
+      .describe('The asked-for paths a tool call of this run names'),
+  }),
+) {}

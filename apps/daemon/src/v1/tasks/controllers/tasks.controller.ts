@@ -21,6 +21,7 @@ import {
   ListTasksQueryDto,
   MoveTaskStatusDto,
   ReorderTasksDto,
+  ReportPrepareFailureDto,
   ReportPullRequestMergedDto,
   TaskAttachmentDto,
   TaskAwaitingMergeDto,
@@ -186,6 +187,21 @@ export class TasksController {
     @Body() dto: ReportPullRequestMergedDto,
   ): Promise<TaskWire> {
     return this.merges.settleMerged(taskId, dto.url, dto.mergedAt);
+  }
+
+  /**
+   * Report that the autopilot could not prepare this card's worktree — a fact
+   * only Electron main sees, since the daemon runs no git. See
+   * `Task.prepareFailedAt`.
+   */
+  @Post(':taskId/prepare-failed')
+  @ApiOperation({ operationId: 'reportTaskPrepareFailure' })
+  @ZodResponse({ status: 200, type: TaskDto })
+  reportPrepareFailure(
+    @Param('taskId') taskId: string,
+    @Body() dto: ReportPrepareFailureDto,
+  ): Promise<TaskWire> {
+    return this.tasks.recordPrepareFailure(taskId, dto.reason);
   }
 
   @Delete(':taskId')

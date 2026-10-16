@@ -14,6 +14,7 @@ function tool(
   seconds: number,
   nodeId: string | null = 'lead',
   name: string | null = 'Bash',
+  isError = false,
   delegate = false,
 ): ToolCallTime {
   return {
@@ -24,6 +25,7 @@ function tool(
     at: s(seconds),
     toolId,
     name,
+    isError,
     delegate,
   };
 }
@@ -60,6 +62,24 @@ describe('pairToolCalls', () => {
       durationMs: null,
       open: false,
     });
+  });
+
+  it('marks a call failed only when its own result came back as an error', () => {
+    const spans = pairToolCalls(
+      [
+        tool(1, 'tool_call', 'a', 0),
+        tool(2, 'tool_call', 'b', 1),
+        tool(3, 'tool_result', 'b', 2, 'lead', null, true),
+        tool(4, 'tool_result', 'a', 3),
+      ],
+      s(3),
+      false,
+    );
+
+    expect(spans.map((span) => [span.seq, span.failed])).toEqual([
+      [1, false],
+      [2, true],
+    ]);
   });
 });
 
@@ -144,7 +164,7 @@ describe('foldThreadTimeline', () => {
           tool(3, 'tool_call', 'b', 11, 'worker-b', 'Bash'),
           tool(4, 'tool_result', 'b', 31, 'worker-b'),
           tool(5, 'tool_call', 'c', 32, 'worker-b', 'Bash'),
-          tool(6, 'tool_result', 'c', 35, 'worker-b'),
+          tool(6, 'tool_result', 'c', 35, 'worker-b', null, true),
         ],
         s(80),
         false,
@@ -158,6 +178,7 @@ describe('foldThreadTimeline', () => {
       calls: 2,
       totalMs: 23_000,
       maxMs: 20_000,
+      failed: 1,
     });
     expect(
       timeline.nodes.find((node) => node.nodeId === 'worker-b'),
@@ -177,9 +198,9 @@ describe('foldThreadTimeline', () => {
         [
           tool(1, 'tool_call', 'a', 1, 'lead', 'Read'),
           tool(2, 'tool_result', 'a', 3, 'lead'),
-          tool(3, 'tool_call', 'b', 5, 'lead', 'Read', true),
+          tool(3, 'tool_call', 'b', 5, 'lead', 'Read', false, true),
           tool(4, 'tool_result', 'b', 15, 'lead'),
-          tool(5, 'tool_call', 'c', 16, 'lead', 'Read', true),
+          tool(5, 'tool_call', 'c', 16, 'lead', 'Read', false, true),
           tool(6, 'tool_result', 'c', 17, 'lead'),
         ],
         s(60),

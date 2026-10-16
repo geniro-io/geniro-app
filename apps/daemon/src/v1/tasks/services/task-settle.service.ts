@@ -18,6 +18,7 @@ import {
   type RunStatus,
 } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
+import type { Task } from '../entity/task.entity';
 import type { TaskStatus, TaskWire } from '../tasks.types';
 import { TasksService } from './tasks.service';
 
@@ -112,6 +113,15 @@ export class TaskSettleService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
+    this.tasks.useOwedReconcile((taskId) => {
+      void this.reconcileTask(taskId).catch((error: unknown) => {
+        this.logger.warn(
+          `could not reconcile task ${taskId} after its start: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+    });
     this.bus.allStatuses().subscribe((event) => {
       if (event.status === 'running') {
         void this.reviveFailedCard(event.runId).catch((error: unknown) => {
@@ -244,6 +254,18 @@ export class TaskSettleService implements OnModuleInit {
     // started on a DIFFERENT run — an older run settling must not move a card
     // that has moved on from it.
     if (!task || task.runId !== runId) {
+      return;
+    }
+    // A Run press or a Follow up in flight: the start moves the card to
+    // `in_progress` before its run is working, and until then the card names
+    // a SETTLED run — the one being continued, or the previous one. Reconciled
+    // now, the card the user just pressed would be put back (a Stop
+    // re-stamped, a failure counted again) under a run about to work. Held
+    // off, not dropped: a start that fails with the card where it found it
+    // announces nothing, so the reconcile is made again, against the card's
+    // CURRENT run, once the start lets go (`reconcileTask`).
+    if (from === 'reconcile' && this.tasks.isStarting(task.id)) {
+      this.tasks.deferReconcile(task.id);
       return;
     }
     const worked = task.status === 'in_progress';
@@ -465,26 +487,41 @@ export class TaskSettleService implements OnModuleInit {
         ? await this.taskDao.listAll(em)
         : await this.taskDao.listForProject(projectId, em);
     for (const task of tasks) {
-      if (task.runId === null || task.status !== 'in_progress') {
-        continue;
-      }
-      const run = await this.runDao.getById(task.runId, em);
-      if (!run || !isTerminalRunStatus(run.status)) {
-        continue;
-      }
       // Per card, on the subscriber's own terms: `settle` ends in a
       // compare-and-set that throws when the row moved since it was read, and
       // `reconcileTasks` is the board's ONLY listing call — so one contested
       // card must not cost the user every other one.
-      await this.settle(task.runId, run.status, 'reconcile').catch(
-        (error: unknown) => {
-          this.logger.warn(
-            `could not reconcile task ${task.id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        },
-      );
+      await this.reconcileCard(task, em).catch((error: unknown) => {
+        this.logger.warn(
+          `could not reconcile task ${task.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
     }
+  }
+
+  /**
+   * Reconcile ONE card against its CURRENT run — the reconcile a start held
+   * off (`TasksService.releaseStart`), made once it has let go.
+   */
+  async reconcileTask(taskId: string): Promise<void> {
+    const em = this.em.fork();
+    const task = await this.taskDao.getById(taskId, em);
+    if (task) {
+      await this.reconcileCard(task, em);
+    }
+  }
+
+  /** A card still reading as worked, settled if its run has ended. */
+  private async reconcileCard(task: Task, em: EntityManager): Promise<void> {
+    if (task.runId === null || task.status !== 'in_progress') {
+      return;
+    }
+    const run = await this.runDao.getById(task.runId, em);
+    if (!run || !isTerminalRunStatus(run.status)) {
+      return;
+    }
+    await this.settle(task.runId, run.status, 'reconcile');
   }
 }

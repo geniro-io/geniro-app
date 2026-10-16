@@ -11,7 +11,9 @@ import {
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { RunDao } from '../../agents/dao/run.dao';
+import { RunGroupDao } from '../../agents/dao/run-group.dao';
 import { Run } from '../../runs/entity/run.entity';
+import { RunGroup } from '../../runs/entity/run-group.entity';
 import { LabelInstructionDao } from '../../tasks/dao/label-instruction.dao';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { LabelInstruction } from '../../tasks/entity/label-instruction.entity';
@@ -35,6 +37,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
   let taskDao: TaskDao;
   let labelInstructionDao: LabelInstructionDao;
   let runDao: RunDao;
+  let groupDao: RunGroupDao;
   let folder: string;
   let otherFolder: string;
 
@@ -46,7 +49,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Project, Task, LabelInstruction, Run],
+        entities: [Project, Task, LabelInstruction, Run, RunGroup],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -69,13 +72,41 @@ describe('ProjectsService (in-memory sqlite)', () => {
     taskDao = new TaskDao(em);
     labelInstructionDao = new LabelInstructionDao(em);
     runDao = new RunDao(em);
+    groupDao = new RunGroupDao(em);
     service = new ProjectsService(
       em,
       projectDao,
       taskDao,
       labelInstructionDao,
       runDao,
+      groupDao,
     );
+  });
+
+  it('refuses a group id that names no sidebar group, on create and on update', async () => {
+    await expect(
+      service.create({ name: 'Board', folder, groupId: 'ghost' }),
+    ).rejects.toMatchObject({ errorCode: 'GROUP_NOT_FOUND' });
+    expect(await projectDao.listAll()).toEqual([]);
+
+    const project = await service.create({ name: 'Board', folder });
+    await expect(
+      service.update(project.id, { groupId: 'ghost' }),
+    ).rejects.toMatchObject({ errorCode: 'GROUP_NOT_FOUND' });
+    expect((await projectDao.getById(project.id))?.groupId).toBeNull();
+  });
+
+  it('stores a group id the sidebar holds, and null clears it', async () => {
+    const group = await groupDao.create({ name: 'Boards', position: 0 });
+    const project = await service.create({
+      name: 'Board',
+      folder,
+      groupId: group.id,
+    });
+    expect(project.groupId).toBe(group.id);
+
+    const cleared = await service.update(project.id, { groupId: null });
+    expect(cleared.groupId).toBeNull();
   });
 
   it('removes a project’s tasks along with the project', async () => {

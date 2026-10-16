@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
+import { ProjectDao } from '../../projects/dao/project.dao';
 import { RunGroup } from '../../runs/entity/run-group.entity';
 import {
   RUN_GROUP_COLORS,
@@ -27,6 +28,11 @@ const MAX_GROUPS = 100;
  * A separate module would need the run DAO while this one needs the group
  * service for auto-filing, and the only ways out of that cycle are a
  * `forwardRef` or relocating three DAOs the rest of the daemon resolves here.
+ *
+ * {@link ProjectDao} is provided to this module the way `ProjectsModule`
+ * provides {@link RunDao}, one stateless DAO rather than a module import:
+ * deleting a group nulls every `projects.group_id` in the same transaction
+ * that releases its runs.
  */
 @Injectable()
 export class RunGroupsService {
@@ -34,6 +40,7 @@ export class RunGroupsService {
     private readonly em: EntityManager,
     private readonly groupDao: RunGroupDao,
     private readonly runDao: RunDao,
+    private readonly projectDao: ProjectDao,
     private readonly bus: AgentEventBus,
   ) {}
 
@@ -163,21 +170,25 @@ export class RunGroupsService {
   }
 
   /**
-   * Delete a group and RELEASE its runs — they move out of it, not away with
-   * it.
+   * Delete a group and RELEASE its runs and projects — they move out of it, not
+   * away with it.
    *
    * The release happens FIRST and the row goes second: the reverse order leaves
-   * a window in which a run points at a group that no longer exists, and a
-   * crash inside that window makes it permanent.
+   * a window in which a run or project points at a group that no longer exists,
+   * and a crash inside that window makes it permanent.
    */
   async remove(groupId: string): Promise<{
     deleted: boolean;
     released: number;
   }> {
     const em = this.em.fork();
-    await this.getOrThrow(groupId, em);
-    const released = await this.runDao.clearGroup(groupId, em);
-    await this.groupDao.hardDeleteById(groupId, em);
+    let released = 0;
+    await em.transactional(async (tx) => {
+      await this.getOrThrow(groupId, tx);
+      released = await this.runDao.clearGroup(groupId, tx);
+      await this.projectDao.releaseGroupBinding(groupId, tx);
+      await this.groupDao.hardDeleteById(groupId, tx);
+    });
     this.bus.publishGroupsChanged();
     return { deleted: true, released };
   }
@@ -185,6 +196,11 @@ export class RunGroupsService {
   /** Refuse a group id that names nothing, so a bad assign 404s at the door. */
   async assertExists(groupId: string): Promise<void> {
     await this.getOrThrow(groupId, this.em.fork());
+  }
+
+  /** Whether a group id still names a group, for a binding that may dangle. */
+  async exists(groupId: string): Promise<boolean> {
+    return (await this.groupDao.getById(groupId, this.em.fork())) !== null;
   }
 
   /**

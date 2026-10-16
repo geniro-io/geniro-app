@@ -35,6 +35,35 @@ import { TaskEventBus } from './task-events.bus';
 export class TasksService {
   private readonly logger = new Logger(TasksService.name);
 
+  /**
+   * Tasks whose run start is in flight, claimed synchronously by
+   * `TaskRunsService.start`.
+   *
+   * `TasksService.moveStatus` is a compare-and-set, and it is what stops two
+   * BOARDS double-starting one card — but it reads and then writes with an
+   * await between, so two requests arriving together can both find the card in
+   * `todo` and both pass. `ChatService.sendMessage` closes the identical
+   * window with the identical mechanism, and its reasoning applies unchanged:
+   * reserve before the first await, since the cost of losing the race is two
+   * agents in two worktrees working one task.
+   *
+   * Held HERE rather than on the starting service because the settle reads it
+   * too (`isStarting`): a start moves the card to `in_progress` before its run
+   * is working, and in that window the card still names a SETTLED run — the
+   * previous one, or the very run the start is about to continue — which the
+   * board's reconcile would otherwise settle the card out of again.
+   */
+  private readonly starting = new Set<string>();
+
+  /**
+   * Starting tasks a reconcile was held off for (`deferReconcile`), owed one
+   * as soon as the start lets go — see `releaseStart`.
+   */
+  private readonly reconcileOwed = new Set<string>();
+
+  /** What `releaseStart` calls for an owed reconcile — the settle's own. */
+  private owedReconcile: ((taskId: string) => void) | null = null;
+
   constructor(
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
@@ -43,6 +72,51 @@ export class TasksService {
     private readonly attachments: TaskAttachmentService,
     private readonly runDao: RunDao,
   ) {}
+
+  /** Claim `taskId`'s start; false when one is already in flight. */
+  claimStart(taskId: string): boolean {
+    if (this.starting.has(taskId)) {
+      return false;
+    }
+    this.starting.add(taskId);
+    return true;
+  }
+
+  /**
+   * End `taskId`'s start, and hand on the reconcile it held off, if any.
+   *
+   * A start does not always leave the board an event to reconcile on: one
+   * pressed from `in_progress` that then fails moves the card from
+   * `in_progress` to `in_progress`, which announces nothing — so a reconcile
+   * dropped during it would be lost until the board reloads, the card left
+   * holding its slot on a settled run.
+   */
+  releaseStart(taskId: string): void {
+    this.starting.delete(taskId);
+    if (this.reconcileOwed.delete(taskId)) {
+      this.owedReconcile?.(taskId);
+    }
+  }
+
+  /** Whether a run start for `taskId` is in flight right now. */
+  isStarting(taskId: string): boolean {
+    return this.starting.has(taskId);
+  }
+
+  /** Record that a reconcile of `taskId` was held off by its start. */
+  deferReconcile(taskId: string): void {
+    if (this.starting.has(taskId)) {
+      this.reconcileOwed.add(taskId);
+    }
+  }
+
+  /**
+   * Install the settle's reconcile of one card, for `releaseStart` to call —
+   * installed rather than injected because the settle depends on this service.
+   */
+  useOwedReconcile(reconcile: (taskId: string) => void): void {
+    this.owedReconcile = reconcile;
+  }
 
   /**
    * Which of these cards' work is FINISHED (`isWorkFinished`). A card that is
@@ -174,6 +248,40 @@ export class TasksService {
   async get(taskId: string): Promise<TaskWire> {
     const em = this.em.fork();
     return this.wireOf(await this.require(taskId, em), em);
+  }
+
+  /**
+   * Record that the autopilot could not prepare this card's worktree, stamped
+   * with the daemon's own clock — the backoff in `TaskQueueService` counts from
+   * it. See `Task.prepareFailedAt`.
+   *
+   * Only for a card still in its project's intake column: a report that lands
+   * after another start of the card won (a Run press preparing the same
+   * worktree) would otherwise mark a card that is being worked. Announced,
+   * because no run or move announces it and the board re-reads the queue only
+   * on a card event.
+   */
+  async recordPrepareFailure(
+    taskId: string,
+    reason: string,
+  ): Promise<TaskWire> {
+    const em = this.em.fork();
+    const task = await this.require(taskId, em);
+    const project = await this.requireProject(task.projectId, em);
+    if (task.status !== project.autopilotIntakeStatus) {
+      return this.wireOf(task, em);
+    }
+    await this.taskDao.setPrepareFailure(
+      taskId,
+      { at: new Date(), reason },
+      em,
+    );
+    this.events.publishTaskChanged({
+      taskId,
+      projectId: task.projectId,
+      status: task.status,
+    });
+    return this.wireOf(task, em);
   }
 
   /**

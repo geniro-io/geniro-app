@@ -335,6 +335,14 @@ export class CodexAdapter extends AgentAdapter {
         unavailableReason: null,
         sessionCarryUnavailableReason: null,
       },
+      // Probed on 0.162.0 through `thread/start`'s `instructionSources`: the
+      // default home lists `~/.codex/AGENTS.md`, a throwaway `CODEX_HOME`
+      // holding an `AGENTS.md` lists that file instead.
+      userInstructions: {
+        kind: 'file',
+        homeDir: '.codex',
+        fileName: 'AGENTS.md',
+      },
       followUp: {
         unavailableReason: null,
         // `turn/steer` adds to the running turn; codex answers it before the

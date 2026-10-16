@@ -24,6 +24,7 @@ import type {
   MoveTaskStatusDto,
   ReconcileTasksDto,
   ReorderTasksDto,
+  ReportPrepareFailureDto,
   ReportPullRequestMergedDto,
   StartTaskRunDto,
   TaskAttachment,
@@ -85,6 +86,11 @@ export interface TasksApiReconcileTasksRequest {
 
 export interface TasksApiReorderTasksRequest {
     reorderTasksDto: ReorderTasksDto;
+}
+
+export interface TasksApiReportTaskPrepareFailureRequest {
+    taskId: string;
+    reportPrepareFailureDto: ReportPrepareFailureDto;
 }
 
 export interface TasksApiReportTaskPullRequestMergedRequest {
@@ -746,6 +752,61 @@ export class TasksApi extends runtime.BaseAPI {
      */
     async reorderTasks(requestParameters: TasksApiReorderTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TaskDto>> {
         const response = await this.reorderTasksRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async reportTaskPrepareFailureRaw(requestParameters: TasksApiReportTaskPrepareFailureRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TaskDto>> {
+        if (requestParameters['taskId'] == null) {
+            throw new runtime.RequiredError(
+                'taskId',
+                'Required parameter "taskId" was null or undefined when calling reportTaskPrepareFailure().'
+            );
+        }
+
+        if (requestParameters['reportPrepareFailureDto'] == null) {
+            throw new runtime.RequiredError(
+                'reportPrepareFailureDto',
+                'Required parameter "reportPrepareFailureDto" was null or undefined when calling reportTaskPrepareFailure().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/{taskId}/prepare-failed`;
+        urlPath = urlPath.replace(`{${"taskId"}}`, encodeURIComponent(String(requestParameters['taskId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['reportPrepareFailureDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async reportTaskPrepareFailure(requestParameters: TasksApiReportTaskPrepareFailureRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
+        const response = await this.reportTaskPrepareFailureRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

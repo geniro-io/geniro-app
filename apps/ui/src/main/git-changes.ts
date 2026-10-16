@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type {
@@ -12,6 +12,7 @@ import type {
   GitUpstreamBase,
 } from '../shared/contracts';
 import { IGNORE_SUBMODULE_WORKTREES, readSafeConfig } from './git-safe-config';
+import { readWorktreeEntries } from './worktree-list';
 
 const execFileAsync = promisify(execFile);
 
@@ -226,6 +227,77 @@ async function openRepository(
     return 'not-repo';
   }
   return { config, root };
+}
+
+/**
+ * The LINKED worktrees of the repository `dir` belongs to, other than `dir`'s
+ * own, as git prints them — their resolved real path. Empty on any failure.
+ *
+ * These are only CANDIDATES for a thread's changes: a repository's worktrees
+ * belong to every thread and session that ever made one, and which of them a
+ * thread worked in is decided by its own transcript, not here. The main
+ * checkout is never one: it is the user's own, and a thread working in a
+ * worktree of its own touches it in passing (reading a file there, or simply
+ * because the worktree is nested inside it), which would put the user's own
+ * uncommitted work on that thread's chip.
+ *
+ * Nor is a worktree made before `createdAfterMs` (the thread's start), or one
+ * of geniro's own task worktrees — the direct children of `tasksRoot`: a
+ * thread that reads a file in another thread's or task's worktree has not
+ * worked there. A worktree an agent nests INSIDE a task worktree is that
+ * agent's, and stays. A tool that owns its worktrees records them at creation;
+ * one an agent made with a plain `git worktree add` leaves no record, so being
+ * made during the thread is what stands in for it.
+ */
+export async function readLinkedWorktrees(
+  dir: string,
+  { createdAfterMs, tasksRoot }: WorktreeFilter = {},
+): Promise<string[]> {
+  const repository = await openRepository(dir);
+  if (repository === 'unsafe' || repository === 'not-repo') {
+    return [];
+  }
+  const entries = await readWorktreeEntries((args) =>
+    git(dir, args, repository.config),
+  );
+  const listed = (entries ?? [])
+    // git lists the main checkout first — or the bare repository, when the
+    // worktrees hang off one.
+    .slice(1)
+    .filter(
+      (entry) =>
+        !entry.prunable &&
+        entry.path !== repository.root &&
+        (tasksRoot === undefined || dirname(entry.path) !== tasksRoot),
+    )
+    .map((entry) => entry.path);
+  if (createdAfterMs === undefined) {
+    return listed;
+  }
+  const made = await Promise.all(listed.map(worktreeMadeAt));
+  return listed.filter((_, at) => (made[at] ?? -1) >= createdAfterMs);
+}
+
+/** What narrows {@link readLinkedWorktrees} to one thread's candidates. */
+export interface WorktreeFilter {
+  createdAfterMs?: number;
+  /** The resolved folder whose direct children are geniro's task worktrees. */
+  tasksRoot?: string;
+}
+
+/**
+ * When a linked worktree was made: the birth of its `.git` link file, which
+ * `git worktree add` writes once (its mtime where the filesystem keeps no
+ * birth time). Null when it cannot be read — a worktree removed between the
+ * listing and this read.
+ */
+export async function worktreeMadeAt(path: string): Promise<number | null> {
+  try {
+    const link = await lstat(join(path, '.git'));
+    return link.birthtimeMs > 0 ? link.birthtimeMs : link.mtimeMs;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -462,10 +534,17 @@ async function upstreamBaseSince(
  * Every failure is ONE outcome — an empty list with a reason — on the rule
  * `readGitInfo` follows: a caller wants to know whether to draw a view, and half
  * an answer presented as a whole one is worse than none.
+ *
+ * `workFolder` reads a worktree one of the thread's agents made rather than the
+ * thread's own folder: its own commits are the work, so when it does not descend
+ * from `sha` (cut from `origin/main` while the chat sat on unpushed commits) it
+ * is measured from where the two histories meet, not reduced to what is
+ * uncommitted.
  */
 export async function readChangesSince(
   dir: string,
   sha: string,
+  workFolder = false,
 ): Promise<GitChanges> {
   const unreadable = (unavailableReason: string): GitChanges => ({
     changes: [],
@@ -503,11 +582,19 @@ export async function readChangesSince(
   // reviewing. Measured against HEAD instead, the list is what is uncommitted
   // NOW, and `movedOffStart` lets the view say why.
   const descends = relation === 'descends';
-  // A checkout that PULLED still descends — see `upstreamBaseSince`.
+  const forkPoint =
+    !descends && workFolder
+      ? (await git(dir, ['merge-base', sha, 'HEAD'], config))?.trim() || null
+      : null;
+  // A checkout that PULLED still descends — see `upstreamBaseSince`. A work
+  // folder cut from a freshly fetched remote branch is past its fork point the
+  // same way, so what upstream gained since is left out of it too.
   const upstreamBase = descends
     ? await upstreamBaseSince(dir, sha, config)
-    : null;
-  const base = descends ? (upstreamBase?.sha ?? sha) : 'HEAD';
+    : forkPoint !== null
+      ? await upstreamBaseSince(dir, forkPoint, config)
+      : null;
+  const base = upstreamBase?.sha ?? (descends ? sha : (forkPoint ?? 'HEAD'));
 
   // Both halves must speak the SAME path language over the SAME scope, and by
   // default they do not: `diff` reports repo-root-relative paths for the whole
@@ -612,7 +699,7 @@ export async function readChangesSince(
     changes: changes.slice(0, MAX_CHANGES),
     truncated: changes.length > MAX_CHANGES,
     unavailableReason: null,
-    movedOffStart: !descends,
+    movedOffStart: !descends && forkPoint === null,
     upstreamBase,
   };
 }

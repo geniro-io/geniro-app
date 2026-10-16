@@ -1,13 +1,13 @@
 import { Module } from '@nestjs/common';
 
 import { RunDao } from '../agents/dao/run.dao';
+import { RunGroupDao } from '../agents/dao/run-group.dao';
 import { LabelInstructionDao } from '../tasks/dao/label-instruction.dao';
 import { TaskDao } from '../tasks/dao/task.dao';
 import { ProjectsController } from './controllers/projects.controller';
 import { ProjectDao } from './dao/project.dao';
 import { ProjectQueueService } from './services/project-queue.service';
 import { ProjectsService } from './services/projects.service';
-import { TaskNumberBackfillService } from './services/task-number-backfill.service';
 
 /**
  * Projects — the folder a board's work happens in.
@@ -23,7 +23,10 @@ import { TaskNumberBackfillService } from './services/task-number-backfill.servi
  * {@link RunDao} is here on the same terms and for the same reason: the queue
  * counts how many of a project's cards hold a run that is still LIVE, which
  * only the run rows can answer, and importing `AgentsModule` for one stateless
- * DAO would pull the whole agent substrate in behind it.
+ * DAO would pull the whole agent substrate in behind it. {@link RunGroupDao}
+ * too: a project's `groupId` is refused when it names no sidebar group.
+ * (`AgentsModule` provides {@link ProjectDao} the same way, for the group
+ * delete that releases projects.)
  *
  * {@link LabelInstructionDao} joins them for `ProjectsService.remove`'s own
  * reason: a deleted project's label instructions go with its tasks, on the
@@ -36,11 +39,11 @@ import { TaskNumberBackfillService } from './services/task-number-backfill.servi
     ProjectDao,
     TaskDao,
     RunDao,
+    RunGroupDao,
     LabelInstructionDao,
     ProjectsService,
     ProjectQueueService,
-    TaskNumberBackfillService,
   ],
-  exports: [ProjectDao, ProjectQueueService, TaskNumberBackfillService],
+  exports: [ProjectDao, ProjectQueueService],
 })
 export class ProjectsModule {}

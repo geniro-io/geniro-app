@@ -1,3 +1,4 @@
+import { ArtifactShareContext } from './artifact-share';
 import { RevealCallBlockContext, RevealCallContext } from './call-block';
 import {
   type CalleeContextResolver,
@@ -44,6 +45,7 @@ import { CollapseToolStepsContext } from './tool-group';
 import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
 import { CardBackedRequestsContext } from './transcript-item';
 import { type TurnDuration, TurnDurationContext } from './turn-duration';
+import type { ArtifactSharing } from './use-artifact-sharing';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /**
@@ -101,6 +103,7 @@ export function ChatProviders({
   callContext,
   callChannel,
   artifactUrl,
+  artifactSharing = null,
   threadId,
   runSettledAt,
   delegatesOut,
@@ -152,6 +155,11 @@ export function ChatProviders({
    * artifact, and all three are inside this tree.
    */
   artifactUrl: ArtifactUrlBuilder | null;
+  /**
+   * How a page's Share control reaches the daemon — see
+   * `ArtifactShareContext`. Absent (or null) draws no Share control.
+   */
+  artifactSharing?: ArtifactSharing | null;
   /** Read images attached to this conversation, including in the workflow dock. */
   loadAttachment?: AttachmentLoader | null;
   /**
@@ -180,24 +188,26 @@ export function ChatProviders({
             <JumpMarkContext.Provider value={jumpMark}>
               <CallMessageChannelContext.Provider value={callChannel}>
                 <ArtifactUrlContext.Provider value={artifactUrl}>
-                  <ThreadUiMemoryContext.Provider value={threadId}>
-                    <AttachmentLoaderContext.Provider value={loadAttachment}>
-                      <RunSettledContext.Provider value={runSettledAt}>
-                        <DelegatesOutContext.Provider value={delegatesOut}>
-                          <RecommendationsApplyContext.Provider
-                            value={applyRecommendations}>
-                            {transcript === undefined ? (
-                              children
-                            ) : (
-                              <SurfaceContexts {...transcript}>
-                                {children}
-                              </SurfaceContexts>
-                            )}
-                          </RecommendationsApplyContext.Provider>
-                        </DelegatesOutContext.Provider>
-                      </RunSettledContext.Provider>
-                    </AttachmentLoaderContext.Provider>
-                  </ThreadUiMemoryContext.Provider>
+                  <ArtifactShareContext.Provider value={artifactSharing}>
+                    <ThreadUiMemoryContext.Provider value={threadId}>
+                      <AttachmentLoaderContext.Provider value={loadAttachment}>
+                        <RunSettledContext.Provider value={runSettledAt}>
+                          <DelegatesOutContext.Provider value={delegatesOut}>
+                            <RecommendationsApplyContext.Provider
+                              value={applyRecommendations}>
+                              {transcript === undefined ? (
+                                children
+                              ) : (
+                                <SurfaceContexts {...transcript}>
+                                  {children}
+                                </SurfaceContexts>
+                              )}
+                            </RecommendationsApplyContext.Provider>
+                          </DelegatesOutContext.Provider>
+                        </RunSettledContext.Provider>
+                      </AttachmentLoaderContext.Provider>
+                    </ThreadUiMemoryContext.Provider>
+                  </ArtifactShareContext.Provider>
                 </ArtifactUrlContext.Provider>
               </CallMessageChannelContext.Provider>
             </JumpMarkContext.Provider>

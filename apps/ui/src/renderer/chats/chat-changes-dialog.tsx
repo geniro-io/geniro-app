@@ -14,6 +14,8 @@ import { Dialog } from '../components/ui/dialog';
 import { cn } from '../components/ui/utils';
 import { buildChangesTree, type ChangeTreeNode } from './changes-tree';
 import { UnifiedDiff } from './diff-view';
+import { folderName } from './directory-select';
+import type { WorkFolderChanges } from './use-chat-changes';
 
 /**
  * What each status is CALLED, and how it is toned.
@@ -189,6 +191,29 @@ function TreeRows({
   );
 }
 
+/** One shared empty value, so the memoized trees below are not rebuilt on every render. */
+const NO_WORK_FOLDERS: readonly WorkFolderChanges[] = [];
+
+/** One work folder's changes, under the folder's name. */
+function WorkFolderSection({
+  folder,
+  tree,
+}: {
+  folder: string;
+  tree: readonly ChangeTreeNode[];
+}): React.JSX.Element {
+  const name = folderName(folder);
+  return (
+    <section className="mt-2 border-t border-border pt-2">
+      <p className="px-3 pb-1 text-xs text-muted-foreground" title={folder}>
+        In <span className="font-mono text-foreground">{name}</span> — a
+        worktree this chat’s agents worked in
+      </p>
+      <TreeRows nodes={tree} depth={0} />
+    </section>
+  );
+}
+
 /**
  * What the folder holds now that it did not when this conversation started.
  *
@@ -206,6 +231,7 @@ export function ChatChangesDialog({
   open,
   startSha,
   changes,
+  elsewhere = NO_WORK_FOLDERS,
   truncated,
   unavailableReason: reason,
   movedOffStart = false,
@@ -229,6 +255,8 @@ export function ChatChangesDialog({
    * at one instant is exactly the bug that would produce.
    */
   changes: GitChange[];
+  /** The thread's other work folders that hold changes, each listed apart. */
+  elsewhere?: readonly WorkFolderChanges[];
   truncated: boolean;
   unavailableReason: string | null;
   /**
@@ -265,6 +293,14 @@ export function ChatChangesDialog({
   // Memoized because every DirRow and FileRow below owns expand state: rebuilding
   // the tree on an unrelated render would hand them new nodes and reset it.
   const tree = useMemo(() => buildChangesTree(changes), [changes]);
+  const elsewhereTrees = useMemo(
+    () =>
+      elsewhere.map(({ folder, changes: held }) => ({
+        folder,
+        tree: buildChangesTree(held),
+      })),
+    [elsewhere],
+  );
 
   return (
     <Dialog
@@ -285,23 +321,33 @@ export function ChatChangesDialog({
 
         {error ? <ErrorText className="shrink-0">{error}</ErrorText> : null}
 
-        {/* The shared list — `truncated` is what its partial note says here. */}
+        {/* The shared list — `truncated` is what its partial note says here.
+            When only the run folder's own reading is unavailable, its reason
+            stands in for its tree and the worktree sections still list: the
+            chip counts them either way. */}
         <SearchResultList
           loading={loading}
           loadingLabel="Reading the folder…"
-          unavailableReason={reason}
+          unavailableReason={elsewhereTrees.length > 0 ? null : reason}
           partialReason={
             truncated
               ? 'More files changed than this view lists — showing the first of them by path.'
               : null
           }
-          isEmpty={changes.length === 0}
+          isEmpty={changes.length === 0 && elsewhereTrees.length === 0}
           empty={
             <EmptyState>
               Nothing has changed in this folder since the chat started.
             </EmptyState>
           }>
-          <TreeRows nodes={tree} depth={0} />
+          {reason && elsewhereTrees.length > 0 ? (
+            <EmptyState>{reason}</EmptyState>
+          ) : (
+            <TreeRows nodes={tree} depth={0} />
+          )}
+          {elsewhereTrees.map(({ folder, tree: held }) => (
+            <WorkFolderSection key={folder} folder={folder} tree={held} />
+          ))}
         </SearchResultList>
       </div>
     </Dialog>

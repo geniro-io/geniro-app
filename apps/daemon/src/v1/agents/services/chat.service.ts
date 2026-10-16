@@ -1470,7 +1470,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         : patch.model !== undefined
           ? { modelParameters: null }
           : {}),
-      ...(profileMove === null ? {} : { configDir: profileMove.configDir }),
+      // A prompt cache is per ACCOUNT, so the expiry and lifetime the old
+      // profile's turns reported go with it: the new account starts cold, and
+      // its first turn reports its own.
+      ...(profileMove === null
+        ? {}
+        : {
+            configDir: profileMove.configDir,
+            promptCacheExpiresAt: null,
+            promptCacheTtlMs: null,
+          }),
       // Blank normalizes to null, as at creation.
       ...(patch.taskInstructions !== undefined
         ? { taskInstructions: patch.taskInstructions?.trim() || null }
@@ -1652,7 +1661,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         `could not switch account without its conversation: ${carried.reason}`,
       );
     }
-    this.sessions.close(runId);
+    this.sessions.close(runId, 'its account was switched');
     // Every reading this run is holding was taken from the OLD account, and a
     // profile is a whole different subscription: the kept metrics reading
     // carries that account's PLAN LIMITS, so serving it here reports one
@@ -2592,7 +2601,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     this.offTurnRuns.delete(runId);
     this.offTurnSignalClaims.delete(runId);
     this.partials.retire(runId, SINGLE_AGENT_NODE, null);
-    this.sessions.close(runId);
+    this.sessions.close(runId, 'its turn was stopped');
   }
 
   private ownsSession(runId: string, session: AgentSession | null): boolean {
@@ -4118,7 +4127,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // turn did.
     const resend = await this.messageToResend(runId, em);
     if (resend !== null) {
-      this.sessions.close(runId);
+      this.sessions.close(runId, 'its turn was retried');
       await this.sendMessage(runId, resend.text, resend.images);
       return { retried: true };
     }
@@ -4134,7 +4143,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         'there is no message to send again — write your next one and the agent continues from where it left off',
       );
     }
-    this.sessions.close(runId);
+    this.sessions.close(runId, 'its turn was retried');
     await this.sendMessage(runId, '', [], { resumeOnly: true });
     return { retried: true };
   }
@@ -4357,21 +4366,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // for a PATCH that deliberately cleared it back to the CLI default.
       const settings =
         (await this.runDao.getById(runId, this.em.fork())) ?? run;
-      // A null `approval` is a chat row created before the mode selector
-      // existed. It used to ride through as `undefined`, which spawns the CLI
-      // with no permission flag at all and inherits whatever that CLI defaults
-      // to — safe while claude's default was "ask about everything", and no
-      // longer: probed on 2.1.227, a headless turn with no flag now reports
-      // `permissionMode: "auto"`, the new default Anthropic is rolling out.
-      // So an old chat would have started approving every tool call
-      // unattended, on a decision the vendor made and the user never saw.
-      //
-      // Resolved HERE rather than in the adapter because this is the layer
-      // that knows what a null row MEANS. The same undefined reaching an
-      // adapter from a geniro-internal probe turn means something else
-      // entirely, and pinning it there would put a permission dialogue on
-      // turns that exist only to read one `system/init` line.
-      //
+      // Every chat row is created with a mode; the column is nullable only for
+      // workflow runs. Never let a null ride through as `undefined`: a turn
+      // with no permission flag inherits the CLI's own default, which for
+      // claude (2.1.227) is now `auto` — approving every tool call unattended.
       // `ask` is the answer because "the user never chose a posture" and "do
       // not act unattended" are the same statement.
       const approvalDefault: ChatApprovalMode = 'ask';
@@ -4435,7 +4433,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // and its CSP opens no channel of its own. Its one way out is a
         // library request to the fixed CDNs, whose URL a page could fill with
         // data it holds — a residual risk accepted by decision, see
-        // `isHostArtifactCall`.
+        // `isHostArtifactCall`, which also says why an encrypted share
+        // (`share: true`) needs no card either.
         isHostArtifactCall(hostServerName, toolName) ||
         // The notify tool, on the render family's reading: a banner the agent
         // asks for is not something a permission card meaningfully guards.

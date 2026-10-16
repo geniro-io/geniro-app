@@ -818,6 +818,86 @@ describe('mapClaudeMessage', () => {
     ).toEqual([]);
   });
 
+  describe('a resumed process whose seed found no cost-state', () => {
+    const SESSION_ID = 's-resumed';
+    /** A resumed process's opening line: no request, the running total only. */
+    const quietResult = (total: number) => ({
+      type: 'result',
+      is_error: false,
+      session_id: SESSION_ID,
+      result: null,
+      stop_reason: null,
+      duration_ms: 49,
+      num_turns: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {
+        'claude-haiku-5-5': { contextWindow: 1_000_000, costUSD: 0 },
+      },
+      total_cost_usd: total,
+    });
+    const billed = (events: AgentEvent[]): number =>
+      events.reduce(
+        (sum, event) =>
+          sum +
+          (event.type === 'turn_complete' ? (event.usage?.costUsd ?? 0) : 0),
+        0,
+      );
+    /** The ledger as a resumed process leaves it once its `init` is mapped. */
+    function resumed(
+      ...before: Record<string, unknown>[]
+    ): ClaudeSessionCostLedger {
+      const ledger = new ClaudeSessionCostLedger();
+      ledger.expectResume(SESSION_ID, () => null);
+      for (const line of [
+        ...before,
+        { type: 'system', subtype: 'init', session_id: SESSION_ID },
+      ]) {
+        mapClaudeMessage(line, ledger);
+      }
+      return ledger;
+    }
+
+    it('bills nothing for its opening line, whatever running total it carries', () => {
+      const ledger = resumed();
+
+      expect(billed(mapClaudeMessage(quietResult(40.676), ledger))).toBe(0);
+    });
+
+    it('bills a quiet line after its own main-thread compaction', () => {
+      const ledger = resumed();
+      mapClaudeMessage(
+        { type: 'system', subtype: 'compact_boundary', session_id: SESSION_ID },
+        ledger,
+      );
+
+      expect(billed(mapClaudeMessage(quietResult(0.4), ledger))).toBeCloseTo(
+        0.4,
+        6,
+      );
+    });
+
+    it('does not let a sub-agent’s compaction, or one from before its init, exempt that line', () => {
+      const delegate = resumed();
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'compact_boundary',
+          session_id: SESSION_ID,
+          parent_tool_use_id: 'toolu_1',
+        },
+        delegate,
+      );
+      expect(billed(mapClaudeMessage(quietResult(0.4), delegate))).toBe(0);
+
+      const stale = resumed({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: SESSION_ID,
+      });
+      expect(billed(mapClaudeMessage(quietResult(0.4), stale))).toBe(0);
+    });
+  });
+
   it('keeps a completion that reports a stop reason but no tokens', () => {
     // The drop is narrow on purpose: only a result saying NOTHING is discarded,
     // so a real completion can never be swallowed by it.

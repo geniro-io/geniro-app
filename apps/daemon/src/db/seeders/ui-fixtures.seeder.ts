@@ -282,10 +282,8 @@ export class UiFixturesSeeder extends Seeder {
         payload: JSON.stringify(item.payload),
         // The one `Item` write that does not go through `persistItemAndEmit`,
         // so it has to flatten for itself. Without this a seeded conversation
-        // is unsearchable for good — the backfill is marker-retired, so it
-        // never comes back for rows created after it ran, and a developer
-        // checking the search against fixtures would read a working feature
-        // as broken.
+        // is unsearchable for good, and a developer checking the search
+        // against fixtures would read a working feature as broken.
         searchText: searchIndexText(item.payload),
         createdAt: item.secondsAgo === undefined ? at : itemAt,
         updatedAt: item.secondsAgo === undefined ? at : itemAt,

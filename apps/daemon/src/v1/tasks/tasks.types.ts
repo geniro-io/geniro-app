@@ -224,9 +224,7 @@ export const TaskWireSchema = z.object({
     .number()
     .int()
     .nullable()
-    .describe(
-      'This card’s number within its project — the 12 of GEN-12. Null only for a row the backfill has not reached',
-    ),
+    .describe('This card’s number within its project — the 12 of GEN-12'),
   description: z.string().nullable(),
   attachments: z
     .array(TaskFileSchema)
@@ -469,6 +467,12 @@ export type ResolvedRunTarget =
 
 /** The AGENT arm of {@link ResolvedRunTarget}, which alone carries CLI fields. */
 export type ResolvedAgentTarget = Extract<ResolvedRunTarget, { kind: 'agent' }>;
+
+/** The WORKFLOW arm of {@link ResolvedRunTarget}. */
+export type ResolvedWorkflowTarget = Extract<
+  ResolvedRunTarget,
+  { kind: 'workflow' }
+>;
 
 /**
  * Why a card cannot be started as it stands.

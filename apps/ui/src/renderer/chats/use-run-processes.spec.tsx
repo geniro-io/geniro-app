@@ -82,6 +82,50 @@ afterEach(() => {
 });
 
 describe('useRunProcesses', () => {
+  it('reports a partial stop and refreshes instead of treating it as success', async () => {
+    const read = vi.fn(async () => dto(1));
+    const stop = vi.fn(async () => ({ stoppedPids: [500] }));
+    render(
+      {
+        chats: { readRunProcesses: read, stopDetachedProcesses: stop },
+      } as unknown as DaemonApis,
+      'run-1',
+      true,
+    );
+    await flush();
+    await act(async () => {
+      await expect(seen?.stopDetached?.([500, 501])).rejects.toThrow(
+        'could not be confirmed or stopped',
+      );
+    });
+    await flush();
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+  it('calls the generated stop API for this run and refreshes the process reading', async () => {
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(dto(2))
+      .mockResolvedValue(dto(0));
+    const stop = vi.fn(async () => ({ stoppedPids: [500, 501] }));
+    render(
+      {
+        chats: { readRunProcesses: read, stopDetachedProcesses: stop },
+      } as unknown as DaemonApis,
+      'run-1',
+      true,
+    );
+    await flush();
+    await act(async () => {
+      await seen?.stopDetached?.([500, 501]);
+    });
+    await flush();
+    expect(stop).toHaveBeenCalledExactlyOnceWith({
+      runId: 'run-1',
+      stopDetachedProcessesDto: { pids: [500, 501] },
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(seen?.data?.processes).toBe(0);
+  });
   it('asks nothing while the panel is folded', () => {
     const read = vi.fn(() => Promise.resolve(dto(1)));
     render(

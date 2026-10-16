@@ -32,6 +32,7 @@ import type {
   RunWire,
   ShellKillWire,
   ShellOutputWire,
+  StoppedDetachedProcesses,
   ThreadAnalysisWire,
 } from '../chat.types';
 import {
@@ -56,6 +57,8 @@ import {
   ListChatsQueryDto,
   LocalImageDto,
   LocalImageQueryDto,
+  NamedPathsDto,
+  NamedPathsResultDto,
   RenameRunDto,
   RetriedDto,
   RunArtifactsDto,
@@ -71,6 +74,8 @@ import {
   ShellKillQueryDto,
   ShellOutputDto,
   ShellOutputQueryDto,
+  StopDetachedProcessesDto,
+  StoppedDetachedProcessesDto,
   SweepArchivedDto,
   SweptArchivedDto,
   ThreadAnalysisDto,
@@ -92,6 +97,7 @@ import { ChatUploadStoreService } from '../services/chat-upload-store.service';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
 import { LocalImageService } from '../services/local-image.service';
 import { RecommendationsApplyService } from '../services/recommendations-apply.service';
+import { RunNamedPathsService } from '../services/run-named-paths.service';
 import { RunProcessesService } from '../services/run-processes.service';
 import { RunStateService } from '../services/run-state.service';
 import { ShellOutputService } from '../services/shell-output.service';
@@ -118,6 +124,7 @@ export class ChatController {
     private readonly localImages: LocalImageService,
     private readonly metrics: ChatMetricsService,
     private readonly search: ChatSearchService,
+    private readonly namedPaths: RunNamedPathsService,
     private readonly shellOutput: ShellOutputService,
     private readonly shells: ChatShellsService,
     private readonly timeline: ChatTimelineService,
@@ -333,6 +340,21 @@ export class ChatController {
   }
 
   /**
+   * Which of the given folders this run's tool calls name — how the changes
+   * chip finds a worktree an agent of this thread made for itself among the
+   * repository's others.
+   */
+  @Post(':runId/named-paths')
+  @ApiOperation({ operationId: 'readRunNamedPaths' })
+  @ZodResponse({ status: 200, type: NamedPathsResultDto })
+  readNamedPaths(
+    @Param('runId') runId: string,
+    @Body() dto: NamedPathsDto,
+  ): Promise<{ named: string[] }> {
+    return this.namedPaths.named(runId, dto.paths);
+  }
+
+  /**
    * What the run holds as a WHOLE — its open cards, calls, delegates, running
    * commands, dynamic workflows — for every readout the loaded transcript
    * window must not decide. See `RunStateWireSchema`.
@@ -407,6 +429,16 @@ export class ChatController {
   @ZodResponse({ status: 200, type: RunProcessesDto })
   readProcesses(@Param('runId') runId: string): Promise<RunProcessesWire> {
     return this.processes.read(runId);
+  }
+
+  @Post(':runId/processes/stop')
+  @ApiOperation({ operationId: 'stopDetachedProcesses' })
+  @ZodResponse({ status: 200, type: StoppedDetachedProcessesDto })
+  stopDetachedProcesses(
+    @Param('runId') runId: string,
+    @Body() dto: StopDetachedProcessesDto,
+  ): Promise<StoppedDetachedProcesses> {
+    return this.processes.stopDetached(runId, dto.pids);
   }
 
   /**

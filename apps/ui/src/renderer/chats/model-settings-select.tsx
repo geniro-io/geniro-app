@@ -210,7 +210,7 @@ export function ModelSettingsSelect({
    * effort and window axes follow.
    */
   approvalCapability: AgentApprovalCapability | undefined;
-  /** Current mode; null = a legacy run created before the selector existed. */
+  /** Current mode; null = unset. */
   approval: ChatApprovalMode | null;
   /**
    * Modes this surface never offers regardless of what the CLI honours — a
@@ -522,8 +522,8 @@ export function ModelSettingsSelect({
      *
      * Built by hand rather than through {@link axis}: that helper's shape is a
      * nullable value with a default arm, and there is no "default approval" to
-     * send — a null here is a legacy run whose mode was never recorded, not a
-     * choice anyone can make.
+     * send — a null here is a mode never recorded, not a choice anyone can
+     * make.
      */
     const approvalRow = ((): MenuItem | null => {
       const options = approvalOptions(approvalCapability, approval, withheld);

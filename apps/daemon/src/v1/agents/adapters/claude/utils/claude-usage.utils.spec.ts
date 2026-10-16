@@ -484,6 +484,33 @@ describe('readClaudeUsage — cost is this turn, not the session so far', () => 
 /** The catalog's anthropic prices — what the cost ledgers below price with. */
 const LIST_PRICES = catalogClaudePrices();
 
+/** A result whose own tokens price at $0.0755 on Opus 5, calibrated 1.0. */
+function pricedLine(total: number): Record<string, unknown> {
+  return {
+    type: 'result',
+    session_id: SESSION,
+    total_cost_usd: total,
+    duration_ms: 5_000,
+    duration_api_ms: 1_000,
+    usage: {
+      input_tokens: 100,
+      output_tokens: 1_000,
+      cache_read_input_tokens: 100_000,
+      cache_creation_input_tokens: 0,
+    },
+    modelUsage: {
+      'claude-opus-5': {
+        contextWindow: 1_000_000,
+        inputTokens: 100,
+        outputTokens: 1_000,
+        cacheReadInputTokens: 100_000,
+        cacheCreationInputTokens: 0,
+        costUSD: 0.0755,
+      },
+    },
+  };
+}
+
 describe('readClaudeUsage — a running total that carries history', () => {
   // Money priced from tokens needs list prices: the catalog's, through the
   // daemon's own parser.
@@ -822,12 +849,173 @@ describe('ClaudeSessionCostLedger.seedForResume — a resumed process', () => {
     );
   });
 
-  it('starts from zero when the session restores nothing, whatever it last knew', () => {
-    const ledger = new ClaudeSessionCostLedger();
-    readClaudeUsage(compactResult(500), ledger);
+  it('starts from zero when the session restores nothing and it knows no total', () => {
+    // A known zero base trusts the step whole; an unknown one would clip it
+    // to the line's own priced tokens ($0.0755).
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
     ledger.seedForResume(SESSION, null);
 
-    expect(readClaudeUsage(compactResult(0.3), ledger).costUsd).toBeCloseTo(
+    expect(readClaudeUsage(pricedLine(5), ledger).costUsd).toBeCloseTo(5, 6);
+  });
+
+  it('keeps a known total when the read finds no cost-state, so the next result of the same total bills nothing', () => {
+    // The predecessor had not written its line yet when the read ran, and a
+    // reset to zero billed its whole total a second time.
+    const ledger = new ClaudeSessionCostLedger();
+    readClaudeUsage(compactResult(40.676), ledger);
+    ledger.seedForResume(SESSION, null);
+
+    expect(readClaudeUsage(compactResult(40.676), ledger).costUsd).toBe(0);
+  });
+});
+
+describe('ClaudeSessionCostLedger — the resume seed waits for the new process', () => {
+  const result = (total: number) => ({
+    type: 'result',
+    session_id: SESSION,
+    total_cost_usd: total,
+    duration_ms: 5_000,
+    usage: { input_tokens: 0, output_tokens: 0 },
+  });
+
+  it('reads the restored total when the process reports init, not when the seed is registered', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    // Known from a process that was killed past its last line.
+    readClaudeUsage(result(50), ledger);
+    let onDisk: { costUsd: number; apiMs: null } | null = null;
+    ledger.expectResume(SESSION, () => onDisk);
+    // The older line the CLI restores lands after registration.
+    onDisk = { costUsd: 40, apiMs: null };
+    ledger.seedPendingResume(SESSION);
+
+    expect(readClaudeUsage(result(41), ledger).costUsd).toBeCloseTo(1, 6);
+  });
+
+  it('seeds once per spawn, so a kept process’s later init leaves its own results alone', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    ledger.expectResume(SESSION, () => ({ costUsd: 40, apiMs: null }));
+    ledger.seedPendingResume(SESSION);
+    readClaudeUsage(result(45), ledger);
+    ledger.seedPendingResume(SESSION);
+
+    expect(readClaudeUsage(result(46), ledger).costUsd).toBeCloseTo(1, 6);
+  });
+
+  it.each([
+    ['finds no line', () => null],
+    ['finds no transcript', () => undefined],
+    [
+      'fails',
+      () => {
+        throw new Error('EACCES');
+      },
+    ],
+  ])('bounds the first result when the read %s', (_, readRestored) => {
+    // The base stays the $50 this ledger knew, but nothing confirmed it is
+    // what the CLI restored: $5 over it is bounded by the line's own tokens.
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
+    readClaudeUsage(pricedLine(50), ledger);
+    ledger.expectResume(SESSION, readRestored);
+    ledger.seedPendingResume(SESSION);
+
+    expect(readClaudeUsage(pricedLine(55), ledger).costUsd).toBeCloseTo(
+      0.0755,
+      6,
+    );
+  });
+
+  it('trusts the first result when the read confirmed the restored total, and every later one', () => {
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
+    readClaudeUsage(pricedLine(50), ledger);
+    ledger.expectResume(SESSION, () => ({ costUsd: 50, apiMs: null }));
+    ledger.seedPendingResume(SESSION);
+    expect(readClaudeUsage(pricedLine(51), ledger).costUsd).toBeCloseTo(1, 6);
+
+    ledger.expectResume(SESSION, () => null);
+    ledger.seedPendingResume(SESSION);
+    readClaudeUsage(pricedLine(52), ledger);
+    expect(readClaudeUsage(pricedLine(53), ledger).costUsd).toBeCloseTo(1, 6);
+  });
+
+  it('drops a compaction noted before the process’s init', () => {
+    // Kept, the stale compaction makes the replacement's quiet first line
+    // unbounded: zero tokens price as nothing at all.
+    const ledger = new ClaudeSessionCostLedger();
+    ledger.expectResume(SESSION, () => null);
+    ledger.noteCompaction(SESSION);
+    ledger.noteInit(SESSION);
+
+    expect(
+      readClaudeUsage({ ...result(40), duration_ms: 49 }, ledger).costUsd,
+    ).toBe(0);
+  });
+});
+
+describe('readClaudeUsage — a result that made no request of its own', () => {
+  const quietLine = (total: number, durationMs = 49) => ({
+    type: 'result',
+    session_id: SESSION,
+    total_cost_usd: total,
+    duration_ms: durationMs,
+    num_turns: 0,
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    },
+  });
+
+  /** A resumed process whose seed found no cost-state: its first step is a guess. */
+  function unconfirmed(): ClaudeSessionCostLedger {
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
+    ledger.expectResume(SESSION, () => null);
+    ledger.seedPendingResume(SESSION);
+    return ledger;
+  }
+
+  it('holds an untrusted quiet step to nothing when no delegate settled on it', () => {
+    expect(readClaudeUsage(quietLine(40.676), unconfirmed()).costUsd).toBe(0);
+  });
+
+  it('holds it to the spend of the delegates it settles', () => {
+    const ledger = unconfirmed();
+    // 20,000 output tokens on Opus 5 at calibration 1.0 → $0.50.
+    ledger.delegates.record(SESSION, 'toolu_1', {
+      model: 'claude-opus-5',
+      inputTokens: 0,
+      outputTokens: 20_000,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    });
+    ledger.delegates.settle(SESSION, pricedLine(40.676));
+
+    expect(readClaudeUsage(quietLine(40.676), ledger).costUsd).toBeCloseTo(
+      0.5,
+      6,
+    );
+  });
+
+  it('is not quiet after a compaction, or at a second or more', () => {
+    // Zero tokens price as nothing, so a line that is not quiet keeps its step.
+    const compacted = unconfirmed();
+    compacted.noteCompaction(SESSION);
+    expect(readClaudeUsage(quietLine(0.4), compacted).costUsd).toBeCloseTo(
+      0.4,
+      6,
+    );
+
+    expect(
+      readClaudeUsage(quietLine(0.4, 1_000), unconfirmed()).costUsd,
+    ).toBeCloseTo(0.4, 6);
+  });
+
+  it('keeps the trusted step of a quiet line in a process it is following', () => {
+    // Background sub-agent spend billed to a quiet line is real.
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
+    readClaudeUsage(quietLine(10), ledger);
+
+    expect(readClaudeUsage(quietLine(10.3), ledger).costUsd).toBeCloseTo(
       0.3,
       6,
     );

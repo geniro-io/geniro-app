@@ -2,7 +2,7 @@
 
 The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent execution, workflow graphs and the call runtime, geniro's own MCP endpoint, the tasks board, stats and diagnostics. Project-wide commands, conventions and constraints are in the root `AGENTS.md`; the module layout is in `.claude/rules/daemon-module-structure.md`, adapters in `agent-adapters.md`, MCP tools in `mcp-tools.md`, queries in `database-queries.md`. This file holds only what those do not: the daemon's non-obvious invariants, by area.
 
-**Contents**: Boot, process and storage · Runs and runtime columns · Agents: adapters · Agents: turns and off-turn work · Host tools · Question cards · Pull requests and task lists · Workflows and passes · Workflow call runtime · v1/mcp · Projects and tasks · Stats · Diagnostics and notifications · Handoff and sign-in · Importing CLI conversations · ACP and cursor transport · Auto-compaction · Agent caches and MCP configuration · Plan limits · Daemon endpoints (loopback)
+**Contents**: Boot, process and storage · Runs and runtime columns · Agents: adapters · Agents: turns and off-turn work · Host tools · Question cards · Pull requests and task lists · Workflows and passes · Workflow call runtime · v1/mcp · Projects and tasks · Shares · Stats · Diagnostics and notifications · Handoff and sign-in · Importing CLI conversations · ACP and cursor transport · Auto-compaction · Agent caches and MCP configuration · Plan limits · Daemon endpoints (loopback)
 
 ---
 
@@ -14,13 +14,14 @@ The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent exec
 - `utils/process-identity.ts` is the one answer to "is pid N still the process I recorded" (ps start time). Never act on a bare `kill(pid, 0)`; a recycled pid is a stranger.
 - One daemon per userData dir (`instance-lock.ts`). Takeover of a stale lock is rename-then-recheck, never delete-then-claim. Release on Nest's shutdown hook (not `process.on('exit')`), and only after `ProcessRegistry.drain` and `AgentSessionRegistry.closeAll`.
 - Idle self-exit (`idle-shutdown.lifecycle.ts`) needs no WS client AND no in-flight turn, counting off-turn work (`workingOffTurn`). It SIGTERMs itself so hooks run, and is off unless `GENIRO_IDLE_EXIT_MS` is set (only `DaemonSupervisor` sets it).
+- `utils/sleep-watch.ts`: node's timers count through a macOS sleep, so a deadline that ran out with the lid shut fires at the wake. A 10 s ticker infers a sleep from a wall-clock gap over a minute past it, and `awakeTimeout` restarts a silence, idle or waiting deadline in full from the wake: the turn silence deadline and off-turn hold (`spawn-cli`), a kept session's idle reap, the call broker's watchdog and parked-question TTL, the ACP delegate hold. A deadline that names an instant (a usage-limit reset, a retry) stays on `setTimeout`, as do two windows that may harmlessly fire at the wake: the badge lease (`DELEGATE_ROW_LEASE_MS`, `chat.service`) only decides a word on the run and never abandons work, and `await_agent`'s bound (`untilDeadline`) only returns `pending` early, as the CLI's own tool-call deadline also counts through a sleep. The watch is a module-level singleton (`sleepWatch`); specs rely on its reset in `src/__tests__/setup.ts`.
 - `crash-guards.ts` installs before Nest. An uncaught exception writes `<userData>/daemon-crashed` (twin of the UI's `daemon-pidfile.ts`), then SIGTERMs itself. Keep it latched (`shuttingDown`) and keep every handler body non-throwing; Nest runs hooks inside its SIGTERM listener, so a throwing hook re-enters.
 - `db/nul-safe-sqlite.driver.ts`: MikroORM 7 inlines values into SQL and SQLite ends a literal at NUL, so the driver renders NUL as `char(0)`. Do not swap back to the stock driver. WAL is on; copying `geniro.db` needs `geniro.db-wal` too.
 - Every child the daemon spawns registers with `ProcessRegistry`; every detached group is also journaled (`child-journal.ts`). An adapter spawns only through `start()` / `runCommand()`.
 - **Run processes** (`utils/run-process-scan.ts`, `services/run-process-attribution.service.ts`): every run-scoped CLI is spawned with `runTagEnv` — `GENIRO_RUN_ID=<runId>` plus `GENIRO_RUN_OWNER=<currentRunOwner()>` (a hash of userData) — merged last so no adapter or caller env replaces it. `RunProcessAttribution` (over `attributeRunProcesses`) is the ONE answer to "which processes are this run's": tagged processes (this owner only; the env is the text AFTER the argv in `ps -E`) plus their descendants, each process in exactly one run. The usage readout (`RunProcessesService`: `detached`, then app-wide `leftover`), the reaper and the sweep all ask it, so what a thread shows as detached is what archiving it ends; its kept CLI trees end with `closeRun`. Readouts may share a reading up to `READOUT_SCAN_MAX_AGE_MS` old; kills always take a fresh one.
   - What is never attributed is decided by STRUCTURE, never by a program's name: the daemon and its ancestors, a run the daemon itself carries the tag of, pid ≤ 1, another uid, a process on a terminal (and what it runs) while that terminal is open, and `isOutsideAnyRun` (executables under `/System`, `/usr/libexec`, `/Applications`, `~/Applications`, and the container VM — matched by lima's own `/_lima/` directory under any home — the one named exception). Never the HOST of a terminal: codex runs commands on a pseudo-terminal, and a whole agent must not vanish behind one. Do not add name lists here: macOS offers no process containment to apps (no cgroups; coalitions are launchd's), and a name decides nothing reliably.
   - Known limits: a tmux an agent started is its thread's, so ending the thread ends it, shells the user opened in it included; a shared helper an agent first started (gpg-agent, watchman, a Gradle daemon) stops with that thread and restarts on demand; a job the user orphans from a session an agent started, after its terminal closed, carries the run's tag and is stopped with it. Nothing in the process table tells these from what the agent detached.
-  - Kills (`RunProcessReaper`): explicit pids only, each re-confirmed by start time before TERM and KILL; nothing over `RUN_PROCESS_CAP` or when `ps` fails; never a run the registry holds a live agent under, asked after the scan; a reap the sweep queued re-asks the database that the run is still gone (`stillGone`); queued reaps share one scan; logs name the executable, never the argv.
+  - Kills (`RunProcessReaper`): explicit pids only, each re-confirmed by start time before TERM and KILL; nothing over `RUN_PROCESS_CAP` or when `ps` fails. Archive/sweep never reap a run the registry holds a live agent under, asked after the scan. A confirmed process-panel stop may stop selected detached pids while an agent is live, but excludes every registry-held CLI tree, including orphaned group members, after fresh attribution and usage scans; any selected pid outside the run's detached set refuses the entire request. A reap the sweep queued re-asks the database that the run is still gone (`stillGone`); queued reaps share one scan; logs name the executable, never the argv.
   - Archive and delete reap through `RunTeardownService.endProcesses` (`closeRun`, then the reaper). `RunProcessSweep` (15 s after boot, then every 5 min) reaps what runs that are gone or archived in THIS database still run, never a run the registry holds a process for.
   - `ps` reads go through `runPs` (`LC_ALL=C`); the boot-time identity probe in `utils/process-identity.ts` pins the locale itself. `lstart` follows the locale, and an unparsed table reads as unreadable. macOS hides the env of its own platform binaries, and turbo's strict env mode strips the tag from its tasks, which is why descendants are included.
 - Persist-then-emit: allocate seq, write the row, then publish.
@@ -60,11 +61,10 @@ The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent exec
   - Ceiling `sessionCeilingFor`: total memory / 8 / ~1GB, clamped [2, 16].
   - Eviction never takes a turn in flight, a parked card, or an entry with off-turn activity within `OFF_TURN_ACTIVE_MS`. That window must equal `DELEGATE_ROW_LEASE_MS`.
   - Off-turn events refresh (never arm) the idle timer (`touchOffTurn`).
-  - A close that interrupted work writes one transcript row (`noteInterruptedSession`); other closes write none.
+  - A close that interrupted work writes one row at the close (`noteInterruptedSession`). A close that stopped detached commands — any close but `closeRun` and shutdown, a process ending on its own included (`endedRunning`) — also owes the key's next turn a `warning` row and a `<geniro-note>` after the prompt naming them (`runningCommands`, `utils/session-replacement-notes.ts`); the prompt line waits for a turn that carries a prompt (not a probe, resume-only or slash command) and a live process. Other closes write nothing.
 - MCP harvest is age-bounded (it shadows the live listing); skill harvest is keyed `(agent, cwd)`. MCP listing cache key includes `configDir`, the read runs under that profile's env, with a keyed single-flight (it launches the user's servers).
 - `chat-metrics` composes only: it hands the adapter `{live, sessionId}` and each adapter answers from its own channel.
 - `chat-title`: writes a title only while it is still exactly what this service derived (manual renames are permanent); checks ownership before any spawn. Do not reintroduce asking cursor for a title. claude's title ask is a throwaway `haiku` turn, MCP withheld, temp cwd, once per conversation.
-- `WorkflowTitleBackfillService` runs once ever (marker file). Never make it repeat; it would erase user renames.
 - `run-teardown` is the ONE delete teardown (cancel, wait, revoke tokens, purge rows with `softDelete` off, drop attachments and artifacts, announce `runDeleted`), shared by chat and workflow delete.
   - It never touches `usage_events`, `usage_activity` or `line_baselines`.
   - Only an ARCHIVED run's own CLI transcripts are deleted with it (`session-transcripts.service.ts`). It keeps a session another run names, or one that began before the run (an import). It never throws.
@@ -115,7 +115,8 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - `show_comparison`: recommendation is matched to an option by name (case- and whitespace-insensitive).
 - `show_gallery` carries paths only; the daemon never opens them, and the renderer reads them through the image route's guards. `MAX_GALLERY_IMAGES` bounds reads per call.
 - `show_artifact`:
-  - Framed `sandbox="allow-scripts"`, never `allow-same-origin`, never `srcdoc`, under the route's own CSP.
+  - Framed `sandbox="allow-scripts"`, never `allow-same-origin`, never `srcdoc`, under the route's own CSP. The one `srcdoc` is inside a share envelope (`v1/shares`), where the page is decrypted in the reader's browser under the same CSP as a meta tag.
+  - `share: true` (listed only while agents may share) shares AFTER the publish; a refused share is a `Not shared:` line in the receipt and never fails the publish. `ShareService.shareForAgent` re-checks the switch itself, because a kept CLI can hold a description listed while it was on.
   - Caps refuse, never truncate. A refused page image refuses the whole page.
   - The serving key is registered with `registerSecret` at its mint site.
   - Workflow call-capable nodes publish too; publishers are dropped with the run, not at pass end.
@@ -137,7 +138,9 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - Deleting the source deletes it (`ThreadAnalysisService` on `bus.allDeleted()`, whichever route deleted the source); what that misses (a daemon stopped before the announce, a failed delete) is swept at boot (`sweepOrphans`).
 - Its four tools (`read_analyzed_thread`, `report_recommendations`, `mark_recommendations`, `save_workflow_change`) are offered only while an analysis turn runs: `ChatService` registers an `AnalysisBroker` sink per turn only when the run has a source. The sink carries the source and snapshot, so no tool takes a run id from the model.
 - `read_analyzed_thread` pages ~22KB (codex cuts a tool result near 10k tokens): timing from `ThreadTimelineService` (the waterfall's UNCAPPED fold plus id-paired tool durations and the critical path, cached per `(runId, snapshotSeq, working)`, after the run's call membership is stamped), rows clipped at 2KB, one row in chunks. Images are collapsed (`collapse-image-blocks.ts`, twin of the renderer's export) and secrets masked before any cut; every answer leads with `HISTORY_RESULT_PREFACE`.
-- `report_recommendations` refuses an evidence seq that does not exist at or below the snapshot, a workflow item for a plain chat, a duplicate id, and an id whose `W-`/`R-` prefix contradicts its target. The card's timing strip is measured by the daemon, never taken from the agent.
+- `report_recommendations` refuses an evidence seq that does not exist at or below the snapshot, a workflow item for a plain chat, a duplicate id, and an id whose `W-`/`R-`/`U-` prefix contradicts its target. The card's timing strip is measured by the daemon, never taken from the agent.
+- A `user` item edits an agent's own standing-instructions file, which reaches every project that agent works in. Its path is an adapter fact (`AdapterConfig.userInstructions`, resolved by `AgentAdapter.userInstructionsFile` under the run's `configDir`), listed to the analysis in the overview's `source.userInstructions` (chat) and in view=workflow's `userInstructions` (every node and pool member the run's snapshot ran). Never spell a path in the guide.
+- The overview counts failed tool calls (a `tool_result` with `isError`, paired in `pairToolCalls`) and sums the tokens and cost the CLI reported; a figure no turn reported stays null.
 - An Apply (`POST /v1/chats/:runId/recommendations/apply`) is a user message carrying the selected items in full and `payload.apply: {cardSeq, ids}`; it is refused `RUN_BUSY` while a turn runs, never delivered mid-turn, and `ALREADY_APPLIED` for a card that already has one (the renderer reads "applied" from its window only). `save_workflow_change` (`WorkflowChangeService`, in `v1/graphs`) writes only `W-` ids in the NEWEST Apply (user messages read in seq order), refuses a hash drift, a deleted file and an invalid graph, and writes a timed backup first. It is not auto-approved.
 - Timeline spans are clipped to the read's `[from, to]`; the critical path takes, at each step, the work still going latest before the cursor (an interval running past the cursor counts up to it); tool calls pair by node, call and id (ACP ids restart per session). Whether the source was working at the snapshot is recorded at the start (`Run.analysisSourceWorking`) and every read folds with it, so one snapshot always folds the same.
 
@@ -159,6 +162,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - A record has no row of ours: it takes the seq of the tool result its time falls on (`ItemDao.toolResultSeqAt`), so ordering stays seq-based.
   - Incremental: the marker advances even when nothing was captured. Errors are swallowed per run. No repeating re-scan sweep; a rule change bumps `PULL_REQUEST_SCAN_VERSION`, and a run scanned under another version is re-read from the start once.
   - Store identity only (owner, repo, number, url), never title or state.
+- Worktrees a thread worked in (`RunNamedPathsService`, `POST /v1/chats/:runId/named-paths`): of the candidate folders the desktop app lists, the ones a `tool_call` of the run names — the path or its run-folder-relative form (two segments or more), followed by a path boundary; a relative form must also begin one (a shell word boundary, a quote, an escaped newline or tab, or `./`), so it is never found inside another repository's path. Never the run's folder or one holding it. Each run's reading is remembered in memory (scanned seq, clamped to `writtenThrough`, + verdicts), so a later ask reads only newer rows — a folder asked about for the first time reads the whole history once, in seq windows that yield the event loop. Asks for one run are serialized.
 - `task_list` rows: `mode` says snapshot vs patch and is never inferred; absent means patch. The run fold is keyed by node AND `callId` and skips delegate rows (`parentToolUseId`).
 - What `v1/agents` exports is whatever `agents.module.ts`'s `exports` names.
 
@@ -221,18 +225,31 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - `Task.position` is allocated past the column's live max, never from a count; only `reorder` renumbers (conditional per-card UPDATE).
 - Label instructions go into `Run.taskInstructions`, a column separate from `customInstructions` (forget must not purge them). They are re-resolved on resume.
 - `Task.runId` and `Run.taskId` are written together or not at all; `abandon` deletes the run it created.
-- **The daemon runs no git**: Electron main makes worktrees and branches. `TaskRunsService` starts an ordinary chat. Two start guards: the synchronous `starting` claim and `assertNotAlreadyRunning` (asks the run).
+- **The daemon runs no git**: Electron main makes worktrees and branches. `TaskRunsService` starts an ordinary chat, or a workflow run; a later press continues the card's own run when it is a settled run of the same agent or workflow (`resumableRun`). Two start guards: the synchronous `TasksService.claimStart` claim and `assertNotAlreadyRunning` (asks the run). The board's reconcile holds off a card while its claim is held and makes it once the claim is released.
 - `TaskSettleService` observes only. A run completing moves nothing and writes no report; never automate that from the settle. The settle only maps `failed` → `failed` and `cancelled` → `todo`, and only for a card still `in_progress`.
 - Board tools (`HOST_BOARD_TOOLS`) go to every endpoint holder; every write goes through `TasksService`. Run-owned fields are refused; there is no delete tool.
 - `refuseUnattended`: a chat not in `auto` may not put a card in an armed intake, change any card on an armed board (except the working run moving its own card out of intake), set `approval: 'auto'`, or change an existing card's run configuration. Keyed on the column the card ends in. The executor auto-approves no host tool.
 - A working run may move its card only to `TASK_AGENT_OWN_STATUSES`.
 - Report screenshots are copied onto the card; rewrite the image destination by position. Keep existing copies (20-file cap).
 - A cancelled card is marked `Task.stoppedAt` and never auto-restarted (`TASK_STOPPED_BY_USER`); only a Run press that starts it clears the mark.
+- A worktree the autopilot could not prepare is reported by main (`POST /v1/tasks/:taskId/prepare-failed`, git's line as `reason`) and marked `Task.prepareFailedAt` (only while the card is still in the intake column; announced as `task_changed`, since nothing else makes the board re-read the queue). While armed, `TaskQueueService` holds a mark younger than `PREPARE_FAILURE_RETRY_MS` (5 min) in `blocked` BEFORE the cap, so it never takes the slot of the card behind it; an older one is handed out again (retry), a repeat failure re-stamps it, and any successful start clears it.
+- Every `blocked` entry carries a `kind` (where the answer lies: `run-target` / `missing-workflow` in the run settings, `stopped` / `worktree` by a Run press on the card) and a `retryInMs` (set only for `worktree`: what is left of the hold, relative so a client on another clock times it right — nothing announces it lapsing, so the board re-reads the queue then). The worktree hold is asked last, so a card with a run-settings problem is reported as that.
 - `work-finished` is announced only for a card in `done` with no run working. `reviveFailedCard` lifts only `failed`. `run_deleted` clears the edge, keeps the report and never touches the worktree.
 - Stop cause (`utils/stop-cause.ts`, twin of the UI's `writeStopCause`): `main.ts` reads and deletes it once, before both reconciles, then runs `settleCutOffCards(null)`. `crash` / `unknown` mark interrupted cards stopped (`TASK_INTERRUPTED`); `quit` / `self-update` / `restart` continue unattended.
 - `create_task` defaults a new card to `backlog`; never default one into an intake column — an armed project starts an agent on it within seconds.
 - A reported merge (`POST /v1/tasks/:taskId/pull-request-merged`) moves only a card still `in_review`, only for a URL its run captured (else `TASK_PULL_REQUEST_UNKNOWN`); a card moved elsewhere is a no-op.
 - A task file is bound by PATH, never copied; `DELETE /v1/tasks/:taskId/files/:attachmentId` drops the reference only and never deletes the user's file.
+
+### Shares
+
+`v1/shares` — encrypted share links for artifacts (`ShareService`, `/v1/shares/*`, all behind `DesktopOnlyGuard`).
+
+- The config is pushed by Electron main (`PUT /v1/shares/config`) on every daemon start, after a Settings restart and after each settings write that changed it; it is held in memory only. Until the first push nothing is shared (`configReceivedAt` null).
+- A share reads the newest stored version (`ArtifactStoreService.latest`, in-process only), builds the saved-file document (`ArtifactPageService.document`) with the pressed theme baked in (`portable-artifact.ts`; an agent's share reuses the last press's theme), encrypts it (`share-envelope.ts`: AES-256-GCM, fresh IV per upload, AAD `geniro-share-v1`) and uploads only the envelope from a 0600 temp file.
+- One share per (run, artifact): sharing again re-uploads to the same object under the same key, so the link handed out keeps working. Operations on one page are serialized.
+- Keys: `ShareKeychain` (`services/share-keychain.service.ts`) writes through `security -i` on stdin (never argv), confirms by reading back, and `registerSecret`s every key it mints or reads.
+- Destination CLIs run through `runManagedCommand` (`v1/agents/utils/managed-command.ts`): argv only, ProcessRegistry, child journal, group kill at the deadline. Custom command tokens refuse shell characters and a shell program, on both sides of the settings twin.
+- Revoke: remote delete first, then the key, then the row. A failed remote delete keeps both and marks the row `revoke-failed`; an object already gone counts as revoked only where the CLI says so plainly — gcloud's "matched no objects", or `aws s3 rm`'s exit 0; a custom command is judged by its exit status alone, and a timeout never counts as gone. Never touched by run teardown or the archive sweep.
 
 ### Stats
 
@@ -243,7 +260,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - Polled spend: Stats reads it only from the ledger rows (`seq ≤ POLLED_SPEND_SEQ`), never from `runs`.
 - The spend fold is `v1/agents/utils/usage-figures.ts`, shared; never copy it. No price means `costUsd: null`, never $0.
 - Lines are measured by the desktop app per folder against one `line_baselines` commit. Day lines are growth past the series peak, never a client delta.
-- `ClaudeSessionCostLedger` persists session totals to disk (`claude-session-costs.json`); seed from the transcript's `cost-state` on resume.
+- `ClaudeSessionCostLedger` persists session totals to disk (`claude-session-costs.json`). A resume's seed is registered at spawn and read from the transcript's last `cost-state` at the new process's `system/init`, never at spawn (the replaced process writes its line as it exits). A read that finds no line keeps a known total, and leaves the process's first result untrusted.
 - List prices come only from `ModelPriceCatalog` (models.dev, persisted to `model-prices.json`); never a hand-written price table. Provider is an adapter fact (`usage.listPrice`).
 
 ### Diagnostics and notifications
@@ -316,6 +333,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - Server definitions (`/v1/agents/mcp/config`, `/servers`): user scope of the listing's profile only. claude touches only top-level `mcpServers`; codex only through `config/batchWrite` (never TOML by hand). Saves carry the read version and are refused if it moved. Add values are registered with `registerSecret` before the CLI runs; nothing in a body is logged. `codex mcp add` is refused when the name exists.
   - claude's `mcp-needs-auth-cache.json` is the one CLI cache geniro edits: delete a server's key once it is seen connected; leave an unreadable record alone.
 - An MCP change MARKS the kept sessions it reaches stale (`markStaleWhere`, scope per `mcp.changeReach`); never close them mid-turn.
+  - A stale mark has a cause (`mcp` / `account` / `conversation`, merged by `mergeStale`). Only `mcp` waits while the process `holdsWork` (a detached command, a parked card, off-turn work): the turn runs on the old process with an `info` row and a prompt note (once per set of reasons) saying the change applies later and that switched-off servers are still loaded (user decision). An account change, a compaction or a pool hand-off never waits, and outranks an `mcp` mark.
 - A server sign-in is `succeeded` only once the server is seen connected (`verifying` until then).
 - The toggle's profile is part of the address; the write lands in the file the read came from.
 - Clear Agent Cache (`POST /v1/agents/caches/clear`) forgets cached answers only: never the harvest stores or `ContextWindowStore` (measurements nobody can re-take), and it never re-probes a CLI.
@@ -330,12 +348,14 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 The OpenAPI document at `/swagger-api` (source of `pnpm generate:api`) is authoritative for every route and shape; read the controllers for behaviour. Bind, public allowlist and token rules are in the root `AGENTS.md`.
 
 Auth by prefix:
+
 - Public: `/health`. `/v1/artifacts/*` is checked by the per-artifact `key` query (an iframe cannot send headers): one uniform 404 for every failure, `Referrer-Policy: no-referrer`, `?raw=1` matched as the literal `1`. `@ApiExcludeController`.
 - Launch token (`LoopbackTokenGuard`): every other `/v1/*`, `/metrics`. `/swagger-api*` uses `swagger.guard`.
 - `/ws`: handshake `auth` token (`enforceWsHandshakeAuth`).
 - `/v1/mcp/<runId>/<nodeId>[/<conversationId>]`: that node's call token or the launch token.
 
 Rules when adding or changing routes:
+
 - Declare static segments (`forget-custom-instructions`, `sweep-archived`, `reorder-pinned`, `processes`, `reconcile`, `awaiting-merge`, `reorder`) before `:param` routes. Workflow slugs `runs` and `import` are reserved.
 - Take query filters through a Zod DTO, never a bare `@Query` (an absent value lists everything; `fastify-qs` parses operators). List `scope` is an enum, never a boolean.
 - `configDir` and `customInstructions` are snapshotted onto the run. `configDir` travels as env, never argv, and must exist; a CLI without the mechanism refuses it (`CONFIG_DIR_UNSUPPORTED`). Text reaching argv (custom instructions, label instructions) refuses control characters.
@@ -351,6 +371,7 @@ Rules when adding or changing routes:
 - `/ws` counts (`holdingFor`, `shellsOpen`, `subagentsOut`) are announced on transitions; every path that ends one must announce. `run_status.status` is nullable (activity announces assert none). `runs_changed` rows carry 0 for `rootsWorking` / `awaitingCalls`. `task_changed` is a twin of the UI's `parseTaskChanged`; the renderer collects worktrees only off `reason: 'work-finished'`.
 
 Destructive or irreversible routes (and one that only looks it — `DELETE /v1/tasks/:taskId/files/:attachmentId` drops a reference, never the file):
+
 - `DELETE /v1/chats/:runId` — hard-deletes a chat run through `RunTeardownService` (chat runs only; reached from the archive).
 - `POST /v1/chats/sweep-archived` — deletes chats archived ≥ `olderThanDays` (1 day–10 years) from `archivedAt`; one at a time, failures logged and skipped. The policy is the client's.
 - `DELETE /v1/workflows/runs/:runId` — one workflow run's history (never the library workflow).
@@ -363,4 +384,4 @@ Destructive or irreversible routes (and one that only looks it — `DELETE /v1/t
 - `POST /v1/chats/:runId/retry` — closes the kept session (refused while working).
 - `POST /v1/chats/:runId/shells/kill` — signals the agent's command tree.
 - `PUT /v1/agents/mcp`, `PUT /v1/agents/mcp/config`, `POST /v1/agents/mcp/servers`, `POST /v1/agents/mcp/plugin-servers` — write the user's own CLI config (see MCP config writes).
-- `DELETE /v1/groups/:groupId` releases its runs; it never deletes chats.
+- `DELETE /v1/groups/:groupId` releases its runs and the projects bound to it; it never deletes chats or boards.

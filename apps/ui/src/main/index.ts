@@ -31,10 +31,10 @@ import {
 } from './network-lockdown';
 import { adoptLoginShellPath } from './process-path';
 import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
-import { purgeLegacySecret } from './purge-legacy-secret';
 import { teardownThenQuit } from './quit-teardown';
 import { RemoteAccess } from './remote/remote-access';
-import { readSettings } from './settings';
+import { onSettingsWritten, readSettings } from './settings';
+import { ShareConfigPush } from './share-config-push';
 import { TerminalSessions } from './terminal-sessions';
 import { createUpdateService } from './update-service';
 import {
@@ -122,6 +122,20 @@ const supervisor = new DaemonSupervisor({
     });
   },
 });
+/**
+ * The sharing settings live in settings.json and the daemon holds them in
+ * memory only, so every daemon is told on start, after a restart from
+ * Settings, and after any write that changed them.
+ */
+const shareConfigPush = new ShareConfigPush((message) => {
+  void reportMainLog(supervisor.getHandle(), 'warn', message, {
+    source: 'share-config',
+  });
+});
+onSettingsWritten((settings) => {
+  void shareConfigPush.pushIfChanged(supervisor.getHandle(), settings.sharing);
+});
+
 /**
  * Why the coming quit stops the daemon: an update's relaunch says so first, and
  * every other quit is the user's. The next daemon writes it onto any turn the
@@ -532,6 +546,7 @@ function reapWorktrees(handle: DaemonHandle): void {
  */
 function daemonCameUp(handle: DaemonHandle): void {
   notifyDaemonReady(mainWindow, handle);
+  void shareConfigPush.push(handle, readSettings().sharing);
   // The window is opened BEFORE the first one, so whatever it already reported
   // about its own load has been waiting for an address to send it to.
   void flushMainLogs(handle);
@@ -560,10 +575,6 @@ function focusMainWindow(): void {
 }
 
 function main(): void {
-  // Unconditional, not gated behind whenReady or any settings flag — see
-  // purge-legacy-secret.ts for why that is both safe and the point.
-  purgeLegacySecret();
-
   // The app is the single owner of the daemon and its pidfile. A second launch
   // focuses the existing window instead of double-spawning the daemon and
   // clobbering the shared pidfile. macOS already enforces single-instance for
@@ -607,12 +618,22 @@ function main(): void {
     // builds (so the gateway proxies to the SAME handlers this app's own
     // window uses), and that registry does not exist until `registerIpc`
     // returns, so passing the instance directly would be circular.
-    const ipcRegistry = registerIpc(supervisor, updates, terminals, () => {
-      if (remoteAccess === null) {
-        throw new Error('remote access is not set up yet');
-      }
-      return remoteAccess;
-    });
+    const ipcRegistry = registerIpc(
+      supervisor,
+      updates,
+      terminals,
+      () => {
+        if (remoteAccess === null) {
+          throw new Error('remote access is not set up yet');
+        }
+        return remoteAccess;
+      },
+      (handle) => {
+        if (handle !== null) {
+          void shareConfigPush.push(handle, readSettings().sharing);
+        }
+      },
+    );
     const access = new RemoteAccess({
       ipcRegistry,
       daemonHandle: () => supervisor.getHandle(),

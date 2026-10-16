@@ -44,9 +44,7 @@ export class Task extends TimestampsEntity {
    * This card's number within its project — the `12` of `GEN-12`.
    *
    * Handed out by the project's own counter at creation and never reused, so
-   * an identifier names one card for good. Nullable only for rows that predate
-   * numbering; the backfill assigns those in creation order on the next
-   * launch.
+   * an identifier names one card for good.
    */
   @Property({ type: 'integer', nullable: true })
   number: number | null = null;
@@ -203,6 +201,26 @@ export class Task extends TimestampsEntity {
    */
   @Property({ type: 'string', nullable: true })
   interruptedBy: InterruptCause | null = null;
+
+  /**
+   * When the autopilot last failed to prepare this card's worktree — reported
+   * by Electron main, which makes worktrees (`POST /v1/tasks/:taskId/
+   * prepare-failed`); null for a card whose last attempt did not fail there.
+   *
+   * The daemon never sees that failure otherwise, because no run is started:
+   * without the mark the queue hands the same card out on every tick and it
+   * holds the slot against every card behind it. Fresh, it puts the card in
+   * the queue's `blocked` list; once `PREPARE_FAILURE_RETRY_MS` has passed the
+   * card is handed out again, so a failure that healed on its own does not park
+   * it for good. Cleared by a successful start, like {@link stoppedAt}. Not on
+   * the wire.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  prepareFailedAt: Date | null = null;
+
+  /** git's own line for the failure at {@link prepareFailedAt}. */
+  @Property({ type: 'text', nullable: true })
+  prepareFailedReason: string | null = null;
 
   /**
    * When this card last ENTERED Done — null for a card that never has.

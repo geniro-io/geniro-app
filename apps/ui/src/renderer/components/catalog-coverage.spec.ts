@@ -44,6 +44,8 @@ const NAMESPACES: Record<string, string> = {
   ui: 'Primitives/',
 };
 
+const FEATURE_NAMESPACES = { chats: 'Chats/' };
+
 /**
  * Components that legitimately have no story.
  *
@@ -160,10 +162,11 @@ describe('the component catalog', () => {
 
   it('keeps every story in the renderer inside a catalogued directory', () => {
     // `.storybook/main.ts` globs ALL of `src/renderer/**`, so a story authored
-    // under `chats/` or `workflows/` is loaded into the catalog while escaping
-    // every check above. Either it moves into a component directory, or that
-    // directory joins NAMESPACES.
-    const known = new Set(directories.map((dir) => join(COMPONENTS_DIR, dir)));
+    // under a feature must still have its namespace and co-location checked.
+    const known = new Set([
+      ...directories.map((dir) => join(COMPONENTS_DIR, dir)),
+      ...Object.keys(FEATURE_NAMESPACES).map((dir) => join(RENDERER_ROOT, dir)),
+    ]);
     const strays = readdirSync(RENDERER_ROOT, {
       recursive: true,
       encoding: 'utf8',
@@ -173,6 +176,29 @@ describe('the component catalog', () => {
 
     expect(strays).toEqual([]);
   });
+
+  it.each(Object.entries(FEATURE_NAMESPACES))(
+    'keeps %s stories co-located and in their namespace',
+    (dir, namespace) => {
+      const path = join(RENDERER_ROOT, dir);
+      const components = new Set(
+        componentFiles(path).map((name) => name.replace(/\.tsx$/, '')),
+      );
+      expect(
+        [...storyBaseNames(path)].filter((base) => !components.has(base)),
+      ).toEqual([]);
+      expect(
+        readdirSync(path)
+          .filter(isStory)
+          .filter(
+            (name) =>
+              !readFileSync(join(path, name), 'utf8').includes(
+                `title: '${namespace}`,
+              ),
+          ),
+      ).toEqual([]);
+    },
+  );
 
   it('names only components that still exist in the exemption list', () => {
     const known = directories.flatMap((dir) =>

@@ -21,6 +21,7 @@ import type { ItemKind } from '../../runs/runs.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ChatWaterfallService } from './chat-waterfall.service';
 import type { ItemCallIndexService } from './item-call-index.service';
 import type { PolledSpendService } from './polled-spend.service';
@@ -76,6 +77,13 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       new ThreadTimelineService(em, waterfall, itemDao, {
         ensureIndexed: () => Promise.resolve(),
       } as unknown as ItemCallIndexService),
+      {
+        for: (agent: string) => ({
+          userInstructionsFile: (configDir: string | null) => ({
+            path: `${configDir ?? `home-of-${agent}`}/RULES.md`,
+          }),
+        }),
+      } as unknown as AgentAdapterRegistry,
     );
     const run = new Run();
     run.id = 'source';
@@ -131,6 +139,74 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(
       OVERVIEW_BYTES,
     );
+  });
+
+  it("names the chat agent's own instructions file, failed tool calls and the tokens it spent", async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(1, 'tool_call', { id: 't1', name: 'Bash' }, 1);
+    await insert(2, 'tool_result', { id: 't1', isError: true }, 2);
+    await insert(3, 'tool_call', { id: 't2', name: 'Read' }, 3);
+    await insert(4, 'tool_result', { id: 't2' }, 4);
+    await insert(
+      5,
+      'turn_complete',
+      {
+        usage: {
+          durationMs: 5_000,
+          inputTokens: 1_200,
+          outputTokens: 300,
+          cacheReadTokens: 9_000,
+          costUsd: 0.25,
+        },
+      },
+      5,
+    );
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 5, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(answer.source).toMatchObject({
+      userInstructions: [
+        { agent: 'claude', configDir: null, path: 'home-of-claude/RULES.md' },
+      ],
+    });
+    expect(answer.timing).toMatchObject({
+      failedToolCalls: 1,
+      inputTokens: 1_200,
+      outputTokens: 300,
+      cacheReadTokens: 9_000,
+      costUsd: 0.25,
+    });
+    expect(answer.slowestTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ seq: 1, failed: true }),
+        expect.not.objectContaining({ failed: true }),
+      ]),
+    );
+    expect(answer.toolTotals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'Bash', failed: 1 }),
+        expect.objectContaining({ name: 'Read', failed: 0 }),
+      ]),
+    );
+  });
+
+  it('leaves usage it never measured null, not zero', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(1, 'turn_complete', { usage: { durationMs: 1_000 } }, 1);
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 1, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(answer.timing).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+    });
   });
 
   it('counts sub-agent tool calls apart and carries a turn’s cost split', async () => {

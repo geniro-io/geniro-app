@@ -11,7 +11,6 @@ import { TaskBoardBroker } from './services/task-board.broker';
 import { WorkflowChangeService } from './services/workflow-change.service';
 import { WorkflowChatService } from './services/workflow-chat.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
-import { WorkflowTitleBackfillService } from './services/workflow-title-backfill.service';
 
 /**
  * Workflow graphs (M3): the YAML workflow library, the ported graph core
@@ -37,7 +36,6 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
     GraphExecutorService,
     CallBroker,
     TaskBoardBroker,
-    WorkflowTitleBackfillService,
     RunWorkflowService,
     WorkflowChatService,
     WorkflowChangeService,
@@ -54,7 +52,6 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
   // and reading the library there is how an edit would reach a run it must not.
   exports: [
     WorkflowStoreService,
-    WorkflowTitleBackfillService,
     GraphExecutorService,
     CallBroker,
     TaskBoardBroker,

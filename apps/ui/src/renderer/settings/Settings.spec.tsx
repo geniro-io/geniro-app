@@ -1213,6 +1213,7 @@ describe('Settings — sections', () => {
       'Fast actions',
       'Projects',
       'Remote access',
+      'Sharing',
     ]);
   });
 

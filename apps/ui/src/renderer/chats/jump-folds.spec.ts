@@ -47,7 +47,7 @@ describe('foldsHolding', () => {
       row(2, 'tool_result', { id: 't1', result: 'a' }),
       row(3, 'tool_call', {
         id: 't2',
-        name: 'mcp__geniro__message_agent',
+        name: 'mcp__geniro-run-1234__message_agent',
         input: {},
       }),
       row(4, 'tool_result', { id: 't2', result: 'sent' }),

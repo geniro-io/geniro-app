@@ -136,7 +136,6 @@ import {
   CLAUDE_TITLE_MODEL,
   CLAUDE_TITLE_TIMEOUT_MS,
   CLAUDE_TODO_TOOLS_ENV,
-  CLAUDE_UNSET_MODE_FALLBACK,
 } from './claude.const';
 import type { ClaudeAdapterOptions, ClaudeModeProbe } from './claude.types';
 import {
@@ -787,6 +786,17 @@ export class ClaudeAdapter extends AgentAdapter {
          * moving the conversation.
          */
         sessionCarryUnavailableReason: null,
+      },
+      /**
+       * Probed on 2.1.295 through `get_context_usage`'s `memoryFiles`: with no
+       * `CLAUDE_CONFIG_DIR` the `User` file is `~/.claude/CLAUDE.md`; pointed at
+       * a throwaway directory holding a `CLAUDE.md`, it is that file instead,
+       * and a real profile without one loads no user file at all.
+       */
+      userInstructions: {
+        kind: 'file',
+        homeDir: '.claude',
+        fileName: 'CLAUDE.md',
       },
       followUp: {
         /**
@@ -1941,7 +1951,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // argv is built only for a process about to START, so this is the one
       // moment the restored totals are known to apply: the process resumes the
       // session from its transcript's last `cost-state`, and its first result
-      // is that figure plus the turn.
+      // is that figure plus the turn. Registered here, read at its `init`.
       this.seedRestoredCost(input);
     }
     // Claude's endpoint is a per-turn config file `prepareTurn` writes from
@@ -1973,7 +1983,7 @@ export class ClaudeAdapter extends AgentAdapter {
         CLAUDE_PERMISSION_MODE_FLAG,
         input.approvalMode === 'ask' || input.approvalMode === 'auto'
           ? CLAUDE_PERMISSION_MODE_DEFAULT
-          : (input.approvalMode ?? CLAUDE_UNSET_MODE_FALLBACK),
+          : (input.approvalMode ?? CLAUDE_PERMISSION_MODE_DEFAULT),
       );
       args.push(
         CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
@@ -2183,9 +2193,8 @@ export class ClaudeAdapter extends AgentAdapter {
    *
    * Two turns are outside it: an `auto` turn that will not ask (it spawns
    * under `--dangerously-skip-permissions`, which wires no prompt tool at
-   * all), and a turn that named no mode at all — which after
-   * {@link CLAUDE_UNSET_MODE_FALLBACK} means a geniro-INTERNAL turn, never a
-   * user's chat. Those probes read one `system/init` line and are cancelled;
+   * all), and a turn that named no mode at all — a geniro-INTERNAL turn,
+   * never a user's chat (`ChatService` gives every chat turn a mode). Those probes read one `system/init` line and are cancelled;
    * handing them a permission dialogue and an open stdin buys nothing.
    */
   private spawnsOnPermissionDialogue(input: AgentTurnInput): boolean {
@@ -2289,30 +2298,23 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * See {@link ClaudeSessionCostLedger.seedForResume}. Never throws: a read
-   * that fails costs the seed, never the turn.
+   * See {@link ClaudeSessionCostLedger.expectResume}: the read runs when the
+   * new process reports `init`, and the ledger owns its failure.
    */
   private seedRestoredCost(input: AgentTurnInput): void {
     const sessionId = input.resumeSessionId;
     if (!sessionId) {
       return;
     }
-    try {
-      const file = findClaudeSessionFileSync(
-        this.profileDir(input.configDir ?? null),
-        sessionId,
-      );
+    const profileDir = this.profileDir(input.configDir ?? null);
+    this.costLedger.expectResume(sessionId, () => {
+      const file = findClaudeSessionFileSync(profileDir, sessionId);
       // A transcript that cannot be found says nothing about what the CLI
       // restores — leave the base alone rather than reading it as zero.
-      if (file !== null) {
-        this.costLedger.seedForResume(
-          sessionId,
-          readLastClaudeCostState(file, sessionId),
-        );
-      }
-    } catch {
-      // The guard in `perTurn` still bounds what this turn can be billed.
-    }
+      return file === null
+        ? undefined
+        : readLastClaudeCostState(file, sessionId);
+    });
   }
 
   /**
@@ -2376,18 +2378,13 @@ export class ClaudeAdapter extends AgentAdapter {
    * loads no server and every poll would return the same empty list until the
    * grace ran out. An `internalProbe` turn reads one `system/init` line and is
    * cancelled; it never reaches a tool, so a tool surface is nothing to it.
-   * And a turn naming NO approval mode keeps its own exemption — the same
-   * population {@link CLAUDE_UNSET_MODE_FALLBACK} describes, which is a LEGACY
-   * chat row rather than a probe, and whose opening write has always been
-   * synchronous.
+   * And a turn naming NO approval mode keeps its own exemption: it is a
+   * geniro-internal turn (the command-list probe), whose opening write has
+   * always been synchronous.
    *
    * `internalProbe` is listed SEPARATELY rather than replacing the unset-mode
-   * arm, and the distinction is load-bearing: the permission-mode probe names
-   * a mode, so the old condition classified it as a user's turn, while a
-   * legacy chat row names none and is a user's turn. Collapsing the two onto
-   * one field moves every legacy row into the gate — measured, and caught by
-   * `leaves a legacy turn (no approval mode) byte-identical when asking is
-   * allowed`.
+   * arm: the permission-mode probe names a mode, so the mode alone cannot tell
+   * it from a user's turn.
    */
   private waitsForMcpServers(input: AgentTurnInput): boolean {
     if (this.claudeOptions.waitForMcpServers === false) {

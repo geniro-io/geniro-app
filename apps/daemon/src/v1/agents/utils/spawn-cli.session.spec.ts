@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent, TurnIo } from '../adapters/adapter.types';
 import { runCliSession, runHeadlessCli, type SessionLogger } from './spawn-cli';
@@ -61,6 +62,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     live?: number;
     /** A tool call with this id — a delegate's own when `parent` is set. */
     run?: string;
+    /** The command line that `run` call ran. */
+    cmd?: string;
   };
   if (typeof row.run === 'string') {
     return [
@@ -68,7 +71,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
         type: 'tool_call',
         id: row.run,
         name: 'Bash',
-        input: {},
+        input: row.cmd === undefined ? {} : { command: row.cmd },
         ...(row.parent === undefined ? {} : { parentToolUseId: row.parent }),
       },
     ];
@@ -534,6 +537,32 @@ describe('a session turn that goes silent', () => {
     await handle?.done;
     expect(events).toEqual([COMPLETE]);
   });
+
+  it('does not count the time the machine slept as silence, and gives a full window from the wake', async () => {
+    // The incident (2026-10-10): a card turn quiet for ~45s when the Mac slept
+    // for four hours was failed "produced nothing for 30 minutes" at the very
+    // second it woke, because node's timers count through a macOS sleep.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    await vi.advanceTimersByTimeAsync(45_000);
+    await simulateSleep(4 * 60 * 60 * 1000);
+    expect(events).toEqual([]);
+
+    // A FULL thirty minutes from the wake — not the 45s-shortened remainder.
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1000);
+    expect(events).toEqual([]);
+
+    // …after which it is still a deadline: genuine silence is given up on.
+    await vi.advanceTimersByTimeAsync(1000);
+    await handle?.done;
+    expect(events).toEqual([
+      { type: 'error', message: expect.stringContaining('giving up') },
+    ]);
+    line(child, { done: true });
+  });
 });
 
 describe('a turn parked on a question nobody has answered yet', () => {
@@ -772,6 +801,98 @@ describe('cancelling a session turn', () => {
 
     line(child, { work: 'b1', phase: 'settled', outcome: 'completed' });
     expect(session.shellsRunning).toBe(1);
+  });
+
+  it('names the command lines of the detached commands it is still running', () => {
+    // What the session registry tells an agent it stopped when it has to
+    // replace the process under them — the line is what restarts a dev server.
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    line(child, { run: 't1', cmd: 'pnpm dev' });
+    line(child, { work: 'b1', phase: 'started', unit: 'other', call: 't1' });
+    // A delegate's own command, announced BEFORE the call that ran it.
+    line(child, {
+      work: 'b2',
+      phase: 'started',
+      unit: 'other',
+      call: 't2',
+      owned: true,
+    });
+    line(child, { run: 't2', cmd: 'pnpm test --watch', parent: 'task-1' });
+    // Counted, but with no launching call there is no line to name.
+    line(child, { work: 'b3', phase: 'started', unit: 'other' });
+    expect(session.shellsRunning).toBe(3);
+    expect(session.runningCommands).toEqual(['pnpm dev', 'pnpm test --watch']);
+
+    line(child, { work: 'b1', phase: 'settled', outcome: 'completed' });
+    expect(session.runningCommands).toEqual(['pnpm test --watch']);
+
+    child.emit('close', 0, null);
+    expect(session.runningCommands).toEqual([]);
+  });
+
+  it('keeps a running command’s line however many calls come after it', () => {
+    // The map of lines is bounded; what it drops must never be a line a
+    // running command still needs.
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    line(child, { run: 't0', cmd: 'pnpm dev' });
+    line(child, { work: 'b0', phase: 'started', unit: 'other', call: 't0' });
+    for (let i = 1; i <= 300; i += 1) {
+      line(child, { run: `t${i}`, cmd: `ls ${i}` });
+    }
+    line(child, { work: 'b1', phase: 'started', unit: 'other', call: 't300' });
+
+    expect(session.runningCommands).toEqual(['pnpm dev', 'ls 300']);
+  });
+
+  it('keeps the line of a foreground command, and of a delegate’s, until they detach', () => {
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    line(child, { run: 'tf', cmd: 'pnpm build' });
+    line(child, {
+      work: 'bf',
+      phase: 'started',
+      unit: 'other',
+      call: 'tf',
+      fore: true,
+    });
+    line(child, { run: 'td', cmd: 'pnpm test --watch', parent: 'task-1' });
+    line(child, {
+      work: 'bd',
+      phase: 'started',
+      unit: 'other',
+      call: 'td',
+      owned: true,
+    });
+    for (let i = 1; i <= 300; i += 1) {
+      line(child, { run: `t${i}`, cmd: `ls ${i}` });
+    }
+    line(child, { work: 'bf', phase: 'backgrounded', unit: 'other' });
+
+    expect(session.runningCommands).toEqual([
+      'pnpm build',
+      'pnpm test --watch',
+    ]);
+  });
+
+  it('remembers what was running when the process ended', () => {
+    // Read by a holder told of the end through `closed`, by which time the
+    // live readings are empty.
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    expect(session.endedRunning).toBeNull();
+    line(child, { run: 't1', cmd: 'pnpm dev' });
+    line(child, { work: 'b1', phase: 'started', unit: 'other', call: 't1' });
+    line(child, { work: 'b2', phase: 'started', unit: 'other' });
+
+    child.emit('close', null, 'SIGKILL');
+
+    expect(session.shellsRunning).toBe(0);
+    expect(session.endedRunning).toEqual({
+      running: 2,
+      commands: ['pnpm dev'],
+    });
   });
 
   it('a follow-up delivered after the turn’s own result makes a continuation’s result NOT its ending again', async () => {
@@ -2883,6 +3004,27 @@ describe('a turn whose background work outlives its result', () => {
     );
   });
 
+  it('does not give up on an off-turn hold because the machine slept through its window', async () => {
+    // Same question as the turn's own deadline, asked with no turn open — and
+    // the same answer: a delegate asleep with the machine has not gone quiet.
+    vi.useFakeTimers();
+    const between: AgentEvent[] = [];
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { child } = openSession(undefined, logger, (e) => between.push(e));
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true });
+    await vi.advanceTimersByTimeAsync(45_000);
+    await simulateSleep(4 * 60 * 60 * 1000);
+    expect(between).toEqual([]);
+
+    // A full window from the wake, not the 45s-shortened remainder.
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1);
+    expect(between).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(between).toEqual([COMPLETE]);
+  });
+
   it('does not let a unit the deadline gave up on hold the next turn too', async () => {
     // The cost of moving the set to session scope, paid here: a unit written off
     // by one turn's deadline must not silently hold every turn after it.
@@ -4250,6 +4392,25 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
     );
     expect(opened).toHaveLength(1);
     expect(opened[0]).toMatchObject({ workId: 'call-1', toolCallId: 'call-1' });
+  });
+
+  it('names a command the OS found still running, however many calls came before the sweep', async () => {
+    // Until the sweep at the turn's end, the command is only an answered
+    // execute call — the bounded map of lines must not drop it meanwhile.
+    const { session, child } = openShellSession(async () => [
+      { pid: 500, ppid: 999, args: 'pnpm dev' },
+    ]);
+    emit(child, { run: 'pnpm dev', id: 'call-0' });
+    emit(child, { answered: 'call-0' });
+    for (let i = 1; i <= 300; i += 1) {
+      emit(child, { run: `ls ${i}`, id: `call-${i}` });
+      emit(child, { answered: `call-${i}` });
+    }
+    emit(child, { done: true });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(session.runningCommands).toEqual(['pnpm dev']);
   });
 
   it('says nothing about a command that really did finish', async () => {

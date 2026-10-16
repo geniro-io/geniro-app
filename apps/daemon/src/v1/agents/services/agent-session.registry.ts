@@ -7,6 +7,7 @@ import {
   Optional,
 } from '@nestjs/common';
 
+import { awakeTimeout, type AwakeTimer } from '../../../utils/sleep-watch';
 import type {
   AgentEvent,
   AgentSession,
@@ -17,6 +18,13 @@ import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { KeptProcessRoot } from '../chat.types';
 import { runTagEnv } from '../utils/run-process-scan';
 import { runIdOfSessionKey, runSessionKeyPrefix } from '../utils/session-keys';
+import {
+  deferredMcpChangeNote,
+  endedCommandsNote,
+  type SessionNote,
+  stoppedCommandsNote,
+  withSessionNote,
+} from '../utils/session-replacement-notes';
 import type {
   BetweenTurnApproval,
   CliSessionOptions,
@@ -158,6 +166,56 @@ export const MAX_LIVE_SESSIONS = sessionCeilingFor(totalmem());
  */
 export const OFF_TURN_ACTIVE_MS = 5 * 60_000;
 
+/**
+ * What made a kept process stale, which decides whether its replacement may
+ * wait for the background work running in it:
+ *
+ * - `mcp` — the MCP servers a fresh process would load changed. May wait: the
+ *   old process still serves the conversation, only without the change, and
+ *   replacing it would stop the dev servers and test runs the agent left up.
+ * - `account` — the CLI's credentials changed, and the old process may fail
+ *   every turn on the ones it started with.
+ * - `conversation` — geniro replaced the conversation (a carried compaction) or
+ *   moved it to another process; a turn on the old one continues the wrong one.
+ */
+type StaleCause = 'mcp' | 'account' | 'conversation';
+
+interface StaleMark {
+  /** Each change that marked it, in order, for the log and the agent's line. */
+  reasons: string[];
+  cause: StaleCause;
+  /**
+   * The row saying this mark is waiting was written, and the agent was told —
+   * each once per set of reasons, since a dev server can hold it for the rest
+   * of the chat. A new reason is a new mark. Apart because a turn with no
+   * prompt to carry the line (a slash command) still writes the row.
+   */
+  rowWritten?: boolean;
+  told?: boolean;
+}
+
+/**
+ * The mark an entry carries after `next` lands on `current`. A cause that
+ * cannot wait outranks `mcp`, so a compaction after an MCP change still
+ * replaces the process; among `mcp` marks every change is kept, so the line
+ * the agent gets names all of them.
+ */
+function mergeStale(current: StaleMark | null, next: StaleMark): StaleMark {
+  if (current === null) {
+    return next;
+  }
+  if (current.cause !== 'mcp') {
+    return current;
+  }
+  if (next.cause !== 'mcp') {
+    return next;
+  }
+  const added = next.reasons.filter((r) => !current.reasons.includes(r));
+  return added.length === 0
+    ? current
+    : { reasons: [...current.reasons, ...added], cause: 'mcp' };
+}
+
 interface SessionEntry {
   session: AgentSession;
   /**
@@ -180,9 +238,10 @@ interface SessionEntry {
    * spot, which is the whole design: closing it would either kill a turn that
    * is running or reap a dozen idle chats nobody is about to use. The flag is
    * read at the start of the next turn, which is exactly the moment the change
-   * has to have landed.
+   * has to have landed — unless its cause may wait and the process is still
+   * running background work, in which case it is read again at the turn after.
    */
-  stale: string | null;
+  stale: StaleMark | null;
   /** When this run's last turn ended; drives both eviction and expiry. */
   lastUsedAt: number;
   /**
@@ -196,7 +255,8 @@ interface SessionEntry {
    * the second is exempt, so a busy chat is not confused with a fresh one.
    */
   offTurnActiveAt: number;
-  timer: ReturnType<typeof setTimeout> | null;
+  /** The idle reap. Awake time — see {@link AgentSessionRegistry.arm}. */
+  timer: AwakeTimer | null;
   /**
    * The between-turn approval policy, in a holder the session reads THROUGH.
    *
@@ -249,6 +309,15 @@ interface SessionEntry {
 export class AgentSessionRegistry implements OnApplicationShutdown {
   private readonly logger = new Logger(AgentSessionRegistry.name);
   private readonly entries = new Map<string, SessionEntry>();
+  /**
+   * What each key's next turn owes its agent about detached commands a close
+   * stopped — transcript rows and prompt lines, kept apart because a turn that
+   * carries no prompt still writes the rows.
+   */
+  private readonly stopped = new Map<
+    string,
+    { rows: string[]; prompts: string[] }
+  >();
   private shuttingDown = false;
   private readonly closeListeners = new Set<
     (runId: string, interrupted: boolean, exited: boolean) => void
@@ -378,13 +447,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     onHeldApproval?: CliSessionOptions['onHeldApproval'],
   ): AgentTurnHandle {
     const existing = this.entries.get(runId);
-    if (existing?.stale !== null && existing !== undefined) {
+    if (
+      existing !== undefined &&
+      existing.stale !== null &&
+      !this.mayKeepStale(existing)
+    ) {
       // Replaced rather than reused, and replaced HERE rather than when the
       // change landed: the process holds MCP servers it read at spawn, so a
       // turn served by it would run against the configuration the user just
       // left. The conversation survives — cursor re-`session/load`s it off
       // disk and claude resumes by id — so the cost is one respawn.
-      this.closeEntry(runId, existing, existing.stale);
+      this.closeEntry(runId, existing, existing.stale.reasons.join('; '));
     } else if (existing) {
       this.disarm(existing);
       // Before the turn opens, not after: this turn's posture is what a
@@ -396,8 +469,30 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       if (onBetweenTurnEvent !== undefined) {
         existing.offTurn.current = onBetweenTurnEvent;
       }
-      const handle = existing.session.startTurn(input, onEvent);
+      // A stale entry reaching here is one whose change may wait: it stays
+      // marked, and the first turn that starts with no background work in it
+      // replaces it.
+      const stale = existing.stale;
+      const deferred =
+        stale === null || stale.told === true
+          ? null
+          : deferredMcpChangeNote(stale.reasons);
+      const reuseInput = this.withOwedNotes(runId, input, deferred?.prompt);
+      const handle = existing.session.startTurn(reuseInput, onEvent);
       if (handle) {
+        const carried = reuseInput !== input;
+        this.tellStopped(runId, carried, onEvent);
+        if (stale !== null && deferred !== null) {
+          if (stale.rowWritten !== true) {
+            onEvent({
+              type: 'notice',
+              message: deferred.transcript,
+              severity: 'info',
+            });
+            stale.rowWritten = true;
+          }
+          stale.told = carried;
+        }
         return this.track(runId, existing, handle);
       }
       // It could not serve this turn, and a session that has refused one will
@@ -411,9 +506,10 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     // what did.
     this.evictIfFull();
 
+    const turnInput = this.withOwedNotes(runId, input);
     const policy: SessionEntry['policy'] = { current: betweenTurnApproval };
     const offTurn: SessionEntry['offTurn'] = { current: onBetweenTurnEvent };
-    const session = adapter.startSession(input, {
+    const session = adapter.startSession(turnInput, {
       // A daemon that is shutting down must not keep a process alive past the
       // drain: `close()` would have to arrive from a hook that has already run.
       runScoped: !this.shuttingDown,
@@ -447,7 +543,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       // under its own key, and the run's teardown searches by the run alone.
       runTag: runTagEnv(runIdOfSessionKey(runId), this.runOwner),
     });
-    const handle = session.startTurn(input, onEvent);
+    const handle = session.startTurn(turnInput, onEvent);
     if (!handle) {
       // A freshly opened session always accepts its first turn — a spawn
       // failure comes back as a settled handle carrying an `error` event. This
@@ -455,6 +551,8 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       session.close();
       throw new Error(`agent session for run ${runId} refused its first turn`);
     }
+    // A spawn that failed has no agent to read the line; it waits for the next.
+    this.tellStopped(runId, turnInput !== input && session.alive, onEvent);
     const entry: SessionEntry = {
       session,
       agent: adapter.getConfig().kind,
@@ -475,11 +573,15 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   /**
    * Close the run's process, if it still holds one. Idempotent, so every
    * teardown path can call it without first asking whether there is one.
+   *
+   * `reason` is read by the user and the agent: a close that stops detached
+   * commands owes the key's next turn a note quoting it ("its turn was
+   * retried").
    */
-  close(runId: string): void {
+  close(runId: string, reason: string): void {
     const entry = this.entries.get(runId);
     if (entry) {
-      this.closeEntry(runId, entry, 'its run was torn down');
+      this.closeEntry(runId, entry, reason);
     }
   }
 
@@ -496,7 +598,13 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     const prefix = runSessionKeyPrefix(runId);
     for (const [key, entry] of [...this.entries]) {
       if (key === runId || key.startsWith(prefix)) {
-        this.closeEntry(key, entry, 'its run was torn down');
+        this.closeEntry(key, entry, 'its run was torn down', false);
+      }
+    }
+    // Nothing will start a turn here again to be told.
+    for (const key of [...this.stopped.keys()]) {
+      if (key === runId || key.startsWith(prefix)) {
+        this.stopped.delete(key);
       }
     }
   }
@@ -530,21 +638,38 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     agent: string,
     reached: (session: { cwd: string; configDir: string | null }) => boolean,
     reason: string,
+    cause: Exclude<StaleCause, 'conversation'>,
   ): number {
     let marked = 0;
     for (const entry of this.entries.values()) {
-      if (entry.agent !== agent || entry.stale !== null || !reached(entry)) {
+      if (entry.agent !== agent || !reached(entry)) {
         continue;
       }
-      entry.stale = reason;
-      marked += 1;
+      const mark = mergeStale(entry.stale, { reasons: [reason], cause });
+      // Counted only when this change is what retires it — newly, or now
+      // without waiting — so a caller's log does not claim a respawn already
+      // owed.
+      if (entry.stale === null || entry.stale.cause !== mark.cause) {
+        marked += 1;
+      }
+      entry.stale = mark;
     }
     return marked;
   }
 
   /** {@link markStaleWhere} for every session of one agent in one folder. */
-  markStale(agent: string, cwd: string, reason: string): number {
-    return this.markStaleWhere(agent, (session) => session.cwd === cwd, reason);
+  markStale(
+    agent: string,
+    cwd: string,
+    reason: string,
+    cause: Exclude<StaleCause, 'conversation'>,
+  ): number {
+    return this.markStaleWhere(
+      agent,
+      (session) => session.cwd === cwd,
+      reason,
+      cause,
+    );
   }
 
   /** The folders this agent's kept sessions run in, each once. */
@@ -573,8 +698,12 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * credentials by itself is not measured, and does not need to be: a respawn
    * costs one cold start, a stale process costs the user's retry.
    */
-  markAgentStale(agent: string, reason: string): number {
-    return this.markStaleWhere(agent, () => true, reason);
+  markAgentStale(
+    agent: string,
+    reason: string,
+    cause: Exclude<StaleCause, 'conversation'>,
+  ): number {
+    return this.markStaleWhere(agent, () => true, reason, cause);
   }
 
   /**
@@ -596,7 +725,10 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     if (!entry) {
       return false;
     }
-    entry.stale ??= reason;
+    entry.stale = mergeStale(entry.stale, {
+      reasons: [reason],
+      cause: 'conversation',
+    });
     return true;
   }
 
@@ -758,6 +890,14 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       this.disarm(entry);
       this.entries.delete(runId);
       this.logger.log(`the agent session for run ${runId} ended on its own`);
+      // Its detached commands died with its group, as a close's would have.
+      const ended = entry.session.endedRunning;
+      if (ended !== null && ended.running > 0) {
+        this.oweStopped(
+          runId,
+          endedCommandsNote(ended.commands, ended.running),
+        );
+      }
       this.notifyClosed(runId, interrupted, true);
     });
   }
@@ -806,6 +946,19 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
+   * Is the process doing something closing it would stop, with no turn of ours
+   * in flight — a parked question, off-turn work, or a detached command? What
+   * eviction will not take and a deferrable stale mark waits for.
+   */
+  private holdsWork(entry: SessionEntry): boolean {
+    return (
+      entry.session.parked ||
+      this.worksOffTurn(entry) ||
+      entry.session.shellsRunning > 0
+    );
+  }
+
+  /**
    * Is this session carrying on by ITSELF — working, with no turn of ours open?
    *
    * The third thing eviction must not take, beside a turn in flight and a
@@ -819,9 +972,82 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     );
   }
 
+  /**
+   * May this stale process serve the coming turn anyway? Only for a change
+   * that may wait ({@link StaleCause}), and only while it {@link holdsWork}.
+   */
+  private mayKeepStale(entry: SessionEntry): boolean {
+    return (
+      entry.stale?.cause === 'mcp' &&
+      entry.session.alive &&
+      this.holdsWork(entry)
+    );
+  }
+
+  /**
+   * This turn's input carrying, in one note, the lines owed for commands a
+   * close stopped and `deferred`'s, or the input itself when nothing is owed
+   * or the turn cannot carry it.
+   */
+  private withOwedNotes(
+    runId: string,
+    input: AgentTurnInput,
+    deferred?: string,
+  ): AgentTurnInput {
+    const lines = [
+      ...(this.stopped.get(runId)?.prompts ?? []),
+      ...(deferred === undefined ? [] : [deferred]),
+    ];
+    return lines.length === 0
+      ? input
+      : withSessionNote(input, lines.join('\n\n'));
+  }
+
+  /** Owe this key's next turn `note` about the commands its process ran. */
+  private oweStopped(runId: string, note: SessionNote): void {
+    if (this.shuttingDown) {
+      return;
+    }
+    const owed = this.stopped.get(runId) ?? { rows: [], prompts: [] };
+    owed.rows.push(note.transcript);
+    owed.prompts.push(note.prompt);
+    this.stopped.set(runId, owed);
+  }
+
+  /**
+   * A turn has opened: write the owed transcript rows, and forget the prompt
+   * lines once one carried them. A turn that could not (a prompt-less resume)
+   * leaves them for the next turn, which is the agent's first chance to read.
+   */
+  private tellStopped(
+    runId: string,
+    carried: boolean,
+    onEvent: (event: AgentEvent) => void,
+  ): void {
+    const owed = this.stopped.get(runId);
+    if (owed === undefined) {
+      return;
+    }
+    for (const message of owed.rows) {
+      onEvent({ type: 'notice', message, severity: 'warning' });
+    }
+    owed.rows = [];
+    if (carried || owed.prompts.length === 0) {
+      this.stopped.delete(runId);
+    }
+  }
+
+  /**
+   * Arm the idle reap on awake time.
+   *
+   * Time asleep is not a chat going unused, whether its process was working
+   * between turns or the chat was merely left idle. What that costs: a chat
+   * idle overnight keeps its CLI, and the MCP servers it dialled, for up to
+   * three awake hours after the wake.
+   */
   private arm(runId: string, entry: SessionEntry): void {
     this.disarm(entry);
-    entry.timer = setTimeout(() => {
+    entry.timer = awakeTimeout(() => {
       entry.timer = null;
       if (this.entries.get(runId) !== entry || !entry.session.idle) {
         return;
@@ -852,12 +1078,11 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       }
       void this.closeAfterFarewell(runId, entry);
     }, SESSION_IDLE_MS);
-    entry.timer.unref?.();
   }
 
   private disarm(entry: SessionEntry): void {
     if (entry.timer) {
-      clearTimeout(entry.timer);
+      entry.timer.clear();
       entry.timer = null;
     }
   }
@@ -900,14 +1125,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         // idle in the only sense `idle` claims and busy in the sense that
         // matters here, exactly as `parked` is. Reported as a thread that
         // "остановился и ничего не делает" — see {@link OFF_TURN_ACTIVE_MS}.
-        if (
-          !candidate[1].session.idle ||
-          candidate[1].session.parked ||
-          this.worksOffTurn(candidate[1]) ||
-          // A process serving a detached command is doing work the user can
-          // see — a server on a port — and evicting it kills that work.
-          candidate[1].session.shellsRunning > 0
-        ) {
+        if (!candidate[1].session.idle || this.holdsWork(candidate[1])) {
           continue;
         }
         if (oldest === null || candidate[1].lastUsedAt < oldest[1].lastUsedAt) {
@@ -958,10 +1176,28 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     this.closeEntry(runId, entry, 'it went unused');
   }
 
-  private closeEntry(runId: string, entry: SessionEntry, reason: string): void {
+  /**
+   * `tell` is whether a later turn on this key should hear which detached
+   * commands the close stopped — every close but a teardown's, which leaves no
+   * conversation to tell, and shutdown's.
+   */
+  private closeEntry(
+    runId: string,
+    entry: SessionEntry,
+    reason: string,
+    tell = true,
+  ): void {
     // Read BEFORE the entry is dropped and the timer disarmed — both are what
     // the answer is computed from.
     const interrupted = this.worksOffTurn(entry);
+    const running = entry.session.shellsRunning;
+    if (tell && running > 0) {
+      // Read before the close, which is what empties them.
+      this.oweStopped(
+        runId,
+        stoppedCommandsNote(reason, entry.session.runningCommands, running),
+      );
+    }
     this.disarm(entry);
     this.entries.delete(runId);
     try {

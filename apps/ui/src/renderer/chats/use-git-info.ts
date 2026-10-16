@@ -24,6 +24,12 @@ export interface GitNotice {
    */
   offerPull: boolean;
   /**
+   * The branch a dirty refusal was FOR, offered as "bring my changes along" —
+   * the one move that actually reaches it without losing the work. Null for
+   * every other notice.
+   */
+  carryTo: string | null;
+  /**
    * The worktree that already holds the branch, when THAT is why the switch was
    * refused — so the strip can offer that folder instead of describing a dead
    * end. Null for every other notice.
@@ -36,7 +42,8 @@ export interface GitNotice {
 
 /**
  * Git state of `dir` for the composer's branch chip, the guarded switch, and
- * the pull that keeps uncommitted work.
+ * the two ways out of a dirty refusal that keep uncommitted work: pull the
+ * current branch, or switch and bring the work along.
  *
  * The chip is absent for a plain folder, so the hook reports `isRepo: false`
  * for a null dir and while the first read is in flight — a chip that appeared
@@ -51,8 +58,11 @@ export function useGitInfo(dir: string | null): {
   notice: GitNotice | null;
   switching: boolean;
   pulling: boolean;
+  carrying: boolean;
   switchTo: (branch: string) => Promise<void>;
   pull: () => Promise<void>;
+  /** Switch to the refused branch, taking the uncommitted work along. */
+  carry: () => Promise<void>;
   /** Re-read `dir`, or an explicit folder the caller has just switched to. */
   refresh: (target?: string) => Promise<void>;
   clearError: () => void;
@@ -61,11 +71,12 @@ export function useGitInfo(dir: string | null): {
   const [notice, setNotice] = useState<GitNotice | null>(null);
   const [switching, setSwitching] = useState(false);
   const [pulling, setPulling] = useState(false);
+  const [carrying, setCarrying] = useState(false);
   /**
-   * The branch a refused switch was FOR, so a later pull can retry it. A ref
-   * because {@link pull} needs the value set by the switch that preceded it,
-   * and — per the past bug in this file — state just written by one callback
-   * is not visible to another read from closure.
+   * The branch a refused switch was FOR, so {@link carry} can reach it and
+   * {@link pull} can keep offering it. A ref because both need the value set by
+   * the switch that preceded them, and — per the past bug in this file — state
+   * just written by one callback is not visible to another read from closure.
    */
   const pendingSwitchTarget = useRef<string | null>(null);
 
@@ -113,11 +124,12 @@ export function useGitInfo(dir: string | null): {
             // takes the warning tone rather than the red one.
             tone: result.dirty || useFolder !== null ? 'warning' : 'error',
             offerPull: result.dirty,
+            carryTo: result.dirty ? branch : null,
             useFolder,
           });
-          // Only a dirty refusal is one `pull` can act on — remember the
-          // branch it was FOR so a later pull retries this exact switch
-          // instead of merely clearing the strip.
+          // Only a dirty refusal is one the strip's offers can act on —
+          // remember the branch it was FOR so "bring changes along" reaches
+          // this exact branch.
           pendingSwitchTarget.current = result.dirty ? branch : null;
         } else {
           pendingSwitchTarget.current = null;
@@ -130,6 +142,15 @@ export function useGitInfo(dir: string | null): {
     [dir],
   );
 
+  /**
+   * Fast-forward the CURRENT branch, keeping the work.
+   *
+   * It never retries the refused switch: the pull puts the work back on this
+   * branch, so the tree is exactly as dirty afterwards and the guard would
+   * refuse again with the very sentence already on the strip — which is how
+   * this button once looked like it did nothing at all. The strip instead says
+   * what the pull did, and keeps the offer that does reach the picked branch.
+   */
   const pull = useCallback(async (): Promise<void> => {
     if (dir === null) {
       return;
@@ -137,45 +158,59 @@ export function useGitInfo(dir: string | null): {
     setPulling(true);
     try {
       const result = await window.geniro.pullBranch(dir);
+      const carryTo = pendingSwitchTarget.current;
       if (!result.ok) {
         // A failed pull REPLACES the strip with git's own reason, as an error
         // — a refused pull is a genuine dead end for this button, and
         // offering it again would be a control that has just been shown not
-        // to work.
+        // to work. Bringing the work along is a different move, still open.
         setNotice({
           message: result.error ?? 'git pull failed',
           tone: 'error',
           offerPull: false,
+          carryTo,
           useFolder: null,
         });
-        setInfo(await window.geniro.getGitInfo(dir));
-        return;
-      }
-      const target = pendingSwitchTarget.current;
-      if (target === null) {
+      } else if (carryTo === null) {
         setNotice(null);
       } else {
-        // The pull was offered to unblock a specific switch — re-run that
-        // switch rather than clearing the strip, which would read as the
-        // switch having gone through when the branch never moved.
-        const retry = await window.geniro.switchBranch(dir, target);
-        if (retry.ok) {
-          pendingSwitchTarget.current = null;
-          setNotice(null);
-        } else if (retry.error !== null) {
-          const retryFolder = retry.worktree ?? null;
-          setNotice({
-            message: retry.error,
-            tone: retry.dirty || retryFolder !== null ? 'warning' : 'error',
-            offerPull: retry.dirty,
-            useFolder: retryFolder,
-          });
-          pendingSwitchTarget.current = retry.dirty ? target : null;
-        }
+        setNotice({
+          message: `Pulled ${result.branch ?? 'this branch'} up to date and kept your changes — still not on ${carryTo}`,
+          tone: 'warning',
+          offerPull: false,
+          carryTo,
+          useFolder: null,
+        });
       }
       setInfo(await window.geniro.getGitInfo(dir));
     } finally {
       setPulling(false);
+    }
+  }, [dir]);
+
+  const carry = useCallback(async (): Promise<void> => {
+    const target = pendingSwitchTarget.current;
+    if (dir === null || target === null) {
+      return;
+    }
+    setCarrying(true);
+    try {
+      const result = await window.geniro.carryChangesToBranch(dir, target);
+      pendingSwitchTarget.current = null;
+      setNotice(
+        result.ok
+          ? null
+          : {
+              message: result.error ?? 'git switch failed',
+              tone: 'error',
+              offerPull: false,
+              carryTo: null,
+              useFolder: null,
+            },
+      );
+      setInfo(await window.geniro.getGitInfo(dir));
+    } finally {
+      setCarrying(false);
     }
   }, [dir]);
 
@@ -209,8 +244,10 @@ export function useGitInfo(dir: string | null): {
     notice,
     switching,
     pulling,
+    carrying,
     switchTo,
     pull,
+    carry,
     refresh,
     clearError: useCallback(() => {
       // A dismissed notice must not leave a stale target for a later pull to

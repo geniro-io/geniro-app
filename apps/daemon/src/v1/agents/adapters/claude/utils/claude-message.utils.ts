@@ -556,6 +556,10 @@ function mapClaudeLine(
         // optional on the wire, and a boundary carrying no numbers is still
         // worth reporting, because the EVENT is what explains the meter.
         const meta = asRecord(root.compact_metadata);
+        const sessionId = asString(root.session_id);
+        if (sessionId && parentToolUseId === null) {
+          costLedger.noteCompaction(sessionId);
+        }
         return [
           {
             type: 'context_compacted',
@@ -805,6 +809,9 @@ function mapClaudeLine(
         const sessionId = asString(root.session_id);
         if (sessionId) {
           events.push({ type: 'session', sessionId });
+          // The CLI has restored its running total by now, so the transcript
+          // holds the line it restored from — see `expectResume`.
+          costLedger.noteInit(sessionId);
         }
         // init's `slash_commands` is the session's authoritative invokable
         // set (built-ins + plugins + skills + commands) — harvested for the

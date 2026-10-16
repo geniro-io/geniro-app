@@ -149,7 +149,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     });
   });
 
-  it('a row created without a stamp reads null (the legacy YAML-fallback marker)', async () => {
+  it('a row created without a stamp reads null (the YAML-fallback marker)', async () => {
     await dao.createPending('run-1', 'node-a');
     const row = await dao.getByRunNode('run-1', 'node-a');
     expect(row?.agentKind).toBeNull();

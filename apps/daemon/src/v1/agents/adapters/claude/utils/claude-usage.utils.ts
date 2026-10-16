@@ -141,13 +141,7 @@ export class ClaudeSessionCostLedger {
       return false;
     }
     this.delegateModels.set(toolCallId, model);
-    while (this.delegateModels.size > MAX_TRACKED_DELEGATE_MODELS) {
-      const oldest = this.delegateModels.keys().next();
-      if (oldest.done === true) {
-        break;
-      }
-      this.delegateModels.delete(oldest.value);
-    }
+    trimOldest(this.delegateModels, MAX_TRACKED_DELEGATE_MODELS);
     return true;
   }
 
@@ -183,13 +177,7 @@ export class ClaudeSessionCostLedger {
       return null;
     }
     this.delegateLaunches.set(taskId, toolCallId);
-    while (this.delegateLaunches.size > MAX_TRACKED_DELEGATE_MODELS) {
-      const oldest = this.delegateLaunches.keys().next();
-      if (oldest.done === true) {
-        break;
-      }
-      this.delegateLaunches.delete(oldest.value);
-    }
+    trimOldest(this.delegateLaunches, MAX_TRACKED_DELEGATE_MODELS);
     return toolCallId;
   }
 
@@ -206,17 +194,29 @@ export class ClaudeSessionCostLedger {
    */
   private readonly extraUsage = new Map<string, boolean>();
 
+  /** Seeds waiting for their process's `init` — see {@link expectResume}. */
+  private readonly pendingResumes = new Map<
+    string,
+    () => SessionTotals | null | undefined
+  >();
+
+  /**
+   * Sessions that compacted since their last `result`. Each entry is taken by
+   * that result, so the set holds only sessions mid-compaction.
+   */
+  private readonly compacted = new Set<string>();
+
+  /**
+   * Resumed sessions whose seed could not read the restored total — see
+   * {@link seedPendingResume}. Taken by the session's next result.
+   */
+  private readonly unconfirmedResumes = new Set<string>();
+
   /** Record what a session's newest `rate_limit_event` said. */
   noteExtraUsage(sessionId: string, onExtraUsage: boolean): void {
     this.extraUsage.delete(sessionId);
     this.extraUsage.set(sessionId, onExtraUsage);
-    while (this.extraUsage.size > MAX_TRACKED_SESSIONS) {
-      const oldest = this.extraUsage.keys().next();
-      if (oldest.done === true) {
-        break;
-      }
-      this.extraUsage.delete(oldest.value);
-    }
+    trimOldest(this.extraUsage, MAX_TRACKED_SESSIONS);
   }
 
   /**
@@ -255,6 +255,7 @@ export class ClaudeSessionCostLedger {
       return { costUsd: null, apiMs: null, modelCosts: null };
     }
     const previous = this.totals.get(sessionId);
+    const unconfirmed = this.unconfirmedResumes.delete(sessionId);
     this.remember(sessionId, cumulative);
     const costUsd = step(previous?.costUsd ?? null, cumulative.costUsd);
     // `modelUsage` runs on the same ledger as `total_cost_usd` (its schema
@@ -265,12 +266,16 @@ export class ClaudeSessionCostLedger {
     // A step off a KNOWN base that did not go down is this process's own
     // spend, and it is trusted whole. The base is known because it is either
     // what this ledger last saw (kept on disk across restarts) or what the
-    // process restored at spawn (`seedForResume`), so no earlier process's
+    // process restored as it started (`seedForResume`), so no earlier process's
     // history can be in it — while a background sub-agent's spend, billed to
     // the result after the one it ran under, legitimately can. Measured on a
     // real profile before this: of 181 clipped turns, 57 had their real spend
     // cut — $522.85 recorded where the session files priced $2,385.51.
+    //
+    // Except a resumed process's FIRST result when its seed could not read
+    // what the CLI restored: that base is a guess, so the step is bounded.
     const trustedStep =
+      !unconfirmed &&
       previous !== undefined &&
       previous.costUsd !== null &&
       cumulative.costUsd !== null &&
@@ -334,10 +339,16 @@ export class ClaudeSessionCostLedger {
    *   sub-agents keep spending past their turn — and measuring from the
    *   ledger's figure bills that to this turn instead of dropping it;
    * - a session that restores NOTHING starts from zero, because that is where
-   *   the CLI's running total starts.
+   *   the CLI's running total starts — unless this ledger already holds a
+   *   total for it. A read that finds no line cannot tell "none was ever
+   *   written" from "the previous process has not written it yet", and zero
+   *   is the base that bills the whole earlier spend to the next result.
    */
   seedForResume(sessionId: string, restored: SessionTotals | null): void {
     const known = this.totals.get(sessionId);
+    if (restored === null && known !== undefined) {
+      return;
+    }
     const base: SessionTotals = restored ?? {
       costUsd: 0,
       apiMs: 0,
@@ -354,10 +365,96 @@ export class ClaudeSessionCostLedger {
     this.remember(sessionId, base);
   }
 
+  /**
+   * Seed a resumed session from what `readRestored` answers, once its new
+   * process reports `system/init` ({@link seedPendingResume}) rather than at
+   * spawn.
+   *
+   * The CLI restores its total when it starts, and the process it replaces
+   * writes the `cost-state` line it restores only as it exits — which a
+   * replacement does not wait for. Read at spawn, the line was not there yet;
+   * read at init, the file holds what the CLI itself restored from.
+   *
+   * `readRestored` answers `undefined` when it cannot say (no transcript
+   * found), which leaves the base alone.
+   */
+  expectResume(
+    sessionId: string,
+    readRestored: () => SessionTotals | null | undefined,
+  ): void {
+    this.pendingResumes.delete(sessionId);
+    this.pendingResumes.set(sessionId, readRestored);
+    trimOldest(this.pendingResumes, MAX_TRACKED_SESSIONS);
+  }
+
+  /**
+   * Apply the seed {@link expectResume} registered for this session, if one is
+   * waiting. Once per spawn: a kept process reports `init` again on later
+   * turns, and re-reading then would lower the base below its own results.
+   *
+   * A read that finds no line, finds no transcript or fails leaves the base a
+   * guess, so the process's first result is not trusted (`perTurn`).
+   */
+  seedPendingResume(sessionId: string): void {
+    const readRestored = this.pendingResumes.get(sessionId);
+    if (readRestored === undefined) {
+      return;
+    }
+    this.pendingResumes.delete(sessionId);
+    let restored: SessionTotals | null | undefined;
+    try {
+      restored = readRestored();
+    } catch {
+      restored = undefined;
+    }
+    if (restored === null || restored === undefined) {
+      this.markUnconfirmed(sessionId);
+    } else {
+      this.unconfirmedResumes.delete(sessionId);
+    }
+    if (restored !== undefined) {
+      this.seedForResume(sessionId, restored);
+    }
+  }
+
+  private markUnconfirmed(sessionId: string): void {
+    this.unconfirmedResumes.delete(sessionId);
+    this.unconfirmedResumes.add(sessionId);
+    trimOldest(this.unconfirmedResumes, MAX_TRACKED_SESSIONS);
+  }
+
+  /**
+   * A process reported `system/init` for this session: apply its pending
+   * resume seed, and drop a compaction noted before it — that one belonged to
+   * a process whose result never came, not to this process's next result.
+   */
+  noteInit(sessionId: string): void {
+    this.compacted.delete(sessionId);
+    this.seedPendingResume(sessionId);
+  }
+
+  /**
+   * The session compacted its conversation, so its next `result` did work even
+   * if it reports no tokens of its own — see `describesQuietResult`.
+   */
+  noteCompaction(sessionId: string): void {
+    this.compacted.delete(sessionId);
+    this.compacted.add(sessionId);
+    trimOldest(this.compacted, MAX_TRACKED_SESSIONS);
+  }
+
+  /** Whether a compaction was noted since the session's last result. */
+  takeCompaction(sessionId: string | null): boolean {
+    return sessionId !== null && this.compacted.delete(sessionId);
+  }
+
   /** Drop a finished session's entry. */
   forget(sessionId: string): void {
     this.totals.delete(sessionId);
     this.extraUsage.delete(sessionId);
+    this.pendingResumes.delete(sessionId);
+    this.compacted.delete(sessionId);
+    this.unconfirmedResumes.delete(sessionId);
   }
 
   /**
@@ -375,13 +472,7 @@ export class ClaudeSessionCostLedger {
   ): void {
     this.totals.delete(sessionId);
     this.totals.set(sessionId, totals);
-    while (this.totals.size > MAX_TRACKED_SESSIONS) {
-      const oldest = this.totals.keys().next();
-      if (oldest.done === true) {
-        break;
-      }
-      this.totals.delete(oldest.value);
-    }
+    trimOldest(this.totals, MAX_TRACKED_SESSIONS);
     if (persist) {
       this.scheduleFlush();
     }
@@ -401,6 +492,23 @@ export class ClaudeSessionCostLedger {
       this.store?.write(this.totals);
     }, TOTALS_FLUSH_DELAY_MS);
     this.flushTimer.unref?.();
+  }
+}
+
+/**
+ * Drop the oldest entries of an insertion-ordered collection past `max` — the
+ * bound every per-session and per-delegate record here keeps.
+ */
+function trimOldest<K>(
+  collection: Map<K, unknown> | Set<K>,
+  max: number,
+): void {
+  while (collection.size > max) {
+    const oldest = collection.keys().next();
+    if (oldest.done === true) {
+      break;
+    }
+    collection.delete(oldest.value);
   }
 }
 
@@ -508,6 +616,34 @@ function turnOwnSpendUsd(
 const UNCALIBRATED_FACTOR = 2;
 
 /**
+ * Whether a `result` line made no API request of its own: no tokens in its
+ * usage and a sub-second wall clock — what a resumed process answers before
+ * any work. Such a line can have cost only what its delegates did, which is
+ * the bound an untrusted step on it is held to; the token-priced bound would
+ * call zero tokens unpriceable and cap nothing. A compaction since the last
+ * result is work the usage does not show, so it is never quiet.
+ */
+function describesQuietResult(
+  root: Record<string, unknown>,
+  usage: Record<string, unknown> | null,
+  compacted: boolean,
+): boolean {
+  const durationMs = asNumber(root.duration_ms);
+  if (compacted || durationMs === null || durationMs >= QUIET_RESULT_MAX_MS) {
+    return false;
+  }
+  return [
+    'input_tokens',
+    'output_tokens',
+    'cache_read_input_tokens',
+    'cache_creation_input_tokens',
+  ].every((key) => !(asNumber(usage?.[key]) ?? 0));
+}
+
+/** @see describesQuietResult */
+const QUIET_RESULT_MAX_MS = 1_000;
+
+/**
  * One rung of the ladder: what this turn added to a session total.
  *
  * Null in either position yields null rather than a guess — an unmeasured
@@ -559,22 +695,31 @@ export function readClaudeUsage(
   // rather than optional: an overload that silently reported the running total
   // when the ledger was left out is exactly the defect, and it would be
   // invisible in every spec that did not pass one.
+  const sessionId = asString(root.session_id);
+  // THIS session's delegates only — the ledger is shared by every process the
+  // adapter drives.
+  const delegatesUsd = ledger.delegates.takeSettledUsd(sessionId);
+  const quiet = describesQuietResult(
+    root,
+    usage,
+    ledger.takeCompaction(sessionId),
+  );
   const step = ledger.perTurn(
-    asString(root.session_id),
+    sessionId,
     {
       costUsd: asNumber(root.total_cost_usd),
       apiMs: asNumber(root.duration_api_ms),
       costByModel: readModelUsageCosts(root.modelUsage),
     },
-    turnOwnSpendUsd(
-      root,
-      usage,
-      context.model,
-      // THIS session's delegates only — the ledger is shared by every process
-      // the adapter drives.
-      ledger.delegates.takeSettledUsd(asString(root.session_id)),
-      ledger.prices,
-    ),
+    quiet
+      ? delegatesUsd
+      : turnOwnSpendUsd(
+          root,
+          usage,
+          context.model,
+          delegatesUsd,
+          ledger.prices,
+        ),
   );
   return {
     // Cumulative by nature and labelled as such — the turn's billed input.

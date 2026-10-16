@@ -2570,6 +2570,27 @@ describe('AcpSession turn completion', () => {
       ]);
     });
 
+    it('re-sends the brief and its instructions when the request died before the agent did anything', () => {
+      // Run 1b0f91aa, call-5: the stream stalled ~66s after a callee's FIRST
+      // prompt and cursor had saved none of it — its store held the bare
+      // "continue" as the conversation's first user message. With no brief and
+      // no role the agent went looking through other sessions' transcripts for
+      // something to continue, and finished another conversation's work.
+      const h = primed({ ...resumable(), composeSystemPrompt: () => 'ROLE' });
+      h.feed(chunk('agent_message_chunk', DROP));
+
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+      const resumed = h.sentAll('session/prompt').at(-1)!;
+      const text = (
+        resumed.params as { prompt: { type: string; text?: string }[] }
+      ).prompt
+        .map((block) => block.text ?? '')
+        .join('\n');
+      expect(text).toContain('do the thing');
+      expect(text).toContain(hostBlock('ROLE'));
+    });
+
     it('reports the drop as the turn’s failure once the attempts are spent', () => {
       const h = primed(resumable([0]));
       h.feed(chunk('agent_message_chunk', DROP));
@@ -2589,9 +2610,11 @@ describe('AcpSession turn completion', () => {
       vi.useFakeTimers();
       try {
         const h = primed(resumable([15_000]));
+        h.feed(chunk('agent_message_chunk', 'Running the command.'));
         h.feed(chunk('agent_message_chunk', DROP));
 
         expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+          { type: 'text', text: 'Running the command.' },
           expect.objectContaining({
             type: 'notice',
             severity: 'info',

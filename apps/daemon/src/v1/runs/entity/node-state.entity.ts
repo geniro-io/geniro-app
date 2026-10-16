@@ -23,8 +23,8 @@ export class NodeState extends TimestampsEntity {
    * The CLI that actually ran this node's turn, stamped at turn start. Run
    * history must not depend on the live workflow YAML: editing a node's agent
    * after runs exist would otherwise make the terminal mirror resume a past
-   * session with the wrong CLI. Null on pre-existing rows (legacy fallback:
-   * the YAML lookup).
+   * session with the wrong CLI. Null until the node's first turn starts
+   * (readers then fall back to the YAML lookup).
    */
   @Property({ type: 'string', nullable: true })
   agentKind: AgentKind | null = null;

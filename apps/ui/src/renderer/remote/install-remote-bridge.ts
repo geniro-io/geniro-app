@@ -236,9 +236,13 @@ export function installRemoteBridge(): void {
       invoke(IPC.getGitStamp, [dir]) as ReturnType<GeniroApi['getGitStamp']>,
     getGitHead: (dir) =>
       invoke(IPC.getGitHead, [dir]) as ReturnType<GeniroApi['getGitHead']>,
-    getChangesSince: (dir, sha) =>
-      invoke(IPC.getChangesSince, [dir, sha]) as ReturnType<
+    getChangesSince: (dir, sha, workFolder) =>
+      invoke(IPC.getChangesSince, [dir, sha, workFolder]) as ReturnType<
         GeniroApi['getChangesSince']
+      >,
+    listWorktrees: (dir, startedAtMs) =>
+      invoke(IPC.listWorktrees, [dir, startedAtMs]) as ReturnType<
+        GeniroApi['listWorktrees']
       >,
     getChangesTotals: (dir, sha) =>
       invoke(IPC.getChangesTotals, [dir, sha]) as ReturnType<
@@ -302,6 +306,10 @@ export function installRemoteBridge(): void {
       >,
     pullBranch: (dir) =>
       invoke(IPC.pullBranch, [dir]) as ReturnType<GeniroApi['pullBranch']>,
+    carryChangesToBranch: (dir, branch) =>
+      invoke(IPC.carryChangesToBranch, [dir, branch]) as ReturnType<
+        GeniroApi['carryChangesToBranch']
+      >,
     revealPath: (path) =>
       invoke(IPC.revealPath, [path]) as ReturnType<GeniroApi['revealPath']>,
     toggleDevTools: () =>

@@ -9,6 +9,7 @@ import {
 import { createElement } from 'react';
 
 import { Card } from '../components/ui/card';
+import { cn } from '../components/ui/utils';
 
 const CONCEPTS = [
   {
@@ -35,60 +36,68 @@ const ROLES = [
 
 export function OnboardingOverview(): React.JSX.Element {
   return (
-    <div className="space-y-4">
-      <Card className="gap-6 border-primary/20 bg-primary/5 p-6 shadow-none sm:p-7">
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium uppercase tracking-widest text-primary">
-            Example team
-          </p>
-          <h2 className="text-lg font-semibold tracking-tight">
-            One task. A few clear roles.
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Start with one agent. Add a team whenever it helps.
-          </p>
-        </div>
-        <ol aria-label="Example team workflow" className="grid grid-cols-3">
+    <div className="space-y-8">
+      <Card className="items-center border-primary/15 bg-primary/5 px-6 py-8 text-center shadow-none sm:px-8">
+        <p className="text-xs font-medium uppercase tracking-widest text-primary">
+          Example team
+        </p>
+        <h2 className="mt-2 text-lg font-semibold tracking-tight">
+          One task. A few clear roles.
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Start with one agent. Add a team whenever it helps.
+        </p>
+        <ol
+          aria-label="Example team workflow"
+          className="mt-8 grid w-full max-w-xl grid-cols-3">
           {ROLES.map(({ Icon: icon, title, detail }, index) => (
-            <li key={title} className="min-w-0">
-              <div className="flex items-center">
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-card text-primary">
+            <li key={title} className="flex min-w-0 flex-col items-center">
+              <div className="flex w-full items-center">
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'h-px flex-1 bg-primary/25',
+                    index === 0 && 'invisible',
+                  )}
+                />
+                <span className="flex size-11 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-card text-primary shadow-panel-sm">
                   {createElement(icon, {
                     'aria-hidden': true,
-                    className: 'size-4',
+                    className: 'size-[18px]',
                   })}
                 </span>
-                {index < ROLES.length - 1 ? (
-                  <span
-                    aria-hidden="true"
-                    className="mx-3 h-px flex-1 bg-primary/30"
-                  />
-                ) : null}
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'h-px flex-1 bg-primary/25',
+                    index === ROLES.length - 1 && 'invisible',
+                  )}
+                />
               </div>
-              <p className="mt-3 pr-3 text-sm font-semibold">{title}</p>
-              <p className="mt-0.5 pr-3 text-xs leading-relaxed text-muted-foreground">
+              <p className="mt-3 text-sm font-semibold">{title}</p>
+              <p className="mt-0.5 px-2 text-xs text-muted-foreground">
                 {detail}
               </p>
             </li>
           ))}
         </ol>
       </Card>
-      <Card className="divide-y divide-border shadow-none sm:grid sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+      <dl className="grid gap-6 sm:grid-cols-3">
         {CONCEPTS.map(({ Icon: icon, title, description }) => (
-          <div key={title} className="p-5">
-            <h2 className="flex items-center gap-2 text-sm font-semibold">
+          <div key={title} className="border-t border-border pt-4">
+            <dt className="flex items-center gap-2 text-sm font-semibold">
               {createElement(icon, {
                 'aria-hidden': true,
                 className: 'size-4 text-primary',
               })}
               {title}
-            </h2>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            </dt>
+            <dd className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
               {description}
-            </p>
+            </dd>
           </div>
         ))}
-      </Card>
+      </dl>
     </div>
   );
 }

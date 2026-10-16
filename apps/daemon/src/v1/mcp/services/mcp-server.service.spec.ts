@@ -3235,7 +3235,14 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const listing = find(tools, 'list_agent_threads');
     // When to use it, what it answers, and when not to.
     expect(listing).toContain('BEFORE you continue');
-    expect(listing).toContain('start_fresh');
+    // It states each conversation's size and the refusal, and steers toward
+    // neither continuing nor starting over.
+    expect(listing).toContain('`tokens`');
+    expect(listing).toContain('`percent`');
+    expect(listing).toContain('resume_refused');
+    expect(listing).not.toMatch(/advice|start_fresh/);
+    expect(listing).not.toContain('Continue a conversation');
+    expect(listing).not.toMatch(/\binstead\b/);
     expect(listing).toMatch(/expired/i);
     expect(listing).toContain('Do not use it');
     expect(listing).toContain('call_agent');
@@ -3243,6 +3250,9 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(call.description).not.toContain('list_agent_threads');
     expect(JSON.stringify(call)).toContain('list_agent_threads');
     expect(JSON.stringify(call)).toContain('CACHE_EXPIRED');
+    expect(JSON.stringify(call)).toContain(
+      "context size in tokens and as a percent of its model's window",
+    );
     expect(tools.find((t) => t.name === 'list_agent_threads')?._meta).toEqual(
       tools.find((t) => t.name === 'await_agent')?._meta,
     );

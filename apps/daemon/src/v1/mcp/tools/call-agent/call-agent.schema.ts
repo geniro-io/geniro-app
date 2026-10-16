@@ -23,7 +23,7 @@ export function callAgentSchema(): Record<string, unknown> {
       },
       thread: {
         type: 'string',
-        description: `Optional: a previous call_id of YOUR call to this same agent — the callee CONTINUES that conversation with its full memory. Omit to start a new thread. Before continuing a conversation after a pause, check it with list_agent_threads: one whose prompt cache has EXPIRED and whose context is over ${COLD_RESUME_CONTEXT_PERCENT}% full is refused (CACHE_EXPIRED), because resuming it re-bills the whole context uncached — start a new instance with a self-contained brief instead.`,
+        description: `Optional: a previous call_id of YOUR call to this same agent — the callee CONTINUES that conversation with its full memory, and every step of its turn re-reads that whole context. Omit to start a new thread. Before continuing a conversation, above all after a pause, check it with list_agent_threads: it reports each conversation's context size in tokens and as a percent of its model's window, and where its prompt cache stands. One whose prompt cache has EXPIRED and whose context is over ${COLD_RESUME_CONTEXT_PERCENT}% full is refused (CACHE_EXPIRED) unless you pass resume_cold, because resuming it re-bills the whole context uncached.`,
       },
       resume_cold: {
         type: 'boolean',

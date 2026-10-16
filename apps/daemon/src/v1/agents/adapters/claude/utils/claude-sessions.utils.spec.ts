@@ -846,8 +846,8 @@ describe('carryClaudeSession', () => {
     // a retry. The id is the CLI's own, so a file of that name in the target is
     // the same thread — carried once and appended to since. Overwriting would
     // replace those later turns with an older prefix of themselves, which is a
-    // silent loss of the user's own conversation, so `COPYFILE_EXCL` refuses
-    // and the refusal reads as success.
+    // silent loss of the user's own conversation, so the longer copy is kept
+    // and that reads as success.
     const id = 'bbbbbbbb-1111-2222-3333-444444444444';
     const from = profile([
       { dir: '-private-tmp-carry', id, lines: [userLine(CWD, 'first turn')] },
@@ -873,6 +873,111 @@ describe('carryClaudeSession', () => {
         'utf8',
       ),
     ).toContain('and a later one');
+  });
+
+  it('A→B→A brings back the turns made on B, with the sidecar folder', async () => {
+    // The target still holds the OLD copy from before the move away. Keeping
+    // it resumed A without every turn made on B while the move reported
+    // success.
+    const id = 'dddddddd-1111-2222-3333-444444444444';
+    const dir = '-private-tmp-carry';
+    const a = profile([{ dir, id, lines: [userLine(CWD, 'turn on A')] }]);
+    const b = profile([]);
+    await carryClaudeSession({
+      sessionId: id,
+      fromProfileDir: a,
+      toProfileDir: b,
+    });
+    writeFileSync(
+      join(b, 'projects', dir, `${id}.jsonl`),
+      [userLine(CWD, 'turn on A'), userLine(CWD, 'turn on B')]
+        .map((line) => JSON.stringify(line))
+        .join('\n'),
+    );
+    // A sub-agent transcript the turn on B wrote.
+    mkdirSync(join(b, 'projects', dir, id, 'subagents'), { recursive: true });
+    writeFileSync(
+      join(b, 'projects', dir, id, 'subagents', 'agent-1.jsonl'),
+      'sub',
+    );
+
+    expect(
+      await carryClaudeSession({
+        sessionId: id,
+        fromProfileDir: b,
+        toProfileDir: a,
+      }),
+    ).toEqual({ carried: true });
+    expect(
+      readFileSync(join(a, 'projects', dir, `${id}.jsonl`), 'utf8'),
+    ).toContain('turn on B');
+    expect(
+      readFileSync(
+        join(a, 'projects', dir, id, 'subagents', 'agent-1.jsonl'),
+        'utf8',
+      ),
+    ).toBe('sub');
+  });
+
+  it('refuses, and overwrites nothing, when the two copies have diverged', async () => {
+    const id = 'ffffffff-1111-2222-3333-444444444444';
+    const dir = '-private-tmp-carry';
+    const from = profile([
+      { dir, id, lines: [userLine(CWD, 'shared'), userLine(CWD, 'from side')] },
+    ]);
+    const to = profile([
+      { dir, id, lines: [userLine(CWD, 'shared'), userLine(CWD, 'to side')] },
+    ]);
+
+    const result = await carryClaudeSession({
+      sessionId: id,
+      fromProfileDir: from,
+      toProfileDir: to,
+    });
+
+    expect(result.carried).toBe(false);
+    expect(result.carried === false ? result.reason : '').toContain(
+      'different continuations',
+    );
+    expect(
+      readFileSync(join(to, 'projects', dir, `${id}.jsonl`), 'utf8'),
+    ).toContain('to side');
+  });
+
+  it('leaves the file alone when both profiles share ONE projects folder through a symlink', async () => {
+    // The source and the target are then the same file, and copying it onto
+    // itself (or truncating it first) would destroy the conversation.
+    const id = 'eeeeeeee-1111-2222-3333-444444444444';
+    const dir = '-private-tmp-carry';
+    const main = profile([{ dir, id, lines: [userLine(CWD, 'shared turn')] }]);
+    mkdirSync(join(main, 'projects', dir, id), { recursive: true });
+    writeFileSync(join(main, 'projects', dir, id, 'tool-result.txt'), 'kept');
+    const alt = profile([]);
+    rmSync(join(alt, 'projects'), { recursive: true, force: true });
+    symlinkSync(join(main, 'projects'), join(alt, 'projects'));
+    const before = readFileSync(
+      join(main, 'projects', dir, `${id}.jsonl`),
+      'utf8',
+    );
+
+    for (const [from, to] of [
+      [main, alt],
+      [alt, main],
+    ] as const) {
+      expect(
+        await carryClaudeSession({
+          sessionId: id,
+          fromProfileDir: from,
+          toProfileDir: to,
+        }),
+      ).toEqual({ carried: true });
+    }
+    expect(
+      readFileSync(join(main, 'projects', dir, `${id}.jsonl`), 'utf8'),
+    ).toBe(before);
+    expect(
+      readFileSync(join(main, 'projects', dir, id, 'tool-result.txt'), 'utf8'),
+    ).toBe('kept');
   });
 
   it('says so when the old profile no longer holds the conversation', async () => {

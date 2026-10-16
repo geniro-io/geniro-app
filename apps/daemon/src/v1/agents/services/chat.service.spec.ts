@@ -12456,6 +12456,35 @@ describe('ChatService — pointing an open chat at another account', () => {
     expect(runDao.runs.get(run.id)?.contextTokens).toBe(4321);
   });
 
+  it('starts the prompt-cache countdown over on the new account', async () => {
+    // A prompt cache is per ACCOUNT: the expiry and lifetime the old profile's
+    // turns reported say nothing about the new one, which starts cold. Kept,
+    // the composer counted down to an expiry that belonged to another account.
+    const { service, claude, nodeDao, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir: profileA,
+    });
+    await service.sendMessage(run.id, 'hello');
+    claude.finish();
+    await drain();
+    await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, SESSION);
+    seedSession(profileA, 'the codeword is PLUM');
+    await runDao.rememberPromptCache(
+      run.id,
+      { ttlMs: 3_600_000, reason: null },
+      new Date(),
+    );
+    expect(runDao.runs.get(run.id)?.promptCacheExpiresAt).not.toBeNull();
+
+    await service.updateSettings(run.id, { configDir: profileB });
+
+    expect(runDao.runs.get(run.id)?.configDir).toBe(profileB);
+    expect(runDao.runs.get(run.id)?.promptCacheExpiresAt).toBeNull();
+    expect(runDao.runs.get(run.id)?.promptCacheTtlMs).toBeNull();
+  });
+
   it('refuses mid-turn, because the turn is writing into the profile being left', async () => {
     // `model` and `effort` are accepted on a claimed run — they only describe
     // the NEXT turn. This one does more than describe: a copy taken now would

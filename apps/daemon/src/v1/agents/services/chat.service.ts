@@ -1470,7 +1470,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         : patch.model !== undefined
           ? { modelParameters: null }
           : {}),
-      ...(profileMove === null ? {} : { configDir: profileMove.configDir }),
+      // A prompt cache is per ACCOUNT, so the expiry and lifetime the old
+      // profile's turns reported go with it: the new account starts cold, and
+      // its first turn reports its own.
+      ...(profileMove === null
+        ? {}
+        : {
+            configDir: profileMove.configDir,
+            promptCacheExpiresAt: null,
+            promptCacheTtlMs: null,
+          }),
       // Blank normalizes to null, as at creation.
       ...(patch.taskInstructions !== undefined
         ? { taskInstructions: patch.taskInstructions?.trim() || null }

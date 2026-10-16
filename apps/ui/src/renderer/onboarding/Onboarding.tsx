@@ -48,8 +48,8 @@ import { OnboardingOverview } from './onboarding-overview';
 const STEPS = ['How it works', 'Agents', 'Profiles', 'First launch'] as const;
 const STEP_DETAILS = [
   'A quick introduction',
-  'Connect a coding assistant',
-  'Separate your setups · optional',
+  'Connect a coding agent',
+  'Optional · separate setups',
   'Choose where to begin',
 ] as const;
 const INITIAL: OnboardingProgress = {
@@ -354,28 +354,28 @@ export function Onboarding({
       <div
         data-slot="onboarding"
         className="flex h-full min-h-0 flex-col bg-background pt-11 text-foreground md:flex-row">
-        <aside className="flex shrink-0 flex-col border-b border-border bg-card px-4 py-3 md:w-60 md:border-r md:border-b-0 md:px-6 md:py-7">
-          <div className="hidden md:block">
-            <Logo size="hero" className="max-w-full" />
-            <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+        <aside className="flex shrink-0 flex-col border-b border-border bg-card px-4 py-3 md:w-72 md:border-r md:border-b-0 md:px-5 md:py-6">
+          <div className="hidden px-3 md:block">
+            <Logo size="hero" className="-ml-1.5 max-w-full" />
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
               A little setup.
               <br />A lot you can build.
             </p>
           </div>
           <nav
             aria-label="Setup steps"
-            className="flex gap-2 md:mt-10 md:flex-col md:gap-2">
+            className="flex gap-2 md:mt-8 md:flex-col md:gap-1">
             {STEPS.map((label, index) => (
               <Button
                 key={label}
                 variant={progress.step === index ? 'secondary' : 'ghost'}
-                className="h-auto min-w-0 flex-1 justify-start gap-2 whitespace-normal px-2 py-2 text-left md:flex-none md:gap-3 md:px-3 md:py-3"
+                className="h-auto min-w-0 flex-1 justify-start gap-2 whitespace-normal px-2 py-2 text-left md:flex-none md:gap-3 md:px-3 md:py-2.5"
                 disabled={blocked}
                 aria-current={progress.step === index ? 'step' : undefined}
                 onClick={() => move(index as OnboardingProgress['step'])}>
                 <span
                   className={cn(
-                    'flex size-7 shrink-0 items-center justify-center rounded-full border border-border text-xs',
+                    'flex size-6 shrink-0 items-center justify-center rounded-full border border-border text-xs',
                     progress.step === index &&
                       'border-primary bg-primary text-primary-foreground',
                     index < progress.step &&
@@ -388,20 +388,26 @@ export function Onboarding({
                   )}
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-xs md:text-sm">{label}</span>
-                  <span className="mt-1 hidden text-xs font-normal leading-relaxed text-muted-foreground md:block">
+                  <span className="block truncate text-xs md:text-sm">
+                    {label}
+                  </span>
+                  <span className="mt-0.5 hidden truncate text-xs font-normal text-muted-foreground md:block">
                     {STEP_DETAILS[index]}
                   </span>
                 </span>
               </Button>
             ))}
           </nav>
-          <div className="mt-auto hidden pt-8 md:block">
-            <p className="flex items-center gap-2 text-xs font-medium">
-              <ShieldCheck className="size-4 text-primary" />
-              On your computer. In your control.
+          <div className="mt-auto hidden px-3 pt-8 md:block">
+            <p className="flex items-start gap-2 text-xs font-medium leading-relaxed">
+              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" />
+              <span>
+                On your computer.
+                <br />
+                In your control.
+              </span>
             </p>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            <p className="mt-1.5 pl-6 text-xs leading-relaxed text-muted-foreground">
               Nothing starts working until you send a task.
             </p>
           </div>

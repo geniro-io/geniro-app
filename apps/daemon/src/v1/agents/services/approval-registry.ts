@@ -24,9 +24,10 @@ export interface PendingApproval {
    */
   question: boolean;
   /**
-   * Whether this card OUTLIVES the turn that raised it — a question whose
-   * agent was told to stop and wait, because its CLI's MCP client will not
-   * hold a call open for a person (`AdapterConfig.hostQuestionDeferredReason`).
+   * Whether this card OUTLIVES the turn that raised it — a question, a plan or
+   * a patch whose agent was told to stop and wait, because its CLI's MCP
+   * client will not hold a call open for a person
+   * (`AdapterConfig.hostQuestionDeferredReason`).
    *
    * It is the one entry {@link ApprovalRegistry.sweepNode} leaves alone. Every
    * other pending card is a PARKED CALL, so a settled turn means nobody is on

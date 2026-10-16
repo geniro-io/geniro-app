@@ -46,9 +46,42 @@ describe('pending question snapshots', () => {
       ],
     });
 
-    expect(readPendingQuestion(stored)?.questions[0]?.options).toEqual([
-      { label: 'Postgres' },
-    ]);
+    const read = readPendingQuestion(stored);
+    const questions = read !== null && !('kind' in read) ? read.questions : [];
+    expect(questions[0]?.options).toEqual([{ label: 'Postgres' }]);
+  });
+
+  it('round-trips a plan and a patch in the same column', () => {
+    const plan = {
+      kind: 'plan' as const,
+      requestId: 'req-plan',
+      title: 'Make the queue test deterministic',
+      steps: [{ title: 'Replace the sleep', detail: 'wait for the queue' }],
+    };
+    const patch = {
+      kind: 'patch' as const,
+      requestId: 'req-patch',
+      patch: {
+        filePath: 'a.ts',
+        oldString: 'const timeout = 30;',
+        newString: 'const timeout = 60;',
+        summary: 'Raise the timeout',
+      },
+    };
+
+    expect(readPendingQuestion(serializePendingQuestion(plan))).toEqual(plan);
+    expect(readPendingQuestion(serializePendingQuestion(patch))).toEqual(patch);
+  });
+
+  it('still reads a row that names no kind as a question', () => {
+    // Every standing question written before plans shared this column has no
+    // `kind`. Reading one as a plan would drop the card on the next boot.
+    const stored = JSON.stringify(SNAPSHOT);
+
+    const read = readPendingQuestion(stored);
+    expect(read !== null && !('kind' in read) && read.questions).toEqual(
+      SNAPSHOT.questions,
+    );
   });
 
   it.each([
@@ -60,6 +93,14 @@ describe('pending question snapshots', () => {
     [
       'a snapshot whose questions read as nothing',
       '{"requestId":"req-1","questions":[{"question":"?"}]}',
+    ],
+    [
+      'a plan with no readable step',
+      '{"kind":"plan","requestId":"req-1","title":"T","steps":[]}',
+    ],
+    [
+      'a patch over the size the live reader refuses',
+      `{"kind":"patch","requestId":"req-1","file_path":"a.ts","new_string":"${'x'.repeat(200_001)}"}`,
     ],
   ])('answers null for %s', (_name, stored) => {
     // The column is TEXT that outlives the process that wrote it, so a row from

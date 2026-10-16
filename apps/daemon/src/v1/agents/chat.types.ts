@@ -1388,11 +1388,16 @@ export interface HostPatch {
  * rejected when it was in fact accepted, and folding it into `unavailable`
  * would hide that the right move is to look at the file again and re-propose.
  * The `reason` is what separates the cases.
+ *
+ * `posted` is the fifth, and it is not an ending — the same arm a deferred
+ * question has. A CLI that will not hold the call open is told the card is up;
+ * Apply or Reject arrives later, as the run's next message.
  */
 export type HostPatchOutcome =
   | { status: 'applied'; path: string }
   | { status: 'declined' }
   | { status: 'stale'; reason: string }
+  | { status: 'posted' }
   | { status: 'unavailable'; reason: string };
 
 /**
@@ -1460,10 +1465,15 @@ export interface HostPlan {
  * action, so nothing can go `stale` between the press and the effect. The note
  * hangs off BOTH verdicts because a user who approves with a caveat is telling
  * the agent something it must not lose.
+ *
+ * `posted` is the fourth, shared with the question and the patch: the card is
+ * on screen and the verdict will arrive as the run's next message, because
+ * this CLI will not hold the call open for a person.
  */
 export type HostPlanOutcome =
   | { status: 'approved'; note?: string }
   | { status: 'declined'; note?: string }
+  | { status: 'posted' }
   | { status: 'unavailable'; reason: string };
 
 /**

@@ -147,6 +147,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - The card outlives the turn (`sweepNode` skips `deferred`) and is retired by a new turn (`sweepDeferred` → `unanswerable`).
   - Write the verdict row and clear `Run.pendingQuestion` BEFORE the answer message goes out.
   - One per run, rehydrated at boot (`rehydrateDeferredQuestions`); a different second question is refused.
+  - `propose_plan` and `propose_patch` take the same deferral, column and one-card rule (`PendingCardSnapshot`). Approve or Reject starts a turn whose message is the verdict, a plan's note included. Apply runs `applyHostPatch` from the run's cwd when that message is sent, after a restart too, so a file that has moved comes back `stale` and is left unwritten. Their listing says the call returns at once (`PlanBroker` / `PatchBroker.answersAtOnce`).
 - cursor's own `cursor/ask_question` is not used for `ask_user_question` (option ids only).
 
 ### Pull requests and task lists

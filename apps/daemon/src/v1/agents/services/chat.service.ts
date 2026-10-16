@@ -116,8 +116,8 @@ import { isHostFindingsCall } from '../utils/host-findings';
 import { isHostGalleryCall } from '../utils/host-gallery';
 import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostNotifyCall } from '../utils/host-notify';
-import { isHostPatchCall } from '../utils/host-patch';
-import { isHostPlanCall } from '../utils/host-plan';
+import { hostPatchResultText, isHostPatchCall } from '../utils/host-patch';
+import { hostPlanResultText, isHostPlanCall } from '../utils/host-plan';
 import {
   deferredAnswerMessage,
   hostCardQuestions,
@@ -142,6 +142,10 @@ import {
   strandedShells,
 } from '../utils/open-shells';
 import {
+  type PendingCardSnapshot,
+  type PendingPatchSnapshot,
+  type PendingPlanSnapshot,
+  type PendingQuestionSnapshot,
   readPendingQuestion,
   serializePendingQuestion,
 } from '../utils/pending-question';
@@ -244,12 +248,78 @@ interface RunWireRead {
 }
 
 /**
- * What an agent is told when it asks a DIFFERENT question while one of its
- * deferred cards is standing — or is still being put up. One per run: the
- * durable half is a single column.
+ * What an agent is told when it raises a DIFFERENT card while one is already
+ * standing — or is still being put up. One per run: the durable half is a
+ * single column, shared by a question, a plan and a patch.
  */
 const QUESTION_ALREADY_STANDING =
-  'a question is already on the user’s screen waiting to be answered — wait for that answer before asking another';
+  'a card is already on the user’s screen waiting to be answered — wait for that answer before raising another';
+
+/** What identifies a deferred plan, so an identical re-ask adopts the card. */
+function deferredPlanKey(plan: HostPlan): string {
+  return `plan:${JSON.stringify({ title: plan.title, steps: plan.steps })}`;
+}
+
+/** What identifies a deferred patch, so an identical re-ask adopts the card. */
+function deferredPatchKey(patch: HostPatch): string {
+  return `patch:${JSON.stringify({
+    filePath: patch.filePath,
+    oldString: patch.oldString ?? null,
+    newString: patch.newString,
+    summary: patch.summary ?? null,
+  })}`;
+}
+
+/** The registry input, spelled the way the card row is. */
+function deferredCardInput(snapshot: PendingCardSnapshot): unknown {
+  if (!('kind' in snapshot)) {
+    return {
+      ...(snapshot.title === null ? {} : { title: snapshot.title }),
+      questions: snapshot.questions,
+    };
+  }
+  return snapshot.kind === 'plan'
+    ? { title: snapshot.title, steps: snapshot.steps }
+    : patchWireInput(snapshot.patch);
+}
+
+/** A patch's arguments in `Edit`'s field names, which is what the diff reads. */
+function patchWireInput(patch: HostPatch): {
+  file_path: string;
+  old_string?: string;
+  new_string: string;
+  summary?: string;
+} {
+  return {
+    file_path: patch.filePath,
+    ...(patch.oldString === undefined ? {} : { old_string: patch.oldString }),
+    new_string: patch.newString,
+    ...(patch.summary === undefined ? {} : { summary: patch.summary }),
+  };
+}
+
+/** The host tool that raised a deferred card. */
+function deferredCardTool(snapshot: PendingCardSnapshot): string {
+  if (!('kind' in snapshot)) {
+    return HOST_QUESTION_TOOL;
+  }
+  return snapshot.kind === 'plan' ? HOST_PLAN_TOOL : HOST_PATCH_TOOL;
+}
+
+/**
+ * Whether `key` is the card already standing. A question's key is every word
+ * it shows; a plan's and a patch's are prefixed so they cannot collide with it.
+ */
+function adoptsStanding(standing: PendingCardSnapshot, key: string): boolean {
+  if (!('kind' in standing)) {
+    return StandingQuestions.keyFor(standing.title, standing.questions) === key;
+  }
+  return (
+    (standing.kind === 'plan'
+      ? deferredPlanKey({ title: standing.title, steps: standing.steps })
+      : deferredPatchKey(standing.patch)) === key
+  );
+}
 
 /**
  * Orchestrates a single-agent chat: validates the run's cwd, drives the chosen
@@ -389,7 +459,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   private readonly deferredAsks = new Map<
     string,
-    { key: string; outcome: Promise<HostQuestionOutcome> }
+    {
+      key: string;
+      outcome: Promise<
+        HostQuestionOutcome | HostPlanOutcome | HostPatchOutcome
+      >;
+    }
   >();
 
   /**
@@ -831,15 +906,30 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     });
   }
 
-  // ── Deferred question cards ─────────────────────────────────────────────
+  /**
+   * Say again that a deferred card is still waiting, after a status write.
+   *
+   * `writeRunStatus` publishes `awaiting: null` on every status change. That
+   * is true for a parked call the settle just swept, and false for a deferred
+   * card `sweepNode` left standing — without this the badge dies with the
+   * turn the card was built to outlive, and the banner never fires for it.
+   */
+  private restoreDeferredAwaiting(runId: string): void {
+    if (this.approvals.awaitingFor(runId) !== null) {
+      this.announceAwaiting(runId);
+    }
+  }
+
+  // ── Deferred cards ──────────────────────────────────────────────────────
   //
   // A card the agent is NOT blocked on, for a CLI whose MCP client refuses to
   // hold a `tools/call` open for a person (`AdapterConfig.hostQuestionDeferredReason`).
   // The tool answers `posted` at once and the agent is told to stop; the card
   // stands until the user answers it, and the answer reaches the agent as the
-  // run's NEXT message. So a question may be left open for an hour, which is
-  // the whole point — what it costs is that these four methods have to hold
-  // everything the parked promise used to hold for free.
+  // run's NEXT message. A question, a plan and a patch share the column and
+  // the one-card rule. So a card may be left open for an hour, which is the
+  // whole point — what it costs is that these methods have to hold everything
+  // the parked promise used to hold for free.
 
   /**
    * Put one deferred card in the registry, with a responder that starts a turn
@@ -850,18 +940,18 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * ended and, routinely, so has the whole daemon process. That is also what
    * lets the boot rehydration call it with a row read off disk.
    */
-  private trackDeferredQuestion(
+  private trackDeferredCard(
     runId: string,
-    requestId: string,
-    input: { title?: string; questions: HostQuestion[] },
+    snapshot: PendingCardSnapshot,
   ): void {
+    const question = !('kind' in snapshot);
     this.approvals.track({
       runId,
       nodeId: SINGLE_AGENT_NODE,
-      requestId,
-      toolName: HOST_QUESTION_TOOL,
-      input,
-      question: true,
+      requestId: snapshot.requestId,
+      toolName: deferredCardTool(snapshot),
+      input: deferredCardInput(snapshot),
+      question,
       deferred: true,
       respond: (allow, answer) => {
         // Fire-and-forget, and `true` regardless: the verdict channel is a
@@ -869,15 +959,98 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // and a new turn. What the ack means here is "accepted", which is the
         // honest reading — the alternative is making the user wait on a CLI
         // spawn to learn their click registered.
-        void this.deliverDeferredAnswer(runId, requestId, allow, answer);
+        void this.deliverDeferredAnswer(runId, snapshot, allow, answer);
         return true;
       },
     });
   }
 
   /**
+   * What the verdict row records and what the agent is told.
+   *
+   * A question sends the user's words, as it always has. A plan sends the
+   * verdict sentence, note included. A patch runs the write first and sends
+   * what that write did.
+   */
+  private async deferredDelivery(
+    runId: string,
+    snapshot: PendingCardSnapshot,
+    allow: boolean,
+    answer: string | undefined,
+    em: EntityManager,
+  ): Promise<{ message: string; answer?: string }> {
+    if ('kind' in snapshot && snapshot.kind === 'plan') {
+      const note =
+        answer !== undefined && answer.trim().length > 0
+          ? answer.trim()
+          : undefined;
+      const outcome: HostPlanOutcome = {
+        status: allow ? 'approved' : 'declined',
+        ...(note === undefined ? {} : { note }),
+      };
+      return {
+        message: hostPlanResultText(outcome),
+        ...(note === undefined ? {} : { answer: note }),
+      };
+    }
+    if ('kind' in snapshot && snapshot.kind === 'patch') {
+      const outcome = await this.deferredPatchOutcome(
+        runId,
+        allow,
+        snapshot.patch,
+        em,
+      );
+      return {
+        message: hostPatchResultText(outcome),
+        ...(outcome.status === 'applied'
+          ? { answer: `applied to ${outcome.path}` }
+          : {}),
+      };
+    }
+    return {
+      message: deferredAnswerMessage(allow, answer),
+      ...(allow && answer !== undefined ? { answer } : {}),
+    };
+  }
+
+  /**
+   * Apply a deferred patch from the run's cwd, or say why it was not applied.
+   *
+   * The cwd is read off the run at answer time. The turn that proposed the
+   * patch is gone, and so, routinely, is the process — the snapshot is the
+   * only copy of the body left.
+   */
+  private async deferredPatchOutcome(
+    runId: string,
+    allow: boolean,
+    patch: HostPatch,
+    em: EntityManager,
+  ): Promise<HostPatchOutcome> {
+    if (!allow) {
+      return { status: 'declined' };
+    }
+    let cwd: string | null;
+    try {
+      const run = await this.runDao.getById(runId, em);
+      cwd = run?.cwd ?? null;
+    } catch (err) {
+      this.logger.error(
+        `run ${runId} could not read its folder for a deferred patch: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { status: 'unavailable', reason: 'the file could not be written' };
+    }
+    if (cwd === null || cwd.length === 0) {
+      return {
+        status: 'unavailable',
+        reason: 'the chat has no working folder',
+      };
+    }
+    return applyHostPatch(cwd, patch);
+  }
+
+  /**
    * The user answered a deferred card: record the verdict, forget the standing
-   * question, and hand the answer to the agent as the run's next message.
+   * card, and hand the answer to the agent as the run's next message.
    *
    * ORDER is load-bearing. The column is cleared and the verdict written BEFORE
    * the message goes out, because `sendMessage` retires whatever card is still
@@ -887,13 +1060,24 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   private async deliverDeferredAnswer(
     runId: string,
-    requestId: string,
+    snapshot: PendingCardSnapshot,
     allow: boolean,
     answer?: string,
   ): Promise<void> {
     const em = this.em.fork();
+    // A patch's Apply writes the file BEFORE the column is cleared. The write
+    // is `applyHostPatch` — the blocking path's own function, from the run's
+    // cwd as it stands now, not a closure over the turn that proposed it —
+    // so a restart answers the same way a live turn does.
+    const delivery = await this.deferredDelivery(
+      runId,
+      snapshot,
+      allow,
+      answer,
+      em,
+    );
     try {
-      await this.runDao.setPendingQuestion(runId, null, em);
+      await this.clearOwnPendingCard(runId, snapshot.requestId, em);
       await this.persist(
         em,
         runId,
@@ -901,9 +1085,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         'approval_verdict',
         null,
         {
-          id: requestId,
+          id: snapshot.requestId,
           allow,
-          ...(allow && answer !== undefined ? { answer } : {}),
+          ...(delivery.answer === undefined ? {} : { answer: delivery.answer }),
         },
       );
       this.announceAwaiting(runId);
@@ -916,7 +1100,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       );
     }
     try {
-      await this.sendMessage(runId, deferredAnswerMessage(allow, answer));
+      await this.sendMessage(runId, delivery.message);
     } catch (err) {
       // An archived run, a run being deleted, a CLI that refused the send: the
       // card is answered either way and the transcript says so, so this is the
@@ -925,6 +1109,31 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         `run ${runId} could not deliver a deferred answer: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * Clear the run's deferred-card column if it still points at `requestId`.
+   *
+   * The delivery reaches this only after awaiting the run row and, for a
+   * patch, the file write. In that window the user may have typed on and a
+   * new turn put up a DIFFERENT card, which must keep its pointer. Read on a
+   * fresh fork (the delivery's own may have the row cached from before), and
+   * cleared only if the text is still what was read.
+   */
+  private async clearOwnPendingCard(
+    runId: string,
+    requestId: string,
+    em: EntityManager,
+  ): Promise<void> {
+    const run = await this.runDao.getById(runId, this.em.fork());
+    const column = run?.pendingQuestion ?? null;
+    if (
+      column === null ||
+      readPendingQuestion(column)?.requestId !== requestId
+    ) {
+      return;
+    }
+    await this.runDao.clearPendingQuestionIf(runId, column, em);
   }
 
   /**
@@ -989,14 +1198,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           await this.runDao.setPendingQuestion(run.id, null, em);
           continue;
         }
-        this.trackDeferredQuestion(run.id, snapshot.requestId, {
-          ...(snapshot.title === null ? {} : { title: snapshot.title }),
-          questions: snapshot.questions,
-        });
+        this.trackDeferredCard(run.id, snapshot);
         restored += 1;
       }
       if (restored > 0) {
-        this.logger.log(`restored ${restored} standing question card(s)`);
+        this.logger.log(`restored ${restored} standing card(s)`);
       }
     } catch (err) {
       this.logger.error(
@@ -1015,40 +1221,87 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * An IDENTICAL re-ask is answered `posted` again without raising anything,
    * which is the deferred twin of `StandingQuestions`' adopt.
    */
-  private async askUserDeferred(
+  private askUserDeferred(
     em: EntityManager,
     runId: string,
     key: string,
     questions: HostQuestion[],
     title: string | null,
   ): Promise<HostQuestionOutcome> {
-    // Claimed SYNCHRONOUSLY, before the first await: the standing check below
-    // reads the run row, so two different asks racing in one tick both found
-    // nothing standing, both drew a card, and only the second survived in
-    // `Run.pendingQuestion` — leaving the first on screen with nothing able to
-    // bring it back after a restart. An identical ask in flight shares the
-    // first one's outcome, the in-flight twin of the adopt below.
+    return this.withDeferredClaim(runId, key, () =>
+      this.raiseDeferredQuestion(em, runId, key, questions, title),
+    );
+  }
+
+  private proposePlanDeferred(
+    em: EntityManager,
+    runId: string,
+    plan: HostPlan,
+  ): Promise<HostPlanOutcome> {
+    const key = deferredPlanKey(plan);
+    return this.withDeferredClaim(runId, key, () =>
+      this.raiseDeferredPlan(em, runId, key, plan),
+    );
+  }
+
+  private proposePatchDeferred(
+    em: EntityManager,
+    runId: string,
+    patch: HostPatch,
+  ): Promise<HostPatchOutcome> {
+    const key = deferredPatchKey(patch);
+    return this.withDeferredClaim(runId, key, () =>
+      this.raiseDeferredPatch(em, runId, key, patch),
+    );
+  }
+
+  /**
+   * Claim the run's one deferred slot SYNCHRONOUSLY, before the first await.
+   *
+   * The standing check reads the run row, so two different asks racing in one
+   * tick both found nothing standing, both drew a card, and only the second
+   * survived in `Run.pendingQuestion`. An identical ask in flight shares the
+   * first one's outcome.
+   */
+  private withDeferredClaim<
+    T extends HostQuestionOutcome | HostPlanOutcome | HostPatchOutcome,
+  >(runId: string, key: string, raise: () => Promise<T>): Promise<T> {
     const inFlight = this.deferredAsks.get(runId);
     if (inFlight !== undefined) {
-      return inFlight.key === key
-        ? inFlight.outcome
-        : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
+      return (
+        inFlight.key === key
+          ? inFlight.outcome
+          : Promise.resolve({
+              status: 'unavailable' as const,
+              reason: QUESTION_ALREADY_STANDING,
+            })
+      ) as Promise<T>;
     }
-    const outcome = this.raiseDeferredQuestion(
-      em,
-      runId,
-      key,
-      questions,
-      title,
-    );
+    const outcome = raise();
     this.deferredAsks.set(runId, { key, outcome });
-    try {
-      return await outcome;
-    } finally {
+    return outcome.finally(() => {
       if (this.deferredAsks.get(runId)?.outcome === outcome) {
         this.deferredAsks.delete(runId);
       }
+    });
+  }
+
+  /** The card already in the column, or null when the run is parked on none. */
+  private async standingCard(
+    em: EntityManager,
+    runId: string,
+    key: string,
+  ): Promise<
+    { status: 'posted' } | { status: 'unavailable'; reason: string } | null
+  > {
+    const run = await this.runDao.getById(runId, em);
+    const standing = readPendingQuestion(run?.pendingQuestion ?? null);
+    if (standing === null) {
+      return null;
     }
+    return adoptsStanding(standing, key)
+      ? { status: 'posted' }
+      : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
   }
 
   /** {@link askUserDeferred}'s body, once the run's claim is held. */
@@ -1059,19 +1312,96 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     questions: HostQuestion[],
     title: string | null,
   ): Promise<HostQuestionOutcome> {
-    const run = await this.runDao.getById(runId, em);
-    const standing = readPendingQuestion(run?.pendingQuestion ?? null);
+    const standing = await this.standingCard(em, runId, key);
     if (standing !== null) {
-      return StandingQuestions.keyFor(standing.title, standing.questions) ===
-        key
-        ? { status: 'posted' }
-        : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
+      return standing;
     }
     const requestId = randomUUID();
-    const input = {
-      ...(title === null ? {} : { title }),
-      questions,
+    const snapshot: PendingQuestionSnapshot = { requestId, title, questions };
+    return this.commitDeferredCard(
+      em,
+      runId,
+      snapshot,
+      {
+        id: requestId,
+        toolName: HOST_QUESTION_TOOL,
+        input: deferredCardInput(snapshot),
+        questions: hostCardQuestions(questions),
+      },
+      'the question card could not be written',
+    );
+  }
+
+  /** {@link proposePlanDeferred}'s body, once the run's claim is held. */
+  private async raiseDeferredPlan(
+    em: EntityManager,
+    runId: string,
+    key: string,
+    plan: HostPlan,
+  ): Promise<HostPlanOutcome> {
+    const standing = await this.standingCard(em, runId, key);
+    if (standing !== null) {
+      return standing;
+    }
+    const requestId = randomUUID();
+    const snapshot: PendingPlanSnapshot = {
+      kind: 'plan',
+      requestId,
+      title: plan.title,
+      steps: plan.steps,
     };
+    return this.commitDeferredCard(
+      em,
+      runId,
+      snapshot,
+      {
+        id: requestId,
+        toolName: HOST_PLAN_TOOL,
+        input: deferredCardInput(snapshot),
+      },
+      'the card could not be written',
+    );
+  }
+
+  /** {@link proposePatchDeferred}'s body, once the run's claim is held. */
+  private async raiseDeferredPatch(
+    em: EntityManager,
+    runId: string,
+    key: string,
+    patch: HostPatch,
+  ): Promise<HostPatchOutcome> {
+    const standing = await this.standingCard(em, runId, key);
+    if (standing !== null) {
+      return standing;
+    }
+    const requestId = randomUUID();
+    const snapshot: PendingPatchSnapshot = { kind: 'patch', requestId, patch };
+    return this.commitDeferredCard(
+      em,
+      runId,
+      snapshot,
+      {
+        id: requestId,
+        toolName: HOST_PATCH_TOOL,
+        input: deferredCardInput(snapshot),
+      },
+      'the card could not be written',
+    );
+  }
+
+  /**
+   * Persist the card, then the column that points at it, then track it.
+   *
+   * The column is written AFTER the row: a pointer written first would survive
+   * a failed persist as a run parked on a card that was never drawn.
+   */
+  private async commitDeferredCard(
+    em: EntityManager,
+    runId: string,
+    snapshot: PendingCardSnapshot,
+    row: Record<string, unknown>,
+    failureReason: string,
+  ): Promise<{ status: 'posted' } | { status: 'unavailable'; reason: string }> {
     try {
       await this.persist(
         em,
@@ -1079,19 +1409,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         await this.seqs.reserve(runId),
         'approval_request',
         null,
-        {
-          id: requestId,
-          toolName: HOST_QUESTION_TOOL,
-          input,
-          questions: hostCardQuestions(questions),
-        },
+        row,
       );
-      // AFTER the row, never before: the column points at that item, and a
-      // pointer written first would survive a failed persist as a run parked on
-      // a card that was never drawn.
       await this.runDao.setPendingQuestion(
         runId,
-        serializePendingQuestion({ requestId, title, questions }),
+        serializePendingQuestion(snapshot),
         em,
       );
     } catch (err) {
@@ -1099,14 +1421,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // names an absolute database path, and this reason goes to a model whose
       // provider is off this machine.
       this.logger.error(
-        `run ${runId} could not put a deferred question on screen: ${err instanceof Error ? err.message : String(err)}`,
+        `run ${runId} could not put a deferred card on screen: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return {
-        status: 'unavailable',
-        reason: 'the question card could not be written',
-      };
+      return { status: 'unavailable', reason: failureReason };
     }
-    this.trackDeferredQuestion(runId, requestId, input);
+    this.trackDeferredCard(runId, snapshot);
     this.announceAwaiting(runId);
     return { status: 'posted' };
   }
@@ -5382,6 +5701,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         patch: HostPatch,
         signal?: AbortSignal,
       ): Promise<HostPatchOutcome> => {
+        // A CLI that will not hold the call open is answered at once. The
+        // card stands, and Apply writes the file when the verdict message
+        // goes out — see the deferred-card block. Everything below parks.
+        if (adapter.getConfig().hostQuestionDeferredReason !== null) {
+          return this.proposePatchDeferred(em, runId, patch);
+        }
         const requestId = randomUUID();
         const input = {
           file_path: patch.filePath,
@@ -5502,6 +5827,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         plan: HostPlan,
         signal?: AbortSignal,
       ): Promise<HostPlanOutcome> => {
+        // Same deferral as {@link proposePatch}: the call returns `posted`
+        // and the verdict arrives as the run's next message.
+        if (adapter.getConfig().hostQuestionDeferredReason !== null) {
+          return this.proposePlanDeferred(em, runId, plan);
+        }
         const requestId = randomUUID();
         const input = { title: plan.title, steps: plan.steps };
         try {
@@ -5631,6 +5961,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const disposePlanner = mcpEndpoint
         ? this.plans.register(runId, SINGLE_AGENT_NODE, proposePlan)
         : null;
+      // The listing says whether the call returns at once. Noted beside the
+      // sink, and cleared only once that sink is gone, so a later turn of the
+      // same run is described from its own adapter.
+      const defersHostCalls =
+        adapter.getConfig().hostQuestionDeferredReason !== null;
+      if (disposeProposer !== null) {
+        this.patches.noteDeferred(runId, SINGLE_AGENT_NODE, defersHostCalls);
+      }
+      if (disposePlanner !== null) {
+        this.plans.noteDeferred(runId, SINGLE_AGENT_NODE, defersHostCalls);
+      }
       const disposeScorer = mcpEndpoint
         ? this.metrics.register(runId, SINGLE_AGENT_NODE, drawMetrics)
         : null;
@@ -5688,7 +6029,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeReporter?.();
         disposeDrawer?.();
         disposeProposer?.();
+        this.patches.clearDeferredIfIdle(runId, SINGLE_AGENT_NODE);
         disposePlanner?.();
+        this.plans.clearDeferredIfIdle(runId, SINGLE_AGENT_NODE);
         disposeScorer?.();
         disposeComparer?.();
         disposeGallerist?.();
@@ -6610,6 +6953,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 `run ${runId} terminal failure item write failed: ${err instanceof Error ? err.message : String(err)}`,
               );
             });
+            this.restoreDeferredAwaiting(runId);
             return;
           }
           if (!sawTerminal) {
@@ -6656,6 +7000,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               lastAgentText,
             );
           }
+          this.restoreDeferredAwaiting(runId);
         })
         .catch((err: unknown) => {
           this.logger.error(

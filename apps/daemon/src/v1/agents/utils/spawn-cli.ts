@@ -440,6 +440,22 @@ export interface CliSession {
    * next reply.
    */
   readonly shellsRunning: number;
+  /**
+   * The command lines of the detached commands {@link shellsRunning} counts,
+   * oldest first — one per command whose launching call disclosed its line, so
+   * it may hold fewer entries than that count.
+   *
+   * For whoever has to say what closing this process stopped: the agent that
+   * started a dev server needs its line to start it again.
+   */
+  readonly runningCommands: readonly string[];
+  /**
+   * {@link shellsRunning} and {@link runningCommands} as they stood when the
+   * process ended, or null while it runs. Both read empty by then — the
+   * commands died with the group — so a holder told of the end by `closed`
+   * reads what it took from here.
+   */
+  readonly endedRunning: StoppedCommands | null;
   /** Terminate the process group (the CLI plus every grandchild). */
   close(): void;
   /** Resolves once the process is gone. Never rejects. */
@@ -536,6 +552,13 @@ const TURN_END_EXIT_GRACE_MS = 2000;
  * every second for a `pnpm dev` somebody will leave up for an hour.
  */
 const DETACHED_SHELL_POLL_MS = 5000;
+
+/**
+ * How many command lines a session keeps by call id for
+ * `CliSession.runningCommands`. Far above the detached commands one agent
+ * keeps running, so only lines of long-finished calls are ever dropped.
+ */
+const MAX_REMEMBERED_COMMANDS = 256;
 
 /**
  * How long a run-scoped turn may go completely SILENT before the turn is
@@ -1013,6 +1036,35 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * the process holding a `pnpm dev` be reaped.
    */
   const runningShells = new Set<string>();
+  /**
+   * The command line each call ran, by call id — what
+   * {@link CliSession.runningCommands} names a detached command by, joined
+   * through {@link shellWork} and {@link delegateCommandCalls}.
+   *
+   * Gathered for every CLI and in either arrival order relative to the unit's
+   * `started`, so it cannot be pruned on the call's answer: a backgrounded
+   * command is answered at once and runs on. Bounded instead, by
+   * {@link MAX_REMEMBERED_COMMANDS}, never dropping one a running command
+   * still needs.
+   */
+  const callCommands = new Map<string, string>();
+  /**
+   * A delegate's own detached command → the call that launched it — the
+   * {@link shellWork} of {@link delegateCommands}, which records the owner
+   * rather than the call.
+   */
+  const delegateCommandCalls = new Map<string, string>();
+  /** See {@link CliSession.endedRunning}. */
+  let endedRunning: StoppedCommands | null = null;
+  /** The lines of the detached commands running now — {@link CliSession.runningCommands}. */
+  const currentCommands = (): string[] =>
+    [
+      ...[...runningShells].map((id) => shellWork.get(id)),
+      ...[...delegateCommands.keys()].map((id) => delegateCommandCalls.get(id)),
+    ].flatMap((call) => {
+      const command = call === undefined ? undefined : callCommands.get(call);
+      return command === undefined ? [] : [command];
+    });
   /**
    * The commands this session's CLI has RUN, by the id of the call that ran
    * each — the raw material for {@link sweepDetachedShells}, and gathered only
@@ -1994,6 +2046,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             : delegateCallOwner.get(event.toolCallId);
         delegateCommands.set(event.id, owner ?? null);
         if (event.toolCallId !== null) {
+          delegateCommandCalls.set(event.id, event.toolCallId);
           if (owner === undefined) {
             unownedDelegateCommands.set(event.toolCallId, event.id);
           } else {
@@ -2063,6 +2116,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (delegateShells.has(event.id)) {
       const owner = delegateCommands.get(event.id) ?? null;
       delegateCommands.delete(event.id);
+      delegateCommandCalls.delete(event.id);
       for (const [call, unit] of unownedDelegateCommands) {
         if (unit === event.id) {
           unownedDelegateCommands.delete(call);
@@ -2149,13 +2203,44 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (event.type !== 'tool_call' || event.kind !== 'execute') {
       return;
     }
-    const input = event.input;
-    const command =
-      typeof input === 'object' && input !== null
-        ? (input as { command?: unknown }).command
-        : null;
-    if (typeof command === 'string' && command.trim() !== '') {
+    const command = commandLineOf(event);
+    if (command !== null) {
       executeCalls.set(event.id, { command, returned: false });
+    }
+  };
+
+  /**
+   * Note the command line a call ran, for {@link CliSession.runningCommands}.
+   *
+   * Read off the call's own `command` argument rather than its kind: claude
+   * marks no kind on its shell tool, and the argument is where every shipped
+   * CLI puts the line.
+   */
+  const rememberCommandLine = (event: AgentEvent): void => {
+    if (event.type !== 'tool_call') {
+      return;
+    }
+    const command = commandLineOf(event);
+    if (command === null) {
+      return;
+    }
+    callCommands.set(event.id, command);
+    if (callCommands.size <= MAX_REMEMBERED_COMMANDS) {
+      return;
+    }
+    // Every unit not yet settled, not only the running ones: a foreground
+    // command is in `shellWork` before a `backgrounded` makes it a shell.
+    const needed = new Set([
+      ...shellWork.values(),
+      ...delegateCommandCalls.values(),
+      // A command the detached-shell sweep has yet to look at.
+      ...executeCalls.keys(),
+    ]);
+    for (const id of callCommands.keys()) {
+      if (!needed.has(id)) {
+        callCommands.delete(id);
+        return;
+      }
     }
   };
 
@@ -2411,6 +2496,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // detachable as one run inside a turn, and the sweep's whole subject is
     // work that outlives the turn that started it.
     rememberExecuteCall(event);
+    rememberCommandLine(event);
     if (event.type === 'tool_call' && event.parentToolUseId !== undefined) {
       // Either order: nothing ties claude's `task_started` for a command to
       // the delegate line that made the call.
@@ -2815,6 +2901,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       clearTimeout(detachedShellTimer);
       detachedShellTimer = null;
     }
+    endedRunning ??= {
+      running: runningShells.size + delegateCommands.size,
+      commands: currentCommands(),
+    };
     osDetachedShells.clear();
     executeCalls.clear();
     // A delegate's own commands die with the group as well, so a settle held
@@ -2822,6 +2912,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // and it is the outcome the session-close sweep writes for a delegate it
     // finds still open, so the two writers cannot disagree.
     delegateCommands.clear();
+    delegateCommandCalls.clear();
     unownedDelegateCommands.clear();
     delegateCallOwner.clear();
     for (const held of [...heldDelegateSettles.values()]) {
@@ -2848,6 +2939,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // A command whose launching call was never known is not in `shellWork`,
     // so the loop above did not settle it — but it died with the group too.
     runningShells.clear();
+    callCommands.clear();
     openWork.clear();
     releaseOffTurnHold();
     if (current) {
@@ -3615,6 +3707,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get shellsRunning() {
       return runningShells.size + delegateCommands.size;
     },
+    get runningCommands() {
+      return currentCommands();
+    },
+    get endedRunning() {
+      return endedRunning;
+    },
     close: () => {
       if (processGone) {
         return;
@@ -3626,6 +3724,21 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     },
     closed,
   };
+}
+
+/**
+ * The command line a tool call ran — its non-blank `command` argument — or
+ * null for a call that discloses none.
+ */
+function commandLineOf(
+  event: Extract<AgentEvent, { type: 'tool_call' }>,
+): string | null {
+  const input = event.input;
+  const command =
+    typeof input === 'object' && input !== null
+      ? (input as { command?: unknown }).command
+      : null;
+  return typeof command === 'string' && command.trim() !== '' ? command : null;
 }
 
 /**
@@ -3665,9 +3778,17 @@ function deadSession(message: string): CliSession {
     parked: false,
     pid: null,
     shellsRunning: 0,
+    runningCommands: [],
+    endedRunning: null,
     close: () => {},
     closed: Promise.resolve(),
   };
+}
+
+/** The detached commands a process was running, counted and named. */
+export interface StoppedCommands {
+  running: number;
+  commands: readonly string[];
 }
 
 export interface RunCliOptions {

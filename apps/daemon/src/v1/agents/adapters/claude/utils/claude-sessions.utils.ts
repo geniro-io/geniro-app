@@ -494,10 +494,12 @@ function mapHistoryLine(
  * plumbing of a slash command (`<command-name>`, `<command-message>`,
  * `<command-args>`), the output it splices back in (`<local-command-stdout>`,
  * `<local-command-caveat>`), and the context blocks it injects
- * (`<system-reminder>`). All observed in this profile's own files.
+ * (`<system-reminder>`). All observed in this profile's own files. Plus
+ * geniro's own `<geniro-note>`, appended to a prompt it sent
+ * (`utils/session-replacement-notes.ts`).
  */
 const ENVELOPE_BLOCK =
-  /<(command-[a-z-]+|local-command-[a-z-]+|system-reminder|task-notification)>([\s\S]*?)<\/\1>/g;
+  /<(command-[a-z-]+|local-command-[a-z-]+|system-reminder|task-notification|geniro-note)>([\s\S]*?)<\/\1>/g;
 /** The slash command itself, which IS what the user typed. */
 const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/;
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;

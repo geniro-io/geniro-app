@@ -822,6 +822,9 @@ function fakeAdapter(
         get alive() {
           return !record.closed;
         },
+        shellsRunning: 0,
+        runningCommands: [],
+        endedRunning: null,
         close: () => {
           record.closed = true;
         },
@@ -10431,7 +10434,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect((await runDao.getById(run.id))?.status).toBe('running');
     statuses.length = 0;
 
-    sessions.close(run.id);
+    sessions.close(run.id, 'closed');
     await drain();
 
     expect((await runDao.getById(run.id))?.status).toBe('completed');
@@ -10479,7 +10482,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       return read(...args);
     });
 
-    sessions.close(run.id);
+    sessions.close(run.id, 'closed');
     await drain();
 
     expect(statuses.some((event) => event.noTerminalItem === true)).toBe(false);
@@ -10520,7 +10523,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
     expect((await runDao.getById(run.id))?.status).toBe('running');
 
-    sessions.close(run.id);
+    sessions.close(run.id, 'closed');
     await drain();
 
     expect(
@@ -10632,7 +10635,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(statuses.some((s) => s.subagentsOut === 1)).toBe(true);
     statuses.length = 0;
 
-    sessions.close(run.id);
+    sessions.close(run.id, 'closed');
     await drain();
 
     const closes = itemDao.items.filter(
@@ -10691,7 +10694,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     claude.finish();
     await drain();
 
-    sessions.close(run.id);
+    sessions.close(run.id, 'closed');
     await drain();
 
     expect(
@@ -10724,7 +10727,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     claude.finish();
     await drain();
 
-    sessions.close(run.id);
+    sessions.close(run.id, 'closed');
     await drain();
 
     expect(

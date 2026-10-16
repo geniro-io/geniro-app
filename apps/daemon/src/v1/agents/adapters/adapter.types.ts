@@ -16,7 +16,12 @@ import type {
   ModelPriceLookup,
   ModelPriceProvider,
 } from '../utils/model-prices';
-import type { SessionAsk, SessionLogger, SpawnFn } from '../utils/spawn-cli';
+import type {
+  SessionAsk,
+  SessionLogger,
+  SpawnFn,
+  StoppedCommands,
+} from '../utils/spawn-cli';
 
 // ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
 // The two names that identify OUR server and OUR tools inside a CLI's config
@@ -3383,6 +3388,17 @@ export interface AgentSession {
    * for as long as it works, and it dies with this process.
    */
   readonly shellsRunning: number;
+  /**
+   * The command lines of those detached commands — see
+   * `CliSession.runningCommands`. Read by a holder that is about to close the
+   * process anyway, so it can tell the agent what that stopped.
+   */
+  readonly runningCommands: readonly string[];
+  /**
+   * What was still running when the process ended — see
+   * `CliSession.endedRunning`. Null while it runs.
+   */
+  readonly endedRunning: StoppedCommands | null;
   /**
    * The CLI's own pid — see `CliSession.pid`. Null once the process has ended.
    */

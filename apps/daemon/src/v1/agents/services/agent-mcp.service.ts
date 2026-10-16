@@ -1109,10 +1109,11 @@ export class AgentMcpService {
         agent,
         (session) => session.cwd === cwd && session.configDir === configDir,
         `${missing.join(', ')} ${missing.length === 1 ? 'was' : 'were'} not loaded`,
+        'mcp',
       );
       if (retired > 0) {
         this.logger.log(
-          `${retired} ${agent} session(s) in ${cwd} will restart on their next turn — ${missing.join(', ')} not loaded`,
+          `${retired} ${agent} session(s) in ${cwd} will restart on their next turn with no background work running — ${missing.join(', ')} not loaded`,
         );
       }
     }
@@ -1162,10 +1163,11 @@ export class AgentMcpService {
         inReach(session.cwd) &&
         (!reach.perProfile || session.configDir === configDir),
       reason,
+      'mcp',
     );
     if (retired > 0) {
       this.logger.log(
-        `${retired} ${agent} session(s) will restart on their next turn — ${reason}`,
+        `${retired} ${agent} session(s) will restart on their next turn with no background work running — ${reason}`,
       );
     }
     return retired;
@@ -1319,10 +1321,11 @@ export class AgentMcpService {
     const retired = this.sessions.markAgentStale(
       agent,
       'its MCP servers changed',
+      'mcp',
     );
     if (retired > 0) {
       this.logger.log(
-        `${retired} ${agent} session(s) will restart on their next turn — ${what}`,
+        `${retired} ${agent} session(s) will restart on their next turn with no background work running — ${what}`,
       );
     }
   }

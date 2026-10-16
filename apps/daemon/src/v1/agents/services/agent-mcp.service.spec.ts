@@ -1332,6 +1332,7 @@ describe('AgentMcpService.list', () => {
       AgentKind.Claude,
       expect.any(Function),
       expect.stringContaining('MCP'),
+      'mcp',
     );
   });
 
@@ -2326,6 +2327,7 @@ describe('AgentMcpService.copyPluginServer', () => {
     expect(retired).toHaveBeenCalledWith(
       AgentKind.CursorAgent,
       'its MCP servers changed',
+      'mcp',
     );
     // A user-scope file changes every folder's answer: the other folder's
     // cached reading was dropped, so asking again dials again.
@@ -2503,6 +2505,7 @@ describe('AgentMcpService — editing a profile’s MCP servers', () => {
     expect(retired).toHaveBeenCalledWith(
       AgentKind.Claude,
       'its MCP servers changed',
+      'mcp',
     );
     await service.list(AgentKind.Claude, cwd);
     expect(listMcpServers).toHaveBeenCalledTimes(2);
@@ -2704,6 +2707,7 @@ describe('AgentMcpService — what seeing a server connect does to the CLI’s n
       AgentKind.Claude,
       expect.any(Function),
       'a is connected now',
+      'mcp',
     );
   });
 
@@ -2761,6 +2765,7 @@ describe('AgentMcpService — what seeing a server connect does to the CLI’s n
       AgentKind.Claude,
       expect.any(Function),
       'a is connected now',
+      'mcp',
     );
   });
 
@@ -2788,6 +2793,7 @@ describe('AgentMcpService — what seeing a server connect does to the CLI’s n
       AgentKind.Claude,
       expect.any(Function),
       'a is connected now',
+      'mcp',
     );
   });
 
@@ -2814,6 +2820,7 @@ describe('AgentMcpService — what seeing a server connect does to the CLI’s n
       AgentKind.Claude,
       expect.any(Function),
       'a is connected now',
+      'mcp',
     );
   });
 

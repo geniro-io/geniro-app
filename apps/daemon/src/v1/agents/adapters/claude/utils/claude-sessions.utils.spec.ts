@@ -357,6 +357,26 @@ describe('listClaudeSessions', () => {
     expect(rows.map((row) => row.id)).toEqual(['prompt']);
   });
 
+  it('leaves out the note geniro appended to a prompt it sent', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'claude-sessions-spec-'));
+    roots.push(root);
+    const dir = join(root, 'projects', 'proj');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'noted.jsonl'),
+      JSON.stringify(
+        userLine(
+          '/tmp/proj',
+          'fix the build\n\n<geniro-note>\nThat stopped 1 background command\n</geniro-note>',
+        ),
+      ),
+    );
+
+    const rows = await listSessions({ profileDir: root, cwd: null, limit: 10 });
+
+    expect(rows.map((row) => row.title)).toEqual(['fix the build']);
+  });
+
   it('does not take a SYNTHETIC or REPLAYED line as something the user said', async () => {
     // The CLI injects a synthetic line after a compaction and re-appends
     // replayed ones with `isReplay`. Titling a row with either puts words in

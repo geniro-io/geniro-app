@@ -1652,7 +1652,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         `could not switch account without its conversation: ${carried.reason}`,
       );
     }
-    this.sessions.close(runId);
+    this.sessions.close(runId, 'its account was switched');
     // Every reading this run is holding was taken from the OLD account, and a
     // profile is a whole different subscription: the kept metrics reading
     // carries that account's PLAN LIMITS, so serving it here reports one
@@ -2592,7 +2592,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     this.offTurnRuns.delete(runId);
     this.offTurnSignalClaims.delete(runId);
     this.partials.retire(runId, SINGLE_AGENT_NODE, null);
-    this.sessions.close(runId);
+    this.sessions.close(runId, 'its turn was stopped');
   }
 
   private ownsSession(runId: string, session: AgentSession | null): boolean {
@@ -4118,7 +4118,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // turn did.
     const resend = await this.messageToResend(runId, em);
     if (resend !== null) {
-      this.sessions.close(runId);
+      this.sessions.close(runId, 'its turn was retried');
       await this.sendMessage(runId, resend.text, resend.images);
       return { retried: true };
     }
@@ -4134,7 +4134,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         'there is no message to send again — write your next one and the agent continues from where it left off',
       );
     }
-    this.sessions.close(runId);
+    this.sessions.close(runId, 'its turn was retried');
     await this.sendMessage(runId, '', [], { resumeOnly: true });
     return { retried: true };
   }

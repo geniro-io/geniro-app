@@ -515,8 +515,7 @@ export const WorkflowInstructionNodeSchema = z
 
 /**
  * One node of a workflow DAG, discriminated by `kind`. Strict: `kind` is
- * required on every node — legacy kind-less files are normalized once by the
- * store (no compatibility shim lives in the schema).
+ * required on every node, and the store refuses a kind-less file.
  */
 export const WorkflowNodeSchema = z
   .discriminatedUnion('kind', [
@@ -957,6 +956,14 @@ export interface CalleeTurnOutcome {
    */
   callsStillOut?: number;
   /**
+   * The commands the callee detached in this call that were still running
+   * when it settled — a dev server it left up, say — oldest first, null for
+   * one whose words were never recorded. They keep running after the result
+   * is handed back, inside the callee's kept process, so the caller is told
+   * rather than left to find them. Absent or empty means none.
+   */
+  shellsStillOut?: (string | null)[];
+  /**
    * Which pool member (1-based) this outcome is from. Absent for a callee with
    * no pool, where there is nothing to choose between.
    */
@@ -1057,6 +1064,10 @@ export interface CallSettledResult {
   text: string;
   delegates_still_running?: number;
   calls_still_running?: number;
+  /** How many detached commands the callee left running. */
+  commands_still_running?: number;
+  /** Those commands' words, each on one line — the ones that were recorded. */
+  running_commands?: string[];
   /** What the text alone would leave the caller to misread. */
   note?: string;
   artifacts?: CallPublishedPage[];

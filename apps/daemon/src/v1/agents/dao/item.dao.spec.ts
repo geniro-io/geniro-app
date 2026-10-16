@@ -887,54 +887,6 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('the backfill helpers', () => {
-    it('finds only the rows with no index text, and stops finding one once filled', async () => {
-      // The sweep's predicate is self-draining, so this pair is what makes it
-      // terminate: `missingSearchText` must shrink as `rememberSearchText`
-      // writes, or the loop reads the same batch forever.
-      const first = await insert('run-a', 0);
-      await insert('run-a', 1);
-
-      expect(await dao.missingSearchText(10)).toHaveLength(2);
-
-      await dao.rememberSearchText(first.id, 'now indexed');
-      const left = await dao.missingSearchText(10);
-
-      expect(left).toHaveLength(1);
-      expect(left[0]?.id).not.toBe(first.id);
-    });
-
-    it('resumes AFTER the cursor it is given', async () => {
-      // The `$gt` half of the paging predicate, which nothing else drives: the
-      // cursor is the whole reason `missingSearchText` is linear rather than
-      // re-scanning the filled prefix on every batch, and without this the
-      // operator could be dropped with every other test still green.
-      const first = await insert('run-a', 0);
-      const second = await insert('run-a', 1);
-      const [lower, upper] = [first.id, second.id].sort();
-
-      const after = await dao.missingSearchText(10, lower);
-
-      expect(after.map((row) => row.id)).toEqual([upper]);
-    });
-
-    it('honours its batch size', async () => {
-      await insert('run-a', 0);
-      await insert('run-a', 1);
-      await insert('run-a', 2);
-
-      expect(await dao.missingSearchText(2)).toHaveLength(2);
-    });
-
-    it('writes text a later search can match', async () => {
-      // The two halves joined: what the backfill stores is what the query reads.
-      const row = await insert('run-a', 0);
-      await dao.rememberSearchText(row.id, 'sizing the bloom filter');
-
-      expect(await dao.searchByText('run-a', ['bloom'], 50)).toHaveLength(1);
-    });
-  });
-
   describe('the timeline pair', () => {
     /** A message row with a role — the timeline's whole discriminator. */
     async function say(
@@ -1120,6 +1072,37 @@ describe('ItemDao (in-memory sqlite)', () => {
       ]);
       expect(typeof rows[0]!.at).toBe('number');
       expect(rows[2]!.at).toBeGreaterThanOrEqual(rows[0]!.at);
+    });
+
+    it('reads a result the CLI marked as an error, and only a result', async () => {
+      await insert(
+        'run-a',
+        0,
+        'tool_call',
+        JSON.stringify({ id: 't1', name: 'Bash', isError: true }),
+      );
+      await insert(
+        'run-a',
+        1,
+        'tool_result',
+        JSON.stringify({ id: 't1', isError: true }),
+      );
+      await insert(
+        'run-a',
+        2,
+        'tool_result',
+        JSON.stringify({ id: 't2', isError: false }),
+      );
+      await insert('run-a', 3, 'tool_result', JSON.stringify({ id: 't3' }));
+
+      const rows = await dao.toolCallTimes('run-a', 3);
+
+      expect(rows.map((row) => row.isError)).toEqual([
+        false,
+        true,
+        false,
+        false,
+      ]);
     });
   });
 

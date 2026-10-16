@@ -10056,7 +10056,7 @@ describe('Chats queued messages — a workflow run', () => {
           { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
           { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
         ],
-        edges: [{ from: 'start', to: 'manager' }],
+        edges: [{ from: 'start', to: 'manager', kind: 'data' }],
       },
     });
     workflowApi.listWorkflows.mockResolvedValue([
@@ -10120,7 +10120,7 @@ describe('Chats queued messages — a workflow run', () => {
           { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
           { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
         ],
-        edges: [{ from: 'start', to: 'manager' }],
+        edges: [{ from: 'start', to: 'manager', kind: 'data' }],
       },
     });
     workflowApi.listWorkflows.mockResolvedValue([
@@ -11798,7 +11798,7 @@ describe('Chats sidebar list', () => {
         // The trigger EDGE is what makes `w-a` the root — `rootAgentOf` reads
         // the graph's routes, not its node list, so a workflow whose agent the
         // trigger does not feed has no root at all.
-        edges: [{ from: 'start', to: 'w-a' }],
+        edges: [{ from: 'start', to: 'w-a', kind: 'data' }],
       },
     });
     workflowApi.listWorkflowRunNodes.mockResolvedValue([
@@ -11879,8 +11879,8 @@ describe('Chats sidebar list', () => {
         ],
         // A trigger feeding TWO agents: two conversations at the top level.
         edges: [
-          { from: 'start', to: 'w-a' },
-          { from: 'start', to: 'w-b' },
+          { from: 'start', to: 'w-a', kind: 'data' },
+          { from: 'start', to: 'w-b', kind: 'data' },
         ],
       },
     });
@@ -14275,7 +14275,12 @@ describe('Chats — running shells', () => {
     };
     const shelfRows = (
       container: HTMLElement,
-    ): { text: string; agent: string | null }[] =>
+    ): {
+      text: string;
+      agent: string | null;
+      kind: string | null;
+      kindTitle: string | null;
+    }[] =>
       [
         ...container.querySelectorAll(
           '[data-slot="running-shells"] [data-slot="shell-row"]',
@@ -14284,6 +14289,10 @@ describe('Chats — running shells', () => {
         text: r.textContent ?? '',
         agent:
           r.querySelector('[data-slot="shell-agent"]')?.textContent ?? null,
+        kind: r.querySelector('[data-slot="shell-kind"]')?.textContent ?? null,
+        kindTitle:
+          r.querySelector('[data-slot="shell-kind"]')?.getAttribute('title') ??
+          null,
       }));
     return {
       row,
@@ -14374,9 +14383,44 @@ describe('Chats — running shells', () => {
     expect(rows.find((r) => r.text.includes('pnpm dev'))?.agent).toBe(
       'Engineer · call-24',
     );
+    // Its conversation is still at work in call-24, so it is not LEFT running.
+    expect(rows.find((r) => r.text.includes('pnpm dev'))?.kind).toBe(
+      'background',
+    );
     expect(rows.find((r) => r.text.includes('pnpm test'))?.agent).toBe(
       'Engineer · call-24',
     );
+  });
+
+  it('says a detached command outlived its call once the call that started it has finished', async () => {
+    // REPORTED as a "ghost terminal": a dev server a callee started kept the
+    // Terminals chip up 20 minutes after its call answered, under a label that
+    // read as that call's live work.
+    const c = continuedCalls();
+    const container = await c.open([
+      c.started('call-22'),
+      c.running('call-22'),
+      c.bash('sh-bg', 'pnpm dev:web', 'call-22', true),
+      c.row('shell_open', 'eng', { id: 'sh-bg' }),
+      ...c.settled('call-22'),
+    ]);
+
+    const rows = c.shelfRows(container);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.agent).toBe('Engineer · call-22');
+    expect(rows[0]!.kind).toBe('left running');
+    expect(rows[0]!.kindTitle).toBe(
+      'Left running by Engineer after call-22 finished — it keeps running until it is stopped',
+    );
+    // The agents panel names the same command the same way, under the
+    // call's own instance.
+    const panelRow = container.querySelector(
+      '[data-slot="agent-shell-list"] [data-slot="shell-row"]',
+    );
+    expect(panelRow?.getAttribute('data-shell-left-running')).toBe('true');
+    expect(
+      panelRow?.querySelector('[data-slot="shell-kind"]')?.textContent,
+    ).toBe('left running');
   });
 
   it('drops a command of an unanswered turn once a LATER turn on the same conversation has settled', async () => {

@@ -1247,6 +1247,17 @@ export class AcpTurnDriver {
   /** How many times this turn has been resumed after a dropped connection. */
   private transientResumes = 0;
   /**
+   * Whether this turn has produced anything of the agent's own — a message, a
+   * thought or a tool call — which is what tells a resume whether the prompt
+   * it continues was ever saved. A request that died before its first step
+   * may not have been: on run 1b0f91aa (session fd93ef04) cursor's store held
+   * no copy of a callee's brief, the bare continuation became the
+   * conversation's FIRST message, and the agent went looking through other
+   * sessions' transcripts for something to continue — and finished their work.
+   * See {@link sendResume}.
+   */
+  private requestProgressed = false;
+  /**
    * The turn's prompt has ended and the turn is HELD for its background
    * delegates — see {@link AcpDelegateProtocol.wakePrompt}. Like a transient
    * pause, the turn is alive with no prompt out: a Stop is answered by
@@ -1592,7 +1603,7 @@ export class AcpTurnDriver {
       // agent already had. Never silent, because a run the user set to `xhigh`
       // quietly thinking at `high` is a wrong turn that reports success — and
       // this arm is genuinely reachable, since a value is only offered for SOME
-      // models and a legacy chat's stored id can name one the model dropped.
+      // models and a chat's stored setting can name one the model dropped.
       //
       // A `warning`, not the default severity. Nothing failed: the turn ran and
       // went on running, which is precisely what made the full-width red panel
@@ -3405,22 +3416,45 @@ export class AcpTurnDriver {
     return stillRunning;
   }
 
-  /** Send the continuation prompt, answering whether it went out. */
+  /**
+   * Send the continuation prompt, answering whether it went out.
+   *
+   * A turn that has produced nothing of the agent's own is sent its PROMPT
+   * again instead ({@link requestProgressed}): the continuation assumes the
+   * conversation holds the request it continues, and a request that died
+   * before its first step may never have been saved — nor the instructions it
+   * carried, which {@link AcpSession.deliveredInstructions} records on the
+   * write. A brief the conversation did keep arrives twice, which costs a
+   * repeat; a continuation of nothing sent the agent looking for work in other
+   * conversations.
+   */
   private sendResume(prompt: string, events: AgentEvent[]): boolean {
     if (this.session.sessionId === null) {
       return false;
+    }
+    const resendBrief = !this.requestProgressed;
+    if (
+      resendBrief &&
+      this.session.deliveredInstructions === this.promptInstructions
+    ) {
+      this.session.deliveredInstructions = null;
     }
     const id = this.session.sendRequest(
       ACP_AGENT_METHODS.sessionPrompt,
       {
         sessionId: this.session.sessionId,
-        prompt: [{ type: 'text', text: prompt }],
+        prompt: resendBrief
+          ? this.composePromptBlocks(events)
+          : [{ type: 'text', text: prompt }],
       },
       'prompt',
       events,
     );
     if (id === null) {
       return false;
+    }
+    if (resendBrief && this.promptInstructions !== null) {
+      this.session.deliveredInstructions = this.promptInstructions;
     }
     this.latestPromptId = id;
     this.promptOutstanding = true;
@@ -4445,6 +4479,7 @@ export class AcpTurnDriver {
           return [];
         }
         this.textChunks.push(text);
+        this.requestProgressed = true;
         // A new step, generated from every result before it.
         this.unconsumedDelegates.clear();
         // The chunk streams as an EPHEMERAL delta; the row is written when the
@@ -4470,6 +4505,7 @@ export class AcpTurnDriver {
         // whole of it while chunks were arriving. Measured on a real turn:
         // thought chunks at 16.8–20.0s and again at 32.1–34.4s, none of it on
         // screen until the block closed.
+        this.requestProgressed = true;
         this.unconsumedDelegates.clear();
         return [
           ...this.appendPending('reasoning', text),
@@ -4480,6 +4516,7 @@ export class AcpTurnDriver {
         if (this.replaying) {
           return [];
         }
+        this.requestProgressed = true;
         const toolCall = readToolCall(update);
         this.session.toolNames.set(toolCall.toolCallId, toolCall.name);
         if (toolCall.rawInput !== null) {

@@ -57,10 +57,10 @@ export interface GroupTerminator {
 /**
  * A SIGTERM → grace → SIGKILL escalation over a whole process group.
  *
- * Extracted rather than mirrored, because the two daemon paths that terminate a
+ * Extracted rather than mirrored, because the daemon paths that terminate a
  * group must not be able to disagree about it: the turn path (`spawn-cli`'s
- * `killGroup`) and the utility-listing path (`AgentAdapter.runAsProcessGroup`'s
- * reap). The listing path had no escalation at all and went straight to
+ * `killGroup`), the utility-listing path (`AgentAdapter.runAsProcessGroup`'s
+ * reap) and `runManagedCommand` (share uploads and Keychain calls). The listing path had no escalation at all and went straight to
  * SIGKILL, on a group whose whole purpose is to have launched the user's own
  * MCP servers.
  *

@@ -398,6 +398,7 @@ export function ThreadPullRequestChips({
 export function RunningShellChips({
   shells,
   agentNameOf,
+  leftRunningOf,
   onOpen,
   onKill,
 }: {
@@ -408,6 +409,8 @@ export function RunningShellChips({
    * the question arises; a 1:1 chat passes none.
    */
   agentNameOf?: ReadonlyMap<string, string>;
+  /** The commands whose call has finished — see {@link ShellRows}. */
+  leftRunningOf?: ReadonlyMap<string, string>;
   onOpen: (shell: ShellRun) => void;
   /** Stop one — see {@link ShellRows}. */
   onKill?: (shell: ShellRun) => void | Promise<void>;
@@ -441,6 +444,7 @@ export function RunningShellChips({
       <ShellRows
         shells={shells}
         agentNameOf={agentNameOf}
+        leftRunningOf={leftRunningOf}
         onOpen={onOpen}
         onKill={onKill}
       />

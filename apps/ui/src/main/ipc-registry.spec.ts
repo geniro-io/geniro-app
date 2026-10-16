@@ -41,6 +41,11 @@ const mocks = vi.hoisted(() => {
     customInstructions: '',
     theme: 'system',
     remoteAccessEnabled: true,
+    sharing: {
+      destinations: [],
+      defaultDestinationId: null,
+      agentsMayShare: false,
+    },
   };
   return {
     handlers,

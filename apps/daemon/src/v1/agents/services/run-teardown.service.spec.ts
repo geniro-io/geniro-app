@@ -11,6 +11,8 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
+import { ArtifactShareDao } from '../../shares/dao/artifact-share.dao';
+import { ArtifactShare } from '../../shares/entity/artifact-share.entity';
 import type {
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
@@ -68,7 +70,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, Item, NodeState, CallContext, WallTurn],
+        entities: [Run, Item, NodeState, CallContext, WallTurn, ArtifactShare],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -233,6 +235,32 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await teardown.purge(orm.em.fork(), 'run-a', undefined);
 
     expect(removedArtifactRuns).toEqual(['run-a']);
+  });
+
+  it('keeps the run’s shared-page rows, the only way to revoke a link it handed out', async () => {
+    // A shared link keeps working after its chat is deleted, so the row that
+    // can revoke it must survive the purge.
+    await seedRun('run-a');
+    const shares = new ArtifactShareDao(orm.em.fork());
+    await shares.create({
+      runId: 'run-a',
+      artifactId: 'report',
+      title: 'Report',
+      destination: '{}',
+      objectId: 'obj',
+      linkBase: 'https://example.com',
+      sharedVersion: 1,
+      sharedBy: 'user',
+    });
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(
+      await new ArtifactShareDao(orm.em.fork()).findByArtifact(
+        'run-a',
+        'report',
+      ),
+    ).not.toBeNull();
   });
 
   it('hands the run’s own user messages to the upload store, and nothing else', async () => {

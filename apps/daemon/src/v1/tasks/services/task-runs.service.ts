@@ -782,8 +782,8 @@ type RunEdge = Pick<Task, 'runId' | 'branch' | 'worktreePath'>;
  *
  * A SPREAD rather than a value, because both create inputs spell the field
  * `taskIdentifier?: string` — optional, not nullable, exactly as `taskId` is —
- * so a board that predates numbering says nothing rather than sending a null
- * the input has no shape for. `taskIdentifier` itself already answers null for
+ * so a card with no identifier says nothing rather than sending a null the
+ * input has no shape for. `taskIdentifier` itself already answers null for
  * a card with no number or a project with no key.
  */
 function identifierOf(

@@ -9,6 +9,7 @@ export * from './GroupsApi';
 export * from './HandoffApi';
 export * from './LabelInstructionsApi';
 export * from './ProjectsApi';
+export * from './SharesApi';
 export * from './StatsApi';
 export * from './TasksApi';
 export * from './WorkflowsApi';

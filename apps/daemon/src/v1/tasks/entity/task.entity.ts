@@ -44,9 +44,7 @@ export class Task extends TimestampsEntity {
    * This card's number within its project — the `12` of `GEN-12`.
    *
    * Handed out by the project's own counter at creation and never reused, so
-   * an identifier names one card for good. Nullable only for rows that predate
-   * numbering; the backfill assigns those in creation order on the next
-   * launch.
+   * an identifier names one card for good.
    */
   @Property({ type: 'integer', nullable: true })
   number: number | null = null;

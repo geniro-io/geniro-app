@@ -34,10 +34,18 @@ export const PUBLISHED_PAGES_NOTE =
   'Point the user at a page by its title instead of publishing it again or restating what it shows.';
 
 /**
+ * How much of each command a call left running its caller is shown — enough
+ * to recognise `pnpm dev:web` behind its `cd` prefix, short enough that a
+ * fan-out of servers cannot swamp the result text it sits beside.
+ */
+export const LEFT_RUNNING_COMMAND_MAX = 160;
+
+/**
  * Collapse free-form node text to a single line, capped at `max` characters
- * with a trailing ellipsis when longer. Both caller-facing surfaces embed it
+ * with a trailing ellipsis when longer. Every caller-facing surface embeds it
  * inline, where a newline or a runaway length would corrupt the surrounding
- * structure (a tool description / a system-prompt block). Empty/absent → ''.
+ * structure (a tool description, a system-prompt block, a call result's
+ * note). Empty/absent → ''.
  */
 export function flattenText(
   text: string | undefined | null,

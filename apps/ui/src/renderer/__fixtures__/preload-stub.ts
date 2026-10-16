@@ -248,6 +248,10 @@ export function createPreloadStub(
         upstreamBase: null,
       });
     },
+    listWorktrees: () => {
+      note('listWorktrees');
+      return Promise.resolve([]);
+    },
     getChangesTotals: () => {
       note('getChangesTotals');
       // Null, as a folder that is not a repository gives nothing to measure

@@ -318,6 +318,17 @@ export interface AgentContextCategory {
   deferred: boolean;
 }
 
+/** Where a CLI keeps the user's own standing instructions — see `AdapterConfig.userInstructions`. */
+export type AgentUserInstructions =
+  | {
+      readonly kind: 'file';
+      /** The config directory's name under the user's home (`.claude`). */
+      readonly homeDir: string;
+      /** The file's name inside that directory (`CLAUDE.md`). */
+      readonly fileName: string;
+    }
+  | { readonly kind: 'unavailable'; readonly reason: string };
+
 /** One file the agent loaded as standing instructions, and what it costs. */
 export interface AgentContextMemoryFile {
   path: string;
@@ -2467,20 +2478,6 @@ export interface AgentMcpServerHealth {
 }
 
 /**
- * Where a server came from, which is what decides whether geniro may switch it
- * off at all.
- *
- * `project` — defined in the folder's own MCP config, and the ONLY scope any
- * verified mechanism can disable. Everything else is `other`: user- and
- * local-scope servers have no non-destructive disable on claude 2.1.220
- * (probe-verified), so a control for them would be a switch that does nothing.
- *
- * `unknown` is not "probably other" — it is a CLI whose config layout has not
- * been verified, and it renders read-only for the same reason.
- */
-export type AgentMcpServerScope = 'project' | 'other' | 'unknown';
-
-/**
  * What a CLI's own config files say about a folder, beyond the health listing.
  *
  * They exist because the LISTING cannot answer either question: `claude mcp
@@ -3204,8 +3201,8 @@ export interface AgentTurnInput {
    * user verdict (elicitation card); `acceptEdits` auto-approves file edits
    * and asks for everything else; `plan` (chat-only) has the agent plan
    * without executing; `auto` runs unattended with permission checks
-   * bypassed. Undefined (legacy chat rows) keeps the CLI's own defaults —
-   * no extra permission flags.
+   * bypassed. Undefined (a geniro-internal turn) keeps the CLI's own
+   * defaults — no extra permission flags.
    */
   approvalMode?: AgentApprovalMode;
   /**
@@ -4793,6 +4790,14 @@ export interface AdapterConfig {
      */
     readonly sessionCarryUnavailableReason: string | null;
   };
+
+  /**
+   * The file this CLI loads in EVERY folder as the user's own standing
+   * instructions, or why it has none. A thread analysis may recommend edits to
+   * it, so the path must be the one the CLI really reads — under a run's
+   * `configDir` when one is set, else under `homeDir` in the user's home.
+   */
+  readonly userInstructions: AgentUserInstructions;
 
   // ── A message into a turn that is already running ───────────────────────
   /**

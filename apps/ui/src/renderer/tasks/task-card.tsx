@@ -147,9 +147,8 @@ export function TaskCard({
           live agent shares this row because it is Linear's avatar slot — who
           is on it, beside what it is called.
 
-          Drawn only when there is something to put in it: an older card the
-          backfill has not reached has no identifier, and a card at rest has no
-          agent. */}
+          Drawn only when there is something to put in it: a card with no
+          number has no identifier, and a card at rest has no agent. */}
       {identifier === null && agent === null ? null : (
         <span className="flex items-center gap-2 text-[11px]">
           <span className="font-mono text-muted-foreground">

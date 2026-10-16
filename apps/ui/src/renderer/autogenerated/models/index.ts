@@ -2812,6 +2812,43 @@ export interface CreateRunGroupDto {
 /**
  * 
  * @export
+ * @interface CreateShareDto
+ */
+export interface CreateShareDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateShareDto
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateShareDto
+     */
+    artifactId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateShareDto
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateShareDto
+     */
+    destinationId?: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof CreateShareDto
+     */
+    themeVars?: { [key: string]: string; };
+}
+/**
+ * 
+ * @export
  * @interface CreateTaskDto
  */
 export interface CreateTaskDto {
@@ -3565,10 +3602,8 @@ export const ItemKind = {
     ToolResult: 'tool_result',
     TurnComplete: 'turn_complete',
     TurnCancelled: 'turn_cancelled',
-    Usage: 'usage',
     System: 'system',
     Error: 'error',
-    Attachment: 'attachment',
     Status: 'status',
     ApprovalRequest: 'approval_request',
     ApprovalVerdict: 'approval_verdict',
@@ -3915,6 +3950,32 @@ export interface MoveTaskStatusDto {
 /**
  * 
  * @export
+ * @interface NamedPathsDto
+ */
+export interface NamedPathsDto {
+    /**
+     * Candidate folders, absolute
+     * @type {Array<string>}
+     * @memberof NamedPathsDto
+     */
+    paths: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface NamedPathsResultDto
+ */
+export interface NamedPathsResultDto {
+    /**
+     * The asked-for paths a tool call of this run names
+     * @type {Array<string>}
+     * @memberof NamedPathsResultDto
+     */
+    named: Array<string>;
+}
+/**
+ * 
+ * @export
  * @interface NodePosition
  */
 export interface NodePosition {
@@ -4157,6 +4218,25 @@ export interface PlanWindow {
      */
     resetsAt: string | null;
 }
+/**
+ * 
+ * @export
+ * @interface ProbeShareDestinationDto
+ */
+export interface ProbeShareDestinationDto {
+    /**
+     * 
+     * @type {ProbeShareDestinationDtoShareDestination}
+     * @memberof ProbeShareDestinationDto
+     */
+    destination: ProbeShareDestinationDtoShareDestination;
+}
+/**
+ * @type ProbeShareDestinationDtoShareDestination
+ * 
+ * @export
+ */
+export type ProbeShareDestinationDtoShareDestination = ShareConfigDtoShareDestinationOneOf | ShareConfigDtoShareDestinationOneOf1 | ShareConfigDtoShareDestinationOneOf2;
 
 /**
  * 
@@ -4611,6 +4691,36 @@ export interface RetriedDto {
      */
     retried: boolean;
 }
+/**
+ * 
+ * @export
+ * @interface RevokeShareDto
+ */
+export interface RevokeShareDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof RevokeShareDto
+     */
+    status: RevokeShareDtoStatusEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof RevokeShareDto
+     */
+    detail?: string;
+}
+
+
+/**
+ * @export
+ */
+export const RevokeShareDtoStatusEnum = {
+    Revoked: 'revoked',
+    RevokeFailed: 'revoke-failed'
+} as const;
+export type RevokeShareDtoStatusEnum = typeof RevokeShareDtoStatusEnum[keyof typeof RevokeShareDtoStatusEnum];
+
 /**
  * 
  * @export
@@ -6251,6 +6361,394 @@ export interface SetRunPinnedDto {
      */
     pinned: boolean;
 }
+/**
+ * 
+ * @export
+ * @interface Share
+ */
+export interface Share {
+    /**
+     * 
+     * @type {string}
+     * @memberof Share
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof Share
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof Share
+     */
+    artifactId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof Share
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof Share
+     */
+    destinationId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof Share
+     */
+    destinationName: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof Share
+     */
+    sharedVersion: number;
+    /**
+     * 
+     * @type {ShareActor}
+     * @memberof Share
+     */
+    sharedBy: ShareActor;
+    /**
+     * 
+     * @type {ShareStatus}
+     * @memberof Share
+     */
+    status: ShareStatus;
+    /**
+     * 
+     * @type {string}
+     * @memberof Share
+     */
+    lastError: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof Share
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof Share
+     */
+    updatedAt: string;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const ShareActor = {
+    User: 'user',
+    Agent: 'agent'
+} as const;
+export type ShareActor = typeof ShareActor[keyof typeof ShareActor];
+
+/**
+ * 
+ * @export
+ * @interface ShareConfigAckDto
+ */
+export interface ShareConfigAckDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigAckDto
+     */
+    receivedAt: string;
+}
+/**
+ * 
+ * @export
+ * @interface ShareConfigDto
+ */
+export interface ShareConfigDto {
+    /**
+     * 
+     * @type {Array<ShareConfigDtoShareDestination>}
+     * @memberof ShareConfigDto
+     */
+    destinations: Array<ShareConfigDtoShareDestination>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDto
+     */
+    defaultDestinationId: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ShareConfigDto
+     */
+    agentsMayShare: boolean;
+}
+/**
+ * @type ShareConfigDtoShareDestination
+ * 
+ * @export
+ */
+export type ShareConfigDtoShareDestination = ShareConfigDtoShareDestinationOneOf | ShareConfigDtoShareDestinationOneOf1 | ShareConfigDtoShareDestinationOneOf2;
+/**
+ * 
+ * @export
+ * @interface ShareConfigDtoShareDestinationOneOf
+ */
+export interface ShareConfigDtoShareDestinationOneOf {
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf
+     */
+    kind: ShareConfigDtoShareDestinationOneOfKindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf
+     */
+    linkBase: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf
+     */
+    bucket: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf
+     */
+    prefix?: string;
+}
+
+
+/**
+ * @export
+ */
+export const ShareConfigDtoShareDestinationOneOfKindEnum = {
+    Gcs: 'gcs'
+} as const;
+export type ShareConfigDtoShareDestinationOneOfKindEnum = typeof ShareConfigDtoShareDestinationOneOfKindEnum[keyof typeof ShareConfigDtoShareDestinationOneOfKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface ShareConfigDtoShareDestinationOneOf1
+ */
+export interface ShareConfigDtoShareDestinationOneOf1 {
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf1
+     */
+    kind: ShareConfigDtoShareDestinationOneOf1KindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf1
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf1
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf1
+     */
+    linkBase: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf1
+     */
+    bucket: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf1
+     */
+    prefix?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf1
+     */
+    profile?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf1
+     */
+    region?: string;
+}
+
+
+/**
+ * @export
+ */
+export const ShareConfigDtoShareDestinationOneOf1KindEnum = {
+    S3: 's3'
+} as const;
+export type ShareConfigDtoShareDestinationOneOf1KindEnum = typeof ShareConfigDtoShareDestinationOneOf1KindEnum[keyof typeof ShareConfigDtoShareDestinationOneOf1KindEnum];
+
+/**
+ * 
+ * @export
+ * @interface ShareConfigDtoShareDestinationOneOf2
+ */
+export interface ShareConfigDtoShareDestinationOneOf2 {
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf2
+     */
+    kind: ShareConfigDtoShareDestinationOneOf2KindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf2
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf2
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareConfigDtoShareDestinationOneOf2
+     */
+    linkBase: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareConfigDtoShareDestinationOneOf2
+     */
+    upload: Array<string>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareConfigDtoShareDestinationOneOf2
+     */
+    remove: Array<string>;
+}
+
+
+/**
+ * @export
+ */
+export const ShareConfigDtoShareDestinationOneOf2KindEnum = {
+    Command: 'command'
+} as const;
+export type ShareConfigDtoShareDestinationOneOf2KindEnum = typeof ShareConfigDtoShareDestinationOneOf2KindEnum[keyof typeof ShareConfigDtoShareDestinationOneOf2KindEnum];
+
+/**
+ * 
+ * @export
+ * @interface ShareCreatedDto
+ */
+export interface ShareCreatedDto {
+    /**
+     * 
+     * @type {Share}
+     * @memberof ShareCreatedDto
+     */
+    share: Share;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareCreatedDto
+     */
+    url: string;
+}
+/**
+ * 
+ * @export
+ * @interface ShareLinkDto
+ */
+export interface ShareLinkDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareLinkDto
+     */
+    url: string;
+}
+/**
+ * 
+ * @export
+ * @interface ShareListDto
+ */
+export interface ShareListDto {
+    /**
+     * 
+     * @type {Array<Share>}
+     * @memberof ShareListDto
+     */
+    shares: Array<Share>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareListDto
+     */
+    configReceivedAt: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ShareProbeResultDto
+ */
+export interface ShareProbeResultDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ShareProbeResultDto
+     */
+    ok: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareProbeResultDto
+     */
+    detail: string;
+}
+
+/**
+ * 
+ * @export
+ */
+export const ShareStatus = {
+    Live: 'live',
+    RevokeFailed: 'revoke-failed'
+} as const;
+export type ShareStatus = typeof ShareStatus[keyof typeof ShareStatus];
+
 /**
  * 
  * @export

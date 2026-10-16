@@ -13,6 +13,11 @@ import { isHostToolCall } from './host-tool';
  * holds — into the CDN's logs and, on jsDelivr, into the per-package request
  * statistics an npm publisher can read — in every approval mode.
  *
+ * `share: true` uploads the page, encrypted, to a place the user configured.
+ * No card guards that either: the user's own "Let agents share pages" switch
+ * (off by default) is the consent, checked by `ShareService.shareForAgent` on
+ * every call.
+ *
  * How the pair is matched belongs to {@link isHostToolCall}.
  */
 export function isHostArtifactCall(

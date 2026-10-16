@@ -2,7 +2,7 @@
 
 The Electron app: main process, preload and React renderer (electron-vite). Project-wide commands, conventions and constraints are in the root `AGENTS.md`. Renderer styling and reuse rules are in `.claude/rules/renderer-*.md`.
 
-**Contents**: [Main process](#main-process) · [Renderer shell](#renderer-shell) · [Design system](#design-system) · [Chats](#chats) · [Workflows](#workflows) · [Settings](#settings) (incl. *Settings keys*) · [macOS packaging](#macos-packaging) · [App updates](#app-updates) · [System notifications](#system-notifications) · [Sidebar](#sidebar) · [Security](#security)
+**Contents**: [Main process](#main-process) · [Renderer shell](#renderer-shell) · [Design system](#design-system) · [Chats](#chats) · [Workflows](#workflows) · [Settings](#settings) (incl. _Settings keys_) · [macOS packaging](#macos-packaging) · [App updates](#app-updates) · [System notifications](#system-notifications) · [Sidebar](#sidebar) · [Security](#security)
 
 ---
 
@@ -10,7 +10,7 @@ The Electron app: main process, preload and React renderer (electron-vite). Proj
 
 Where things live:
 
-- `src/main/` is the Electron main process, `src/preload/index.ts` exposes the typed `window.geniro`, and `src/shared/contracts.ts` holds the Electron-internal contracts (IPC, Settings, CLI detection, `DaemonHandle`). Never add a daemon wire type to `shared/contracts.ts`; those are generated.
+- `src/main/` is the Electron main process, `src/preload/index.ts` exposes the typed `window.geniro`, and `src/shared/contracts.ts` holds the Electron-internal contracts (IPC, Settings, CLI detection, `DaemonHandle`). Never add a daemon wire type to `shared/contracts.ts`; those are generated. One deliberate exception: `ShareDestination` inside `Settings.sharing`, which main owns in settings.json and pushes to the daemon as a twin (`shareDestinationSchema` in `ipc-schemas.ts` ↔ the daemon's `ShareDestinationSchema`).
 - `main/agents/` holds one descriptor per CLI, collected as a total `Record<CliKind, …>`. No other main file names a CLI. The daemon's twin of each fact is that CLI's `AdapterConfig`.
 - `main/remote/` is the LAN gateway (below). `main/notifications/` is system notifications. `updater.ts`, `update-installer.ts` and `update-service.ts` are app updates.
 - Every git call this app makes belongs to main: `git-info.ts`, `git-changes.ts`, `worktree-service.ts`, `github-prs.ts`. The daemon runs no git.
@@ -18,7 +18,7 @@ Where things live:
 IPC:
 
 - Every IPC argument is validated against its zod schema in `ipc-schemas.ts` before main acts on it. The renderer is the untrusted side.
-- Every channel declares a `RemotePolicy` in `ipc-registry.ts`: `ALLOW_REMOTELY`, `allowRemotelyRedacted` (strip a secret from the answer), `allowRemotelyExceptFields` (refuse fields a phone must never set, such as `updateSettings`' `cliPaths`/`daemonInspect`) or `denyRemotely`.
+- Every channel declares a `RemotePolicy` in `ipc-registry.ts`: `ALLOW_REMOTELY`, `allowRemotelyRedacted` (strip a secret from the answer), `allowRemotelyExceptFields` (refuse fields a phone must never set, such as `updateSettings`' `cliPaths`/`daemonInspect`/`sharing`) or `denyRemotely`.
 - Use `allow` only for a handler that never reads its event. The remote bridge hands handlers a Proxy that throws on any read.
 - `toggleDevTools` acts on `event.sender` only, so one window cannot open another's devtools.
 - `GeniroApi.filePath` is the one preload-local member (`webUtils.getPathForFile`). It is excluded from the IPC exhaustiveness check through `PreloadLocalMethod`.
@@ -32,12 +32,13 @@ Child processes and environment:
 - `cli-install.ts` runs the descriptor's `installer` as `curl -fsSL <url> | <shell>`, and only on the user's press. It reports success only once detection resolves the new binary's `--version`.
 - Main's own failures go to the daemon's log (`reportMainLog`, the `ui` channel), never to stdout. A packaged Finder launch discards main's stdout.
 
-Git (the hardening is under *Security*):
+Git (the hardening is under _Security_):
 
 - Switch a branch with `git switch` behind a re-read dirty check, never `git checkout` (which treats a branch name as a pathspec and restores a file).
 - `pullBranch` is stash, then `git pull --ff-only`, then stash pop. The pop runs on every path, a failed pull included. A failed stash push aborts the pull.
 - `pullStashIsOurs` requires both that the stash ref moved and that the tip's subject ends `geniro: pull`.
 - Decide which branches are checked out in another worktree from `git worktree list --porcelain`. Never parse git's translated error prose.
+- Every `git worktree list` read goes through `worktree-list.ts` (`readWorktreeEntries`: `--porcelain -z`, newline framing only on git < 2.36); never hand-parse the listing. Path and branch are read off one record.
 - `github-prs.ts` fails closed. Every failure (no `gh`, signed out, not GitHub, query error) is the empty list, with no "did it work" flag on the wire.
 
 Task worktrees (`worktree-service.ts`):
@@ -72,7 +73,6 @@ Smaller rules:
 - The `entry` stamp is the only "is this the current build" signal. `version` is identical across rebuilds.
   - Same path with a changed mtime or size means a rebuild: replace it.
   - A different path (`pnpm daemon:dev`): leave it.
-  - No stamp: replace it.
 - Replace a stale daemon only when it is not busy and its identity is re-confirmed. The busy check fails toward busy, because replacing a daemon kills its agent children.
 - A pid that is alive but fails health or identity is refused, never signalled, and no second daemon starts. A recycled pid's pidfile is swept.
 - The root `dev` script must stay `turbo run dev --filter=@geniro/ui`. Turbo's `^build` edge, plus the otherwise-unused `@geniro/daemon` dependency in `apps/ui/package.json`, is what rebuilds `dist/` before launch.
@@ -97,11 +97,11 @@ Smaller rules:
 - node-pty is an app `dependency` with an N-API prebuild. Never add it to `rebuild:native`. `spawn-helper` is unpacked from the asar, and `build-mac.mjs` restores its exec bit.
 - The in-app terminal is a different feature from the "continue in your terminal" handoff.
 
-**LAN gateway** (`main/remote/`). The hard rules (daemon stays loopback-only, pairing gate, Origin check, injected token, Host guard, tunnel on a press only) are in the root `AGENTS.md` → *Constraints*. In code:
+**LAN gateway** (`main/remote/`). The hard rules (daemon stays loopback-only, pairing gate, Origin check, injected token, Host guard, tunnel on a press only) are in the root `AGENTS.md` → _Constraints_. In code:
 
 - `gateway.ts` binds IPv4 only on `REMOTE_PREFERRED_PORT` (47616), with a free-port fallback. Routing order: its own routes, then `/v1/*` and `/health` proxied, then `/ws` upgraded, then the bundle, all behind one path-traversal guard.
 - Match the upgrade as `/ws` or `/ws/…`. engine.io requests the trailing-slash form, so an exact match breaks live streaming while every unit test still passes.
-- `daemon-proxy.ts` strips the browser's `Authorization` and injects the daemon token. On `/ws` it rewrites the `token` query param.
+- `daemon-proxy.ts` strips the browser's `Authorization` and injects the daemon token. On `/ws` it rewrites the `token` query param. It drops any client `x-geniro-via` and stamps `x-geniro-via: remote` on every request and upgrade it forwards (twin of the daemon's `auth/remote-marker.ts`).
 - `host-guard.ts` admits a `*.suffix` only while a tunnel is open. The match is at a label boundary. A bare `*` and one-label suffixes are refused.
 - The tunnel mask is derived from the URL the client printed, never stored per provider.
 - `tunnel.ts` providers are a table in preference order (cloudflared, then ngrok). The client is spawned with only `PATH` and `HOME`.
@@ -288,6 +288,7 @@ One home for each concern:
 - A saved file bakes in the theme and restates the CSP as `ARTIFACT_FILE_CSP`, a twin of the daemon's `artifact-page.ts`. Insert them into a parsed `<head>` (`DOMParser`), never by text splice.
 - A saved file must look like the framed page. The daemon's raw reading (`renderArtifactDocument`) carries the frame's base style (font, padding, box-sizing, centring) but not its transparent ground, and the export supplies the ground.
 - Links are opened by the host, only for `http:`, `https:` and `mailto:` (`shared/link-schemes.ts`). Main's `guardArtifactFrameNavigations` cancels any frame navigation away from the artifact route.
+- Share (`artifact-share.tsx` over `use-artifact-sharing.ts`, provided as `ArtifactShareContext` by `Chats`): beside Save on the card and in the dialog header; null on a paired phone, which draws nothing. A press sends the current `themeVars()`. The link (key in its `#fragment`) is read from the daemon when the panel opens, never kept in the list. Settings → Sharing (`settings/sharing.tsx`) edits the places and the agents switch, and lists every shared page with Copy link and Revoke.
 
 **Shells** (`chats/shell-activity.ts`):
 
@@ -330,6 +331,7 @@ One home for each concern:
 - Do not reintroduce a branch-scoped pull-request list.
 - `keepFresherRows`: a pin, colour or pull-request list written without moving `updatedAt` is decided by the listing.
 - "Changed since this chat started" uses `upstreamBaseSince` and excludes what a pull brought in. The header names the ref and claims no cause.
+- The changes chip and dialog also count the worktrees the thread's agents made (`use-run-work-folders.ts`). A worktree is the thread's only if all three hold: main lists it (`listWorktrees(cwd, startedAtMs)`: a linked worktree made after the thread started — birth of its `.git` link file — never the main checkout and never a geniro task worktree, the direct children of `worktreesRoot()`), and the run's own tool calls name it (`POST /v1/chats/:runId/named-paths`). Each is read as a work folder (`getChangesSince(…, true)`: from where its history meets the start, past what upstream already has). Found folders are only ever added; each lists in its own dialog section. Listings go through `worktree-list.ts` (see *Git*).
 
 **Thread UI memory** (`chats/thread-ui-memory.ts`):
 
@@ -431,6 +433,7 @@ One home for each concern:
 - `customInstructions`: see below.
 - `theme`: read by main before any window exists, and enumerated in `settingsPatchSchema`. An unknown value falls back to `'system'`.
 - `historyPageSize`, `checkForUpdates`, `remoteAccessEnabled`, `daemonInspect`, `cliPaths`.
+- `sharing`: `{destinations, defaultDestinationId, agentsMayShare}` — where pages are shared to and whether agents may share (off by default). Salvaged destination by destination (`salvageSharing`); the shape is a twin of the daemon's `ShareDestinationSchema` (`ipc-schemas.ts` restates its limits). Every write that changes it is pushed to the daemon (`share-config-push.ts`, through `onSettingsWritten`), as is every daemon start. Desktop only.
 
 Data-loss rules:
 

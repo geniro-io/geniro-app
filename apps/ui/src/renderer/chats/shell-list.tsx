@@ -59,10 +59,18 @@ export function ShellIcon({
 function ShellRow({
   shell,
   agentName = null,
+  leftRunning = null,
   onOpen,
   onKill,
 }: {
   shell: ShellRun;
+  /**
+   * The sentence saying this detached command outlived the call that started
+   * it, or null while that call is still going (or there is none). It swaps
+   * the `background` tag for `left running`: under a call that answered long
+   * ago, "background" reads as that call's live work.
+   */
+  leftRunning?: string | null;
   /**
    * WHOSE command this is, when the list mixes several agents' — a workflow's.
    *
@@ -92,6 +100,7 @@ function ShellRow({
       // KIND.
       data-slot="shell-row"
       data-shell-background={shell.background}
+      data-shell-left-running={leftRunning !== null}
       className="flex items-center gap-1.5 text-xs">
       {/* Nudged UP by a pixel, and this is an optical correction rather than a
           fudge — REPORTED as "it should be on the same line, now icon a bit
@@ -169,9 +178,13 @@ function ShellRow({
           sentence a tag has no room for lives on `title`. */}
       {shell.background ? (
         <span
+          data-slot="shell-kind"
           className="shrink-0 rounded border border-border px-1 py-px text-[10px] text-muted-foreground"
-          title="Detached — this command keeps running after the agent's turn ends">
-          background
+          title={
+            leftRunning ??
+            "Detached — this command keeps running after the agent's turn ends"
+          }>
+          {leftRunning === null ? 'background' : 'left running'}
         </span>
       ) : null}
       {/* A COLUMN, not a trailing word: the clock is the last thing on the row
@@ -250,6 +263,7 @@ export function ShellRows({
   shells,
   className,
   agentNameOf,
+  leftRunningOf,
   onOpen,
   onKill,
 }: {
@@ -261,6 +275,11 @@ export function ShellRows({
    * is right for a list that is already about one agent.
    */
   agentNameOf?: ReadonlyMap<string, string>;
+  /**
+   * The detached commands whose call has finished, keyed by shell id, each to
+   * the sentence saying so — see {@link ShellRow}'s `leftRunning`.
+   */
+  leftRunningOf?: ReadonlyMap<string, string>;
   /**
    * Open one command's own output. Absent leaves the rows as plain text — the
    * list never invents a surface it was not given, the same rule the panel's
@@ -296,6 +315,7 @@ export function ShellRows({
             key={shell.id}
             shell={shell}
             agentName={agentNameOf?.get(shell.id) ?? null}
+            leftRunning={leftRunningOf?.get(shell.id) ?? null}
             onOpen={onOpen}
             onKill={onKill}
           />

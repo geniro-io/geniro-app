@@ -134,6 +134,6 @@ describe('RecommendationsBlock', () => {
 
     expect(
       again.querySelector('[data-slot="recommendations-footer"]')?.textContent,
-    ).toContain('1 of 3 selected');
+    ).toContain('1 of 4 selected');
   });
 });

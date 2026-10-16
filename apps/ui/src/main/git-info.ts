@@ -10,11 +10,13 @@ import type {
   GitInfo,
   GitStamp,
 } from '../shared/contracts';
+import { gitFailureLine } from './git-failure';
 import {
   IGNORE_SUBMODULE_WORKTREES,
   readSafeConfig,
   SAFE_CONFIG,
 } from './git-safe-config';
+import { readWorktreeEntries } from './worktree-list';
 
 const execFileAsync = promisify(execFile);
 
@@ -76,10 +78,8 @@ async function git(
  *
  * The porcelain form is parsed rather than the human one for the reason every
  * other git read here gives: `--porcelain` is a documented, locale-independent
- * format, while the plain listing pads columns and abbreviates. Records come as
- * blank-line-separated blocks of `worktree <path>` / `HEAD <sha>` / `branch
- * <ref>`, with `detached` or `bare` in place of the branch line where there is
- * none.
+ * format, while the plain listing pads columns and abbreviates. The read is
+ * `readWorktreeEntries`, shared with the changes reader.
  *
  * `self` — this folder's own worktree root — is dropped: the branch it holds is
  * the one already checked out here, and calling that "held elsewhere" would put
@@ -90,30 +90,17 @@ async function readWorktrees(
   self: string | null,
   config: readonly string[],
 ): Promise<{ held: BranchWorktree[]; main: string | null }> {
-  const listing = await git(dir, ['worktree', 'list', '--porcelain'], config);
-  if (listing === null) {
+  const entries = await readWorktreeEntries((args) => git(dir, args, config));
+  if (entries === null) {
     return { held: [], main: null };
   }
-  const found: BranchWorktree[] = [];
-  let main: string | null = null;
-  let path: string | null = null;
-  for (const line of listing.split('\n')) {
-    if (line.startsWith('worktree ')) {
-      path = line.slice('worktree '.length).trim();
-      main ??= path;
-      continue;
-    }
-    if (line.startsWith('branch ') && path !== null) {
-      const branch = line.slice('branch '.length).trim();
-      if (path !== self && branch.startsWith('refs/heads/')) {
-        found.push({
-          branch: branch.slice('refs/heads/'.length),
-          path,
-        });
-      }
+  const held: BranchWorktree[] = [];
+  for (const { path, branch } of entries) {
+    if (path !== self && branch?.startsWith('refs/heads/')) {
+      held.push({ branch: branch.slice('refs/heads/'.length), path });
     }
   }
-  return { held: found, main };
+  return { held, main: entries[0]?.path ?? null };
 }
 
 /**
@@ -234,14 +221,10 @@ export async function switchBranch(
       timeout: GIT_TIMEOUT_MS,
     });
   } catch (error) {
-    const stderr =
-      error instanceof Error && 'stderr' in error
-        ? String((error as { stderr: unknown }).stderr).trim()
-        : '';
     return {
       ok: false,
       branch: info.branch,
-      error: stderr === '' ? 'git switch failed' : stderr.split('\n')[0]!,
+      error: gitFailureLine(error, 'git switch failed'),
       dirty: false,
       worktree: null,
     };
@@ -485,8 +468,8 @@ export async function carryChangesToBranch(
 }
 
 /**
- * Run one git command for its OUTCOME: `true`, or git's own first line of
- * stderr.
+ * Run one git command for its OUTCOME: `true`, or the line of git's stderr
+ * that says why it failed ({@link gitFailureLine}).
  *
  * Separate from {@link git}, which answers with stdout and swallows the reason
  * — right for reading state, useless for an action whose whole value on failure
@@ -500,13 +483,7 @@ async function runGit(dir: string, args: string[]): Promise<true | string> {
     });
     return true;
   } catch (error) {
-    const stderr =
-      error instanceof Error && 'stderr' in error
-        ? String((error as { stderr: unknown }).stderr).trim()
-        : '';
-    return stderr === ''
-      ? `git ${args[0]} failed`
-      : (stderr.split('\n').find((line) => line.trim() !== '') ?? 'git failed');
+    return gitFailureLine(error, `git ${args[0]} failed`);
   }
 }
 

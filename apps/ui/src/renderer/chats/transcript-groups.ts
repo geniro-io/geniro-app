@@ -2572,7 +2572,7 @@ function foldOneMore(
  * - the caller-attributed rows about the call (question/answer/settle)
  *   claim in too — the WHOLE exchange lives in the block; only the anchor
  *   and approval requests/verdicts stay out (see {@link UNCLAIMABLE_KINDS}),
- *   and untagged items (legacy transcripts) keep the flat flow.
+ *   and items with no `callId` keep the flat flow.
  * - a call continuing an earlier call's `thread` joins that call's block, and
  *   the block is drawn at the conversation's NEWEST `call_started` — earlier
  *   anchors draw nothing (see {@link resolveCallChains}).
@@ -2585,8 +2585,8 @@ function foldOneMore(
  * - a `tool_result` attaches to its call by payload id wherever that call
  *   lives (the pairing survives a closed group); an orphan result (no known
  *   call) stays a plain item entry.
- * - `mcp__geniro__*` tool calls and their results are dropped entirely (see
- *   {@link GENIRO_TOOL_PREFIX}).
+ * - geniro's own tool calls and their results are dropped entirely (see
+ *   `isGeniroToolName`).
  */
 export function groupTranscript(
   items: readonly ChatItem[],

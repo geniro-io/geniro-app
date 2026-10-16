@@ -10,12 +10,15 @@ import {
   type AnalysisSpanKind,
   type AnalysisTurn,
   type ReadAnalyzedThreadArgs,
+  type RunWaterfallTurn,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { asRecord } from '../utils/json-util';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
+import { userInstructionFiles } from '../utils/user-instruction-files';
+import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ThreadTimelineService } from './thread-timeline.service';
 
 /** The overview's byte budget — small enough to read whole, first. */
@@ -112,6 +115,7 @@ export class ThreadReaderService {
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly timelines: ThreadTimelineService,
+    private readonly adapters: AgentAdapterRegistry,
   ) {}
 
   async read(
@@ -163,11 +167,12 @@ export class ThreadReaderService {
       source.snapshotSeq,
       source.sourceWorking,
     );
+    const kind = analysedThreadKindOf(run);
     const header = {
       source: {
         runId: run.id,
         title: run.title,
-        kind: analysedThreadKindOf(run),
+        kind,
         workflowId: run.workflowId,
         agentKind: run.agentKind,
         model: run.model,
@@ -178,6 +183,14 @@ export class ThreadReaderService {
         cwd: run.cwd,
         createdAt: run.createdAt.toISOString(),
         snapshotSeq: source.snapshotSeq,
+        // A workflow's agents differ per node: view=workflow lists theirs.
+        ...(kind === 'chat' && run.agentKind !== null
+          ? {
+              userInstructions: userInstructionFiles(this.adapters, [
+                { agent: run.agentKind, configDir: run.configDir },
+              ]),
+            }
+          : {}),
       },
     };
     if (reading === null) {
@@ -195,6 +208,7 @@ export class ThreadReaderService {
         toolCalls: node.toolCalls,
         toolMs: node.toolMs,
         maxContextTokens: maxContext(fold.turns, node.nodeId),
+        ...usageOf(fold.turns, node.nodeId),
       })),
       criticalPath: [...timeline.criticalPath]
         .sort((a, b) => b.durationMs - a.durationMs)
@@ -213,6 +227,7 @@ export class ThreadReaderService {
           name: tool.name.slice(0, TOOL_NAME_CHARS),
           ms: tool.durationMs,
           at: iso(tool.startMs),
+          ...(tool.failed ? { failed: true } : {}),
         })),
       toolTotals: timeline.toolTotals.map((total) => ({
         node: laneOf(total.nodeId),
@@ -220,6 +235,7 @@ export class ThreadReaderService {
         calls: total.calls,
         totalMs: total.totalMs,
         maxMs: total.maxMs,
+        failed: total.failed,
       })),
     };
     const answer = {
@@ -240,6 +256,8 @@ export class ThreadReaderService {
         userWaits: fold.waits.length,
         delegates: fold.delegates.length,
         toolCalls: timeline.tools.length,
+        failedToolCalls: timeline.tools.filter((tool) => tool.failed).length,
+        ...usageOf(fold.turns),
         working: fold.working,
       },
       ...lists,
@@ -288,6 +306,9 @@ export class ThreadReaderService {
           model: turn.model,
           toolCalls: turn.toolCalls,
           contextTokens: turn.contextTokens,
+          inputTokens: turn.inputTokens,
+          outputTokens: turn.outputTokens,
+          cacheReadTokens: turn.cacheReadTokens,
           costUsd: turn.costUsd,
         });
       }
@@ -337,6 +358,7 @@ export class ThreadReaderService {
           resultSeq: tool.resultSeq,
           name: tool.name.slice(0, TOOL_NAME_CHARS),
           open: tool.open,
+          failed: tool.failed,
           startMs: tool.startMs,
           ms: tool.durationMs ?? 0,
         });
@@ -509,6 +531,41 @@ function itemEntry(row: Item): Answer {
     ...(row.inCall === null || row.inCall === '' ? {} : { inCall: row.inCall }),
     at: row.createdAt.toISOString(),
     text: clip(payloadText(row.payload), ITEM_TEXT_CHARS, row.seq),
+  };
+}
+
+type TurnUsage = Pick<
+  RunWaterfallTurn,
+  'nodeId' | 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'costUsd'
+>;
+
+/**
+ * The tokens and money the CLI reported, summed over every turn — or one
+ * node's when `nodeId` is given. A figure no turn reported stays null: not
+ * measured is not zero.
+ */
+function usageOf(
+  turns: readonly TurnUsage[],
+  nodeId?: string | null,
+): {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  costUsd: number | null;
+} {
+  const own = turns.filter(
+    (turn) => nodeId === undefined || turn.nodeId === nodeId,
+  );
+  const sum = (pick: (turn: TurnUsage) => number | null): number | null =>
+    own.reduce<number | null>((total, turn) => {
+      const value = pick(turn);
+      return value === null ? total : (total ?? 0) + value;
+    }, null);
+  return {
+    inputTokens: sum((turn) => turn.inputTokens),
+    outputTokens: sum((turn) => turn.outputTokens),
+    cacheReadTokens: sum((turn) => turn.cacheReadTokens),
+    costUsd: sum((turn) => turn.costUsd),
   };
 }
 

@@ -6,6 +6,7 @@ import {
   Download,
   FileText,
   LayoutTemplate,
+  Link2,
   NotebookPen,
   Search,
   Sparkles,
@@ -52,6 +53,7 @@ import {
 } from './agent-instances';
 import { ArtifactDialog } from './artifact-dialog';
 import type { RunArtifact } from './artifact-payload';
+import { ArtifactShareContext } from './artifact-share';
 import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
 import { ContextMeter } from './context-meter';
 import { ConversationTimeline } from './conversation-timeline';
@@ -707,18 +709,26 @@ function ShellBand({
   shells,
   onOpenShell,
   onKillShell,
+  leftRunningOf,
   className,
 }: {
   shells: readonly ShellRun[];
   onOpenShell?: (shell: ShellRun) => void;
   onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  /** The commands whose call has finished — see `ShellRows`. */
+  leftRunningOf?: ReadonlyMap<string, string>;
   className?: string;
 }): React.JSX.Element {
   return (
     <div
       data-slot="agent-shell-list"
       className={cn('flex flex-col gap-1', className)}>
-      <ShellRows shells={shells} onOpen={onOpenShell} onKill={onKillShell} />
+      <ShellRows
+        shells={shells}
+        leftRunningOf={leftRunningOf}
+        onOpen={onOpenShell}
+        onKill={onKillShell}
+      />
     </div>
   );
 }
@@ -857,6 +867,7 @@ function ConversationSections({
   onResolveHandoff,
   onOpenShell,
   onKillShell,
+  leftRunningOf,
   className,
 }: {
   agent: AgentDisplay;
@@ -875,6 +886,8 @@ function ConversationSections({
   ) => Promise<HandoffTargetDto>;
   onOpenShell?: (shell: ShellRun) => void;
   onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  /** The commands whose call has finished — see `ShellRows`. */
+  leftRunningOf?: ReadonlyMap<string, string>;
   className?: string;
 }): React.JSX.Element | null {
   const [pressed, setPressed] = useState<
@@ -937,6 +950,7 @@ function ConversationSections({
             shells={shells}
             onOpenShell={onOpenShell}
             onKillShell={onKillShell}
+            leftRunningOf={leftRunningOf}
           />
         </ConversationSection>
       ) : null}
@@ -1224,6 +1238,7 @@ function InstanceBlock({
   onResolveHandoff,
   onOpenShell,
   onKillShell,
+  leftRunningOf,
 }: {
   agent: AgentDisplay;
   instance: AgentInstance;
@@ -1246,6 +1261,8 @@ function InstanceBlock({
   ) => Promise<HandoffTargetDto>;
   onOpenShell?: (shell: ShellRun) => void;
   onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  /** The commands whose call has finished — see `ShellRows`. */
+  leftRunningOf?: ReadonlyMap<string, string>;
 }): React.JSX.Element {
   const { thread } = instance;
   const content = hasInstanceContent(instance);
@@ -1335,6 +1352,7 @@ function InstanceBlock({
             onResolveHandoff={onResolveHandoff}
             onOpenShell={onOpenShell}
             onKillShell={onKillShell}
+            leftRunningOf={leftRunningOf}
           />
           {/* The heading's chevron is a screen away once sub-agents and a plan
               are open under it, so the body carries its own way back. */}
@@ -1612,6 +1630,7 @@ export function AgentsPanel({
   openTurns,
   onOpenShell,
   onKillShell,
+  leftRunningOf,
   mcpByScope,
   mcpLoading = false,
   onRefreshMcp,
@@ -1914,6 +1933,8 @@ export function AgentsPanel({
   onOpenShell?: (shell: ShellRun) => void;
   /** Stop one — see `ShellRows`. */
   onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  /** The commands whose call has finished — see `ShellRows`. */
+  leftRunningOf?: ReadonlyMap<string, string>;
   /*
    * There was a `subagentUnavailableReason` here — a panel-level paragraph
    * saying why a CLI lists no delegates. It has been removed: on cursor it was
@@ -2013,6 +2034,7 @@ export function AgentsPanel({
   // a second card's trigger closes the first before it opens. A set of open
   // ids modelled a side-by-side comparison the pointer cannot actually reach.
   const [openMcp, setOpenMcp] = useState<string | null>(null);
+  const sharing = useContext(ArtifactShareContext);
   // Which published page the popup is showing, or null. Held here rather than
   // per row so the popup survives the row list re-rendering under it, which it
   // does on every streamed token.
@@ -2624,6 +2646,7 @@ export function AgentsPanel({
                     onResolveHandoff={onResolveHandoff}
                     onOpenShell={onOpenShell}
                     onKillShell={onKillShell}
+                    leftRunningOf={leftRunningOf}
                     className="border-t border-border px-2 py-1.5"
                   />
                   {shownInstances.length > 0 ? (
@@ -2693,6 +2716,7 @@ export function AgentsPanel({
                               onResolveHandoff={onResolveHandoff}
                               onOpenShell={onOpenShell}
                               onKillShell={onKillShell}
+                              leftRunningOf={leftRunningOf}
                             />
                           );
                         })}
@@ -2734,7 +2758,13 @@ export function AgentsPanel({
                       <LayoutTemplate className="size-3.5 shrink-0 text-muted-foreground" />
                     }
                     meta={
-                      artifact.version > 1 ? `v${artifact.version}` : undefined
+                      <PageMeta
+                        version={artifact.version}
+                        shared={
+                          sharing !== null &&
+                          sharing.shareOf(artifact.artifactId) !== null
+                        }
+                      />
                     }
                   />
                 </li>
@@ -2791,5 +2821,33 @@ export function AgentsPanel({
         ) : null}
       </div>
     </aside>
+  );
+}
+
+/**
+ * A Pages row's trailing note: its version past the first, and a link glyph
+ * while the page has a live share link — named for a screen reader, since the
+ * glyph alone says nothing to one.
+ */
+function PageMeta({
+  version,
+  shared,
+}: {
+  version: number;
+  shared: boolean;
+}): React.JSX.Element | null {
+  if (version <= 1 && !shared) {
+    return null;
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      {version > 1 ? `v${version}` : null}
+      {shared ? (
+        <>
+          <Link2 aria-hidden="true" className="size-3 text-primary" />
+          <span className="sr-only">(shared)</span>
+        </>
+      ) : null}
+    </span>
   );
 }

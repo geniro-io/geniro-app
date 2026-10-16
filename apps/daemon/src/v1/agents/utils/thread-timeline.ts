@@ -104,6 +104,7 @@ export function pairToolCalls(
         startMs: row.at,
         durationMs: null,
         open: false,
+        failed: false,
       };
       spans.push(entry);
       bySeq.set(row.seq, entry);
@@ -117,6 +118,7 @@ export function pairToolCalls(
     const entry = bySeq.get(call.seq)!;
     entry.resultSeq = row.seq;
     entry.durationMs = Math.max(0, row.at - call.at);
+    entry.failed = row.isError;
   }
   if (working) {
     for (const call of [...open.values()].flat()) {
@@ -293,8 +295,10 @@ export function foldThreadTimeline(
       calls: 0,
       totalMs: 0,
       maxMs: 0,
+      failed: 0,
     };
     total.calls += 1;
+    total.failed += tool.failed ? 1 : 0;
     total.totalMs += tool.durationMs ?? 0;
     total.maxMs = Math.max(total.maxMs, tool.durationMs ?? 0);
     totals.set(key, total);

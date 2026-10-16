@@ -318,6 +318,10 @@ import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { type SkillTarget, useAgentSkills } from './use-agent-skills';
 import {
+  latestShowArtifactResultSeq,
+  useArtifactSharing,
+} from './use-artifact-sharing';
+import {
   MAX_ATTACHMENTS,
   readAsBase64,
   type StagedAttachment,
@@ -344,6 +348,7 @@ import { useRunArtifacts } from './use-run-artifacts';
 import { useRunProcesses } from './use-run-processes';
 import { useRunState } from './use-run-state';
 import { useRunWaterfall } from './use-run-waterfall';
+import { useRunWorkFolders } from './use-run-work-folders';
 import { useThreadAnalysis } from './use-thread-analysis';
 import {
   threadPullRequestsOf,
@@ -4742,12 +4747,21 @@ export function Chats({
    */
   const activeRunArchived = activeRun?.archivedAt != null;
 
-  // ONE read of the run's folder, feeding the header's changes chip AND the
-  // dialog behind it. Kept here rather than inside the dialog because the chip
-  // states the figures without anything being opened — see `useChatChanges`.
+  // ONE read of the run's folder and the worktrees its agents worked in,
+  // feeding the header's changes chip AND the dialog behind it. Kept here
+  // rather than inside the dialog because the chip states the figures without
+  // anything being opened — see `useChatChanges`.
+  const workFolders = useRunWorkFolders(
+    chatApi,
+    activeRunId,
+    activeRun?.cwd ?? null,
+    activeRun?.createdAt ?? null,
+    streaming,
+  );
   const chatChanges = useChatChanges(
     activeRun?.cwd ?? null,
     activeRun?.startSha ?? null,
+    workFolders,
   );
   const refreshChatChanges = chatChanges.refresh;
   // What the DIALOG asks for when it opens: past the freshness floor, because
@@ -6195,6 +6209,26 @@ export function Chats({
     activeRunId,
     latestArtifactSeq,
   ).artifacts;
+  const latestShowArtifactResult = useMemo(
+    () =>
+      activeRunId === null
+        ? latestArtifactSeq
+        : latestShowArtifactResultSeq(
+            transcriptRows,
+            activeRunId,
+            latestArtifactSeq,
+          ),
+    [transcriptRows, activeRunId, latestArtifactSeq],
+  );
+  /**
+   * The open run's shared pages and the Share control's actions. Desktop only:
+   * a paired phone gets no control, and the daemon refuses it anyway.
+   */
+  const artifactSharing = useArtifactSharing(
+    isRemoteRuntime() ? null : apis.shares,
+    activeRunId,
+    latestShowArtifactResult,
+  );
   /**
    * Stop one of this thread's running commands — ASKED FOR as "i wanna have an
    * ability to kill terminals".
@@ -7340,19 +7374,38 @@ export function Chats({
     // is USED is the caller's call (see the shelf's `agentNameOf`): naming the
     // one agent of a 1:1 chat on every row would be a column of one word.
     const shellAgents = new Map<string, string>();
+    // The detached commands whose call has FINISHED, keyed by shell id — still
+    // running only because they outlived it, which the row must say, or a
+    // command under a call that answered long ago reads as that call's live
+    // work. Decided per conversation, as the label is: a continuation still
+    // open keeps the commands its earlier calls started.
+    const shellsLeftRunning = new Map<string, string>();
     for (const agent of agents) {
+      const settledCallIds = new Set(
+        agent.threads.flatMap((thread) =>
+          thread.kind === 'call' && thread.openCallIds.length === 0
+            ? thread.callIds
+            : [],
+        ),
+      );
       const own = shellsByAgent.get(agent.id) ?? [];
       shells.push(...own);
       for (const shell of own) {
         // Named for its INSTANCE when a call started it — two Engineers each
         // running `pnpm test` are otherwise one name printed twice.
         // A continued conversation is one instance, named by its latest call.
-        shellAgents.set(
-          shell.id,
-          shell.callId === null
-            ? agent.name
-            : `${agent.name} · ${conversationHead(callChains, shell.callId)}`,
-        );
+        if (shell.callId === null) {
+          shellAgents.set(shell.id, agent.name);
+          continue;
+        }
+        const head = conversationHead(callChains, shell.callId);
+        shellAgents.set(shell.id, `${agent.name} · ${head}`);
+        if (shell.background && settledCallIds.has(shell.callId)) {
+          shellsLeftRunning.set(
+            shell.id,
+            `Left running by ${agent.name} after ${head} finished — it keeps running until it is stopped`,
+          );
+        }
       }
     }
     return {
@@ -7364,6 +7417,7 @@ export function Chats({
       taskGroups,
       shells,
       shellAgents,
+      shellsLeftRunning,
     };
   }, [agents, shellsByAgent, tasksByAgent, callChains]);
 
@@ -8398,6 +8452,7 @@ export function Chats({
         agentNameOf={
           activeRun?.workflowId ? sidePanelLive.shellAgents : undefined
         }
+        leftRunningOf={sidePanelLive.shellsLeftRunning}
         onOpen={setOpenShell}
         onKill={handleKillShell}
       />
@@ -8413,6 +8468,7 @@ export function Chats({
         callContext={resolveCallReading}
         callChannel={callChannel}
         artifactUrl={artifactUrl}
+        artifactSharing={artifactSharing}
         // What the reader folded and opened is remembered per THREAD — see
         // `thread-ui-memory.ts`.
         threadId={activeRunId}
@@ -10062,6 +10118,7 @@ export function Chats({
                       openTurns={openTurnsShown}
                       onOpenShell={setOpenShell}
                       onKillShell={handleKillShell}
+                      leftRunningOf={sidePanelLive.shellsLeftRunning}
                       // Withheld for a run with no working directory, and where
                       // no terminal panel hosts it — the panel itself never
                       // sees the path.
@@ -10466,6 +10523,7 @@ export function Chats({
                     open
                     startSha={activeRun.startSha}
                     changes={chatChanges.changes}
+                    elsewhere={chatChanges.elsewhere}
                     truncated={chatChanges.truncated}
                     unavailableReason={chatChanges.unavailableReason}
                     movedOffStart={chatChanges.movedOffStart}

@@ -18,6 +18,8 @@ import { GraphsModule } from '../graphs/graphs.module';
 import { CallBroker } from '../graphs/services/call-broker.service';
 import { TaskBoardBroker } from '../graphs/services/task-board.broker';
 import { WorkflowChangeService } from '../graphs/services/workflow-change.service';
+import { ShareService } from '../shares/services/share.service';
+import { SharesModule } from '../shares/shares.module';
 import { McpController } from './controllers/mcp.controller';
 import { McpServerService } from './services/mcp-server.service';
 import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
@@ -36,7 +38,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
  * ({@link createMcpTools}).
  */
 @Module({
-  imports: [AgentsModule, GraphsModule],
+  imports: [AgentsModule, GraphsModule, SharesModule],
   controllers: [McpController],
   providers: [
     {
@@ -58,6 +60,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         analysis: AnalysisBroker,
         threads: ThreadReaderService,
         workflowChanges: WorkflowChangeService,
+        shares: ShareService,
       ) =>
         createMcpTools({
           calls,
@@ -76,6 +79,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           analysis,
           threads,
           workflowChanges,
+          shares,
         }),
       inject: [
         CallBroker,
@@ -94,6 +98,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         AnalysisBroker,
         ThreadReaderService,
         WorkflowChangeService,
+        ShareService,
       ],
     },
     McpServerService,

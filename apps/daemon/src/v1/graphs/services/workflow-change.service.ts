@@ -6,9 +6,15 @@ import { Injectable } from '@nestjs/common';
 import { ConflictException } from '@packages/common';
 
 import { atomicCreate } from '../../../utils/atomic-file';
-import type { RecommendationApply } from '../../agents/chat.types';
+import {
+  RECOMMENDATION_ID_PREFIX,
+  type RecommendationApply,
+} from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { appliesOf } from '../../agents/utils/recommendations-card';
+import { userInstructionFiles } from '../../agents/utils/user-instruction-files';
+import type { AgentKind } from '../../runs/runs.types';
 import { type Workflow, WorkflowSchema } from '../graphs.types';
 import { computeRunOrder } from '../utils/graph-order';
 import { validateWorkflowGraph } from '../utils/graph-validate';
@@ -36,6 +42,20 @@ export interface WorkflowChange {
 
 type Answer = Record<string, unknown>;
 
+/** Every (agent, profile) an agent node or one of its pool members runs under. */
+function runnersOf(
+  workflow: Workflow,
+): { agent: AgentKind; configDir: string | null }[] {
+  return workflow.nodes.flatMap((node) =>
+    node.kind === 'agent'
+      ? [node, ...(node.pool ?? [])].map((member) => ({
+          agent: member.agent,
+          configDir: member.configDir ?? null,
+        }))
+      : [],
+  );
+}
+
 /** `2026-10-14T21-05-33` — a timestamp a file name can hold. */
 function stampOf(at: Date): string {
   return at.toISOString().slice(0, 19).replaceAll(':', '-');
@@ -56,11 +76,13 @@ export class WorkflowChangeService {
     private readonly em: EntityManager,
     private readonly store: WorkflowStoreService,
     private readonly itemDao: ItemDao,
+    private readonly adapters: AgentAdapterRegistry,
   ) {}
 
   /**
-   * The workflow as the library holds it now, the hash a save must quote, and
-   * how it differs from the copy a run started with.
+   * The workflow as the library holds it now, the hash a save must quote, how
+   * it differs from the copy a run started with, and the user-instructions
+   * file of every agent and pool member that copy ran.
    */
   async describe(slug: string, snapshot: string | null): Promise<Answer> {
     const current = await this.readCurrent(slug);
@@ -79,6 +101,12 @@ export class WorkflowChangeService {
         started.state === 'readable'
           ? diffWorkflows(started.workflow, current.workflow)
           : `unknown — the run's own copy is ${started.state}`,
+      userInstructions: userInstructionFiles(
+        this.adapters,
+        runnersOf(
+          started.state === 'readable' ? started.workflow : current.workflow,
+        ),
+      ),
     };
   }
 
@@ -90,11 +118,13 @@ export class WorkflowChangeService {
         'nothing has been applied in this chat yet — workflow changes are saved only for items the user selected and applied',
       );
     }
-    const repoItems = change.ids.filter((id) => !id.startsWith('W-'));
-    if (repoItems.length > 0) {
+    const otherItems = change.ids.filter(
+      (id) => !id.startsWith(RECOMMENDATION_ID_PREFIX.workflow),
+    );
+    if (otherItems.length > 0) {
       return refuse(
         'NOT_A_WORKFLOW_ITEM',
-        `${repoItems.join(', ')} ${repoItems.length === 1 ? 'is a repo item' : 'are repo items'} — only W- items change the workflow`,
+        `${otherItems.join(', ')} ${otherItems.length === 1 ? 'is not a workflow item' : 'are not workflow items'} — only W- items change the workflow`,
       );
     }
     const unselected = change.ids.filter((id) => !apply.ids.includes(id));

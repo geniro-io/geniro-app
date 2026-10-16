@@ -100,7 +100,7 @@ function readTiming(value: unknown): RecommendationsTimingView | null {
 function readItem(value: unknown): RecommendationView | null {
   const row = record(value);
   const id = text(row?.id);
-  const target = oneOf(row?.target, ['workflow', 'repo'] as const);
+  const target = oneOf(row?.target, ['workflow', 'repo', 'user'] as const);
   const title = text(row?.title);
   const change = text(row?.change);
   if (

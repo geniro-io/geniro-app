@@ -6,6 +6,7 @@ import {
   MAX_ARTIFACT_SUMMARY_LENGTH,
   MAX_ARTIFACT_TITLE_LENGTH,
 } from '../../../agents/chat.types';
+import type { AgentShareOutcome } from '../../../shares/shares.types';
 
 /** Trim to a cap without inventing content; an absent value stays absent. */
 function text(value: unknown, max: number): string | null {
@@ -96,6 +97,14 @@ export function readHostArtifact(
 }
 
 /**
+ * Whether the call asked for the page to be shared. Only a literal true (or
+ * the string a model sometimes sends for it) counts — anything else is no.
+ */
+export function readShareRequested(args: Record<string, unknown>): boolean {
+  return args.share === true || args.share === 'true';
+}
+
+/**
  * The tool result text for one outcome.
  *
  * A RECEIPT, never the document — the point of a published artifact is that the
@@ -106,7 +115,10 @@ export function readHostArtifact(
  * an agent that let the store mint an id has no other way to learn it, and
  * would otherwise publish a second page every time it updated its plan.
  */
-export function hostArtifactResultText(outcome: HostArtifactOutcome): string {
+export function hostArtifactResultText(
+  outcome: HostArtifactOutcome,
+  share: AgentShareOutcome | null = null,
+): string {
   if (outcome.status === 'unavailable') {
     return `The artifact could not be shown (${outcome.reason}). Describe it in your reply instead.`;
   }
@@ -114,8 +126,14 @@ export function hostArtifactResultText(outcome: HostArtifactOutcome): string {
     return `The artifact was not published (${outcome.reason}).`;
   }
   const { artifactId: id, version } = outcome;
-  if (version === 1) {
-    return `Artifact published and shown to the user (artifact_id: ${id}). Pass that same artifact_id to show_artifact again to revise this page in place.`;
+  const receipt =
+    version === 1
+      ? `Artifact published and shown to the user (artifact_id: ${id}). Pass that same artifact_id to show_artifact again to revise this page in place.`
+      : `Artifact ${id} updated to version ${version} and shown to the user.`;
+  if (share === null) {
+    return receipt;
   }
-  return `Artifact ${id} updated to version ${version} and shown to the user.`;
+  return share.kind === 'shared'
+    ? `${receipt}\nShared link: ${share.url}`
+    : `${receipt}\nNot shared: ${share.reason}.`;
 }

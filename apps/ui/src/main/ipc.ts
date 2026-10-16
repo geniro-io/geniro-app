@@ -1,3 +1,5 @@
+import { realpath } from 'node:fs/promises';
+
 import {
   app,
   BrowserWindow,
@@ -15,7 +17,12 @@ import { detectClis } from './cli-detect';
 import { runCliInstall } from './cli-install';
 import { runCliUpdate } from './cli-update';
 import type { DaemonSupervisor } from './daemon-supervisor';
-import { readChangesSince, readChangesTotals } from './git-changes';
+import {
+  readChangesSince,
+  readChangesTotals,
+  readLinkedWorktrees,
+} from './git-changes';
+import { gitFailureLine } from './git-failure';
 import {
   carryChangesToBranch,
   pullBranch,
@@ -40,6 +47,7 @@ import {
   chatExportSaveSchema,
   cliKindSchema,
   commitShaSchema,
+  epochMsSchema,
   gitDirSchema,
   lineFlushRequestIdSchema,
   notificationSchema,
@@ -58,6 +66,7 @@ import {
   terminalIdSchema,
   terminalRowsSchema,
   terminalWriteDataSchema,
+  workFolderFlagSchema,
 } from './ipc-schemas';
 import {
   flushWindowsThen,
@@ -79,6 +88,7 @@ import {
   prepareWorktree,
   pruneWorktreeForTask,
   settleWorktreeForTask,
+  worktreesRoot,
 } from './worktree-service';
 
 /**
@@ -183,6 +193,8 @@ export function registerIpc(
   updates: UpdateService,
   terminals: TerminalSessions,
   remoteAccess?: () => RemoteAccess,
+  /** Told after a restart from Settings, which the supervisor's `onStarted` does not cover. */
+  afterRestart?: (handle: DaemonHandle | null) => void,
 ): IpcRegistry {
   // One instance for the app's lifetime, reading settings through the same
   // function every other handler here does — so the toggle it consults is
@@ -254,6 +266,7 @@ export function registerIpc(
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(IPC.onDaemonRestarted, handle);
     }
+    afterRestart?.(handle);
   };
 
   handle(IPC.getStatus, allowRemotelyRedacted(redactDaemonToken), () => {
@@ -348,7 +361,9 @@ export function registerIpc(
   // path alone — the desktop keeps them, since `refuseRemoteArgs` is never
   // consulted for a plain `ipcMain.handle` call.
   const updateSettingsRemotePolicy = allowRemotelyExceptFields(
-    ['cliPaths', 'daemonInspect'],
+    // `sharing` names the commands an upload runs and lets agents publish
+    // pages through the user's own logins: the desktop's call alone.
+    ['cliPaths', 'daemonInspect', 'sharing'],
     'sets a field the desktop alone may set',
   );
   handle(
@@ -461,8 +476,23 @@ export function registerIpc(
   handle(
     IPC.getChangesSince,
     ALLOW_REMOTELY,
-    (_event, dir: unknown, sha: unknown) =>
-      readChangesSince(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
+    (_event, dir: unknown, sha: unknown, workFolder: unknown) =>
+      readChangesSince(
+        gitDirSchema.parse(dir),
+        commitShaSchema.parse(sha),
+        workFolderFlagSchema.parse(workFolder) === true,
+      ),
+  );
+  // The candidates `getChangesSince` above is then asked about, so it reaches as far.
+  handle(
+    IPC.listWorktrees,
+    ALLOW_REMOTELY,
+    async (_event, dir: unknown, startedAt: unknown) =>
+      readLinkedWorktrees(gitDirSchema.parse(dir), {
+        createdAfterMs: epochMsSchema.parse(startedAt),
+        // Resolved, as git names worktrees by their real path.
+        tasksRoot: await realpath(worktreesRoot()).catch(() => worktreesRoot()),
+      }),
   );
   // The line measurement's two reads are the desktop window's alone: the hook that makes them
   // is silent on a remote device, and a total reads every untracked file in the tree, which a
@@ -594,22 +624,15 @@ export function registerIpc(
         // Shaped rather than rethrown: an exception crossing IPC arrives as a
         // string with its structure gone, and the caller must be able to tell a
         // failed worktree from a made one before it starts a run against it.
-        const stderr =
-          error instanceof Error && 'stderr' in error
-            ? String((error as { stderr: unknown }).stderr).trim()
-            : '';
-        const message =
-          stderr === ''
-            ? error instanceof Error
-              ? error.message
-              : String(error)
-            : stderr.split('\n')[0]!;
         return {
           ok: false,
           path: null,
           branch: null,
           reused: false,
-          error: message,
+          error: gitFailureLine(
+            error,
+            error instanceof Error ? error.message : String(error),
+          ),
         };
       }
     },

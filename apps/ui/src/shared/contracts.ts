@@ -247,6 +247,59 @@ export interface AnalysisConfig {
   effort: string | null;
 }
 
+/**
+ * One place encrypted share links are uploaded to, reached through the user's
+ * own CLI and login (`gcloud`, `aws`, or a program of their own as argv).
+ *
+ * TWIN PARSER: `ShareDestinationSchema` in
+ * `apps/daemon/src/v1/shares/shares.types.ts`, which receives these values
+ * (`PUT /v1/shares/config`); the shape and its limits are restated in
+ * `main/ipc-schemas.ts`. A field added here goes in both.
+ */
+export type ShareDestination =
+  | {
+      kind: 'gcs';
+      id: string;
+      name: string;
+      /** https origin the objects are served from; the link is `<linkBase>/<path>#k=<key>`. */
+      linkBase: string;
+      bucket: string;
+      prefix?: string;
+    }
+  | {
+      kind: 's3';
+      id: string;
+      name: string;
+      linkBase: string;
+      bucket: string;
+      prefix?: string;
+      profile?: string;
+      region?: string;
+    }
+  | {
+      kind: 'command';
+      id: string;
+      name: string;
+      linkBase: string;
+      /** argv tokens; `{file}` and `{object}` are substituted, nothing runs through a shell. */
+      upload: string[];
+      remove: string[];
+    };
+
+export interface SharingSettings {
+  destinations: ShareDestination[];
+  /** Where a press (and an agent) shares to; null shares nowhere. */
+  defaultDestinationId: string | null;
+  /** Whether an agent's `show_artifact(share: true)` may upload. Off unless turned on. */
+  agentsMayShare: boolean;
+}
+
+export const DEFAULT_SHARING: SharingSettings = {
+  destinations: [],
+  defaultDestinationId: null,
+  agentsMayShare: false,
+};
+
 export interface Settings {
   /** First-run onboarding finished (gates the renderer's initial route). */
   onboardingComplete: boolean;
@@ -390,6 +443,13 @@ export interface Settings {
    * binding loopback only whatever this says.
    */
   remoteAccessEnabled: boolean;
+  /**
+   * Where artifacts are shared to as encrypted links, and whether agents may
+   * share. Owned here (settings.json) and pushed to every daemon this app
+   * starts; the daemon keeps it in memory only. Desktop only: a paired device
+   * may not write it.
+   */
+  sharing: SharingSettings;
   /**
    * Delete a chat this many days after it was ARCHIVED, or `null` to keep the
    * archive for ever.
@@ -560,6 +620,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarCollapsed: false,
   notificationsEnabled: true,
   remoteAccessEnabled: true,
+  sharing: DEFAULT_SHARING,
   archiveRetentionDays: null,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
   agentOptions: {},
@@ -1328,22 +1389,9 @@ export interface FileSaveResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * `KEYCHAIN_SERVICE` and `SecretName` are deliberately GONE, along with
- * `keychain.ts` and the save/has/delete IPC channels.
- *
- * `cursor.apiKey` was the only secret this app ever held, and it stopped being
- * needed once `cursor-agent` was confirmed to authenticate from its own
- * `~/.cursor` login. `SecretName` could not simply lose its one member — zod
- * rejects an empty enum, so the IPC schema had no valid shape — which is what
- * made removing the surface the honest option rather than keeping a scaffold
- * with a placeholder member no caller could ever pass.
- *
- * The service name lives on as a literal in `purge-legacy-secret.ts`, whose one
- * job is deleting the entry earlier versions wrote.
- *
- * The project's "secrets live in the macOS Keychain only — never in SQLite,
- * never in a file" rule is NOT repealed by this. It still governs the moment a
- * second secret is ever needed; there simply is no first one now.
+ * Every CLI authenticates from its own login, so the app holds no credential.
+ * The "secrets live in the macOS Keychain only — never in SQLite, never in a
+ * file" rule still governs the moment one is ever needed.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1504,8 +1552,23 @@ export interface GeniroApi {
    * READ-ONLY, and the view built on it offers no revert: it says what happened,
    * and undoing any of it is the user's own git, where they can see what they
    * are undoing.
+   *
+   * `workFolder` marks a worktree one of the thread's agents made, measured
+   * from where its history meets `sha` when it does not descend from it.
    */
-  getChangesSince(dir: string, sha: string): Promise<GitChanges>;
+  getChangesSince(
+    dir: string,
+    sha: string,
+    workFolder?: boolean,
+  ): Promise<GitChanges>;
+  /**
+   * The repository's LINKED worktrees other than `dir`'s own — never the main
+   * checkout, nor one whose directory is gone — as real paths, empty when git
+   * cannot answer. Candidates only: which of them a thread worked in is the
+   * daemon's answer from the thread's own transcript. Only worktrees made
+   * since `startedAtMs` (the thread's start), never geniro's own task ones.
+   */
+  listWorktrees(dir: string, startedAtMs: number): Promise<string[]>;
   /**
    * The lines a folder has added and removed since `sha`, tracked and untracked files
    * together — for a readout that wants the figures and not the diffs, so it is counted
@@ -1851,6 +1914,7 @@ export const IPC = {
   getGitStamp: 'geniro:getGitStamp',
   getGitHead: 'geniro:getGitHead',
   getChangesSince: 'geniro:getChangesSince',
+  listWorktrees: 'geniro:listWorktrees',
   getChangesTotals: 'geniro:getChangesTotals',
   lineMeasurementsFlushed: 'geniro:lineMeasurementsFlushed',
   prepareTaskWorktree: 'geniro:prepareTaskWorktree',

@@ -110,11 +110,6 @@ export function clearSecrets(): void {
   scoped.length = 0;
 }
 
-/** How many secrets are currently registered (for the diagnostics report). */
-export function registeredSecretCount(): number {
-  return secrets.length;
-}
-
 /**
  * The length of the longest value {@link redactSecrets} would mask right now, or
  * 0 when there is none — how far past a cut a match that began before it can

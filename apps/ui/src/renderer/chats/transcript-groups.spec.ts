@@ -407,14 +407,11 @@ describe('groupTranscript', () => {
     expect((entries[0] as ToolGroupEntry).pairs[0]?.result).not.toBeNull();
   });
 
-  it('drops mcp__geniro__* tool calls AND their results entirely', () => {
+  it('drops geniro’s own tool calls AND their results entirely', () => {
     // The dedicated call_* kinds already narrate agent calls — the raw
     // envelope JSON rows are duplication.
-    //
-    // The fixed key is what rows STORED before the server was renamed per run
-    // carry; a live turn produces the run-scoped spelling the next test covers.
     const entries = groupTranscript([
-      call('mcp__geniro__call_agent', 't1', { agent: 'poet' }),
+      call('mcp__geniro-run-1__call_agent', 't1', { agent: 'poet' }),
       item('call_started', { callId: 'call-1', calleeNodeId: 'poet' }),
       result('t1', '{"status":"ok"}'),
     ]);
@@ -488,9 +485,9 @@ describe('groupTranscript', () => {
 
   it('drops the host tools’ own rows too — each already draws its own card', () => {
     const entries = groupTranscript([
-      call('mcp__geniro__report_findings', 't1', { findings: [] }),
+      call('mcp__geniro-run-1__report_findings', 't1', { findings: [] }),
       result('t1', '0 findings recorded.'),
-      call('mcp__geniro__ask_user_question', 't2', { questions: [] }),
+      call('mcp__geniro-run-1__ask_user_question', 't2', { questions: [] }),
       result('t2', 'The user responded: yes'),
     ]);
 
@@ -548,9 +545,8 @@ describe('groupTranscript', () => {
 
   it('leaves a user’s OWN server named geniro visible', () => {
     // `geniro` is a name a user may legitimately have given a server of their
-    // own, and the legacy arm is a bare prefix away from hiding every call to
-    // it — an agent working through their server while the transcript shows
-    // nothing. The arm is scoped to geniro's own tool names for exactly this.
+    // own; hiding its calls would leave an agent working through their server
+    // while the transcript shows nothing.
     const entries = groupTranscript([
       call('mcp__geniro__query', 't1', { q: 'x' }),
       result('t1', 'rows'),

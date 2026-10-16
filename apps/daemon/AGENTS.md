@@ -2,7 +2,7 @@
 
 The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent execution, workflow graphs and the call runtime, geniro's own MCP endpoint, the tasks board, stats and diagnostics. Project-wide commands, conventions and constraints are in the root `AGENTS.md`; the module layout is in `.claude/rules/daemon-module-structure.md`, adapters in `agent-adapters.md`, MCP tools in `mcp-tools.md`, queries in `database-queries.md`. This file holds only what those do not: the daemon's non-obvious invariants, by area.
 
-**Contents**: Boot, process and storage · Runs and runtime columns · Agents: adapters · Agents: turns and off-turn work · Host tools · Question cards · Pull requests and task lists · Workflows and passes · Workflow call runtime · v1/mcp · Projects and tasks · Stats · Diagnostics and notifications · Handoff and sign-in · Importing CLI conversations · ACP and cursor transport · Auto-compaction · Agent caches and MCP configuration · Plan limits · Daemon endpoints (loopback)
+**Contents**: Boot, process and storage · Runs and runtime columns · Agents: adapters · Agents: turns and off-turn work · Host tools · Question cards · Pull requests and task lists · Workflows and passes · Workflow call runtime · v1/mcp · Projects and tasks · Shares · Stats · Diagnostics and notifications · Handoff and sign-in · Importing CLI conversations · ACP and cursor transport · Auto-compaction · Agent caches and MCP configuration · Plan limits · Daemon endpoints (loopback)
 
 ---
 
@@ -64,7 +64,6 @@ The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent exec
 - MCP harvest is age-bounded (it shadows the live listing); skill harvest is keyed `(agent, cwd)`. MCP listing cache key includes `configDir`, the read runs under that profile's env, with a keyed single-flight (it launches the user's servers).
 - `chat-metrics` composes only: it hands the adapter `{live, sessionId}` and each adapter answers from its own channel.
 - `chat-title`: writes a title only while it is still exactly what this service derived (manual renames are permanent); checks ownership before any spawn. Do not reintroduce asking cursor for a title. claude's title ask is a throwaway `haiku` turn, MCP withheld, temp cwd, once per conversation.
-- `WorkflowTitleBackfillService` runs once ever (marker file). Never make it repeat; it would erase user renames.
 - `run-teardown` is the ONE delete teardown (cancel, wait, revoke tokens, purge rows with `softDelete` off, drop attachments and artifacts, announce `runDeleted`), shared by chat and workflow delete.
   - It never touches `usage_events`, `usage_activity` or `line_baselines`.
   - Only an ARCHIVED run's own CLI transcripts are deleted with it (`session-transcripts.service.ts`). It keeps a session another run names, or one that began before the run (an import). It never throws.
@@ -115,7 +114,8 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - `show_comparison`: recommendation is matched to an option by name (case- and whitespace-insensitive).
 - `show_gallery` carries paths only; the daemon never opens them, and the renderer reads them through the image route's guards. `MAX_GALLERY_IMAGES` bounds reads per call.
 - `show_artifact`:
-  - Framed `sandbox="allow-scripts"`, never `allow-same-origin`, never `srcdoc`, under the route's own CSP.
+  - Framed `sandbox="allow-scripts"`, never `allow-same-origin`, never `srcdoc`, under the route's own CSP. The one `srcdoc` is inside a share envelope (`v1/shares`), where the page is decrypted in the reader's browser under the same CSP as a meta tag.
+  - `share: true` (listed only while agents may share) shares AFTER the publish; a refused share is a `Not shared:` line in the receipt and never fails the publish. `ShareService.shareForAgent` re-checks the switch itself, because a kept CLI can hold a description listed while it was on.
   - Caps refuse, never truncate. A refused page image refuses the whole page.
   - The serving key is registered with `registerSecret` at its mint site.
   - Workflow call-capable nodes publish too; publishers are dropped with the run, not at pass end.
@@ -137,7 +137,9 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - Deleting the source deletes it (`ThreadAnalysisService` on `bus.allDeleted()`, whichever route deleted the source); what that misses (a daemon stopped before the announce, a failed delete) is swept at boot (`sweepOrphans`).
 - Its four tools (`read_analyzed_thread`, `report_recommendations`, `mark_recommendations`, `save_workflow_change`) are offered only while an analysis turn runs: `ChatService` registers an `AnalysisBroker` sink per turn only when the run has a source. The sink carries the source and snapshot, so no tool takes a run id from the model.
 - `read_analyzed_thread` pages ~22KB (codex cuts a tool result near 10k tokens): timing from `ThreadTimelineService` (the waterfall's UNCAPPED fold plus id-paired tool durations and the critical path, cached per `(runId, snapshotSeq, working)`, after the run's call membership is stamped), rows clipped at 2KB, one row in chunks. Images are collapsed (`collapse-image-blocks.ts`, twin of the renderer's export) and secrets masked before any cut; every answer leads with `HISTORY_RESULT_PREFACE`.
-- `report_recommendations` refuses an evidence seq that does not exist at or below the snapshot, a workflow item for a plain chat, a duplicate id, and an id whose `W-`/`R-` prefix contradicts its target. The card's timing strip is measured by the daemon, never taken from the agent.
+- `report_recommendations` refuses an evidence seq that does not exist at or below the snapshot, a workflow item for a plain chat, a duplicate id, and an id whose `W-`/`R-`/`U-` prefix contradicts its target. The card's timing strip is measured by the daemon, never taken from the agent.
+- A `user` item edits an agent's own standing-instructions file, which reaches every project that agent works in. Its path is an adapter fact (`AdapterConfig.userInstructions`, resolved by `AgentAdapter.userInstructionsFile` under the run's `configDir`), listed to the analysis in the overview's `source.userInstructions` (chat) and in view=workflow's `userInstructions` (every node and pool member the run's snapshot ran). Never spell a path in the guide.
+- The overview counts failed tool calls (a `tool_result` with `isError`, paired in `pairToolCalls`) and sums the tokens and cost the CLI reported; a figure no turn reported stays null.
 - An Apply (`POST /v1/chats/:runId/recommendations/apply`) is a user message carrying the selected items in full and `payload.apply: {cardSeq, ids}`; it is refused `RUN_BUSY` while a turn runs, never delivered mid-turn, and `ALREADY_APPLIED` for a card that already has one (the renderer reads "applied" from its window only). `save_workflow_change` (`WorkflowChangeService`, in `v1/graphs`) writes only `W-` ids in the NEWEST Apply (user messages read in seq order), refuses a hash drift, a deleted file and an invalid graph, and writes a timed backup first. It is not auto-approved.
 - Timeline spans are clipped to the read's `[from, to]`; the critical path takes, at each step, the work still going latest before the cursor (an interval running past the cursor counts up to it); tool calls pair by node, call and id (ACP ids restart per session). Whether the source was working at the snapshot is recorded at the start (`Run.analysisSourceWorking`) and every read folds with it, so one snapshot always folds the same.
 
@@ -159,6 +161,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - A record has no row of ours: it takes the seq of the tool result its time falls on (`ItemDao.toolResultSeqAt`), so ordering stays seq-based.
   - Incremental: the marker advances even when nothing was captured. Errors are swallowed per run. No repeating re-scan sweep; a rule change bumps `PULL_REQUEST_SCAN_VERSION`, and a run scanned under another version is re-read from the start once.
   - Store identity only (owner, repo, number, url), never title or state.
+- Worktrees a thread worked in (`RunNamedPathsService`, `POST /v1/chats/:runId/named-paths`): of the candidate folders the desktop app lists, the ones a `tool_call` of the run names — the path or its run-folder-relative form (two segments or more), followed by a path boundary; a relative form must also begin one (a shell word boundary, a quote, an escaped newline or tab, or `./`), so it is never found inside another repository's path. Never the run's folder or one holding it. Each run's reading is remembered in memory (scanned seq, clamped to `writtenThrough`, + verdicts), so a later ask reads only newer rows — a folder asked about for the first time reads the whole history once, in seq windows that yield the event loop. Asks for one run are serialized.
 - `task_list` rows: `mode` says snapshot vs patch and is never inferred; absent means patch. The run fold is keyed by node AND `callId` and skips delegate rows (`parentToolUseId`).
 - What `v1/agents` exports is whatever `agents.module.ts`'s `exports` names.
 
@@ -233,6 +236,17 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - `create_task` defaults a new card to `backlog`; never default one into an intake column — an armed project starts an agent on it within seconds.
 - A reported merge (`POST /v1/tasks/:taskId/pull-request-merged`) moves only a card still `in_review`, only for a URL its run captured (else `TASK_PULL_REQUEST_UNKNOWN`); a card moved elsewhere is a no-op.
 - A task file is bound by PATH, never copied; `DELETE /v1/tasks/:taskId/files/:attachmentId` drops the reference only and never deletes the user's file.
+
+### Shares
+
+`v1/shares` — encrypted share links for artifacts (`ShareService`, `/v1/shares/*`, all behind `DesktopOnlyGuard`).
+
+- The config is pushed by Electron main (`PUT /v1/shares/config`) on every daemon start, after a Settings restart and after each settings write that changed it; it is held in memory only. Until the first push nothing is shared (`configReceivedAt` null).
+- A share reads the newest stored version (`ArtifactStoreService.latest`, in-process only), builds the saved-file document (`ArtifactPageService.document`) with the pressed theme baked in (`portable-artifact.ts`; an agent's share reuses the last press's theme), encrypts it (`share-envelope.ts`: AES-256-GCM, fresh IV per upload, AAD `geniro-share-v1`) and uploads only the envelope from a 0600 temp file.
+- One share per (run, artifact): sharing again re-uploads to the same object under the same key, so the link handed out keeps working. Operations on one page are serialized.
+- Keys: `ShareKeychain` (`services/share-keychain.service.ts`) writes through `security -i` on stdin (never argv), confirms by reading back, and `registerSecret`s every key it mints or reads.
+- Destination CLIs run through `runManagedCommand` (`v1/agents/utils/managed-command.ts`): argv only, ProcessRegistry, child journal, group kill at the deadline. Custom command tokens refuse shell characters and a shell program, on both sides of the settings twin.
+- Revoke: remote delete first, then the key, then the row. A failed remote delete keeps both and marks the row `revoke-failed`; an object already gone counts as revoked only where the CLI says so plainly — gcloud's "matched no objects", or `aws s3 rm`'s exit 0; a custom command is judged by its exit status alone, and a timeout never counts as gone. Never touched by run teardown or the archive sweep.
 
 ### Stats
 
@@ -330,12 +344,14 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 The OpenAPI document at `/swagger-api` (source of `pnpm generate:api`) is authoritative for every route and shape; read the controllers for behaviour. Bind, public allowlist and token rules are in the root `AGENTS.md`.
 
 Auth by prefix:
+
 - Public: `/health`. `/v1/artifacts/*` is checked by the per-artifact `key` query (an iframe cannot send headers): one uniform 404 for every failure, `Referrer-Policy: no-referrer`, `?raw=1` matched as the literal `1`. `@ApiExcludeController`.
 - Launch token (`LoopbackTokenGuard`): every other `/v1/*`, `/metrics`. `/swagger-api*` uses `swagger.guard`.
 - `/ws`: handshake `auth` token (`enforceWsHandshakeAuth`).
 - `/v1/mcp/<runId>/<nodeId>[/<conversationId>]`: that node's call token or the launch token.
 
 Rules when adding or changing routes:
+
 - Declare static segments (`forget-custom-instructions`, `sweep-archived`, `reorder-pinned`, `processes`, `reconcile`, `awaiting-merge`, `reorder`) before `:param` routes. Workflow slugs `runs` and `import` are reserved.
 - Take query filters through a Zod DTO, never a bare `@Query` (an absent value lists everything; `fastify-qs` parses operators). List `scope` is an enum, never a boolean.
 - `configDir` and `customInstructions` are snapshotted onto the run. `configDir` travels as env, never argv, and must exist; a CLI without the mechanism refuses it (`CONFIG_DIR_UNSUPPORTED`). Text reaching argv (custom instructions, label instructions) refuses control characters.
@@ -351,6 +367,7 @@ Rules when adding or changing routes:
 - `/ws` counts (`holdingFor`, `shellsOpen`, `subagentsOut`) are announced on transitions; every path that ends one must announce. `run_status.status` is nullable (activity announces assert none). `runs_changed` rows carry 0 for `rootsWorking` / `awaitingCalls`. `task_changed` is a twin of the UI's `parseTaskChanged`; the renderer collects worktrees only off `reason: 'work-finished'`.
 
 Destructive or irreversible routes (and one that only looks it — `DELETE /v1/tasks/:taskId/files/:attachmentId` drops a reference, never the file):
+
 - `DELETE /v1/chats/:runId` — hard-deletes a chat run through `RunTeardownService` (chat runs only; reached from the archive).
 - `POST /v1/chats/sweep-archived` — deletes chats archived ≥ `olderThanDays` (1 day–10 years) from `archivedAt`; one at a time, failures logged and skipped. The policy is the client's.
 - `DELETE /v1/workflows/runs/:runId` — one workflow run's history (never the library workflow).

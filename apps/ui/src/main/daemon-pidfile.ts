@@ -85,24 +85,15 @@ export interface DaemonInfo {
   port: number;
   token: string;
   version: string;
+  /** The entry script the running daemon started from, as it looked then. */
+  entry: DaemonEntryStamp;
   /**
-   * The entry script the running daemon started from, as it looked then.
-   *
-   * Null when the daemon did not report one. Only this app writes this pidfile
-   * and the field has been written since it existed, so a null dates the daemon
-   * to before the staleness check — which `DaemonSupervisor.mayAdopt` treats as
-   * stale and replaces, unlike the other unidentifiable cases it adopts.
-   */
-  entry: DaemonEntryStamp | null;
-  /**
-   * When the daemon PROCESS started, epoch ms; null when it did not say.
+   * When the daemon PROCESS started, epoch ms.
    *
    * Compared against the kernel's own answer before signalling the pid — a
-   * recycled pid is otherwise indistinguishable from the daemon. Null means the
-   * daemon predates the field, and the supervisor treats that as "cannot check"
-   * rather than as a reason to refuse: the version and entry gates still apply.
+   * recycled pid is otherwise indistinguishable from the daemon.
    */
-  pidStartedAtMs: number | null;
+  pidStartedAtMs: number;
   startedAt: string;
 }
 
@@ -176,6 +167,7 @@ export function parseDaemonInfo(raw: unknown): DaemonInfo | null {
     return null;
   }
   const v = raw as Record<string, unknown>;
+  const entry = parseEntryStamp(v.entry);
   if (
     typeof v.pid === 'number' &&
     Number.isInteger(v.pid) &&
@@ -185,6 +177,9 @@ export function parseDaemonInfo(raw: unknown): DaemonInfo | null {
     typeof v.token === 'string' &&
     v.token.length > 0 &&
     typeof v.version === 'string' &&
+    entry !== null &&
+    typeof v.pidStartedAtMs === 'number' &&
+    Number.isFinite(v.pidStartedAtMs) &&
     typeof v.startedAt === 'string'
   ) {
     return {
@@ -193,16 +188,8 @@ export function parseDaemonInfo(raw: unknown): DaemonInfo | null {
       port: v.port,
       token: v.token,
       version: v.version,
-      // NOT part of the validity test above: a pidfile without it still names
-      // a daemon that is genuinely there and genuinely serving. It is only
-      // unidentifiable as a build, which the supervisor handles by declining
-      // to adopt it rather than by ignoring it.
-      entry: parseEntryStamp(v.entry),
-      pidStartedAtMs:
-        typeof v.pidStartedAtMs === 'number' &&
-        Number.isFinite(v.pidStartedAtMs)
-          ? v.pidStartedAtMs
-          : null,
+      entry,
+      pidStartedAtMs: v.pidStartedAtMs,
       startedAt: v.startedAt,
     };
   }

@@ -53,6 +53,7 @@
     "@swc/core": "^1.16.13",
     "@types/node": "^26.6.4",
     "@types/proper-lockfile": "^4.1.4",
+    "kysely": "0.29.6",
     "socket.io-client": "^4.8.4",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^6.0.3",

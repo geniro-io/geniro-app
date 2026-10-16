@@ -27,6 +27,7 @@ function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
     costUsd: 12.5,
     turns: 2,
     toolCalls: 40,
+    delegateToolCalls: 0,
     workedMs: 600_000,
     ...over,
   };
@@ -39,12 +40,14 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
     timingSource: 'cli',
     outcome: 'completed',
     toolCalls: 0,
+    delegateToolCalls: 0,
     durationMs: 60_000,
     apiMs: null,
     ttftMs: null,
     timeToRequestMs: null,
     numTurns: null,
     costUsd: 3,
+    modelCosts: null,
     model: 'opus-5',
     inputTokens: null,
     outputTokens: null,
@@ -232,6 +235,38 @@ describe('RunWaterfallDialog', () => {
     expect(view.textContent).toContain('so far');
   });
 
+  it('hovers a turn’s cost by model and its sub-agents’ tool calls', () => {
+    const view = show(
+      dto({
+        turns: [
+          turn({
+            costUsd: 40.68,
+            toolCalls: 12,
+            delegateToolCalls: 30,
+            modelCosts: [
+              { model: 'claude-haiku-5-5', costUsd: 39.03 },
+              { model: 'claude-sonnet-5-5', costUsd: 1.65 },
+            ],
+          }),
+        ],
+      }),
+    );
+
+    const bar = view.querySelector('[data-slot="waterfall-turn"]');
+    act(() => {
+      bar?.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 10,
+          clientY: 10,
+        }),
+      );
+    });
+    expect(view.textContent).toContain('claude-haiku-5-5$39.03');
+    expect(view.textContent).toContain('claude-sonnet-5-5$1.65');
+    expect(view.textContent).toContain('by sub-agents30');
+  });
+
   it('outlines a failed turn rather than drawing it like a finished one', () => {
     const view = show(dto({ turns: [turn({ outcome: 'failed' })] }));
 
@@ -364,8 +399,8 @@ describe('RunWaterfallDialog', () => {
       dto({
         lanes: [lane({ nodeId: 'eng', toolCalls: 520 })],
         toolUse: [
-          { nodeId: 'eng', name: 'Bash', calls: 352 },
-          { nodeId: 'eng', name: 'Read', calls: 168 },
+          { nodeId: 'eng', name: 'Bash', calls: 352, delegateCalls: 0 },
+          { nodeId: 'eng', name: 'Read', calls: 168, delegateCalls: 0 },
         ],
       }),
     );
@@ -373,5 +408,102 @@ describe('RunWaterfallDialog', () => {
     const table = view.querySelector('table');
     expect(table?.textContent).toContain('68%');
     expect(table?.textContent).not.toContain('1%');
+    // No sub-agent called anything, so there is no column for them.
+    expect(table?.textContent).not.toContain('sub-agents');
+  });
+
+  it('gives sub-agents’ calls a column of their own, and says whose the totals are', () => {
+    const view = show(
+      dto({
+        lanes: [
+          lane({ nodeId: 'middle', toolCalls: 400, delegateToolCalls: 600 }),
+        ],
+        toolUse: [
+          { nodeId: 'middle', name: 'Read', calls: 100, delegateCalls: 600 },
+          { nodeId: 'middle', name: 'Bash', calls: 300, delegateCalls: 0 },
+        ],
+      }),
+    );
+
+    const table = view.querySelector('table');
+    const headers = [...(table?.querySelectorAll('th') ?? [])].map(
+      (th) => th.textContent,
+    );
+    expect(headers).toEqual(['tool', 'share', 'own', 'sub-agents', 'of total']);
+    const read = [...(table?.querySelectorAll('tbody tr') ?? [])][0];
+    const cells = [...(read?.querySelectorAll('td') ?? [])].map(
+      (td) => td.textContent,
+    );
+    // Read is first by both counts together, and 700 of 1,000 is its share.
+    expect(cells[0]).toBe('Read');
+    expect(cells.slice(2)).toEqual(['100', '600', '70%']);
+    expect(view.textContent).toContain(
+      '400 tool calls made by the agents themselves, 600 by their sub-agents',
+    );
+    // The lane's label carries the same split, its sentence on hover.
+    const label = [...view.querySelectorAll('span')].find(
+      (node) => node.textContent === '400 own + 600 by sub-agents',
+    );
+    expect(label?.getAttribute('title')).toBe(
+      '400 tool calls made by the agents themselves, 600 by their sub-agents',
+    );
+    // The tools tile counts the agents' own and names the rest under it.
+    const tile = [...view.querySelectorAll('[data-slot="stat"]')].find(
+      (node) => node.textContent?.trim().startsWith('tools') === true,
+    );
+    expect(tile?.textContent).toContain('400');
+    expect(tile?.textContent).toContain('+ 600 by sub-agents');
+    expect(
+      tile?.querySelector('[title]')?.getAttribute('title') ??
+        tile?.getAttribute('title'),
+    ).toBe(
+      '400 tool calls made by the agents themselves, 600 by their sub-agents',
+    );
+  });
+
+  it('folds one tool across lanes, own and sub-agents’ each summed', () => {
+    const view = show(
+      dto({
+        lanes: [
+          lane({ nodeId: 'a', toolCalls: 10, delegateToolCalls: 50 }),
+          lane({ nodeId: 'b', toolCalls: 5, delegateToolCalls: 20 }),
+        ],
+        toolUse: [
+          { nodeId: 'a', name: 'Read', calls: 10, delegateCalls: 50 },
+          { nodeId: 'b', name: 'Read', calls: 5, delegateCalls: 20 },
+          { nodeId: 'b', name: 'Bash', calls: 15, delegateCalls: 0 },
+        ],
+      }),
+    );
+
+    const rows = [
+      ...(view.querySelector('table')?.querySelectorAll('tbody tr') ?? []),
+    ];
+    const cells = (row: Element | undefined) =>
+      [...(row?.querySelectorAll('td') ?? [])].map((td) => td.textContent);
+    expect(cells(rows[0])).toEqual(['Read', '', '15', '70', '85%']);
+    expect(cells(rows[1])).toEqual(['Bash', '', '15', '0', '15%']);
+  });
+
+  it('names the models a costly turn’s money went to', () => {
+    const view = show(
+      dto({
+        turns: [
+          turn({
+            costUsd: 40.68,
+            model: 'claude-opus-5',
+            modelCosts: [
+              { model: 'claude-haiku-5-5', costUsd: 39.03 },
+              { model: 'claude-sonnet-5-5', costUsd: 1.65 },
+            ],
+          }),
+        ],
+      }),
+    );
+
+    const row = view.querySelector('tbody tr');
+    expect(row?.textContent).toContain(
+      'claude-haiku-5-5 $39.03 · claude-sonnet-5-5 $1.65',
+    );
   });
 });

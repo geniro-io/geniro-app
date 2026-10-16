@@ -15,11 +15,14 @@ import {
   CLAUDE_SESSION_FILE_SUFFIX,
   CLAUDE_SESSIONS_DIR_NAME,
 } from '../claude.const';
+import { readModelUsageCosts } from './claude-cost-totals.utils';
 
 /** The running totals a resumed claude process starts from. */
 export interface ClaudeCostState {
   costUsd: number | null;
   apiMs: number | null;
+  /** The saved per-model totals (`modelUsage[<model>].costUSD`). */
+  costByModel: Record<string, number> | null;
 }
 
 /**
@@ -132,6 +135,7 @@ function readCostStateLine(
     return {
       costUsd: asNumber(record?.totalCostUSD),
       apiMs: asNumber(record?.totalAPIDuration),
+      costByModel: readModelUsageCosts(record?.modelUsage),
     };
   } catch {
     return null;

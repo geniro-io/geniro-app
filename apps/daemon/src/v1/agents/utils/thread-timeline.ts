@@ -104,6 +104,7 @@ export function pairToolCalls(
         startMs: row.at,
         durationMs: null,
         open: false,
+        delegate: row.delegate,
       };
       spans.push(entry);
       bySeq.set(row.seq, entry);
@@ -260,7 +261,8 @@ export function foldThreadTimeline(
       work.push({ nodeId, interval });
       busyAll.push(interval);
     }
-    const own = tools.filter((tool) => tool.nodeId === nodeId);
+    const lane = tools.filter((tool) => tool.nodeId === nodeId);
+    const own = lane.filter((tool) => !tool.delegate);
     return {
       nodeId,
       inTurnsMs: length(turns),
@@ -269,7 +271,11 @@ export function foldThreadTimeline(
       busyMs: length(busy),
       turns: turns.length,
       toolCalls: own.length,
+      delegateToolCalls: lane.length - own.length,
       toolMs: own.reduce((sum, tool) => sum + (tool.durationMs ?? 0), 0),
+      delegateToolMs: lane
+        .filter((tool) => tool.delegate)
+        .reduce((sum, tool) => sum + (tool.durationMs ?? 0), 0),
     };
   });
 
@@ -286,10 +292,12 @@ export function foldThreadTimeline(
 
   const totals = new Map<string, ToolTotal>();
   for (const tool of tools) {
-    const key = `${tool.nodeId ?? ''}\u0000${tool.name}`;
+    // Own and sub-agents' calls are separate rows, so each row's time is its count's.
+    const key = `${tool.nodeId ?? ''}\u0000${tool.name}\u0000${tool.delegate}`;
     const total = totals.get(key) ?? {
       nodeId: tool.nodeId,
       name: tool.name,
+      delegate: tool.delegate,
       calls: 0,
       totalMs: 0,
       maxMs: 0,

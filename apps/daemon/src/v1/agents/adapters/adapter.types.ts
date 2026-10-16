@@ -258,6 +258,23 @@ export interface AgentUsage {
    * reason was given, the ordinary case.
    */
   promptCacheTtlReason?: PromptCacheTtlReason | null;
+  /**
+   * {@link costUsd} split by the model that spent it — the turn's own model
+   * beside every model its sub-agents and side calls ran on — costliest first.
+   *
+   * The split exists because a turn's TOKEN fields can be its main thread's
+   * alone (claude's `usage`) while its cost covers everything, so tokens times
+   * price does not reproduce the cost without it. Reported only when the parts
+   * sum to {@link costUsd}; optional and null alike mean no CLI-stated split.
+   */
+  modelCosts?: AgentModelCost[] | null;
+}
+
+/** One model's share of a turn's cost — see {@link AgentUsage.modelCosts}. */
+export interface AgentModelCost {
+  /** The model id as the CLI keyed it. */
+  model: string;
+  costUsd: number;
 }
 
 // ── What the window currently HOLDS ─────────────────────────────────────────

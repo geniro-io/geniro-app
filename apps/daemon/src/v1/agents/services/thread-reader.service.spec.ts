@@ -133,6 +133,105 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     );
   });
 
+  it('counts sub-agent tool calls apart and carries a turn’s cost split', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(1, 'tool_call', { id: 't1', name: 'Bash' }, 1);
+    await insert(2, 'tool_result', { id: 't1', output: 'done' }, 2);
+    await insert(
+      3,
+      'tool_call',
+      { id: 't2', name: 'Read', parentToolUseId: 'toolu_agent' },
+      3,
+    );
+    await insert(4, 'tool_result', { id: 't2', output: 'read' }, 4);
+    await insert(
+      5,
+      'turn_complete',
+      {
+        usage: {
+          durationMs: 6_000,
+          costUsd: 3,
+          modelCosts: [
+            { model: 'haiku', costUsd: 2 },
+            { model: 'opus', costUsd: 1 },
+          ],
+        },
+      },
+      6,
+    );
+    const source = {
+      sourceRunId: 'source',
+      snapshotSeq: 5,
+      sourceWorking: false,
+    };
+
+    const overview = await reader.read(source, { view: 'overview' });
+    expect(overview.timing).toMatchObject({
+      toolCalls: 1,
+      delegateToolCalls: 1,
+    });
+    expect(overview.nodes).toEqual([
+      expect.objectContaining({ toolCalls: 1, delegateToolCalls: 1 }),
+    ]);
+    expect(overview.toolTotals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'Bash', delegate: false, calls: 1 }),
+        expect.objectContaining({ name: 'Read', delegate: true, calls: 1 }),
+      ]),
+    );
+    expect(overview.slowestTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ seq: 3, delegate: true }),
+        expect.objectContaining({ seq: 1, delegate: false }),
+      ]),
+    );
+    const tools = (
+      await reader.read(source, { view: 'spans', kinds: ['tool'] })
+    ).spans as Record<string, unknown>[];
+    expect(tools.map((span) => [span.seq, span.delegate])).toEqual(
+      expect.arrayContaining([
+        [1, false],
+        [3, true],
+      ]),
+    );
+
+    expect(overview.nodes).toEqual([
+      expect.objectContaining({ toolMs: 1_000, delegateToolMs: 1_000 }),
+    ]);
+    const spans = (
+      await reader.read(source, { view: 'spans', kinds: ['turn'] })
+    ).spans as Record<string, unknown>[];
+    expect(spans).toEqual([
+      expect.objectContaining({
+        toolCalls: 1,
+        delegateToolCalls: 1,
+        modelCosts: [
+          { model: 'haiku', costUsd: 2 },
+          { model: 'opus', costUsd: 1 },
+        ],
+      }),
+    ]);
+  });
+
+  it('leaves the cost split out of a turn span that has none', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(
+      1,
+      'turn_complete',
+      { usage: { durationMs: 1_000, costUsd: 1 } },
+      1,
+    );
+
+    const spans = (
+      await reader.read(
+        { sourceRunId: 'source', snapshotSeq: 1, sourceWorking: false },
+        { view: 'spans', kinds: ['turn'] },
+      )
+    ).spans as Record<string, unknown>[];
+    expect(spans).toHaveLength(1);
+    expect(spans[0]).not.toHaveProperty('modelCosts');
+  });
+
   it('never returns a row past the snapshot seq', async () => {
     await insert(0, 'message', { text: 'before' }, 0);
     await insert(1, 'message', { text: 'after the click' }, 1);

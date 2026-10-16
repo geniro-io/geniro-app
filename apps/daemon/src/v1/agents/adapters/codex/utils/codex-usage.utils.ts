@@ -1,10 +1,11 @@
 import { asNumber, asRecord } from '../../../utils/json-util';
+import { mergeModelCosts, splitOf } from '../../../utils/model-costs';
 import {
   type ModelPrice,
   ratesForPrompt,
   tokenCostUsd,
 } from '../../../utils/model-prices';
-import type { AgentUsage } from '../../adapter.types';
+import type { AgentModelCost, AgentUsage } from '../../adapter.types';
 import type { CodexTokenBreakdown, CodexTokenUsage } from '../codex.types';
 
 /** One breakdown, or null when a figure is missing — a partial one is unusable. */
@@ -95,6 +96,14 @@ export interface CodexSpend {
   outputTokens: number;
   reasoningOutputTokens: number;
   costUsd: number | null;
+}
+
+/**
+ * The sub-agents' spend, with its dollars split by the model each thread ran
+ * on — null when a thread that spent has no model or no price to split by.
+ */
+export interface CodexSubagentsSpend extends CodexSpend {
+  modelCosts: AgentModelCost[] | null;
 }
 
 /**
@@ -221,19 +230,23 @@ export class CodexSubagentSpend {
   unbilled(
     priceOf: (model: string | null) => ModelPrice | null,
     fallbackModel: string | null,
-  ): CodexSpend | null {
+  ): CodexSubagentsSpend | null {
     const parts: CodexSpend[] = [];
+    let modelCosts: AgentModelCost[] | null = [];
     for (const [threadId, { billed, latest }] of this.threads) {
-      const spend = spendBetween(
-        latest,
-        billed,
-        priceOf(this.models.get(threadId) ?? fallbackModel),
-      );
-      if (!isEmptySpend(spend)) {
-        parts.push(spend);
+      const model = this.models.get(threadId) ?? fallbackModel;
+      const spend = spendBetween(latest, billed, priceOf(model));
+      if (isEmptySpend(spend)) {
+        continue;
       }
+      parts.push(spend);
+      modelCosts =
+        modelCosts === null || model === null || spend.costUsd === null
+          ? null
+          : [...modelCosts, { model, costUsd: spend.costUsd }];
     }
-    return sumSpends(parts);
+    const total = sumSpends(parts);
+    return total === null ? null : { ...total, modelCosts };
   }
 
   /** Everything read so far is now on a turn's row. */
@@ -288,7 +301,7 @@ export function turnUsageOf(options: {
   durationMs: number | null;
   /** The model's list price, or null when nobody can price it. */
   price: ModelPrice | null;
-  subagents?: CodexSpend | null;
+  subagents?: CodexSubagentsSpend | null;
 }): AgentUsage {
   const { latest, baseline, price } = options;
   const own =
@@ -300,6 +313,16 @@ export function turnUsageOf(options: {
       (part): part is CodexSpend => part !== null,
     ),
   );
+  // List-price estimates like `costUsd` itself: the thread's own requests at
+  // its model, each sub-agent's at the model it ran on.
+  const ownCosts =
+    own === null || isEmptySpend(own)
+      ? []
+      : own.costUsd === null || options.model === null
+        ? null
+        : [{ model: options.model, costUsd: own.costUsd }];
+  const subagentCosts =
+    options.subagents == null ? [] : options.subagents.modelCosts;
   const context = latest?.last.totalTokens ?? null;
   const window = latest?.modelContextWindow ?? null;
   return {
@@ -317,5 +340,12 @@ export function turnUsageOf(options: {
     ttftMs: null,
     timeToRequestMs: null,
     numTurns: null,
+    modelCosts:
+      ownCosts === null || subagentCosts === null
+        ? null
+        : splitOf(
+            mergeModelCosts([ownCosts, subagentCosts]),
+            spend?.costUsd ?? null,
+          ),
   };
 }

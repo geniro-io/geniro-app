@@ -121,13 +121,20 @@ describe('offline Ollama model routing', () => {
         ttftMs: null,
         timeToRequestMs: null,
         numTurns: null,
+        modelCosts: [{ model: 'claude-sonnet-5-5', costUsd: 4 }],
       },
     };
+    // The split of a figure that is now $0 goes with it.
     expect(qualifyOllamaEvent(settled, model)).toEqual({
       type: 'turn_complete',
       stopReason: null,
       finalText: null,
-      usage: { ...settled.usage, costUsd: 0, contextModel: model },
+      usage: {
+        ...settled.usage,
+        costUsd: 0,
+        contextModel: model,
+        modelCosts: null,
+      },
     });
     expect(settled.usage.costUsd).toBe(4);
     expect(qualifyOllamaEvent(settled, 'opus')).toBe(settled);

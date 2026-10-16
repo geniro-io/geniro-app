@@ -14,8 +14,18 @@ function tool(
   seconds: number,
   nodeId: string | null = 'lead',
   name: string | null = 'Bash',
+  delegate = false,
 ): ToolCallTime {
-  return { seq, kind, nodeId, inCall: null, at: s(seconds), toolId, name };
+  return {
+    seq,
+    kind,
+    nodeId,
+    inCall: null,
+    at: s(seconds),
+    toolId,
+    name,
+    delegate,
+  };
 }
 
 describe('pairToolCalls', () => {
@@ -144,6 +154,7 @@ describe('foldThreadTimeline', () => {
     expect(timeline.toolTotals[0]).toEqual({
       nodeId: 'worker-b',
       name: 'Bash',
+      delegate: false,
       calls: 2,
       totalMs: 23_000,
       maxMs: 20_000,
@@ -151,6 +162,49 @@ describe('foldThreadTimeline', () => {
     expect(
       timeline.nodes.find((node) => node.nodeId === 'worker-b'),
     ).toMatchObject({ toolCalls: 2, toolMs: 23_000 });
+  });
+
+  it('counts a node’s sub-agent tool calls apart from its own', () => {
+    const timeline = foldThreadTimeline(
+      {
+        from: s(0),
+        to: s(60),
+        turns: [{ nodeId: 'lead', startedAt: iso(0), durationMs: 60_000 }],
+        calls: [],
+        waits: [],
+      },
+      pairToolCalls(
+        [
+          tool(1, 'tool_call', 'a', 1, 'lead', 'Read'),
+          tool(2, 'tool_result', 'a', 3, 'lead'),
+          tool(3, 'tool_call', 'b', 5, 'lead', 'Read', true),
+          tool(4, 'tool_result', 'b', 15, 'lead'),
+          tool(5, 'tool_call', 'c', 16, 'lead', 'Read', true),
+          tool(6, 'tool_result', 'c', 17, 'lead'),
+        ],
+        s(60),
+        false,
+      ),
+    );
+
+    expect(timeline.nodes[0]).toMatchObject({
+      toolCalls: 1,
+      delegateToolCalls: 2,
+      toolMs: 2_000,
+      delegateToolMs: 11_000,
+    });
+    // Own and sub-agents' calls of one tool are separate rows, each timed alone.
+    expect(
+      timeline.toolTotals.map(({ name, delegate, calls, totalMs }) => ({
+        name,
+        delegate,
+        calls,
+        totalMs,
+      })),
+    ).toEqual([
+      { name: 'Read', delegate: true, calls: 2, totalMs: 11_000 },
+      { name: 'Read', delegate: false, calls: 1, totalMs: 2_000 },
+    ]);
   });
 });
 

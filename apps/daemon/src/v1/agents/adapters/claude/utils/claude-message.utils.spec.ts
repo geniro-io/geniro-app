@@ -789,6 +789,7 @@ describe('mapClaudeMessage', () => {
           // This fixture's usage carries no `cache_creation` split.
           promptCacheTtlMs: null,
           promptCacheTtlReason: null,
+          modelCosts: null,
         },
         stopReason: 'end_turn',
         finalText: 'pong',

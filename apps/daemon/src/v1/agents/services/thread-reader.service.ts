@@ -193,7 +193,9 @@ export class ThreadReaderService {
         waitingOnUserMs: node.waitingOnUserMs,
         turns: node.turns,
         toolCalls: node.toolCalls,
+        delegateToolCalls: node.delegateToolCalls,
         toolMs: node.toolMs,
+        delegateToolMs: node.delegateToolMs,
         maxContextTokens: maxContext(fold.turns, node.nodeId),
       })),
       criticalPath: [...timeline.criticalPath]
@@ -211,12 +213,14 @@ export class ThreadReaderService {
           seq: tool.seq,
           node: laneOf(tool.nodeId),
           name: tool.name.slice(0, TOOL_NAME_CHARS),
+          delegate: tool.delegate,
           ms: tool.durationMs,
           at: iso(tool.startMs),
         })),
       toolTotals: timeline.toolTotals.map((total) => ({
         node: laneOf(total.nodeId),
         name: total.name.slice(0, TOOL_NAME_CHARS),
+        delegate: total.delegate,
         calls: total.calls,
         totalMs: total.totalMs,
         maxMs: total.maxMs,
@@ -239,7 +243,9 @@ export class ThreadReaderService {
         calls: fold.calls.length,
         userWaits: fold.waits.length,
         delegates: fold.delegates.length,
-        toolCalls: timeline.tools.length,
+        toolCalls: timeline.tools.filter((tool) => !tool.delegate).length,
+        delegateToolCalls: timeline.tools.filter((tool) => tool.delegate)
+          .length,
         working: fold.working,
       },
       ...lists,
@@ -287,8 +293,10 @@ export class ThreadReaderService {
           timing: turn.timingSource,
           model: turn.model,
           toolCalls: turn.toolCalls,
+          delegateToolCalls: turn.delegateToolCalls,
           contextTokens: turn.contextTokens,
           costUsd: turn.costUsd,
+          ...(turn.modelCosts === null ? {} : { modelCosts: turn.modelCosts }),
         });
       }
     }
@@ -336,6 +344,7 @@ export class ThreadReaderService {
           seq: tool.seq,
           resultSeq: tool.resultSeq,
           name: tool.name.slice(0, TOOL_NAME_CHARS),
+          delegate: tool.delegate,
           open: tool.open,
           startMs: tool.startMs,
           ms: tool.durationMs ?? 0,

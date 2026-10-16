@@ -7,7 +7,7 @@ import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import type {
   SessionPullRequest,
-  SessionRecordInput,
+  SessionPullRequestsInput,
 } from '../adapters/adapter.types';
 import type {
   PullRequestsCapturedEvent,
@@ -235,14 +235,14 @@ function sessionRecords(
     failing?: string;
   } = {},
 ) {
-  const asked: SessionRecordInput[] = [];
+  const asked: SessionPullRequestsInput[] = [];
   const sessionTranscripts = {
     collect,
   } as unknown as SessionTranscriptsService;
   // Only claude keeps such a record; every other CLI answers the base's empty.
   const adapters = {
     for: (kind: AgentKind) => ({
-      readSessionPullRequests: async (input: SessionRecordInput) => {
+      readSessionPullRequests: async (input: SessionPullRequestsInput) => {
         if (kind !== AgentKind.Claude) {
           return [];
         }

@@ -2,12 +2,13 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 
 import type { Run } from '../../runs/entity/run.entity';
-import type { SessionTranscriptTarget } from '../chat.types';
+import { type SessionTranscriptTarget, SINGLE_AGENT_NODE } from '../chat.types';
 import { NodeStateDao } from '../dao/node-state.dao';
+import { readNodeSessions } from '../utils/node-sessions';
 import {
-  nodeSessionTargets,
-  runSnapshotProfiles,
-} from '../utils/node-session-targets';
+  snapshotNodeConfigDirs,
+  snapshotNodePoolProfiles,
+} from '../utils/snapshot-config-dirs';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 
 /**
@@ -39,16 +40,52 @@ export class SessionTranscriptsService {
 
   /**
    * Every CLI conversation a run held, with the CLI and the profile it lives
-   * under (`nodeSessionTargets`). Read BEFORE the run's `node_state` rows are
-   * deleted.
+   * under. Read BEFORE the run's `node_state` rows are deleted.
+   *
+   * A chat's one node runs under the run's own profile; a workflow node under
+   * the one its snapshot names. A node's whole session history is taken, not
+   * only the session it would resume: every call to it and every compaction
+   * starts another conversation, and each is a transcript on disk.
    */
   async collect(
     run: Run,
     em: EntityManager,
   ): Promise<SessionTranscriptTarget[]> {
-    const states = await this.nodeStateDao.listByRun(run.id, em);
-    const profiles = runSnapshotProfiles(run.workflowSnapshot);
-    return states.flatMap((state) => nodeSessionTargets(run, state, profiles));
+    const nodeDirs = snapshotNodeConfigDirs(run.workflowSnapshot);
+    const nodePools = snapshotNodePoolProfiles(run.workflowSnapshot);
+    const targets: SessionTranscriptTarget[] = [];
+    for (const state of await this.nodeStateDao.listByRun(run.id, em)) {
+      const agentKind = state.agentKind ?? run.agentKind;
+      if (agentKind === null) {
+        continue;
+      }
+      const configDir =
+        run.workflowId === null && state.nodeId === SINGLE_AGENT_NODE
+          ? run.configDir
+          : (nodeDirs.get(state.nodeId) ?? null);
+      const sessions = new Set(readNodeSessions(state.sessionIds));
+      if (state.agentSessionId) {
+        sessions.add(state.agentSessionId);
+      }
+      // A pooled node's sessions belong to whichever member ran them, which
+      // `node_state` does not record — so each is looked for under every
+      // member's profile.
+      const profiles = nodePools.get(state.nodeId) ?? [
+        { agentKind, configDir },
+      ];
+      for (const sessionId of sessions) {
+        for (const profile of profiles) {
+          if (profile !== null) {
+            targets.push({
+              agentKind: profile.agentKind,
+              configDir: profile.configDir,
+              sessionId,
+            });
+          }
+        }
+      }
+    }
+    return targets;
   }
 
   /**

@@ -3707,27 +3707,6 @@ describe('ClaudeAdapter — a resumed process’s first cost', () => {
       done?.type === 'turn_complete' ? done.usage?.costUsd : null,
     ).toBeCloseTo(1, 6);
   });
-
-  it('reads a session’s cost-state totals from the profile that holds it', async () => {
-    const profile = mkdtempSync(join(tmpdir(), 'claude-resume-cost-'));
-    const sessionId = '5c1d1e0a-6f3b-4c55-9d7e-2b0a3f4e5d62';
-    mkdirSync(join(profile, 'projects', '-Users-x'), { recursive: true });
-    writeFileSync(
-      join(profile, 'projects', '-Users-x', `${sessionId}.jsonl`),
-      `${JSON.stringify({ type: 'cost-state', sessionId, totalCostUSD: 2.5 })}\n`,
-    );
-    const adapter = new ClaudeAdapter();
-
-    await expect(
-      adapter.readSessionCostTotals({ sessionId, configDir: profile }),
-    ).resolves.toEqual([2.5]);
-    await expect(
-      adapter.readSessionCostTotals({
-        sessionId: 'missing',
-        configDir: profile,
-      }),
-    ).resolves.toEqual([]);
-  });
 });
 
 describe('ClaudeAdapter — editing the profile’s MCP servers', () => {

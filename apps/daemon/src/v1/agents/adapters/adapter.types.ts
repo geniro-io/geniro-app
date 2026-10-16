@@ -3757,8 +3757,8 @@ export interface DeleteSessionTranscriptInput {
   readonly runCreatedAt: Date;
 }
 
-/** One conversation a run held, for a read of the CLI's own record of it. */
-export interface SessionRecordInput {
+/** One conversation a run held, for {@link AgentAdapter.readSessionPullRequests}. */
+export interface SessionPullRequestsInput {
   /** The conversation, in the CLI's own id namespace. */
   readonly sessionId: string;
   /** The profile that holds it — null for the CLI's own default. */

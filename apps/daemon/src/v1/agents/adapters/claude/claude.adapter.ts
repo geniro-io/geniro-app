@@ -48,7 +48,7 @@ import type {
   InstalledApprovalSupport,
   NO_PLAN_LIMITS,
   SessionPullRequest,
-  SessionRecordInput,
+  SessionPullRequestsInput,
   TurnDriver,
   TurnImage,
 } from '../adapter.types';
@@ -153,7 +153,6 @@ import {
 } from './utils/claude-context-usage.utils';
 import {
   findClaudeSessionFileSync,
-  readClaudeCostStateTotals,
   readLastClaudeCostState,
 } from './utils/claude-cost-state.utils';
 import { ClaudeCostTotalsFile } from './utils/claude-cost-totals.utils';
@@ -1316,24 +1315,12 @@ export class ClaudeAdapter extends AgentAdapter {
 
   /** The `pr-link` lines the session's transcript carries. */
   override readSessionPullRequests(
-    input: SessionRecordInput,
+    input: SessionPullRequestsInput,
   ): Promise<SessionPullRequest[]> {
     return readClaudeSessionPullRequests(
       this.profileDir(input.configDir),
       input.sessionId,
     );
-  }
-
-  override async readSessionCostTotals(
-    input: SessionRecordInput,
-  ): Promise<number[]> {
-    const file = findClaudeSessionFileSync(
-      this.profileDir(input.configDir),
-      input.sessionId,
-    );
-    return file === null
-      ? []
-      : await readClaudeCostStateTotals(file, input.sessionId);
   }
 
   /**

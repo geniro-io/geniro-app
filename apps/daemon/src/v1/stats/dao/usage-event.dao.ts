@@ -282,63 +282,6 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
   }
 
   /**
-   * Recorded turns with no turns of their own and a cost — the only rows a
-   * re-billed restored total can be (`looksLikeResumePhantom` narrows them).
-   */
-  async zeroTurnCostedRows(txEm?: EntityManager): Promise<UsageEvent[]> {
-    return this.getRepo(txEm).find(
-      {
-        seq: { $gt: POLLED_SPEND_SEQ },
-        numTurns: 0,
-        costUsd: { $gt: 0 },
-      },
-      // In transcript order: a row's correction sums the turns before it, so
-      // an earlier phantom must be corrected first.
-      { orderBy: { runId: 'asc', seq: 'asc' }, disableIdentityMap: true },
-    );
-  }
-
-  /**
-   * The costs recorded for one run's node before `seq`, newest first — the
-   * turns billed ahead of a given one.
-   */
-  async costsBefore(
-    runId: string,
-    nodeId: string | null,
-    seq: number,
-    txEm?: EntityManager,
-  ): Promise<number[]> {
-    const rows = await this.getRepo(txEm).find(
-      { runId, nodeId, seq: { $gt: POLLED_SPEND_SEQ, $lt: seq } },
-      {
-        fields: ['costUsd'],
-        orderBy: { seq: 'desc' },
-        disableIdentityMap: true,
-      },
-    );
-    return rows.map((row) => row.costUsd ?? 0);
-  }
-
-  /** Restate one recorded turn's cost. */
-  async restateTurnCost(
-    runId: string,
-    seq: number,
-    costUsd: number,
-    txEm?: EntityManager,
-  ): Promise<void> {
-    await this.getRepo(txEm).nativeUpdate({ runId, seq }, { costUsd });
-  }
-
-  /** Delete one recorded turn. */
-  async deleteTurn(
-    runId: string,
-    seq: number,
-    txEm?: EntityManager,
-  ): Promise<void> {
-    await this.getRepo(txEm).nativeDelete({ runId, seq });
-  }
-
-  /**
    * The most recent TURN the ledger holds, or null when it holds none — the
    * boot sweep's high-water mark.
    *

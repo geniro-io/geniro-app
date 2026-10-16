@@ -6,7 +6,6 @@ import { LineBaselineDao } from './dao/line-baseline.dao';
 import { UsageActivityDao } from './dao/usage-activity.dao';
 import { UsageEventDao } from './dao/usage-event.dao';
 import { ProjectRootsService } from './services/project-roots.service';
-import { ResumePhantomSweepService } from './services/resume-phantom-sweep.service';
 import { StatsService } from './services/stats.service';
 import { UsageActivityRecorderService } from './services/usage-activity-recorder.service';
 import { UsageBackfillService } from './services/usage-backfill.service';
@@ -20,10 +19,7 @@ import { UsageRecorderService } from './services/usage-recorder.service';
  * must not be imported BY it. That direction is deliberate and cycle-free, and it
  * mirrors `DiagnosticsModule`: this module OBSERVES the agent plane and never
  * drives it, so nothing in `v1/agents` depends on it — a daemon built without
- * this module behaves identically, minus the history. One exception:
- * `ResumePhantomSweepService` restates the cost on `items` rows proven to
- * re-bill a resumed claude session's restored total (`apps/daemon/AGENTS.md`
- * → *Stats*).
+ * this module behaves identically, minus the history.
  *
  * The one thing it deliberately does NOT hook is the run teardown. A chat
  * delete destroys that run's `runs` / `items` / `node_state` rows; the ledger is
@@ -43,7 +39,6 @@ import { UsageRecorderService } from './services/usage-recorder.service';
     UsageRecorderService,
     UsageActivityRecorderService,
     UsageBackfillService,
-    ResumePhantomSweepService,
   ],
   // The bus alone. The WS gateway announces each recorded turn so an open Stats
   // page can refresh — the same direction as everything else here: the channel

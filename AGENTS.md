@@ -332,7 +332,7 @@ Daemon side of the contract (`v1/*`):
 - **Secrets → none.** Every CLI authenticates from its own login. Any future secret goes in the macOS Keychain only (see *Constraints*). `main/purge-legacy-secret.ts` removes the one entry earlier versions wrote.
 - **SQLite (`geniro.db`) → runtime and history only**: `runs`, `items`, `node_state`, and the usage tables.
   - Archive uses its own `archivedAt` column, never `deletedAt`: the `softDelete` filter is global and default-on, so an archived row would vanish from the read that unarchives it.
-  - `usage_events`, `usage_activity` and `line_baselines` are exempt from run teardown so lifetime totals survive deleting a chat. `usage_events` is append-only (one proven-phantom repair aside: `apps/daemon/AGENTS.md` → *Stats*) and denormalizes agent/model/folder at write time.
+  - `usage_events`, `usage_activity` and `line_baselines` are exempt from run teardown so lifetime totals survive deleting a chat. `usage_events` is append-only and denormalizes agent/model/folder at write time.
 - **Pasted images → `<userData>/attachments/<runId>/`.** Only `{id, mediaType}` rides the item payload; never put blobs in the DB.
   - On ACP, send image blocks only to an agent that advertised `promptCapabilities.image`; otherwise send the text plus a `notice` naming what was withheld.
 - **Uploaded files (phone) → `<userData>/chat-uploads/<uuid>/<name>`** (`POST /v1/chats/uploads`), collected by the teardown of the run whose user messages name them.

@@ -33,7 +33,6 @@ import {
   type UsageDimensions,
   usageDimensions,
 } from '../utils/usage-dimensions';
-import { ResumePhantomSweepService } from './resume-phantom-sweep.service';
 
 /**
  * How far before the ledger's newest turn each launch re-reads. See
@@ -101,8 +100,6 @@ export class UsageBackfillService implements OnModuleInit {
     private readonly activityDao: UsageActivityDao,
     /** Which CLIs poll their spend — absent in a spec that prices no pool. */
     @Optional() private readonly adapters?: AgentAdapterRegistry,
-    /** Started once the turn backfill is done — see {@link onModuleInit}. */
-    @Optional() private readonly phantoms?: ResumePhantomSweepService,
   ) {}
 
   /**
@@ -161,10 +158,6 @@ export class UsageBackfillService implements OnModuleInit {
     // answered until this method returns. Nothing needs it before then, so it runs
     // behind the boot, as the search-text backfill does.
     void this.backfillActivityQuietly();
-    // After the turn backfill, never beside it: that sweep re-records any turn
-    // missing from the ledger, and racing the removal it would put a phantom
-    // back at its full cost.
-    void this.phantoms?.sweepQuietly();
   }
 
   /** {@link backfillActivity} with its failure logged rather than thrown. */

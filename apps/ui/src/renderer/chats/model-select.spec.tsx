@@ -82,12 +82,20 @@ describe('ModelSelect', () => {
             source: 'cli',
           },
           { id: 'unknown', label: 'Unknown', source: 'cli' },
+          {
+            id: 'gpt-6.1-sol',
+            label: 'GPT 6.1 Sol',
+            contextTokens: 475_000,
+            contextWindowSelectable: true,
+            source: 'cli',
+          },
         ]}
       />,
     );
     expect(openRows(el).map(([label]) => label)).toEqual([
       'Haiku 5.5 · 1M',
       'Unknown',
+      'GPT 6.1 Sol',
       'default model',
     ]);
     const row = [...el.querySelectorAll<HTMLElement>('[role="option"]')].find(

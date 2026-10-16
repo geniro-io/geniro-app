@@ -888,6 +888,12 @@ export interface AgentModelDto {
      */
     contextTokens?: number;
     /**
+     * The agent exposes a separate per-model context-window selector
+     * @type {boolean}
+     * @memberof AgentModelDto
+     */
+    contextWindowSelectable?: boolean;
+    /**
      * Reported by the CLI, a documented fallback, or local Ollama
      * @type {string}
      * @memberof AgentModelDto

@@ -3141,6 +3141,10 @@ export const AgentModelWireSchema = z.object({
     .positive()
     .optional()
     .describe('Known default context window in tokens; omitted when unknown'),
+  contextWindowSelectable: z
+    .boolean()
+    .optional()
+    .describe('The agent exposes a separate per-model context-window selector'),
   source: z
     .enum(['cli', 'builtin', 'ollama'])
     .describe('Reported by the CLI, a documented fallback, or local Ollama'),

@@ -208,7 +208,7 @@ function profileRows(
 }
 
 describe('ModelSettingsSelect', () => {
-  it('shows resolved identities and numeric windows in the composer model submenu', () => {
+  it('shows fixed windows and keeps selectable window sizes out of model names', () => {
     const { el, picked } = render({
       models: [
         {
@@ -222,6 +222,7 @@ describe('ModelSettingsSelect', () => {
           id: 'gpt-6.1-sol',
           label: 'GPT 6.1 Sol',
           contextTokens: 475_000,
+          contextWindowSelectable: true,
           source: 'cli',
         },
         { id: 'unknown', label: 'Unknown', source: 'cli' },
@@ -231,7 +232,8 @@ describe('ModelSettingsSelect', () => {
     openAxis(el, 'Model');
     const haiku = submenuRow(el, 'Haiku 5.5 · 1M')!;
     expect(haiku.textContent).toContain('haiku → claude-haiku-5-5');
-    expect(submenuRow(el, 'GPT 6.1 Sol · 475k')).toBeDefined();
+    expect(submenuRow(el, 'GPT 6.1 Sol')).toBeDefined();
+    expect(submenuRow(el, 'GPT 6.1 Sol · 475k')).toBeUndefined();
     expect(submenuRow(el, 'Unknown')).toBeDefined();
     act(() => haiku.click());
     expect(picked).toContainEqual(['model', 'haiku']);

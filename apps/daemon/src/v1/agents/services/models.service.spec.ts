@@ -77,6 +77,7 @@ describe('ModelsService — the memory mirror over the durable store', () => {
       expect.objectContaining({
         resolvedModel: 'claude-haiku-5-5',
         contextTokens: 1_000_000,
+        contextWindowSelectable: false,
       }),
     ]);
     windows.remember(AgentKind.Claude, 'claude-haiku-5-5', 900_000);
@@ -133,9 +134,10 @@ describe('ModelsService — the memory mirror over the durable store', () => {
       'contextTokens',
     );
     windows.remember(AgentKind.Codex, 'gpt-6.1-sol', 475_000);
-    expect((await models.list(AgentKind.Codex))[0]?.contextTokens).toBe(
-      475_000,
-    );
+    expect((await models.list(AgentKind.Codex))[0]).toMatchObject({
+      contextTokens: 475_000,
+      contextWindowSelectable: true,
+    });
   });
 
   it('refreshes local discovery without persisting it in the native model cache', async () => {

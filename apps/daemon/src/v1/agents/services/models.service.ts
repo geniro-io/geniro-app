@@ -136,7 +136,14 @@ export class ModelsService {
         model.contextTokens ??
         this.options.windows?.get(kind, resolved) ??
         adapter.catalogWindow(resolved);
-      return contextTokens == null ? model : { ...model, contextTokens };
+      return contextTokens == null
+        ? model
+        : {
+            ...model,
+            contextTokens,
+            contextWindowSelectable:
+              config.contextWindowsUnavailableReason === null,
+          };
     });
   }
 

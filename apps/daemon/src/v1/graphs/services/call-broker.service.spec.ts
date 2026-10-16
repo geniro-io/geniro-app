@@ -5962,7 +5962,7 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
     return (envelope.result as { threads: unknown[] }).threads;
   }
 
-  it('lists the caller’s conversation with its context and a warm cache, and no one else’s', async () => {
+  it('lists the caller’s conversation with its context in tokens and percent of its window, a warm cache, and no one else’s', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(START);
     const calleesOf = new Map([
@@ -5989,13 +5989,12 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
           expires_at: new Date(START + HOUR).toISOString(),
           expires_in_s: 50 * 60,
         },
-        advice: 'continue',
       },
     ]);
     expect(listed(broker, 'other')).toEqual([]);
   });
 
-  it('refuses to continue a cold, over-half-full conversation, and says start fresh', async () => {
+  it('refuses to continue a cold, over-half-full conversation, and lists it as refused', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(START);
     const { broker, launches } = harness({ instantOutcome: warmLarge });
@@ -6012,7 +6011,7 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
           state: 'expired',
           expired_s_ago: 60 * 60,
         }),
-        advice: 'start_fresh',
+        resume_refused: 'CACHE_EXPIRED',
       }),
     ]);
     const refused = await broker.callAgent('run-1', 'orch', {
@@ -6084,12 +6083,9 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
       message: 'm',
     });
     vi.setSystemTime(START + 24 * HOUR);
-    expect(listed(broker)).toEqual([
-      expect.objectContaining({
-        cache: expect.objectContaining({ state: 'unknown' }),
-        advice: 'continue',
-      }),
-    ]);
+    const [entry] = listed(broker);
+    expect(entry).toMatchObject({ cache: { state: 'unknown' } });
+    expect(entry).not.toHaveProperty('resume_refused');
     const resumed = await broker.callAgent('run-1', 'orch', {
       title: 'why',
       agent: 'helper',
@@ -6128,11 +6124,12 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
       resumeCold: true,
     });
     vi.setSystemTime(START + 2 * HOUR + 30 * 60_000);
-    expect(
-      listed(broker).find(
-        (thread) => (thread as { agent: string }).agent === 'helper',
-      ),
-    ).toMatchObject({ thread: 'call-10', calls: 2, advice: 'continue' });
+    const helper = listed(broker).find(
+      (thread) => (thread as { agent: string }).agent === 'helper',
+    );
+    expect(helper).toMatchObject({ thread: 'call-10', calls: 2 });
+    // call-1 alone is cold and large; judged by it, this would read refused.
+    expect(helper).not.toHaveProperty('resume_refused');
     const again = await broker.callAgent('run-1', 'orch', {
       title: 'why',
       agent: 'helper',
@@ -6183,7 +6180,10 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
     await new Promise((resolve) => setImmediate(resolve));
     vi.setSystemTime(START + 2 * HOUR);
     expect(listed(broker)).toEqual([
-      expect.objectContaining({ thread: 'call-1', advice: 'start_fresh' }),
+      expect.objectContaining({
+        thread: 'call-1',
+        resume_refused: 'CACHE_EXPIRED',
+      }),
     ]);
     const refused = await broker.callAgent('run-1', 'orch', {
       title: 'why',
@@ -6227,7 +6227,6 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
     vi.setSystemTime(START + 2 * HOUR);
     const threads = listed(broker) as {
       thread: string;
-      advice: string;
       cache: { state: string };
     }[];
     // Oldest conversation first.
@@ -6238,12 +6237,10 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
     ]);
     expect(threads[1]).toMatchObject({
       cache: { state: 'expired' },
-      advice: 'start_fresh',
+      resume_refused: 'CACHE_EXPIRED',
     });
-    expect(threads[2]).toMatchObject({
-      cache: { state: 'unknown' },
-      advice: 'continue',
-    });
+    expect(threads[2]).toMatchObject({ cache: { state: 'unknown' } });
+    expect(threads[2]).not.toHaveProperty('resume_refused');
   });
 
   it('moves a conversation’s facts when its kept process runs a turn of its own after the call', async () => {
@@ -6268,7 +6265,6 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
       expect.objectContaining({
         context: { tokens: 800_000, window: 1_000_000, percent: 80 },
         cache: expect.objectContaining({ state: 'warm' }),
-        advice: 'continue',
       }),
     ]);
   });
@@ -6295,9 +6291,65 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
     expect(listed(broker)).toEqual([
       expect.objectContaining({
         context: expect.objectContaining({ percent: 50.1 }),
-        advice: 'start_fresh',
+        resume_refused: 'CACHE_EXPIRED',
       }),
     ]);
+  });
+
+  it('keeps the window of a zero-token reading, with no percent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker } = harness({
+      instantOutcome: { ...warmLarge, contextTokens: 0 },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    const [entry] = listed(broker);
+    expect((entry as { context: unknown }).context).toStrictEqual({
+      tokens: 0,
+      window: 1_000_000,
+    });
+  });
+
+  it('states the context in tokens alone when no window was reported', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker } = harness({
+      instantOutcome: { ...warmLarge, contextWindowTokens: null },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    const [entry] = listed(broker);
+    // Strict: a `window: null` or `percent: null` beside the tokens fails it.
+    expect((entry as { context: unknown }).context).toStrictEqual({
+      tokens: 700_000,
+    });
+  });
+
+  it('leaves the context out when nothing measured it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker } = harness({
+      instantOutcome: {
+        ...warmLarge,
+        contextTokens: null,
+        contextWindowTokens: null,
+      },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    const [entry] = listed(broker);
+    expect(entry).toMatchObject({ thread: 'call-1', status: 'idle' });
+    expect(entry).not.toHaveProperty('context');
   });
 
   it('marks a conversation with a call still running as busy', async () => {
@@ -6313,9 +6365,48 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
         thread: null,
         status: 'running',
         running_call: 'call-1',
-        advice: 'busy',
       }),
     ]);
+  });
+
+  it('never lists a conversation as refused while a call runs on it', async () => {
+    // A continuation of a busy conversation is refused THREAD_BUSY, not
+    // CACHE_EXPIRED — whatever its last settled call measured.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: 'sess-1',
+      ...warmLarge,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    vi.setSystemTime(START + 2 * HOUR);
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm2',
+      thread: 'call-1',
+      mode: 'async',
+      resumeCold: true,
+    });
+    const [entry] = listed(broker);
+    expect(entry).toMatchObject({
+      status: 'running',
+      cache: { state: 'expired' },
+      context: { percent: 70 },
+    });
+    expect(entry).not.toHaveProperty('resume_refused');
   });
 
   it('keeps the cache facts across a daemon restart, read back off the result row', async () => {
@@ -6351,7 +6442,7 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
     expect(listed(restarted)).toEqual([
       expect.objectContaining({
         thread: 'call-1',
-        advice: 'start_fresh',
+        resume_refused: 'CACHE_EXPIRED',
         context: { tokens: 700_000, window: 1_000_000, percent: 70 },
       }),
     ]);

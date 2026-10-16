@@ -1490,9 +1490,10 @@ export class CallBroker implements OnModuleInit {
    *
    * What it exists for is the choice before a follow-up: a conversation whose
    * cache is warm is cheap to continue, while one whose cache has lapsed is
-   * re-billed WHOLE on its next turn, so past half its window a fresh instance
-   * with a brief costs less. That choice needs figures that move with the
-   * clock, which is why they are a tool's answer rather than a line of the
+   * re-billed WHOLE on its next turn — which is why `callAgent` refuses one past
+   * half its window (CACHE_EXPIRED). The listing states the figures and that
+   * refusal and recommends neither choice. The figures move with the clock,
+   * which is why they are a tool's answer rather than a line of the
    * "May call" block — that block is part of the caller's session identity,
    * and changing it would restart the caller's own process and cache.
    */
@@ -1554,20 +1555,25 @@ export class CallBroker implements OnModuleInit {
             facts.endedAt === null
               ? null
               : new Date(facts.endedAt).toISOString(),
-          context:
-            facts.contextTokens === null
-              ? null
-              : {
+          // Only what was measured: no `context` without a token reading, no
+          // window without a window reading, no percent without both.
+          ...(facts.contextTokens === null
+            ? {}
+            : {
+                context: {
                   tokens: facts.contextTokens,
-                  window: facts.contextWindowTokens,
-                  percent: percent === null ? null : statedPercent(percent),
+                  ...(facts.contextWindowTokens === null
+                    ? {}
+                    : { window: facts.contextWindowTokens }),
+                  ...(percent === null
+                    ? {}
+                    : { percent: statedPercent(percent) }),
                 },
+              }),
           cache: cacheWire(standing, now),
-          advice: busy
-            ? 'busy'
-            : isColdAndLarge(facts, now)
-              ? 'start_fresh'
-              : 'continue',
+          ...(!busy && isColdAndLarge(facts, now)
+            ? { resume_refused: 'CACHE_EXPIRED' }
+            : {}),
         };
         return { newest, wire };
       })

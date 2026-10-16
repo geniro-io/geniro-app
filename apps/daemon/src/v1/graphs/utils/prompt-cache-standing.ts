@@ -12,8 +12,12 @@ import { positive } from '../../agents/utils/positive-figure';
  * rule for the user; a change here is mirrored there.
  */
 export const COLD_RESUME_CONTEXT_PERCENT = 50;
-/** Said wherever a caller is told how to choose between resuming and starting over. */
-export const COLD_RESUME_RULE = `Continue a conversation (call_agent with thread) while its cache is warm. When its cache has EXPIRED and its context is over ${COLD_RESUME_CONTEXT_PERCENT}% full, start a new instance instead (call_agent without thread) with a self-contained brief of what it needs from the old conversation — resuming would re-bill the whole context uncached.`;
+/**
+ * Said wherever a caller chooses between resuming and starting over. It states
+ * the costs and the refusal, and recommends neither: windows differ per model,
+ * so the caller weighs the figures `list_agent_threads` reports.
+ */
+export const COLD_RESUME_RULE = `Continuing a conversation (call_agent with thread) keeps the callee's full memory, and every step of its turn re-reads that whole context at the cache-read price; once its prompt cache has EXPIRED, the turn first re-writes all of it to the cache at full price. A new instance (call_agent without thread) starts from your brief alone, so the brief must carry everything it needs from the old conversation. call_agent refuses to continue a conversation whose cache has EXPIRED and whose context is over ${COLD_RESUME_CONTEXT_PERCENT}% full (CACHE_EXPIRED), unless you pass resume_cold.`;
 
 /**
  * What one callee conversation last reported about itself — read off its

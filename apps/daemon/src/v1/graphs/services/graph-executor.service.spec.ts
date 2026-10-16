@@ -4653,10 +4653,12 @@ describe('GraphExecutorService — agent calls', () => {
     // ...and never how it does it. A callee's role is private, so a caller
     // routes by description alone instead of restating its team in its role.
     expect(caller.input.callSurfacePrompt).not.toContain('SECRET_PLAYBOOK');
-    // ...and the standing rule for choosing between resuming an instance and
-    // starting a fresh one, which only the listing tool can apply live.
+    // ...and what resuming an instance costs against starting a fresh one,
+    // pointing at the listing tool for the live figures.
     expect(caller.input.callSurfacePrompt).toContain('list_agent_threads');
-    expect(caller.input.callSurfacePrompt).toContain('start a new instance');
+    expect(caller.input.callSurfacePrompt).toContain('cache-read price');
+    expect(caller.input.callSurfacePrompt).toContain('A new instance');
+    expect(caller.input.callSurfacePrompt).toContain('CACHE_EXPIRED');
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
       title: 'why',
@@ -11806,7 +11808,6 @@ describe('GraphExecutorService — work still out when a process ends', () => {
         thread: 'call-1',
         context: { tokens: 640_000, window: 1_000_000, percent: 64 },
         cache: expect.objectContaining({ state: 'warm' }),
-        advice: 'continue',
       }),
     ]);
   });
@@ -12591,8 +12592,9 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
       result: { threads: Record<string, unknown>[] };
     };
     expect(listing.result.threads).toEqual([
-      expect.objectContaining({ agent: 'helper', context: null }),
+      expect.objectContaining({ agent: 'helper' }),
     ]);
+    expect(listing.result.threads[0]).not.toHaveProperty('context');
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });

@@ -7013,6 +7013,32 @@ export interface StartWorkflowChatDto {
 /**
  * 
  * @export
+ * @interface StopDetachedProcessesDto
+ */
+export interface StopDetachedProcessesDto {
+    /**
+     * 
+     * @type {Array<number>}
+     * @memberof StopDetachedProcessesDto
+     */
+    pids: Array<number>;
+}
+/**
+ * 
+ * @export
+ * @interface StoppedDetachedProcessesDto
+ */
+export interface StoppedDetachedProcessesDto {
+    /**
+     * 
+     * @type {Array<number>}
+     * @memberof StoppedDetachedProcessesDto
+     */
+    stoppedPids: Array<number>;
+}
+/**
+ * 
+ * @export
  * @interface SweepArchivedDto
  */
 export interface SweepArchivedDto {

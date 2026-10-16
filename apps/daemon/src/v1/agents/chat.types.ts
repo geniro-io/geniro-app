@@ -9,6 +9,7 @@ import {
   type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
+import { RUN_PROCESS_CAP } from './utils/run-process-scan';
 
 /**
  * The single-agent chat has exactly one node; its CLI session id is keyed
@@ -2631,6 +2632,16 @@ export const RunProcessesWireSchema = z.object({
     ),
 });
 export type RunProcessesWire = z.infer<typeof RunProcessesWireSchema>;
+
+export const StopDetachedProcessesSchema = z.object({
+  pids: z.array(z.number().int().min(2)).min(1).max(RUN_PROCESS_CAP),
+});
+export const StoppedDetachedProcessesSchema = z.object({
+  stoppedPids: z.array(z.number().int()),
+});
+export type StoppedDetachedProcesses = z.infer<
+  typeof StoppedDetachedProcessesSchema
+>;
 
 /** What a set of processes costs, summed. */
 export const ProcessFiguresSchema = z

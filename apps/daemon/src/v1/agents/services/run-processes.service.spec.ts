@@ -14,6 +14,7 @@ import {
 import { callSessionKey, nodeSessionKey } from '../utils/session-keys';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import { RunProcessAttribution } from './run-process-attribution.service';
+import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunProcessesService } from './run-processes.service';
 
 function row(
@@ -104,6 +105,7 @@ function build(
         selfPid: DAEMON,
         uid: UID,
       }),
+      {} as RunProcessReaper,
       { listUsage, selfPid: DAEMON },
     ),
     listUsage,

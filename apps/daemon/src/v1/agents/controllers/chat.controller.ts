@@ -32,6 +32,7 @@ import type {
   RunWire,
   ShellKillWire,
   ShellOutputWire,
+  StoppedDetachedProcesses,
   ThreadAnalysisWire,
 } from '../chat.types';
 import {
@@ -73,6 +74,8 @@ import {
   ShellKillQueryDto,
   ShellOutputDto,
   ShellOutputQueryDto,
+  StopDetachedProcessesDto,
+  StoppedDetachedProcessesDto,
   SweepArchivedDto,
   SweptArchivedDto,
   ThreadAnalysisDto,
@@ -426,6 +429,16 @@ export class ChatController {
   @ZodResponse({ status: 200, type: RunProcessesDto })
   readProcesses(@Param('runId') runId: string): Promise<RunProcessesWire> {
     return this.processes.read(runId);
+  }
+
+  @Post(':runId/processes/stop')
+  @ApiOperation({ operationId: 'stopDetachedProcesses' })
+  @ZodResponse({ status: 200, type: StoppedDetachedProcessesDto })
+  stopDetachedProcesses(
+    @Param('runId') runId: string,
+    @Body() dto: StopDetachedProcessesDto,
+  ): Promise<StoppedDetachedProcesses> {
+    return this.processes.stopDetached(runId, dto.pids);
   }
 
   /**

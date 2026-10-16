@@ -85,6 +85,14 @@ function reaper(
 }
 
 describe('RunProcessReaper', () => {
+  it('leaves background reap targets alone when identities cannot be read', async () => {
+    const { reaper: subject, signals } = reaper(
+      [row(10, 1, 'node stand.js', { env: tag() })],
+      { startTimes: async () => null },
+    );
+    expect(await subject.reap([RUN])).toEqual([]);
+    expect(signals).toEqual([]);
+  });
   it('sends SIGTERM to the run tree, waits the grace, then SIGKILLs only confirmed survivors', async () => {
     let probes = 0;
     const {

@@ -2807,9 +2807,11 @@ export function AgentsPanel({
         {processes === null ? null : (
           <PanelSection label="Processes">
             <RunProcesses
+              key={processes.runId}
               data={processes.data}
               loading={processes.loading}
               error={processes.error}
+              onStopDetached={processes.stopDetached}
             />
           </PanelSection>
         )}

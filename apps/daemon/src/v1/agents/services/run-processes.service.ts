@@ -30,6 +30,7 @@ import {
 } from '../utils/session-keys';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { RunProcessAttribution } from './run-process-attribution.service';
+import { RunProcessReaper } from './run-process-reaper.service';
 
 const PS_UNREADABLE =
   'the process table could not be read — `ps` failed or timed out';
@@ -72,6 +73,7 @@ export class RunProcessesService {
     private readonly runDao: RunDao,
     private readonly sessions: AgentSessionRegistry,
     private readonly attribution: RunProcessAttribution,
+    private readonly reaper: RunProcessReaper,
     options: RunProcessesOptions = {},
   ) {
     this.listUsage = options.listUsage ?? listProcessUsage;
@@ -271,6 +273,16 @@ export class RunProcessesService {
       rssBytes: all.reduce((sum, proc) => sum + proc.rssBytes, 0),
       unavailableReason: null,
     };
+  }
+
+  async stopDetached(
+    runId: string,
+    pids: readonly number[],
+  ): Promise<{ stoppedPids: number[] }> {
+    if ((await this.runDao.getById(runId, this.em.fork())) === null) {
+      throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
+    }
+    return { stoppedPids: await this.reaper.stopDetached(runId, pids) };
   }
 }
 

@@ -51,6 +51,8 @@ import type {
   SetRunPinnedDto,
   ShellKillDto,
   ShellOutputDto,
+  StopDetachedProcessesDto,
+  StoppedDetachedProcessesDto,
   SweepArchivedDto,
   SweptArchivedDto,
   ThreadAnalysisDto,
@@ -217,6 +219,11 @@ export interface ChatsApiSetRunNotesRequest {
 export interface ChatsApiSetRunPinnedRequest {
     runId: string;
     setRunPinnedDto: SetRunPinnedDto;
+}
+
+export interface ChatsApiStopDetachedProcessesRequest {
+    runId: string;
+    stopDetachedProcessesDto: StopDetachedProcessesDto;
 }
 
 export interface ChatsApiSweepArchivedChatsRequest {
@@ -2002,6 +2009,61 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async setRunPinned(requestParameters: ChatsApiSetRunPinnedRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<RunDto>> {
         const response = await this.setRunPinnedRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async stopDetachedProcessesRaw(requestParameters: ChatsApiStopDetachedProcessesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<StoppedDetachedProcessesDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling stopDetachedProcesses().'
+            );
+        }
+
+        if (requestParameters['stopDetachedProcessesDto'] == null) {
+            throw new runtime.RequiredError(
+                'stopDetachedProcessesDto',
+                'Required parameter "stopDetachedProcessesDto" was null or undefined when calling stopDetachedProcesses().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/processes/stop`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['stopDetachedProcessesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async stopDetachedProcesses(requestParameters: ChatsApiStopDetachedProcessesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<StoppedDetachedProcessesDto> {
+        const response = await this.stopDetachedProcessesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

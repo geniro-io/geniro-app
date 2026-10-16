@@ -40,6 +40,7 @@ import { Logo } from '../components/logo';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
+import { OptionIndicator, OptionList } from '../components/ui/option-list';
 import { ProgressBar } from '../components/ui/progress-bar';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
@@ -67,6 +68,26 @@ const INITIAL: OnboardingProgress = {
   teamMethod: 'ai',
   brief: '',
 };
+const ROUTES = [
+  {
+    value: 'chat',
+    Icon: MessageSquare,
+    title: 'Start a chat',
+    detail: 'Give one agent a task and watch it work.',
+  },
+  {
+    value: 'team',
+    Icon: GitBranch,
+    title: 'Create a team',
+    detail: 'Connect agents with clear roles in a graph.',
+  },
+  {
+    value: 'explore',
+    Icon: Sparkles,
+    title: 'Explore Geniro',
+    detail: 'Look around first and set things up later.',
+  },
+] as const;
 const METHODS = [
   {
     value: 'ai',
@@ -637,187 +658,171 @@ export function Onboarding({
                   </>
                 ) : null}
                 {progress.step === 3 ? (
-                  <>
-                    <div className="grid gap-3 lg:grid-cols-3">
-                      {[
-                        {
-                          value: 'chat',
-                          Icon: MessageSquare,
-                          title: 'Start a chat',
-                          detail: 'Give one agent a task.',
-                        },
-                        {
-                          value: 'team',
-                          Icon: GitBranch,
-                          title: 'Create a team',
-                          detail: 'Connect agents and roles.',
-                        },
-                        {
-                          value: 'explore',
-                          Icon: Sparkles,
-                          title: 'Explore Geniro',
-                          detail: 'Set things up later.',
-                        },
-                      ].map(({ value, Icon: icon, title, detail }) => (
-                        <Button
+                  <Card className="divide-y divide-border overflow-hidden p-0 shadow-none">
+                    {ROUTES.map(({ value, Icon: icon, title, detail }) => {
+                      const chosen = progress.route === value;
+                      return (
+                        <div
                           key={value}
-                          variant="outline"
-                          disabled={blocked}
-                          aria-pressed={progress.route === value}
-                          className={cn(
-                            'relative h-auto min-h-36 flex-col items-start justify-start gap-3 whitespace-normal rounded-xl p-5 text-left',
-                            progress.route === value &&
-                              'border-primary bg-primary/5 ring-1 ring-primary/20',
-                          )}
-                          onClick={() =>
-                            setProgress((prev) => ({
-                              ...prev,
-                              route: value as OnboardingProgress['route'],
-                            }))
-                          }>
-                          {createElement(icon, {
-                            className: 'size-5 text-primary',
-                            'aria-hidden': true,
-                          })}
-                          <span className="font-semibold">{title}</span>
-                          <span
-                            aria-hidden="true"
-                            className={cn(
-                              'absolute top-4 right-4 flex size-5 items-center justify-center rounded-full border border-border',
-                              progress.route === value &&
-                                'border-primary bg-primary text-primary-foreground',
-                            )}>
-                            {progress.route === value ? (
-                              <Check className="size-3" />
-                            ) : null}
-                          </span>
-                          <span className="text-xs font-normal text-muted-foreground">
-                            {detail}
-                          </span>
-                        </Button>
-                      ))}
-                    </div>
-                    {progress.route === 'team' ? (
-                      <div className="mt-6">
-                        <h2 className="mb-3 text-sm font-semibold">
-                          How would you like to build it?
-                        </h2>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          {METHODS.map((method) => (
-                            <Button
-                              key={method.value}
-                              variant="outline"
-                              disabled={blocked}
-                              aria-pressed={
-                                progress.teamMethod === method.value
-                              }
-                              className={cn(
-                                'h-auto flex-col items-start gap-2 whitespace-normal rounded-xl p-4 text-left',
-                                progress.teamMethod === method.value &&
-                                  'border-primary bg-primary/5 ring-1 ring-primary/20',
-                              )}
-                              onClick={() =>
-                                setProgress((prev) => ({
-                                  ...prev,
-                                  teamMethod: method.value,
-                                }))
-                              }>
-                              <span>{method.title}</span>
-                              <span className="text-xs font-normal leading-relaxed text-muted-foreground">
-                                {method.detail}
-                              </span>
-                            </Button>
-                          ))}
-                        </div>
-                        {progress.teamMethod === 'ai' ? (
-                          <div className="mt-4">
-                            <label
-                              htmlFor="team-brief"
-                              className="mb-2 block text-sm font-medium">
-                              What should your team do?{' '}
-                              <span className="font-normal text-muted-foreground">
-                                (optional)
-                              </span>
-                            </label>
-                            <Textarea
-                              id="team-brief"
-                              rows={3}
-                              maxLength={4000}
-                              disabled={blocked}
-                              placeholder="For example: plan a feature, implement it, then review the changes."
-                              value={progress.brief}
-                              onChange={(event) =>
-                                setProgress((prev) => ({
-                                  ...prev,
-                                  brief: event.target.value,
-                                }))
-                              }
-                            />
-                            <p className="mt-2 text-xs text-muted-foreground">
-                              Your description opens as a draft in the team’s AI
-                              chat. Review it and send when you’re ready.
-                            </p>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {progress.route !== 'explore' ? (
-                      readyAgents.length > 1 ? (
-                        <div className="mt-6 flex flex-col items-start gap-2">
-                          <label
-                            htmlFor="first-agent"
-                            className="text-sm font-medium">
-                            Agent
-                          </label>
-                          <Select
-                            id="first-agent"
-                            className="w-56"
+                          className={cn(chosen && 'bg-primary/5')}>
+                          <Button
+                            variant="ghost"
                             disabled={blocked}
-                            leadingIcon={
-                              progress.agent ? (
-                                <AgentGlyph
-                                  icon={agentIconName(
-                                    identities,
-                                    progress.agent,
-                                  )}
-                                />
-                              ) : undefined
-                            }
-                            groups={[
-                              {
-                                items: readyAgents.map((cli) => ({
-                                  value: cli.kind,
-                                  label: nameOf(cli.kind),
-                                  icon: (
-                                    <AgentGlyph
-                                      icon={agentIconName(identities, cli.kind)}
+                            aria-pressed={chosen}
+                            className={cn(
+                              'h-auto w-full justify-start gap-4 whitespace-normal rounded-none px-5 py-4 text-left font-normal',
+                              chosen && 'hover:bg-transparent',
+                            )}
+                            onClick={() =>
+                              setProgress((prev) => ({ ...prev, route: value }))
+                            }>
+                            <span
+                              className={cn(
+                                'flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors',
+                                chosen && 'bg-primary/15 text-primary',
+                              )}>
+                              {createElement(icon, {
+                                className: 'size-4',
+                                'aria-hidden': true,
+                              })}
+                            </span>
+                            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                              <span className="text-sm font-medium">
+                                {title}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {detail}
+                              </span>
+                            </span>
+                            <OptionIndicator arity="one" chosen={chosen} />
+                          </Button>
+                          {chosen && value !== 'explore' ? (
+                            <div className="flex flex-col gap-5 pr-5 pb-5 pl-[72px]">
+                              {value === 'team' ? (
+                                <>
+                                  <div className="flex flex-col gap-2">
+                                    <p className="text-sm font-medium">
+                                      How would you like to build it?
+                                    </p>
+                                    <OptionList
+                                      label="How to build the team"
+                                      arity="one"
+                                      className="-ml-2"
+                                      disabled={blocked}
+                                      options={METHODS.map((m) => m.title)}
+                                      details={METHODS.map((m) => m.detail)}
+                                      selected={METHODS.filter(
+                                        (m) => m.value === progress.teamMethod,
+                                      ).map((m) => m.title)}
+                                      onPick={(picked) => {
+                                        const method = METHODS.find(
+                                          (m) => m.title === picked,
+                                        );
+                                        if (method) {
+                                          setProgress((prev) => ({
+                                            ...prev,
+                                            teamMethod: method.value,
+                                          }));
+                                        }
+                                      }}
                                     />
-                                  ),
-                                })),
-                              },
-                            ]}
-                            value={progress.agent}
-                            placeholder="Choose an agent"
-                            onValueChange={(value) =>
-                              setProgress((prev) => ({
-                                ...prev,
-                                agent: value as CliKind,
-                              }))
-                            }
-                          />
-                          <span className="text-xs text-muted-foreground">
-                            You can switch agents any time.
-                          </span>
+                                  </div>
+                                  {progress.teamMethod === 'ai' ? (
+                                    <div className="flex flex-col gap-2">
+                                      <label
+                                        htmlFor="team-brief"
+                                        className="text-sm font-medium">
+                                        What should your team do?{' '}
+                                        <span className="font-normal text-muted-foreground">
+                                          (optional)
+                                        </span>
+                                      </label>
+                                      <Textarea
+                                        id="team-brief"
+                                        rows={3}
+                                        maxLength={4000}
+                                        disabled={blocked}
+                                        placeholder="For example: plan a feature, implement it, then review the changes."
+                                        value={progress.brief}
+                                        onChange={(event) =>
+                                          setProgress((prev) => ({
+                                            ...prev,
+                                            brief: event.target.value,
+                                          }))
+                                        }
+                                      />
+                                      <p className="text-xs text-muted-foreground">
+                                        Your description opens as a draft in the
+                                        team’s AI chat. Review it and send when
+                                        you’re ready.
+                                      </p>
+                                    </div>
+                                  ) : null}
+                                </>
+                              ) : null}
+                              {readyAgents.length > 1 ? (
+                                <div className="flex flex-col items-start gap-2">
+                                  <label
+                                    htmlFor="first-agent"
+                                    className="text-sm font-medium">
+                                    Agent
+                                  </label>
+                                  <Select
+                                    id="first-agent"
+                                    className="w-52"
+                                    disabled={blocked}
+                                    leadingIcon={
+                                      progress.agent ? (
+                                        <AgentGlyph
+                                          icon={agentIconName(
+                                            identities,
+                                            progress.agent,
+                                          )}
+                                        />
+                                      ) : undefined
+                                    }
+                                    groups={[
+                                      {
+                                        items: readyAgents.map((cli) => ({
+                                          value: cli.kind,
+                                          label: nameOf(cli.kind),
+                                          icon: (
+                                            <AgentGlyph
+                                              icon={agentIconName(
+                                                identities,
+                                                cli.kind,
+                                              )}
+                                            />
+                                          ),
+                                        })),
+                                      },
+                                    ]}
+                                    value={progress.agent}
+                                    placeholder="Choose an agent"
+                                    onValueChange={(next) =>
+                                      setProgress((prev) => ({
+                                        ...prev,
+                                        agent: next as CliKind,
+                                      }))
+                                    }
+                                  />
+                                  <span className="text-xs text-muted-foreground">
+                                    You can switch agents any time.
+                                  </span>
+                                </div>
+                              ) : (
+                                <p className="text-sm text-muted-foreground">
+                                  {ready && progress.agent
+                                    ? `Your agent: ${nameOf(progress.agent)}. You can switch agents any time.`
+                                    : 'Connect an agent in step 2 first, or choose Explore Geniro.'}
+                                </p>
+                              )}
+                            </div>
+                          ) : null}
                         </div>
-                      ) : (
-                        <p className="mt-5 text-sm text-muted-foreground">
-                          {ready && progress.agent
-                            ? `Your agent: ${nameOf(progress.agent)}. You can switch agents any time.`
-                            : 'Connect an agent in step 2 to start a chat or create a team, or choose Explore Geniro.'}
-                        </p>
-                      )
-                    ) : null}
-                  </>
+                      );
+                    })}
+                  </Card>
                 ) : null}
               </div>
               {error ? (

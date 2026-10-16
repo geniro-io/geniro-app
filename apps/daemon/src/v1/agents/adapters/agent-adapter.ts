@@ -2992,6 +2992,12 @@ export abstract class AgentAdapter {
         // — reaping the process that serves a dev server.
         return session.shellsRunning;
       },
+      get runningCommands() {
+        return session.runningCommands;
+      },
+      get endedRunning() {
+        return session.endedRunning;
+      },
       close: () => session.close(),
       closed: session.closed,
     };

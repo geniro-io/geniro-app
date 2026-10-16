@@ -152,7 +152,7 @@ export class CliAuthService {
         `dropped ${dropped} cached ${agent} answer(s) — ${because}`,
       );
     }
-    const retired = this.sessions.markAgentStale(agent, because);
+    const retired = this.sessions.markAgentStale(agent, because, 'account');
     if (retired > 0) {
       this.logger.log(
         `${retired} ${agent} session(s) will restart on their next turn — ${because}`,

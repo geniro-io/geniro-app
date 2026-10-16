@@ -62,6 +62,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     live?: number;
     /** A tool call with this id — a delegate's own when `parent` is set. */
     run?: string;
+    /** The command line that `run` call ran. */
+    cmd?: string;
   };
   if (typeof row.run === 'string') {
     return [
@@ -69,7 +71,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
         type: 'tool_call',
         id: row.run,
         name: 'Bash',
-        input: {},
+        input: row.cmd === undefined ? {} : { command: row.cmd },
         ...(row.parent === undefined ? {} : { parentToolUseId: row.parent }),
       },
     ];
@@ -799,6 +801,98 @@ describe('cancelling a session turn', () => {
 
     line(child, { work: 'b1', phase: 'settled', outcome: 'completed' });
     expect(session.shellsRunning).toBe(1);
+  });
+
+  it('names the command lines of the detached commands it is still running', () => {
+    // What the session registry tells an agent it stopped when it has to
+    // replace the process under them — the line is what restarts a dev server.
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    line(child, { run: 't1', cmd: 'pnpm dev' });
+    line(child, { work: 'b1', phase: 'started', unit: 'other', call: 't1' });
+    // A delegate's own command, announced BEFORE the call that ran it.
+    line(child, {
+      work: 'b2',
+      phase: 'started',
+      unit: 'other',
+      call: 't2',
+      owned: true,
+    });
+    line(child, { run: 't2', cmd: 'pnpm test --watch', parent: 'task-1' });
+    // Counted, but with no launching call there is no line to name.
+    line(child, { work: 'b3', phase: 'started', unit: 'other' });
+    expect(session.shellsRunning).toBe(3);
+    expect(session.runningCommands).toEqual(['pnpm dev', 'pnpm test --watch']);
+
+    line(child, { work: 'b1', phase: 'settled', outcome: 'completed' });
+    expect(session.runningCommands).toEqual(['pnpm test --watch']);
+
+    child.emit('close', 0, null);
+    expect(session.runningCommands).toEqual([]);
+  });
+
+  it('keeps a running command’s line however many calls come after it', () => {
+    // The map of lines is bounded; what it drops must never be a line a
+    // running command still needs.
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    line(child, { run: 't0', cmd: 'pnpm dev' });
+    line(child, { work: 'b0', phase: 'started', unit: 'other', call: 't0' });
+    for (let i = 1; i <= 300; i += 1) {
+      line(child, { run: `t${i}`, cmd: `ls ${i}` });
+    }
+    line(child, { work: 'b1', phase: 'started', unit: 'other', call: 't300' });
+
+    expect(session.runningCommands).toEqual(['pnpm dev', 'ls 300']);
+  });
+
+  it('keeps the line of a foreground command, and of a delegate’s, until they detach', () => {
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    line(child, { run: 'tf', cmd: 'pnpm build' });
+    line(child, {
+      work: 'bf',
+      phase: 'started',
+      unit: 'other',
+      call: 'tf',
+      fore: true,
+    });
+    line(child, { run: 'td', cmd: 'pnpm test --watch', parent: 'task-1' });
+    line(child, {
+      work: 'bd',
+      phase: 'started',
+      unit: 'other',
+      call: 'td',
+      owned: true,
+    });
+    for (let i = 1; i <= 300; i += 1) {
+      line(child, { run: `t${i}`, cmd: `ls ${i}` });
+    }
+    line(child, { work: 'bf', phase: 'backgrounded', unit: 'other' });
+
+    expect(session.runningCommands).toEqual([
+      'pnpm build',
+      'pnpm test --watch',
+    ]);
+  });
+
+  it('remembers what was running when the process ended', () => {
+    // Read by a holder told of the end through `closed`, by which time the
+    // live readings are empty.
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    expect(session.endedRunning).toBeNull();
+    line(child, { run: 't1', cmd: 'pnpm dev' });
+    line(child, { work: 'b1', phase: 'started', unit: 'other', call: 't1' });
+    line(child, { work: 'b2', phase: 'started', unit: 'other' });
+
+    child.emit('close', null, 'SIGKILL');
+
+    expect(session.shellsRunning).toBe(0);
+    expect(session.endedRunning).toEqual({
+      running: 2,
+      commands: ['pnpm dev'],
+    });
   });
 
   it('a follow-up delivered after the turn’s own result makes a continuation’s result NOT its ending again', async () => {
@@ -4298,6 +4392,25 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
     );
     expect(opened).toHaveLength(1);
     expect(opened[0]).toMatchObject({ workId: 'call-1', toolCallId: 'call-1' });
+  });
+
+  it('names a command the OS found still running, however many calls came before the sweep', async () => {
+    // Until the sweep at the turn's end, the command is only an answered
+    // execute call — the bounded map of lines must not drop it meanwhile.
+    const { session, child } = openShellSession(async () => [
+      { pid: 500, ppid: 999, args: 'pnpm dev' },
+    ]);
+    emit(child, { run: 'pnpm dev', id: 'call-0' });
+    emit(child, { answered: 'call-0' });
+    for (let i = 1; i <= 300; i += 1) {
+      emit(child, { run: `ls ${i}`, id: `call-${i}` });
+      emit(child, { answered: `call-${i}` });
+    }
+    emit(child, { done: true });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(session.runningCommands).toEqual(['pnpm dev']);
   });
 
   it('says nothing about a command that really did finish', async () => {

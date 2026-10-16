@@ -768,6 +768,8 @@ class FakeAdapter {
       retired: false,
       parked: false,
       shellsRunning: 0,
+      runningCommands: [],
+      endedRunning: null,
       pid: null,
       close: () => {
         if (closed) {
@@ -9636,7 +9638,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
     // Reaped as unused, evicted, replaced — the registry closes a kept process
     // on its own account, and the conversation then lives on disk alone.
-    sessions.close(`${run.id}::call:call-1`);
+    sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
     expect(callee.sessionClosed).toBe(true);
     const opened = claude.sessionsOpened;
@@ -12051,7 +12053,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     await call;
     await drain();
 
-    sessions.close(`${run.id}::call:call-1`);
+    sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
 
     const stopped = stoppedDelegates(itemDao, run.id);
@@ -12072,7 +12074,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee']);
     // It is closed when the caller's OWN process goes.
-    sessions.close(`${run.id}::node:a`);
+    sessions.close(`${run.id}::node:a`, 'closed');
     await drain();
     expect(
       stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
@@ -12117,7 +12119,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     await continueWith('one', undefined, 'task-one');
     await continueWith('two', 'call-1', 'task-two');
     // One process served both calls; reaping it stops call-1's delegate too.
-    sessions.close(`${run.id}::call:call-1`);
+    sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
     expect(stoppedIds().sort()).toEqual(['task-one', 'task-two']);
 
@@ -12125,14 +12127,14 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     // after it: the replacement stops what the old process left out…
     await continueWith('three', 'call-2', 'task-three');
     expect(
-      sessions.markStale('claude', dir, 'its MCP servers changed'),
+      sessions.markStale('claude', dir, 'you signed in', 'account'),
     ).toBeGreaterThan(0);
     await continueWith('four', 'call-3', 'task-four');
     expect(stoppedIds()).toContain('task-three');
     expect(stoppedIds()).not.toContain('task-four');
 
     // …and the process that replaced it still stops its own when it is reaped.
-    sessions.close(`${run.id}::call:call-1`);
+    sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
     expect(stoppedIds()).toContain('task-four');
 

@@ -743,6 +743,7 @@ describe('CliAuthService — what an account change invalidates', () => {
     expect(retired).toHaveBeenCalledWith(
       AgentKind.Claude,
       expect.stringContaining('signed in'),
+      'account',
     );
     cleanup();
   });
@@ -760,7 +761,11 @@ describe('CliAuthService — what an account change invalidates', () => {
 
     await service.logout({ agent: AgentKind.Claude });
 
-    expect(retired).toHaveBeenCalledWith(AgentKind.Claude, 'signed out');
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      'signed out',
+      'account',
+    );
     cleanup();
   });
 

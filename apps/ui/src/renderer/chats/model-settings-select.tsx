@@ -32,7 +32,11 @@ import {
   autoCompactLabel,
 } from './auto-compact';
 import { folderName, shortenPath } from './directory-select';
-import { withSelectedModel } from './model-options';
+import {
+  modelDescription,
+  modelLabel,
+  withSelectedModel,
+} from './model-options';
 
 /**
  * The one row that means "send this axis no value at all" — a distinct token
@@ -569,7 +573,8 @@ export function ModelSettingsSelect({
               .filter((entry) => entry.source !== 'ollama')
               .map((entry) => ({
                 value: encode(MODEL, entry.id),
-                label: entry.label,
+                label: modelLabel(entry),
+                subLabel: modelDescription(entry),
                 checked: entry.id === model,
               })),
             {
@@ -587,11 +592,11 @@ export function ModelSettingsSelect({
                   .filter((entry) => entry.source === 'ollama')
                   .map((entry) => ({
                     value: encode(MODEL, entry.id),
-                    label: entry.label,
+                    label: modelLabel(entry),
                     checked: entry.id === model,
                     disabled: Boolean(entry.unavailableReason),
                     title: entry.unavailableReason,
-                    subLabel: entry.unavailableReason,
+                    subLabel: modelDescription(entry),
                   })),
               },
             ]

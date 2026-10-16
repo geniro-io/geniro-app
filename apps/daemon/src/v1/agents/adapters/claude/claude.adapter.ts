@@ -1078,7 +1078,17 @@ export class ClaudeAdapter extends AgentAdapter {
   ): Promise<string | null> {
     const asked = model === '' ? null : model;
     const resolutions = await this.modelResolutions(configDir);
-    return resolutions?.[asked ?? CLAUDE_DEFAULT_MODEL_VALUE] ?? asked;
+    return (
+      resolutions?.[asked ?? CLAUDE_DEFAULT_MODEL_VALUE]?.resolvedModel ?? asked
+    );
+  }
+
+  override async modelDetails(
+    model: AgentModel,
+    configDir: string | null,
+  ): Promise<AgentModel> {
+    const resolutions = await this.modelResolutions(configDir);
+    return resolutions?.[model.id] ?? model;
   }
 
   /**
@@ -1308,33 +1318,19 @@ export class ClaudeAdapter extends AgentAdapter {
     return written.length === 0 ? undefined : discard;
   }
 
-  /**
-   * claude has no list-models subcommand to run, so nothing is spawned: the
-   * list is the documented tier aliases plus the account-specific models the
-   * CLI caches in `~/.claude.json` for its own picker. Synchronous work behind
-   * an async signature — the contract is shared with cursor, which really does
-   * shell out.
-   *
-   * The alias floor comes from `config.builtinModels` — the declared fallback
-   * surface — never from the const behind it, so config stays the one place a
-   * CLI's static values are read.
-   */
-  override listModels({ configDir }: AgentModelsInput): Promise<AgentModel[]> {
-    // The RUN's profile, not the home dir. The extra models an account offers
-    // are cached by the CLI in the config directory's own `.claude.json`, so
-    // reading the home copy answered with the DEFAULT profile's account for
-    // every chat, whatever subscription it actually ran on. Measured on the
-    // reporter's own machine, the two profiles of one login report different
-    // subscriptions (`max` against `team`) — the same CLI binary, so no version
-    // check could ever have caught it. Their cached lists happen to coincide
-    // today, which is precisely why this had to be found by reading rather than
-    // by looking at a screen.
-    return Promise.resolve(
-      claudeModels(
-        this.getConfig().builtinModels,
-        this.modelCacheDir(configDir),
-      ),
-    );
+  /** The initialize reply supplies account models, display names and alias ids. */
+  override async listModels({
+    configDir,
+  }: AgentModelsInput): Promise<AgentModel[]> {
+    // Both sources belong to the run's profile: one binary can serve accounts
+    // with different model access.
+    const resolutions = await this.modelResolutions(configDir);
+    return resolutions !== null
+      ? Object.values(resolutions)
+      : claudeModels(
+          this.getConfig().builtinModels,
+          this.modelCacheDir(configDir),
+        );
   }
 
   /**

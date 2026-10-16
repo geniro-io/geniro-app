@@ -1,4 +1,5 @@
 import { asArray, asRecord, asString } from '../../../utils/json-util';
+import type { AgentModel } from '../../adapter.types';
 import {
   CLAUDE_INITIALIZE_SUBTYPE,
   CLAUDE_MODEL_RESOLUTION_REQUEST_ID,
@@ -10,8 +11,10 @@ import {
  * `claude.const.ts`.
  */
 
-/** Model name (`haiku`, `default`, an id) → the id it runs as. */
-export type ClaudeModelResolutions = Readonly<Record<string, string>>;
+/** Model name (`haiku`, `default`, an id) → the CLI's model metadata. */
+export type ClaudeModelResolutions = Readonly<
+  Record<string, AgentModel & { resolvedModel: string }>
+>;
 
 /** The `initialize` request line, newline-terminated for stdin. */
 export function modelResolutionRequestLine(): string {
@@ -46,12 +49,18 @@ export function readModelResolutions(
     ) {
       continue;
     }
-    const resolutions: Record<string, string> = {};
+    const resolutions: Record<string, AgentModel & { resolvedModel: string }> =
+      {};
     for (const entry of asArray(asRecord(envelope.response)?.models)) {
       const value = asString(asRecord(entry)?.value);
       const resolved = asString(asRecord(entry)?.resolvedModel);
       if (value && resolved) {
-        resolutions[value] = resolved;
+        resolutions[value] = {
+          id: value,
+          label: asString(asRecord(entry)?.displayName) || resolved,
+          resolvedModel: resolved,
+          source: 'cli',
+        };
       }
     }
     return Object.keys(resolutions).length > 0 ? resolutions : null;
@@ -67,8 +76,14 @@ export function isModelResolutions(
     typeof value === 'object' &&
     value !== null &&
     !Array.isArray(value) &&
-    Object.values(value).every(
-      (resolved) => typeof resolved === 'string' && resolved !== '',
-    )
+    Object.values(value).every((entry) => {
+      const model = asRecord(entry);
+      return (
+        typeof model?.id === 'string' &&
+        typeof model.label === 'string' &&
+        typeof model.resolvedModel === 'string' &&
+        model.resolvedModel !== ''
+      );
+    })
   );
 }

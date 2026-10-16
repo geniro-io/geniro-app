@@ -876,6 +876,24 @@ export interface AgentModelDto {
      */
     label: string;
     /**
+     * The model id this alias runs as
+     * @type {string}
+     * @memberof AgentModelDto
+     */
+    resolvedModel?: string;
+    /**
+     * Known default context window in tokens; omitted when unknown
+     * @type {number}
+     * @memberof AgentModelDto
+     */
+    contextTokens?: number;
+    /**
+     * The agent exposes a separate per-model context-window selector
+     * @type {boolean}
+     * @memberof AgentModelDto
+     */
+    contextWindowSelectable?: boolean;
+    /**
      * Reported by the CLI, a documented fallback, or local Ollama
      * @type {string}
      * @memberof AgentModelDto

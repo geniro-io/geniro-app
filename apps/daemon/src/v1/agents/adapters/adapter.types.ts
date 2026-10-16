@@ -1858,6 +1858,9 @@ export interface FollowUpMessage {
 export interface AgentModel {
   id: string;
   label: string;
+  resolvedModel?: string;
+  /** Numeric window reported by the CLI; never inferred from a choice label. */
+  contextTokens?: number;
   /** How this entry was obtained — the UI says so when it is not live. */
   source: 'cli' | 'builtin' | 'ollama';
   unavailableReason?: string;

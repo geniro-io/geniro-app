@@ -338,6 +338,14 @@ export abstract class AgentAdapter {
     return this.listPriceOf(model)?.contextTokens ?? null;
   }
 
+  /** Current metadata for a cached vocabulary row; adapters with aliases refresh it here. */
+  modelDetails(
+    model: AgentModel,
+    _configDir: string | null,
+  ): Promise<AgentModel> {
+    return Promise.resolve(model);
+  }
+
   /**
    * What a probe has established about THIS installed binary's approval
    * modes, as it stands right now — never waiting for one to run.

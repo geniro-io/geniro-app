@@ -7,10 +7,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentKind } from '../../runs/runs.types';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { CodexAdapter } from '../adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type { AgentModelWire } from '../chat.types';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
+import { ContextWindowStore } from './context-window.store';
 import { ModelVocabularyStore } from './model-vocabulary.store';
 import { ModelsService, type ModelsServiceOptions } from './models.service';
 import { OllamaService } from './ollama.service';
@@ -26,6 +28,7 @@ function service(
   store: ModelVocabularyStore;
 } {
   const claude = new ClaudeAdapter();
+  vi.spyOn(claude, 'modelDetails').mockImplementation(async (model) => model);
   const cursor = new CursorAcpAdapter({ vocabularyStore: store });
   // The version is PINNED, and that is what makes the durable path reachable
   // at all: the binary is absent here, so a real `--version` resolves to null,
@@ -52,6 +55,89 @@ const LISTED: AgentModelWire[] = [
 ];
 
 describe('ModelsService — the memory mirror over the durable store', () => {
+  it('uses current alias metadata and measurements after reading the cached vocabulary', async () => {
+    const windows = new ContextWindowStore({
+      file: join(
+        mkdtempSync(join(tmpdir(), 'picker-windows-')),
+        'windows.json',
+      ),
+    });
+    const { models, claude } = service({ windows });
+    const ask = vi
+      .spyOn(claude, 'listModels')
+      .mockResolvedValue([{ id: 'haiku', label: 'haiku', source: 'builtin' }]);
+    vi.mocked(claude.modelDetails).mockResolvedValue({
+      id: 'haiku',
+      label: 'Haiku 5.5',
+      resolvedModel: 'claude-haiku-5-5',
+      source: 'cli',
+    });
+    vi.spyOn(claude, 'catalogWindow').mockReturnValue(1_000_000);
+    expect(await models.list(AgentKind.Claude)).toEqual([
+      expect.objectContaining({
+        resolvedModel: 'claude-haiku-5-5',
+        contextTokens: 1_000_000,
+      }),
+    ]);
+    windows.remember(AgentKind.Claude, 'claude-haiku-5-5', 900_000);
+    expect(await models.list(AgentKind.Claude)).toEqual([
+      expect.objectContaining({ contextTokens: 900_000 }),
+    ]);
+    windows.remember(AgentKind.Claude, 'claude-haiku-next', 700_000);
+    vi.mocked(claude.modelDetails).mockResolvedValue({
+      id: 'haiku',
+      label: 'Haiku next',
+      resolvedModel: 'claude-haiku-next',
+      contextTokens: 800_000,
+      source: 'cli',
+    });
+    expect(await models.list(AgentKind.Claude)).toEqual([
+      expect.objectContaining({
+        resolvedModel: 'claude-haiku-next',
+        contextTokens: 800_000,
+      }),
+    ]);
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the measured Codex default, never its catalog maximum or a named window choice', async () => {
+    const windows = new ContextWindowStore({
+      file: join(mkdtempSync(join(tmpdir(), 'picker-codex-')), 'windows.json'),
+    });
+    const codex = new CodexAdapter({
+      prices: {
+        priceOf: () => ({
+          input: 1,
+          output: 1,
+          cacheRead: 1,
+          cacheWrite: 1,
+          tiers: [],
+          contextTokens: 1_050_000,
+        }),
+      },
+    });
+    vi.spyOn(codex, 'listModels').mockResolvedValue([
+      { id: 'gpt-6.1-sol', label: 'GPT 6.1 Sol', source: 'cli' },
+    ]);
+    const versions = new AgentVersionService();
+    vi.spyOn(versions, 'resolve').mockResolvedValue('1');
+    const models = new ModelsService(
+      new AgentAdapterRegistry([codex]),
+      new ProcessRegistry(),
+      versions,
+      freshVocabularyStore(),
+      { windows },
+    );
+    windows.remember(AgentKind.Codex, 'gpt-6.1-sol', 828_400, '872k');
+    expect((await models.list(AgentKind.Codex))[0]).not.toHaveProperty(
+      'contextTokens',
+    );
+    windows.remember(AgentKind.Codex, 'gpt-6.1-sol', 475_000);
+    expect((await models.list(AgentKind.Codex))[0]?.contextTokens).toBe(
+      475_000,
+    );
+  });
+
   it('refreshes local discovery without persisting it in the native model cache', async () => {
     const ollama = new OllamaService();
     const discover = vi

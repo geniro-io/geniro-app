@@ -66,6 +66,38 @@ function openRows(el: HTMLDivElement): [string, string][] {
 }
 
 describe('ModelSelect', () => {
+  it('shows resolved aliases and known windows while preserving the selected alias', () => {
+    const picked = vi.fn();
+    const el = render(
+      <ModelSelect
+        agentKind="claude"
+        value={null}
+        onChange={picked}
+        models={[
+          {
+            id: 'haiku',
+            label: 'Haiku 5.5',
+            resolvedModel: 'claude-haiku-5-5',
+            contextTokens: 1_000_000,
+            source: 'cli',
+          },
+          { id: 'unknown', label: 'Unknown', source: 'cli' },
+        ]}
+      />,
+    );
+    expect(openRows(el).map(([label]) => label)).toEqual([
+      'Haiku 5.5 · 1M',
+      'Unknown',
+      'default model',
+    ]);
+    const row = [...el.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => option.textContent?.includes('Haiku 5.5'),
+    )!;
+    expect(row.textContent).toContain('haiku → claude-haiku-5-5');
+    act(() => row.click());
+    expect(picked).toHaveBeenCalledWith('haiku');
+  });
+
   it('groups local models, permits tool-capable models and explains disabled models', () => {
     const picked = vi.fn();
     const el = render(

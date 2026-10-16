@@ -8,6 +8,7 @@ import type { AgentModelWire } from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
+import type { ContextWindowStore } from './context-window.store';
 import { ModelVocabularyStore } from './model-vocabulary.store';
 import type { OllamaService } from './ollama.service';
 import { ProcessRegistry } from './process-registry';
@@ -19,6 +20,7 @@ export interface ModelsServiceOptions {
   /** Clock (test seam). */
   now?: () => number;
   ollama?: OllamaService;
+  windows?: ContextWindowStore;
 }
 
 interface CacheEntry {
@@ -94,7 +96,7 @@ export class ModelsService {
     private readonly processes: ProcessRegistry,
     private readonly versions: AgentVersionService,
     private readonly store: ModelVocabularyStore,
-    options: ModelsServiceOptions = {},
+    private readonly options: ModelsServiceOptions = {},
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.now = options.now ?? Date.now;
@@ -105,7 +107,8 @@ export class ModelsService {
     kind: AgentKind,
     configDir: string | null = null,
   ): Promise<AgentModelWire[]> {
-    const config = this.adapters.for(kind).getConfig();
+    const adapter = this.adapters.for(kind);
+    const config = adapter.getConfig();
     const [native, local] = await Promise.all([
       this.listNative(kind, configDir),
       this.ollama
@@ -121,7 +124,20 @@ export class ModelsService {
             ])
         : Promise.resolve([]),
     ]);
-    return [...native, ...local];
+    // Enrich after the vocabulary cache: a completed turn can teach us a window
+    // while the list of models stays unchanged.
+    const described = await Promise.all(
+      native.map((model) => adapter.modelDetails(model, configDir)),
+    );
+    const models: AgentModelWire[] = [...described, ...local];
+    return models.map((model) => {
+      const resolved = model.resolvedModel ?? model.id;
+      const contextTokens =
+        model.contextTokens ??
+        this.options.windows?.get(kind, resolved) ??
+        adapter.catalogWindow(resolved);
+      return contextTokens == null ? model : { ...model, contextTokens };
+    });
   }
 
   private async listNative(

@@ -3132,6 +3132,15 @@ export const AgentModelWireSchema = z.object({
     .string()
     .describe('Model identifier; ollama/ prefixes select a local provider'),
   label: z.string(),
+  resolvedModel: z
+    .string()
+    .optional()
+    .describe('The model id this alias runs as'),
+  contextTokens: z
+    .number()
+    .positive()
+    .optional()
+    .describe('Known default context window in tokens; omitted when unknown'),
   source: z
     .enum(['cli', 'builtin', 'ollama'])
     .describe('Reported by the CLI, a documented fallback, or local Ollama'),

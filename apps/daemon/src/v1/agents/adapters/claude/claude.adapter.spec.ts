@@ -2621,6 +2621,9 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
 
 describe('ClaudeAdapter — models', () => {
   const dirs: string[] = [];
+  const unavailableSpawn = (() => {
+    throw new Error('CLI unavailable');
+  }) as typeof spawn;
 
   afterEach(() => {});
 
@@ -2654,6 +2657,7 @@ describe('ClaudeAdapter — models', () => {
 
     const models = await new ConfiguredClaudeAdapter({
       homeDir: emptyHome(),
+      groupSpawnFn: unavailableSpawn,
     }).listModels({ configDir: null });
 
     expect(models).toEqual([
@@ -2693,7 +2697,10 @@ describe('ClaudeAdapter — models', () => {
       }),
     );
 
-    const models = await new ClaudeAdapter({ homeDir }).listModels({
+    const models = await new ClaudeAdapter({
+      homeDir,
+      groupSpawnFn: unavailableSpawn,
+    }).listModels({
       configDir: profile,
     });
 
@@ -2708,6 +2715,7 @@ describe('ClaudeAdapter — models', () => {
     // documented tier aliases, so a real install's picker is never empty.
     const models = await new ClaudeAdapter({
       homeDir: emptyHome(),
+      groupSpawnFn: unavailableSpawn,
     }).listModels({ configDir: null });
 
     expect(models.map((model) => model.id)).toEqual([
@@ -4076,7 +4084,11 @@ describe('ClaudeAdapter — what a model name resolves to', () => {
       response: {
         models: [
           { value: 'default', resolvedModel: 'claude-opus-5-5' },
-          { value: 'haiku', resolvedModel: 'claude-haiku-5-5' },
+          {
+            value: 'haiku',
+            resolvedModel: 'claude-haiku-5-5',
+            displayName: 'Haiku 5.5',
+          },
           { value: 'sonnet', resolvedModel: 'claude-sonnet-5-5' },
         ],
       },
@@ -4145,6 +4157,30 @@ describe('ClaudeAdapter — what a model name resolves to', () => {
       await new Promise((resolve) => setImmediate(resolve));
     }
   };
+
+  it('lists the CLI display names and resolved identities, also after a daemon restart', async () => {
+    const store = freshVocabularyStore();
+    const first = probing(INITIALIZE_REPLY, store);
+    expect(await first.adapter.listModels({ configDir: null })).toContainEqual({
+      id: 'haiku',
+      label: 'Haiku 5.5',
+      resolvedModel: 'claude-haiku-5-5',
+      source: 'cli',
+    });
+    const restarted = probing('', store);
+    expect(
+      await restarted.adapter.modelDetails(
+        { id: 'haiku', label: 'haiku', source: 'builtin' },
+        null,
+      ),
+    ).toEqual({
+      id: 'haiku',
+      label: 'Haiku 5.5',
+      resolvedModel: 'claude-haiku-5-5',
+      source: 'cli',
+    });
+    expect(restarted.spawns).toHaveLength(0);
+  });
 
   it('answers an alias and the default with what the CLI’s own initialize names, asked under the profile', async () => {
     const { adapter, spawns } = probing(INITIALIZE_REPLY);

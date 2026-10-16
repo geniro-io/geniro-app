@@ -13,7 +13,7 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor) working in this repos
 
 ## Repository rules
 
-The rules under `.claude/rules/` are part of this file's contract. Claude Code loads each one by itself when a file under its `paths:` is touched. Codex and Cursor never read `.claude/rules/`, so on either of them open the matching rule and follow it before editing a file under its paths.
+The rules under `.claude/rules/` are part of this file's contract. Claude Code loads each one by itself when a file under its `paths:` is touched. Cursor reads each one through `.cursor/rules/<name>.mdc`, a tracked symlink to the rule; it ignores `paths:` and offers the rule to its agent by its `description:`, so it does not load one by itself when a matching file is touched. Codex never reads `.claude/rules/`. So on Codex, and on Cursor when the rule is not already in context, open the matching rule and follow it before editing a file under its paths.
 
 <!-- prettier-ignore -->
 | Rule | Applies to | What it holds |
@@ -29,7 +29,7 @@ The rules under `.claude/rules/` are part of this file's contract. Claude Code l
 | [`packaging-config.md`](.claude/rules/packaging-config.md) | `scripts/**`, `apps/ui/electron-builder.yml` | An env-signal branch owns every config value it controls |
 | [`testing.md`](.claude/rules/testing.md) | `**/*.spec.ts`, `**/*.spec.tsx` | No false pins: a claimed behaviour has an assertion that fails when it breaks |
 
-Add a new rule file to this table in the same change, with the paths its frontmatter declares. The table is the only way a rule reaches Codex and Cursor.
+Add a new rule file to this table in the same change, with the paths its frontmatter declares, and give it its `.cursor/rules/<name>.mdc` symlink (`ln -s ../../.claude/rules/<name>.md .cursor/rules/<name>.mdc`). The table is the only way a rule reaches Codex.
 
 ---
 

@@ -158,7 +158,14 @@ const keepAlive = new DaemonKeepAlive((message) => {
 const autopilot = new AutopilotConductor({
   handle: () => supervisor.getHandle(),
   armedProjects: readArmedProjects,
-  prepareWorktree,
+  prepareWorktree: (input) =>
+    prepareWorktree(input, {
+      log: (level, message) => {
+        void reportMainLog(supervisor.getHandle(), level, message, {
+          source: 'worktree',
+        });
+      },
+    }),
   discardWorktree: pruneWorktreeForTask,
   gitStamp: readGitStamp,
   agentOptions: () => readSettings().agentOptions,

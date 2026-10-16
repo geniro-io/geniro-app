@@ -82,6 +82,7 @@ import { saveChatExport } from './save-chat-export';
 import { readSettings, updateSettings } from './settings';
 import type { TerminalSessions } from './terminal-sessions';
 import type { UpdateService } from './update-service';
+import { reportMainLog } from './window-diagnostics';
 import {
   prepareWorktree,
   pruneWorktreeForTask,
@@ -605,7 +606,13 @@ export function registerIpc(
     async (_event, input: unknown) => {
       const parsed = taskWorktreeSchema.parse(input);
       try {
-        const made = await prepareWorktree(parsed);
+        const made = await prepareWorktree(parsed, {
+          log: (level, message) => {
+            void reportMainLog(supervisor.getHandle(), level, message, {
+              source: 'worktree',
+            });
+          },
+        });
         return {
           ok: true,
           path: made.path,

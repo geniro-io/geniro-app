@@ -87,7 +87,7 @@ import type {
   InstalledApprovalSupport,
   NO_PLAN_LIMITS,
   SessionPullRequest,
-  SessionPullRequestsInput,
+  SessionRecordInput,
   TurnDriver,
 } from './adapter.types';
 import {
@@ -507,8 +507,20 @@ export abstract class AgentAdapter {
    * an unreadable record costs its chips, not the chat list.
    */
   readSessionPullRequests(
-    _input: SessionPullRequestsInput,
+    _input: SessionRecordInput,
   ): Promise<SessionPullRequest[]> {
+    return Promise.resolve([]);
+  }
+
+  /**
+   * The running totals in USD this CLI's own record says one conversation's
+   * processes ended at, oldest first; empty for a CLI that keeps no such
+   * record. What a turn's reported cost can be checked against when it may be
+   * an earlier process's total billed again. Empty when the conversation has
+   * no record; rejects when its record exists but cannot be read, so the
+   * caller can tell "unreadable" from "none".
+   */
+  readSessionCostTotals(_input: SessionRecordInput): Promise<number[]> {
     return Promise.resolve([]);
   }
 

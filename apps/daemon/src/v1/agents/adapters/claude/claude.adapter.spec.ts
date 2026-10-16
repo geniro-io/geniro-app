@@ -1,5 +1,6 @@
 import type { ChildProcess, execFile, spawn } from 'node:child_process';
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   lstatSync,
@@ -3647,6 +3648,7 @@ describe('ClaudeAdapter — a resumed process’s first cost', () => {
       configDir: profile,
       resumeSessionId: sessionId,
     } as AgentTurnInput);
+    adapter.line({ type: 'system', subtype: 'init', session_id: sessionId });
     const events = adapter.line({
       type: 'result',
       subtype: 'success',
@@ -3660,6 +3662,71 @@ describe('ClaudeAdapter — a resumed process’s first cost', () => {
     expect(
       done?.type === 'turn_complete' ? done.usage?.costUsd : null,
     ).toBeCloseTo(1.8, 6);
+  });
+
+  it('reads the cost-state a replaced process writes after the spawn, at the new process’s init', () => {
+    // The replaced process writes its $40 line as it exits, after argv is
+    // built: a spawn-time read finds only the older $13, and the next result
+    // re-bills the $27 between them.
+    const profile = mkdtempSync(join(tmpdir(), 'claude-resume-cost-'));
+    const sessionId = '5c1d1e0a-6f3b-4c55-9d7e-2b0a3f4e5d61';
+    const transcript = join(
+      profile,
+      'projects',
+      '-Users-x',
+      `${sessionId}.jsonl`,
+    );
+    const costState = (total: number): string =>
+      `${JSON.stringify({ type: 'cost-state', sessionId, totalCostUSD: total })}\n`;
+    mkdirSync(join(profile, 'projects', '-Users-x'), { recursive: true });
+    writeFileSync(transcript, costState(13));
+    const adapter = new ArgsAdapter();
+    const result = (total: number): AgentEvent[] =>
+      adapter.line({
+        type: 'result',
+        subtype: 'success',
+        session_id: sessionId,
+        total_cost_usd: total,
+        duration_ms: 5_000,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        result: '',
+      });
+    result(40);
+
+    adapter.args({
+      prompt: 'carry on',
+      cwd: profile,
+      configDir: profile,
+      resumeSessionId: sessionId,
+    } as AgentTurnInput);
+    appendFileSync(transcript, costState(40));
+    adapter.line({ type: 'system', subtype: 'init', session_id: sessionId });
+    const done = result(41).find((event) => event.type === 'turn_complete');
+
+    expect(
+      done?.type === 'turn_complete' ? done.usage?.costUsd : null,
+    ).toBeCloseTo(1, 6);
+  });
+
+  it('reads a session’s cost-state totals from the profile that holds it', async () => {
+    const profile = mkdtempSync(join(tmpdir(), 'claude-resume-cost-'));
+    const sessionId = '5c1d1e0a-6f3b-4c55-9d7e-2b0a3f4e5d62';
+    mkdirSync(join(profile, 'projects', '-Users-x'), { recursive: true });
+    writeFileSync(
+      join(profile, 'projects', '-Users-x', `${sessionId}.jsonl`),
+      `${JSON.stringify({ type: 'cost-state', sessionId, totalCostUSD: 2.5 })}\n`,
+    );
+    const adapter = new ClaudeAdapter();
+
+    await expect(
+      adapter.readSessionCostTotals({ sessionId, configDir: profile }),
+    ).resolves.toEqual([2.5]);
+    await expect(
+      adapter.readSessionCostTotals({
+        sessionId: 'missing',
+        configDir: profile,
+      }),
+    ).resolves.toEqual([]);
   });
 });
 

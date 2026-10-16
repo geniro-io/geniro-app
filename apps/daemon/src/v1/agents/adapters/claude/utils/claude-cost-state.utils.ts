@@ -1,12 +1,16 @@
 import {
   closeSync,
+  constants,
+  createReadStream,
   existsSync,
+  fstatSync,
   openSync,
   readdirSync,
   readSync,
-  statSync,
 } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 
 import { asNumber, asRecord, asString } from '../../../utils/json-util';
 import { isPlainSessionId } from '../../../utils/session-id';
@@ -79,8 +83,15 @@ export function readLastClaudeCostState(
 ): ClaudeCostState | null {
   let fd: number | null = null;
   try {
-    fd = openSync(path, 'r');
-    let end = statSync(path).size;
+    // Non-blocking, and checked on the descriptor it opened: a blocking open
+    // of a FIFO would hang the event loop, and this runs on the stdout
+    // mapper's path.
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    const info = fstatSync(fd);
+    if (!info.isFile()) {
+      return null;
+    }
+    let end = info.size;
     // Bytes of a line cut by the previous chunk's start, carried into this one.
     let carry = Buffer.alloc(0);
     while (end > 0) {
@@ -112,6 +123,35 @@ export function readLastClaudeCostState(
       }
     }
   }
+}
+
+/**
+ * Every total the session's transcript recorded at a process's exit, oldest
+ * first — the figures a resumed process could have restored. Empty when the
+ * path is not a regular file (a FIFO would block the read for good); rejects
+ * when the file exists but cannot be read, so a caller that must not mistake
+ * "unreadable" for "none" can tell them apart. Streamed, since a transcript
+ * runs to hundreds of megabytes.
+ */
+export async function readClaudeCostStateTotals(
+  path: string,
+  sessionId: string,
+): Promise<number[]> {
+  if (!(await stat(path)).isFile()) {
+    return [];
+  }
+  const totals: number[] = [];
+  const lines = createInterface({
+    input: createReadStream(path, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+  for await (const line of lines) {
+    const costUsd = readCostStateLine(line, sessionId)?.costUsd ?? null;
+    if (costUsd !== null) {
+      totals.push(costUsd);
+    }
+  }
+  return totals;
 }
 
 function readCostStateLine(

@@ -115,6 +115,33 @@ export class ItemDao extends BaseDao<Item> {
     super(em, Item);
   }
 
+  /**
+   * Restate one finished turn's recorded cost, leaving the row and its other
+   * figures in place — for a cost proven to be partly or wholly not that turn's.
+   */
+  async restateTurnCost(
+    runId: string,
+    seq: number,
+    costUsd: number,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .updateTable('items')
+      .set((eb) => ({
+        payload: eb.fn<string>('json_set', [
+          eb.ref('payload'),
+          eb.val('$.usage.costUsd'),
+          eb.val(costUsd),
+        ]),
+      }))
+      .where('run_id', '=', runId)
+      .where('seq', '=', seq)
+      .where('kind', 'in', [...USAGE_ITEM_KINDS])
+      .where('deleted_at', 'is', null)
+      .execute();
+  }
+
   async acknowledgeUserMessage(
     runId: string,
     itemId: string,

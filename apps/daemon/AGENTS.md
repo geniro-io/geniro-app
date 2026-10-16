@@ -237,13 +237,14 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 ### Stats
 
 - `usage_events` and `usage_activity` are append-only ledgers that outlive teardown, with dimensions denormalized at write.
+  - One exception: `ResumePhantomSweepService` (started by `UsageBackfillService` after its turn backfill, once per profile, versioned marker) restates a turn proven to re-bill a resumed claude session's restored total to the share its node had not billed yet (only on a node that held one conversation; elsewhere it removes exact repeats alone), deleting it when that is zero, and writes the same cost onto the turn's item (`usage.costUsd`). It is the one write this module makes into `v1/agents`' rows.
 - `v1/stats` observes `AgentEventBus` and never drives; nothing in `v1/agents` imports it.
 - Ledger writes are native inserts, not flushes (a flush re-stamps loaded runs' `updated_at`).
 - Boot backfills must stay idempotent (`(runId, seq)` unique, `dedupKey`).
 - Polled spend: Stats reads it only from the ledger rows (`seq ≤ POLLED_SPEND_SEQ`), never from `runs`.
 - The spend fold is `v1/agents/utils/usage-figures.ts`, shared; never copy it. No price means `costUsd: null`, never $0.
 - Lines are measured by the desktop app per folder against one `line_baselines` commit. Day lines are growth past the series peak, never a client delta.
-- `ClaudeSessionCostLedger` persists session totals to disk (`claude-session-costs.json`); seed from the transcript's `cost-state` on resume.
+- `ClaudeSessionCostLedger` persists session totals to disk (`claude-session-costs.json`). A resume's seed is registered at spawn and read from the transcript's last `cost-state` at the new process's `system/init`, never at spawn (the replaced process writes its line as it exits). A read that finds no line keeps a known total, and leaves the process's first result untrusted.
 - List prices come only from `ModelPriceCatalog` (models.dev, persisted to `model-prices.json`); never a hand-written price table. Provider is an adapter fact (`usage.listPrice`).
 
 ### Diagnostics and notifications

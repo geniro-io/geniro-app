@@ -28,6 +28,7 @@ import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import { POLLED_SPEND_SEQ } from '../stats.types';
+import type { ResumePhantomSweepService } from './resume-phantom-sweep.service';
 import { UsageBackfillService } from './usage-backfill.service';
 
 /**
@@ -375,6 +376,33 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
 
   it('does nothing on an empty database', async () => {
     expect(await service.backfill()).toEqual({ recovered: 0, scanned: 0 });
+  });
+
+  it('starts the resume phantom sweep only once the turn backfill is done', async () => {
+    // Beside it, the backfill could re-record a phantom the sweep removes.
+    await runDao.create({ id: 'run-a', agentKind: 'claude' });
+    await turn('run-a', 1);
+    const writes = vi.spyOn(usageDao, 'recordOnce');
+    let writesWhenStarted: number | null = null;
+    const ordered = new UsageBackfillService(
+      orm.em.fork(),
+      itemDao,
+      runDao,
+      nodeStateDao,
+      usageDao,
+      activityDao,
+      undefined,
+      {
+        sweepQuietly: () => {
+          writesWhenStarted = writes.mock.calls.length;
+          return Promise.resolve();
+        },
+      } as unknown as ResumePhantomSweepService,
+    );
+
+    await ordered.onModuleInit();
+
+    expect(writesWhenStarted).toBe(1);
   });
 
   it('lets the daemon boot when the sweep itself fails', async () => {

@@ -34,6 +34,7 @@ describe('cursorModelSelection', () => {
         value: 'xhigh',
         alternateIds: ['effort', 'reasoning', 'reasoning_effort'],
         category: 'thought_level',
+        applyBeforePrompt: true,
       },
     ]);
   });
@@ -49,6 +50,7 @@ describe('cursorModelSelection', () => {
           value: 'max',
           alternateIds: ['effort', 'reasoning', 'reasoning_effort'],
           category: 'thought_level',
+          applyBeforePrompt: true,
         },
       ],
     });
@@ -85,6 +87,7 @@ describe('cursorModelSelection', () => {
         value: 'max',
         alternateIds: ['effort', 'reasoning', 'reasoning_effort'],
         category: 'thought_level',
+        applyBeforePrompt: true,
       },
       { id: 'context', value: '1m', applyBeforePrompt: true },
     ]);
@@ -124,7 +127,7 @@ describe('cursorModelSelection — the other model parameters', () => {
 
     expect(selection.model).toBe('auto-smart');
     expect(selection.parameters).toEqual([
-      { id: 'optimize_for', value: 'intelligence' },
+      { id: 'optimize_for', value: 'intelligence', applyBeforePrompt: true },
     ]);
   });
 

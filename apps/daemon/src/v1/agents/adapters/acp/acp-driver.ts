@@ -700,10 +700,13 @@ export interface AcpModelParameter {
    * even though the reply confirms `context = 1m`. So the option was set and
    * the turn had already started without it.
    *
-   * The cost is one round trip on the turns that ask, and only those. It is not
-   * set on the effort axis: nothing has measured that one to bind at turn
-   * start, and the deferral was priced at ~1.4s per turn when it was considered
-   * for the model frame.
+   * The cost is one round trip on the turns that ask, and only those — one per
+   * turn however many parameters ask, since the frames already go out one at a
+   * time ({@link AcpTurnDriver.configSteps}) and only the last can still be in
+   * flight. It was once withheld from the effort axis as unmeasured; billing
+   * then showed cursor binds that one at turn start too (a `gpt-5.6-sol` card
+   * at `high` billed as `-medium`), so cursor now asks it of every parameter —
+   * see `cursorModelSelection`.
    */
   applyBeforePrompt?: boolean;
 }

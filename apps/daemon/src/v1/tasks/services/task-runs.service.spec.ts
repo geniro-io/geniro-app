@@ -1508,6 +1508,53 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
   });
 
+  describe('a card whose worktree the autopilot could not prepare', () => {
+    const failureOf = async (
+      taskId: string,
+    ): Promise<{ at: Date | null; reason: string | null }> => {
+      const task = await taskDao.getById(
+        taskId,
+        orm.em.fork() as EntityManager,
+      );
+      return {
+        at: task?.prepareFailedAt ?? null,
+        reason: task?.prepareFailedReason ?? null,
+      };
+    };
+
+    it.each([
+      ['a Run press', {}],
+      ['a later autopilot start', { startedBy: 'autopilot' as const }],
+    ])('forgets the failure once %s has started it', async (_, by) => {
+      const task = await seed();
+      await taskDao.setPrepareFailure(
+        task.id,
+        { at: new Date(), reason: "fatal: 'x' is already used by worktree" },
+        em,
+      );
+
+      await service.start(task.id, { ...start(), ...by });
+
+      expect(await failureOf(task.id)).toEqual({ at: null, reason: null });
+    });
+
+    it('keeps the failure when the start that would have cleared it failed', async () => {
+      const task = await seed();
+      await taskDao.setPrepareFailure(
+        task.id,
+        { at: new Date(), reason: 'fatal: nope' },
+        em,
+      );
+      sendMessage.mockRejectedValueOnce(new Error('agent refused'));
+
+      await expect(service.start(task.id, start())).rejects.toThrow(
+        'agent refused',
+      );
+
+      expect((await failureOf(task.id)).reason).toBe('fatal: nope');
+    });
+  });
+
   it('takes the run down with the card when a start fails after creating it', async () => {
     const task = await seed();
     sendMessage.mockRejectedValueOnce(new Error('agent refused'));

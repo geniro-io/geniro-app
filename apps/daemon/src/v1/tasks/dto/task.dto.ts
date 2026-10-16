@@ -218,6 +218,29 @@ export class ReportPullRequestMergedDto extends createZodDto(
   reportPullRequestMergedSchema,
 ) {}
 
+/**
+ * The autopilot could not prepare this card's worktree — see
+ * `Task.prepareFailedAt`.
+ *
+ * TWIN PARSER: sent by `reportPrepareFailure` in
+ * `apps/ui/src/main/autopilot-conductor.ts`, which cuts `reason` to the same
+ * `max` (`MAX_PREPARE_FAILURE_CHARS`) so a long git line is never refused —
+ * a refused report would leave the card starving the queue again. Change one
+ * and change the other.
+ */
+export const reportPrepareFailureSchema = z.object({
+  reason: z
+    .string()
+    .min(1)
+    .max(1000)
+    .describe(
+      "git's own line for why the worktree could not be made, shown on the board as the reason the card is held",
+    ),
+});
+export class ReportPrepareFailureDto extends createZodDto(
+  reportPrepareFailureSchema,
+) {}
+
 // ── Responses ───────────────────────────────────────────────────────────────
 
 /** One task. */

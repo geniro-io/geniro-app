@@ -288,6 +288,25 @@ export class TaskDao extends BaseDao<Task> {
   }
 
   /**
+   * Record, or forget (`null`), that the autopilot could not prepare this
+   * card's worktree — see `Task.prepareFailedAt`. Not an edit of the card, so
+   * `updatedAt` stays, on {@link setStoppedAt}'s reasoning.
+   */
+  async setPrepareFailure(
+    taskId: string,
+    failure: { at: Date; reason: string } | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: taskId, deletedAt: null } as FilterQuery<Task>,
+      {
+        prepareFailedAt: failure?.at ?? null,
+        prepareFailedReason: failure?.reason ?? null,
+      } as EntityData<Task>,
+    );
+  }
+
+  /**
    * Remove every task belonging to a project.
    *
    * Soft-delete, like every other default delete path here: `BaseDao.delete`

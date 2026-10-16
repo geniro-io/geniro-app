@@ -54,7 +54,7 @@ Task worktrees (`worktree-service.ts`):
 
 Background loops in main (main hosts them because a renderer timer dies with the window and is throttled):
 
-- **Autopilot** (`autopilot-conductor.ts`) is a recurring tick that starts what `GET /v1/projects/:id/queue` hands out, with `approval: 'auto'` and `startedBy: 'autopilot'`. It decides nothing about capacity, because the daemon enforces the cap and the breaker at the route. A refusal is the ordinary case: give the worktree back. One failing project never ends the sweep. The tick is `unref`'d.
+- **Autopilot** (`autopilot-conductor.ts`) is a recurring tick that starts what `GET /v1/projects/:id/queue` hands out, with `approval: 'auto'` and `startedBy: 'autopilot'`. It decides nothing about capacity, because the daemon enforces the cap and the breaker at the route. A refusal is the ordinary case: give the worktree back. A worktree it cannot prepare is reported to `POST /v1/tasks/:taskId/prepare-failed` with `gitFailureLine`'s reason; the daemon then holds the card in `blocked` and decides the retry, never the conductor. One failing project never ends the sweep. The tick is `unref`'d.
 - **Daemon keepalive** (`daemon-keepalive.ts`) holds one authenticated Socket.IO client while any project is armed, so the daemon's idle exit does not fire with every window closed. It must authenticate, because an unauthenticated client is disconnected and not counted. `before-quit` disposes it.
 - **Merge watcher** (`pull-request-merge-watcher.ts`) reports merges to `POST /v1/tasks/:taskId/pull-request-merged`. The daemon moves the card. Only a merge strictly after the card's `lastDoneAt` counts (`endsCard`, twin of the daemon's `mergedSince`). `readAwaitingMerge` is a twin parser of `TaskAwaitingMergeSchema`.
 
@@ -140,6 +140,7 @@ Smaller rules:
   - A refused edit is undone only in fields that still hold what it wrote.
 - The New task dialog stages pictures and files. `useBoard.createTask` creates the card without the staged references, writes the pictures, repoints the references, then binds files.
 - The dialog is hidden, not unmounted, so its reset on open must also clear staged phone uploads.
+- The "cannot start" popover offers the board's run settings only for a blocked `kind` they can answer (`FIXED_IN_RUN_SETTINGS`); the board re-reads the queue after the soonest blocked `retryInMs` (`soonestRetryInMs`), re-armed on every queue answer, since nothing announces a hold lapsing.
 
 **Stats (`stats/`):**
 

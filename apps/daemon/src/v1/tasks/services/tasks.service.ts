@@ -177,6 +177,40 @@ export class TasksService {
   }
 
   /**
+   * Record that the autopilot could not prepare this card's worktree, stamped
+   * with the daemon's own clock — the backoff in `TaskQueueService` counts from
+   * it. See `Task.prepareFailedAt`.
+   *
+   * Only for a card still in its project's intake column: a report that lands
+   * after another start of the card won (a Run press preparing the same
+   * worktree) would otherwise mark a card that is being worked. Announced,
+   * because no run or move announces it and the board re-reads the queue only
+   * on a card event.
+   */
+  async recordPrepareFailure(
+    taskId: string,
+    reason: string,
+  ): Promise<TaskWire> {
+    const em = this.em.fork();
+    const task = await this.require(taskId, em);
+    const project = await this.requireProject(task.projectId, em);
+    if (task.status !== project.autopilotIntakeStatus) {
+      return this.wireOf(task, em);
+    }
+    await this.taskDao.setPrepareFailure(
+      taskId,
+      { at: new Date(), reason },
+      em,
+    );
+    this.events.publishTaskChanged({
+      taskId,
+      projectId: task.projectId,
+      status: task.status,
+    });
+    return this.wireOf(task, em);
+  }
+
+  /**
    * One card as the wire has it, its run's pull requests included.
    *
    * Every single-task path goes through here rather than through {@link toWire}

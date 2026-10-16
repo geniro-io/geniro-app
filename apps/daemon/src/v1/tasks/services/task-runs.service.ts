@@ -118,8 +118,11 @@ export class TaskRunsService {
       // A start that WORKED is the answer to a Stop, so the card is the
       // autopilot's again from here — see `Task.stoppedAt`. Only after the run
       // exists: a press that failed leaves the card stopped, since nothing the
-      // user asked for has happened yet.
-      await this.taskDao.setStoppedAt(taskId, null, this.em.fork());
+      // user asked for has happened yet. The same start proves its worktree
+      // could be made, so a prepare failure on record is over too.
+      const em = this.em.fork();
+      await this.taskDao.setStoppedAt(taskId, null, em);
+      await this.taskDao.setPrepareFailure(taskId, null, em);
       return wire;
     } finally {
       this.starting.delete(taskId);

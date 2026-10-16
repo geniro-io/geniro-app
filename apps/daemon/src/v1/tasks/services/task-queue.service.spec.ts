@@ -16,6 +16,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from 'vitest';
 
 import { RunDao } from '../../agents/dao/run.dao';
@@ -30,8 +31,10 @@ import { Task } from '../entity/task.entity';
 import { RUN_TARGET_PROBLEM_REASON } from '../utils/run-target';
 import {
   missingWorkflowReason,
+  PREPARE_FAILURE_RETRY_MS,
   STOPPED_BY_USER_REASON,
   TaskQueueService,
+  worktreeUnpreparedReason,
 } from './task-queue.service';
 
 /** A minimal, valid single-node workflow — content is irrelevant to this spec. */
@@ -189,6 +192,9 @@ describe('TaskQueueService (in-memory sqlite)', () => {
       expect.objectContaining({
         title: 'stopped by me',
         reason: STOPPED_BY_USER_REASON,
+        // A Run press answers it, not the run settings — and nothing retries.
+        kind: 'stopped',
+        retryInMs: null,
       }),
     ]);
   });
@@ -201,6 +207,129 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     const queue = await service.read(projectId);
 
     expect(queue.blocked).toEqual([]);
+  });
+
+  describe('a card whose worktree main could not prepare', () => {
+    const GIT_LINE =
+      "fatal: 'geniro/task-x' is already used by worktree at '/tmp/x'";
+    // Only `Date` is frozen, so the hold's remainder the service measures is
+    // exact; the database and its timers run as usual.
+    beforeEach(() => {
+      vi.useFakeTimers({
+        toFake: ['Date'],
+        now: new Date('2026-10-16T12:00:00Z'),
+      });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const failedAgo = async (task: Task, ms: number): Promise<void> => {
+      await taskDao.setPrepareFailure(
+        task.id,
+        { at: new Date(Date.now() - ms), reason: GIT_LINE },
+        em,
+      );
+    };
+
+    it('is held in blocked with git’s reason, and does not take the one free slot from the card behind it', async () => {
+      // The starvation this exists for: cap 1, the failing card at the head of
+      // the column, handed out (and failing) on every tick.
+      await arm({ autopilotMaxConcurrent: 1 });
+      const head = await addTask('head', 'todo', 0);
+      await addTask('behind', 'todo', 1);
+      await failedAgo(head, 30_000);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.eligible.map((task) => task.title)).toEqual(['behind']);
+      expect(queue.blocked).toEqual([
+        {
+          id: head.id,
+          title: 'head',
+          reason: worktreeUnpreparedReason(GIT_LINE),
+          kind: 'worktree',
+          // What is left of the hold, so an open board can re-read then.
+          retryInMs: 5 * 60_000 - 30_000,
+        },
+      ]);
+      expect(queue.blocked[0]?.reason).toContain(GIT_LINE);
+    });
+
+    it.each([
+      ['exactly', PREPARE_FAILURE_RETRY_MS],
+      ['a second past', PREPARE_FAILURE_RETRY_MS + 1_000],
+    ])(
+      'is handed out again %s the backoff, so a failure that healed does not park it',
+      async (_, ago) => {
+        await arm({ autopilotMaxConcurrent: 1 });
+        const head = await addTask('head', 'todo', 0);
+        await addTask('behind', 'todo', 1);
+        await failedAgo(head, ago);
+
+        const queue = await service.read(projectId);
+
+        expect(queue.eligible.map((task) => task.title)).toEqual(['head']);
+        expect(queue.blocked).toEqual([]);
+      },
+    );
+
+    it('is handed out when its mark lies in the future — a clock set back must not hold it for hours', async () => {
+      await arm({ autopilotMaxConcurrent: 1 });
+      const head = await addTask('head', 'todo', 0);
+      await failedAgo(head, -60 * 60_000);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.eligible.map((task) => task.title)).toEqual(['head']);
+    });
+
+    it('is held on a fresh mark even when no reason was stored with it', async () => {
+      const head = await addTask('head', 'todo', 0);
+      const at = new Date();
+      await em.nativeUpdate(
+        Task,
+        { id: head.id },
+        { prepareFailedAt: at, prepareFailedReason: null },
+      );
+
+      const queue = await service.read(projectId);
+
+      expect(queue.blocked).toEqual([
+        {
+          id: head.id,
+          title: 'head',
+          reason:
+            'its worktree could not be prepared — the autopilot tries again in a few minutes, or press Run once that is fixed',
+          kind: 'worktree',
+          retryInMs: 5 * 60_000,
+        },
+      ]);
+    });
+
+    it('is reported by its settings problem, not as a timed hold, when it has both', async () => {
+      // The run settings are where that one is answered; a worktree kind would
+      // hide the button that leads there for the rest of the hold.
+      await arm({ agentKind: null, workflowSlug: null });
+      const head = await addTask('head', 'todo', 0);
+      await failedAgo(head, 30_000);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.blocked).toEqual([
+        expect.objectContaining({ id: head.id, kind: 'run-target' }),
+      ]);
+    });
+
+    it('is not flagged on a DISARMED board — only the autopilot is held by it', async () => {
+      await arm({ autopilotEnabled: false });
+      const head = await addTask('head', 'todo', 0);
+      await failedAgo(head, 30_000);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.blocked).toEqual([]);
+    });
   });
 
   it('keeps a stopped task the user’s after they carried its THREAD on themselves', async () => {
@@ -297,7 +426,13 @@ describe('TaskQueueService (in-memory sqlite)', () => {
 
     expect(queue.eligible).toEqual([]);
     expect(queue.blocked).toEqual([
-      { id: orphan.id, title: 'nothing to run me', reason: expect.any(String) },
+      {
+        id: orphan.id,
+        title: 'nothing to run me',
+        reason: expect.any(String),
+        kind: 'run-target',
+        retryInMs: null,
+      },
     ]);
     // Still WAITING: it is in the intake column, which is what that count
     // means. `blocked` is what tells the two apart.
@@ -357,6 +492,8 @@ describe('TaskQueueService (in-memory sqlite)', () => {
         id: card.id,
         title: 'run me as a graph',
         reason: RUN_TARGET_PROBLEM_REASON['workflow-unattended'],
+        kind: 'run-target',
+        retryInMs: null,
       },
     ]);
   });
@@ -415,6 +552,8 @@ describe('TaskQueueService (in-memory sqlite)', () => {
         id: card.id,
         title: 'run me as a ghost graph',
         reason: missingWorkflowReason('ghost-workflow'),
+        kind: 'missing-workflow',
+        retryInMs: null,
       },
     ]);
   });
@@ -479,6 +618,8 @@ describe('TaskQueueService (in-memory sqlite)', () => {
         id: card.id,
         title: 'run me as a ghost graph',
         reason: missingWorkflowReason('ghost-workflow'),
+        kind: 'missing-workflow',
+        retryInMs: null,
       },
     ]);
   });

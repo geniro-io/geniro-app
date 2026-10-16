@@ -9,6 +9,7 @@ import {
 } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type {
+  BlockedTask,
   CreateTaskDto,
   ProjectDto,
   TaskDto,
@@ -22,6 +23,7 @@ import {
   arrangeColumn,
   type BoardApi,
   columnOrderAfterDrop,
+  soonestRetryInMs,
   useBoard,
 } from './use-board';
 import type { StagedImage } from './use-description-paste';
@@ -205,6 +207,99 @@ describe('where a dropped card lands', () => {
       next.filter((row) => row.status === 'todo').map((row) => row.id),
     ).toEqual(['a', 'x', 'b', 'c']);
     expect(next.find((row) => row.id === 'x')?.position).toBe(1);
+  });
+});
+
+describe('a card held for a worktree failure', () => {
+  const worktreeHold = (id: string, retryInMs: number): BlockedTask => ({
+    id,
+    title: id,
+    reason: 'its worktree could not be prepared',
+    kind: 'worktree',
+    retryInMs,
+  });
+  const stoppedCard = (id: string): BlockedTask => ({
+    id,
+    title: id,
+    reason: 'you stopped its last run',
+    kind: 'stopped',
+    retryInMs: null,
+  });
+
+  it('knows the soonest release among the held cards, and that a stopped card has none', () => {
+    expect(
+      soonestRetryInMs([
+        worktreeHold('a', 240_000),
+        stoppedCard('b'),
+        worktreeHold('c', 60_000),
+      ]),
+    ).toBe(60_000);
+    expect(soonestRetryInMs([stoppedCard('b')])).toBeNull();
+  });
+
+  describe('on an open board', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const queueHolding = (retryInMs: number) => ({
+      running: 1,
+      waiting: 1,
+      eligible: [],
+      blocked: [worktreeHold('t1', retryInMs)],
+      active: [],
+    });
+
+    async function openBoard(): Promise<ReturnType<typeof vi.fn>> {
+      const { apis } = stubApis();
+      const readProjectQueue = apis.projects.readProjectQueue as ReturnType<
+        typeof vi.fn
+      >;
+      // A fresh object per read, as a parsed response is.
+      readProjectQueue.mockImplementation(async () => queueHolding(60_000));
+      const board = await mount(apis);
+      await act(async () => {
+        board.current.selectProject('p1');
+      });
+      return readProjectQueue;
+    }
+
+    it('re-reads the queue once the hold lapses — nothing else announces that moment', async () => {
+      const readProjectQueue = await openBoard();
+      const before = readProjectQueue.mock.calls.length;
+
+      // Not ON the instant: a read landing exactly then could still find the
+      // card held by the daemon's clock.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_500);
+      });
+      expect(readProjectQueue.mock.calls.length).toBe(before);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(readProjectQueue.mock.calls.length).toBeGreaterThan(before);
+      expect(readProjectQueue).toHaveBeenLastCalledWith({ projectId: 'p1' });
+    });
+
+    it('re-arms when the re-read still finds the card held, instead of going quiet', async () => {
+      // The re-read answers exactly what the first did — the card still held,
+      // the same remainder — so only a timer re-armed per ANSWER reads again.
+      const readProjectQueue = await openBoard();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(61_000);
+      });
+      const afterFirst = readProjectQueue.mock.calls.length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(61_000);
+      });
+
+      expect(readProjectQueue.mock.calls.length).toBeGreaterThan(afterFirst);
+    });
   });
 });
 

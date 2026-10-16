@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 
-import { type RunDeltaEvent, SINGLE_AGENT_NODE } from '../chat.types';
+import type { AgentKind } from '../../runs/runs.types';
+import {
+  type RequestedModel,
+  type RunDeltaEvent,
+  SINGLE_AGENT_NODE,
+} from '../chat.types';
 import { AgentEventBus } from './agent-events.bus';
 import { contextWindowKey, ContextWindowStore } from './context-window.store';
 import { UnrecordedSpendStore } from './unrecorded-spend.store';
@@ -152,7 +157,8 @@ export class PartialStreamService {
    *
    * Still never assumed: a model neither this process nor the store has ever
    * seen stays unknown, and the meter renders the count with no ring rather
-   * than measuring against a guess.
+   * than measuring against a guess. Keyed like the store, so it also holds the
+   * requested-name keys {@link knownWindow} reads.
    */
   private readonly windowsByModel = new Map<string, number>();
   /**
@@ -163,10 +169,21 @@ export class PartialStreamService {
    * switch model between turns (the composer's chips are editable mid-run), and
    * a window learned from the previous model would otherwise be kept for the
    * whole next turn — a 300k request on a 1M model reading "300k / 200k".
+   *
+   * `requestedKey` is {@link requestedKey} of what the turn was spawned with;
+   * see {@link knownWindow} for why the window is filed under it too. `resolvedAs`
+   * is the FIRST model this owner announced for it: codex re-announces the
+   * model it rerouted to, and that one's window is not the requested name's.
    */
   private readonly runModels = new Map<
     string,
-    { key: string; agent: string; model: string }
+    {
+      key: string;
+      agent: AgentKind;
+      model: string;
+      requestedKey: string | null;
+      resolvedAs: string;
+    }
   >();
 
   constructor(
@@ -559,6 +576,9 @@ export class PartialStreamService {
    * Kept per OWNER rather than per turn: the window belongs to the model, and
    * an owner's next turn is overwhelmingly the same model — so a turn's first
    * `assistant` line, which carries no window of its own, can still be scaled.
+   *
+   * True when the reading was taken as this owner's window — only when
+   * {@link isOwnReading} says it is one.
    */
   rememberWindow(
     runId: string,
@@ -566,20 +586,18 @@ export class PartialStreamService {
     contextWindowTokens: number | null,
     model: string | null = null,
     contextWindow: string | null = null,
-  ): void {
+  ): boolean {
     try {
       if (contextWindowTokens === null || contextWindowTokens <= 0) {
-        return;
+        return false;
+      }
+      if (!this.isOwnReading(runId, ownerKey, model)) {
+        return false;
       }
       const owner = this.ownerId(runId, ownerKey);
-      this.windows.set(owner, contextWindowTokens);
-      // Cached under the model the WINDOW ITSELF came from, never under
-      // whatever the turn announced at startup. A turn that fell back to a
-      // second model reports that model's window, and filing it under the
-      // requested one poisons every later chat on the requested model — the
-      // 1M-shown-as-200k defect, cached for the life of the process.
       const announced = this.runModels.get(owner);
-      if (announced && model !== null && announced.model === model) {
+      this.windows.set(owner, contextWindowTokens);
+      if (announced && model !== null) {
         this.windowsByModel.set(announced.key, contextWindowTokens);
         // Written through to disk so the NEXT daemon launch already knows this
         // model's window at the turn's first request, instead of relearning it
@@ -590,10 +608,43 @@ export class PartialStreamService {
           contextWindowTokens,
           contextWindow,
         );
+        if (announced.requestedKey !== null && announced.resolvedAs === model) {
+          this.windowsByModel.set(
+            this.modelKey(
+              announced.agent,
+              announced.requestedKey,
+              contextWindow,
+            ),
+            contextWindowTokens,
+          );
+          this.windowStore.remember(
+            announced.agent,
+            announced.requestedKey,
+            contextWindowTokens,
+            contextWindow,
+          );
+        }
       }
+      return true;
     } catch (err) {
       this.warn('rememberWindow', err);
+      return false;
     }
+  }
+
+  /**
+   * Whether a reading labelled with `model` describes this owner's OWN
+   * conversation. A delegate or a per-request fallback can out-spend the
+   * owner's model, and `modelUsage` then names ITS window — which, taken as
+   * the owner's, misreports the meter and moves the `--autocompact` threshold
+   * that joins `sessionKey`. A reading naming no model, or an owner that has
+   * announced none, cannot be told apart and is taken as the owner's.
+   */
+  isOwnReading(runId: string, ownerKey: string, model: string | null): boolean {
+    const announced = this.runModels.get(this.ownerId(runId, ownerKey));
+    return (
+      model === null || announced === undefined || announced.model === model
+    );
   }
 
   /**
@@ -610,29 +661,32 @@ export class PartialStreamService {
   useModel(
     runId: string,
     ownerKey: string,
-    agent: string,
+    agent: AgentKind,
     model: string,
     contextWindow: string | null = null,
+    spawnedWith: RequestedModel | null = null,
   ): void {
     try {
       const owner = this.ownerId(runId, ownerKey);
       const key = this.modelKey(agent, model, contextWindow);
-      if (this.runModels.get(owner)?.key !== key) {
-        this.runModels.set(owner, { key, agent, model });
+      const requestedKey =
+        spawnedWith === null ? null : this.requestedKey(spawnedWith);
+      const previous = this.runModels.get(owner);
+      if (previous?.key !== key) {
         this.windows.delete(owner);
       }
-      // A miss falls through to the persisted store — that is what makes the
-      // FIRST turn after a daemon launch scaled, rather than the first turn to
-      // complete in this process.
-      let known = this.windowsByModel.get(key);
-      if (known === undefined) {
-        const stored = this.windowStore.get(agent, model, contextWindow);
-        if (stored !== null) {
-          this.windowsByModel.set(key, stored);
-          known = stored;
-        }
-      }
-      if (known !== undefined && !this.windows.has(owner)) {
+      this.runModels.set(owner, {
+        key,
+        agent,
+        model,
+        requestedKey,
+        resolvedAs:
+          previous !== undefined && previous.requestedKey === requestedKey
+            ? previous.resolvedAs
+            : model,
+      });
+      const known = this.modelWindow(agent, model, contextWindow);
+      if (known !== null && !this.windows.has(owner)) {
         this.windows.set(owner, known);
       }
     } catch (err) {
@@ -655,6 +709,64 @@ export class PartialStreamService {
    */
   windowFor(runId: string, ownerKey: string): number | null {
     return this.windows.get(this.ownerId(runId, ownerKey)) ?? null;
+  }
+
+  /**
+   * The window a model was last measured at, asked BEFORE a turn exists — by
+   * the name the turn will be spawned with, which is all a caller has then.
+   *
+   * That name is often an alias the CLI resolves itself (`haiku`), or none at
+   * all (the CLI's default), so it only matches because {@link rememberWindow}
+   * files each measurement under the requested name as well as the announced
+   * one. The plain name is the second try: a node may name the id itself.
+   * Never a figure derived from the window CHOICE (`1m`): the choice is part of
+   * the key, and the number is whatever the agent reported at it — codex's
+   * `872k` reports 828,400.
+   */
+  knownWindow(
+    agent: AgentKind,
+    requested: RequestedModel,
+    contextWindow: string | null = null,
+  ): number | null {
+    return (
+      this.modelWindow(agent, this.requestedKey(requested), contextWindow) ??
+      (requested.model === null
+        ? null
+        : this.modelWindow(agent, requested.model, contextWindow))
+    );
+  }
+
+  /**
+   * The model segment a requested name is filed under. Per PROFILE because the
+   * profile resolves it — an alias can map to another model there
+   * (`ANTHROPIC_DEFAULT_HAIKU_MODEL`), and the default model is its setting.
+   * No model id contains \u0001, so a requested key never collides with an
+   * announced id, which is filed bare.
+   */
+  private requestedKey(requested: RequestedModel): string {
+    return `${requested.model ?? ''}\u0001${requested.configDir ?? ''}`;
+  }
+
+  /**
+   * A model's window, cache first. A miss falls through to the persisted store
+   * — that is what makes the FIRST turn after a daemon launch scaled, rather
+   * than the first turn to complete in this process.
+   */
+  private modelWindow(
+    agent: AgentKind,
+    model: string,
+    contextWindow: string | null,
+  ): number | null {
+    const key = this.modelKey(agent, model, contextWindow);
+    const cached = this.windowsByModel.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const stored = this.windowStore.get(agent, model, contextWindow);
+    if (stored !== null) {
+      this.windowsByModel.set(key, stored);
+    }
+    return stored;
   }
 
   /**

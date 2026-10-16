@@ -624,6 +624,16 @@ class FakeAdapter {
   sessionsOpened = 0;
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
+
+  /**
+   * The SHIPPED adapter's session key for a turn — what decides whether a kept
+   * process may serve it, which this double's spawn never compares.
+   */
+  sessionKeyOf(input: AgentTurnInput): string {
+    return (
+      this.real as unknown as { sessionKey(input: AgentTurnInput): string }
+    ).sessionKey(input);
+  }
   /**
    * The REAL adapter for this kind, delegated to for every CLI-fact
    * declaration. The double fakes the SPAWN, never the contract: a
@@ -931,6 +941,8 @@ function setup(
     autoGroupId?: string | null;
     /** The MCP service a node turn's server report is checked against. */
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
+    /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
+    contextWindows?: Record<string, number>;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -1127,7 +1139,7 @@ function setup(
   const spendStore = new FakeUnrecordedSpendStore();
   const partials = new PartialStreamService(
     bus,
-    new FakeContextWindowStore().asStore(),
+    new FakeContextWindowStore(opts.contextWindows).asStore(),
     spendStore.asStore(),
   );
   const deltas: RunDeltaEvent[] = [];
@@ -12787,6 +12799,67 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
   });
 
+  it('keeps a callee thread’s own window when a turn it ran on its own reports a delegate’s', async () => {
+    // The thread listing and the cold-resume refusal read this window: a
+    // delegate's smaller one would show the thread fuller than it is.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('helper')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'Helper',
+      message: 'build it',
+    });
+    await drain();
+    const helper = claude.starts[1]!;
+    helper.emit({ type: 'session', sessionId: 'sess-helper' });
+    helper.emit({ type: 'turn_model', model: 'claude-own-model' });
+    helper.emit({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextTokens: 50_000,
+        contextWindowTokens: 1_000_000,
+        contextModel: 'claude-own-model',
+      },
+      stopReason: 'end_turn',
+      finalText: 'started the build',
+    });
+    helper.finish();
+    await envelope;
+    await drain();
+
+    helper.emitOffTurn({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextTokens: 60_000,
+        contextWindowTokens: 200_000,
+        contextModel: 'a-delegate-model',
+      },
+      stopReason: 'end_turn',
+      finalText: 'the build passed',
+    });
+    await drain();
+
+    const listing = callBroker.listThreads(run.id, 'orch') as {
+      result: { threads: Record<string, unknown>[] };
+    };
+    expect(listing.result.threads).toEqual([
+      expect.objectContaining({
+        agent: 'helper',
+        context: expect.objectContaining({ tokens: 60_000, window: 1_000_000 }),
+      }),
+    ]);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('compacts a callee whose call WOKE the run after its pass ended', async () => {
     // A Dev Team run spends nearly all of its life AWAKE rather than in its
     // pass: the Manager dispatches, ends its turn, and every call after that
@@ -13076,6 +13149,350 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     completeTurn(next, 'ok');
     await drain();
     completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  /** CHAIN with `a` naming its model by the alias claude resolves itself. */
+  const HAIKU_CHAIN: Workflow = {
+    ...CHAIN,
+    nodes: CHAIN.nodes.map((node) =>
+      node.id === 'a' && node.kind === 'agent'
+        ? { ...node, model: 'haiku' }
+        : node,
+    ),
+  };
+
+  it('hands the CLI its threshold on a node’s FIRST turn, from the window its model was measured at', async () => {
+    const { service, claude } = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'haiku')]: 200_000,
+      },
+    });
+    await service.startRun({
+      slug: 'chain',
+      workflow: triggered(HAIKU_CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const first = turnsOf(claude, 'role-a')[0]!;
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    completeTurn(first, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+  });
+
+  it('looks the first-turn window up at the node’s window CHOICE', async () => {
+    const { service, claude } = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'haiku')]: 200_000,
+        [FakeContextWindowStore.key('claude', 'haiku', '1m')]: 1_000_000,
+      },
+    });
+    await service.startRun({
+      slug: 'chain',
+      workflow: triggered({
+        ...HAIKU_CHAIN,
+        nodes: HAIKU_CHAIN.nodes.map((node) =>
+          node.id === 'a' && node.kind === 'agent'
+            ? { ...node, contextWindow: '1m' }
+            : node,
+        ),
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const first = turnsOf(claude, 'role-a')[0]!;
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    completeTurn(first, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+  });
+
+  it('serves a node’s second turn under the session key its first was spawned with', async () => {
+    // The flag is argv and joins `sessionKey`: a threshold first appearing on
+    // turn two would respawn the node's CLI there.
+    const { service, claude } = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'haiku')]: 200_000,
+      },
+    });
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(HAIKU_CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = turnsOf(claude, 'role-a')[0]!;
+    first.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+    fillAndComplete(first, 10_000, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.prompt).toContain('next');
+    expect(second.input.autoCompact).toEqual(first.input.autoCompact);
+    expect(claude.sessionKeyOf(second.input)).toBe(
+      claude.sessionKeyOf(first.input),
+    );
+    completeTurn(second, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  it('keeps what a node learned under its profile to that profile', async () => {
+    const { service, claude } = setup();
+    const inProfile = (configDir: string | undefined): Workflow =>
+      triggered({
+        ...HAIKU_CHAIN,
+        nodes: HAIKU_CHAIN.nodes.map((node) =>
+          node.id === 'a' && node.kind === 'agent'
+            ? { ...node, ...(configDir ? { configDir } : {}) }
+            : node,
+        ),
+      });
+    const runOnce = async (
+      configDir: string | undefined,
+    ): Promise<FakeTurn> => {
+      const before = turnsOf(claude, 'role-a').length;
+      await service.startRun({
+        slug: 'chain',
+        workflow: inProfile(configDir),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      return turnsOf(claude, 'role-a')[before]!;
+    };
+    const finish = async (turn: FakeTurn): Promise<void> => {
+      turn.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+      turn.emit({
+        type: 'turn_complete',
+        usage: {
+          ...NO_USAGE,
+          contextWindowTokens: 200_000,
+          contextModel: 'claude-haiku-5-5',
+        },
+        stopReason: 'end_turn',
+        finalText: 'A done',
+      });
+      turn.finish();
+      await drain();
+      const b = turnsOf(claude, 'role-b');
+      completeTurn(b[b.length - 1]!, 'B done');
+      await drain();
+    };
+
+    await finish(await runOnce(dir));
+    const sameProfile = await runOnce(dir);
+    expect(sameProfile.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    await finish(sameProfile);
+    // Another profile may resolve `haiku` to another model.
+    const otherProfile = await runOnce(undefined);
+    expect(otherProfile.input.autoCompact).toBeUndefined();
+    await finish(otherProfile);
+  });
+
+  it('lets the node’s own reading override its model’s stored window when the two differ', async () => {
+    const { service, claude } = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'haiku')]: 200_000,
+      },
+    });
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(HAIKU_CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = turnsOf(claude, 'role-a')[0]!;
+    first.emit({
+      type: 'context_progress',
+      contextTokens: 10_000,
+      contextWindowTokens: 1_000_000,
+    });
+    completeTurn(first, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    completeTurn(second, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  it('learns the window of a node that names NO model, so the next run’s first turn is armed', async () => {
+    const { service, claude } = setup();
+    await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = turnsOf(claude, 'role-a')[0]!;
+    first.emit({ type: 'turn_model', model: 'claude-opus-5-5' });
+    first.emit({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextWindowTokens: 200_000,
+        contextModel: 'claude-opus-5-5',
+      },
+      stopReason: 'end_turn',
+      finalText: 'A done',
+    });
+    first.finish();
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+
+    await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'again',
+    });
+    await drain();
+    const next = turnsOf(claude, 'role-a')[1]!;
+    expect(next.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    completeTurn(next, 'A again');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'B again');
+    await drain();
+  });
+
+  it('keeps the node’s own window when a delegate’s model out-spends it', async () => {
+    // `modelUsage` names the model that spent the most, and that can be a
+    // delegate on a smaller window: taken as the node's, it would compact the
+    // node at a share of the DELEGATE's window and respawn its CLI.
+    const { service, claude } = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'haiku')]: 1_000_000,
+      },
+    });
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(HAIKU_CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = turnsOf(claude, 'role-a')[0]!;
+    first.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+    // 150k is 15% of the node's window and 75% of the delegate's — over the
+    // node's 50% only if a delegate's window is taken as the node's.
+    first.emit({
+      type: 'context_progress',
+      contextTokens: 150_000,
+      contextWindowTokens: 200_000,
+      contextModel: 'a-delegate-model',
+    });
+    first.emit({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextTokens: 150_000,
+        contextWindowTokens: 200_000,
+        contextModel: 'a-delegate-model',
+      },
+      stopReason: 'end_turn',
+      finalText: 'A done',
+    });
+    first.finish();
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    // The node's next turn is the message, not a compaction.
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.prompt).toContain('next');
+    expect(second.input.autoCompact).toEqual(first.input.autoCompact);
+    expect(second.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    completeTurn(second, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  it('learns a node’s window under the model it NAMES, so the next run’s first turn is armed', async () => {
+    const { service, claude } = setup();
+    await service.startRun({
+      slug: 'chain',
+      workflow: triggered(HAIKU_CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = turnsOf(claude, 'role-a')[0]!;
+    expect(first.input.autoCompact).toBeUndefined();
+    first.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+    first.emit({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextWindowTokens: 200_000,
+        contextModel: 'claude-haiku-5-5',
+      },
+      stopReason: 'end_turn',
+      finalText: 'A done',
+    });
+    first.finish();
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+
+    await service.startRun({
+      slug: 'chain',
+      workflow: triggered(HAIKU_CHAIN),
+      cwd: dir,
+      prompt: 'again',
+    });
+    await drain();
+    const next = turnsOf(claude, 'role-a')[1]!;
+    expect(next.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    completeTurn(next, 'A again');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'B again');
     await drain();
   });
 

@@ -2997,7 +2997,10 @@ export interface ApprovalResolution {
 export interface TurnAutoCompact {
   /** Whole percent of the window, 10–95 — `AutoCompactPercentSchema`'s range. */
   percent: number;
-  /** The MODEL's own window in tokens, as this conversation last measured it. */
+  /**
+   * The MODEL's own window in tokens: as this conversation last measured it,
+   * or before its first reading, as that model was last measured anywhere.
+   */
   windowTokens: number;
 }
 

@@ -161,6 +161,10 @@ class FakeRunDao {
       // The column's own default, spelled out: a fixture that omits it hands
       // `runToWire` an `undefined` the real entity can never produce.
       modelParameters: null,
+      // The context columns' defaults too: an `undefined` window reads as a
+      // divisor rather than "not measured" to the auto-compaction rule.
+      contextTokens: null,
+      contextWindowTokens: null,
       archivedAt: null,
       groupId: null,
       pinnedPosition: null,
@@ -973,6 +977,8 @@ function setup(
     >;
     /** The MCP service a turn's server report is checked against, when a test needs one. */
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
+    /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
+    contextWindows?: Record<string, number>;
     /** The analysis sink a turn installs, for the cases that drive an analysis chat. */
     analysisSink?: AnalysisReportsService['sinkFor'];
   } = {},
@@ -1036,7 +1042,7 @@ function setup(
   } as unknown as AttachmentStoreService;
   const partials = new PartialStreamService(
     bus,
-    new FakeContextWindowStore().asStore(),
+    new FakeContextWindowStore(opts.contextWindows).asStore(),
     new FakeUnrecordedSpendStore().asStore(),
   );
   const callTokens = new CallTokenRegistry();
@@ -3662,6 +3668,214 @@ describe('ChatService', () => {
       await turn(claude, 'half of it', { type: 'turn_cancelled' });
       await drain();
       expect(claude.start).toHaveBeenCalledTimes(1);
+    });
+
+    it('hands the CLI its threshold on the FIRST turn, from the window the model was measured at', async () => {
+      // The flag joins `sessionKey`: absent on turn one and present on turn
+      // two, it would respawn the chat's CLI on its second message.
+      const { service, claude } = setup({
+        contextWindows: {
+          [FakeContextWindowStore.key('claude', 'sonnet')]: 1_000_000,
+        },
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        model: 'sonnet',
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(startArg.autoCompact).toEqual({
+        percent: 80,
+        windowTokens: 1_000_000,
+      });
+      await turn(claude, 'hi');
+    });
+
+    it('learns the window under the model, window choice and profile the chat NAMES, for the next chat’s first turn', async () => {
+      const { service, claude } = setup();
+      const settings = {
+        agentKind: 'claude' as const,
+        cwd: dir,
+        configDir: dir,
+        model: 'sonnet',
+        contextWindow: '1m',
+        autoCompactPercent: 80,
+      };
+      const first = await service.createChat(settings);
+      await service.sendMessage(first.id, 'hello');
+      expect(
+        (claude.start.mock.calls[0]?.[0] as AgentTurnInput).autoCompact,
+      ).toBeUndefined();
+      claude.emit({ type: 'turn_model', model: 'claude-sonnet-5-5' });
+      await turn(claude, 'hi', {
+        type: 'turn_complete',
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
+          contextTokens: null,
+          contextWindowTokens: 1_000_000,
+          contextModel: 'claude-sonnet-5-5',
+          costUsd: null,
+          durationMs: null,
+          apiMs: null,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
+        },
+        stopReason: 'end_turn',
+        finalText: 'hi',
+      });
+
+      const second = await service.createChat(settings);
+      await service.sendMessage(second.id, 'again');
+      const opening = claude.start.mock.calls
+        .map((call) => call[0] as AgentTurnInput)
+        .find((input) => input.prompt === 'again');
+      expect(opening?.autoCompact).toEqual({
+        percent: 80,
+        windowTokens: 1_000_000,
+      });
+      await turn(claude, 'ok');
+
+      // Another profile may resolve `sonnet` to another model.
+      const elsewhere = await service.createChat({
+        ...settings,
+        configDir: undefined,
+      });
+      await service.sendMessage(elsewhere.id, 'elsewhere');
+      const unarmed = claude.start.mock.calls
+        .map((call) => call[0] as AgentTurnInput)
+        .find((input) => input.prompt === 'elsewhere');
+      expect(unarmed?.autoCompact).toBeUndefined();
+      await turn(claude, 'ok');
+    });
+
+    it('lets the chat’s own reading override its model’s stored window', async () => {
+      const { service, claude } = setup({
+        contextWindows: {
+          [FakeContextWindowStore.key('claude', 'sonnet')]: 200_000,
+        },
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        model: 'sonnet',
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'hello');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 10_000,
+        contextWindowTokens: 1_000_000,
+      });
+      await turn(claude, 'hi');
+
+      await service.sendMessage(run.id, 'again');
+      const inputs = claude.start.mock.calls.map(
+        (call) => call[0] as AgentTurnInput,
+      );
+      expect(inputs[0]?.autoCompact).toEqual({
+        percent: 80,
+        windowTokens: 200_000,
+      });
+      expect(
+        inputs.find((input) => input.prompt === 'again')?.autoCompact,
+      ).toEqual({ percent: 80, windowTokens: 1_000_000 });
+      await turn(claude, 'ok');
+    });
+
+    it('keeps the chat’s own window when a reading BETWEEN turns names a delegate’s model', async () => {
+      const { service, claude } = setup({
+        contextWindows: {
+          [FakeContextWindowStore.key('claude', 'sonnet')]: 1_000_000,
+        },
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        model: 'sonnet',
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'hello');
+      claude.emit({ type: 'turn_model', model: 'claude-sonnet-5-5' });
+      await turn(claude, 'hi');
+
+      claude.sessions[0]!.onBetweenTurnEvent!({
+        type: 'context_progress',
+        contextTokens: 10_000,
+        contextWindowTokens: 200_000,
+        contextModel: 'a-delegate-model',
+      });
+      await drain();
+
+      await service.sendMessage(run.id, 'again');
+      expect(
+        claude.start.mock.calls
+          .map((call) => call[0] as AgentTurnInput)
+          .find((input) => input.prompt === 'again')?.autoCompact,
+      ).toEqual({ percent: 80, windowTokens: 1_000_000 });
+      await turn(claude, 'ok');
+    });
+
+    it('keeps the chat’s own window when a delegate’s model out-spends it', async () => {
+      // 170k is 17% of the chat's window and 85% of the delegate's — over the
+      // chat's 80% only if a delegate's window is taken as the chat's.
+      const { service, claude } = setup({
+        contextWindows: {
+          [FakeContextWindowStore.key('claude', 'sonnet')]: 1_000_000,
+        },
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        model: 'sonnet',
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'hello');
+      claude.emit({ type: 'turn_model', model: 'claude-sonnet-5-5' });
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+        contextModel: 'a-delegate-model',
+      });
+      await turn(claude, 'hi', {
+        type: 'turn_complete',
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
+          contextTokens: 170_000,
+          contextWindowTokens: 200_000,
+          contextModel: 'a-delegate-model',
+          costUsd: null,
+          durationMs: null,
+          apiMs: null,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
+        },
+        stopReason: 'end_turn',
+        finalText: 'hi',
+      });
+
+      await service.sendMessage(run.id, 'again');
+      const inputs = claude.start.mock.calls.map(
+        (call) => call[0] as AgentTurnInput,
+      );
+      expect(inputs.map((input) => input.prompt)).not.toContain('/compact');
+      expect(
+        inputs.find((input) => input.prompt === 'again')?.autoCompact,
+      ).toEqual({ percent: 80, windowTokens: 1_000_000 });
+      await turn(claude, 'ok');
     });
 
     it('leaves a conversation under its auto-compact threshold alone', async () => {

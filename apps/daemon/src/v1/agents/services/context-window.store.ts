@@ -7,9 +7,11 @@ import { environment } from '../../../environments';
 import { atomicWriteSync } from '../../../utils/atomic-file';
 
 /**
- * Defensive bound. One entry per (agent, model) the user has ever run; a
- * machine with more distinct models than this is not a real installation, and
- * an unbounded file is one that grows forever on a caller writing in a loop.
+ * Defensive bound. One entry per (agent, model, window choice) the user has
+ * ever run, plus one per name a turn ASKED for under each profile — roughly
+ * twice the models in use. A machine with more than this is not a real
+ * installation, and an unbounded file is one that grows forever on a caller
+ * writing in a loop.
  */
 const MAX_ENTRIES = 500;
 
@@ -85,6 +87,12 @@ export interface ContextWindowStoreOptions {
  * deliberate behaviour `context-meter.tsx` documents. A `result` line always
  * overwrites what is stored here, so a model whose window changes is corrected
  * by the next completed turn rather than needing a migration.
+ *
+ * It also sizes a conversation's FIRST `--autocompact` threshold
+ * (`PartialStreamService.knownWindow`), so a stale entry costs one turn at the
+ * wrong threshold. For
+ * that lookup the model part of a key may also be what a turn ASKED for — a
+ * name or the CLI default, with its profile (`PartialStreamService.requestedKey`).
  *
  * Reads are SYNCHRONOUS for the same reason `McpSettingsStore`'s are: the
  * caller is the live-delta path, which publishes inside the persist chain. The

@@ -600,7 +600,12 @@ describe('PartialStreamService — the window survives a daemon restart', () => 
     service.rememberWindow(RUN, OWNER, 1_000_000, 'claude-opus-5');
 
     expect(windowStore.writes).toEqual([
-      { agent: AGENT, model: 'claude-opus-5', window: 1_000_000 },
+      {
+        agent: AGENT,
+        model: 'claude-opus-5',
+        window: 1_000_000,
+        contextWindow: null,
+      },
     ]);
   });
 
@@ -620,6 +625,178 @@ describe('PartialStreamService — the window survives a daemon restart', () => 
     service.context(RUN, OWNER, null, 26_000);
 
     expect(last().contextWindowTokens).toBeNull();
+  });
+});
+
+describe('PartialStreamService — knownWindow, asked before a turn exists', () => {
+  /** What a turn was spawned with, in the default profile unless named. */
+  const asked = (model: string | null, configDir: string | null = null) => ({
+    model,
+    configDir,
+  });
+
+  it('answers by the name the turn was REQUESTED with, alias included', () => {
+    // A workflow node names `haiku`; the CLI announces `claude-haiku-5-5`.
+    // Before a turn is spawned only the first name exists, so a measurement
+    // filed only under the second could never arm the node's first turn.
+    service.useModel(
+      RUN,
+      OWNER,
+      AGENT,
+      'claude-haiku-5-5',
+      null,
+      asked('haiku'),
+    );
+    service.rememberWindow(RUN, OWNER, 1_000_000, 'claude-haiku-5-5');
+
+    expect(service.knownWindow(AGENT, asked('haiku'))).toBe(1_000_000);
+    expect(service.knownWindow(AGENT, asked('claude-haiku-5-5'))).toBe(
+      1_000_000,
+    );
+    // And durably, so a later launch knows it before its first turn too.
+    const restarted = new PartialStreamService(
+      {
+        publishDelta: (event: RunDeltaEvent) => published.push(event),
+      } as unknown as AgentEventBus,
+      windowStore.asStore(),
+      new FakeUnrecordedSpendStore().asStore(),
+    );
+    expect(restarted.knownWindow(AGENT, asked('haiku'))).toBe(1_000_000);
+  });
+
+  it('answers for a turn that names no model, by the CLI default of its profile', () => {
+    service.useModel(
+      RUN,
+      OWNER,
+      AGENT,
+      'claude-opus-5-5',
+      null,
+      asked(null, '/p1'),
+    );
+    service.rememberWindow(RUN, OWNER, 1_000_000, 'claude-opus-5-5');
+
+    expect(service.knownWindow(AGENT, asked(null, '/p1'))).toBe(1_000_000);
+    // Another profile's default is its own setting, so it is not this one.
+    expect(service.knownWindow(AGENT, asked(null, '/p2'))).toBeNull();
+    expect(service.knownWindow(AGENT, asked(null))).toBeNull();
+  });
+
+  it('keeps an alias’s window per profile, which is what resolves the alias', () => {
+    service.useModel(
+      RUN,
+      OWNER,
+      AGENT,
+      'claude-haiku-5-5',
+      null,
+      asked('haiku', '/p1'),
+    );
+    service.rememberWindow(RUN, OWNER, 1_000_000, 'claude-haiku-5-5');
+
+    expect(service.knownWindow(AGENT, asked('haiku', '/p1'))).toBe(1_000_000);
+    expect(service.knownWindow(AGENT, asked('haiku', '/p2'))).toBeNull();
+  });
+
+  it('corrects a requested name’s window in THIS process once a turn measures it', () => {
+    // An alias resolves to the newest model of its tier, so a stored window
+    // goes stale when the tier grows. The cache the first lookup filled must
+    // take the new measurement, or every later first turn keeps the old one.
+    service.useModel(
+      RUN,
+      OWNER,
+      AGENT,
+      'claude-haiku-4-5',
+      null,
+      asked('haiku'),
+    );
+    service.rememberWindow(RUN, OWNER, 200_000, 'claude-haiku-4-5');
+    const fresh = new PartialStreamService(
+      {
+        publishDelta: (event: RunDeltaEvent) => published.push(event),
+      } as unknown as AgentEventBus,
+      windowStore.asStore(),
+      new FakeUnrecordedSpendStore().asStore(),
+    );
+    expect(fresh.knownWindow(AGENT, asked('haiku'))).toBe(200_000);
+
+    fresh.useModel(RUN, OWNER, AGENT, 'claude-haiku-5-5', null, asked('haiku'));
+    fresh.rememberWindow(RUN, OWNER, 1_000_000, 'claude-haiku-5-5');
+
+    expect(fresh.knownWindow(AGENT, asked('haiku'))).toBe(1_000_000);
+  });
+
+  it('files the requested alias at the window choice the turn ran at', () => {
+    service.useModel(
+      RUN,
+      OWNER,
+      AGENT,
+      'claude-haiku-5-5',
+      '1m',
+      asked('haiku'),
+    );
+    service.rememberWindow(RUN, OWNER, 1_000_000, 'claude-haiku-5-5', '1m');
+
+    expect(service.knownWindow(AGENT, asked('haiku'), '1m')).toBe(1_000_000);
+    expect(service.knownWindow(AGENT, asked('haiku'))).toBeNull();
+  });
+
+  it('does not take a reading from another model as the owner’s window', () => {
+    // `modelUsage` names the model that spent the most, which can be a
+    // delegate's: its window is not this conversation's, and taken as one it
+    // would move the `--autocompact` threshold the owner's next turn carries.
+    service.useModel(RUN, OWNER, AGENT, 'big-model');
+    expect(service.rememberWindow(RUN, OWNER, 1_000_000, 'big-model')).toBe(
+      true,
+    );
+    expect(
+      service.rememberWindow(RUN, OWNER, 200_000, 'a-delegate-model'),
+    ).toBe(false);
+
+    expect(service.windowFor(RUN, OWNER)).toBe(1_000_000);
+  });
+
+  it('does not file a REROUTED model’s window under the requested alias', () => {
+    // codex re-announces the model it rerouted to, and labels its readings
+    // with it — so the reporter matches the announcement, and only the
+    // requested name's FIRST resolution tells the two apart.
+    service.useModel(RUN, OWNER, AGENT, 'gpt-6.1-sol', null, asked('sol'));
+    service.useModel(RUN, OWNER, AGENT, 'gpt-6-luna', null, asked('sol'));
+    service.rememberWindow(RUN, OWNER, 258_400, 'gpt-6-luna');
+    // …nor on a later turn that opens on the rerouted thread.
+    service.useModel(RUN, OWNER, AGENT, 'gpt-6-luna', null, asked('sol'));
+    service.rememberWindow(RUN, OWNER, 258_400, 'gpt-6-luna');
+
+    expect(service.knownWindow(AGENT, asked('sol'))).toBeNull();
+    expect(service.knownWindow(AGENT, asked('gpt-6-luna'))).toBe(258_400);
+  });
+
+  it('files under a newly requested name that resolves to the same model', () => {
+    service.useModel(RUN, OWNER, AGENT, 'claude-opus-5-5', null, asked('opus'));
+    service.useModel(RUN, OWNER, AGENT, 'claude-opus-5-5', null, asked('best'));
+    service.rememberWindow(RUN, OWNER, 1_000_000, 'claude-opus-5-5');
+
+    expect(service.knownWindow(AGENT, asked('best'))).toBe(1_000_000);
+  });
+
+  it('keys the answer by the window CHOICE, never parsing the choice itself', () => {
+    // codex's `872k` reports 828,400. A number read off the label would differ
+    // from the one the turn then measures, and the changed threshold would
+    // respawn the CLI on its second turn.
+    const seeded = new FakeContextWindowStore({
+      [FakeContextWindowStore.key('codex', 'gpt-6.1-sol', '872k')]: 828_400,
+    });
+    const fresh = new PartialStreamService(
+      {
+        publishDelta: (event: RunDeltaEvent) => published.push(event),
+      } as unknown as AgentEventBus,
+      seeded.asStore(),
+      new FakeUnrecordedSpendStore().asStore(),
+    );
+
+    expect(fresh.knownWindow('codex', asked('gpt-6.1-sol'), '872k')).toBe(
+      828_400,
+    );
+    expect(fresh.knownWindow('codex', asked('gpt-6.1-sol'))).toBeNull();
+    expect(fresh.knownWindow('codex', asked('gpt-6.2-sol'), '1m')).toBeNull();
   });
 });
 

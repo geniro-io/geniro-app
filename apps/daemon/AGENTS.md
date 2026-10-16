@@ -313,7 +313,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 ### Auto-compaction
 
 - **AUTO-COMPACTION** — asked of the CLI where it has a control, performed by the daemon between turns where not. One number: `autoCompactPercent` (10–95, null = never) per chat or node.
-- claude: `--autocompact <threshold + 33k buffer>` (not `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`). The window is the conversation's last reading (live, then row; the executor seeds `nodeWindows` from `node_state` each pass). It joins `sessionKey`; outside 100k–1M the flag is dropped. cursor has none.
+- claude: `--autocompact <threshold + 33k buffer>` (not `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`). The window is the conversation's last reading (live, then row; the executor seeds `nodeWindows` from `node_state` each pass), and before any reading the window the turn's model was last measured at (`PartialStreamService.knownWindow`), so the flag is there from turn one. Measurements are filed under the announced id and under what the turn asked for: the requested name (empty = the CLI default) plus the profile, since the profile resolves both. Never a number parsed from the window choice. A reading whose model is not the one the turn announced (a delegate out-spending it in `modelUsage`) is not the conversation's window and is never stored as one, in a turn or between turns (`PartialStreamService.isOwnReading`). It joins `sessionKey`; outside 100k–1M the flag is dropped. cursor has none.
 - Between-turn rule (`utils/auto-compact.ts`): after a `completed` settle, it sends `/compact` through `sendMessage` and writes its row only once that has taken.
   - A geniro-command turn never re-arms it.
   - `compactingRuns` refuses follow-ups `RUN_BUSY` with a per-turn token.

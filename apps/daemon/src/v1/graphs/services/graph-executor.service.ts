@@ -34,6 +34,7 @@ import {
   type HostArtifactRow,
   type ItemWire,
   type PersistedResetWake,
+  type RequestedModel,
   type RunCallSeed,
   type RunWire,
   type SendMessageImage,
@@ -2470,7 +2471,7 @@ export class GraphExecutorService
     const compactionHandles = new Set<AgentTurnHandle>();
     /**
      * The window each node's conversation last reported, in tokens — what the
-     * CLI's OWN auto-compaction is given a share of (`turnAutoCompact` below).
+     * CLI's OWN auto-compaction is given a share of (the turn's `autoCompact`).
      *
      * Per NODE rather than per conversation, and that is exact rather than
      * loose: what is stored is the MODEL's window, which is the same figure for
@@ -2480,9 +2481,9 @@ export class GraphExecutorService
      * deliberately not here — nothing in this map is a reading of how full
      * anything is.
      *
-     * Seeded from the earlier passes' readings (`RunContext.nodeWindows`), so
-     * only a node's first turn in the RUN runs without the flag — geniro's
-     * between-turn rule is the only threshold that one turn has.
+     * Seeded from the earlier passes' readings (`RunContext.nodeWindows`); a
+     * node with none yet falls back to its model's measured window at the
+     * turn (`PartialStreamService.knownWindow`).
      */
     const nodeWindows = new Map<string, number>(run.nodeWindows);
     const rememberNodeWindow = (
@@ -3628,9 +3629,22 @@ export class GraphExecutorService
         adapter.getConfig().questionToolName !== null &&
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
+      // One value for the lookup below and the filing on `turn_model`: the
+      // two must build the same key.
+      const spawnedWith: RequestedModel = {
+        model: node.model ?? null,
+        configDir: node.configDir ?? null,
+      };
+      // Until this node has a reading of its own, its model's measured window
+      // arms the FIRST turn — see `PartialStreamService.knownWindow`.
       const nodeWindow = separateCallState
         ? null
-        : (nodeWindows.get(node.id) ?? null);
+        : (nodeWindows.get(node.id) ??
+          this.partials.knownWindow(
+            adapter.getConfig().kind,
+            spawnedWith,
+            node.contextWindow ?? null,
+          ));
       // Asked of the adapter, never inferred from the agent kind — the graph
       // twin of `ChatService`'s probe, and the answer is per INSTALLED binary
       // (an older claude rejects the flag on argv). Without it a node never
@@ -3658,9 +3672,9 @@ export class GraphExecutorService
         // The node's threshold handed to the CLI ITSELF, so a turn that fills
         // the window compacts inside itself rather than running to the end and
         // being judged by `compactIfDue` when it is already too late. The same
-        // percent both rules read, so the two can only ever agree; absent until
-        // this node's window has been measured, and absent for good on a CLI
-        // with no such control — `compactIfDue` remains the threshold there.
+        // percent both rules read, so the two can only ever agree; absent while
+        // no window is known for this node or its model, and absent for good on
+        // a CLI with no such control — `compactIfDue` remains the threshold there.
         ...(nodeWindow !== null && node.autoCompactPercent
           ? {
               autoCompact: {
@@ -3844,19 +3858,12 @@ export class GraphExecutorService
             if (firstContextTokens === null && event.contextTokens > 0) {
               firstContextTokens = event.contextTokens;
             }
-            if (
-              event.contextWindowTokens !== undefined &&
-              event.contextWindowTokens !== null
-            ) {
-              lastWindowTokens = event.contextWindowTokens;
-            }
             // BEFORE the figure it scales — `context` publishes, so a window
             // remembered after it would not reach the client until the next
             // reading. See the same pair in `ChatService`.
-            if (
+            const ownWindow =
               event.contextWindowTokens !== undefined &&
-              event.contextWindowTokens !== null
-            ) {
+              event.contextWindowTokens !== null &&
               this.partials.rememberWindow(
                 runId,
                 ownerKey,
@@ -3864,6 +3871,8 @@ export class GraphExecutorService
                 event.contextModel ?? null,
                 node.contextWindow ?? null,
               );
+            if (ownWindow) {
+              lastWindowTokens = event.contextWindowTokens ?? lastWindowTokens;
             }
             // EPHEMERAL, like a text delta: the durable copy is the
             // turn_complete usage. This is what lets a NODE's meter move while
@@ -3889,7 +3898,7 @@ export class GraphExecutorService
             // deletes that entry — so a deferred read would file null for a
             // reading that had a window at the moment it was taken.
             const windowTokens =
-              event.contextWindowTokens ??
+              (ownWindow ? event.contextWindowTokens : null) ??
               this.partials.windowFor(runId, ownerKey);
             // Separate call conversations keep their readings on the call
             // row; the node's own account and window must stay untouched.
@@ -3936,6 +3945,7 @@ export class GraphExecutorService
               adapter.getConfig().kind,
               event.model,
               node.contextWindow ?? null,
+              spawnedWith,
             );
             return;
           }
@@ -3959,20 +3969,23 @@ export class GraphExecutorService
             if (firstContextTokens === null && (lastContextTokens ?? 0) > 0) {
               firstContextTokens = lastContextTokens;
             }
-            lastWindowTokens =
-              event.usage?.contextWindowTokens ?? lastWindowTokens;
             promptCacheTtlMs =
               event.usage?.promptCacheTtlMs ?? promptCacheTtlMs;
             // The ONLY line carrying the model's window — under the model that
             // REPORTED it, so a node that fell back to a second model cannot
-            // file that model's window under the requested one.
-            this.partials.rememberWindow(
+            // file that model's window under the requested one, nor take it as
+            // its own.
+            const ownWindow = this.partials.rememberWindow(
               runId,
               ownerKey,
               event.usage?.contextWindowTokens ?? null,
               event.usage?.contextModel ?? null,
               node.contextWindow ?? null,
             );
+            if (ownWindow) {
+              lastWindowTokens =
+                event.usage?.contextWindowTokens ?? lastWindowTokens;
+            }
             // The result line is the ONLY one carrying the window, so it is
             // where a node's denominator becomes durable — the count beside it
             // is written too, since a turn that reported none mid-flight still
@@ -3980,7 +3993,7 @@ export class GraphExecutorService
             // back to the live plane, resolved eagerly for the reason the
             // reading above states.
             const settledWindowTokens =
-              event.usage?.contextWindowTokens ??
+              (ownWindow ? event.usage?.contextWindowTokens : null) ??
               this.partials.windowFor(runId, ownerKey);
             if (!separateCallState) {
               rememberNodeWindow(node.id, settledWindowTokens);
@@ -4368,7 +4381,13 @@ export class GraphExecutorService
               endedAt: Date.now(),
               promptCacheTtlMs: event.usage?.promptCacheTtlMs ?? null,
               contextTokens: event.usage?.contextTokens ?? null,
-              contextWindowTokens: event.usage?.contextWindowTokens ?? null,
+              contextWindowTokens: this.partials.isOwnReading(
+                runId,
+                ownerKey,
+                event.usage?.contextModel ?? null,
+              )
+                ? (event.usage?.contextWindowTokens ?? null)
+                : null,
             });
           }
           // A continuation the CLI did not time is wall work like an in-turn

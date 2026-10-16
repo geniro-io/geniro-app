@@ -18,6 +18,7 @@ import {
   readSafeConfig,
   SAFE_CONFIG,
 } from './git-safe-config';
+import { copyWorktreeIncludeFiles, type WorktreeLog } from './worktree-include';
 import { readWorktreeEntries } from './worktree-list';
 
 const execFileAsync = promisify(execFile);
@@ -464,11 +465,17 @@ async function releaseBranchFromMissingWorktree(
  * has been collected, because removing a worktree deliberately keeps its
  * branch. `-b` refuses to create a branch that exists, so the branch is
  * re-used rather than re-created when it is already there.
+ *
+ * A worktree just MADE then gets the gitignored files the checkout's
+ * `.worktreeinclude` lists (`worktree-include.ts`); a reused one keeps its own.
  */
-export async function prepareWorktree(input: {
-  taskId: string;
-  folder: string;
-}): Promise<PreparedWorktree> {
+export async function prepareWorktree(
+  input: {
+    taskId: string;
+    folder: string;
+  },
+  options: PrepareWorktreeOptions = {},
+): Promise<PreparedWorktree> {
   const branch = taskBranchName(input.taskId);
   const path = join(worktreesRoot(), input.taskId);
   mkdirSync(worktreesRoot(), { recursive: true });
@@ -540,8 +547,27 @@ export async function prepareWorktree(input: {
     folder: input.folder,
     createdAt: new Date().toISOString(),
   });
+  // Only a worktree just MADE: a reused one is the agent's, and what it did to
+  // these files since is its own work. Never fails the worktree.
+  await copyWorktreeIncludeFiles({
+    folder: input.folder,
+    worktree: path,
+    log: options.log ?? logToConsole,
+  });
   return { path, branch, reused: false };
 }
+
+/** How {@link prepareWorktree}'s callers hand it the main-process log. */
+export interface PrepareWorktreeOptions {
+  log?: WorktreeLog;
+}
+
+/** The fallback for a caller with no log of its own. */
+const logToConsole: WorktreeLog = (level, message) => {
+  if (level === 'warn') {
+    console.warn(message);
+  }
+};
 
 /**
  * Whether git agrees this path is a worktree of that repository, and whether

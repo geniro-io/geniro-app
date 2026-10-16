@@ -3202,6 +3202,13 @@ export interface AgentTurnInput {
    */
   callSurfacePrompt?: string | null;
   /**
+   * Set on every turn that answers a call: where that answer goes. Its own
+   * field rather than part of {@link callSurfacePrompt}: a callee with no
+   * callees gets no "May call" block, and that block is dropped when the call
+   * tools are not delivered, while this text names no tool.
+   */
+  answeringACallPrompt?: string | null;
+  /**
    * Tool-approval mode. `ask` blocks each permission-gated tool call on a
    * user verdict (elicitation card); `acceptEdits` auto-approves file edits
    * and asks for everything else; `plan` (chat-only) has the agent plan
@@ -4132,6 +4139,29 @@ export interface AdapterConfig {
      * is the client's own list of the same names, matched exactly too.
      */
     readonly launchToolNames: readonly string[];
+  };
+
+  /**
+   * What the agent is told about work it leaves running when its turn ends.
+   */
+  readonly backgroundWork: {
+    /**
+     * Composed into every user-facing turn right after the host preamble, and
+     * served on `GET /v1/capabilities` → `backgroundWorkNotes[]`. Null for a
+     * CLI with nothing to say.
+     *
+     * Per CLI because the truth differs: geniro holds a claude or cursor turn —
+     * and the call it answers — open while its background sub-agents run and
+     * starts it again with their reports, while a codex turn settles the moment
+     * it ends. An agent told nothing assumes the terminal it was built for and
+     * polls with `sleep` for results that would have woken it. Every sentence
+     * must hold for its CLI; re-check them against the hold whenever it moves.
+     *
+     * Static text only: nothing keys a kept process on it, so a process keeps
+     * the text it started with — on claude's argv, and on ACP the block sent
+     * once per session.
+     */
+    readonly agentNote: string | null;
   };
 
   /**

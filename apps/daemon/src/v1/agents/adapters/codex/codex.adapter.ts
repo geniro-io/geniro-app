@@ -214,6 +214,13 @@ export class CodexAdapter extends AgentAdapter {
         // as a `subagent_info` row; nothing admits it by a tool name.
         launchToolNames: [],
       },
+      backgroundWork: {
+        // Nothing holds a codex turn: `onTurnCompleted` settles it at once.
+        // `wait_agent` is the CLI's own blocking wait (0.162.0: "Returns empty
+        // status when timed out"), hence "wait again".
+        agentNote:
+          '## Work you leave running\n\nSub-agents you spawn are NOT waited for when you end your turn: your answer goes back at once, without their results. Before your final answer, wait for every sub-agent still running with wait_agent, giving it a long timeout (minutes); if it times out, wait again — never check on them with sleep, list_agents or shell commands in a loop. Background commands are not waited for either: run a command whose result you need in the foreground.',
+      },
       // `CODEX_TOOL_NAMES` is every tool this adapter maps, and none publishes
       // an artifact.
       artifactToolNames: [],

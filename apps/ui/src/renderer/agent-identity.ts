@@ -41,6 +41,20 @@ export function agentShortName(
 }
 
 /**
+ * The full name a CLI is called by, where a heading has room for it — the
+ * Settings preview of what each one is told. Falls back to the kind string on
+ * the same reading {@link agentShortName} takes.
+ */
+export function agentDisplayName(
+  identities: readonly AgentIdentityCapability[],
+  kind: AgentKind | string,
+): string {
+  return (
+    identities.find((identity) => identity.agent === kind)?.displayName ?? kind
+  );
+}
+
+/**
  * The glyph a CLI is drawn with. The generic `bot` before capabilities have
  * loaded or for a kind the daemon did not report — the same not-a-guess
  * reading {@link agentShortName} takes for the name.

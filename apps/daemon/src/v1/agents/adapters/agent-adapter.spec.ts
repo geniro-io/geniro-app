@@ -978,14 +978,17 @@ class BareAdapter extends AgentAdapter {
 }
 
 /**
- * A CLI that CAN keep a process between turns but has no message for changing
- * its approval mode — the combination claude cannot produce (both of its
- * answers come from `keepStdinOpen`) and the one the base's re-mode refusal
- * exists for.
+ * A CLI that CAN keep a process between turns and holds the stdin dialogue,
+ * but has no message for changing its approval mode — the case the base's
+ * re-mode refusal exists for beyond a process spawned without the dialogue.
  */
 class SessionWithoutModeChangeAdapter extends AgentAdapter {
   constructor(spawn: SpawnFn) {
     super({ spawn });
+  }
+
+  protected override keepStdinOpen(): boolean {
+    return true;
   }
 
   protected get command(): string {
@@ -2513,6 +2516,51 @@ describe('AgentAdapter sessions separate on the instruction blocks', () => {
     expect(
       session.startTurn(
         { prompt: 'second', cwd: '/proj', instructionBlocks: 'BLOCK A' },
+        () => {},
+      ),
+    ).not.toBeNull();
+  });
+});
+
+describe('AgentAdapter sessions separate on the answering-a-call sentence', () => {
+  async function sessionAfterCallee(
+    answeringACallPrompt: string,
+  ): Promise<ReturnType<AgentAdapter['startSession']>> {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      answeringACallPrompt,
+    };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      input,
+      { runScoped: true },
+    );
+    const turn = session.startTurn(input, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+    return session;
+  }
+
+  it('refuses a turn that does not answer a call on a process spawned to answer one', async () => {
+    // For a callee with no callees of its own this sentence is the only part
+    // of the composed block that differs between answering a call and not.
+    const session = await sessionAfterCallee('ANSWERING');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', answeringACallPrompt: null },
+        () => {},
+      ),
+    ).toBeNull();
+  });
+
+  it('still reuses the process for the next turn of the same call', async () => {
+    const session = await sessionAfterCallee('ANSWERING');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', answeringACallPrompt: 'ANSWERING' },
         () => {},
       ),
     ).not.toBeNull();

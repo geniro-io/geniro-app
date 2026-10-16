@@ -974,6 +974,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * A turn is not over while this is non-empty, however plainly the CLI's
    * turn-end line says otherwise — and neither is an OFF-turn continuation; see
    * {@link deferredOffTurnTerminal}.
+   *
+   * claude's `AdapterConfig.backgroundWork.agentNote` tells the agent to END
+   * its turn on the strength of this hold (and that a backgrounded command
+   * holds nothing): a change to what enters this set changes what it may say.
    */
   const openWork = new Set<string>();
   /**

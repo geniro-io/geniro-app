@@ -1306,6 +1306,22 @@ export type AgentSubagentCapability = z.infer<
   typeof AgentSubagentCapabilitySchema
 >;
 
+/** What ONE CLI is told about work it leaves running when its turn ends. */
+export const AgentBackgroundWorkNoteSchema = z
+  .object({
+    agent: AgentKindSchema,
+    /**
+     * `AdapterConfig.backgroundWork.agentNote`, verbatim — composed right after
+     * {@link CapabilitiesWireSchema}'s `hostPreamble` into every user-facing
+     * turn of this CLI. Null when it is told nothing.
+     */
+    note: z.string().nullable(),
+  })
+  .meta({ id: 'AgentBackgroundWorkNote' });
+export type AgentBackgroundWorkNote = z.infer<
+  typeof AgentBackgroundWorkNoteSchema
+>;
+
 /**
  * Whether ONE CLI offers a reasoning-effort PICKER — the wire home for
  * `AdapterConfig.effortsUnavailableReason`.
@@ -1451,6 +1467,17 @@ export const CapabilitiesWireSchema = z.object({
     .string()
     .describe(
       'The instruction block geniro prepends to every user-facing turn, before the user’s own custom instructions',
+    ),
+  /**
+   * The per-CLI half of what is said before the user's instructions, right
+   * after {@link hostPreamble} — per agent because geniro holds one CLI's turn
+   * for its background sub-agents and not another's. Served for the same
+   * reason the preamble is: the Settings preview reads it, never a copy.
+   */
+  backgroundWorkNotes: z
+    .array(AgentBackgroundWorkNoteSchema)
+    .describe(
+      'Per-CLI note on background work, composed right after the host preamble, one entry per known agent',
     ),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;

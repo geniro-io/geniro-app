@@ -376,6 +376,11 @@ describe('the turn', () => {
     const withheld = instructionsFor(input);
     expect(withheld).toContain('ROLE: review the parser');
     expect(withheld).not.toContain('MAY CALL: researcher');
+    // The thread's own instructions are where codex hears that its turn is
+    // not held for sub-agents — the one CLI told to wait rather than end.
+    expect(withheld).toContain(
+      adapterWith().getConfig().backgroundWork.agentNote!,
+    );
   });
 
   it('hands a conversation to the terminal as `codex -m <model> resume <id>`', () => {

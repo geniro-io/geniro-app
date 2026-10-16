@@ -12,13 +12,24 @@ import { poolMemberLabel, poolMembersOf, poolSize } from './agent-pool';
 export const CALLEE_DESCRIPTION_MAX = 400;
 
 /**
- * What a callee that can itself call is told about ending its turn — said in
- * the "May call" block AND in `call_agent`'s description, which must agree.
- * Without it the "end your turn" steering every caller gets reads, to a
- * callee, as permission to hand back "I've delegated it" as its whole answer.
+ * What EVERY callee is told about where its answer goes, whether or not it may
+ * call anyone itself — its own instruction part (`answeringACallPrompt`), and
+ * the lead of `call_agent`'s description for a callee that can call. CLI-
+ * neutral: whether a turn is held for background sub-agents is the adapter's
+ * note to make (`AdapterConfig.backgroundWork`).
  */
 export const ANSWERING_A_CALL =
-  'You are answering a call from another agent. Ending your turn while async or sync calls you made are still running does NOT hand back your result: that call stays open, you are started again inside it when they finish or ask, and the reply you end THAT turn with is your result — so put your full answer in the turn that has nothing left running. Fire-and-forget calls are not waited for.';
+  'You are answering a call from another agent. Your answer to it is the reply you end your final turn in this call with — put your full answer there, never only a note that the work is under way.';
+
+/**
+ * What a callee that can itself call is told about ending its turn — said in
+ * the "May call" block AND in `call_agent`'s description, which must agree,
+ * each time after {@link ANSWERING_A_CALL}. Without it the "end your turn"
+ * steering every caller gets reads, to a callee, as permission to hand back
+ * "I've delegated it" as its whole answer.
+ */
+export const ANSWERING_WITH_CALLS_OUT =
+  'Ending your turn while async or sync calls you made are still running does NOT hand back your result: that call stays open, you are started again inside it when they finish or ask, and the reply you end THAT turn with is your result — so put your full answer in the turn that has nothing left running. Fire-and-forget calls are not waited for.';
 
 /**
  * What a caller is told about the pages its callees publish — said in both

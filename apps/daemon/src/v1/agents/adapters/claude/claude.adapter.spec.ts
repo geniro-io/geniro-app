@@ -75,6 +75,9 @@ class KillableChild extends FakeChild {
   }
 }
 
+/** What every user-facing claude turn leads with: the preamble, then its note. */
+const HOST_BLOCK = `${GENIRO_UI_PREAMBLE}\n\n${new ClaudeAdapter().getConfig().backgroundWork.agentNote}`;
+
 /**
  * Answers a utility command (`runCommand`, not `start`) with canned stdout,
  * capturing its argv. The two paths take different seams: a turn is spawned
@@ -721,7 +724,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     expect(captured.args).toEqual(
       expect.arrayContaining([
         '--append-system-prompt',
-        `${GENIRO_UI_PREAMBLE}\n\nYou are the reviewer.`,
+        `${HOST_BLOCK}\n\nYou are the reviewer.`,
       ]),
     );
   });
@@ -743,7 +746,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
 
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(captured.args![idx + 1]).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.`,
+      `${HOST_BLOCK}\n\nAlways answer in British English.`,
     );
   });
 
@@ -769,7 +772,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
 
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(captured.args![idx + 1]).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nPrefer short sentences.\n\nYou are the reviewer.`,
+      `${HOST_BLOCK}\n\nAlways answer in British English.\n\nPrefer short sentences.\n\nYou are the reviewer.`,
     );
   });
 
@@ -792,7 +795,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
 
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(captured.args![idx + 1]).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nLABEL BLOCK\n\nREPORT ASK\n\nPrefer short sentences.`,
+      `${HOST_BLOCK}\n\nAlways answer in British English.\n\nLABEL BLOCK\n\nREPORT ASK\n\nPrefer short sentences.`,
     );
   });
 
@@ -808,7 +811,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
 
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThanOrEqual(0);
-    expect(captured.args![idx + 1]).toBe(GENIRO_UI_PREAMBLE);
+    expect(captured.args![idx + 1]).toBe(HOST_BLOCK);
   });
 
   it('withholds the preamble from geniro’s OWN probe, leaving its argv bare', () => {
@@ -1223,7 +1226,7 @@ describe('ClaudeAdapter instruction file delivery', () => {
 
     const index = captured.args!.indexOf(CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG);
     const content = readFileSync(captured.args![index + 1]!, 'utf8');
-    expect(content).toBe(`${GENIRO_UI_PREAMBLE}\n\ncustom\n\n${LONG_PROMPT}`);
+    expect(content).toBe(`${HOST_BLOCK}\n\ncustom\n\n${LONG_PROMPT}`);
     child.emit('close', 0, null);
     await handle.done;
   });
@@ -1592,7 +1595,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     expect(captured.args!.join(' ')).not.toContain('--mcp-config');
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(captured.args![idx + 1]).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nYou are the router.`,
+      `${HOST_BLOCK}\n\nYou are the router.`,
     );
   });
 
@@ -1614,7 +1617,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     );
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(captured.args![idx + 1]).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nYou are the router.\n\nMay call (via the call_agent tool):\n- worker`,
+      `${HOST_BLOCK}\n\nYou are the router.\n\nMay call (via the call_agent tool):\n- worker`,
     );
   });
 
@@ -1632,7 +1635,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     );
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(captured.args![idx + 1]).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nMay call (via the call_agent tool):\n- worker`,
+      `${HOST_BLOCK}\n\nMay call (via the call_agent tool):\n- worker`,
     );
   });
 

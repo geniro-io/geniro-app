@@ -185,6 +185,7 @@ import {
 import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
 import {
   ANSWERING_A_CALL,
+  ANSWERING_WITH_CALLS_OUT,
   CALLEE_DESCRIPTION_MAX,
   calleeSummary,
 } from '../utils/callee-text';
@@ -3418,7 +3419,7 @@ export class GraphExecutorService
      */
     const callSurfaceFor = (
       node: WorkflowAgentNode,
-      /** Whether this turn answers a call — see `ANSWERING_A_CALL`. */
+      /** Whether this turn answers a call — see `ANSWERING_WITH_CALLS_OUT`. */
       answeringACall: boolean,
     ): string | null => {
       const callees = calleesOf.get(node.id);
@@ -3437,7 +3438,7 @@ export class GraphExecutorService
         questionTool !== null
           ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.\nBefore continuing an earlier conversation with call_agent(thread), above all after a pause, check it with list_agent_threads. ${COLD_RESUME_RULE}${answeringACall ? `\n${ANSWERING_A_CALL}` : ''}`;
+      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.\nBefore continuing an earlier conversation with call_agent(thread), above all after a pause, check it with list_agent_threads. ${COLD_RESUME_RULE}${answeringACall ? `\n${ANSWERING_WITH_CALLS_OUT}` : ''}`;
     };
 
     /**
@@ -3690,6 +3691,10 @@ export class GraphExecutorService
         // This node's own CLI's slice; an option it does not carry reads as
         // that option's declared default, never as off.
         agentOptions: agentOptions[node.agent],
+        // Every callee, a leaf included: one with no callees gets no "May
+        // call" block to carry it.
+        answeringACallPrompt:
+          callContext !== undefined ? ANSWERING_A_CALL : null,
         callSurfacePrompt: callSurfaceFor(node, callContext !== undefined),
         // A questionCapable AUTO node spawns in ask mode when its CLI's
         // question channel COSTS that posture (the daemon auto-approves plain

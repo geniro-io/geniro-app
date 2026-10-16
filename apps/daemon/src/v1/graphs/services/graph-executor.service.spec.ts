@@ -22,6 +22,7 @@ import {
 } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { type FakeChild, fakeSpawn } from '../../agents/__tests__/fake-child';
 import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
@@ -75,6 +76,7 @@ import { SessionTranscriptsService } from '../../agents/services/session-transcr
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
+import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import {
   WALL_CLOCK_ROW_KINDS,
   type WallClockRow,
@@ -89,6 +91,10 @@ import {
   type Workflow,
   type WorkflowNode,
 } from '../graphs.types';
+import {
+  ANSWERING_A_CALL,
+  ANSWERING_WITH_CALLS_OUT,
+} from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
@@ -931,6 +937,12 @@ function setup(
     autoGroupId?: string | null;
     /** The MCP service a node turn's server report is checked against. */
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
+    /**
+     * Runs claude nodes on the REAL adapter over this spawn instead of the
+     * double — for what only the shipped turn machinery does, such as holding
+     * a turn for a background delegate.
+     */
+    claudeSpawn?: SpawnFn;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -1232,7 +1244,13 @@ function setup(
     sessions,
     approvals,
     new AgentAdapterRegistry([
-      claude as unknown as ClaudeAdapter,
+      opts.claudeSpawn
+        ? new ClaudeAdapter({
+            spawn: opts.claudeSpawn,
+            waitForMcpServers: false,
+            modeProbe: claudeProbe,
+          })
+        : (claude as unknown as ClaudeAdapter),
       cursor as unknown as CursorAcpAdapter,
     ]),
     callTokens,
@@ -6010,6 +6028,15 @@ describe('GraphExecutorService — agent calls', () => {
       return { ...harness, run, eng, res: claude.starts[2]! };
     }
 
+    it('tells a callee with no callees of its own where its answer goes', async () => {
+      // The Researcher can call nobody, so it gets no "May call" block; the
+      // sentence must reach it on its own.
+      const { res } = await engineerDelegating();
+
+      expect(res.input.callSurfacePrompt).toBeNull();
+      expect(res.input.answeringACallPrompt).toBe(ANSWERING_A_CALL);
+    });
+
     it('HOLDS the Manager’s call while the Engineer’s research runs, and continues the Engineer INSIDE it', async () => {
       // REPORTED as "Manager picked back up — Senior Engineer finished
       // call-4" while the Middle Engineers it had started were still working,
@@ -6017,11 +6044,11 @@ describe('GraphExecutorService — agent calls', () => {
       const { claude, callBroker, run, eng, res, itemDao } =
         await engineerDelegating();
       // Told up front that delegating and ending its turn is not the answer.
-      expect(eng.input.callSurfacePrompt).toContain(
-        'You are answering a call from another agent',
-      );
+      expect(eng.input.answeringACallPrompt).toBe(ANSWERING_A_CALL);
+      expect(eng.input.callSurfacePrompt).toContain(ANSWERING_WITH_CALLS_OUT);
+      expect(claude.starts[0]!.input.answeringACallPrompt).toBeNull();
       expect(claude.starts[0]!.input.callSurfacePrompt).not.toContain(
-        'You are answering a call from another agent',
+        ANSWERING_WITH_CALLS_OUT,
       );
       completeTurn(eng, 'research dispatched — I will report when it lands');
       await drain();
@@ -13098,5 +13125,254 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
     expect(compaction.cancelled).toBe(true);
     expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+  });
+});
+
+describe('GraphExecutorService — a claude callee whose sub-agent outlives its turn', () => {
+  const WORKFLOW: Workflow = {
+    name: 'held',
+    nodes: [
+      { id: 'orch', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
+      {
+        id: 'rev',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You review.',
+      },
+    ],
+    edges: [{ from: 'orch', to: 'rev', kind: 'call' as const }],
+  };
+
+  /** One stream-json line from the callee's claude, as the CLI prints it. */
+  const line = (child: FakeChild, message: Record<string, unknown>): void =>
+    child.stdout.emitData(
+      `${JSON.stringify({ session_id: 's-rev', ...message })}\n`,
+    );
+
+  it('settles the call on the continuation’s answer, not on the turn that launched the sub-agent', async () => {
+    // claude's background-work note promises a callee that ending its turn
+    // keeps the call open and that it is started again with the results —
+    // this is that promise, through the real claude turn machinery.
+    const { spawn, child } = fakeSpawn();
+    const { service, callBroker, itemDao } = setup(4870, {
+      claudeSpawn: spawn,
+    });
+    const run = await service.startRun({
+      slug: 'held',
+      workflow: triggered(WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'review',
+      agent: 'rev',
+      message: 'review the diff',
+      mode: 'async',
+    });
+    // The real adapter spawns after async preparation of its own: a line the
+    // CLI "prints" before the prompt reached it would land on no turn.
+    await vi.waitFor(() =>
+      expect(child.stdin.written).toContain('review the diff'),
+    );
+    const collect = () =>
+      callBroker.awaitAgent(run.id, 'orch', {
+        call_id: 'call-1',
+        timeout_ms: 10,
+      });
+
+    // Probed on 2.1.295 with the session-state env geniro sets: `running`
+    // comes first, ahead of `init`. Without it the hold reads as a CLI that
+    // never says when its turn is over, and is released on the report.
+    line(child, {
+      type: 'system',
+      subtype: 'session_state_changed',
+      state: 'running',
+    });
+    line(child, { type: 'system', subtype: 'init' });
+    line(child, {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_review',
+            name: 'Agent',
+            input: {
+              description: 'Review: bugs',
+              prompt: 'Find bugs in the diff.',
+              run_in_background: true,
+            },
+          },
+        ],
+      },
+    });
+    line(child, {
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'a-review',
+      tool_use_id: 'toolu_review',
+      description: 'Review: bugs',
+      task_type: 'local_agent',
+    });
+    line(child, {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_review',
+            content: 'Async agent launched successfully.',
+          },
+        ],
+      },
+    });
+    line(child, {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'The reviewer is running.',
+      stop_reason: 'end_turn',
+    });
+    await drain();
+
+    // The stream was consumed through the line before the result — a held
+    // result itself writes nothing, so this is the last durable proof it was
+    // read before the call is asked about…
+    expect(itemDao.items).toContainEqual(
+      expect.objectContaining({
+        kind: 'tool_result',
+        payload: expect.stringContaining('Async agent launched successfully.'),
+      }),
+    );
+    // …and with its sub-agent out, the turn's ending leaves the call open.
+    expect(await collect()).toMatchObject({ status: 'pending' });
+
+    line(child, {
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'a-review',
+      tool_use_id: 'toolu_review',
+      status: 'completed',
+    });
+    line(child, {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'REVIEW: one bug, in parse().' }],
+      },
+    });
+    line(child, {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'REVIEW: one bug, in parse().',
+      stop_reason: 'end_turn',
+      origin: { kind: 'task-notification' },
+    });
+    line(child, {
+      type: 'system',
+      subtype: 'session_state_changed',
+      state: 'idle',
+    });
+    await drain();
+
+    expect(await collect()).toMatchObject({
+      status: 'ok',
+      result: { text: 'REVIEW: one bug, in parse().' },
+    });
+  });
+
+  it('hands a plain auto node’s CONTINUATION downstream, not the turn that launched the sub-agent', async () => {
+    // A node that neither calls nor answers a call used to run one-shot with
+    // its stdin closed, where nothing held its turn: "LAUNCHED" went
+    // downstream. It runs on a kept process now, held like every other.
+    const PLAIN: Workflow = {
+      name: 'plain',
+      nodes: [
+        {
+          id: 'rev',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You review.',
+        },
+        { id: 'next', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
+      ],
+      edges: [{ from: 'rev', to: 'next', kind: 'data' as const }],
+    };
+    const { spawn, child } = fakeSpawn();
+    const { service, cursor } = setup(4870, { claudeSpawn: spawn });
+    await service.startRun({
+      slug: 'plain',
+      workflow: triggered(PLAIN),
+      cwd: dir,
+      prompt: 'review the diff',
+    });
+    await vi.waitFor(() =>
+      expect(child.stdin.written).toContain('review the diff'),
+    );
+
+    line(child, {
+      type: 'system',
+      subtype: 'session_state_changed',
+      state: 'running',
+    });
+    line(child, { type: 'system', subtype: 'init' });
+    line(child, {
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'a-review',
+      tool_use_id: 'toolu_review',
+      description: 'Review: bugs',
+      task_type: 'local_agent',
+    });
+    line(child, {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'LAUNCHED',
+      stop_reason: 'end_turn',
+    });
+    await drain();
+    // Held: the node has not finished, so nothing downstream has started.
+    expect(child.stdin.ended).toBe(false);
+    expect(cursor.starts).toEqual([]);
+
+    line(child, {
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'a-review',
+      tool_use_id: 'toolu_review',
+      status: 'completed',
+    });
+    line(child, {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'REVIEW: one bug, in parse().' }],
+      },
+    });
+    line(child, {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'REVIEW: one bug, in parse().',
+      stop_reason: 'end_turn',
+      origin: { kind: 'task-notification' },
+    });
+    line(child, {
+      type: 'system',
+      subtype: 'session_state_changed',
+      state: 'idle',
+    });
+    await drain();
+
+    const downstream = cursor.starts[0]!.input.prompt;
+    expect(downstream).toContain('REVIEW: one bug, in parse().');
+    expect(downstream).not.toContain('LAUNCHED');
   });
 });

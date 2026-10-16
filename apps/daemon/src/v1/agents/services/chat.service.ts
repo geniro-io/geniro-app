@@ -68,7 +68,6 @@ import {
   type HostQuestionOutcome,
   type ItemWire,
   type RecommendationApply,
-  type RequestedModel,
   type RunGroupColor,
   type RunPreview,
   type RunSeenWire,
@@ -105,6 +104,7 @@ import {
   restatesRunAsWorking,
   terminalStatus,
 } from '../utils/event-to-item';
+import { firstTurnWindow } from '../utils/first-turn-window';
 import {
   isHostAnalysisReadCall,
   isHostRecommendationsCall,
@@ -4495,16 +4495,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // The threshold handed to the CLI itself, where it has a control for one
       // — see `turnAutoCompact`. Resolved per turn rather than once per chat,
       // because the window it is a share of is learned from the turn that just
-      // settled. After `configDir`: the profile is part of the lookup, and
-      // `turn_model` files under this same value.
-      const spawnedWith: RequestedModel = {
-        model: model ?? null,
-        configDir: configDir ?? null,
-      };
-      const autoCompact = this.turnAutoCompact(
+      // settled. After `configDir`: the profile resolves the model.
+      const autoCompact = await this.turnAutoCompact(
         run,
         agentKind,
-        spawnedWith,
+        model ?? null,
+        configDir ?? null,
         contextWindow ?? null,
       );
       // Read off the ROW, not off the app's settings: the value was
@@ -5900,7 +5896,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 adapter.getConfig().kind,
                 event.model,
                 contextWindow,
-                spawnedWith,
               );
               return;
             }
@@ -6770,23 +6765,30 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * The window is this conversation's own last reading, live first and the row
    * behind it — the same pair {@link autoCompactIfDue} judges on, so the two
    * rules can never disagree about how full the window is. Before any turn has
-   * reported one, the model's measured window stands in (see
-   * `PartialStreamService.knownWindow`). Null only for a model never measured,
-   * where the between-turn rule below covers the first turn.
+   * reported one, the model's known window stands in (`firstTurnWindow`). Null
+   * only when nothing knows it, where the between-turn rule below covers the
+   * first turn.
    */
-  private turnAutoCompact(
+  private async turnAutoCompact(
     run: Run,
     agent: AgentKind,
-    requested: RequestedModel,
+    model: string | null,
+    configDir: string | null,
     contextWindow: string | null,
-  ): TurnAutoCompact | null {
+  ): Promise<TurnAutoCompact | null> {
     if (run.autoCompactPercent === null) {
       return null;
     }
     const window =
       this.contexts.read(run.id)?.window ??
       run.contextWindowTokens ??
-      this.partials.knownWindow(agent, requested, contextWindow);
+      (await firstTurnWindow(
+        this.adapterFor(agent),
+        this.partials,
+        model,
+        configDir,
+        contextWindow,
+      ));
     if (window === null || window <= 0) {
       return null;
     }

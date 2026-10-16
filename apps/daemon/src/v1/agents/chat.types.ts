@@ -21,15 +21,6 @@ import { RUN_PROCESS_CAP } from './utils/run-process-scan';
 export const SINGLE_AGENT_NODE = 'agent';
 
 /**
- * What a turn was spawned with: the model name it asked for (null = the CLI's
- * own default) and the profile it ran under, which is what resolves that name.
- */
-export interface RequestedModel {
-  model: string | null;
-  configDir: string | null;
-}
-
-/**
  * One CLI conversation a run held, as `SessionTranscriptsService` gathers them
  * before a delete — the CLI that keeps it, its id in that CLI's namespace, and
  * the profile it lives under (null for the CLI's default).

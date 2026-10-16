@@ -656,8 +656,16 @@ class FakeNodeStateDao {
 function fakeAdapter(
   kind: AgentKind,
   modeProbe?: ClaudeModeProbe,
+  /**
+   * What `resolveModel` answers, by the name a turn asked for (`default` for
+   * none) — the stand-in for claude's `initialize` probe, which spawns. The
+   * probe itself is pinned in `claude.adapter.spec.ts`.
+   */
+  resolutions: Record<string, string> = {},
 ): {
   adapter: ClaudeAdapter;
+  /** Every `resolveModel` the service made, in order. */
+  resolveCalls: { model: string | null; configDir: string | null }[];
   start: ReturnType<typeof vi.fn>;
   emit: (event: AgentEvent) => void;
   finish: () => void;
@@ -708,6 +716,7 @@ function fakeAdapter(
   }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
+  const resolveCalls: { model: string | null; configDir: string | null }[] = [];
   /** When set, the pre-spawn probe blocks on it — see supportsLiveStream. */
   let streamGate: Promise<void> | null = null;
   let resolveDone: (() => void) | null = null;
@@ -850,6 +859,7 @@ function fakeAdapter(
           vocabularyStore: freshVocabularyStore(),
         });
   return {
+    resolveCalls,
     adapter: {
       getConfig: () => real.getConfig(),
       validateModel: (model: string | null | undefined) =>
@@ -878,6 +888,11 @@ function fakeAdapter(
           ? Promise.resolve(kind === 'claude')
           : streamGate.then(() => kind === 'claude'),
       listEfforts: () => real.listEfforts(),
+      resolveModel: (model: string | null, configDir: string | null) => {
+        resolveCalls.push({ model, configDir });
+        return Promise.resolve(resolutions[model ?? 'default'] ?? model);
+      },
+      catalogWindow: (model: string) => real.catalogWindow(model),
       // The REAL lookup over the REAL adapter's own command list: what
       // `/compact` does — and whether the CLI has it at all — is the fact
       // under test wherever this double is asked, and a stub answering null
@@ -979,6 +994,8 @@ function setup(
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
     contextWindows?: Record<string, number>;
+    /** What claude resolves each name to — see `fakeAdapter`'s `resolutions`. */
+    resolutions?: Record<string, string>;
     /** The analysis sink a turn installs, for the cases that drive an analysis chat. */
     analysisSink?: AnalysisReportsService['sinkFor'];
   } = {},
@@ -1020,7 +1037,7 @@ function setup(
     ensureVerdict: vi.fn(async () => claudeModes),
     wireCapability: () => claudeModes,
   };
-  const claude = fakeAdapter('claude', claudeProbe);
+  const claude = fakeAdapter('claude', claudeProbe, opts.resolutions);
   const cursor = fakeAdapter('cursor-agent');
   const em = {
     fork: () => ({ clear: () => undefined }),
@@ -3675,8 +3692,10 @@ describe('ChatService', () => {
       // two, it would respawn the chat's CLI on its second message.
       const { service, claude } = setup({
         contextWindows: {
-          [FakeContextWindowStore.key('claude', 'sonnet')]: 1_000_000,
+          [FakeContextWindowStore.key('claude', 'claude-sonnet-5-5')]:
+            1_000_000,
         },
+        resolutions: { sonnet: 'claude-sonnet-5-5' },
       });
       const run = await service.createChat({
         agentKind: 'claude',
@@ -3694,8 +3713,10 @@ describe('ChatService', () => {
       await turn(claude, 'hi');
     });
 
-    it('learns the window under the model, window choice and profile the chat NAMES, for the next chat’s first turn', async () => {
-      const { service, claude } = setup();
+    it('arms the next chat’s first turn from the window its resolved model measured, at the window choice, under the chat’s profile', async () => {
+      const { service, claude } = setup({
+        resolutions: { sonnet: 'claude-sonnet-5-5' },
+      });
       const settings = {
         agentKind: 'claude' as const,
         cwd: dir,
@@ -3742,25 +3763,19 @@ describe('ChatService', () => {
         windowTokens: 1_000_000,
       });
       await turn(claude, 'ok');
-
-      // Another profile may resolve `sonnet` to another model.
-      const elsewhere = await service.createChat({
-        ...settings,
-        configDir: undefined,
+      // The profile resolves the name, so it is the one the chat runs under.
+      expect(claude.resolveCalls).toContainEqual({
+        model: 'sonnet',
+        configDir: realpathSync(dir),
       });
-      await service.sendMessage(elsewhere.id, 'elsewhere');
-      const unarmed = claude.start.mock.calls
-        .map((call) => call[0] as AgentTurnInput)
-        .find((input) => input.prompt === 'elsewhere');
-      expect(unarmed?.autoCompact).toBeUndefined();
-      await turn(claude, 'ok');
     });
 
     it('lets the chat’s own reading override its model’s stored window', async () => {
       const { service, claude } = setup({
         contextWindows: {
-          [FakeContextWindowStore.key('claude', 'sonnet')]: 200_000,
+          [FakeContextWindowStore.key('claude', 'claude-sonnet-5-5')]: 200_000,
         },
+        resolutions: { sonnet: 'claude-sonnet-5-5' },
       });
       const run = await service.createChat({
         agentKind: 'claude',
@@ -3793,8 +3808,10 @@ describe('ChatService', () => {
     it('keeps the chat’s own window when a reading BETWEEN turns names a delegate’s model', async () => {
       const { service, claude } = setup({
         contextWindows: {
-          [FakeContextWindowStore.key('claude', 'sonnet')]: 1_000_000,
+          [FakeContextWindowStore.key('claude', 'claude-sonnet-5-5')]:
+            1_000_000,
         },
+        resolutions: { sonnet: 'claude-sonnet-5-5' },
       });
       const run = await service.createChat({
         agentKind: 'claude',
@@ -3828,8 +3845,10 @@ describe('ChatService', () => {
       // chat's 80% only if a delegate's window is taken as the chat's.
       const { service, claude } = setup({
         contextWindows: {
-          [FakeContextWindowStore.key('claude', 'sonnet')]: 1_000_000,
+          [FakeContextWindowStore.key('claude', 'claude-sonnet-5-5')]:
+            1_000_000,
         },
+        resolutions: { sonnet: 'claude-sonnet-5-5' },
       });
       const run = await service.createChat({
         agentKind: 'claude',

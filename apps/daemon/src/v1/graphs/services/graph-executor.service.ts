@@ -34,7 +34,6 @@ import {
   type HostArtifactRow,
   type ItemWire,
   type PersistedResetWake,
-  type RequestedModel,
   type RunCallSeed,
   type RunWire,
   type SendMessageImage,
@@ -94,6 +93,7 @@ import {
   restatesRunAsWorking,
   terminalStatus,
 } from '../../agents/utils/event-to-item';
+import { firstTurnWindow } from '../../agents/utils/first-turn-window';
 import { hostMcpServerName } from '../../agents/utils/host-question';
 import {
   asRecord,
@@ -3488,6 +3488,20 @@ export class GraphExecutorService
     }> => {
       const adapter = this.adapterFor(node.agent);
       await adapter.validateModel(node.model);
+      // Until this node has a reading of its own, its model's known window
+      // arms the FIRST turn — see `firstTurnWindow`. Asked only of a node that
+      // has a threshold, since resolving a model may probe the CLI, and ahead
+      // of the stop check below so a Stop during the probe is still honoured.
+      const firstWindow =
+        node.autoCompactPercent && !nodeWindows.has(node.id)
+          ? await firstTurnWindow(
+              adapter,
+              this.partials,
+              node.model ?? null,
+              node.configDir ?? null,
+              node.contextWindow ?? null,
+            )
+          : null;
       if (
         cancelRequested ||
         !this.registry.canStart(runId) ||
@@ -3629,22 +3643,9 @@ export class GraphExecutorService
         adapter.getConfig().questionToolName !== null &&
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
-      // One value for the lookup below and the filing on `turn_model`: the
-      // two must build the same key.
-      const spawnedWith: RequestedModel = {
-        model: node.model ?? null,
-        configDir: node.configDir ?? null,
-      };
-      // Until this node has a reading of its own, its model's measured window
-      // arms the FIRST turn — see `PartialStreamService.knownWindow`.
       const nodeWindow = separateCallState
         ? null
-        : (nodeWindows.get(node.id) ??
-          this.partials.knownWindow(
-            adapter.getConfig().kind,
-            spawnedWith,
-            node.contextWindow ?? null,
-          ));
+        : (nodeWindows.get(node.id) ?? firstWindow);
       // Asked of the adapter, never inferred from the agent kind — the graph
       // twin of `ChatService`'s probe, and the answer is per INSTALLED binary
       // (an older claude rejects the flag on argv). Without it a node never
@@ -3945,7 +3946,6 @@ export class GraphExecutorService
               adapter.getConfig().kind,
               event.model,
               node.contextWindow ?? null,
-              spawnedWith,
             );
             return;
           }

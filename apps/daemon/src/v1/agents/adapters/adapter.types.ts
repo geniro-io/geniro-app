@@ -5106,6 +5106,13 @@ export type AdapterListPrice =
       readonly kind: 'catalog';
       /** The catalog provider the CLI's model ids are that provider's API ids under. */
       readonly provider: ModelPriceProvider;
+      /**
+       * Whether the catalog's context window for a model is the window this
+       * CLI enforces — what a turn's `--autocompact` threshold may be a share
+       * of before the CLI has reported one itself. A MEASUREMENT per CLI: the
+       * catalog states the vendor API's limit, and a CLI can apply its own.
+       */
+      readonly catalogWindows: boolean;
     }
   | {
       readonly kind: 'unavailable';

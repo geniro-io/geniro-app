@@ -25,6 +25,7 @@ const ASTRA: ModelPrice = {
       aboveContextTokens: 272_000,
     },
   ],
+  contextTokens: null,
 };
 
 /**
@@ -223,6 +224,7 @@ describe('sub-agent spend', () => {
     cacheRead: 0.4,
     cacheWrite: 5,
     tiers: [],
+    contextTokens: null,
   };
   const breakdown = (input: number, output: number, cached = 0) => ({
     totalTokens: input + output,

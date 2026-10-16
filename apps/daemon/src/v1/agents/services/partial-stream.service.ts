@@ -1,11 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import type { AgentKind } from '../../runs/runs.types';
-import {
-  type RequestedModel,
-  type RunDeltaEvent,
-  SINGLE_AGENT_NODE,
-} from '../chat.types';
+import { type RunDeltaEvent, SINGLE_AGENT_NODE } from '../chat.types';
 import { AgentEventBus } from './agent-events.bus';
 import { contextWindowKey, ContextWindowStore } from './context-window.store';
 import { UnrecordedSpendStore } from './unrecorded-spend.store';
@@ -157,8 +153,7 @@ export class PartialStreamService {
    *
    * Still never assumed: a model neither this process nor the store has ever
    * seen stays unknown, and the meter renders the count with no ring rather
-   * than measuring against a guess. Keyed like the store, so it also holds the
-   * requested-name keys {@link knownWindow} reads.
+   * than measuring against a guess.
    */
   private readonly windowsByModel = new Map<string, number>();
   /**
@@ -169,21 +164,10 @@ export class PartialStreamService {
    * switch model between turns (the composer's chips are editable mid-run), and
    * a window learned from the previous model would otherwise be kept for the
    * whole next turn — a 300k request on a 1M model reading "300k / 200k".
-   *
-   * `requestedKey` is {@link requestedKey} of what the turn was spawned with;
-   * see {@link knownWindow} for why the window is filed under it too. `resolvedAs`
-   * is the FIRST model this owner announced for it: codex re-announces the
-   * model it rerouted to, and that one's window is not the requested name's.
    */
   private readonly runModels = new Map<
     string,
-    {
-      key: string;
-      agent: AgentKind;
-      model: string;
-      requestedKey: string | null;
-      resolvedAs: string;
-    }
+    { key: string; agent: AgentKind; model: string }
   >();
 
   constructor(
@@ -608,22 +592,6 @@ export class PartialStreamService {
           contextWindowTokens,
           contextWindow,
         );
-        if (announced.requestedKey !== null && announced.resolvedAs === model) {
-          this.windowsByModel.set(
-            this.modelKey(
-              announced.agent,
-              announced.requestedKey,
-              contextWindow,
-            ),
-            contextWindowTokens,
-          );
-          this.windowStore.remember(
-            announced.agent,
-            announced.requestedKey,
-            contextWindowTokens,
-            contextWindow,
-          );
-        }
       }
       return true;
     } catch (err) {
@@ -664,27 +632,14 @@ export class PartialStreamService {
     agent: AgentKind,
     model: string,
     contextWindow: string | null = null,
-    spawnedWith: RequestedModel | null = null,
   ): void {
     try {
       const owner = this.ownerId(runId, ownerKey);
       const key = this.modelKey(agent, model, contextWindow);
-      const requestedKey =
-        spawnedWith === null ? null : this.requestedKey(spawnedWith);
-      const previous = this.runModels.get(owner);
-      if (previous?.key !== key) {
+      if (this.runModels.get(owner)?.key !== key) {
+        this.runModels.set(owner, { key, agent, model });
         this.windows.delete(owner);
       }
-      this.runModels.set(owner, {
-        key,
-        agent,
-        model,
-        requestedKey,
-        resolvedAs:
-          previous !== undefined && previous.requestedKey === requestedKey
-            ? previous.resolvedAs
-            : model,
-      });
       const known = this.modelWindow(agent, model, contextWindow);
       if (known !== null && !this.windows.has(owner)) {
         this.windows.set(owner, known);
@@ -712,39 +667,18 @@ export class PartialStreamService {
   }
 
   /**
-   * The window a model was last measured at, asked BEFORE a turn exists — by
-   * the name the turn will be spawned with, which is all a caller has then.
-   *
-   * That name is often an alias the CLI resolves itself (`haiku`), or none at
-   * all (the CLI's default), so it only matches because {@link rememberWindow}
-   * files each measurement under the requested name as well as the announced
-   * one. The plain name is the second try: a node may name the id itself.
-   * Never a figure derived from the window CHOICE (`1m`): the choice is part of
-   * the key, and the number is whatever the agent reported at it — codex's
-   * `872k` reports 828,400.
+   * The window a model id was last measured at, asked BEFORE a turn exists
+   * (`firstTurnWindow`). The id is the one the CLI runs, so an alias is
+   * resolved by the caller first. Never a figure derived from the window
+   * CHOICE (`1m`): the choice is part of the key, and the number is whatever
+   * the agent reported at it — codex's `872k` reports 828,400.
    */
   knownWindow(
     agent: AgentKind,
-    requested: RequestedModel,
+    model: string,
     contextWindow: string | null = null,
   ): number | null {
-    return (
-      this.modelWindow(agent, this.requestedKey(requested), contextWindow) ??
-      (requested.model === null
-        ? null
-        : this.modelWindow(agent, requested.model, contextWindow))
-    );
-  }
-
-  /**
-   * The model segment a requested name is filed under. Per PROFILE because the
-   * profile resolves it — an alias can map to another model there
-   * (`ANTHROPIC_DEFAULT_HAIKU_MODEL`), and the default model is its setting.
-   * No model id contains \u0001, so a requested key never collides with an
-   * announced id, which is filed bare.
-   */
-  private requestedKey(requested: RequestedModel): string {
-    return `${requested.model ?? ''}\u0001${requested.configDir ?? ''}`;
+    return this.modelWindow(agent, model, contextWindow);
   }
 
   /**

@@ -22,8 +22,12 @@ const CONTEXT = {
 function item(id: string, seq = 3): RecommendationItem {
   return {
     id,
-    target: id.startsWith('W') ? 'workflow' : 'repo',
-    kind: id.startsWith('W') ? 'parallelize' : 'ADD',
+    target: id.startsWith('W')
+      ? 'workflow'
+      : id.startsWith('U')
+        ? 'user'
+        : 'repo',
+    kind: id.startsWith('W') ? 'parallelize' : 'check',
     location: id.startsWith('W') ? 'reviewer' : 'AGENTS.md:12',
     title: `Item ${id}`,
     change: 'the exact change',
@@ -125,8 +129,19 @@ describe('ReportRecommendationsTool', () => {
     const result = await report({ items: [item('W-1')] });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain('only repo recommendations');
+    expect(result.content[0]!.text).toContain(
+      'only repo and user recommendations',
+    );
     expect(written).toEqual([]);
+  });
+
+  it('takes a user-instructions item on a plain chat', async () => {
+    const { report, written } = setup(null);
+
+    const result = await report({ items: [item('R-1'), item('U-1')] });
+
+    expect(result.isError).toBe(false);
+    expect(written).toHaveLength(1);
   });
 
   it('refuses duplicate ids and an id whose prefix lies about its target', async () => {
@@ -139,6 +154,10 @@ describe('ReportRecommendationsTool', () => {
       (await report({ items: [{ ...item('R-2'), target: 'workflow' }] }))
         .content[0]!.text,
     ).toContain('starts with W-');
+    expect(
+      (await report({ items: [{ ...item('R-3'), target: 'user' }] }))
+        .content[0]!.text,
+    ).toContain('starts with U-');
   });
 
   it('refuses more than five items for one target', async () => {
@@ -165,6 +184,11 @@ describe('ReportRecommendationsTool', () => {
       'R-3',
       'R-4',
       'R-5',
+      'U-1',
+      'U-2',
+      'U-3',
+      'U-4',
+      'U-5',
     ];
 
     const result = await report({ items: ids.map((id) => item(id)) });

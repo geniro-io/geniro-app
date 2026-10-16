@@ -788,6 +788,17 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         sessionCarryUnavailableReason: null,
       },
+      /**
+       * Probed on 2.1.295 through `get_context_usage`'s `memoryFiles`: with no
+       * `CLAUDE_CONFIG_DIR` the `User` file is `~/.claude/CLAUDE.md`; pointed at
+       * a throwaway directory holding a `CLAUDE.md`, it is that file instead,
+       * and a real profile without one loads no user file at all.
+       */
+      userInstructions: {
+        kind: 'file',
+        homeDir: '.claude',
+        fileName: 'CLAUDE.md',
+      },
       followUp: {
         /**
          * A stream-json stdin is a CONVERSATION: a second `{"type":"user"}`

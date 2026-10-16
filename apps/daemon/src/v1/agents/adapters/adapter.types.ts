@@ -318,6 +318,17 @@ export interface AgentContextCategory {
   deferred: boolean;
 }
 
+/** Where a CLI keeps the user's own standing instructions — see `AdapterConfig.userInstructions`. */
+export type AgentUserInstructions =
+  | {
+      readonly kind: 'file';
+      /** The config directory's name under the user's home (`.claude`). */
+      readonly homeDir: string;
+      /** The file's name inside that directory (`CLAUDE.md`). */
+      readonly fileName: string;
+    }
+  | { readonly kind: 'unavailable'; readonly reason: string };
+
 /** One file the agent loaded as standing instructions, and what it costs. */
 export interface AgentContextMemoryFile {
   path: string;
@@ -4793,6 +4804,14 @@ export interface AdapterConfig {
      */
     readonly sessionCarryUnavailableReason: string | null;
   };
+
+  /**
+   * The file this CLI loads in EVERY folder as the user's own standing
+   * instructions, or why it has none. A thread analysis may recommend edits to
+   * it, so the path must be the one the CLI really reads — under a run's
+   * `configDir` when one is set, else under `homeDir` in the user's home.
+   */
+  readonly userInstructions: AgentUserInstructions;
 
   // ── A message into a turn that is already running ───────────────────────
   /**

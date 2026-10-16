@@ -1268,6 +1268,9 @@ export class ItemDao extends BaseDao<Item> {
           eb
             .fn<string | null>('json_extract', [payload, eb.val('$.name')])
             .as('tool_name'),
+          eb
+            .fn<number | null>('json_extract', [payload, eb.val('$.isError')])
+            .as('tool_is_error'),
         ];
       })
       .where('run_id', '=', runId)
@@ -1284,6 +1287,8 @@ export class ItemDao extends BaseDao<Item> {
       at: Number(row.created_at),
       toolId: row.tool_id === null ? null : String(row.tool_id),
       name: row.tool_name === null ? null : String(row.tool_name),
+      // SQLite's json_extract answers a JSON `true` as 1.
+      isError: row.kind === 'tool_result' && Number(row.tool_is_error) === 1,
     }));
   }
 

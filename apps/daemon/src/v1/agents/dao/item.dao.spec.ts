@@ -1121,6 +1121,37 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(typeof rows[0]!.at).toBe('number');
       expect(rows[2]!.at).toBeGreaterThanOrEqual(rows[0]!.at);
     });
+
+    it('reads a result the CLI marked as an error, and only a result', async () => {
+      await insert(
+        'run-a',
+        0,
+        'tool_call',
+        JSON.stringify({ id: 't1', name: 'Bash', isError: true }),
+      );
+      await insert(
+        'run-a',
+        1,
+        'tool_result',
+        JSON.stringify({ id: 't1', isError: true }),
+      );
+      await insert(
+        'run-a',
+        2,
+        'tool_result',
+        JSON.stringify({ id: 't2', isError: false }),
+      );
+      await insert('run-a', 3, 'tool_result', JSON.stringify({ id: 't3' }));
+
+      const rows = await dao.toolCallTimes('run-a', 3);
+
+      expect(rows.map((row) => row.isError)).toEqual([
+        false,
+        true,
+        false,
+        false,
+      ]);
+    });
   });
 
   describe('waterfallPayloadRows', () => {

@@ -1009,6 +1009,14 @@ export class CursorAcpAdapter extends AgentAdapter {
         sessionCarryUnavailableReason:
           'cursor-agent cannot be pointed at another profile at all, so there is nowhere to move a conversation to',
       },
+      userInstructions: {
+        kind: 'unavailable',
+        // Read off the 2026.10.01 bundle: every rule glob it loads is relative
+        // to the workspace (`.cursor/rules/**/*.mdc`, `AGENTS.md`, `CLAUDE.md`),
+        // and `user_rules` appears only as the name of a prompt section.
+        reason:
+          "cursor-agent's user rules are a Cursor account setting with no local file — edit them in Cursor's settings",
+      },
       followUp: {
         /**
          * This said "ACP has no channel for a message mid-turn" for two

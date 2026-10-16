@@ -249,7 +249,7 @@ describe('ThreadAnalysisService.start', () => {
     });
   });
 
-  it('gives a plain chat the repo-only guide, with the focus appended', async () => {
+  it('gives a plain chat the guide without workflow changes, with the focus appended', async () => {
     const { service, createChat } = build({});
 
     await service.start('source', {
@@ -258,7 +258,7 @@ describe('ThreadAnalysisService.start', () => {
     });
 
     const guide = createChat.mock.calls[0]![0].taskInstructions!;
-    expect(guide).toContain('repository changes only');
+    expect(guide).toContain('Never recommend a workflow change');
     expect(guide).not.toContain(HOST_WORKFLOW_CHANGE_TOOL);
     expect(guide).toContain('why so many re-reads?');
   });

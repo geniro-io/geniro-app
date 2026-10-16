@@ -374,6 +374,40 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(previews.has('run-a')).toBe(false);
     });
 
+    it('labels an image-only newest message as images rather than previewing a blank line', async () => {
+      // REPORTED as "Thread doesnt have last message, but other have": the
+      // user answered with a screenshot alone, the message was stored with
+      // `text: ""`, and the list handed that empty string to the row, which
+      // drew no preview line until the agent's next message minutes later.
+      await insert('run-a', 0, 'message', JSON.stringify({ text: 'Open it' }));
+      await insert(
+        'run-a',
+        1,
+        'message',
+        JSON.stringify({
+          text: '',
+          images: [{ id: 'shot.png', mediaType: 'image/png' }],
+        }),
+      );
+      await insert(
+        'run-b',
+        0,
+        'message',
+        JSON.stringify({
+          text: '',
+          images: [
+            { id: 'a.png', mediaType: 'image/png' },
+            { id: 'b.png', mediaType: 'image/png' },
+          ],
+        }),
+      );
+
+      const previews = await dao.latestMessageTextPerRun(['run-a', 'run-b']);
+
+      expect(previews.get('run-a')).toBe('🖼 Image');
+      expect(previews.get('run-b')).toBe('🖼 2 images');
+    });
+
     it('tolerates a malformed head payload — absent, never a throw', async () => {
       await insert('run-a', 0, 'message', 'not json {');
       await insert('run-b', 0, 'message', JSON.stringify({ text: 'fine' }));

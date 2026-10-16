@@ -78,6 +78,29 @@ export function cursorBareModel(
  * CLI's default model still has a current model in the seeded profile, and its
  * `effort` option is set on that. Refusing it here would make the picker inert
  * for exactly the runs that never named a model.
+ *
+ * EVERY parameter is `applyBeforePrompt`, because this CLI reads a turn's
+ * settings when the prompt arrives and a frame still in flight then is lost —
+ * accepted, its reply naming the new value, and the turn run on the old one:
+ *
+ * - The context window, measured on 2026.08.11-e8db854: the identical frames
+ *   pipelined behind the prompt left the turn at the model's default 300,000,
+ *   while awaited they gave the 1,000,000 asked for, and the reply confirmed
+ *   `context = 1m` either way.
+ * - The effort, REPORTED from billing: a card run on `gpt-5.6-sol` at `high`
+ *   was billed `gpt-5.6-sol-medium`, that model's default (`thought_level/
+ *   reasoning current=medium`; a lone `reasoning=high` frame is answered
+ *   `current=high`, probed on 2026.10.01-e373342). A card names no window, so
+ *   its effort was the last frame and the prompt followed it straight down the
+ *   pipe; a chat that also set a window never showed it, since that frame held
+ *   the prompt.
+ * - `fast`, by the same mechanism and the dearest to lose: Grok runs Fast
+ *   unless told otherwise (`fast current=true`, same probe).
+ *
+ * It costs one round trip per TURN, not per parameter: the frames go out one at
+ * a time anyway (`AcpTurnDriver.configSteps`), so only the last can still be in
+ * flight when the prompt is written. Which frame is last depends on what the
+ * run happens to name, which is why no one layer can own the flag.
  */
 export function cursorModelSelection(
   modelId: string | null | undefined,
@@ -85,13 +108,20 @@ export function cursorModelSelection(
   contextWindow?: string | null,
   modelParameters?: Record<string, string> | null,
 ): CursorModelSelection {
-  return withModelParameters(
+  const selection = withModelParameters(
     withContextWindow(
       withEffort({ model: cursorBareModel(modelId), parameters: [] }, effort),
       contextWindow,
     ),
     modelParameters,
   );
+  return {
+    model: selection.model,
+    parameters: selection.parameters.map((parameter) => ({
+      ...parameter,
+      applyBeforePrompt: true,
+    })),
+  };
 }
 
 /**
@@ -103,10 +133,6 @@ export function cursorModelSelection(
  * than trusted — they are the axes with their own control, and letting one
  * through here would set the same option twice, once from the chip the user
  * pressed and once from a map that happened to carry the same key.
- *
- * Not `applyBeforePrompt`: nothing has measured any of these to bind at turn
- * start the way `context` does, and paying a round trip per parameter on a
- * guess would cost every turn.
  */
 function withModelParameters(
   selection: CursorModelSelection,
@@ -150,18 +176,7 @@ function withContextWindow(
       ...selection.parameters,
       // ONE spelling, so no `alternateIds` — see the constant for the sweep
       // that measured that, and for what would turn this into a list.
-      //
-      // `applyBeforePrompt` because this CLI binds the window when the TURN
-      // begins, not per request: measured on 2026.08.11-e8db854, the identical
-      // frames pipelined behind the prompt leave the turn on the model's
-      // default (300,000) while awaited they give the 1,000,000 that was asked
-      // for — and the reply confirms `context = 1m` either way, so nothing
-      // short of the timing distinguishes them.
-      {
-        id: CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
-        value: wanted,
-        applyBeforePrompt: true,
-      },
+      { id: CURSOR_CONTEXT_WINDOW_PARAMETER_ID, value: wanted },
     ],
   };
 }

@@ -935,6 +935,169 @@ describe('CursorAcpAdapter turn shaping', () => {
     ).toEqual(['effort']);
   });
 
+  describe('the prompt waits for the LAST setting to be answered', () => {
+    // REPORTED from billing: a card run on `gpt-5.6-sol` with effort `high` was
+    // billed as `gpt-5.6-sol-medium` — that model's own default (probed on
+    // 2026.10.01-e373342: `thought_level/reasoning current=medium`, and a
+    // `reasoning=high` frame on its own is answered `current=high`). A card
+    // names no context window, so its effort was the LAST frame, and the
+    // prompt followed it down the pipe before cursor had applied it — the
+    // timing `context` was already measured to need. A chat that also sends a
+    // context window never showed it, because that frame held the prompt.
+    const SESSION_ON_DEFAULT_MODEL = {
+      sessionId: 's',
+      configOptions: [
+        {
+          id: 'model',
+          category: 'model',
+          currentValue: 'auto-smart',
+          options: [
+            { value: 'gpt-5.6-sol' },
+            { value: 'grok-4.7' },
+            { value: 'auto-smart' },
+          ],
+        },
+      ],
+    };
+
+    /** A `session/set_config_option` reply listing a model's own options. */
+    function modelOptions(
+      options: {
+        id: string;
+        category: string;
+        current: string;
+        values: string[];
+      }[],
+    ): Record<string, unknown> {
+      return {
+        configOptions: options.map(({ id, category, current, values }) => ({
+          id,
+          category,
+          currentValue: current,
+          options: values.map((value) => ({ value, name: value })),
+        })),
+      };
+    }
+
+    const methodsOn = (child: FakeChild): unknown[] =>
+      framesOn(child).map((frame) => frame.method);
+
+    const settingsOn = (child: FakeChild): [string, string][] =>
+      framesOn(child)
+        .filter((frame) => frame.method === 'session/set_config_option')
+        .map((frame) => frame.params as { configId: string; value: string })
+        .map(({ configId, value }) => [configId, value]);
+
+    /** The id of the newest `set_config_option` frame on the wire. */
+    const lastSettingId = (child: FakeChild): unknown =>
+      framesOn(child)
+        .filter((frame) => frame.method === 'session/set_config_option')
+        .at(-1)?.id;
+
+    it('holds a card’s prompt until its effort frame is answered', () => {
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start({ ...BASE, model: 'gpt-5.6-sol', effort: 'high' }, () => {});
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(
+        stdoutLine({ id: 2, result: SESSION_ON_DEFAULT_MODEL }),
+      );
+
+      // The model frame's reply is the Sol option list as cursor sends it.
+      child.stdout.emitData(
+        stdoutLine({
+          id: lastSettingId(child),
+          result: modelOptions([
+            {
+              id: 'context',
+              category: 'model_config',
+              current: '272k',
+              values: ['272k', '1m'],
+            },
+            {
+              id: 'reasoning',
+              category: 'thought_level',
+              current: 'medium',
+              values: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+            },
+            {
+              id: 'fast',
+              category: 'model_config',
+              current: 'false',
+              values: ['false', 'true'],
+            },
+          ]),
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([
+        ['model', 'gpt-5.6-sol'],
+        ['reasoning', 'high'],
+      ]);
+      // The effort is on the wire and unanswered: the prompt must not be.
+      expect(methodsOn(child)).not.toContain('session/prompt');
+
+      child.stdout.emitData(
+        stdoutLine({ id: lastSettingId(child), result: {} }),
+      );
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
+
+    it('holds the prompt behind a model setting too, when that is the last frame', () => {
+      // Grok runs as Fast unless told otherwise (`fast current=true`, probed),
+      // and a card asking `fast=false` is that setting's whole point — so it
+      // must land before the turn starts, for the same reason the effort must.
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start(
+        { ...BASE, model: 'grok-4.7', modelParameters: { fast: 'false' } },
+        () => {},
+      );
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(
+        stdoutLine({ id: 2, result: SESSION_ON_DEFAULT_MODEL }),
+      );
+      child.stdout.emitData(
+        stdoutLine({
+          id: lastSettingId(child),
+          result: modelOptions([
+            {
+              id: 'reasoning_effort',
+              category: 'thought_level',
+              current: 'high',
+              values: ['low', 'medium', 'high', 'xhigh'],
+            },
+            {
+              id: 'fast',
+              category: 'model_config',
+              current: 'true',
+              values: ['false', 'true'],
+            },
+          ]),
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([
+        ['model', 'grok-4.7'],
+        ['fast', 'false'],
+      ]);
+      expect(methodsOn(child)).not.toContain('session/prompt');
+
+      child.stdout.emitData(
+        stdoutLine({ id: lastSettingId(child), result: {} }),
+      );
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
+  });
+
   it('points the child at its OWN config dir, never the user’s ~/.cursor', () => {
     // THE leak fix. Applying a model or an effort over ACP persists into the
     // config directory — measured: one `set_config_option` changed `model`,

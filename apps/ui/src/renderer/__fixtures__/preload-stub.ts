@@ -1,4 +1,5 @@
 import {
+  type BranchCarryResult,
   type BranchPullResult,
   type BranchSwitchResult,
   CLI_KINDS,
@@ -296,6 +297,18 @@ export function createPreloadStub(
       return Promise.resolve({
         ok: true,
         branch: null,
+        error: null,
+        stashLeft: null,
+      });
+    },
+    carryChangesToBranch: (
+      _dir: string,
+      branch: string,
+    ): Promise<BranchCarryResult> => {
+      note('carryChangesToBranch');
+      return Promise.resolve({
+        ok: true,
+        branch,
         error: null,
         stashLeft: null,
       });

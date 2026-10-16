@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import type {
+  BranchCarryResult,
   BranchPullResult,
   BranchSwitchResult,
   BranchWorktree,
@@ -255,6 +256,9 @@ export async function switchBranch(
  */
 const PULL_STASH_MESSAGE = 'geniro: pull';
 
+/** The stash {@link carryChangesToBranch} makes, named for the same reason. */
+const CARRY_STASH_MESSAGE = 'geniro: bring changes along';
+
 /**
  * Whether the current stash tip is the one THIS pull just pushed, not a
  * concurrent write from elsewhere.
@@ -288,12 +292,50 @@ export function pullStashIsOurs(
   before: string | null,
   after: string | null,
   subject: string | null,
+  message: string = PULL_STASH_MESSAGE,
 ): boolean {
   return (
     after !== null &&
     after !== before &&
     subject !== null &&
-    subject.endsWith(PULL_STASH_MESSAGE)
+    subject.endsWith(message)
+  );
+}
+
+/**
+ * Move uncommitted work aside under `message`: `true` when an entry of ours
+ * now needs popping back, `false` when there was nothing to move, or git's own
+ * reason when the push failed — in which case nothing moved and the caller
+ * must not go on to touch the tree.
+ *
+ * `--include-untracked`, because a new file the user has not added yet is work
+ * in exactly the same sense as an edit to a tracked one, and a pull or switch
+ * that writes a file into that path fails on it.
+ */
+async function stashWork(
+  dir: string,
+  dirty: boolean,
+  message: string,
+): Promise<boolean | string> {
+  if (!dirty) {
+    return false;
+  }
+  const before = await stashTipOid(dir);
+  const push = await runGit(dir, [
+    'stash',
+    'push',
+    '--include-untracked',
+    '--message',
+    message,
+  ]);
+  if (push !== true) {
+    return push;
+  }
+  return pullStashIsOurs(
+    before,
+    await stashTipOid(dir),
+    await stashTipSubject(dir),
+    message,
   );
 }
 
@@ -348,30 +390,12 @@ export async function pullBranch(dir: string): Promise<BranchPullResult> {
     };
   }
   const branch = info.branch;
-  let stashed = false;
-  const stashBefore = info.dirty ? await stashTipOid(dir) : null;
-  if (info.dirty) {
-    // `--include-untracked`, because a new file the user has not added yet is
-    // work in exactly the same sense as an edit to a tracked one, and a pull
-    // that fast-forwards a file into that path fails on it.
-    const push = await runGit(dir, [
-      'stash',
-      'push',
-      '--include-untracked',
-      '--message',
-      PULL_STASH_MESSAGE,
-    ]);
-    if (push !== true) {
-      // The tree is exactly as dirty as it was — nothing was moved aside, so
-      // there is nothing to leave stashed, and a pull now would run against
-      // uncommitted work with no protection.
-      return { ok: false, branch, error: push, stashLeft: null };
-    }
-    stashed = pullStashIsOurs(
-      stashBefore,
-      await stashTipOid(dir),
-      await stashTipSubject(dir),
-    );
+  const stashed = await stashWork(dir, info.dirty, PULL_STASH_MESSAGE);
+  if (typeof stashed === 'string') {
+    // The tree is exactly as dirty as it was — nothing was moved aside, so
+    // there is nothing to leave stashed, and a pull now would run against
+    // uncommitted work with no protection.
+    return { ok: false, branch, error: stashed, stashLeft: null };
   }
   const pull = await runGit(dir, ['pull', '--ff-only']);
   const restore = stashed ? await runGit(dir, ['stash', 'pop']) : null;
@@ -392,6 +416,68 @@ export async function pullBranch(dir: string): Promise<BranchPullResult> {
       // to report: the branch moved, the work is safe, and it is sitting in a
       // stash the user has to apply by hand.
       error: `Pulled, but your changes could not be restored — they are kept in ${stashLeft}`,
+      stashLeft,
+    };
+  }
+  return { ok: true, branch, error: null, stashLeft: null };
+}
+
+/**
+ * Switch `dir` to `branch` and take the uncommitted work along: stash →
+ * `git switch` → put the stash back on the new branch.
+ *
+ * The way out of {@link switchBranch}'s dirty refusal that actually reaches the
+ * branch the user picked. A pull cannot be that way out — it puts the work back
+ * on the SAME branch, so the tree is exactly as dirty afterwards and the guard
+ * refuses the switch again.
+ *
+ * The same promises as {@link pullBranch}: a failed stash push touches nothing,
+ * a failed switch puts the work back where it was, and a restore that
+ * conflicts leaves the entry and says where ({@link BranchCarryResult.stashLeft}).
+ * A branch another worktree holds is refused before anything moves, for the
+ * reason `switchBranch` gives.
+ */
+export async function carryChangesToBranch(
+  dir: string,
+  branch: string,
+): Promise<BranchCarryResult> {
+  const info = await readGitInfo(dir);
+  if (!info.isRepo) {
+    return {
+      ok: false,
+      branch: null,
+      error: 'Not a git repository',
+      stashLeft: null,
+    };
+  }
+  if (info.branch === branch) {
+    return { ok: true, branch, error: null, stashLeft: null };
+  }
+  if (info.worktrees.some((entry) => entry.branch === branch)) {
+    return {
+      ok: false,
+      branch: info.branch,
+      error: `${branch} is checked out in another worktree — this folder stays on ${info.branch ?? 'a detached HEAD'}`,
+      stashLeft: null,
+    };
+  }
+  const stashed = await stashWork(dir, info.dirty, CARRY_STASH_MESSAGE);
+  if (typeof stashed === 'string') {
+    return { ok: false, branch: info.branch, error: stashed, stashLeft: null };
+  }
+  const moved = await runGit(dir, ['switch', branch]);
+  const restore = stashed ? await runGit(dir, ['stash', 'pop']) : null;
+  const stashLeft = restore !== null && restore !== true ? 'stash@{0}' : null;
+  if (moved !== true) {
+    return { ok: false, branch: info.branch, error: moved, stashLeft };
+  }
+  if (stashLeft !== null) {
+    return {
+      ok: false,
+      branch,
+      // The switch SUCCEEDED and the restore did not: the branch moved, the
+      // work is safe, and it is sitting in a stash the user applies by hand.
+      error: `Switched to ${branch}, but your changes could not be restored — they are kept in ${stashLeft}`,
       stashLeft,
     };
   }

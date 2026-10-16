@@ -167,6 +167,7 @@ import {
   parkedReason,
   steerReadiness,
 } from './follow-up-delivery';
+import { GitNoticeOffers } from './git-notice-offers';
 import { GlobalChatSearchDialog } from './global-chat-search-dialog';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { isCallRow, mergeAnchorRows, withAnchors } from './history-anchors';
@@ -5263,12 +5264,19 @@ export function Chats({
    */
   const composerNotice: GitNotice | null =
     error !== null
-      ? { message: error, tone: 'error', offerPull: false, useFolder: null }
+      ? {
+          message: error,
+          tone: 'error',
+          offerPull: false,
+          carryTo: null,
+          useFolder: null,
+        }
       : (attachments.error ?? fileAttach.error) !== null
         ? {
             message: (attachments.error ?? fileAttach.error)!,
             tone: 'error',
             offerPull: false,
+            carryTo: null,
             useFolder: null,
           }
         : (git.notice ??
@@ -5278,6 +5286,7 @@ export function Chats({
                 message: runConfigBranchNotice,
                 tone: 'error',
                 offerPull: false,
+                carryTo: null,
                 // No offer here, deliberately: a configuration names a FOLDER
                 // as well as a branch, so pointing the run at the worktree that
                 // holds the branch would run it somewhere the user's own saved
@@ -9109,28 +9118,19 @@ export function Chats({
                                     }}>
                                     Use that folder
                                   </Button>
-                                ) : composerNotice.offerPull ? (
-                                  // A clickable STRING, not a bordered button. The
-                                  // strip is one sentence the app is saying; a
-                                  // button beside it reads as a second control
-                                  // competing with the composer's own, where what
-                                  // this is is the rest of the sentence — "the
-                                  // branch stays put · pull latest". `link` is the
-                                  // app's one such look, re-toned to the strip it
-                                  // sits in so it cannot read as unrelated caramel.
-                                  <Button
-                                    type="button"
-                                    variant="link"
-                                    size="sm"
-                                    className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
-                                    disabled={git.pulling}
-                                    title="Stash your changes, fast-forward this branch, then put the changes back"
-                                    onClick={() => {
+                                ) : (
+                                  <GitNoticeOffers
+                                    notice={composerNotice}
+                                    pulling={git.pulling}
+                                    carrying={git.carrying}
+                                    onPull={() => {
                                       void git.pull();
-                                    }}>
-                                    {git.pulling ? 'Pulling…' : 'Pull latest'}
-                                  </Button>
-                                ) : null
+                                    }}
+                                    onCarry={() => {
+                                      void git.carry();
+                                    }}
+                                  />
+                                )
                               }
                               onDismiss={dismissError}
                             />

@@ -7,6 +7,7 @@ function group(over: Partial<ToolUsageGroup> = {}): ToolUsageGroup {
     nodeId: 'engineer',
     name: 'Bash',
     toolKind: 'execute',
+    delegate: false,
     calls: 1,
     ...over,
   };
@@ -69,8 +70,8 @@ describe('foldToolUsage', () => {
     );
 
     expect(toolUse).toEqual([
-      { nodeId: 'qa', name: 'Read File', calls: 40 },
-      { nodeId: 'qa', name: 'execute', calls: 3 },
+      { nodeId: 'qa', name: 'Read File', calls: 40, delegateCalls: 0 },
+      { nodeId: 'qa', name: 'execute', calls: 3, delegateCalls: 0 },
     ]);
   });
 
@@ -86,8 +87,25 @@ describe('foldToolUsage', () => {
     );
 
     expect(toolUse).toEqual([
-      { nodeId: 'engineer', name: 'Bash', calls: 86 },
-      { nodeId: 'qa', name: 'Bash', calls: 4 },
+      { nodeId: 'engineer', name: 'Bash', calls: 86, delegateCalls: 0 },
+      { nodeId: 'qa', name: 'Bash', calls: 4, delegateCalls: 0 },
+    ]);
+  });
+
+  it('keeps a tool’s sub-agent calls apart from the lane’s own on one row', () => {
+    const { toolUse } = foldToolUsage(
+      [
+        group({ name: 'Read', toolKind: 'read', calls: 5 }),
+        group({ name: 'Read', toolKind: 'read', delegate: true, calls: 7 }),
+        group({ name: 'Bash', delegate: true, calls: 10 }),
+      ],
+      10,
+    );
+
+    // Ordered by both together: Read's 12 outranks Bash's 10.
+    expect(toolUse).toEqual([
+      { nodeId: 'engineer', name: 'Read', calls: 5, delegateCalls: 7 },
+      { nodeId: 'engineer', name: 'Bash', calls: 0, delegateCalls: 10 },
     ]);
   });
 
@@ -98,8 +116,8 @@ describe('foldToolUsage', () => {
 
     expect(foldToolUsage(groups, 2)).toEqual({
       toolUse: [
-        { nodeId: 'engineer', name: 'Tool3', calls: 4 },
-        { nodeId: 'engineer', name: 'Tool2', calls: 3 },
+        { nodeId: 'engineer', name: 'Tool3', calls: 4, delegateCalls: 0 },
+        { nodeId: 'engineer', name: 'Tool2', calls: 3, delegateCalls: 0 },
       ],
       capped: true,
     });

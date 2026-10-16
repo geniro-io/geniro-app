@@ -642,6 +642,8 @@ export interface ToolCallTime {
   at: number;
   toolId: string | null;
   name: string | null;
+  /** A CLI sub-agent's call (`parentToolUseId`), filed under its launcher. */
+  delegate: boolean;
   /** A `tool_result` the CLI marked as an error; always false on a call. */
   isError: boolean;
 }
@@ -657,6 +659,8 @@ export interface ToolSpan {
   durationMs: number | null;
   /** True when it was still unanswered at the last row of a working run. */
   open: boolean;
+  /** Made by one of the node's CLI sub-agents rather than the node itself. */
+  delegate: boolean;
   /** Its result was marked an error by the CLI. */
   failed: boolean;
 }
@@ -695,9 +699,14 @@ export interface NodeTime {
   /** In a turn and blocked on neither — the node's own work. */
   busyMs: number;
   turns: number;
+  /** The node's OWN tool calls. */
   toolCalls: number;
-  /** Summed tool-call durations — tools run in parallel, so this can exceed busy. */
+  /** Tool calls its CLI sub-agents made. */
+  delegateToolCalls: number;
+  /** Summed durations of its own tool calls — they run in parallel, so this can exceed busy. */
   toolMs: number;
+  /** The same, over its CLI sub-agents' tool calls. */
+  delegateToolMs: number;
 }
 
 export interface CriticalSegment {
@@ -710,6 +719,8 @@ export interface CriticalSegment {
 export interface ToolTotal {
   nodeId: string | null;
   name: string;
+  /** The row counts the node's CLI sub-agents' calls, not its own. */
+  delegate: boolean;
   calls: number;
   totalMs: number;
   maxMs: number;
@@ -2269,7 +2280,16 @@ export type RunArtifactsWire = z.infer<typeof RunArtifactsWireSchema>;
  * same reason. Generous — the longest model id measured on a real install is 16
  * characters — so a truthful label is never cut.
  */
-const MAX_WATERFALL_LABEL_CHARS = 200;
+export const MAX_WATERFALL_LABEL_CHARS = 200;
+
+/** One model's share of a turn's cost. */
+export const RunWaterfallModelCostSchema = z
+  .object({
+    model: z.string().max(MAX_WATERFALL_LABEL_CHARS),
+    costUsd: z.number(),
+  })
+  .meta({ id: 'RunWaterfallModelCost' });
+export type RunWaterfallModelCost = z.infer<typeof RunWaterfallModelCostSchema>;
 
 /**
  * One finished turn as the waterfall draws it.
@@ -2317,7 +2337,13 @@ export const RunWaterfallTurnSchema = z
       .number()
       .int()
       .describe(
-        "tool calls this lane made inside the turn's span, sub-agents included",
+        "the lane agent's OWN tool calls inside the turn's span — its CLI sub-agents' are `delegateToolCalls`",
+      ),
+    delegateToolCalls: z
+      .number()
+      .int()
+      .describe(
+        "tool calls the lane agent's CLI sub-agents made inside the turn's span (rows carrying `parentToolUseId`)",
       ),
     // Every figure below is the CLI's own, so none carries `.int()`: the
     // response is SERIALIZED through this schema, and a version-volatile CLI
@@ -2342,6 +2368,12 @@ export const RunWaterfallTurnSchema = z
       .nullable()
       .describe('model round-trips inside this one turn'),
     costUsd: z.number().nullable(),
+    modelCosts: z
+      .array(RunWaterfallModelCostSchema)
+      .nullable()
+      .describe(
+        "costUsd split by the model that spent it, costliest first — the sub-agents' models included, while the token figures may be the main thread's alone. Null when the CLI stated no split that adds up to the cost",
+      ),
     model: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
     inputTokens: z.number().nullable(),
     outputTokens: z.number().nullable(),
@@ -2432,7 +2464,13 @@ export const RunWaterfallLaneSchema = z
       .describe(
         'how many turns this lane TOOK — the larger of its `turn_complete` rows and the status rows recording a turn opening, never the spans the card can draw. Each of the three is short in a different case: a CLI reporting no timing draws no span, a cancelled turn writes no completion, and a chat writes no status row at all',
       ),
-    toolCalls: z.number().int(),
+    toolCalls: z.number().int().describe("the lane agent's OWN tool calls"),
+    delegateToolCalls: z
+      .number()
+      .int()
+      .describe(
+        "tool calls the lane agent's CLI sub-agents made (rows carrying `parentToolUseId`), filed under the agent that launched them",
+      ),
     workedMs: z
       .number()
       .int()
@@ -2481,7 +2519,11 @@ export const RunWaterfallToolUseSchema = z
   .object({
     nodeId: z.string().nullable(),
     name: z.string().max(MAX_WATERFALL_LABEL_CHARS),
-    calls: z.number().int(),
+    calls: z.number().int().describe("the lane agent's OWN calls of this tool"),
+    delegateCalls: z
+      .number()
+      .int()
+      .describe("its CLI sub-agents' calls of this tool"),
   })
   .meta({ id: 'RunWaterfallToolUse' });
 export type RunWaterfallToolUse = z.infer<typeof RunWaterfallToolUseSchema>;

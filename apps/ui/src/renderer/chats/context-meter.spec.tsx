@@ -147,11 +147,33 @@ describe('ContextMeter', () => {
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-expanded]',
     );
-    act(() => trigger?.focus());
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+      );
+      trigger?.focus();
+    });
     expect(container.textContent).toContain('250k / 1M');
 
     act(() => trigger?.blur());
     expect(container.textContent).toBe('');
+  });
+
+  it('stays shut when a script moves focus onto it, as a dialog does on open', () => {
+    render(
+      <ContextMeter contextTokens={250_000} contextWindowTokens={1_000_000} />,
+    );
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-expanded]',
+    );
+    act(() => {
+      // The press that opened whatever moved focus here.
+      document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      trigger?.focus();
+    });
+
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger?.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('keeps a MUTED ring when the CLI named no window, and invents no denominator', () => {

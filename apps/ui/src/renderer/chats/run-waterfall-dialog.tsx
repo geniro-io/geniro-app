@@ -38,10 +38,14 @@ import {
 import { formatTokens, formatUsd } from './agent-activity';
 import type { SpendPoint } from './run-waterfall-geometry';
 import {
+  BY_SUB_AGENTS,
   callFailed,
+  costSplit,
   cumulativeSpend,
   laneIndexOf,
   place,
+  splitParts,
+  toolsCaption,
   toolsTitle,
   topTurns,
   TURN_OUTCOME_CLASS,
@@ -199,7 +203,7 @@ const TILE_HELP: Record<string, { what: string; example: string }> = {
       'You send one message, the agent reads twelve files, edits three and answers → 1 turn, 15 tools.',
   },
   tools: {
-    what: 'How many tool calls the run made — reads, edits, shell commands, MCP calls. Sub-agents are counted in their launcher’s total.',
+    what: 'How many tool calls the agents themselves made — reads, edits, shell commands, MCP calls. What their sub-agents called is counted apart, under the figure.',
     example:
       'An agent that greps a repo, opens nine files and runs the tests has already spent a dozen of these inside a single turn.',
   },
@@ -330,15 +334,27 @@ function ToolBreakdown({ data }: { data: RunWaterfallDto }): React.JSX.Element {
         : data.toolUse.filter((use) => use.nodeId === lane);
     // Folded by NAME once a lane is not the grouping — otherwise `Bash` appears
     // once per agent and the table stops answering "what did this run do".
-    const byName = new Map<string, number>();
+    const byName = new Map<string, { calls: number; delegateCalls: number }>();
     for (const use of shown) {
-      byName.set(use.name, (byName.get(use.name) ?? 0) + use.calls);
+      const row = byName.get(use.name) ?? { calls: 0, delegateCalls: 0 };
+      row.calls += use.calls;
+      row.delegateCalls += use.delegateCalls;
+      byName.set(use.name, row);
     }
     return [...byName.entries()]
-      .map(([name, calls]) => ({ name, calls }))
-      .sort((a, b) => b.calls - a.calls);
+      .map(([name, row]) => ({
+        name,
+        ...row,
+        all: row.calls + row.delegateCalls,
+      }))
+      .sort((a, b) => b.all - a.all);
   }, [data, lane]);
-  const total = rows.reduce((sum, row) => sum + row.calls, 0);
+  const own = rows.reduce((sum, row) => sum + row.calls, 0);
+  const delegated = rows.reduce((sum, row) => sum + row.delegateCalls, 0);
+  const total = own + delegated;
+  // A run whose agents launched no sub-agent keeps the table it had: a column
+  // of zeros says nothing.
+  const split = delegated > 0;
 
   if (data.toolUse.length === 0) {
     return (
@@ -378,16 +394,22 @@ function ToolBreakdown({ data }: { data: RunWaterfallDto }): React.JSX.Element {
       <div className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full table-fixed border-collapse text-xs">
           <colgroup>
-            <col className="w-[38%]" />
-            <col className="w-[38%]" />
+            <col className={cn(split ? 'w-[32%]' : 'w-[38%]')} />
+            <col className={cn(split ? 'w-[32%]' : 'w-[38%]')} />
             <col className="w-[12%]" />
+            {split ? <col className="w-[12%]" /> : null}
             <col className="w-[12%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-border bg-muted/30 text-[10px] tracking-wide text-muted-foreground uppercase">
               <th className="h-8 px-3 text-left font-medium">tool</th>
               <th className="h-8 px-3 text-left font-medium">share</th>
-              <th className="h-8 px-3 text-right font-medium">calls</th>
+              <th className="h-8 px-3 text-right font-medium">
+                {split ? 'own' : 'calls'}
+              </th>
+              {split ? (
+                <th className="h-8 px-3 text-right font-medium">sub-agents</th>
+              ) : null}
               <th className="h-8 px-3 text-right font-medium">of total</th>
             </tr>
           </thead>
@@ -406,7 +428,7 @@ function ToolBreakdown({ data }: { data: RunWaterfallDto }): React.JSX.Element {
                     <span
                       className="block h-full rounded-full"
                       style={{
-                        width: `${Math.max(2, (row.calls / (rows[0]?.calls ?? 1)) * 100)}%`,
+                        width: `${Math.max(2, (row.all / (rows[0]?.all ?? 1)) * 100)}%`,
                         backgroundColor: categoryToken(index),
                       }}
                     />
@@ -415,6 +437,11 @@ function ToolBreakdown({ data }: { data: RunWaterfallDto }): React.JSX.Element {
                 <td className="h-9 px-3 text-right font-medium tabular-nums text-foreground">
                   {formatCount(row.calls)}
                 </td>
+                {split ? (
+                  <td className="h-9 px-3 text-right tabular-nums text-foreground">
+                    {formatCount(row.delegateCalls)}
+                  </td>
+                ) : null}
                 <td className="h-9 px-3 text-right tabular-nums text-muted-foreground">
                   {/*
                     `formatPercent` takes a PERCENT, not a rate — handed the
@@ -423,7 +450,7 @@ function ToolBreakdown({ data }: { data: RunWaterfallDto }): React.JSX.Element {
                   */}
                   {total === 0
                     ? NOT_MEASURED
-                    : formatPercent((row.calls / total) * 100)}
+                    : formatPercent((row.all / total) * 100)}
                 </td>
               </tr>
             ))}
@@ -431,7 +458,7 @@ function ToolBreakdown({ data }: { data: RunWaterfallDto }): React.JSX.Element {
         </table>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {formatCount(total)} tool calls, sub-agents included
+        {toolsTitle(own, delegated)}
       </p>
     </div>
   );
@@ -469,6 +496,10 @@ function Tiles({
   span: number;
 }): React.JSX.Element {
   const tools = data.lanes.reduce((sum, lane) => sum + lane.toolCalls, 0);
+  const delegateTools = data.lanes.reduce(
+    (sum, lane) => sum + lane.delegateToolCalls,
+    0,
+  );
   const turnsTaken = data.lanes.reduce((sum, lane) => sum + lane.turns, 0);
   const failed = data.calls.filter(callFailed).length;
   return (
@@ -539,11 +570,18 @@ function Tiles({
         label="tools"
         help={<TileHelp label="tools" />}
         value={formatCount(tools)}
-        hint={toolsTitle(tools)}
+        hint={toolsTitle(tools, delegateTools)}
         footnote={
-          data.calls.length === 0
-            ? undefined
-            : `${data.calls.length} agent calls${failed === 0 ? '' : `, ${failed} failed`}`
+          [
+            delegateTools === 0
+              ? null
+              : `+ ${formatCount(delegateTools)} ${BY_SUB_AGENTS}`,
+            data.calls.length === 0
+              ? null
+              : `${data.calls.length} agent calls${failed === 0 ? '' : `, ${failed} failed`}`,
+          ]
+            .filter((part) => part !== null)
+            .join(' · ') || undefined
         }
       />
     </StatGrid>
@@ -744,17 +782,10 @@ function LaneLabel({
   lane: RunWaterfallLane;
   index: number;
 }): React.JSX.Element {
-  // THREE lines, each with one job, and none of them allowed to wrap.
-  //
-  // It was name / kind / then the three figures in a `flex gap-2`, and at
-  // 168px that flex wrapped: `5` sat above `turns` and `220` above `tools`, so
-  // the column read as a broken table rather than as a caption. REPORTED as
-  // "левое описание каждого агента неправильное, и всё там как-то криво".
-  //
-  // The money moves to the END of the name row — a right-aligned column the
-  // eye can run down across lanes — and the two counts share the last line as
-  // one nowrap phrase. Everything truncates rather than wrapping, because a
-  // shortened node name is readable where a reflowed figure is not.
+  // Name, then kind and turns, then the tools — one job per line. At this
+  // width a wrapped figure stacks above its unit, so every line truncates
+  // instead: a shortened node name is readable where a reflowed figure is not.
+  // The money ends the name row, a right-aligned column across lanes.
   return (
     <div className="flex min-w-0 flex-col justify-center gap-1 border-t border-border px-3 py-2">
       <span className="flex min-w-0 items-baseline gap-1.5">
@@ -770,12 +801,15 @@ function LaneLabel({
           {lane.costUsd === null ? NOT_MEASURED : formatUsd(lane.costUsd)}
         </span>
       </span>
+      <span className="truncate pl-3.5 text-[11px] whitespace-nowrap text-muted-foreground">
+        {lane.agentKind ?? NOT_MEASURED} · {lane.turns}{' '}
+        {lane.turns === 1 ? 'turn' : 'turns'}
+      </span>
+      {/* Its own line, so the label width never cuts the tool split. */}
       <span
         className="truncate pl-3.5 text-[11px] whitespace-nowrap text-muted-foreground"
-        title={toolsTitle(lane.toolCalls)}>
-        {lane.agentKind ?? NOT_MEASURED} · {lane.turns}{' '}
-        {lane.turns === 1 ? 'turn' : 'turns'} · {formatCount(lane.toolCalls)}{' '}
-        tools
+        title={toolsTitle(lane.toolCalls, lane.delegateToolCalls)}>
+        {toolsCaption(lane.toolCalls, lane.delegateToolCalls)}
       </span>
     </div>
   );
@@ -1072,6 +1106,12 @@ function LaneTrack({
 function turnRows(turn: RunWaterfallTurn, from: number): TooltipRow[] {
   const rows: TooltipRow[] = [
     measuredRow('cost', turn.costUsd === null ? null : formatUsd(turn.costUsd)),
+    // Which models that cost went to — the sub-agents' included, which the
+    // token rows below may not count.
+    ...(splitParts(turn) ?? []).map((part) => ({
+      label: part.model,
+      value: formatUsd(part.costUsd),
+    })),
     {
       label: turn.outcome === 'running' ? 'so far' : 'worked',
       value: formatTurnDuration(turn.durationMs),
@@ -1081,6 +1121,14 @@ function turnRows(turn: RunWaterfallTurn, from: number): TooltipRow[] {
       value: formatTurnDuration(Date.parse(turn.startedAt) - from),
     },
     { label: 'tools', value: formatCount(turn.toolCalls) },
+    ...(turn.delegateToolCalls === 0
+      ? []
+      : [
+          {
+            label: BY_SUB_AGENTS,
+            value: formatCount(turn.delegateToolCalls),
+          },
+        ]),
     { label: 'model', value: turn.model ?? '—' },
   ];
   if (turn.apiMs !== null) {
@@ -1291,6 +1339,28 @@ function SpendCurve({
   );
 }
 
+/**
+ * Which models a turn's cost went to, under its model's name — absent for a
+ * turn one model paid for whole.
+ */
+function TurnCostSplit({
+  turn,
+}: {
+  turn: RunWaterfallTurn;
+}): React.JSX.Element | null {
+  const split = costSplit(turn);
+  if (split === null) {
+    return null;
+  }
+  return (
+    <span
+      className="block truncate text-[10px] tabular-nums text-muted-foreground"
+      title={split}>
+      {split}
+    </span>
+  );
+}
+
 /** Where the money went, turn by turn — the rows a reader acts on. */
 function TopTurns({
   data,
@@ -1356,6 +1426,7 @@ function TopTurns({
                   <span className="block truncate">
                     {turn.model ?? NOT_MEASURED}
                   </span>
+                  <TurnCostSplit turn={turn} />
                 </td>
                 <td className="h-9 px-3">
                   {/*

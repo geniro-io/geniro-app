@@ -269,6 +269,50 @@ describe('sub-agent spend', () => {
     expect(asked.sort()).toEqual(['gpt-mini', 'gpt-parent']);
   });
 
+  it('splits a turn’s cost into its own model and each sub-agent’s', () => {
+    const MINI: ModelPrice = { ...PLAIN, input: 1, output: 5 };
+    const spend = new CodexSubagentSpend();
+    spend.noteModel('A', 'gpt-mini');
+    spend.record('A', reading([10_000, 100], [10_000, 100]));
+    spend.record('B', reading([1_000, 0], [1_000, 0]));
+    const latest = reading([36_000, 100], [16_000, 50]);
+
+    const usage = turnUsageOf({
+      latest,
+      baseline: baselineOf(latest),
+      model: 'gpt-5.5',
+      durationMs: null,
+      price: PLAIN,
+      subagents: spend.unbilled(
+        (model) => (model === 'gpt-mini' ? MINI : PLAIN),
+        'gpt-5.5',
+      ),
+    });
+
+    // Own 16,000 in + 50 out and thread B's 1,000 in at the parent's model;
+    // thread A's 10,000 in + 100 out at the mini model's price.
+    expect(usage.modelCosts).toEqual([
+      { model: 'gpt-5.5', costUsd: (17_000 * 4 + 50 * 20) / 1e6 },
+      { model: 'gpt-mini', costUsd: (10_000 * 1 + 100 * 5) / 1e6 },
+    ]);
+  });
+
+  it('reports no split when a sub-agent that spent cannot be priced', () => {
+    const spend = new CodexSubagentSpend();
+    spend.record('S', reading([1_000, 0], [1_000, 0]));
+    const latest = reading([36_000, 100], [16_000, 50]);
+
+    const usage = turnUsageOf({
+      latest,
+      baseline: baselineOf(latest),
+      model: 'gpt-5.5',
+      durationMs: null,
+      price: PLAIN,
+      subagents: spend.unbilled(() => null, null),
+    });
+    expect(usage.modelCosts).toBeNull();
+  });
+
   it('makes the sum unmeasured when a thread that spent cannot be priced', () => {
     const spend = new CodexSubagentSpend();
     spend.record('S', reading([1_000, 0], [1_000, 0]));
@@ -277,11 +321,14 @@ describe('sub-agent spend', () => {
 
   it('folds into a turn: tokens and dollars added, the window left the parent’s', () => {
     const latest = reading([36_000, 100], [16_000, 50]);
-    const subagents = spendBetween(
-      reading([10_000, 100], [10_000, 100]),
-      breakdown(0, 0),
-      PLAIN,
-    );
+    const subagents = {
+      ...spendBetween(
+        reading([10_000, 100], [10_000, 100]),
+        breakdown(0, 0),
+        PLAIN,
+      ),
+      modelCosts: null,
+    };
     const usage = turnUsageOf({
       latest,
       baseline: baselineOf(latest),

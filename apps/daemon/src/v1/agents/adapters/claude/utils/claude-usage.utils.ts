@@ -4,16 +4,18 @@ import {
   asRecord,
   asString,
 } from '../../../utils/json-util';
-import type { AgentUsage } from '../../adapter.types';
+import { splitOf } from '../../../utils/model-costs';
+import type { AgentModelCost, AgentUsage } from '../../adapter.types';
 import {
   CLAUDE_CACHE_1H_KEY,
   CLAUDE_CACHE_1H_TTL_MS,
   CLAUDE_CACHE_5M_KEY,
   CLAUDE_CACHE_5M_TTL_MS,
 } from '../claude.const';
-import type {
-  ClaudeCostTotalsFile,
-  ClaudeSessionTotals,
+import {
+  type ClaudeCostTotalsFile,
+  type ClaudeSessionTotals,
+  readModelUsageCosts,
 } from './claude-cost-totals.utils';
 import {
   canonicalClaudeModel,
@@ -241,17 +243,26 @@ export class ClaudeSessionCostLedger {
     sessionId: string | null,
     cumulative: SessionTotals,
     ownSpendUsd: number | null = null,
-  ): { costUsd: number | null; apiMs: number | null } {
+  ): {
+    costUsd: number | null;
+    apiMs: number | null;
+    modelCosts: AgentModelCost[] | null;
+  } {
     if (sessionId === null) {
       // Nothing to key on. Reporting the running total would be the very bug
       // this class exists to stop, and no `result` line has been observed
       // without the field — so the honest answer is "not measured".
-      return { costUsd: null, apiMs: null };
+      return { costUsd: null, apiMs: null, modelCosts: null };
     }
     const previous = this.totals.get(sessionId);
     const unconfirmed = this.unconfirmedResumes.delete(sessionId);
     this.remember(sessionId, cumulative);
     const costUsd = step(previous?.costUsd ?? null, cumulative.costUsd);
+    // `modelUsage` runs on the same ledger as `total_cost_usd` (its schema
+    // description in the 2.1.295 bundle: "cumulative across turns … shares its
+    // lifecycle"), so each model's share steps the same way — and is kept only
+    // when the shares add up to the step taken, see `splitOf`.
+    const modelCosts = splitOf(modelSteps(previous, cumulative), costUsd);
     // A step off a KNOWN base that did not go down is this process's own
     // spend, and it is trusted whole. The base is known because it is either
     // what this ledger last saw (kept on disk across restarts) or what the
@@ -273,6 +284,7 @@ export class ClaudeSessionCostLedger {
       return {
         costUsd,
         apiMs: step(previous.apiMs, cumulative.apiMs),
+        modelCosts,
       };
     }
     // With no base, or a total that went DOWN, a step far past what the turn's
@@ -296,11 +308,13 @@ export class ClaudeSessionCostLedger {
       ownSpendUsd !== null &&
       costUsd > ownSpendUsd * RUNNING_TOTAL_TOLERANCE + RUNNING_TOTAL_SLACK_USD
     ) {
-      return { costUsd: ownSpendUsd, apiMs: null };
+      // The CLI's per-model figures are the same untrustworthy history.
+      return { costUsd: ownSpendUsd, apiMs: null, modelCosts: null };
     }
     return {
       costUsd,
       apiMs: step(previous?.apiMs ?? null, cumulative.apiMs),
+      modelCosts,
     };
   }
 
@@ -335,7 +349,11 @@ export class ClaudeSessionCostLedger {
     if (restored === null && known !== undefined) {
       return;
     }
-    const base: SessionTotals = restored ?? { costUsd: 0, apiMs: 0 };
+    const base: SessionTotals = restored ?? {
+      costUsd: 0,
+      apiMs: 0,
+      costByModel: {},
+    };
     if (
       known !== undefined &&
       known.costUsd !== null &&
@@ -496,6 +514,36 @@ function trimOldest<K>(
 
 /** One session's running totals, as the last `result` line stated them. */
 type SessionTotals = ClaudeSessionTotals;
+
+/**
+ * What each model added since `previous`, on {@link step}'s rules — null when
+ * the line names no models, or the base it would step from has no per-model
+ * figures (an entry written before they were kept).
+ */
+function modelSteps(
+  previous: SessionTotals | undefined,
+  cumulative: SessionTotals,
+): AgentModelCost[] | null {
+  const current = cumulative.costByModel;
+  if (current === null || current === undefined) {
+    return null;
+  }
+  // A total that went down is a new ledger behind a reused id: the cost step
+  // takes it whole, so the per-model steps do too.
+  const restarted =
+    previous?.costUsd != null &&
+    cumulative.costUsd !== null &&
+    cumulative.costUsd < previous.costUsd;
+  const base = previous === undefined || restarted ? {} : previous.costByModel;
+  if (base === null || base === undefined) {
+    return null;
+  }
+  return Object.entries(current).map(([model, costUsd]) => ({
+    model,
+    // Own keys only: a model id is CLI text, and `constructor` is a key too.
+    costUsd: step(Object.hasOwn(base, model) ? base[model]! : 0, costUsd) ?? 0,
+  }));
+}
 
 /** How long after a total moves it is written to disk. */
 const TOTALS_FLUSH_DELAY_MS = 1_000;
@@ -661,6 +709,7 @@ export function readClaudeUsage(
     {
       costUsd: asNumber(root.total_cost_usd),
       apiMs: asNumber(root.duration_api_ms),
+      costByModel: readModelUsageCosts(root.modelUsage),
     },
     quiet
       ? delegatesUsd
@@ -692,6 +741,9 @@ export function readClaudeUsage(
     // {@link ClaudeSessionCostLedger} for the probe and for what summing the
     // total instead did to the Stats page.
     costUsd: step.costUsd,
+    // What that spend ran on — the turn's own model and every model its
+    // sub-agents and side calls used, which `usage` above does not count.
+    modelCosts: step.modelCosts,
     // The CLI's OWN clock for the turn, which is the number worth having: it
     // starts when the CLI begins working and so counts neither geniro's
     // MCP-readiness hold nor a stretch parked on an approval card. Probed on

@@ -14,6 +14,7 @@ import { DaemonKeepAlive } from './daemon-keepalive';
 import type { DaemonQuitCause } from './daemon-pidfile';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
+import { installFetchDispatcher } from './fetch-dispatcher';
 import { readFinishedTasks } from './finished-tasks';
 import { readGitStamp } from './git-info';
 import { registerIpc } from './ipc';
@@ -36,6 +37,7 @@ import { RemoteAccess } from './remote/remote-access';
 import { onSettingsWritten, readSettings } from './settings';
 import { ShareConfigPush } from './share-config-push';
 import { TerminalSessions } from './terminal-sessions';
+import { reportUncaughtErrors } from './uncaught-error-report';
 import { createUpdateService } from './update-service';
 import {
   describeLoadFailure,
@@ -121,6 +123,24 @@ const supervisor = new DaemonSupervisor({
       source: 'daemon-supervisor',
     });
   },
+});
+// Before anything here calls `fetch`: see fetch-dispatcher.ts for the crash
+// it prevents. Said in the log when skipped, so a later crash can be told
+// apart from one this should have stopped.
+const fetchDispatcherSkipped = installFetchDispatcher();
+if (fetchDispatcherSkipped !== null) {
+  void reportMainLog(
+    null,
+    'warn',
+    `fetch dispatcher left as it is: ${fetchDispatcherSkipped}`,
+    { source: 'fetch-dispatcher' },
+  );
+}
+reportUncaughtErrors((message, context) => {
+  void reportMainLog(supervisor.getHandle(), 'error', message, {
+    ...context,
+    source: 'main-process',
+  });
 });
 /**
  * The sharing settings live in settings.json and the daemon holds them in

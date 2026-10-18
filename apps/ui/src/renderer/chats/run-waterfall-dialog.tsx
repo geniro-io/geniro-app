@@ -25,6 +25,7 @@ import {
   ChartTooltip,
   SERIES,
 } from '../stats/charts/chart-theme';
+import { StatCell, StatGrid } from '../stats/stat-card';
 import {
   formatCount,
   formatDuration,
@@ -288,7 +289,7 @@ export function RunWaterfallDialog({
 
   const pick = (insight: Insight): void => {
     if (insight.target === null) {
-      setCritical(true);
+      setCritical(!critical);
       setSelected(null);
       return;
     }
@@ -459,13 +460,13 @@ function Section({
 }
 
 /**
- * The run's headline figures, as one line a person reads across.
+ * The run's headline figures, one ruled surface a person reads across.
  *
  * `wall clock`, `agent time` and `parallel` sit beside each other on purpose:
  * the gap between the first two IS the answer to "why did this take all
  * afternoon", and the third says it as a single number. Every figure is one
- * size — REPORTED earlier as "сверху цифры разного размера" — and keeps its
- * `?`, because three of them are terms this app invented.
+ * size — REPORTED as "сверху цифры разного размера" — and keeps its `?`,
+ * because three of them are terms this app invented.
  */
 function Headline({
   data,
@@ -486,11 +487,10 @@ function Headline({
   const parallel =
     data.totals.workedMs === null ? null : data.totals.workedMs / span;
   return (
-    <div
-      data-slot="waterfall-headline"
-      className="flex flex-wrap items-start gap-x-6 gap-y-3 rounded-xl border border-border bg-card px-4 py-3">
-      <Figure
+    <StatGrid className="grid-cols-2 sm:grid-cols-4 xl:grid-cols-7">
+      <StatCell
         label="spent"
+        help={<FigureHelp label="spent" />}
         value={
           data.totals.costUsd === null
             ? NOT_MEASURED
@@ -502,36 +502,47 @@ function Headline({
             : `${data.totals.costedTurns} of ${data.totals.turns} turns priced`
         }
       />
-      <Figure label="wall clock" value={formatDuration(span)} />
-      <Figure
+      <StatCell
+        label="wall clock"
+        help={<FigureHelp label="wall clock" />}
+        value={formatDuration(span)}
+      />
+      <StatCell
         label="agent time"
+        help={<FigureHelp label="agent time" />}
         value={
           data.totals.workedMs === null
             ? NOT_MEASURED
             : formatDuration(data.totals.workedMs)
         }
       />
-      <Figure
+      <StatCell
         label="parallel"
+        help={<FigureHelp label="parallel" />}
         value={parallel === null ? NOT_MEASURED : `${parallel.toFixed(1)}×`}
       />
-      <Figure
+      <StatCell
         label="waited on you"
+        help={<FigureHelp label="waited on you" />}
         value={
           data.waitedOnUserMs === null
             ? NOT_MEASURED
             : formatDuration(data.waitedOnUserMs)
         }
-        tone={data.waitedOnUserMs === null ? undefined : 'warning'}
         footnote={
           data.waits.length === 0
             ? undefined
             : `${data.waits.length} ${data.waits.length === 1 ? 'card' : 'cards'}`
         }
       />
-      <Figure label="turns" value={formatCount(turnsTaken)} />
-      <Figure
+      <StatCell
+        label="turns"
+        help={<FigureHelp label="turns" />}
+        value={formatCount(turnsTaken)}
+      />
+      <StatCell
         label="tools"
+        help={<FigureHelp label="tools" />}
         value={formatCount(tools)}
         hint={toolsTitle(tools)}
         footnote={
@@ -540,40 +551,44 @@ function Headline({
             : `${data.calls.length} agent calls${failed === 0 ? '' : `, ${failed} failed`}`
         }
       />
-    </div>
+    </StatGrid>
   );
 }
 
-function Figure({
-  label,
-  value,
-  footnote,
-  hint,
-  tone,
+/**
+ * A share drawn as a bar in a TRACK rather than floating: without one a
+ * 2%-wide stripe and a full-width one share no left edge to read against, so a
+ * column of them looks ragged instead of ranked. The track is the rail; the bar
+ * is the reading. One shape for every table on the view.
+ */
+function ShareBar({
+  fraction,
+  colour,
+  className,
 }: {
-  label: string;
-  value: string;
-  footnote?: string;
-  hint?: string;
-  tone?: 'warning';
+  fraction: number;
+  /** A lane's or a series' colour; the primary when absent. */
+  colour?: string;
+  className?: string;
 }): React.JSX.Element {
   return (
-    <div className="flex min-w-0 flex-col gap-0.5" title={hint}>
-      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-        {label}
-        <FigureHelp label={label} />
-      </span>
+    <span
+      aria-hidden="true"
+      className={cn(
+        'block h-1.5 w-full overflow-hidden rounded-full bg-muted',
+        className,
+      )}>
       <span
         className={cn(
-          'text-lg leading-tight font-semibold tabular-nums text-foreground',
-          tone === 'warning' && 'text-warning',
-        )}>
-        {value}
-      </span>
-      {footnote === undefined ? null : (
-        <span className="text-[11px] text-muted-foreground">{footnote}</span>
-      )}
-    </div>
+          'block h-full rounded-full',
+          colour === undefined && 'bg-primary',
+        )}
+        style={{
+          width: `${Math.max(2, Math.min(1, fraction) * 100)}%`,
+          backgroundColor: colour,
+        }}
+      />
+    </span>
   );
 }
 
@@ -895,16 +910,10 @@ function FoldTable({
                 </td>
                 <td className="h-9 px-3">
                   <span className="flex items-center justify-end gap-2">
-                    <span
-                      aria-hidden="true"
-                      className="block h-1.5 w-12 overflow-hidden rounded-full bg-muted">
-                      <span
-                        className="block h-full rounded-full bg-primary"
-                        style={{
-                          width: `${Math.max(2, ((row.costUsd ?? 0) / peak) * 100)}%`,
-                        }}
-                      />
-                    </span>
+                    <ShareBar
+                      fraction={(row.costUsd ?? 0) / peak}
+                      className="w-12"
+                    />
                     <span className="font-medium tabular-nums text-foreground">
                       {row.costUsd === null
                         ? NOT_MEASURED
@@ -1003,17 +1012,10 @@ function ToolTable({
                   </span>
                 </td>
                 <td className="h-9 px-3">
-                  <span
-                    aria-hidden="true"
-                    className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                    <span
-                      className="block h-full rounded-full"
-                      style={{
-                        width: `${Math.max(2, (row.calls / (rows[0]?.calls ?? 1)) * 100)}%`,
-                        backgroundColor: categoryToken(index),
-                      }}
-                    />
-                  </span>
+                  <ShareBar
+                    fraction={row.calls / (rows[0]?.calls ?? 1)}
+                    colour={categoryToken(index)}
+                  />
                 </td>
                 <td className="h-9 px-3 text-right font-medium tabular-nums text-foreground">
                   {formatCount(row.calls)}
@@ -1192,7 +1194,6 @@ function TopTurns({
               <tr
                 key={index}
                 data-slot="waterfall-top-turn"
-                aria-selected={sameMark(selected, mark)}
                 className={cn(
                   'cursor-pointer border-t border-border/60 hover:bg-muted/40',
                   sameMark(selected, mark) && 'bg-muted/50',
@@ -1207,9 +1208,20 @@ function TopTurns({
                       className="size-2 shrink-0 rounded-[2px]"
                       style={{ backgroundColor: colour }}
                     />
-                    <span className="truncate text-foreground">
+                    {/*
+                      A BUTTON, so the row is reachable from the keyboard: the
+                      row's own click is the pointer's shortcut to the same.
+                    */}
+                    <button
+                      type="button"
+                      aria-pressed={sameMark(selected, mark)}
+                      className="cursor-pointer truncate text-left text-xs text-foreground hover:underline"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSelect(sameMark(selected, mark) ? null : mark);
+                      }}>
                       {turn.nodeId ?? 'agent'}
-                    </span>
+                    </button>
                   </span>
                 </td>
                 <td className="h-9 px-3 text-muted-foreground">
@@ -1218,23 +1230,10 @@ function TopTurns({
                   </span>
                 </td>
                 <td className="h-9 px-3">
-                  {/*
-                    The bar runs in a TRACK rather than floating: without one a
-                    2%-wide stripe and a full-width one share no left edge to
-                    read against, so a column of them looks ragged instead of
-                    ranked. The track is the rail; the bar is the reading.
-                  */}
-                  <span
-                    aria-hidden="true"
-                    className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                    <span
-                      className="block h-full rounded-full"
-                      style={{
-                        width: `${Math.max(2, ((turn.costUsd ?? 0) / peak) * 100)}%`,
-                        backgroundColor: colour,
-                      }}
-                    />
-                  </span>
+                  <ShareBar
+                    fraction={(turn.costUsd ?? 0) / peak}
+                    colour={colour}
+                  />
                 </td>
                 <td className="h-9 px-3 text-right font-medium tabular-nums text-foreground">
                   {turn.costUsd === null

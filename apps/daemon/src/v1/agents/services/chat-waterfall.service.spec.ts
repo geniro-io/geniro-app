@@ -16,6 +16,7 @@ interface StoredRow {
   nodeId: string | null;
   payload: unknown;
   secondsIn: number;
+  inCall?: string | null;
 }
 
 const T0 = Date.parse('2026-09-07T12:00:00.000Z');
@@ -79,9 +80,10 @@ function build(
     {
       timelineSpine: () =>
         Promise.resolve(
-          rows.map(({ seq, kind, nodeId, payload, secondsIn }) => ({
+          rows.map(({ seq, kind, nodeId, payload, secondsIn, inCall }) => ({
             seq,
             kind,
+            inCall: inCall ?? null,
             role:
               kind === 'message'
                 ? ((payload as { role?: string } | null)?.role ?? null)
@@ -870,6 +872,29 @@ describe('ChatWaterfallService', () => {
       expect(result.turns.map((turn) => turn.seq)).toEqual([2]);
     });
 
+    it("takes a callee's turn to ITS conversation's row when one node answers two calls at once", async () => {
+      // Call c2's turn ran 50–100s, but call c1's conversation on the same node
+      // wrote first inside that stretch (seq 2). Landing there would open c1's
+      // card for c2's turn.
+      const result = await build([
+        row(0, 'message', { role: 'user' }, 0),
+        { ...row(2, 'tool_call', null, 55, 'eng'), inCall: 'c1' },
+        { ...row(3, 'tool_call', null, 60, 'eng'), inCall: 'c2' },
+        {
+          ...row(
+            4,
+            'turn_complete',
+            { callId: 'c2', usage: { durationMs: 50_000 } },
+            100,
+            'eng',
+          ),
+          inCall: 'c2',
+        },
+      ]).read('run-a');
+
+      expect(result.turns.map((turn) => turn.seq)).toEqual([3]);
+    });
+
     it('falls back to the closing row when the turn wrote nothing inside its span', async () => {
       const result = await build([
         row(0, 'message', { role: 'user' }, 0),
@@ -1026,6 +1051,9 @@ describe('ChatWaterfallService', () => {
     // run backwards rather than shortening it.
     expect(result.turns[0]?.startedAt).toBe(iso(19));
     expect(result.turns.at(-1)?.startedAt).toBe(iso(518));
+    // The critical path is folded BEFORE the cap: it still starts at the
+    // run's first row, where a path over the kept tail would start at 19s.
+    expect(result.criticalPath[0]?.startedAt).toBe(iso(0));
   });
 
   it('folds every span UNCAPPED for an analysis while the card still caps', async () => {

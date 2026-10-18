@@ -72,6 +72,24 @@ describe('breakdownRows', () => {
     expect(rows.find((row) => row.key === 'eng')?.withCalleesUsd).toBe(2);
   });
 
+  it("counts a callee's price toward its caller only for turns that ended in the window", () => {
+    // The engineer answered with two turns; zoomed onto the first, only that
+    // turn's money is the manager's "with callees" figure.
+    const data = wfDto(100, {
+      lanes: [wfLane('mgr'), wfLane('eng')],
+      turns: [
+        wfTurn('mgr', 0, 5, { costUsd: 1 }),
+        wfTurn('eng', 10, 30, { costUsd: 2 }),
+        wfTurn('eng', 40, 70, { costUsd: 4 }),
+      ],
+      calls: [wfCall('mgr', 'eng', 5, 80)],
+    });
+
+    const rows = breakdownRows(data, between(0, 35), 'agent', undefined);
+
+    expect(rows.find((row) => row.key === 'mgr')?.withCalleesUsd).toBe(3);
+  });
+
   it('reads the cache share only off turns that reported both figures', () => {
     // The second turn reported a cache read but no input: it would drag the
     // share toward 100% on a figure nobody measured.

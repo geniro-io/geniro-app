@@ -258,6 +258,12 @@ One home for each concern:
 - A direct link (`#chats/<id>`) or the processes panel can still open an analysis as the thread on screen; its header's "Analyzing: <source> ↗" chip (`analysisSourceOf`) is kept for exactly that way back.
 - The popup and the builder's chat dock are one surface: `chats/hosted-chat.tsx` (`HostedChat`, transcript + composer + chips) over `chats/use-hosted-chat.ts`. Change a hosted-chat behaviour there, never in one frame.
 
+**Run waterfall** (`chats/run-waterfall-*.ts(x)`, the "Where the run went" card and its full view):
+
+- Every span, its `seq` (what "Open in chat" jumps to) and the critical path come from the daemon's waterfall route; the renderer never folds them from loaded `items`.
+- `blocksCaller` (`run-waterfall-geometry.ts`) is a twin of the daemon's critical-path rule in `v1/agents/utils/thread-timeline.ts`: any call not `async` holds its caller. Change one, change the other.
+- The full view reads ONE state (zoom window, selected mark, focused agent); the tables count a turn's time where it overlaps the window and its money where it ended (`run-waterfall-breakdown.ts`).
+
 **Cards (agent-drawn payloads):**
 
 - Each card kind has a twin parser (`*-payload.ts`) of the daemon's schema.

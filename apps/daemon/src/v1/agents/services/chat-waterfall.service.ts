@@ -313,6 +313,8 @@ type SpineRow = {
   kind: string;
   role: string | null;
   nodeId: string | null;
+  /** The call whose card the row is drawn in — `''` for the node's own flow, null when not stamped yet. */
+  inCall?: string | null;
   createdAt: Date;
 };
 
@@ -454,6 +456,7 @@ function foldTurns(
         endedMs - durationMs,
         endedMs,
         row.seq,
+        asString(body?.callId),
       ),
       timingSource: usable === null ? 'derived' : 'cli',
       outcome: 'completed',
@@ -719,7 +722,11 @@ function countBefore(
 function laneRows(spine: readonly SpineRow[]): Map<string | null, LaneRow[]> {
   const byLane = new Map<string | null, LaneRow[]>();
   for (const row of spine) {
-    const entry = { at: row.createdAt.getTime(), seq: row.seq };
+    const entry = {
+      at: row.createdAt.getTime(),
+      seq: row.seq,
+      inCall: row.inCall ?? null,
+    };
     const own = byLane.get(row.nodeId);
     if (own === undefined) {
       byLane.set(row.nodeId, [entry]);
@@ -730,22 +737,35 @@ function laneRows(spine: readonly SpineRow[]): Map<string | null, LaneRow[]> {
   return byLane;
 }
 
-/** One row a lane wrote: when, and its seq. */
-type LaneRow = { at: number; seq: number };
+/** One row a lane wrote: when, its seq, and the call it is drawn in. */
+type LaneRow = { at: number; seq: number; inCall: string | null };
 
 /**
  * Where a reader is taken for a turn: the first row its lane wrote inside the
  * turn's span, which is the turn's own opening in the transcript. A turn that
- * wrote nothing inside its span (a derived one is measured FROM a row before
- * it) falls back to the row that closed it, which always exists.
+ * wrote nothing inside its span falls back to the row that closed it, which
+ * always exists. (A derived span starts AT the lane's previous row, so a
+ * derived turn lands on the row its bar is drawn from.)
+ *
+ * Matched on the turn's CONVERSATION as well as its node: one node can answer
+ * two calls at once, and the other call's row inside the same stretch would
+ * open the wrong card. A row not stamped with its call yet (`inCall` null)
+ * still counts — it is the node's, and the closing row is no closer.
  */
 function firstSeqWithin(
   rows: readonly LaneRow[] | undefined,
   startMs: number,
   endMs: number,
   closingSeq: number,
+  callId: string | null,
 ): number {
-  const first = rows?.find((row) => row.at >= startMs && row.at <= endMs);
+  const conversation = callId ?? '';
+  const first = rows?.find(
+    (row) =>
+      row.at >= startMs &&
+      row.at <= endMs &&
+      (row.inCall === null || row.inCall === conversation),
+  );
   return first?.seq ?? closingSeq;
 }
 

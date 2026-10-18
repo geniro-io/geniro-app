@@ -154,6 +154,14 @@ export function measuredRow(label: string, value: string | null): TooltipRow {
   return { label, value: value ?? '', unmeasured: value === null };
 }
 
+/**
+ * A lane's React key. The chat's own lane is keyed null, and spelling that as
+ * a word collided with a node of the same name.
+ */
+function laneKey(nodeId: string | null): string {
+  return nodeId === null ? '\u0000chat' : `node:${nodeId}`;
+}
+
 /** The DOM key of a mark, which the arrows find their ends by. */
 function markKey(mark: WaterfallMark): string {
   return `${mark.kind}-${mark.index}`;
@@ -280,7 +288,7 @@ export function Gantt({
         {data.lanes.map((lane, index) => {
           const faded = focus !== undefined && focus !== lane.nodeId;
           return (
-            <Fragment key={lane.nodeId ?? 'chat'}>
+            <Fragment key={laneKey(lane.nodeId)}>
               <LaneLabel
                 lane={lane}
                 index={index}
@@ -1051,7 +1059,12 @@ function WaitLane({
                     },
                     {
                       label: 'answered',
-                      value: wait.allowed ? 'yes' : 'no',
+                      value:
+                        wait.allowed === null
+                          ? '—'
+                          : wait.allowed
+                            ? 'yes'
+                            : 'no',
                     },
                   ],
                 });
@@ -1095,6 +1108,19 @@ function CallArrows({
   selected: WaterfallMark | null;
   view: ClockWindow;
 }): React.JSX.Element | null {
+  // Bumped whenever the grid changes size: the arrows are pixels measured
+  // off bars placed in percentages, so a window resize moves the bars and
+  // leaves the arrows pointing at where they used to be.
+  const [measure, setMeasure] = useState(0);
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (grid === null || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const observer = new ResizeObserver(() => setMeasure((n) => n + 1));
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, [gridRef]);
   const [paths, setPaths] = useState<{
     out: string;
     back: string;
@@ -1162,7 +1188,7 @@ function CallArrows({
       ),
       colour: categoryToken(laneIndexOf(data, call.calleeNodeId)),
     });
-  }, [data, gridRef, selected, view]);
+  }, [data, gridRef, selected, view, measure]);
 
   if (paths === null) {
     return null;
@@ -1313,6 +1339,10 @@ export function WaterfallOverview({
     3,
     Math.min(6, Math.floor(30 / Math.max(1, rows))),
   );
+  // The strip GROWS for a run with many agents rather than clipping its last
+  // rows — the waits row is drawn last, and on a nine-agent run with cards it
+  // fell off the bottom of a fixed 40px.
+  const stripHeight = Math.max(40, 8 + rows * (rowHeight + 1) + 2);
   const zoomed = view.from > full.from || view.to < full.to;
   const atX = (element: HTMLElement, clientX: number): number => {
     const rect = element.getBoundingClientRect();
@@ -1331,9 +1361,16 @@ export function WaterfallOverview({
   return (
     <div
       data-slot="waterfall-overview"
+      role="group"
       aria-label="The whole run — drag across it to zoom in"
-      className="relative h-10 cursor-crosshair touch-none overflow-hidden rounded-lg border border-border bg-background select-none"
+      className="relative cursor-crosshair touch-none overflow-hidden rounded-lg border border-border bg-background select-none"
+      style={{ height: stripHeight }}
       onPointerDown={(event) => {
+        // The primary button only: a right-click opening a menu is not the
+        // start of a drag.
+        if (event.button !== 0) {
+          return;
+        }
         const at = atX(event.currentTarget, event.clientX);
         event.currentTarget.setPointerCapture?.(event.pointerId);
         setDrag({ from: at, to: at });
@@ -1344,22 +1381,30 @@ export function WaterfallOverview({
         }
         setDrag({ ...drag, to: atX(event.currentTarget, event.clientX) });
       }}
-      onPointerUp={() => {
+      onPointerUp={(event) => {
         if (drag === null) {
           return;
         }
-        const from = Math.min(drag.from, drag.to);
-        const to = Math.max(drag.from, drag.to);
+        // The END is read off this event, not off the last move the state has
+        // caught up with: a quick flick can lift before its moves render.
+        const end = atX(event.currentTarget, event.clientX);
+        const from = Math.min(drag.from, end);
+        const to = Math.max(drag.from, end);
         setDrag(null);
         // A click, or a drag too short to mean a stretch, is not a zoom.
         if (to - from >= span * 0.02) {
           onWindow({ from, to });
         }
       }}
+      // A drag the system took away — a gesture, a lost capture — ends with
+      // no zoom. Left standing, the brush followed a pointer with no button
+      // held and the next click zoomed to a stretch nobody chose.
+      onPointerCancel={() => setDrag(null)}
+      onLostPointerCapture={() => setDrag(null)}
       onDoubleClick={() => onWindow(full)}>
       {data.lanes.map((lane, row) => (
         <span
-          key={lane.nodeId ?? 'chat'}
+          key={laneKey(lane.nodeId)}
           aria-hidden="true"
           className="absolute inset-x-0"
           style={{ top: 4 + row * (rowHeight + 1), height: rowHeight }}>

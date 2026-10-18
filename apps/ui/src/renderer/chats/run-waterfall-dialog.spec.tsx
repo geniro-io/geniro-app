@@ -113,6 +113,9 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  // The critical-path switch remembers itself; a spec that turned it on must
+  // not hand every later spec a view that starts with it lit.
+  localStorage.clear();
 });
 
 describe('RunWaterfallDialog', () => {
@@ -298,8 +301,8 @@ describe('RunWaterfallDialog', () => {
       }),
     );
 
-    // The footnote's own wording, not the bare word — the legend beside it
-    // says "outlined red if it failed".
+    // The footnote's own wording, not the bare word — an insight about a
+    // failed call would carry "failed" too.
     expect(view.textContent).toContain('1 agent calls');
     expect(view.textContent).not.toContain('1 agent calls, 1 failed');
   });
@@ -675,6 +678,132 @@ describe('RunWaterfallDialog', () => {
     expect(stripes.map((stripe) => stripe.style.width)).toEqual(['85%', '25%']);
     expect(stripes[0]?.className).toContain('bg-destructive');
     expect(stripes[1]?.className).not.toContain('bg-destructive');
+  });
+});
+
+describe('the rest of the view answering the pointer', () => {
+  it('zooms to the stretch dragged across the overview, and not on a mere click', () => {
+    const view = show(dto({ turns: [turn()] }));
+    const strip = view.querySelector<HTMLElement>(
+      '[data-slot="waterfall-overview"]',
+    );
+    expect(strip).not.toBeNull();
+    // jsdom lays nothing out; the strip is given a 1000px box to drag across.
+    Object.defineProperty(strip, 'getBoundingClientRect', {
+      value: () => ({ left: 0, width: 1000, top: 0, height: 40 }),
+    });
+    const pointer = (type: string, clientX: number): void => {
+      act(() => {
+        strip?.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, clientX, button: 0 }),
+        );
+      });
+    };
+
+    // A click — down and up at one spot — zooms nowhere.
+    pointer('pointerdown', 300);
+    pointer('pointerup', 301);
+    expect(view.textContent).toContain('the whole run');
+
+    // A drag from 25% to 50% of an hour's run zooms to 15m–30m.
+    pointer('pointerdown', 250);
+    pointer('pointermove', 400);
+    pointer('pointerup', 500);
+    expect(view.textContent).toContain('15m – 30m of 1h');
+  });
+
+  it('lets Escape drop a focused agent when nothing is selected', () => {
+    const onClose = vi.fn();
+    const view = show(
+      dto({
+        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
+      }),
+      { onClose },
+    );
+    press(view.querySelector('[data-slot="waterfall-lane-label"]'));
+    expect(buttonNamed(view, 'Every agent')).toBeDefined();
+
+    escape();
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(buttonNamed(view, 'Every agent')).toBeUndefined();
+  });
+
+  it('clears a focus from its own button', () => {
+    const view = show(
+      dto({
+        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
+      }),
+    );
+    press(view.querySelector('[data-slot="waterfall-lane-label"]'));
+
+    press(buttonNamed(view, 'Every agent'));
+
+    expect(
+      view
+        .querySelector('[data-slot="waterfall-lane-label"]')
+        ?.getAttribute('aria-pressed'),
+    ).toBe('false');
+  });
+
+  it('draws arrows for a selected call to the work that answered it, and none for a turn', () => {
+    const view = show(
+      dto({
+        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
+        turns: [turn({ nodeId: 'engineer', durationMs: 5 * 60_000 })],
+        calls: [
+          {
+            callerNodeId: 'manager',
+            calleeNodeId: 'engineer',
+            mode: 'sync',
+            status: 'ok',
+            running: false,
+            startedAt: FROM,
+            seq: 9,
+            durationMs: 10 * 60_000,
+          },
+        ],
+      }),
+    );
+    expect(view.querySelector('[data-slot="waterfall-arrows"]')).toBeNull();
+
+    press(view.querySelector('[data-slot="waterfall-turn"]'));
+    expect(view.querySelector('[data-slot="waterfall-arrows"]')).toBeNull();
+
+    press(view.querySelector('[data-slot="waterfall-call"]'));
+    expect(
+      // The two curves — out, and back — not the arrowhead's own path.
+      view.querySelectorAll('[data-slot="waterfall-arrows"] > path'),
+    ).toHaveLength(2);
+  });
+
+  it('turns the critical path on and off from an insight about the run as a whole', () => {
+    const view = show(
+      dto({
+        criticalPath: [
+          {
+            kind: 'idle',
+            nodeId: null,
+            startedAt: FROM,
+            durationMs: 50 * 60_000,
+          },
+        ],
+      }),
+    );
+    const insight = (): Element | undefined =>
+      [
+        ...view.querySelectorAll('[data-slot="waterfall-insights"] button'),
+      ].find((each) => each.textContent?.includes('nobody was working'));
+    const critical = (): string | null | undefined =>
+      buttonNamed(view, 'Critical path')?.getAttribute('aria-pressed');
+    expect(critical()).toBe('false');
+
+    press(insight());
+    expect(critical()).toBe('true');
+    expect(insight()?.getAttribute('aria-pressed')).toBe('true');
+
+    press(insight());
+    expect(critical()).toBe('false');
   });
 });
 

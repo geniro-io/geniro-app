@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,6 +21,7 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => mocks.userData) },
 }));
 
+import { copyWorktreeIncludeFiles } from './worktree-include';
 import {
   prepareWorktree,
   pruneWorktreeForTask,
@@ -1022,4 +1023,328 @@ describe('reapFinishedWorktrees', () => {
     const raw = readFileSync(join(mocks.userData, 'worktrees.json'), 'utf8');
     expect(() => JSON.parse(raw) as unknown).not.toThrow();
   });
+});
+
+describe('.worktreeinclude files a new worktree starts with', () => {
+  /** Ignore `ignoredName`, list `includeLines`, and write the ignored file. */
+  const ignoreAndInclude = (
+    ignoredName: string,
+    includeLines: string[],
+  ): void => {
+    writeFileSync(join(repo, '.gitignore'), `${ignoredName}\n`);
+    git(repo, 'add', '.gitignore');
+    git(repo, 'commit', '-m', 'ignore');
+    writeFileSync(
+      join(repo, '.worktreeinclude'),
+      `${includeLines.join('\n')}\n`,
+    );
+    const ignoredPath = join(repo, ignoredName);
+    mkdirSync(dirname(ignoredPath), { recursive: true });
+    writeFileSync(ignoredPath, 'ignored-by-git\n');
+  };
+
+  it(
+    'copies a gitignored file listed in .worktreeinclude into a NEW worktree',
+    async () => {
+      ignoreAndInclude('.env', ['.env']);
+      const log = vi.fn();
+
+      const made = await prepareWorktree(
+        { taskId: 't1', folder: repo },
+        { log },
+      );
+
+      expect(made.reused).toBe(false);
+      expect(readFileSync(join(made.path, '.env'), 'utf8')).toBe(
+        'ignored-by-git\n',
+      );
+      expect(log).toHaveBeenCalledWith(
+        'info',
+        expect.stringContaining('worktree include copied 1 file(s)'),
+      );
+      expect(log).toHaveBeenCalledWith('info', expect.stringContaining('.env'));
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'leaves a tracked file that matches .worktreeinclude to git',
+    async () => {
+      writeFileSync(join(repo, 'tracked.cfg'), 'from-git\n');
+      git(repo, 'add', 'tracked.cfg');
+      git(repo, 'commit', '-m', 'tracked');
+      writeFileSync(join(repo, 'tracked.cfg'), 'edited-in-source\n');
+      writeFileSync(join(repo, '.gitignore'), 'local-only\n');
+      git(repo, 'add', '.gitignore');
+      git(repo, 'commit', '-m', 'ignore');
+      writeFileSync(join(repo, 'local-only'), 'local\n');
+      writeFileSync(
+        join(repo, '.worktreeinclude'),
+        'tracked.cfg\nlocal-only\n',
+      );
+
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(readFileSync(join(made.path, 'tracked.cfg'), 'utf8')).toBe(
+        'from-git\n',
+      );
+      expect(existsSync(join(made.path, 'local-only'))).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'does not copy a listed file that is NOT gitignored',
+    async () => {
+      writeFileSync(join(repo, '.gitignore'), 'secret.env\n');
+      git(repo, 'add', '.gitignore');
+      git(repo, 'commit', '-m', 'ignore');
+      writeFileSync(join(repo, 'plain.txt'), 'visible\n');
+      writeFileSync(join(repo, '.worktreeinclude'), 'plain.txt\n');
+
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(existsSync(join(made.path, 'plain.txt'))).toBe(false);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'copies nothing when the checkout has no .worktreeinclude',
+    async () => {
+      writeFileSync(join(repo, '.gitignore'), '.env\n');
+      git(repo, 'add', '.gitignore');
+      git(repo, 'commit', '-m', 'ignore');
+      writeFileSync(join(repo, '.env'), 'secret\n');
+      const log = vi.fn();
+
+      const made = await prepareWorktree(
+        { taskId: 't1', folder: repo },
+        { log },
+      );
+
+      expect(existsSync(join(made.path, '.env'))).toBe(false);
+      expect(log).not.toHaveBeenCalled();
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'does not copy through a symlink that points outside the repository',
+    async () => {
+      const outside = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-worktree-outside-')),
+      );
+      writeFileSync(join(outside, 'leak.txt'), 'outside\n');
+      try {
+        ignoreAndInclude('link-target', ['link-target']);
+        rmSync(join(repo, 'link-target'));
+        symlinkSync(join(outside, 'leak.txt'), join(repo, 'link-target'));
+
+        const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+        expect(existsSync(join(made.path, 'link-target'))).toBe(false);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'never writes through a symlinked folder the task branch carries',
+    async () => {
+      // A leftover task branch, from an earlier run, that committed `config`
+      // as a symlink out of the tree; in the checkout `config/` is a real,
+      // ignored folder holding the listed `.env`.
+      const outside = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-worktree-outside-')),
+      );
+      try {
+        writeFileSync(join(repo, '.gitignore'), 'config/\n');
+        git(repo, 'add', '.gitignore');
+        git(repo, 'commit', '-m', 'ignore');
+        git(repo, 'checkout', '-b', taskBranchName('t1'));
+        symlinkSync(outside, join(repo, 'config'));
+        git(repo, 'add', '-f', 'config');
+        git(repo, 'commit', '-m', 'a symlinked folder');
+        git(repo, 'checkout', 'main');
+        mkdirSync(join(repo, 'config'));
+        writeFileSync(join(repo, 'config', '.env'), 'secret\n');
+        writeFileSync(join(repo, '.worktreeinclude'), 'config/.env\n');
+        const log = vi.fn();
+
+        const made = await prepareWorktree(
+          { taskId: 't1', folder: repo },
+          { log },
+        );
+
+        expect(existsSync(join(outside, '.env'))).toBe(false);
+        expect(log).toHaveBeenCalledWith(
+          'warn',
+          expect.stringContaining('skipped config/.env: a folder on its path'),
+        );
+        expect(made.reused).toBe(false);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'logs and copies nothing when the worktree folder cannot be resolved',
+    async () => {
+      ignoreAndInclude('.env', ['.env']);
+      const log = vi.fn();
+
+      await copyWorktreeIncludeFiles({
+        folder: repo,
+        worktree: join(mocks.userData, 'no-such-worktree'),
+        log,
+      });
+
+      expect(log).toHaveBeenCalledWith(
+        'warn',
+        expect.stringContaining('worktree include not copied into'),
+      );
+      expect(existsSync(join(mocks.userData, 'no-such-worktree'))).toBe(false);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'does not overwrite a file that is already present in the worktree',
+    async () => {
+      ignoreAndInclude('keep.cfg', ['keep.cfg']);
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      writeFileSync(join(made.path, 'keep.cfg'), 'already-here\n');
+      writeFileSync(join(repo, 'keep.cfg'), 'from-source\n');
+
+      await copyWorktreeIncludeFiles({
+        folder: repo,
+        worktree: made.path,
+        log: () => {},
+      });
+
+      expect(readFileSync(join(made.path, 'keep.cfg'), 'utf8')).toBe(
+        'already-here\n',
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'logs a file it could not copy and copies the rest',
+    async () => {
+      ignoreAndInclude('conf/local.json', ['conf/local.json', '.env']);
+      writeFileSync(join(repo, '.gitignore'), 'conf/local.json\n.env\n');
+      git(repo, 'commit', '-am', 'ignore both');
+      writeFileSync(join(repo, '.env'), 'env\n');
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      rmSync(join(made.path, '.env'));
+      rmSync(join(made.path, 'conf'), { recursive: true, force: true });
+      // A FILE where the copy needs a folder.
+      writeFileSync(join(made.path, 'conf'), 'in the way\n');
+      const log = vi.fn();
+
+      await copyWorktreeIncludeFiles({
+        folder: repo,
+        worktree: made.path,
+        log,
+      });
+
+      expect(log).toHaveBeenCalledWith(
+        'warn',
+        expect.stringContaining('could not copy conf/local.json'),
+      );
+      expect(readFileSync(join(made.path, '.env'), 'utf8')).toBe('env\n');
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'copies from the repository root when the card folder is a subfolder',
+    async () => {
+      const pkg = join(repo, 'packages', 'app');
+      mkdirSync(pkg, { recursive: true });
+      ignoreAndInclude('.env', ['.env']);
+
+      const made = await prepareWorktree({ taskId: 't1', folder: pkg });
+
+      expect(readFileSync(join(made.path, '.env'), 'utf8')).toBe(
+        'ignored-by-git\n',
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'copies nothing into a REUSED worktree',
+    async () => {
+      ignoreAndInclude('.claude/settings.local.json', [
+        '.claude/settings.local.json',
+      ]);
+      const first = await prepareWorktree({ taskId: 't1', folder: repo });
+      rmSync(join(first.path, '.claude'), { recursive: true, force: true });
+
+      const again = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(again.reused).toBe(true);
+      expect(
+        existsSync(join(again.path, '.claude', 'settings.local.json')),
+      ).toBe(false);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'logs and still makes the worktree when git cannot read .worktreeinclude',
+    async () => {
+      // A directory where the file should be: it exists, and git refuses it
+      // as an exclude file.
+      mkdirSync(join(repo, '.worktreeinclude'));
+      const log = vi.fn();
+
+      const made = await prepareWorktree(
+        { taskId: 't1', folder: repo },
+        { log },
+      );
+
+      expect(made.reused).toBe(false);
+      expect(existsSync(join(made.path, 'README.md'))).toBe(true);
+      expect(log).toHaveBeenCalledWith(
+        'warn',
+        expect.stringContaining('git could not list the ignored files'),
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'logs and goes on when git cannot name the checkout',
+    async () => {
+      const notARepo = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-worktree-plain-')),
+      );
+      const log = vi.fn();
+      try {
+        await expect(
+          copyWorktreeIncludeFiles({
+            folder: notARepo,
+            worktree: join(notARepo, 'wt'),
+            log,
+          }),
+        ).resolves.toBeUndefined();
+      } finally {
+        rmSync(notARepo, { recursive: true, force: true });
+      }
+
+      expect(log).toHaveBeenCalledWith(
+        'warn',
+        expect.stringContaining('could not name the checkout root'),
+      );
+    },
+    TIMEOUT_MS,
+  );
 });

@@ -85,11 +85,11 @@ import {
 } from '../utils/wall-worked';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
+import { UnknownAgentVersion } from './__tests__/unknown-agent-version';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import type { AgentMcpService } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
-import { AgentVersionService } from './agent-version.service';
 import { AnalysisBroker } from './analysis.broker';
 import type { AnalysisReportsService } from './analysis-reports.service';
 import { ApprovalRegistry } from './approval-registry';
@@ -1092,7 +1092,9 @@ function setup(
   const efforts = new EffortsService(
     adapters,
     new ProcessRegistry(),
-    new AgentVersionService(),
+    // `null`, what CI's missing binary answers, without forking the installed
+    // CLI's `--version` in every test.
+    new UnknownAgentVersion(),
   );
   // The REAL teardown over the same fakes: `delete` is a thin caller of it, so
   // a mock here would leave every assertion below pinning the mock.

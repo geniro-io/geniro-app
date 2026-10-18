@@ -78,6 +78,35 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     });
   }
 
+  /**
+   * {@link legacy} for rows `1..count` of a run, in one flush. A run past one
+   * stamping batch is 600 rows, and a flush per row made such a case alone take
+   * ~1s on an idle machine and run out of its 5s on a loaded one.
+   */
+  async function legacyRun(
+    count: number,
+    row: (seq: number) => {
+      kind: ItemKind;
+      nodeId: string;
+      payload: Record<string, unknown>;
+    },
+    runId = 'run-1',
+  ): Promise<void> {
+    await dao.createMany(
+      Array.from({ length: count }, (_, index) => {
+        const seq = index + 1;
+        const { kind, nodeId, payload } = row(seq);
+        return {
+          runId,
+          seq,
+          kind,
+          nodeId,
+          payload: JSON.stringify(payload),
+        };
+      }),
+    );
+  }
+
   async function inCallBySeq(runId = 'run-1'): Promise<(string | null)[]> {
     const rows = await dao.getByRun(runId, -1, orm.em.fork() as EntityManager);
     return rows.map((row) => row.inCall);
@@ -174,12 +203,11 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       callId: 'call-1',
       calleeNodeId: 'engineer',
     });
-    for (let seq = 1; seq <= 600; seq += 1) {
-      await legacy(seq, 'tool_call', 'engineer', {
-        id: `t${seq}`,
-        callId: 'call-1',
-      });
-    }
+    await legacyRun(600, (seq) => ({
+      kind: 'tool_call',
+      nodeId: 'engineer',
+      payload: { id: `t${seq}`, callId: 'call-1' },
+    }));
 
     await index.ensureIndexed('run-1');
 
@@ -268,9 +296,15 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       await runs.create({ id: 'run-1', workflowId: 'dev-team' });
       await runs.create({ id: 'run-2', workflowId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
-      for (let seq = 1; seq <= 600; seq += 1) {
-        await legacy(seq, 'message', 'manager', { text: `m${seq}` }, 'run-2');
-      }
+      await legacyRun(
+        600,
+        (seq) => ({
+          kind: 'message',
+          nodeId: 'manager',
+          payload: { text: `m${seq}` },
+        }),
+        'run-2',
+      );
       // run-2's first batch lands BEFORE the clear and its second after it.
       let firstBatchDone: () => void = () => undefined;
       const firstBatch = new Promise<void>((resolve) => {
@@ -311,9 +345,11 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     it('leaves no row unstamped when a read was stamping the run as the stamps were cleared', async () => {
       await runs.create({ id: 'run-1', workflowId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
-      for (let seq = 1; seq <= 600; seq += 1) {
-        await legacy(seq, 'message', 'manager', { text: `m${seq}` });
-      }
+      await legacyRun(600, (seq) => ({
+        kind: 'message',
+        nodeId: 'manager',
+        payload: { text: `m${seq}` },
+      }));
 
       await Promise.all([
         index.ensureIndexed('run-1'),

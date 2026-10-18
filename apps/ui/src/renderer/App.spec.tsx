@@ -3,11 +3,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
   afterEach,
+  beforeAll,
   beforeEach,
   describe,
   expect,
-  it,
   onTestFinished,
+  test,
   vi,
 } from 'vitest';
 
@@ -40,6 +41,10 @@ vi.mock('./daemon-client', () => ({
   DaemonClient: class {
     connect(): void {}
     close(): void {}
+    // The Stats page subscribes on mount, and the tab-bar test opens it.
+    onUsageRecorded(): () => void {
+      return () => {};
+    }
   },
 }));
 vi.mock('./terminal/terminal-panel', () => ({ TerminalPanel: () => null }));
@@ -58,6 +63,27 @@ import { DaemonClient } from './daemon-client';
 let container: HTMLDivElement;
 let root: Root;
 
+/**
+ * The running test's body, and whether vitest has finished with it. A test
+ * that times out is abandoned, not stopped: its body goes on pressing buttons
+ * in `container`, which by then holds the NEXT test's App, and that test finds
+ * what it looks for gone. `afterEach` lets the body end first.
+ */
+let body: Promise<void> | null = null;
+let testOver = false;
+/** This file's `it`, which keeps hold of the body for `afterEach`. */
+const it = (name: string, fn: () => Promise<void>): void => {
+  test(name, () => (body = fn()));
+};
+
+// The first import of the Settings chunk compiles its whole module tree: 1.3s
+// on an idle machine and 5–7s at load average 30–80, which a test paying it
+// inside its own 5s budget ran out of. Paid once here, where the work is real
+// and bounded; App's own lazy import then finds the module loaded.
+beforeAll(async () => {
+  await import('./settings/Settings');
+}, 60_000);
+
 /** jsdom ships no `matchMedia`; the shell asks it for the narrow layout. */
 function stubMatchMedia(narrow: boolean): void {
   window.matchMedia = ((query: string) => ({
@@ -73,16 +99,24 @@ function stubMatchMedia(narrow: boolean): void {
 }
 
 beforeEach(() => {
+  testOver = false;
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   stubMatchMedia(false);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  testOver = true;
+  // Its outcome was the test's to report; here it only has to have ended.
+  await body?.catch(() => undefined);
+  body = null;
   act(() => root.unmount());
   container.remove();
   delete (window as { geniro?: unknown }).geniro;
+  // A test that navigates leaves its hash behind, and the next App would open
+  // on that screen rather than the one its test is about.
+  history.replaceState(null, '', '/');
 });
 
 const flush = async (): Promise<void> => {
@@ -351,7 +385,11 @@ describe('App — phone pages and the tab bar', () => {
     sectionsNav()?.classList.contains('max-sm:hidden') ?? false;
   /** Settings is a lazy chunk: wait for it to replace the Suspense fallback. */
   const waitForSettings = async (): Promise<void> => {
-    for (let tries = 0; tries < 100 && !sectionsNav(); tries += 1) {
+    for (
+      let tries = 0;
+      tries < 100 && !testOver && !sectionsNav();
+      tries += 1
+    ) {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 20));
       });

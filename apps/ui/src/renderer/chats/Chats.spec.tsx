@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { GeniroApi } from '../../shared/contracts';
+import { type GeniroApi, HISTORY_PAGE_SIZES } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { afterPopstate } from '../__tests__/after-popstate';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
@@ -1419,6 +1419,22 @@ describe('Chats — searching one conversation', () => {
     // The forward read a jump makes (`take: 'oldest'`) is answered with MORE
     // rows than the window has room for, which is what a hit far above the
     // tail looks like — a short answer there means the window reaches the end.
+    //
+    // The smallest page size the user can pick, because the window that answer
+    // fills is drawn in full: at the default 1000 jsdom renders a thousand
+    // bubbles and the test outran its timeout on a loaded machine. 250 rows
+    // still overflow the room, so the window still lands away from the tail.
+    (
+      window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }
+    ).geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      historyPageSize: 250,
+    });
     api.listRunItems.mockImplementation(
       (args: { take?: string; limit?: number }) =>
         Promise.resolve(
@@ -1436,6 +1452,9 @@ describe('Chats — searching one conversation', () => {
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
+    expect(api.listRunItems).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r1', limit: 250 }),
+    );
     const rows = await search(container, 'bloom');
     await act(async () => {
       rows[0]!.click();
@@ -1456,7 +1475,10 @@ describe('Chats — searching one conversation', () => {
     expect(api.listRunItems).toHaveBeenCalledWith(
       expect.not.objectContaining({ beforeSeq: expect.anything() }),
     );
-  });
+    // The window it draws is a full page, and 250 rows is the least a page can
+    // be. Measured at load average ~300: 3.9–5.4s, past vitest's 5s default on
+    // drawing alone, so it gets the budget the long-chat tests have.
+  }, 20_000);
 
   it('anchors each rendered entry by the seq it starts at', async () => {
     // What makes a hit REACHABLE once its window is loaded. Without an anchor
@@ -7273,6 +7295,28 @@ describe('Chats queued messages', () => {
   }
 
   /**
+   * The smallest page size the user can pick, for the tests below that open a
+   * chat on a FULL page — the signal that more history lies behind it.
+   *
+   * jsdom draws every row of that page. At the default 1,000 one such test
+   * spent 23–43s drawing it on a loaded machine (load average ~300) and failed
+   * on wall-clock alone. A full page of 250 is still a full page, so the paging
+   * these tests pin is the same, and the reads they assert carry this size.
+   */
+  const SMALL_PAGE = HISTORY_PAGE_SIZES[0];
+  function openAtSmallestPage(): void {
+    window.geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      historyPageSize: SMALL_PAGE,
+    });
+  }
+
+  /**
    * The daemon's refusal to take a message into a turn that is already
    * running — a CLI with no mid-turn channel, or a turn already settling.
    *
@@ -7694,14 +7738,15 @@ describe('Chats queued messages', () => {
         msg(from + i, 'user', `m${from + i}`),
       );
     // A FULL page is the signal that more may exist behind it.
-    api.listRunItems.mockResolvedValue(page(1000, HISTORY_PAGE));
+    openAtSmallestPage();
+    api.listRunItems.mockResolvedValue(page(1000, SMALL_PAGE));
 
     const container = await mount(makeClient().client);
     await clickRun(container, 'My chat');
 
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
-      limit: HISTORY_PAGE,
+      limit: SMALL_PAGE,
       conversation: 'root',
     });
     // Said out loud, rather than leaving a conversation that appears to start
@@ -7738,7 +7783,7 @@ describe('Chats queued messages', () => {
     });
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
-      limit: HISTORY_PAGE,
+      limit: SMALL_PAGE,
       conversation: 'root',
     });
 
@@ -7750,7 +7795,7 @@ describe('Chats queued messages', () => {
 
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
-      limit: HISTORY_PAGE,
+      limit: SMALL_PAGE,
       beforeSeq: 1000,
       conversation: 'root',
     });
@@ -7759,13 +7804,12 @@ describe('Chats queued messages', () => {
     // A budget sized for what this test actually does, replacing vitest's 5s
     // default — which is a default, not a decision anyone made about this case.
     //
-    // It mounts a FULL page: `HISTORY_PAGE` is 1,000 and a full page is the
-    // signal the assertions are about, so the render cannot be made smaller
-    // without pinning something other than the behaviour. That makes it the
-    // heaviest test in the UI suite by CPU (measured: 424ms on its own, 891ms
-    // under the full suite's parallelism) and, unlike the timer-bound tests
-    // above it, its cost scales with how contended the machine is. On a shared
-    // CI runner it crossed 5s and failed on wall-clock alone — never on an
+    // It mounts a FULL page, the signal the assertions are about, so the
+    // render cannot shrink below the smallest page the user can pick (see
+    // `openAtSmallestPage`). That keeps it among the heaviest tests in the UI
+    // suite by CPU and, unlike the timer-bound tests above it, its cost scales
+    // with how contended the machine is. At the old 1,000-row page it crossed
+    // 5s on a shared CI runner and failed on wall-clock alone — never on an
     // assertion, and never with a byte of this file changed.
     //
     // Per-test rather than `vi.setConfig`, which would raise it for all 286
@@ -7865,7 +7909,8 @@ describe('Chats queued messages', () => {
       Array.from({ length: count }, (_, i) =>
         msg(from + i, 'user', `m${from + i}`),
       );
-    api.listRunItems.mockResolvedValueOnce(page(1000, HISTORY_PAGE));
+    openAtSmallestPage();
+    api.listRunItems.mockResolvedValueOnce(page(1000, SMALL_PAGE));
     api.listRunItems.mockResolvedValue(page(0, 10));
     // Every transcript pane reports itself exactly filled: 1,000px of content
     // in a 1,000px box, with nothing to scroll. Set on the prototype because the
@@ -7901,7 +7946,7 @@ describe('Chats queued messages', () => {
 
       expect(api.listRunItems).toHaveBeenCalledWith({
         runId: 'r1',
-        limit: HISTORY_PAGE,
+        limit: SMALL_PAGE,
         beforeSeq: 1000,
         conversation: 'root',
       });
@@ -7931,14 +7976,15 @@ describe('Chats queued messages', () => {
       Array.from({ length: count }, (_, i) =>
         msg(from + i, 'user', `m${from + i}`),
       );
-    api.listRunItems.mockResolvedValue(page(1000, HISTORY_PAGE));
+    openAtSmallestPage();
+    api.listRunItems.mockResolvedValue(page(1000, SMALL_PAGE));
     const container = await mount(makeClient().client);
     await clickRun(container, 'My chat');
     // jsdom measures nothing, so the fill check stands aside — the press is
     // the only thing that can ask here.
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
-      limit: HISTORY_PAGE,
+      limit: SMALL_PAGE,
       conversation: 'root',
     });
 
@@ -7952,7 +7998,7 @@ describe('Chats queued messages', () => {
 
     expect(api.listRunItems).toHaveBeenLastCalledWith({
       runId: 'r1',
-      limit: HISTORY_PAGE,
+      limit: SMALL_PAGE,
       beforeSeq: 1000,
       conversation: 'root',
     });

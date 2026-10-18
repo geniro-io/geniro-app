@@ -42,9 +42,16 @@ export default defineConfig({
       allowedHosts: ['.local'],
     },
     build: {
+      // electron-vite leaves the renderer unminified by default, so the
+      // packaged app shipped a 4.8 MB startup chunk (and ~10 MB of renderer
+      // JS in all) for the window to parse on every launch. Whitespace and
+      // syntax only: identifiers keep their names, so a renderer stack trace
+      // in the debug log still reads.
+      minify: 'esbuild',
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/renderer/index.html') },
       },
     },
+    esbuild: { minifyIdentifiers: false },
   },
 });

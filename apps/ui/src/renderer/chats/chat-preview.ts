@@ -74,7 +74,7 @@ export function previewsThread(
 export function previewTextOf(payload: unknown): string | null {
   const text = payloadString(payload, 'text');
   if (text !== null && text.trim() !== '') {
-    return text;
+    return previewCut(text);
   }
   const images =
     typeof payload === 'object' &&
@@ -87,4 +87,27 @@ export function previewTextOf(payload: unknown): string | null {
     return null;
   }
   return images === 1 ? '🖼 Image' : `🖼 ${images} images`;
+}
+
+/**
+ * The most of a message's text the preview line carries.
+ *
+ * The row draws ONE truncated line, yet the list used to ship each thread's
+ * whole last message: 73% of a 1.5 MB archive listing on a real profile was
+ * these lines. Generous beyond the row's width, so that markdown stripped off
+ * the front (a link's URL, a heading's marks) still leaves words to show.
+ *
+ * TWIN: `PREVIEW_MAX_CHARS` in `apps/daemon/src/v1/agents/utils/message-preview.ts`
+ * — both sides write the same line, so they cut at the same place.
+ */
+export const PREVIEW_MAX_CHARS = 400;
+
+/** `text` cut to {@link PREVIEW_MAX_CHARS} code points, never inside a surrogate pair. */
+function previewCut(text: string): string {
+  if (text.length <= PREVIEW_MAX_CHARS) {
+    return text;
+  }
+  return Array.from(text.slice(0, PREVIEW_MAX_CHARS * 2))
+    .slice(0, PREVIEW_MAX_CHARS)
+    .join('');
 }

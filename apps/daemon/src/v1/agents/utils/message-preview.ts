@@ -19,6 +19,29 @@ function messageTextOf(payload: unknown): string | null {
 }
 
 /**
+ * The most of a message's text the preview line carries.
+ *
+ * The sidebar row draws ONE truncated line, yet the list shipped each thread's
+ * whole last message: 73% of a 1.5 MB archive listing on a real profile was
+ * these lines. Generous beyond the row's width, so that markdown stripped off
+ * the front (a link's URL, a heading's marks) still leaves words to show.
+ *
+ * TWIN: `PREVIEW_MAX_CHARS` in `apps/ui/src/renderer/chats/chat-preview.ts` —
+ * both sides write the same line, so they cut at the same place.
+ */
+export const PREVIEW_MAX_CHARS = 400;
+
+/** `text` cut to {@link PREVIEW_MAX_CHARS} code points, never inside a surrogate pair. */
+function previewCut(text: string): string {
+  if (text.length <= PREVIEW_MAX_CHARS) {
+    return text;
+  }
+  return Array.from(text.slice(0, PREVIEW_MAX_CHARS * 2))
+    .slice(0, PREVIEW_MAX_CHARS)
+    .join('');
+}
+
+/**
  * The chat list's preview line for a stored `message` payload: its text, or —
  * for a message that says nothing in words, such as a screenshot sent alone —
  * a label naming its pictures. Null for neither, and for a malformed payload.
@@ -42,7 +65,7 @@ export function messagePreview(payload: string): string | null {
 export function messagePreviewOf(payload: unknown): string | null {
   const text = messageTextOf(payload);
   if (text !== null && text.trim() !== '') {
-    return text;
+    return previewCut(text);
   }
   const images = asRecord(payload)?.images;
   const count = Array.isArray(images) ? images.length : 0;

@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
+
 import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
 
 import { awakeTimeout, type AwakeTimer } from '../../../utils/sleep-watch';
 import type {
   CallResultPayload,
   CallStartedPayload,
+  MessageDeliveryFailure,
   PersistedResetWake,
   RunCallSeed,
 } from '../../agents/chat.types';
@@ -283,6 +286,8 @@ interface ActiveCall {
    * as undelivered.
    */
   pendingMessages: string[];
+  /** Messages in a held wake's prompt, awaiting evidence that the CLI took it. */
+  wakingMessages: string[];
   messageRetry: NodeJS.Timeout | null;
   /**
    * Whether the transcript has ALREADY been told this call went quiet.
@@ -423,6 +428,7 @@ interface RunCallState {
   activeCalls: Map<string, ActiveCall>;
   /** Results retained until their caller collects them via await_agent. */
   pendingAsync: Map<string, AsyncCallEntry>;
+  messageFailures: Map<string, MessageDeliveryFailure>;
   /** Settled calls' resume handles keyed by call id (thread continuation). */
   threads: Map<string, ThreadRecord>;
   /**
@@ -788,6 +794,12 @@ export class CallBroker implements OnModuleInit {
     // map is what lands that wake here too. The calls it names come back as
     // threads through the seed, so the wake needs nothing else of the old state.
     const previous = this.runs.get(runId);
+    // A call from the previous pass may still be writing its final receipt.
+    const messageFailures =
+      previous?.messageFailures ?? new Map<string, MessageDeliveryFailure>();
+    for (const failure of seed?.messageFailures ?? []) {
+      messageFailures.set(failure.deliveryId, failure);
+    }
     // …and a promise a RESTART carried over, read back off the run row at
     // boot: the first pass since then is what can deliver it through a live
     // capability, so it is adopted here with its timer still armed.
@@ -809,6 +821,7 @@ export class CallBroker implements OnModuleInit {
       activeCalls: new Map(),
       settledMadeIn: new Map(),
       pendingAsync: new Map(),
+      messageFailures,
       threads,
       blockedOwners: new Map(),
       waitingOwners: new Map(),
@@ -995,6 +1008,7 @@ export class CallBroker implements OnModuleInit {
           call.messageRetry = null;
         }
         call.pendingMessages = [];
+        call.wakingMessages = [];
         // A held call has no turn the teardown's cancel reached: its
         // executor is waiting on this, and must not wait forever.
         this.releaseHold(call, { kind: 'cancelled' });
@@ -1302,6 +1316,7 @@ export class CallBroker implements OnModuleInit {
       silence: null,
       saidStalled: false,
       pendingMessages: [],
+      wakingMessages: [],
       messageRetry: null,
       blockedOnVerdicts: 0,
       openToolCalls: new Set(),
@@ -1430,7 +1445,7 @@ export class CallBroker implements OnModuleInit {
           call.silence.clear();
           call.silence = null;
         }
-        this.dropPendingMessages(state, callId, call, callerNodeId);
+        this.dropPendingMessages(state, callId, call);
         state.settledMadeIn.set(callId, call.madeIn);
         state.activeCalls.delete(callId);
         state.capability.persistItem(callerNodeId, 'call_result', null, {
@@ -1978,6 +1993,7 @@ export class CallBroker implements OnModuleInit {
     // chain reads `failReason` the moment the turn resolves, and a cancel can
     // resolve it synchronously.
     call.failReason = `CALLEE_CANCELLED: ${agent} was stopped by ${callerNodeOf(caller)} — ${args.reason}`;
+    this.dropPendingMessages(state, args.call_id, call);
     // A question parked on this call dies with the turn, and its row must not be
     // left dangling unresolved in the transcript. Same two steps `failParked`
     // takes, minus its own `failReason` (already set, and more specific).
@@ -2066,6 +2082,7 @@ export class CallBroker implements OnModuleInit {
       }
       const agent = this.calleeName(state, sub.owner, sub.calleeId);
       sub.failReason = `CALLEE_CANCELLED: ${agent} was stopped because the call it was working for ('${parentCallId}') was cancelled`;
+      this.dropPendingMessages(state, subId, sub);
       sub.cancelledOwing = owesHold(state, sub);
       if (this.unpark(state, subId, sub)) {
         state.capability.persistItem(
@@ -2181,10 +2198,16 @@ export class CallBroker implements OnModuleInit {
   messageHeldCall(runId: string, callId: string, userMessage: string): boolean {
     const state = this.runs.get(runId);
     const call = state?.activeCalls.get(callId);
-    if (!state || !call || call.hold === null) {
+    if (
+      !state ||
+      !call ||
+      call.hold === null ||
+      call.failReason !== null ||
+      state.capability.isCancelled()
+    ) {
       return false;
     }
-    this.wakeHeldWithMessages(state, callId, call, [], userMessage);
+    this.wakeHeldWithMessages(state, call, [], userMessage);
     return true;
   }
 
@@ -2192,16 +2215,17 @@ export class CallBroker implements OnModuleInit {
    * Wake a held call with what was said to it: the caller's messages queued on
    * it first, then `callerMessages`, then the user's `userMessage` — in the
    * order they were sent, so none overtakes one queued before it. The caller's
-   * are recorded here as its `call_answer` rows; the user's row is its sender's.
+   * keep a pending receipt until the CLI takes the wake prompt; the user's row
+   * belongs to its sender.
    */
   private wakeHeldWithMessages(
     state: RunCallState,
-    callId: string,
     call: ActiveCall,
     callerMessages: readonly string[],
     userMessage: string | null,
   ): void {
     const fromCaller = [...call.pendingMessages.splice(0), ...callerMessages];
+    call.wakingMessages.push(...fromCaller);
     this.releaseHold(
       call,
       heldWake(
@@ -2213,9 +2237,6 @@ export class CallBroker implements OnModuleInit {
         ),
       ),
     );
-    for (const message of fromCaller) {
-      this.recordDeliveredMessage(state, callId, call, message);
-    }
   }
 
   /**
@@ -2249,22 +2270,72 @@ export class CallBroker implements OnModuleInit {
     }
     const call = state.activeCalls.get(args.call_id);
     if (!call || call.owner !== caller) {
-      return this.unknownCall(state, caller, args.call_id, 'live call');
+      const refusal = this.unknownCall(
+        state,
+        caller,
+        args.call_id,
+        'live call',
+      );
+      const thread =
+        state.pendingAsync.get(args.call_id) ?? state.threads.get(args.call_id);
+      if (thread?.owner === caller && refusal.status === 'error') {
+        this.recordUndeliveredMessage(
+          state,
+          args.call_id,
+          caller,
+          thread.calleeId,
+          args.message,
+          refusal.error,
+        );
+      }
+      return refusal;
+    }
+    if (call.failReason !== null || state.capability.isCancelled()) {
+      const reason =
+        call.failReason ?? 'RUN_CANCELLED: the workflow was stopped';
+      this.recordUndeliveredMessage(
+        state,
+        args.call_id,
+        caller,
+        call.calleeId,
+        args.message,
+        reason,
+      );
+      return { status: 'error', error: `NOT_DELIVERED: ${reason}` };
     }
     // The callee has FINISHED and only the executor's bookkeeping holds the
     // call open: no turn is left to take the message, and holding it would
     // only see it dropped as undelivered a moment later.
     if (isFinishedWork(state, call)) {
-      return this.finishedCall(
+      const refusal = this.finishedCall(
         state,
         caller,
         args.call_id,
         call.calleeId,
         false,
       );
+      if (refusal.status === 'error') {
+        this.recordUndeliveredMessage(
+          state,
+          args.call_id,
+          caller,
+          call.calleeId,
+          args.message,
+          refusal.error,
+        );
+      }
+      return refusal;
     }
     const agent = this.calleeName(state, call.owner, call.calleeId);
     if (call.parked) {
+      this.recordUndeliveredMessage(
+        state,
+        args.call_id,
+        caller,
+        call.calleeId,
+        args.message,
+        `CALLEE_PARKED: ${agent} is waiting for answer_agent`,
+      );
       return {
         status: 'error',
         error: `CALLEE_PARKED: ${agent} is waiting on your answer to its question in '${args.call_id}' — reply with answer_agent instead`,
@@ -2273,20 +2344,14 @@ export class CallBroker implements OnModuleInit {
     // A call held for its callee's own calls has no turn to join: the message
     // opens the next one, with anything queued ahead of it in front.
     if (call.hold !== null) {
-      this.wakeHeldWithMessages(
-        state,
-        args.call_id,
-        call,
-        [args.message],
-        null,
-      );
+      this.wakeHeldWithMessages(state, call, [args.message], null);
       return {
         status: 'ok',
         result: {
           call_id: args.call_id,
           agent: call.calleeId,
-          state: 'delivered',
-          note: `${agent} had ended its turn to wait for calls of its own; it is continued with your message now. Its answer arrives as this call's result.`,
+          state: 'queued',
+          note: `${agent} had ended its turn to wait for calls of its own; it is continued with your message now. Delivery is pending until that turn takes the prompt. Its answer arrives as this call's result.`,
         },
       };
     }
@@ -2306,7 +2371,7 @@ export class CallBroker implements OnModuleInit {
           call_id: args.call_id,
           agent: call.calleeId,
           state: 'queued',
-          note: `${agent} cannot take a message this moment (its turn is still starting, or it is between steps). geniro holds it and delivers it as soon as ${agent} can — do NOT send it again. If the call ends first, the message is dropped and you will see the call's result; continue with thread: '${args.call_id}' then.`,
+          note: `${agent} cannot take a message this moment (its turn is still starting, or it is between steps). geniro holds it and delivers it as soon as ${agent} can — do NOT send it again. If the call ends first, the message is marked not delivered and you are told at your next turn; continue with thread: '${args.call_id}' then.`,
         },
       };
     }
@@ -2339,11 +2404,121 @@ export class CallBroker implements OnModuleInit {
       {
         callId,
         callerNodeId: callerNodeOf(call.owner),
+        ...(callerConversationOf(call.owner) !== null
+          ? { callerConversationId: callerConversationOf(call.owner) }
+          : {}),
         calleeNodeId: call.calleeId,
         message,
         outcome: 'message',
       },
     );
+  }
+
+  confirmWakingMessages(runId: string, callId: string): void {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    if (
+      !state ||
+      !call ||
+      call.failReason !== null ||
+      state.capability.isCancelled()
+    ) {
+      return;
+    }
+    for (const message of call.wakingMessages.splice(0)) {
+      this.recordDeliveredMessage(state, callId, call, message);
+    }
+  }
+
+  private recordUndeliveredMessage(
+    state: RunCallState,
+    callId: string,
+    caller: string,
+    calleeNodeId: string,
+    message: string,
+    reason: string,
+  ): void {
+    const conversation = callerConversationOf(caller);
+    const failure: MessageDeliveryFailure = {
+      deliveryId: randomUUID(),
+      callId,
+      callerNodeId: callerNodeOf(caller),
+      ...(conversation !== null ? { callerConversationId: conversation } : {}),
+      calleeNodeId,
+      message,
+      reason,
+    };
+    state.capability.persistItem(failure.callerNodeId, 'call_answer', null, {
+      ...failure,
+      outcome: 'undelivered',
+    });
+    state.messageFailures.set(failure.deliveryId, failure);
+  }
+
+  messageDeliveryNotice(
+    runId: string,
+    caller: string,
+  ): {
+    ids: string[];
+    prompt: string;
+  } | null {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return null;
+    }
+    const failures = [...state.messageFailures.values()].filter(
+      (failure) =>
+        callerKey(
+          failure.callerNodeId,
+          failure.callerConversationId ?? null,
+        ) === caller,
+    );
+    if (failures.length === 0) {
+      return null;
+    }
+    const messages = failures
+      .map(
+        (failure) =>
+          `Not delivered to ${failure.calleeNodeId} (${failure.callId}): ${failure.reason}\nMessage: ${JSON.stringify(failure.message)}`,
+      )
+      .join('\n\n');
+    return {
+      ids: failures.map((failure) => failure.deliveryId),
+      prompt: `Delivery receipts for your earlier message_agent sends:\n${messages}\nThese messages did not reach the callee. Reassess its result before continuing the conversation.`,
+    };
+  }
+
+  acknowledgeMessageDeliveryNotice(
+    runId: string,
+    caller: string,
+    notice: { ids: string[]; prompt: string },
+  ): void {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return;
+    }
+    const acknowledged = notice.ids.filter((id) => {
+      const failure = state.messageFailures.get(id);
+      return (
+        failure !== undefined &&
+        callerKey(
+          failure.callerNodeId,
+          failure.callerConversationId ?? null,
+        ) === caller
+      );
+    });
+    if (acknowledged.length === 0) {
+      return;
+    }
+    state.capability.persistItem(callerNodeOf(caller), 'system', null, {
+      severity: 'info',
+      ...inAnsweredCall(state, caller),
+      message: notice.prompt,
+      messageDeliveryNotices: acknowledged,
+    });
+    for (const id of acknowledged) {
+      state.messageFailures.delete(id);
+    }
   }
 
   private scheduleMessageRetry(
@@ -2369,10 +2544,14 @@ export class CallBroker implements OnModuleInit {
     if (!state || !call) {
       return;
     }
+    if (call.failReason !== null || state.capability.isCancelled()) {
+      this.dropPendingMessages(state, callId, call);
+      return;
+    }
     // Queued while the turn was ending, and the call is now HELD: no turn will
     // take them until one is opened for them.
     if (call.hold !== null && call.pendingMessages.length > 0) {
-      this.wakeHeldWithMessages(state, callId, call, [], null);
+      this.wakeHeldWithMessages(state, call, [], null);
       return;
     }
     // A parked callee is blocked on its caller's answer; the messages wait
@@ -2395,8 +2574,7 @@ export class CallBroker implements OnModuleInit {
 
   /**
    * The caller's messages still queued on `callId`, taken now to open the
-   * turn that continues a woken HELD call — recorded as delivered, since that
-   * turn's prompt carries them. Between the wake and that turn the call has no
+   * turn that continues a woken HELD call. Between the wake and that turn the call has no
    * turn to take them, so without this they would wait for the retry to land
    * in it mid-turn, behind anything the user sent meanwhile.
    */
@@ -2406,14 +2584,16 @@ export class CallBroker implements OnModuleInit {
     if (!state || !call || call.pendingMessages.length === 0) {
       return [];
     }
+    if (call.failReason !== null || state.capability.isCancelled()) {
+      this.dropPendingMessages(state, callId, call);
+      return [];
+    }
     if (call.messageRetry !== null) {
       clearTimeout(call.messageRetry);
       call.messageRetry = null;
     }
     const taken = call.pendingMessages.splice(0);
-    for (const message of taken) {
-      this.recordDeliveredMessage(state, callId, call, message);
-    }
+    call.wakingMessages.push(...taken);
     return taken;
   }
 
@@ -2426,22 +2606,24 @@ export class CallBroker implements OnModuleInit {
     state: RunCallState,
     callId: string,
     call: ActiveCall,
-    callerNodeId: string,
   ): void {
     if (call.messageRetry !== null) {
       clearTimeout(call.messageRetry);
       call.messageRetry = null;
     }
-    for (const message of call.pendingMessages) {
-      state.capability.persistItem(callerNodeId, 'call_answer', null, {
+    for (const message of [...call.wakingMessages, ...call.pendingMessages]) {
+      this.recordUndeliveredMessage(
+        state,
         callId,
-        callerNodeId,
-        calleeNodeId: call.calleeId,
+        call.owner,
+        call.calleeId,
         message,
-        outcome: 'undelivered',
-      });
+        call.failReason ??
+          'The callee ended before the message could be delivered.',
+      );
     }
     call.pendingMessages = [];
+    call.wakingMessages = [];
   }
 
   /**

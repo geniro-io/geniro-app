@@ -210,7 +210,7 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
     const message = payloadString(item.payload, 'message');
     const outcome = payloadString(item.payload, 'outcome');
     if (outcome === 'message' && message !== null) {
-      return [`**💬 message to the running call**`, '', message];
+      return [`**💬 message to the running call — delivered**`, '', message];
     }
     // Held until the callee could take it, and the call ended first.
     if (outcome === 'undelivered' && message !== null) {

@@ -3136,6 +3136,41 @@ describe('CallBroker — a caller waiting on its own calls', () => {
 });
 
 describe('CallBroker — message_agent', () => {
+  it('keeps failure notices separate for two conversations of the same node', () => {
+    const { broker } = harness({
+      seed: {
+        callSeq: 2,
+        records: [],
+        messageFailures: [
+          {
+            deliveryId: 'delivery-1',
+            callId: 'call-2',
+            callerNodeId: 'worker',
+            callerConversationId: 'call-1',
+            calleeNodeId: 'helper',
+            message: 'correction',
+            reason: 'stopped',
+          },
+        ],
+      },
+    });
+    expect(broker.messageDeliveryNotice('run-1', 'worker')).toBeNull();
+    expect(
+      broker.messageDeliveryNotice('run-1', callerKey('worker', 'call-other')),
+    ).toBeNull();
+    const notice = broker.messageDeliveryNotice(
+      'run-1',
+      callerKey('worker', 'call-1'),
+    )!;
+    broker.acknowledgeMessageDeliveryNotice(
+      'run-1',
+      callerKey('worker', 'call-other'),
+      notice,
+    );
+    expect(
+      broker.messageDeliveryNotice('run-1', callerKey('worker', 'call-1')),
+    ).toEqual(notice);
+  });
   it('hands the message to the RUNNING callee and records it as the caller’s', async () => {
     // REPORTED: a Manager held six user corrections "until the engineer
     // finishes", 8–32 minutes each, because nothing could reach a callee mid-call.
@@ -3214,7 +3249,7 @@ describe('CallBroker — message_agent', () => {
   });
 
   it('sends a PARKED callee to answer_agent instead of queueing a message behind its question', async () => {
-    const { broker, messages } = harness({ launch: 'defer' });
+    const { broker, messages, items } = harness({ launch: 'defer' });
     void broker.callAgent('run-1', 'orch', {
       title: 'why',
       agent: 'helper',
@@ -3238,6 +3273,16 @@ describe('CallBroker — message_agent', () => {
       ),
     ).toContain('answer_agent');
     expect(messages).toEqual([]);
+    expect(
+      items.find((item) => item.kind === 'call_answer')?.payload,
+    ).toMatchObject({
+      outcome: 'undelivered',
+      message: 'use red',
+      reason: expect.stringContaining('CALLEE_PARKED'),
+    });
+    expect(broker.messageDeliveryNotice('run-1', 'orch')?.prompt).toContain(
+      'use red',
+    );
   });
 
   it('HOLDS a message the callee cannot take yet and delivers it the moment it can, in order', async () => {
@@ -3329,7 +3374,7 @@ describe('CallBroker — message_agent', () => {
     // Manager sat on its user's question card, and steering the call then
     // read "UNKNOWN_CALL: no live call 'call-74' started by you" — about a
     // call the Manager had made and whose result was waiting for it.
-    const { broker, messages, deferred } = harness({ launch: 'defer' });
+    const { broker, messages, deferred, items } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
       title: 'build it',
       agent: 'helper',
@@ -3367,6 +3412,20 @@ describe('CallBroker — message_agent', () => {
     expect(collected).toMatch(/^CALL_FINISHED: /);
     expect(collected).toContain('nothing of it is left to collect');
     expect(collected).toContain("call_agent(thread: 'call-1')");
+    expect(
+      items
+        .filter((item) => item.kind === 'call_answer')
+        .map((item) => item.payload),
+    ).toEqual([
+      expect.objectContaining({
+        outcome: 'undelivered',
+        message: 'one more thing',
+      }),
+      expect.objectContaining({
+        outcome: 'undelivered',
+        message: 'one more thing',
+      }),
+    ]);
     // Ownership still reads as UNKNOWN_CALL: a caller does not learn that a
     // call it does not own exists, finished or not.
     expect(
@@ -3402,7 +3461,103 @@ describe('CallBroker — message_agent', () => {
         }),
       ),
     ).toMatch(/^CALL_FINISHED: .*await_agent\(call_id: 'call-1'\)/);
-    expect(items.some((item) => item.kind === 'call_answer')).toBe(false);
+    expect(
+      items.find((item) => item.kind === 'call_answer')?.payload,
+    ).toMatchObject({
+      outcome: 'undelivered',
+      message: 'too late',
+      reason: expect.stringContaining('CALL_FINISHED'),
+    });
+  });
+
+  it('never sends to a cancelled handle, and drops its queued messages before settlement', async () => {
+    vi.useFakeTimers();
+    try {
+      const deliver = vi.fn(() => ({
+        delivered: false as const,
+        reason: 'refused' as const,
+      }));
+      const { broker, items, capability } = harness({
+        launch: 'defer',
+        messageCallee: deliver,
+      });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'work',
+        mode: 'async',
+      });
+      broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        message: 'queued correction',
+      });
+      broker.cancelAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        reason: 'withdrawn',
+      });
+      expect(
+        errorOf(
+          broker.messageAgent('run-1', 'orch', {
+            call_id: 'call-1',
+            message: 'after cancel',
+          }),
+        ),
+      ).toContain('NOT_DELIVERED');
+      await vi.advanceTimersByTimeAsync(600);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(
+        items
+          .filter((item) => item.kind === 'call_answer')
+          .map((item) => item.payload),
+      ).toEqual([
+        expect.objectContaining({
+          outcome: 'undelivered',
+          message: 'queued correction',
+        }),
+        expect.objectContaining({
+          outcome: 'undelivered',
+          message: 'after cancel',
+        }),
+      ]);
+      const notice = broker.messageDeliveryNotice('run-1', 'orch')!;
+      expect(notice.prompt).toContain('queued correction');
+      expect(notice.prompt).toContain('after cancel');
+      expect(notice.prompt).toContain('withdrawn');
+      expect(broker.messageDeliveryNotice('run-1', 'writer')).toBeNull();
+      broker.registerRun('run-1', capability);
+      expect(broker.messageDeliveryNotice('run-1', 'orch')).toEqual(notice);
+      broker.acknowledgeMessageDeliveryNotice('run-1', 'orch', notice);
+      expect(broker.messageDeliveryNotice('run-1', 'orch')).toBeNull();
+      expect(items.at(-1)?.payload).toMatchObject({
+        severity: 'info',
+        messageDeliveryNotices: notice.ids,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records a failed send to an owned call whose launch failed without a thread', async () => {
+    const { broker, items } = harness({ launch: 'throw' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'work',
+      mode: 'async',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(
+      broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        message: 'too late',
+      }).status,
+    ).toBe('error');
+    expect(
+      items.find((item) => item.kind === 'call_answer')?.payload,
+    ).toMatchObject({ outcome: 'undelivered', message: 'too late' });
+    expect(broker.messageDeliveryNotice('run-1', 'orch')?.prompt).toContain(
+      'too late',
+    );
   });
 
   it('records a held message as UNDELIVERED when the call ends before it lands', async () => {
@@ -5355,6 +5510,33 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     expect(h.cancelledTurns).toEqual(['call-2', 'call-1']);
   });
 
+  it('does not mark a held wake message delivered when it is cancelled before its prompt is taken', async () => {
+    const h = await engineerDelegated();
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+    h.broker.messageAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      message: 'changed requirement',
+    });
+    await flush();
+    expect(release()).toMatchObject({ kind: 'wake' });
+    h.broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'withdrawn before wake',
+    });
+    expect(
+      h.items
+        .filter(
+          (item) =>
+            item.kind === 'call_answer' &&
+            item.payload.message === 'changed requirement',
+        )
+        .map((item) => item.payload.outcome),
+    ).toEqual(['undelivered']);
+    expect(h.broker.messageDeliveryNotice('run-1', 'orch')?.prompt).toContain(
+      'changed requirement',
+    );
+  });
+
   it('wakes a HELD call with a message its caller sends it', async () => {
     const h = await engineerDelegated();
     const release = released(h.broker.holdCall('run-1', 'call-1')!);
@@ -5366,13 +5548,17 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
 
     expect(receipt).toMatchObject({
       status: 'ok',
-      result: { state: 'delivered' },
+      result: { state: 'queued' },
     });
     const wake = release() as { kind: 'wake'; prompt: string };
     expect(wake.prompt).toContain('use Postgres, not SQLite');
     expect(wake.prompt).toContain('1 other call(s) of yours are still running');
     // Through the wake, not into a turn that no longer exists.
     expect(h.messages).toEqual([]);
+    expect(h.items.some((item) => item.payload.outcome === 'message')).toBe(
+      false,
+    );
+    h.broker.confirmWakingMessages('run-1', 'call-1');
     expect(
       h.items.find(
         (item) =>
@@ -5580,7 +5766,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
         call_id: 'call-3',
         message: 'one more thing',
       }),
-    ).toMatchObject({ result: { state: 'delivered' } });
+    ).toMatchObject({ result: { state: 'queued' } });
     await flush();
     expect(release()).toMatchObject({ kind: 'wake' });
     h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
@@ -5953,6 +6139,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
       expect(prompt.indexOf('QUEUED FIRST')).toBeLessThan(
         prompt.indexOf('USER SECOND'),
       );
+      h.broker.confirmWakingMessages('run-1', 'call-1');
       expect(
         h.items.find(
           (item) =>

@@ -1780,8 +1780,8 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * One run's `call_started` / `call_result` rows in seq order — every
-   * agent-to-agent call it has made, with the session each callee recorded.
+   * One run's calls and message receipts in seq order, including the notices
+   * that acknowledge failed deliveries to their sender.
    *
    * Durable for {@link subagentInfoRows}'s reason: the broker's call state is
    * in memory and dies with the daemon, and a follow-up on a run that made
@@ -1794,7 +1794,13 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'kind' | 'payload' | 'createdAt'>[]> {
     return this.getRepo(txEm).find(
-      { runId, kind: { $in: ['call_started', 'call_result'] } },
+      {
+        runId,
+        $or: [
+          { kind: { $in: ['call_started', 'call_result', 'call_answer'] } },
+          { kind: 'system', payload: { $like: '%"messageDeliveryNotices"%' } },
+        ],
+      },
       {
         orderBy: { seq: 'asc' },
         fields: ['kind', 'payload', 'createdAt'],

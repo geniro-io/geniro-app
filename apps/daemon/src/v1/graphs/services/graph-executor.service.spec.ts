@@ -349,7 +349,12 @@ class FakeItemDao {
   async callRecordRows(
     runId: string,
   ): Promise<Pick<Item, 'kind' | 'payload' | 'createdAt'>[]> {
-    return this.ofKinds(runId, ['call_started', 'call_result']).map((i) => ({
+    return this.ofKinds(runId, [
+      'call_started',
+      'call_result',
+      'call_answer',
+      'system',
+    ]).map((i) => ({
       kind: i.kind,
       payload: i.payload,
       createdAt: i.createdAt,
@@ -6266,6 +6271,51 @@ describe('GraphExecutorService — agent calls', () => {
       );
     });
 
+    it.each(['text_delta', 'reasoning_delta', 'reasoning'] as const)(
+      'confirms a held message on its own %s before a later cancellation',
+      async (type) => {
+        const { service, claude, callBroker, run, eng, itemDao } =
+          await engineerDelegating();
+        completeTurn(eng, 'dispatched');
+        await drain();
+        callBroker.messageAgent(run.id, 'mgr', {
+          call_id: 'call-1',
+          message: 'read this correction',
+        });
+        await drain();
+        const woken = claude.starts.at(-1)!;
+        const receipts = () =>
+          itemDao.items
+            .filter((row) => row.runId === run.id && row.kind === 'call_answer')
+            .map(
+              (row) =>
+                JSON.parse(row.payload) as {
+                  message?: string;
+                  outcome?: string;
+                },
+            )
+            .filter((payload) => payload.message === 'read this correction');
+        woken.emit({
+          type,
+          text: 'delegate output',
+          parentToolUseId: 'delegate-tool',
+        });
+        await drain();
+        expect(receipts()).toHaveLength(0);
+        woken.emit({ type, text: 'I have read the correction' });
+        callBroker.cancelAgent(run.id, 'mgr', {
+          call_id: 'call-1',
+          reason: 'stop after delivery',
+        });
+        await drain();
+        expect(receipts().map((payload) => payload.outcome)).toEqual([
+          'message',
+        ]);
+        await service.cancel(run.id);
+        await drain();
+      },
+    );
+
     it('continues a held call with a message the user sends into its block', async () => {
       const { service, claude, run, eng } = await engineerDelegating();
       completeTurn(eng, 'dispatched');
@@ -11865,6 +11915,87 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     expect(payloadOf(row!)).toMatchObject({ callId: 'call-1' });
   });
 
+  it('refuses the executor message channel once its callee is marked cancelled', async () => {
+    const { service, claude, callBroker } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'work',
+      mode: 'async',
+    });
+    await drain();
+    const channel = register.mock.calls[0]![1];
+    channel.cancelCalleeTurn('call-1');
+    expect(channel.messageCallee('call-1', 'too late').delivered).toBe(false);
+    expect(claude.starts[1]!.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('tells the sender about a cancelled delivery at its next turn and records the notice only after the prompt is taken', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build it',
+      mode: 'async',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callBroker.cancelAgent(run.id, 'a', {
+      call_id: 'call-1',
+      reason: 'withdrawn',
+    });
+    const result = callBroker.messageAgent(run.id, 'a', {
+      call_id: 'call-1',
+      message: 'keep the old labels',
+    });
+    expect(result.status).toBe('error');
+    expect(callee.sendUserMessage).not.toHaveBeenCalled();
+    await drain();
+    expect(
+      payloadOf(
+        rowsOf(itemDao, run.id).find((row) => row.kind === 'call_answer')!,
+      ),
+    ).toMatchObject({ outcome: 'undelivered', message: 'keep the old labels' });
+    completeTurn(claude.starts[0]!, 'waiting');
+    await drain();
+    const next = claude.starts[2]!;
+    expect(next.input.prompt).toContain('Not delivered to callee (call-1)');
+    expect(next.input.prompt).toContain('keep the old labels');
+    expect(next.input.prompt).toContain('withdrawn');
+    next.emit({ type: 'session', sessionId: 'sender-session' });
+    await drain();
+    const notices = () =>
+      rowsOf(itemDao, run.id).filter(
+        (row) =>
+          row.kind === 'system' &&
+          payloadOf(row).messageDeliveryNotices !== undefined,
+      );
+    expect(notices()).toHaveLength(0);
+    completeTurn(next, 'I saw the failed delivery');
+    await drain();
+    expect(notices()).toHaveLength(1);
+    await service.sendMessage(run.id, 'next task');
+    await drain();
+    expect(claude.starts.at(-1)!.input.prompt).not.toContain(
+      'Delivery receipts',
+    );
+  });
+
   it('tells the caller its callee ended the turn with sub-agents still out', async () => {
     // REPORTED on a Dev Team run: a cursor QA fanned eight reviewers out in the
     // background and ended its turn with "the reviewers are looking at it". The
@@ -12706,6 +12837,42 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     completeTurn(b[0]!, 'B done');
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('keeps delivery notices out of an automatic compact command and carries them to the next work turn', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('orch')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'Helper',
+      message: 'work',
+      mode: 'async',
+    });
+    await drain();
+    callBroker.cancelAgent(run.id, 'orch', {
+      call_id: 'call-1',
+      reason: 'withdrawn',
+    });
+    callBroker.messageAgent(run.id, 'orch', {
+      call_id: 'call-1',
+      message: 'undelivered correction',
+    });
+    await drain();
+    fillAndComplete(claude.starts[0]!, 170_000, 'waiting');
+    await drain();
+    const compact = claude.starts.at(-1)!;
+    expect(compact.input.prompt).toBe('/compact');
+    fillAndComplete(compact, 20_000, 'compacted');
+    await drain();
+    expect(claude.starts.at(-1)!.input.prompt).toContain(
+      'undelivered correction',
+    );
   });
 
   it('leaves a node under its threshold alone', async () => {

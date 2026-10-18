@@ -5255,6 +5255,17 @@ export interface RunCallSeed {
   callSeq: number;
   /** Every earlier call, in transcript order (a continuation after its parent). */
   records: CallSeedRecord[];
+  messageFailures?: MessageDeliveryFailure[];
+}
+
+export interface MessageDeliveryFailure {
+  deliveryId: string;
+  callId: string;
+  callerNodeId: string;
+  callerConversationId?: string;
+  calleeNodeId: string;
+  message: string;
+  reason: string;
 }
 
 /**

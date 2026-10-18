@@ -160,7 +160,9 @@ describe('chatToMarkdown', () => {
       ]),
     );
 
-    expect(out).toContain('**💬 message to the running call**\n\nstop after 3');
+    expect(out).toContain(
+      '**💬 message to the running call — delivered**\n\nstop after 3',
+    );
     expect(out).toContain(
       '**✗ message to the call — not delivered**\n\ntoo late',
     );

@@ -212,7 +212,7 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
       />,
     );
     const text = container.textContent ?? '';
-    expect(text).toContain('message → helper');
+    expect(text).toContain('message → helper · delivered');
     expect(text).toContain('keep the old labels');
     expect(text).not.toContain('orphaned');
   });

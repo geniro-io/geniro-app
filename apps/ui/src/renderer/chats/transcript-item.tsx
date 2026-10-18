@@ -612,7 +612,9 @@ export const TranscriptItem = memo(function TranscriptItem({
       // "orphaned" line below, which is the opposite of what happened.
       if (outcome === 'message') {
         return (
-          <MessageBubble variant="call" role={tag(`💬 message → ${callee}`)}>
+          <MessageBubble
+            variant="call"
+            role={tag(`💬 message → ${callee} · delivered`)}>
             <div className="whitespace-pre-wrap break-words">
               {payloadString(item.payload, 'message') ?? ''}
             </div>

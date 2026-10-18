@@ -30,7 +30,18 @@ import {
 import { adoptLoginShellPath } from './process-path';
 import { readSettings } from './settings';
 
-const HEALTH_TIMEOUT_MS = 15_000;
+/**
+ * How long a daemon we spawned may take to come up before it is killed.
+ *
+ * A boot reads history (the schema sync, the reconciles before listen), so its
+ * cost grows with the profile and with a cold disk cache. The old 15 s was
+ * measured too short: a 5.9 GB profile booted in 19 s on a cold cache, was
+ * killed at 15 s, and the Retry booted it again from scratch — the ~35 s
+ * "loading" a user sees. A slow boot that is still alive is worth waiting for;
+ * one that died says so at once through `exitCode`, so a long deadline costs
+ * nothing on the failure path.
+ */
+const START_TIMEOUT_MS = 90_000;
 const HEALTH_POLL_INTERVAL_MS = 200;
 /** Per-attempt cap on the /health fetch — a wedged-but-listening daemon must
  * not stall start() on undici's multi-minute default. */
@@ -327,6 +338,7 @@ export interface DaemonSupervisorOptions {
   /** Leave the next daemon the note of why this one stopped (`DAEMON_STOP_CAUSE_NAME`). */
   writeStopCause?: (cause: DaemonStopCause) => void;
   pollIntervalMs?: number;
+  startTimeoutMs?: number;
   shutdownGraceMs?: number;
   stopWaitMs?: number;
   respawnDelaysMs?: readonly number[];
@@ -412,6 +424,7 @@ export class DaemonSupervisor {
   private readonly consumeCrashMark: (pid: number) => boolean;
   private readonly writeStopCause: (cause: DaemonStopCause) => void;
   private readonly pollIntervalMs: number;
+  private readonly startTimeoutMs: number;
   private readonly shutdownGraceMs: number;
   private readonly stopWaitMs: number;
   private readonly respawnDelaysMs: readonly number[];
@@ -451,6 +464,7 @@ export class DaemonSupervisor {
           cause,
         ));
     this.pollIntervalMs = options.pollIntervalMs ?? HEALTH_POLL_INTERVAL_MS;
+    this.startTimeoutMs = options.startTimeoutMs ?? START_TIMEOUT_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
     this.stopWaitMs = options.stopWaitMs ?? STOP_WAITS_FOR_START_MS;
     this.respawnDelaysMs = options.respawnDelaysMs ?? RESPAWN_DELAYS_MS;
@@ -965,7 +979,7 @@ export class DaemonSupervisor {
       this.scheduleRespawn();
     });
 
-    const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+    const deadline = Date.now() + this.startTimeoutMs;
     while (Date.now() < deadline) {
       if (this.stopping) {
         await this.stopChild(child);

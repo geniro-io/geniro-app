@@ -483,10 +483,33 @@ describe('DaemonSupervisor.start', () => {
       const rejected = expect(started).rejects.toThrow(
         /did not become healthy/,
       );
-      await vi.advanceTimersByTimeAsync(25_000);
+      await vi.advanceTimersByTimeAsync(100_000);
       await rejected;
 
       expect(h.child.signals[0]).toBe('SIGTERM');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits out a slow boot instead of killing it — a large profile took 19 s on a cold cache', async () => {
+    vi.useFakeTimers();
+    try {
+      const healthyAt = Date.now() + 20_000;
+      const h = harness({
+        pidfile: null,
+        healthy: () => Date.now() >= healthyAt,
+        graceMs: 50,
+        pollMs: 1_000,
+      });
+
+      const started = h.supervisor.start();
+      await vi.advanceTimersByTimeAsync(21_000);
+
+      // Under the old 15 s deadline this child was SIGTERMed and the start
+      // rejected, so the user's Retry booted the whole history a second time.
+      await expect(started).resolves.toMatchObject({ port: 4823 });
+      expect(h.child.signals).toEqual([]);
     } finally {
       vi.useRealTimers();
     }

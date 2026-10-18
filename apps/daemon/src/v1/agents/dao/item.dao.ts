@@ -2394,12 +2394,16 @@ export class ItemDao extends BaseDao<Item> {
     const all = [...unique.values()];
     const times = new Map<string, Map<number, Date>>();
     for (let start = 0; start < all.length; start += CHUNK) {
+      // `kind` sits inside EACH branch, never beside the `$or`: with it outside,
+      // SQLite answers the `kind` equality from the `kind` index and filters
+      // every tool result in history against the branches — measured 1.6-12 s
+      // per chunk on a 5.9 GB profile, on the boot path. Inside, each branch is
+      // one `(run_id, kind, seq)` index probe (0.03 s for the same chunk).
       const rows = await this.getAll(
         {
-          kind: 'tool_result',
           $or: all
             .slice(start, start + CHUNK)
-            .map(({ runId, seq }) => ({ runId, seq })),
+            .map(({ runId, seq }) => ({ runId, kind: 'tool_result', seq })),
         },
         {
           fields: ['runId', 'seq', 'createdAt'],

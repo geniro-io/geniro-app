@@ -49,6 +49,7 @@ import type { DaemonHandle } from '../shared/contracts';
 import { createPreloadStub } from './__fixtures__/preload-stub';
 import { afterPopstate } from './__tests__/after-popstate';
 import { App } from './App';
+import { DaemonClient } from './daemon-client';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -90,37 +91,161 @@ const flush = async (): Promise<void> => {
   });
 };
 
-describe('App — the connection banner’s Retry', () => {
-  it('asks main to START the daemon, rather than re-reading a handle that does not exist', async () => {
-    // A daemon that died, or never came up, has no handle — so a Retry that
-    // only called `getDaemonHandle` could never bring it back, however often
-    // it was pressed.
-    const getDaemonHandle = vi.fn((): Promise<DaemonHandle | null> =>
-      Promise.resolve(null),
+const HANDLE: DaemonHandle = {
+  host: '127.0.0.1',
+  port: 1,
+  token: 't',
+  version: '0.0.0',
+  startedAt: '2026-01-01T00:00:00.000Z',
+};
+
+const startupScreen = (): HTMLElement | null =>
+  container.querySelector<HTMLElement>('[data-slot="startup-screen"]');
+
+const buttonNamed = (label: string): HTMLButtonElement | undefined =>
+  [...container.querySelectorAll('button')].find(
+    (button) => button.textContent?.trim() === label,
+  );
+
+describe('App — while the daemon starts', () => {
+  it('shows the startup screen, not the red "not connected" strip, while the launch’s start is in flight', async () => {
+    // The launch's start takes seconds on a large profile. Reading the handle
+    // mid-boot answered "none", and the shell drew that as a failure banner on
+    // every launch.
+    let finish: (handle: DaemonHandle) => void = () => undefined;
+    const ensureDaemon = vi.fn(
+      () =>
+        new Promise<DaemonHandle>((resolve) => {
+          finish = resolve;
+        }),
     );
-    const ensureDaemon = vi.fn((): Promise<DaemonHandle> =>
-      Promise.reject(
-        new Error('daemon pid 7 is running but not answering its health check'),
-      ),
+    window.geniro = createPreloadStub({ ensureDaemon });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('no daemon in this spec'))),
     );
-    window.geniro = createPreloadStub({ getDaemonHandle, ensureDaemon });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
 
     await act(async () => {
       root.render(<App />);
     });
     await flush();
-    const retry = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent?.trim() === 'Retry',
+
+    // Mount JOINS the start rather than reading a handle it does not have yet.
+    expect(ensureDaemon).toHaveBeenCalledTimes(1);
+    expect(startupScreen()?.dataset.state).toBe('starting');
+    expect(container.textContent).not.toContain('Not connected');
+
+    await act(async () => {
+      finish(HANDLE);
+    });
+    await flush();
+
+    expect(startupScreen()).toBeNull();
+  });
+
+  it('shows the supervisor’s reason when the start fails, and Retry starts it again', async () => {
+    const ensureDaemon = vi
+      .fn((): Promise<DaemonHandle> =>
+        Promise.reject(new Error('daemon exited during startup (code 1)')),
+      )
+      .mockImplementationOnce(() =>
+        Promise.reject(
+          new Error(
+            'daemon pid 7 is running but not answering its health check',
+          ),
+        ),
+      );
+    window.geniro = createPreloadStub({ ensureDaemon });
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    await flush();
+
+    expect(startupScreen()?.dataset.state).toBe('failed');
+    expect(startupScreen()?.textContent).toContain(
+      'not answering its health check',
     );
+
+    await act(async () => {
+      buttonNamed('Retry')!.click();
+    });
+    await flush();
+
+    expect(ensureDaemon).toHaveBeenCalledTimes(2);
+    // The second attempt's own reason, not the first one left standing.
+    expect(startupScreen()?.textContent).toContain('exited during startup');
+  });
+
+  it('attaches once when the start answers through both the push and the joined ensure', async () => {
+    const restarted: ((handle: DaemonHandle) => void)[] = [];
+    window.geniro = createPreloadStub({
+      ensureDaemon: () => Promise.resolve(HANDLE),
+      onDaemonRestarted: (listener) => {
+        restarted.push(listener);
+        return () => undefined;
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('no daemon in this spec'))),
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const connects = vi.spyOn(DaemonClient.prototype, 'connect');
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    await flush();
+    await act(async () => {
+      restarted.forEach((listener) => listener({ ...HANDLE }));
+    });
+    await flush();
+
+    expect(connects).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('App — the connection banner’s Retry', () => {
+  it('asks main to START the daemon again once a held daemon stops answering', async () => {
+    const ensureDaemon = vi
+      .fn((): Promise<DaemonHandle> =>
+        Promise.reject(
+          new Error(
+            'daemon pid 7 is running but not answering its health check',
+          ),
+        ),
+      )
+      .mockImplementationOnce(() => Promise.resolve(HANDLE));
+    window.geniro = createPreloadStub({ ensureDaemon });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('no daemon in this spec'))),
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    await flush();
+    // The socket never opened (the client is a stand-in), so the strip is up.
+    const retry = buttonNamed('Retry');
     expect(retry).toBeDefined();
-    expect(ensureDaemon).not.toHaveBeenCalled();
+    expect(startupScreen()).toBeNull();
 
     await act(async () => {
       retry!.click();
     });
     await flush();
 
-    expect(ensureDaemon).toHaveBeenCalledTimes(1);
+    expect(ensureDaemon).toHaveBeenCalledTimes(2);
     // The supervisor's own reason reaches the banner.
     expect(container.textContent).toContain('not answering its health check');
   });
@@ -173,7 +298,7 @@ describe('App — the phone’s navigation', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
     };
     window.geniro = createPreloadStub({
-      getDaemonHandle: () => Promise.resolve(handle),
+      ensureDaemon: () => Promise.resolve(handle),
     });
     vi.stubGlobal(
       'fetch',
@@ -253,7 +378,7 @@ describe('App — phone pages and the tab bar', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
     };
     window.geniro = createPreloadStub({
-      getDaemonHandle: () => Promise.resolve(handle),
+      ensureDaemon: () => Promise.resolve(handle),
     });
     vi.stubGlobal(
       'fetch',

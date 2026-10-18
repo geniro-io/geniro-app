@@ -249,6 +249,9 @@ export function foldThreadTimeline(
     const turns = spans.turns
       .filter((turn) => turn.nodeId === nodeId)
       .map((turn) => span(turn.startedAt, turn.durationMs));
+    // Anything not explicitly async holds its caller. TWIN of the renderer's
+    // `blocksCaller` (`run-waterfall-geometry.ts`), which hatches the same
+    // stretch on the caller's lane — change one, change the other.
     const calleeWaits = spans.calls
       .filter((call) => call.callerNodeId === nodeId && call.mode !== 'async')
       .map((call) => span(call.startedAt, call.durationMs));

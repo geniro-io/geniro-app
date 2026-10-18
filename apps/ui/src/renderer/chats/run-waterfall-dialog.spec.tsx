@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type {
@@ -36,6 +36,7 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   return {
     nodeId: 'engineer',
     startedAt: FROM,
+    seq: 1,
     timingSource: 'cli',
     outcome: 'completed',
     toolCalls: 0,
@@ -65,6 +66,7 @@ function dto(over: Partial<RunWaterfallDto> = {}): RunWaterfallDto {
     calls: [],
     waits: [],
     delegates: [],
+    criticalPath: [],
     totals: {
       turns: 2,
       costedTurns: 2,
@@ -85,12 +87,22 @@ function dto(over: Partial<RunWaterfallDto> = {}): RunWaterfallDto {
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
 
-function show(data: RunWaterfallDto): HTMLElement {
+function show(
+  data: RunWaterfallDto,
+  props: { onClose?: () => void; onJump?: (seq: number) => void } = {},
+): HTMLElement {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
   act(() => {
-    root?.render(<RunWaterfallDialog open onClose={() => {}} data={data} />);
+    root?.render(
+      <RunWaterfallDialog
+        open
+        onClose={props.onClose ?? (() => {})}
+        data={data}
+        onJump={props.onJump}
+      />,
+    );
   });
   // The dialog renders into the document, not into `host` — read the body.
   return document.body;
@@ -164,6 +176,7 @@ describe('RunWaterfallDialog', () => {
             toolName: 'AskUserQuestion',
             allowed: true,
             startedAt: FROM,
+            seq: 2,
             durationMs: 120_000,
           },
         ],
@@ -187,7 +200,7 @@ describe('RunWaterfallDialog', () => {
       }),
     );
 
-    const rows = [...view.querySelectorAll('tbody tr')];
+    const rows = [...view.querySelectorAll('[data-slot="waterfall-top-turn"]')];
     expect(rows).toHaveLength(2);
     expect(rows[0]?.textContent).toContain('opus-5');
     expect(rows[1]?.textContent).toContain('haiku');
@@ -253,6 +266,7 @@ describe('RunWaterfallDialog', () => {
             status: 'ok',
             running: false,
             startedAt: FROM,
+            seq: 3,
             durationMs: 30 * 60_000,
           },
         ],
@@ -277,6 +291,7 @@ describe('RunWaterfallDialog', () => {
             status: null,
             running: true,
             startedAt: FROM,
+            seq: 4,
             durationMs: 60_000,
           },
         ],
@@ -299,6 +314,7 @@ describe('RunWaterfallDialog', () => {
       status: 'ok' as const,
       running: false,
       startedAt: new Date(Date.parse(FROM) + minutes * 60_000).toISOString(),
+      seq: 5,
       durationMs: 20 * 60_000,
     });
     const view = show(
@@ -410,9 +426,281 @@ describe('RunWaterfallDialog', () => {
         ],
       }),
     );
+    press(buttonNamed(view, 'By tool'));
 
-    const table = view.querySelector('table');
+    const table = [...view.querySelectorAll('table')].find((each) =>
+      each.textContent?.includes('Bash'),
+    );
     expect(table?.textContent).toContain('68%');
     expect(table?.textContent).not.toContain('1%');
   });
+
+  it("opens with focus on the gantt, not on the first figure's explanation", () => {
+    // The first control is the `?` beside `spent`, and focusing it opened its
+    // explanation over the insights the moment the view appeared.
+    show(dto());
+
+    expect(document.activeElement?.textContent).toBe('Critical path');
+  });
+
+  describe('selecting a mark', () => {
+    it('keeps the clicked turn in the detail panel, figures included', () => {
+      const view = show(
+        dto({
+          turns: [
+            turn({
+              costUsd: 3,
+              inputTokens: 1_000,
+              cacheReadTokens: 3_000,
+              model: 'opus-5',
+            }),
+          ],
+        }),
+      );
+      const detail = (): string =>
+        view.querySelector('[data-slot="waterfall-detail"]')?.textContent ?? '';
+      expect(detail()).toContain('Nothing selected');
+
+      press(view.querySelector('[data-slot="waterfall-turn"]'));
+
+      expect(detail()).toContain('A turn');
+      expect(detail()).toContain('opus-5');
+      // 3,000 of 4,000 prompt tokens came from cache.
+      expect(detail()).toContain('75%');
+    });
+
+    it('opens the selected turn in the chat by its own seq, closing the view first', () => {
+      const onJump = vi.fn();
+      const onClose = vi.fn();
+      const view = show(dto({ turns: [turn({ seq: 42 })] }), {
+        onJump,
+        onClose,
+      });
+
+      press(view.querySelector('[data-slot="waterfall-turn"]'));
+      press(buttonNamed(view, 'Open in chat'));
+
+      expect(onJump).toHaveBeenCalledWith(42);
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it('offers no "Open in chat" where no transcript is on screen to open', () => {
+      const view = show(dto({ turns: [turn()] }));
+
+      press(view.querySelector('[data-slot="waterfall-turn"]'));
+
+      expect(buttonNamed(view, 'Open in chat')).toBeUndefined();
+    });
+
+    it('lets Escape drop the selection before it closes the view', () => {
+      const onClose = vi.fn();
+      const view = show(dto({ turns: [turn()] }), { onClose });
+      press(view.querySelector('[data-slot="waterfall-turn"]'));
+
+      escape();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(
+        view.querySelector('[data-slot="waterfall-detail"]')?.textContent,
+      ).toContain('Nothing selected');
+
+      escape();
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it('selects a turn from the most-expensive table too', () => {
+      const view = show(dto({ turns: [turn({ costUsd: 3, model: 'haiku' })] }));
+
+      press(view.querySelector('[data-slot="waterfall-top-turn"]'));
+
+      expect(
+        view
+          .querySelector('[data-slot="waterfall-turn"]')
+          ?.className.includes('ring-2'),
+      ).toBe(true);
+    });
+  });
+
+  it('draws the part of a turn a sync call held still, and never an async one', () => {
+    const call = (mode: string, calleeNodeId: string) => ({
+      callerNodeId: 'manager',
+      calleeNodeId,
+      mode,
+      status: 'ok',
+      running: false,
+      startedAt: FROM,
+      seq: 3,
+      durationMs: 10 * 60_000,
+    });
+    const view = show(
+      dto({
+        lanes: [
+          lane({ nodeId: 'manager' }),
+          lane({ nodeId: 'engineer' }),
+          lane({ nodeId: 'researcher' }),
+        ],
+        calls: [call('sync', 'engineer'), call('async', 'researcher')],
+      }),
+    );
+
+    const blocked = [
+      ...view.querySelectorAll('[data-slot="waterfall-blocked"]'),
+    ];
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]?.getAttribute('aria-label')).toBe(
+      'manager waiting on engineer',
+    );
+  });
+
+  it('focuses an agent from its lane name, narrowing the table to it', () => {
+    const view = show(
+      dto({
+        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
+        turns: [turn({ nodeId: 'manager' }), turn({ nodeId: 'engineer' })],
+      }),
+    );
+    const foldRows = (): string[] =>
+      [...view.querySelectorAll('[data-slot="waterfall-fold-row"]')].map(
+        (row) => row.textContent ?? '',
+      );
+    expect(foldRows()).toHaveLength(2);
+
+    const label = [
+      ...view.querySelectorAll('[data-slot="waterfall-lane-label"]'),
+    ].find((each) => each.textContent?.includes('engineer'));
+    press(label ?? null);
+
+    expect(label?.getAttribute('aria-pressed')).toBe('true');
+    expect(foldRows()).toHaveLength(1);
+    expect(foldRows()[0]).toContain('engineer');
+  });
+
+  it('lands a pressed insight on the mark that shows it', () => {
+    const view = show(
+      dto({ turns: [turn({ outcome: 'failed', costUsd: 0.7 })] }),
+    );
+    const insight = [
+      ...view.querySelectorAll('[data-slot="waterfall-insights"] button'),
+    ].find((each) => each.textContent?.includes('a turn failed'));
+    expect(insight).toBeDefined();
+
+    press(insight ?? null);
+
+    expect(
+      view.querySelector('[data-slot="waterfall-detail"]')?.textContent,
+    ).toContain('A turn · failed');
+  });
+
+  it('lights the critical path and fades the work off it', () => {
+    const view = show(
+      dto({
+        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
+        turns: [
+          turn({ nodeId: 'manager', startedAt: FROM, durationMs: 60_000 }),
+          turn({ nodeId: 'engineer', startedAt: FROM, durationMs: 30_000 }),
+        ],
+        criticalPath: [
+          {
+            kind: 'work',
+            nodeId: 'manager',
+            startedAt: FROM,
+            durationMs: 60_000,
+          },
+        ],
+      }),
+    );
+    expect(view.querySelector('[data-slot="waterfall-critical"]')).toBeNull();
+
+    press(buttonNamed(view, 'Critical path'));
+
+    expect(
+      view.querySelectorAll('[data-slot="waterfall-critical"]'),
+    ).toHaveLength(1);
+    const bars = [...view.querySelectorAll('[data-slot="waterfall-turn"]')];
+    const manager = bars.find((bar) =>
+      bar.getAttribute('aria-label')?.startsWith('manager'),
+    );
+    const engineer = bars.find((bar) =>
+      bar.getAttribute('aria-label')?.startsWith('engineer'),
+    );
+    expect(manager?.className).not.toContain('opacity-25');
+    expect(engineer?.className).toContain('opacity-25');
+  });
+
+  it('zooms to a selected mark and draws only what is inside the stretch', () => {
+    const view = show(
+      dto({
+        turns: [
+          turn({ startedAt: FROM, durationMs: 60_000 }),
+          turn({
+            startedAt: new Date(Date.parse(FROM) + 40 * 60_000).toISOString(),
+            durationMs: 60_000,
+          }),
+        ],
+      }),
+    );
+    expect(view.querySelectorAll('[data-slot="waterfall-turn"]')).toHaveLength(
+      2,
+    );
+
+    press(view.querySelector('[data-slot="waterfall-turn"]'));
+    press(buttonNamed(view, 'Zoom to this'));
+
+    expect(view.querySelectorAll('[data-slot="waterfall-turn"]')).toHaveLength(
+      1,
+    );
+    expect(view.textContent).toContain('of 1h');
+    press(buttonNamed(view, 'Show the whole run'));
+    expect(view.querySelectorAll('[data-slot="waterfall-turn"]')).toHaveLength(
+      2,
+    );
+  });
+
+  it("marks a context close to its window along the turn's floor", () => {
+    const view = show(
+      dto({
+        turns: [
+          turn({ contextTokens: 170_000, contextWindowTokens: 200_000 }),
+          turn({
+            startedAt: new Date(Date.parse(FROM) + 30 * 60_000).toISOString(),
+            contextTokens: 50_000,
+            contextWindowTokens: 200_000,
+          }),
+        ],
+      }),
+    );
+
+    const stripes = [
+      ...view.querySelectorAll<HTMLElement>('[data-slot="waterfall-context"]'),
+    ];
+    expect(stripes.map((stripe) => stripe.style.width)).toEqual(['85%', '25%']);
+    expect(stripes[0]?.className).toContain('bg-destructive');
+    expect(stripes[1]?.className).not.toContain('bg-destructive');
+  });
 });
+
+function press(element: Element | null | undefined): void {
+  expect(element).toBeTruthy();
+  act(() => {
+    element?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
+function buttonNamed(view: HTMLElement, text: string): Element | undefined {
+  return [...view.querySelectorAll('button')].find(
+    (button) => button.textContent?.trim() === text,
+  );
+}
+
+function escape(): void {
+  act(() => {
+    document.dispatchEvent(
+      // Cancelable, as a real key press is: the dialog stands down for a key
+      // whose default was prevented, and an uncancelable event cannot be.
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+}

@@ -2801,6 +2801,7 @@ export function AgentsPanel({
               data={waterfall.data}
               loading={waterfall.loading}
               error={waterfall.error}
+              onJump={timeline?.onJump}
             />
           </PanelSection>
         )}

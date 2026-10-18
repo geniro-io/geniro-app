@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import type {
   RunWaterfallCall,
+  RunWaterfallCriticalSegment,
   RunWaterfallDto,
   RunWaterfallLane,
   RunWaterfallTurn,
@@ -9,54 +10,58 @@ import type {
 import { RunWaterfallDialog } from './run-waterfall-dialog';
 
 const FROM = Date.parse('2026-09-07T12:00:00.000Z');
-const MINUTE = 60_000;
+const SECOND = 1000;
 
-function at(minutes: number): string {
-  return new Date(FROM + minutes * MINUTE).toISOString();
+function at(seconds: number): string {
+  return new Date(FROM + seconds * SECOND).toISOString();
 }
 
-function lane(nodeId: string, costUsd: number | null): RunWaterfallLane {
-  return {
-    nodeId,
-    agentKind: 'claude',
-    costUsd,
-    turns: 2,
-    toolCalls: 40,
-    workedMs: 10 * MINUTE,
-  };
+function lane(
+  nodeId: string,
+  agentKind: RunWaterfallLane['agentKind'],
+  costUsd: number | null,
+  turns: number,
+  toolCalls: number,
+): RunWaterfallLane {
+  return { nodeId, agentKind, costUsd, turns, toolCalls, workedMs: null };
 }
+
+let nextSeq = 1;
 
 function turn(
   nodeId: string,
-  startMinutes: number,
-  minutes: number,
-  costUsd: number | null,
+  start: number,
+  end: number,
+  over: Partial<RunWaterfallTurn> = {},
 ): RunWaterfallTurn {
   return {
     nodeId,
-    startedAt: at(startMinutes),
+    startedAt: at(start),
+    seq: nextSeq++,
     timingSource: 'cli',
     outcome: 'completed',
     toolCalls: 12,
-    durationMs: minutes * MINUTE,
+    durationMs: (end - start) * SECOND,
     apiMs: null,
     ttftMs: null,
     timeToRequestMs: null,
     numTurns: null,
-    costUsd,
+    costUsd: null,
     model: 'opus-5',
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,
     contextTokens: null,
     contextWindowTokens: null,
+    ...over,
   };
 }
 
 function call(
   calleeNodeId: string,
-  startMinutes: number,
-  minutes: number,
+  start: number,
+  end: number,
+  over: Partial<RunWaterfallCall> = {},
 ): RunWaterfallCall {
   return {
     callerNodeId: 'manager',
@@ -64,64 +69,177 @@ function call(
     mode: 'async',
     status: 'ok',
     running: false,
-    startedAt: at(startMinutes),
-    durationMs: minutes * MINUTE,
+    startedAt: at(start),
+    seq: nextSeq++,
+    durationMs: (end - start) * SECOND,
+    ...over,
+  };
+}
+
+function segment(
+  kind: RunWaterfallCriticalSegment['kind'],
+  nodeId: string | null,
+  start: number,
+  end: number,
+): RunWaterfallCriticalSegment {
+  return {
+    kind,
+    nodeId,
+    startedAt: at(start),
+    durationMs: (end - start) * SECOND,
   };
 }
 
 /**
- * The REPORTED shape: a manager that hands work to three agents within a
- * minute of each other, whose three calls used to print over one another.
+ * A manager that hands work to three agents within a minute — the REPORTED
+ * shape whose calls used to print over one another — and blocks on one of
+ * them, while the engineer waits on a permission card, the reviewer's second
+ * turn fails and the manager's cache collapses on its last turn.
  */
 const fanOut: RunWaterfallDto = {
   from: at(0),
-  to: at(9),
+  to: at(540),
   lanes: [
-    lane('manager', 4.24),
-    lane('engineer', 2.1),
-    lane('researcher', 1.5),
-    lane('reviewer', null),
+    lane('manager', 'claude', 4.24, 2, 36),
+    lane('engineer', 'claude', 2.1, 2, 49),
+    lane('researcher', 'codex', 1.5, 1, 44),
+    lane('reviewer', 'cursor-agent', 1.1, 2, 21),
   ],
-  toolUse: [],
+  toolUse: [
+    { nodeId: 'engineer', name: 'Bash', calls: 28 },
+    { nodeId: 'researcher', name: 'Read', calls: 24 },
+    { nodeId: 'researcher', name: 'Grep', calls: 16 },
+    { nodeId: 'manager', name: 'Read', calls: 12 },
+    { nodeId: 'engineer', name: 'Edit', calls: 12 },
+    { nodeId: 'reviewer', name: 'Read', calls: 6 },
+  ],
   turns: [
-    turn('manager', 0, 2.2, 1.96),
-    turn('manager', 5.3, 3.7, 2.28),
-    turn('engineer', 5.7, 0.1, 2.1),
-    turn('researcher', 1.2, 4.0, 1.5),
+    turn('manager', 0, 345, {
+      costUsd: 1.96,
+      inputTokens: 12_000,
+      cacheReadTokens: 55_000,
+      contextTokens: 76_000,
+      contextWindowTokens: 200_000,
+      apiMs: 41_000,
+      ttftMs: 2_100,
+      toolCalls: 14,
+    }),
+    turn('engineer', 52, 200, {
+      model: 'sonnet-5',
+      costUsd: 1.1,
+      inputTokens: 9_000,
+      cacheReadTokens: 30_000,
+      contextTokens: 104_000,
+      contextWindowTokens: 200_000,
+      toolCalls: 31,
+    }),
+    turn('researcher', 58, 300, {
+      model: 'gpt-5.6',
+      costUsd: 1.5,
+      toolCalls: 44,
+    }),
+    turn('reviewer', 60, 118, {
+      model: 'gpt-5.6-sol',
+      timingSource: 'derived',
+      toolCalls: 9,
+    }),
+    turn('engineer', 262, 342, {
+      model: 'sonnet-5',
+      costUsd: 1.0,
+      inputTokens: 11_000,
+      cacheReadTokens: 25_000,
+      contextTokens: 122_000,
+      contextWindowTokens: 200_000,
+      toolCalls: 18,
+    }),
+    turn('reviewer', 300, 405, {
+      model: 'gpt-5.6-sol',
+      timingSource: 'derived',
+      outcome: 'failed',
+      toolCalls: 12,
+    }),
+    turn('manager', 345, 540, {
+      costUsd: 2.28,
+      inputTokens: 52_000,
+      cacheReadTokens: 36_000,
+      contextTokens: 172_000,
+      contextWindowTokens: 200_000,
+      apiMs: 151_000,
+      ttftMs: 3_400,
+      toolCalls: 22,
+    }),
   ],
   calls: [
-    call('engineer', 0.8, 4.9),
-    call('researcher', 1.0, 4.1),
-    call('reviewer', 1.1, 5.8),
+    call('engineer', 50, 345, { mode: 'sync' }),
+    call('researcher', 52, 305),
+    call('reviewer', 55, 410, { status: 'failed' }),
   ],
-  waits: [],
+  waits: [
+    {
+      nodeId: 'reviewer',
+      question: false,
+      toolName: 'Edit',
+      allowed: true,
+      startedAt: at(130),
+      seq: nextSeq++,
+      durationMs: 11 * SECOND,
+    },
+    {
+      nodeId: 'engineer',
+      question: false,
+      toolName: 'Bash',
+      allowed: true,
+      startedAt: at(200),
+      seq: nextSeq++,
+      durationMs: 62 * SECOND,
+    },
+  ],
   delegates: [
-    { nodeId: 'manager', startedAt: at(0.4), durationMs: 1.2 * MINUTE },
-    { nodeId: 'manager', startedAt: at(0.6), durationMs: 1.4 * MINUTE },
+    {
+      nodeId: 'manager',
+      startedAt: at(8),
+      seq: nextSeq++,
+      durationMs: 36 * SECOND,
+    },
+    {
+      nodeId: 'manager',
+      startedAt: at(14),
+      seq: nextSeq++,
+      durationMs: 35 * SECOND,
+    },
+  ],
+  criticalPath: [
+    segment('work', 'manager', 0, 50),
+    segment('idle', null, 50, 52),
+    segment('work', 'engineer', 52, 200),
+    segment('waiting_on_user', null, 200, 262),
+    segment('work', 'engineer', 262, 342),
+    segment('idle', null, 342, 345),
+    segment('work', 'manager', 345, 540),
   ],
   totals: {
-    turns: 4,
-    costedTurns: 4,
+    turns: 7,
+    costedTurns: 5,
     costUsd: 7.84,
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,
     cacheCreationTokens: null,
     thinkingTokens: null,
-    workedMs: 20 * MINUTE,
+    workedMs: 1_260 * SECOND,
   },
-  waitedOnUserMs: null,
+  waitedOnUserMs: 73 * SECOND,
   partialReason: null,
 };
 
 const meta = {
   title: 'Chats/RunWaterfallDialog',
   component: RunWaterfallDialog,
-  args: { open: true, onClose: () => {}, data: fanOut },
-  decorators: [(story) => <div className="h-[720px]">{story()}</div>],
+  args: { open: true, onClose: () => {}, data: fanOut, onJump: () => {} },
+  decorators: [(story) => <div className="h-[900px]">{story()}</div>],
 } satisfies Meta<typeof RunWaterfallDialog>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const ConcurrentCalls: Story = {};
+export const MultiAgentRun: Story = {};

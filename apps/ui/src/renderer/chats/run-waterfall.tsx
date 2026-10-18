@@ -180,10 +180,13 @@ export const RunWaterfall = memo(function RunWaterfall({
   data,
   loading,
   error,
+  onJump,
 }: {
   data: RunWaterfallDto | null;
   loading: boolean;
   error: string | null;
+  /** Open a transcript row by seq — the full view's "Open in chat". */
+  onJump?: (seq: number) => void;
 }): React.JSX.Element | null {
   // Declared ahead of every early return, like the two memos below it: the
   // card renders nothing at all in three of its states, and a hook after those
@@ -237,6 +240,7 @@ export const RunWaterfall = memo(function RunWaterfall({
         open={expanded}
         onClose={() => setExpanded(false)}
         data={data}
+        onJump={onJump}
       />
       <dl className="grid grid-cols-3 gap-1 text-xs">
         <Figure

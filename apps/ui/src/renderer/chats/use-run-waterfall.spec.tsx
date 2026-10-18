@@ -21,6 +21,7 @@ function dto(from: string): RunWaterfallDto {
     calls: [],
     waits: [],
     delegates: [],
+    criticalPath: [],
     totals: {
       turns: 0,
       costedTurns: 0,

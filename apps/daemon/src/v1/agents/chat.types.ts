@@ -2323,6 +2323,12 @@ export const RunWaterfallTurnSchema = z
   .object({
     nodeId: z.string().nullable(),
     startedAt: z.string(),
+    seq: z
+      .number()
+      .int()
+      .describe(
+        'the transcript row a reader is taken to for this turn — its first row on the lane, or the row that closed it when it wrote none',
+      ),
     timingSource: z
       .enum(['cli', 'derived'])
       .describe(
@@ -2403,6 +2409,10 @@ export const RunWaterfallCallSchema = z
         "dispatched and not yet answered while the run is still working — drawn up to the run's last row",
       ),
     startedAt: z.string(),
+    seq: z
+      .number()
+      .int()
+      .describe('the `call_started` row that opened the call'),
     durationMs: z.number().int(),
   })
   .meta({ id: 'RunWaterfallCall' });
@@ -2427,6 +2437,10 @@ export const RunWaterfallWaitSchema = z
     toolName: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
     allowed: z.boolean().nullable(),
     startedAt: z.string(),
+    seq: z
+      .number()
+      .int()
+      .describe('the `approval_request` row that raised the card'),
     durationMs: z.number().int(),
   })
   .meta({ id: 'RunWaterfallWait' });
@@ -2437,6 +2451,10 @@ export const RunWaterfallDelegateSchema = z
   .object({
     nodeId: z.string().nullable(),
     startedAt: z.string(),
+    seq: z
+      .number()
+      .int()
+      .describe('the `subagent_info` row that launched the sub-agent'),
     durationMs: z.number().int(),
   })
   .meta({ id: 'RunWaterfallDelegate' });
@@ -2528,6 +2546,27 @@ export const RunWaterfallToolUseSchema = z
   .meta({ id: 'RunWaterfallToolUse' });
 export type RunWaterfallToolUse = z.infer<typeof RunWaterfallToolUseSchema>;
 
+/**
+ * One stretch of the run's critical path — the chain of work, waits on the user
+ * and idle time that set its wall clock, read backwards from the last row.
+ * Folded by `foldThreadTimeline`, the same rule the thread analysis reads, so
+ * the card and an analysis cannot name two different paths for one run.
+ */
+export const RunWaterfallCriticalSegmentSchema = z
+  .object({
+    kind: z.enum(['work', 'waiting_on_user', 'idle']),
+    nodeId: z
+      .string()
+      .nullable()
+      .describe('whose work it was — null for a wait on the user or idle time'),
+    startedAt: z.string(),
+    durationMs: z.number().int(),
+  })
+  .meta({ id: 'RunWaterfallCriticalSegment' });
+export type RunWaterfallCriticalSegment = z.infer<
+  typeof RunWaterfallCriticalSegmentSchema
+>;
+
 export const RunWaterfallWireSchema = z.object({
   from: z.string().describe('first event of the run, ISO-8601'),
   to: z.string().describe('last event of the run, ISO-8601'),
@@ -2539,6 +2578,11 @@ export const RunWaterfallWireSchema = z.object({
   calls: z.array(RunWaterfallCallSchema),
   waits: z.array(RunWaterfallWaitSchema),
   delegates: z.array(RunWaterfallDelegateSchema),
+  criticalPath: z
+    .array(RunWaterfallCriticalSegmentSchema)
+    .describe(
+      'the stretches that set the wall clock, in order — folded over every span, before any list here is capped',
+    ),
   totals: ChatTotalsWireSchema,
   waitedOnUserMs: z
     .number()
@@ -2563,7 +2607,7 @@ export type RunWaterfallWire = z.infer<typeof RunWaterfallWireSchema>;
  */
 export type RunWaterfallFold = Omit<
   RunWaterfallWire,
-  'toolUse' | 'partialReason'
+  'toolUse' | 'partialReason' | 'criticalPath'
 > & { working: boolean };
 
 /**

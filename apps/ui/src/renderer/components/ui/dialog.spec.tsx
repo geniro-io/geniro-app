@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -54,6 +55,25 @@ describe('Dialog focus management', () => {
   it('moves initial focus to the first focusable child after the corner ✕', () => {
     renderDialog(true);
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Title');
+  });
+
+  it('focuses the element it is told to start at, in place of the first', () => {
+    function Starting(): React.JSX.Element {
+      const start = React.useRef<HTMLButtonElement>(null);
+      return (
+        <Dialog open onClose={vi.fn()} title="Run" initialFocus={start}>
+          <button type="button">Help</button>
+          <button type="button" ref={start}>
+            Start here
+          </button>
+        </Dialog>
+      );
+    }
+    act(() => {
+      root.render(<Starting />);
+    });
+
+    expect(document.activeElement?.textContent).toBe('Start here');
   });
 
   it('traps Tab inside the card in both directions', () => {

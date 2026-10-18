@@ -29,6 +29,7 @@ import {
   type PolledSpend,
 } from '../utils/polled-spend';
 import { snapshotPoolKinds } from '../utils/snapshot-config-dirs';
+import { foldThreadTimeline } from '../utils/thread-timeline';
 import { foldToolUsage } from '../utils/tool-usage';
 import {
   carriesUsage,
@@ -128,6 +129,7 @@ export class ChatWaterfallService {
     const { working: _working, ...spans } = folded;
     return {
       ...spans,
+      criticalPath: criticalPathOf(folded),
       toolUse: tools.toolUse,
       turns: cap(folded.turns, 'turns'),
       calls: cap(folded.calls, 'calls'),
@@ -184,7 +186,7 @@ export class ChatWaterfallService {
     // A snapshot read takes the working flag recorded when the snapshot was
     // taken, so the same snapshot always folds the same.
     const working = workingAtSnapshot ?? !isTerminalRunStatus(run.status);
-    const finished = foldTurns(payloadRows, laneRowTimes(spine));
+    const finished = foldTurns(payloadRows, laneRows(spine));
     const unfinished =
       run.workflowId === null
         ? foldUnfinishedChatTurns(spine, working, to)
@@ -317,6 +319,8 @@ type SpineRow = {
   kind: string;
   role: string | null;
   nodeId: string | null;
+  /** The call whose card the row is drawn in — `''` for the node's own flow, null when not stamped yet. */
+  inCall?: string | null;
   createdAt: Date;
 };
 
@@ -331,10 +335,39 @@ function empty(): RunWaterfallWire {
     calls: [],
     waits: [],
     delegates: [],
+    criticalPath: [],
     totals: sumUsagePayloads([]),
     waitedOnUserMs: null,
     partialReason: null,
   };
+}
+
+/**
+ * The run's critical path, on the wire's clock.
+ *
+ * Read off the UNCAPPED fold, for the reason `fold` exists: a path computed
+ * over a capped tail would start halfway through a long run. Tool spans are
+ * not needed — they refine an analysis's per-node figures, never the path.
+ */
+function criticalPathOf(
+  folded: RunWaterfallFold,
+): RunWaterfallWire['criticalPath'] {
+  const timeline = foldThreadTimeline(
+    {
+      from: Date.parse(folded.from),
+      to: Date.parse(folded.to),
+      turns: folded.turns,
+      calls: folded.calls,
+      waits: folded.waits,
+    },
+    [],
+  );
+  return timeline.criticalPath.map((segment) => ({
+    kind: segment.kind,
+    nodeId: segment.nodeId,
+    startedAt: new Date(segment.startMs).toISOString(),
+    durationMs: Math.round(segment.durationMs),
+  }));
 }
 
 /**
@@ -384,7 +417,7 @@ function parsed(payload: string): Record<string, unknown> | null {
  */
 function foldTurns(
   rows: readonly PayloadRow[],
-  laneRowTimes: ReadonlyMap<string | null, number[]>,
+  laneRows: ReadonlyMap<string | null, readonly LaneRow[]>,
 ): { turns: RunWaterfallTurn[]; ends: Map<string, number[]> } {
   const out: RunWaterfallTurn[] = [];
   // Where each DRAWN turn ended, per (node, call) — what the unfinished fold
@@ -414,7 +447,7 @@ function foldTurns(
     // dropped. Every ACP agent reports no timing at all, so dropping meant a
     // cursor callee's lane drew nothing and counted nothing while its caller
     // drew a long bar waiting on it — the picture said the agent had not run.
-    const derived = usable === null ? derivedSpan(laneRowTimes, row) : null;
+    const derived = usable === null ? derivedSpan(laneRows, row) : null;
     const durationMs = usable ?? derived;
     if (durationMs === null) {
       continue;
@@ -424,6 +457,13 @@ function foldTurns(
     out.push({
       nodeId: row.nodeId,
       startedAt: new Date(endedMs - durationMs).toISOString(),
+      seq: firstSeqWithin(
+        laneRows.get(row.nodeId),
+        endedMs - durationMs,
+        endedMs,
+        row.seq,
+        asString(body?.callId),
+      ),
       timingSource: usable === null ? 'derived' : 'cli',
       outcome: 'completed',
       toolCalls: 0,
@@ -492,6 +532,8 @@ function bracketedTurn(
   startMs: number,
   endMs: number,
   outcome: RunWaterfallTurn['outcome'],
+  /** The row that opened the stretch — where a reader is taken for it. */
+  seq: number,
 ): RunWaterfallTurn | null {
   const durationMs = Math.max(0, endMs - startMs);
   if (durationMs > MAX_SPAN_MS) {
@@ -500,6 +542,7 @@ function bracketedTurn(
   return {
     nodeId,
     startedAt: new Date(startMs).toISOString(),
+    seq,
     timingSource: 'derived',
     outcome,
     toolCalls: 0,
@@ -537,11 +580,14 @@ function foldUnfinishedNodeTurns(
   working: boolean,
   to: number,
 ): RunWaterfallTurn[] {
-  const open = new Map<string, { nodeId: string | null; startMs: number }>();
+  const open = new Map<
+    string,
+    { nodeId: string | null; startMs: number; seq: number }
+  >();
   const out: RunWaterfallTurn[] = [];
   const settle = (
     key: string,
-    started: { nodeId: string | null; startMs: number },
+    started: { nodeId: string | null; startMs: number; seq: number },
     endMs: number,
     outcome: RunWaterfallTurn['outcome'],
   ): void => {
@@ -551,7 +597,13 @@ function foldUnfinishedNodeTurns(
     if (reported) {
       return;
     }
-    const turn = bracketedTurn(started.nodeId, started.startMs, endMs, outcome);
+    const turn = bracketedTurn(
+      started.nodeId,
+      started.startMs,
+      endMs,
+      outcome,
+      started.seq,
+    );
     if (turn !== null) {
       out.push(turn);
     }
@@ -569,7 +621,7 @@ function foldUnfinishedNodeTurns(
       // The EARLIEST open is the start: a pass re-announcing `running` for a
       // turn already under way must not shrink it to its tail.
       if (!open.has(key)) {
-        open.set(key, { nodeId, startMs: atMs });
+        open.set(key, { nodeId, startMs: atMs, seq: row.seq });
       }
       continue;
     }
@@ -609,12 +661,12 @@ function foldUnfinishedChatTurns(
   to: number,
 ): RunWaterfallTurn[] {
   const out: RunWaterfallTurn[] = [];
-  let openMs: number | null = null;
+  let open: { atMs: number; seq: number } | null = null;
   const close = (endMs: number, outcome: RunWaterfallTurn['outcome']): void => {
-    if (openMs === null) {
+    if (open === null) {
       return;
     }
-    const turn = bracketedTurn(null, openMs, endMs, outcome);
+    const turn = bracketedTurn(null, open.atMs, endMs, outcome, open.seq);
     if (turn !== null) {
       out.push(turn);
     }
@@ -625,12 +677,12 @@ function foldUnfinishedChatTurns(
     }
     const atMs = row.createdAt.getTime();
     if (row.kind === 'message' && row.role === 'user') {
-      openMs ??= atMs;
+      open ??= { atMs, seq: row.seq };
     } else if (row.kind === 'turn_complete') {
-      openMs = null;
+      open = null;
     } else if (row.kind === 'error' || row.kind === 'turn_cancelled') {
       close(atMs, row.kind === 'error' ? 'failed' : 'cancelled');
-      openMs = null;
+      open = null;
     }
   }
   if (working) {
@@ -716,20 +768,54 @@ function countBefore(
  * Built off the SPINE, which carries no payload, so this costs nothing beyond
  * the walk the fold already makes.
  */
-function laneRowTimes(
-  spine: readonly SpineRow[],
-): Map<string | null, number[]> {
-  const byLane = new Map<string | null, number[]>();
+function laneRows(spine: readonly SpineRow[]): Map<string | null, LaneRow[]> {
+  const byLane = new Map<string | null, LaneRow[]>();
   for (const row of spine) {
-    const at = row.createdAt.getTime();
+    const entry = {
+      at: row.createdAt.getTime(),
+      seq: row.seq,
+      inCall: row.inCall ?? null,
+    };
     const own = byLane.get(row.nodeId);
     if (own === undefined) {
-      byLane.set(row.nodeId, [at]);
+      byLane.set(row.nodeId, [entry]);
     } else {
-      own.push(at);
+      own.push(entry);
     }
   }
   return byLane;
+}
+
+/** One row a lane wrote: when, its seq, and the call it is drawn in. */
+type LaneRow = { at: number; seq: number; inCall: string | null };
+
+/**
+ * Where a reader is taken for a turn: the first row its lane wrote inside the
+ * turn's span, which is the turn's own opening in the transcript. A turn that
+ * wrote nothing inside its span falls back to the row that closed it, which
+ * always exists. (A derived span starts AT the lane's previous row, so a
+ * derived turn lands on the row its bar is drawn from.)
+ *
+ * Matched on the turn's CONVERSATION as well as its node: one node can answer
+ * two calls at once, and the other call's row inside the same stretch would
+ * open the wrong card. A row not stamped with its call yet (`inCall` null)
+ * still counts — it is the node's, and the closing row is no closer.
+ */
+function firstSeqWithin(
+  rows: readonly LaneRow[] | undefined,
+  startMs: number,
+  endMs: number,
+  closingSeq: number,
+  callId: string | null,
+): number {
+  const conversation = callId ?? '';
+  const first = rows?.find(
+    (row) =>
+      row.at >= startMs &&
+      row.at <= endMs &&
+      (row.inCall === null || row.inCall === conversation),
+  );
+  return first?.seq ?? closingSeq;
 }
 
 /**
@@ -745,16 +831,16 @@ function laneRowTimes(
  * stretch, so nothing is invented.
  */
 function derivedSpan(
-  laneRowTimes: ReadonlyMap<string | null, number[]>,
+  laneRows: ReadonlyMap<string | null, readonly LaneRow[]>,
   row: PayloadRow,
 ): number | null {
-  const times = laneRowTimes.get(row.nodeId);
-  if (times === undefined) {
+  const rows = laneRows.get(row.nodeId);
+  if (rows === undefined) {
     return null;
   }
   const endedMs = row.createdAt.getTime();
   let previous: number | null = null;
-  for (const at of times) {
+  for (const { at } of rows) {
     if (at >= endedMs) {
       break;
     }
@@ -809,6 +895,7 @@ function foldCalls(
       status: asString(body.status),
       running: false,
       startedAt: started.row.createdAt.toISOString(),
+      seq: started.row.seq,
       durationMs: Math.max(
         0,
         row.createdAt.getTime() - started.row.createdAt.getTime(),
@@ -824,6 +911,7 @@ function foldCalls(
         status: null,
         running: true,
         startedAt: started.row.createdAt.toISOString(),
+        seq: started.row.seq,
         durationMs: Math.max(0, to - started.row.createdAt.getTime()),
       });
     }
@@ -878,6 +966,7 @@ function foldWaits(rows: readonly PayloadRow[]): RunWaterfallWait[] {
       toolName: asString(started.body.toolName),
       allowed: asBoolean(body.allow),
       startedAt: started.row.createdAt.toISOString(),
+      seq: started.row.seq,
       durationMs: Math.max(
         0,
         row.createdAt.getTime() - started.row.createdAt.getTime(),
@@ -931,6 +1020,7 @@ function foldDelegates(rows: readonly PayloadRow[]): RunWaterfallDelegate[] {
     out.push({
       nodeId: started.nodeId,
       startedAt: started.createdAt.toISOString(),
+      seq: started.seq,
       durationMs: Math.max(
         0,
         row.createdAt.getTime() - started.createdAt.getTime(),

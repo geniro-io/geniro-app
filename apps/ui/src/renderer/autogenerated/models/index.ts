@@ -5865,12 +5865,61 @@ export interface RunWaterfallCall {
      */
     startedAt: string;
     /**
+     * the `call_started` row that opened the call
+     * @type {number}
+     * @memberof RunWaterfallCall
+     */
+    seq: number;
+    /**
      * 
      * @type {number}
      * @memberof RunWaterfallCall
      */
     durationMs: number;
 }
+/**
+ * 
+ * @export
+ * @interface RunWaterfallCriticalSegment
+ */
+export interface RunWaterfallCriticalSegment {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCriticalSegment
+     */
+    kind: RunWaterfallCriticalSegmentKindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCriticalSegment
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCriticalSegment
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallCriticalSegment
+     */
+    durationMs: number;
+}
+
+
+/**
+ * @export
+ */
+export const RunWaterfallCriticalSegmentKindEnum = {
+    Work: 'work',
+    WaitingOnUser: 'waiting_on_user',
+    Idle: 'idle'
+} as const;
+export type RunWaterfallCriticalSegmentKindEnum = typeof RunWaterfallCriticalSegmentKindEnum[keyof typeof RunWaterfallCriticalSegmentKindEnum];
+
 /**
  * 
  * @export
@@ -5889,6 +5938,12 @@ export interface RunWaterfallDelegate {
      * @memberof RunWaterfallDelegate
      */
     startedAt: string;
+    /**
+     * the `subagent_info` row that launched the sub-agent
+     * @type {number}
+     * @memberof RunWaterfallDelegate
+     */
+    seq: number;
     /**
      * 
      * @type {number}
@@ -5950,6 +6005,12 @@ export interface RunWaterfallDto {
      * @memberof RunWaterfallDto
      */
     delegates: Array<RunWaterfallDelegate>;
+    /**
+     * the stretches that set the wall clock, in order — folded over every span, before any list here is capped
+     * @type {Array<RunWaterfallCriticalSegment>}
+     * @memberof RunWaterfallDto
+     */
+    criticalPath: Array<RunWaterfallCriticalSegment>;
     /**
      * 
      * @type {ChatTotals}
@@ -6088,6 +6149,12 @@ export interface RunWaterfallTurn {
      * @memberof RunWaterfallTurn
      */
     startedAt: string;
+    /**
+     * the transcript row a reader is taken to for this turn — its first row on the lane, or the row that closed it when it wrote none
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    seq: number;
     /**
      * 'cli' is the agent's own reported duration; 'derived' is measured from the rows this lane wrote, for a CLI that reports no timing
      * @type {string}
@@ -6249,6 +6316,12 @@ export interface RunWaterfallWait {
      * @memberof RunWaterfallWait
      */
     startedAt: string;
+    /**
+     * the `approval_request` row that raised the card
+     * @type {number}
+     * @memberof RunWaterfallWait
+     */
+    seq: number;
     /**
      * 
      * @type {number}

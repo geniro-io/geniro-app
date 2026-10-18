@@ -16,6 +16,7 @@ interface StoredRow {
   nodeId: string | null;
   payload: unknown;
   secondsIn: number;
+  inCall?: string | null;
 }
 
 const T0 = Date.parse('2026-09-07T12:00:00.000Z');
@@ -79,9 +80,10 @@ function build(
     {
       timelineSpine: () =>
         Promise.resolve(
-          rows.map(({ seq, kind, nodeId, payload, secondsIn }) => ({
+          rows.map(({ seq, kind, nodeId, payload, secondsIn, inCall }) => ({
             seq,
             kind,
+            inCall: inCall ?? null,
             role:
               kind === 'message'
                 ? ((payload as { role?: string } | null)?.role ?? null)
@@ -428,6 +430,7 @@ describe('ChatWaterfallService', () => {
           status: null,
           running: true,
           startedAt: iso(100),
+          seq: 1,
           durationMs: 300_000,
         },
       ]);
@@ -670,6 +673,7 @@ describe('ChatWaterfallService', () => {
           status: 'error',
           running: false,
           startedAt: iso(0),
+          seq: 0,
           durationMs: 12_000,
         },
       ]);
@@ -690,7 +694,7 @@ describe('ChatWaterfallService', () => {
       ]).read('run-a');
 
       expect(result.delegates).toEqual([
-        { nodeId: null, startedAt: iso(0), durationMs: 20_000 },
+        { nodeId: null, startedAt: iso(0), seq: 0, durationMs: 20_000 },
       ]);
     });
   });
@@ -1023,6 +1027,128 @@ describe('ChatWaterfallService', () => {
     expect(result.waits[0]?.question).toBe(true);
   });
 
+  describe('where a reader is taken', () => {
+    it("takes a turn to the first row its lane wrote inside the turn's span", async () => {
+      // The detail panel's "Open in chat" jumps to this seq. A row the lane
+      // wrote BEFORE the turn began (seq 1) belongs to an earlier stretch, and
+      // the closing row (seq 3) would land the reader at the turn's end.
+      const result = await build([
+        row(0, 'message', { role: 'user' }, 0),
+        row(1, 'tool_call', null, 60),
+        row(2, 'tool_call', null, 75),
+        row(3, 'turn_complete', { usage: { durationMs: 30_000 } }, 100),
+      ]).read('run-a');
+
+      expect(result.turns.map((turn) => turn.seq)).toEqual([2]);
+    });
+
+    it("takes a callee's turn to ITS conversation's row when one node answers two calls at once", async () => {
+      // Call c2's turn ran 50–100s, but call c1's conversation on the same node
+      // wrote first inside that stretch (seq 2). Landing there would open c1's
+      // card for c2's turn.
+      const result = await build([
+        row(0, 'message', { role: 'user' }, 0),
+        { ...row(2, 'tool_call', null, 55, 'eng'), inCall: 'c1' },
+        { ...row(3, 'tool_call', null, 60, 'eng'), inCall: 'c2' },
+        {
+          ...row(
+            4,
+            'turn_complete',
+            { callId: 'c2', usage: { durationMs: 50_000 } },
+            100,
+            'eng',
+          ),
+          inCall: 'c2',
+        },
+      ]).read('run-a');
+
+      expect(result.turns.map((turn) => turn.seq)).toEqual([3]);
+    });
+
+    it('falls back to the closing row when the turn wrote nothing inside its span', async () => {
+      const result = await build([
+        row(0, 'message', { role: 'user' }, 0),
+        row(4, 'turn_complete', { usage: { durationMs: 30_000 } }, 100),
+      ]).read('run-a');
+
+      expect(result.turns.map((turn) => turn.seq)).toEqual([4]);
+    });
+
+    it('takes a turn still running to the message that opened it', async () => {
+      const result = await build(
+        [
+          row(0, 'message', { role: 'user' }, 0),
+          row(7, 'message', { role: 'user' }, 10),
+          row(8, 'tool_call', null, 20),
+        ],
+        { status: 'running' },
+      ).read('run-a');
+
+      expect(result.turns).toHaveLength(1);
+      expect(result.turns[0]?.outcome).toBe('running');
+      expect(result.turns[0]?.seq).toBe(0);
+    });
+
+    it("takes a workflow node's unfinished turn to the status row that opened it", async () => {
+      const result = await build(
+        [
+          row(0, 'message', { role: 'user' }, 0),
+          row(3, 'status', { status: 'running' }, 5, 'qa'),
+          row(4, 'tool_call', null, 8, 'qa'),
+          row(5, 'status', { status: 'failed' }, 20, 'qa'),
+        ],
+        {
+          workflowId: 'wf',
+          nodeStates: [{ nodeId: 'qa', agentKind: 'claude' }],
+        },
+      ).read('run-a');
+
+      expect(result.turns).toHaveLength(1);
+      expect(result.turns[0]?.outcome).toBe('failed');
+      expect(result.turns[0]?.seq).toBe(3);
+    });
+  });
+
+  describe('the critical path', () => {
+    it('chains the work that set the wall clock, with the idle gap between', async () => {
+      // `a` works 0–30s, nothing runs 30–40s, `b` works 40–100s. The path is
+      // the same fold the thread analysis reads, stated on the card's clock.
+      const result = await build([
+        row(0, 'message', { role: 'user' }, 0),
+        row(1, 'turn_complete', { usage: { durationMs: 30_000 } }, 30, 'a'),
+        row(2, 'turn_complete', { usage: { durationMs: 60_000 } }, 100, 'b'),
+      ]).read('run-a');
+
+      expect(result.criticalPath).toEqual([
+        { kind: 'work', nodeId: 'a', startedAt: iso(0), durationMs: 30_000 },
+        { kind: 'idle', nodeId: null, startedAt: iso(30), durationMs: 10_000 },
+        { kind: 'work', nodeId: 'b', startedAt: iso(40), durationMs: 60_000 },
+      ]);
+    });
+
+    it('names a wait on the user as its own stretch of the path', async () => {
+      const result = await build([
+        row(0, 'message', { role: 'user' }, 0),
+        row(1, 'turn_complete', { usage: { durationMs: 10_000 } }, 10, 'a'),
+        row(2, 'approval_request', { id: 'w', toolName: 'Bash' }, 10, 'b'),
+        row(3, 'approval_verdict', { id: 'w', allow: true }, 25, 'b'),
+        row(4, 'turn_complete', { usage: { durationMs: 5_000 } }, 30, 'b'),
+      ]).read('run-a');
+
+      expect(result.criticalPath.map((segment) => segment.kind)).toEqual([
+        'work',
+        'waiting_on_user',
+        'work',
+      ]);
+    });
+
+    it('answers no path for a run with no row', async () => {
+      const result = await build([]).read('run-a');
+
+      expect(result.criticalPath).toEqual([]);
+    });
+  });
+
   it('pins every field of a wait span, not only its length', async () => {
     const result = await build([
       row(
@@ -1042,6 +1168,7 @@ describe('ChatWaterfallService', () => {
         toolName: 'Bash',
         allowed: false,
         startedAt: iso(10),
+        seq: 0,
         durationMs: 30_000,
       },
     ]);
@@ -1077,7 +1204,7 @@ describe('ChatWaterfallService', () => {
     ]).read('run-a');
 
     expect(result.delegates).toEqual([
-      { nodeId: null, startedAt: iso(0), durationMs: 15_000 },
+      { nodeId: null, startedAt: iso(0), seq: 0, durationMs: 15_000 },
     ]);
   });
 
@@ -1094,6 +1221,9 @@ describe('ChatWaterfallService', () => {
     // run backwards rather than shortening it.
     expect(result.turns[0]?.startedAt).toBe(iso(19));
     expect(result.turns.at(-1)?.startedAt).toBe(iso(518));
+    // The critical path is folded BEFORE the cap: it still starts at the
+    // run's first row, where a path over the kept tail would start at 19s.
+    expect(result.criticalPath[0]?.startedAt).toBe(iso(0));
   });
 
   it('folds every span UNCAPPED for an analysis while the card still caps', async () => {

@@ -45,3 +45,12 @@ export const Full: Story = {
     </div>
   ),
 };
+
+export const Danger: Story = {
+  args: { fraction: 0.86, label: 'Context window', tone: 'danger' },
+  render: (args) => (
+    <div className="w-64">
+      <ProgressBar {...args} />
+    </div>
+  ),
+};

@@ -62,8 +62,9 @@ function pushLayer(layer: { close: () => void }): () => void {
 /**
  * A minimal modal dialog: a dark backdrop + a centered token-styled card.
  * Closes on Escape, backdrop click, or the corner ✕. Owns the modal focus
- * contract (no dep): on open, focus moves to the first focusable child after
- * the ✕ (the card itself as fallback), Tab cycles inside the card, and close
+ * contract (no dep): on open, focus moves to `initialFocus` when given, else to
+ * the first focusable child after the ✕ (the card itself as fallback), Tab
+ * cycles inside the card, and close
  * restores focus to the opener — aria-modal promises assistive tech the
  * background does not exist, so keyboard focus must not walk it either.
  *
@@ -78,6 +79,7 @@ export function Dialog({
   className,
   fullScreen = false,
   flush = false,
+  initialFocus,
 }: {
   open: boolean;
   onClose: () => void;
@@ -91,6 +93,12 @@ export function Dialog({
    * scrolls its own parts (a hosted chat's transcript over its composer).
    */
   flush?: boolean;
+  /**
+   * What takes focus as the dialog opens, in place of its first focusable
+   * child — for a view whose first control is not where a reader starts (a
+   * `?` that would open its explanation over everything else).
+   */
+  initialFocus?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element | null {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   // Read through a ref rather than put in the effect's dependencies: callers
@@ -99,6 +107,8 @@ export function Dialog({
   // to the top of the stack, over the dialog the user actually opened last.
   const onCloseRef = React.useRef(onClose);
   onCloseRef.current = onClose;
+  const initialFocusRef = React.useRef(initialFocus);
+  initialFocusRef.current = initialFocus;
 
   React.useEffect(() => {
     if (!open) {
@@ -128,7 +138,7 @@ export function Dialog({
     const initial =
       focusables.find((el) => el.getAttribute('aria-label') !== 'Close') ??
       focusables[0];
-    (initial ?? card)?.focus();
+    (initialFocusRef.current?.current ?? initial ?? card)?.focus();
     return () => {
       // Restore the opener on close — otherwise focus falls to <body> and a
       // keyboard user restarts from the top of the window.

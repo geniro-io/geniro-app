@@ -1,4 +1,17 @@
+import { cva, type VariantProps } from 'class-variance-authority';
+
 import { cn } from './utils';
+
+/** The fill's colour: the ordinary reading, or one past where it should be. */
+const fillVariants = cva('h-full rounded-full', {
+  variants: {
+    tone: {
+      default: 'bg-primary',
+      danger: 'bg-destructive',
+    },
+  },
+  defaultVariants: { tone: 'default' },
+});
 
 /**
  * A horizontal determinate progress track.
@@ -16,13 +29,14 @@ export function ProgressBar({
   fraction,
   label,
   className,
+  tone,
 }: {
   /** Fill fraction 0..1 (clamped), or null for indeterminate. */
   fraction: number | null;
   /** Accessible name — required, since a bar with no name conveys nothing. */
   label: string;
   className?: string;
-}): React.JSX.Element {
+} & VariantProps<typeof fillVariants>): React.JSX.Element {
   const clamped = fraction === null ? null : Math.min(1, Math.max(0, fraction));
   return (
     <div
@@ -39,7 +53,7 @@ export function ProgressBar({
       )}>
       <div
         className={cn(
-          'h-full rounded-full bg-primary',
+          fillVariants({ tone }),
           clamped === null
             ? 'w-1/3 animate-[progress-slide_1.4s_ease-in-out_infinite]'
             : 'transition-[width] duration-200',

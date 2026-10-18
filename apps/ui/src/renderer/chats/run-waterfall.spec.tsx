@@ -36,6 +36,7 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   return {
     nodeId: 'engineer',
     startedAt: FROM,
+    seq: 1,
     timingSource: 'cli',
     outcome: 'completed',
     toolCalls: 0,
@@ -65,6 +66,7 @@ function call(status: string): RunWaterfallCall {
     status,
     running: false,
     startedAt: FROM,
+    seq: 2,
     durationMs: 1_000,
   };
 }
@@ -79,6 +81,7 @@ function dto(over: Partial<RunWaterfallDto> = {}): RunWaterfallDto {
     calls: [],
     waits: [],
     delegates: [],
+    criticalPath: [],
     totals: {
       turns: 2,
       costedTurns: 2,
@@ -149,6 +152,7 @@ describe('RunWaterfall', () => {
         turns: [
           turn({
             startedAt: new Date(Date.parse(FROM) + SPAN_MS / 2).toISOString(),
+            seq: 3,
             durationMs: SPAN_MS / 4,
           }),
         ],
@@ -182,6 +186,7 @@ describe('RunWaterfall', () => {
         turns: [
           turn({
             startedAt: new Date(Date.parse(TO) - 60_000).toISOString(),
+            seq: 4,
             durationMs: SPAN_MS,
           }),
         ],
@@ -208,6 +213,7 @@ describe('RunWaterfall', () => {
             toolName: 'AskUserQuestion',
             allowed: true,
             startedAt: FROM,
+            seq: 5,
             durationMs: 120_000,
           },
         ],
@@ -332,6 +338,7 @@ describe('RunWaterfall', () => {
           turn({
             model: 'sonnet',
             startedAt: new Date(Date.parse(TO) - 100).toISOString(),
+            seq: 6,
             durationMs: 100,
           }),
         ],

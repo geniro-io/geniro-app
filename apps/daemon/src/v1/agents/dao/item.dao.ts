@@ -1022,12 +1022,14 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
     /** Stop at this seq — an analysis reads its source as it stood when clicked. */
     maxSeq?: number,
-  ): Promise<Pick<Item, 'seq' | 'kind' | 'role' | 'nodeId' | 'createdAt'>[]> {
+  ): Promise<
+    Pick<Item, 'seq' | 'kind' | 'role' | 'nodeId' | 'inCall' | 'createdAt'>[]
+  > {
     return this.getRepo(txEm).find(
       maxSeq === undefined ? { runId } : { runId, seq: { $lte: maxSeq } },
       {
         orderBy: { seq: 'asc' },
-        fields: ['seq', 'kind', 'role', 'nodeId', 'createdAt'],
+        fields: ['seq', 'kind', 'role', 'nodeId', 'inCall', 'createdAt'],
         disableIdentityMap: true,
       },
     );

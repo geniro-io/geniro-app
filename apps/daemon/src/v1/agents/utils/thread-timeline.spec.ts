@@ -230,6 +230,40 @@ describe('foldThreadTimeline', () => {
 });
 
 describe('thread timeline edge cases', () => {
+  it('holds a caller on a call recorded with no mode, and never on an async one', () => {
+    // TWIN of the renderer's `blocksCaller`: an older build wrote no mode,
+    // and both sides read that as a call the caller waited on.
+    const timeline = foldThreadTimeline(
+      {
+        from: s(0),
+        to: s(60),
+        turns: [{ nodeId: 'lead', startedAt: iso(0), durationMs: 60_000 }],
+        calls: [
+          {
+            callerNodeId: 'lead',
+            calleeNodeId: 'worker',
+            mode: null,
+            startedAt: iso(10),
+            durationMs: 20_000,
+          },
+          {
+            callerNodeId: 'lead',
+            calleeNodeId: 'other',
+            mode: 'async',
+            startedAt: iso(30),
+            durationMs: 20_000,
+          },
+        ],
+        waits: [],
+      },
+      [],
+    );
+
+    expect(
+      timeline.nodes.find((node) => node.nodeId === 'lead')?.waitingOnCalleeMs,
+    ).toBe(20_000);
+  });
+
   it('never reports a critical path longer than the wall clock', () => {
     // The first turn reaches BACK from its turn_complete by the CLI's own
     // duration, so it can start before the run's first row.

@@ -27,6 +27,8 @@ import { TaskDetail } from './task-detail';
 import { targetOf } from './task-target';
 import { BOARD_COLUMNS, boardColumns, useBoard } from './use-board';
 
+const TASKS_PER_PAGE = 20;
+
 /**
  * Which card of a column a drag over it would land ahead of — the first card
  * whose vertical midpoint is below the pointer — or null for the column's end.
@@ -78,6 +80,16 @@ export function Tasks({
   }, [handle]);
 
   const board = useBoard(apis, client);
+  const [pageByStatus, setPageByStatus] = useState<Record<string, number>>({});
+  useEffect(() => {
+    setPageByStatus({});
+  }, [board.selectedProjectId]);
+  const showTaskAt = useCallback((status: string, index: number) => {
+    setPageByStatus((current) => ({
+      ...current,
+      [status]: Math.floor(index / TASKS_PER_PAGE),
+    }));
+  }, []);
   const refreshProjects = board.refreshProjects;
   useEffect(() => {
     if (active) {
@@ -196,6 +208,8 @@ export function Tasks({
   // node that had focus is unmounted and focus falls to <body>. Re-claim it on
   // the card's new node, or the next arrow press goes nowhere.
   const refocusTaskId = useRef<string | null>(null);
+  const keyboardMoveId = useRef(0);
+  const [focusNonce, setFocusNonce] = useState(0);
   useEffect(() => {
     const id = refocusTaskId.current;
     if (id === null) {
@@ -208,7 +222,28 @@ export function Tasks({
       ...document.querySelectorAll<HTMLElement>('[data-task-id]'),
     ].find((el) => el.dataset.taskId === id);
     node?.focus();
-  }, [board.tasks]);
+  }, [board.tasks, focusNonce]);
+
+  const placeKeyboardTask = useCallback(
+    (taskId: string, status: string, before: string | null) => {
+      const moveId = ++keyboardMoveId.current;
+      refocusTaskId.current = taskId;
+      void board.placeTask(taskId, status, before).then(() => {
+        // A refresh between moving and reordering can unmount the focused card.
+        const focused = document.activeElement;
+        if (
+          moveId !== keyboardMoveId.current ||
+          (focused !== document.body &&
+            focused?.getAttribute('data-task-id') !== taskId)
+        ) {
+          return;
+        }
+        refocusTaskId.current = taskId;
+        setFocusNonce((current) => current + 1);
+      });
+    },
+    [board.placeTask],
+  );
 
   const onCardKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>, taskId: string) => {
@@ -231,13 +266,13 @@ export function Tasks({
           return;
         }
         event.preventDefault();
-        refocusTaskId.current = taskId;
+        showTaskAt(task.status, target);
         // Down lands ahead of the card after the neighbour, or at the end.
         const before =
           event.key === 'ArrowUp'
             ? (column[target] ?? null)
             : (column[target + 1] ?? null);
-        void board.placeTask(taskId, task.status, before);
+        placeKeyboardTask(taskId, task.status, before);
         return;
       }
       const step =
@@ -257,10 +292,10 @@ export function Tasks({
         return;
       }
       event.preventDefault();
-      refocusTaskId.current = taskId;
-      void board.moveTask(taskId, next);
+      showTaskAt(next, board.tasks.filter((row) => row.status === next).length);
+      placeKeyboardTask(taskId, next, null);
     },
-    [board],
+    [board, showTaskAt, placeKeyboardTask],
   );
 
   const projectId = board.selectedProjectId;
@@ -530,106 +565,134 @@ export function Tasks({
             {/* The COLUMNS scroll horizontally and each scrolls its own cards;
               the page itself never scrolls. */}
             <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-3">
-              {boardColumns(board.tasks).map((status) => (
-                <BoardColumn
-                  key={status}
-                  status={status}
-                  // Only on the column the open project actually picks work up
-                  // from, and only while it is armed: everywhere else "work
-                  // leaves here on its own" is not a fact about what the user
-                  // is looking at.
-                  autopilot={
-                    openProject?.autopilotEnabled === true &&
-                    openProject.autopilotIntakeStatus === status
+              {boardColumns(board.tasks).map((status) => {
+                const columnTasks = board.tasks.filter(
+                  (row) => row.status === status,
+                );
+                const pageCount = Math.max(
+                  1,
+                  Math.ceil(columnTasks.length / TASKS_PER_PAGE),
+                );
+                const page = Math.min(pageByStatus[status] ?? 0, pageCount - 1);
+                const offset = page * TASKS_PER_PAGE;
+                const visibleTasks = columnTasks.slice(
+                  offset,
+                  offset + TASKS_PER_PAGE,
+                );
+                const nextPageTaskId =
+                  columnTasks[offset + TASKS_PER_PAGE]?.id ?? null;
+                return (
+                  <BoardColumn
+                    key={status}
+                    status={status}
+                    // Only on the column the open project actually picks work up
+                    // from, and only while it is armed: everywhere else "work
+                    // leaves here on its own" is not a fact about what the user
+                    // is looking at.
+                    autopilot={
+                      openProject?.autopilotEnabled === true &&
+                      openProject.autopilotIntakeStatus === status
+                        ? {
+                            breakerOpen: isBreakerOpen(openProject),
+                            waiting: board.queue?.waiting ?? null,
+                            // Every blocked card is in the intake column by
+                            // construction — the daemon only ever considers that
+                            // column — and this banner is drawn on that column
+                            // alone, so the queue's whole list belongs here.
+                            blocked: board.queue?.blocked ?? [],
+                            onStop: () => {
+                              void board.stopAutopilot();
+                            },
+                            // The board's run settings are where most blocked
+                            // cards are answered, so the explanation offers them
+                            // rather than naming the chip they live behind.
+                            onFixBlocked: () => {
+                              setRunConfigOpen(true);
+                            },
+                          }
+                        : undefined
+                    }
+                    tasks={visibleTasks}
+                    pagination={{
+                      page,
+                      pageSize: TASKS_PER_PAGE,
+                      total: columnTasks.length,
+                      onPageChange: (nextPage) => {
+                        setPageByStatus((current) => ({
+                          ...current,
+                          [status]: nextPage,
+                        }));
+                        setDropTarget(null);
+                        setDropBeforeTaskId(null);
+                      },
+                    }}
+                    taskKeyOf={(task) =>
+                      projectsById.get(task.projectId)?.taskKey ?? null
+                    }
+                    {...(projectId === null
                       ? {
-                          breakerOpen: isBreakerOpen(openProject),
-                          waiting: board.queue?.waiting ?? null,
-                          // Every blocked card is in the intake column by
-                          // construction — the daemon only ever considers that
-                          // column — and this banner is drawn on that column
-                          // alone, so the queue's whole list belongs here.
-                          blocked: board.queue?.blocked ?? [],
-                          onStop: () => {
-                            void board.stopAutopilot();
-                          },
-                          // The board's run settings are where most blocked
-                          // cards are answered, so the explanation offers them
-                          // rather than naming the chip they live behind.
-                          onFixBlocked: () => {
-                            setRunConfigOpen(true);
-                          },
+                          projectNameOf: (task: TaskDto) =>
+                            projectsById.get(task.projectId)?.name ?? null,
                         }
-                      : undefined
-                  }
-                  tasks={board.tasks.filter((row) => row.status === status)}
-                  taskKeyOf={(task) =>
-                    projectsById.get(task.projectId)?.taskKey ?? null
-                  }
-                  {...(projectId === null
-                    ? {
-                        projectNameOf: (task: TaskDto) =>
-                          projectsById.get(task.projectId)?.name ?? null,
+                      : {})}
+                    activeByTask={activeByTask}
+                    selectedTaskId={openTaskId}
+                    draggingTaskId={draggingTaskId}
+                    isDropTarget={dropTarget === status}
+                    {...(dropTarget === status ? { dropBeforeTaskId } : {})}
+                    onOpenTask={setOpenTaskId}
+                    onDragStartTask={setDraggingTaskId}
+                    onDragEndTask={() => {
+                      setDraggingTaskId(null);
+                      setDropTarget(null);
+                      setDropBeforeTaskId(null);
+                    }}
+                    onTaskKeyDown={onCardKeyDown}
+                    {...(openProject === null
+                      ? {}
+                      : {
+                          onAddTask: (into: string) => {
+                            setNewTaskStatus(into);
+                            setNewTaskOpen(true);
+                          },
+                        })}
+                    onDragOver={(event) => {
+                      if (draggingTaskId === null) {
+                        return;
                       }
-                    : {})}
-                  activeByTask={activeByTask}
-                  selectedTaskId={openTaskId}
-                  draggingTaskId={draggingTaskId}
-                  isDropTarget={dropTarget === status}
-                  {...(dropTarget === status ? { dropBeforeTaskId } : {})}
-                  onOpenTask={setOpenTaskId}
-                  onDragStartTask={setDraggingTaskId}
-                  onDragEndTask={() => {
-                    setDraggingTaskId(null);
-                    setDropTarget(null);
-                    setDropBeforeTaskId(null);
-                  }}
-                  onTaskKeyDown={onCardKeyDown}
-                  {...(openProject === null
-                    ? {}
-                    : {
-                        onAddTask: (into: string) => {
-                          setNewTaskStatus(into);
-                          setNewTaskOpen(true);
-                        },
-                      })}
-                  onDragOver={(event) => {
-                    if (draggingTaskId === null) {
-                      return;
-                    }
-                    // After the foreign-drag guard above and before anything
-                    // else. A dragover that returns without calling this is a
-                    // dragover the browser reads as "not a drop target", and
-                    // the card animates back to where it started.
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'move';
-                    setDropTarget(status);
-                    setDropBeforeTaskId(
-                      dropSlotBefore(
-                        event,
-                        board.tasks
-                          .filter((row) => row.status === status)
-                          .map((row) => row.id),
-                      ),
-                    );
-                  }}
-                  onDragLeave={() => {
-                    setDropTarget((current) =>
-                      current === status ? null : current,
-                    );
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    const taskId = draggingTaskId;
-                    const before = dropBeforeTaskId;
-                    setDraggingTaskId(null);
-                    setDropTarget(null);
-                    setDropBeforeTaskId(null);
-                    if (taskId !== null) {
-                      void board.placeTask(taskId, status, before);
-                    }
-                  }}
-                />
-              ))}
+                      // After the foreign-drag guard above and before anything
+                      // else. A dragover that returns without calling this is a
+                      // dragover the browser reads as "not a drop target", and
+                      // the card animates back to where it started.
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                      setDropTarget(status);
+                      setDropBeforeTaskId(
+                        dropSlotBefore(
+                          event,
+                          visibleTasks.map((row) => row.id),
+                        ) ?? nextPageTaskId,
+                      );
+                    }}
+                    onDragLeave={() => {
+                      setDropTarget((current) =>
+                        current === status ? null : current,
+                      );
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const taskId = draggingTaskId;
+                      const before = dropBeforeTaskId;
+                      setDraggingTaskId(null);
+                      setDropTarget(null);
+                      setDropBeforeTaskId(null);
+                      if (taskId !== null) {
+                        void board.placeTask(taskId, status, before);
+                      }
+                    }}
+                  />
+                );
+              })}
             </div>
           </>
         )}

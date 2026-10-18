@@ -42,6 +42,7 @@ import {
   cumulativeSpend,
   laneIndexOf,
   place,
+  stackRows,
   toolsTitle,
   topTurns,
   TURN_OUTCOME_CLASS,
@@ -86,6 +87,21 @@ const LABEL_MIN_PCT = 5;
 
 /** Rows in the most-expensive-turns table. */
 const TOP_TURNS = 12;
+
+/**
+ * A lane track's vertical anatomy, in pixels: the turns' row on top, then one
+ * row per set of calls that overlap in time, then the sub-agents' rows. Each is
+ * a number rather than a class because how many call and sub-agent rows a lane
+ * needs is only known from its data.
+ */
+const CALL_TOP = 32;
+const CALL_HEIGHT = 16;
+const CALL_STEP = 20;
+const DELEGATE_GAP = 2;
+const DELEGATE_HEIGHT = 12;
+const DELEGATE_STEP = 10;
+const TRACK_MIN_HEIGHT = 64;
+const TRACK_PAD_BOTTOM = 4;
 
 /** Plot height for the cumulative-cost curve. */
 const CURVE_HEIGHT = 200;
@@ -832,6 +848,25 @@ function LaneTrack({
   );
   const laneName = lane.nodeId ?? 'agent';
 
+  // Calls that share time get a row each, and the sub-agents' rows start under
+  // the last of them. A manager fanning out to three agents at once otherwise
+  // drew three outlines and three names over one another on a single line.
+  const callSpots = calls.map((call) =>
+    place(call.startedAt, call.durationMs, from, span),
+  );
+  const callRows = stackRows(callSpots);
+  const delegateSpots = delegates.map((delegate) =>
+    place(delegate.startedAt, delegate.durationMs, from, span),
+  );
+  const delegateRows = stackRows(delegateSpots);
+  const delegateTop =
+    CALL_TOP + Math.max(1, callRows.count) * CALL_STEP - DELEGATE_GAP;
+  const lowestMark =
+    delegateRows.count > 0
+      ? delegateTop + (delegateRows.count - 1) * DELEGATE_STEP + DELEGATE_HEIGHT
+      : CALL_TOP + (callRows.count - 1) * CALL_STEP + CALL_HEIGHT;
+  const trackHeight = Math.max(TRACK_MIN_HEIGHT, lowestMark + TRACK_PAD_BOTTOM);
+
   /**
    * Every mark answers the pointer the same way.
    *
@@ -855,7 +890,8 @@ function LaneTrack({
   return (
     <div
       data-lane-track=""
-      className="relative min-h-16 border-t border-l border-border"
+      className="relative border-t border-l border-border"
+      style={{ minHeight: trackHeight }}
       onMouseMove={(event) => {
         const pct = pctWithin(event.currentTarget, event.clientX);
         onMove(pct);
@@ -880,13 +916,16 @@ function LaneTrack({
       }}>
       <Crosshair pct={cursorPct} />
 
-      {delegates.map((delegate) => {
-        const spot = place(delegate.startedAt, delegate.durationMs, from, span);
+      {delegates.map((delegate, at) => {
+        const spot = delegateSpots[at] ?? null;
         return spot === null ? null : (
           <span
             key={`d-${delegate.startedAt}-${delegate.durationMs}`}
-            className="absolute top-[50px] flex h-3 items-center"
+            data-slot="waterfall-delegate"
+            className="absolute flex items-center"
             style={{
+              top: delegateTop + (delegateRows.rows[at] ?? 0) * DELEGATE_STEP,
+              height: DELEGATE_HEIGHT,
               left: `${spot.leftPct}%`,
               width: `${spot.widthPct}%`,
             }}
@@ -914,8 +953,8 @@ function LaneTrack({
         );
       })}
 
-      {calls.map((call) => {
-        const spot = place(call.startedAt, call.durationMs, from, span);
+      {calls.map((call, at) => {
+        const spot = callSpots[at] ?? null;
         if (spot === null) {
           return null;
         }
@@ -931,8 +970,10 @@ function LaneTrack({
           <span
             key={`c-${call.startedAt}-${call.calleeNodeId ?? ''}-${call.durationMs}`}
             data-slot="waterfall-call"
-            className="absolute top-8 flex h-4 items-center"
+            className="absolute flex items-center"
             style={{
+              top: CALL_TOP + (callRows.rows[at] ?? 0) * CALL_STEP,
+              height: CALL_HEIGHT,
               left: `${spot.leftPct}%`,
               width: `${spot.widthPct}%`,
             }}

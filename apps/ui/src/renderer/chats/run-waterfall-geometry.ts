@@ -63,6 +63,39 @@ export function place(
 }
 
 /**
+ * Which sub-row each span sits on so no two that share time share a row.
+ *
+ * A manager that hands work to three agents at once makes three calls covering
+ * the same stretch, and drawn on one line they were one smear of overprinted
+ * names. First fit in order of start: a span takes the lowest row whose last
+ * bar has ended by its left edge. Measured on the PLACED geometry, visible
+ * minimum included, because that is what is drawn — two instants a second
+ * apart in a long run are separate on the clock and one blob on screen.
+ *
+ * Returns one row index per input, in input order, and how many rows that took.
+ */
+export function stackRows(spans: readonly (Placed | null)[]): {
+  rows: number[];
+  count: number;
+} {
+  const rows = spans.map(() => 0);
+  const rowEnds: number[] = [];
+  const order = spans
+    .map((spot, index) => ({ spot, index }))
+    .filter(
+      (entry): entry is { spot: Placed; index: number } => entry.spot !== null,
+    )
+    .sort((a, b) => a.spot.leftPct - b.spot.leftPct);
+  for (const { spot, index } of order) {
+    const free = rowEnds.findIndex((end) => end <= spot.leftPct);
+    const row = free < 0 ? rowEnds.length : free;
+    rowEnds[row] = spot.leftPct + spot.widthPct;
+    rows[index] = row;
+  }
+  return { rows, count: rowEnds.length };
+}
+
+/**
  * How a turn bar says the turn did not simply finish — the ONE spelling both
  * surfaces draw, so a failed turn cannot read as failed in one and as done in
  * the other.

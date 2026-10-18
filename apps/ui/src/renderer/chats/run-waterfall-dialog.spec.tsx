@@ -289,6 +289,47 @@ describe('RunWaterfallDialog', () => {
     expect(view.textContent).not.toContain('1 agent calls, 1 failed');
   });
 
+  it('puts calls that overlap in time on separate rows instead of over one another', () => {
+    // REPORTED as a usage page with "→ engineer" and "researcher" printed on
+    // top of each other: a manager's concurrent calls all sat on one line.
+    const call = (calleeNodeId: string, minutes: number) => ({
+      callerNodeId: 'manager',
+      calleeNodeId,
+      mode: 'async' as const,
+      status: 'ok' as const,
+      running: false,
+      startedAt: new Date(Date.parse(FROM) + minutes * 60_000).toISOString(),
+      durationMs: 20 * 60_000,
+    });
+    const view = show(
+      dto({
+        lanes: [
+          lane({ nodeId: 'manager' }),
+          lane({ nodeId: 'engineer' }),
+          lane({ nodeId: 'researcher' }),
+        ],
+        calls: [
+          call('engineer', 5),
+          call('researcher', 6),
+          call('engineer', 40),
+        ],
+      }),
+    );
+
+    const tops = [
+      ...view.querySelectorAll<HTMLElement>('[data-slot="waterfall-call"]'),
+    ].map((bar) => bar.style.top);
+    expect(tops).toHaveLength(3);
+    expect(tops[0]).not.toBe(tops[1]);
+    // The later call has the first row to itself again.
+    expect(tops[2]).toBe(tops[0]);
+    // And the lane grows to hold the second row rather than clipping it.
+    const track = view.querySelector<HTMLElement>('[data-lane-track]');
+    expect(Number.parseInt(track?.style.minHeight ?? '0', 10)).toBeGreaterThan(
+      Number.parseInt(tops[1] ?? '0', 10),
+    );
+  });
+
   it('answers a hover anywhere in a lane, not only on a mark', () => {
     // Most of a lane is the space BETWEEN its marks, so the TRACK itself has
     // to say which agent the row is and where on the clock the pointer sits —

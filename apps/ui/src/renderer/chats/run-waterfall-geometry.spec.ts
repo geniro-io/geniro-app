@@ -9,6 +9,7 @@ import {
   cumulativeSpend,
   laneIndexOf,
   place,
+  stackRows,
   toolsTitle,
   topTurns,
 } from './run-waterfall-geometry';
@@ -168,5 +169,37 @@ describe('toolsTitle', () => {
     // The fold reads the payload-free spine, so a delegate's calls land in its
     // launcher's lane while the agent card beside it counts the agent's own.
     expect(toolsTitle(636)).toContain('sub-agents included');
+  });
+});
+
+describe('stackRows', () => {
+  it('gives spans that share time a row each and reuses a row once it is free', () => {
+    // Three calls out at once, then a fourth after the first has come back:
+    // the fourth goes back to row 0 rather than opening a fourth row.
+    const { rows, count } = stackRows([
+      { leftPct: 10, widthPct: 40 },
+      { leftPct: 12, widthPct: 30 },
+      { leftPct: 15, widthPct: 50 },
+      { leftPct: 50, widthPct: 10 },
+    ]);
+
+    expect(rows).toEqual([0, 1, 2, 0]);
+    expect(count).toBe(3);
+  });
+
+  it('keeps input order in its answer whatever order the spans start in', () => {
+    const { rows } = stackRows([
+      { leftPct: 30, widthPct: 10 },
+      { leftPct: 0, widthPct: 35 },
+    ]);
+
+    expect(rows).toEqual([1, 0]);
+  });
+
+  it('takes no row for a span that could not be placed', () => {
+    const { rows, count } = stackRows([null, { leftPct: 0, widthPct: 5 }]);
+
+    expect(rows).toEqual([0, 0]);
+    expect(count).toBe(1);
   });
 });

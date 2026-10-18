@@ -109,6 +109,7 @@ export class CodexSession implements TurnDriver {
   readonly subagents = new Map<string, string>();
   /** Spawning calls whose delegate this session has announced as running. */
   private readonly openSubagents = new Set<string>();
+  private readonly untrackedSubagents = new Set<string>();
   /**
    * The thread is in plan mode, as codex last confirmed it. codex keeps a
    * turn's collaboration mode for the turns after it — across processes too,
@@ -274,16 +275,25 @@ export class CodexSession implements TurnDriver {
   }
 
   /**
-   * End one sub-agent: announce its spawning call closed, once, with how it
-   * ended — whichever report of its ending arrives first.
+   * Publish the first known ending, allowing it to replace tracking loss.
    */
   closeSubagent(
     threadId: string,
     outcome: BackgroundUnitOutcome,
   ): AgentEvent[] {
     const parent = this.subagents.get(threadId);
-    if (parent === undefined || !this.openSubagents.delete(parent)) {
+    if (parent === undefined) {
       return [];
+    }
+    const wasOpen = this.openSubagents.delete(parent);
+    const wasUntracked = this.untrackedSubagents.has(parent);
+    if (!wasOpen && !wasUntracked) {
+      return [];
+    }
+    if (outcome === 'untracked') {
+      this.untrackedSubagents.add(parent);
+    } else {
+      this.untrackedSubagents.delete(parent);
     }
     return [subagentState(parent, { open: false, outcome })];
   }
@@ -291,6 +301,7 @@ export class CodexSession implements TurnDriver {
   /** Mark a spawning call's delegate as running, so its ending is owed. */
   openSubagent(spawnItemId: string): void {
     this.openSubagents.add(spawnItemId);
+    this.untrackedSubagents.delete(spawnItemId);
   }
 
   /**

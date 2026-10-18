@@ -217,7 +217,6 @@ import { effectiveConfigDir } from './run-profile';
 import {
   callEndedPerDaemon,
   OFF_WINDOW_CALL_PREFIX,
-  withDaemonDelegateEndings,
   withDurableDelegates,
   withDurableShells,
   withoutDaemonEndedShells,
@@ -4662,6 +4661,7 @@ export function Chats({
    * anchor only ever builds the card it belongs to (`history-anchors.ts`).
    */
   const { foldItems, entries: durableEntries } = useDurableTranscript({
+    delegateState: runState,
     items,
     anchors,
     runId: activeRun?.id ?? null,
@@ -6472,20 +6472,17 @@ export function Chats({
    */
   const subagentThreads = useMemo(
     () =>
-      withDaemonDelegateEndings(
-        withDurableDelegates(
-          subagentThreadsByAgent(
-            collectSubagentBlocks(durableEntries),
-            CHAT_AGENT_KEY,
-            runStoppedAt,
-            activeDelegatesOut,
-          ),
-          runState.delegates,
+      withDurableDelegates(
+        subagentThreadsByAgent(
+          collectSubagentBlocks(durableEntries),
           CHAT_AGENT_KEY,
+          runStoppedAt,
+          activeDelegatesOut,
         ),
-        runState,
+        runState.delegates,
+        CHAT_AGENT_KEY,
       ),
-    [durableEntries, runStoppedAt, activeDelegatesOut, runState],
+    [durableEntries, runStoppedAt, activeDelegatesOut, runState.delegates],
   );
   const agents = useMemo((): AgentDisplay[] => {
     if (!activeRun) {

@@ -847,11 +847,11 @@ describe('subagentThreadsByAgent', () => {
     expect(statusOf({})).toBe('running');
     expect(statusOf({ returned: true })).toBe('completed');
     expect(statusOf({ failed: true, returned: true })).toBe('failed');
-    // `stopped` has no word of its own in RunStatusKind — a delegate that
-    // stopped without completing is reported as `cancelled`, the nearest true
-    // term. Both routes into it are covered: its own turn ending, and the run.
-    expect(statusOf({ closed: true })).toBe('cancelled');
-    expect(statusOf({ lastRowAt: 500 }, 1_000)).toBe('cancelled');
+    // Parent state alone cannot end a child; the daemon supplies its status.
+    expect(statusOf({ closed: true })).toBe('running');
+    expect(statusOf({ daemonStatus: 'untracked' })).toBe('untracked');
+    expect(statusOf({ daemonStatus: 'stopped' })).toBe('cancelled');
+    expect(statusOf({ lastRowAt: 500 }, 1_000)).toBe('running');
     // …and the panel reads the SAME exception the block does: a delegate whose
     // rows are newer than the settle is working, so the panel cannot report it
     // cancelled while the block beside it draws a spinner.
@@ -877,8 +877,10 @@ describe('subagentThreadsByAgent', () => {
     expect(statusOf({ returned: true, backgroundOutcome: 'failed' })).toBe(
       'failed',
     );
-    // …and a CLI that names no outcome is unchanged: silence is not a failure.
-    expect(statusOf({ backgroundOpen: false })).toBe('completed');
+    // Tracking loss is reported separately from an observed outcome.
+    expect(
+      statusOf({ backgroundOpen: false, backgroundOutcome: 'untracked' }),
+    ).toBe('untracked');
     expect(statusOf({ returned: true, backgroundOutcome: 'completed' })).toBe(
       'completed',
     );

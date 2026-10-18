@@ -830,7 +830,7 @@ export class CodexTurnDriver {
         const status = asString(asRecord(record.turn)?.status);
         return this.session.closeSubagent(
           threadId,
-          subagentOutcomeOf(status) ?? 'failed',
+          subagentOutcomeOf(status) ?? 'untracked',
         );
       }
       default:

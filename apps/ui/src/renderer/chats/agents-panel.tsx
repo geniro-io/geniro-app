@@ -65,7 +65,12 @@ import { PromptCacheBadge } from './prompt-cache-badge';
 import type { PublishedArtifact } from './published-artifact';
 import { ThreadPullRequestRow } from './pull-request-row';
 import { RunProcesses } from './run-processes';
-import { RUN_STATUS_META, RunStatusIcon, RunStatusLabel } from './run-status';
+import {
+  isSettledRunStatus,
+  RUN_STATUS_META,
+  RunStatusIcon,
+  RunStatusLabel,
+} from './run-status';
 import { RunWaterfall } from './run-waterfall';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
@@ -617,8 +622,10 @@ function SubagentRows({
    */
   foldSettled?: boolean;
 }): React.JSX.Element {
-  const live = subagents.filter((thread) => thread.status === 'running');
-  const settled = subagents.filter((thread) => thread.status !== 'running');
+  const live = subagents.filter((thread) => !isSettledRunStatus(thread.status));
+  const settled = subagents.filter((thread) =>
+    isSettledRunStatus(thread.status),
+  );
   if (!foldSettled) {
     return (
       <ul className="m-0 flex list-none flex-col gap-0.5">
@@ -899,10 +906,13 @@ function ConversationSections({
   const running = subagents.filter(
     (thread) => thread.status === 'running',
   ).length;
+  const untracked = subagents.filter(
+    (thread) => thread.status === 'untracked',
+  ).length;
   const progress = taskProgress(tasks);
   const toggle = (kind: ConversationSectionKind, wasOpen: boolean): void =>
     setPressed((prev) => ({ ...prev, [kind]: !wasOpen }));
-  const subagentsOpen = pressed.subagents ?? running > 0;
+  const subagentsOpen = pressed.subagents ?? (running > 0 || untracked > 0);
   const shellsOpen = pressed.shells ?? true;
   const tasksOpen = pressed.tasks ?? progress.done < progress.total;
   return (
@@ -915,11 +925,13 @@ function ConversationSections({
           icon={<SubagentIcon aria-hidden="true" className="size-3" />}
           label="Sub-agents"
           summary={
-            running === 0
-              ? `${subagents.length} finished`
-              : running === subagents.length
-                ? `${running} running`
-                : `${running} of ${subagents.length} running`
+            untracked > 0
+              ? `${untracked} untracked${running > 0 ? ` · ${running} running` : ''}`
+              : running === 0
+                ? `${subagents.length} finished`
+                : running === subagents.length
+                  ? `${running} running`
+                  : `${running} of ${subagents.length} running`
           }
           open={subagentsOpen}
           onToggle={() => toggle('subagents', subagentsOpen)}>
@@ -932,7 +944,7 @@ function ConversationSections({
             onOpenThread={onOpenThread}
             onOpenSubagent={onOpenSubagent}
             onResolveHandoff={onResolveHandoff}
-            foldSettled={running > 0}
+            foldSettled={running > 0 || untracked > 0}
           />
         </ConversationSection>
       ) : null}

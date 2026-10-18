@@ -296,7 +296,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     ).toEqual(['art-1']);
   });
 
-  it('reads an unanswered delegate as stopped once its launching turn ended, but not a backgrounded one', async () => {
+  it('reads an unanswered delegate as untracked once its launching turn ended, but not a backgrounded one', async () => {
     // The run is working again — a later turn — so the run's own status says
     // nothing about a sync delegate the user's Stop cut off.
     await createRun('running');
@@ -311,12 +311,12 @@ describe('RunStateService (in-memory sqlite)', () => {
     expect(
       state.delegates.map((delegate) => [delegate.id, delegate.status]),
     ).toEqual([
-      ['toolu_sync', 'cancelled'],
+      ['toolu_sync', 'untracked'],
       ['toolu_bg', 'running'],
     ]);
   });
 
-  it('closes a delegate only on ITS turn’s ending — same node, same call, a real end', async () => {
+  it('loses tracking of a delegate only on ITS parent turn’s ending — same node, same call, a real end', async () => {
     await createRun('running', 'dev-team');
     const qa = { nodeId: 'qa' };
     await insert(
@@ -343,11 +343,11 @@ describe('RunStateService (in-memory sqlite)', () => {
     await insert(5, 'turn_cancelled', { callId: 'call-3' }, qa);
 
     expect((await service().read('run-a')).delegates[0]!.status).toBe(
-      'cancelled',
+      'untracked',
     );
   });
 
-  it('closes only the delegates launched BEFORE a turn ended — a later turn’s keeps working', async () => {
+  it('marks untracked only the delegates launched BEFORE a turn ended — a later turn’s keeps working', async () => {
     await createRun('running');
     await insert(1, 'tool_call', { id: 'toolu_a', name: 'Task', input: {} });
     await insert(2, 'turn_cancelled', {});
@@ -359,7 +359,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     expect(
       state.delegates.map((delegate) => [delegate.id, delegate.status]),
     ).toEqual([
-      ['toolu_a', 'cancelled'],
+      ['toolu_a', 'untracked'],
       ['toolu_b', 'running'],
     ]);
   });

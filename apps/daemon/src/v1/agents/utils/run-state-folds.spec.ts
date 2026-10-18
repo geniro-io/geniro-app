@@ -205,7 +205,49 @@ describe('foldRunDelegates', () => {
     expect(delegate!.callId).toBe('call-7');
   });
 
-  it('reads an unanswered launch as running until the run settles, then as cancelled', () => {
+  it.each([undefined, null])(
+    'keeps an outcome-less close untracked despite a successful launch reply (%s)',
+    (outcome) => {
+      const [delegate] = foldRunDelegates({
+        declarations: [
+          info(3, {
+            id: 'toolu_a',
+            backgroundOpen: false,
+            backgroundOutcome: outcome,
+          }),
+        ],
+        launches: [task(1, 'toolu_a', 'Review')],
+        replies: [reply(2, 'toolu_a')],
+        runSettled: false,
+      });
+      expect(delegate!.status).toBe('untracked');
+    },
+  );
+
+  it('keeps tracking loss distinct from a reported stop and accepts a late report', () => {
+    const declarations = [
+      info(2, {
+        id: 'toolu_a',
+        backgroundOpen: false,
+        backgroundOutcome: 'untracked',
+      }),
+    ];
+    const input = {
+      declarations,
+      launches: [task(1, 'toolu_a', 'A')],
+      replies: [reply(3, 'toolu_a')],
+      runSettled: true,
+    };
+    expect(foldRunDelegates(input)[0]!.status).toBe('untracked');
+    declarations.push(
+      info(4, { id: 'toolu_a', backgroundOutcome: 'completed' }),
+    );
+    expect(foldRunDelegates(input)[0]!.status).toBe('completed');
+    declarations.push(info(5, { id: 'toolu_a', backgroundOpen: true }));
+    expect(foldRunDelegates(input)[0]!.status).toBe('running');
+  });
+
+  it('reads an unanswered launch as running until the run settles, then as untracked', () => {
     const input = {
       declarations: [],
       launches: [task(1, 'toolu_a', 'A')],
@@ -215,7 +257,7 @@ describe('foldRunDelegates', () => {
       'running',
     );
     expect(foldRunDelegates({ ...input, runSettled: true })[0]!.status).toBe(
-      'cancelled',
+      'untracked',
     );
   });
 });

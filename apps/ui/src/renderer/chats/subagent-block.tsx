@@ -47,6 +47,8 @@ function shellStatusOf(
       return 'error';
     case 'stopped':
       return 'stopped';
+    case 'untracked':
+      return 'untracked';
     case 'running':
       return 'running';
   }
@@ -446,7 +448,9 @@ export function SubagentThread({
       {/* Above the (empty) thread rather than below the result: it explains why
           there is nothing between here and there, and a caveat placed after the
           result reads as a caveat ABOUT the result. */}
-      <SubagentStepsMissing block={block} />
+      {status !== 'untracked' || block.stepsUnavailableReason !== null ? (
+        <SubagentStepsMissing block={block} />
+      ) : null}
       {block.entries.map((entry) => (
         <TranscriptEntryView
           key={entry.type === 'item' ? entry.item.id : entry.id}
@@ -487,7 +491,13 @@ export function SubagentThread({
           text={block.result}
         />
       ) : null}
-      <SubagentEnded block={block} status={status} />
+      {status === 'untracked' ? (
+        <p data-role="subagent-untracked" className="m-0 text-xs text-warning">
+          Tracking was lost. This sub-agent may still be running.
+        </p>
+      ) : (
+        <SubagentEnded block={block} status={status} />
+      )}
       {/*
         No footer beyond that one line. It used to close every delegate's
         thread with `<title> is

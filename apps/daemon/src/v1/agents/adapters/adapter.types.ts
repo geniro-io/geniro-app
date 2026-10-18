@@ -70,7 +70,8 @@ export const GENIRO_MCP_CALL_TOOLS = [
  * which is why translating at the read site is the only place it can be done
  * once.
  */
-export type BackgroundUnitOutcome = 'completed' | 'failed' | 'stopped';
+export type BackgroundUnitOutcome =
+  'completed' | 'failed' | 'stopped' | 'untracked';
 
 export interface BackgroundUnitUsage {
   /** Every token the unit spent, prompt and completion together. */

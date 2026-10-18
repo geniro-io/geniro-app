@@ -154,9 +154,11 @@ export function foldRunDelegates({
       kind: payloadString(row.payload, 'kind') ?? previous?.kind ?? null,
       open: typeof open === 'boolean' ? open : (previous?.open ?? null),
       outcome:
-        payloadString(row.payload, 'backgroundOutcome') ??
-        previous?.outcome ??
-        null,
+        open === true
+          ? null
+          : (payloadString(row.payload, 'backgroundOutcome') ??
+            previous?.outcome ??
+            null),
       first: previous?.first ?? row,
     });
   }
@@ -217,23 +219,30 @@ function delegateStatus(
   declaration: Declared | undefined,
   replyIsError: boolean | undefined,
   nothingMoreComing: boolean,
-): RunWorkStatus {
+): RunDelegateState['status'] {
   switch (declaration?.outcome) {
     case 'completed':
       return 'completed';
     case 'failed':
       return 'failed';
+    case 'untracked':
+      return 'untracked';
     case undefined:
     case null:
       break;
-    default:
+    case 'stopped':
       return 'cancelled';
+    default:
+      return 'untracked';
   }
   if (declaration?.open === true) {
     return 'running';
   }
+  if (declaration?.open === false) {
+    return 'untracked';
+  }
   if (replyIsError !== undefined) {
     return replyIsError ? 'failed' : 'completed';
   }
-  return nothingMoreComing ? 'cancelled' : 'running';
+  return nothingMoreComing ? 'untracked' : 'running';
 }

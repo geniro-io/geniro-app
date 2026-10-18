@@ -1459,8 +1459,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // Given up on, so they must not hold the NEXT turn either — the set is
         // session-scoped now, and a unit this deadline has already written off
         // would otherwise hold every turn after it for as long as the session
-        // lives. `delegateWork` is deliberately left alone: a late report is
-        // still what closes that delegate's block.
+        // lives. `delegateWork` is deliberately left alone so a late report
+        // can resolve its outcome.
+        untrackOpenDelegates();
         openWork.clear();
         finishTurn(turn, held);
         return;
@@ -1917,6 +1918,21 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     opts.onBetweenTurnEvent?.(announcement);
   };
 
+  const untrackOpenDelegates = (): void => {
+    for (const id of openWork) {
+      if (delegateWork.has(id)) {
+        announceDelegateWork({
+          type: 'background_work',
+          id,
+          phase: 'settled',
+          unit: 'agent',
+          toolCallId: null,
+          outcome: 'untracked',
+        });
+      }
+    }
+  };
+
   /**
    * Bound the off-turn hold, so a unit that never reports cannot strand a
    * continuation's result for the life of the session.
@@ -1941,6 +1957,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       );
       // Written off exactly as the turn's deadline writes its own units off,
       // and for the same reason: they must not hold anything after this.
+      untrackOpenDelegates();
       openWork.clear();
       releaseOffTurnHold();
     }, TURN_SILENCE_DEADLINE_MS);
@@ -1984,6 +2001,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         opts.logger?.warn(
           `${opts.command}: the CLI went idle with ${openWork.size} unit(s) of background work never reported — settling the held '${held.type}'`,
         );
+        untrackOpenDelegates();
         openWork.clear();
       } else {
         opts.logger?.debug?.(
@@ -2921,15 +2939,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     osDetachedShells.clear();
     executeCalls.clear();
     // A delegate's own commands die with the group as well, so a settle held
-    // for them is owed now — as `stopped`, figures kept: its work was cut off,
-    // and it is the outcome the session-close sweep writes for a delegate it
-    // finds still open, so the two writers cannot disagree.
+    // for them is owed now as untracked, figures kept: the CLI never reported
+    // the final ending. This matches the session-close sweep.
     delegateCommands.clear();
     delegateCommandCalls.clear();
     unownedDelegateCommands.clear();
     delegateCallOwner.clear();
     for (const held of [...heldDelegateSettles.values()]) {
-      announceDelegateWork({ ...held, outcome: 'stopped' });
+      announceDelegateWork({ ...held, outcome: 'untracked' });
     }
     // `runningShells` as well as `shellWork`: a unit the CLI announced with no
     // launching call is in the first alone, and closing only the second left
@@ -2953,6 +2970,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // so the loop above did not settle it — but it died with the group too.
     runningShells.clear();
     callCommands.clear();
+    untrackOpenDelegates();
     openWork.clear();
     releaseOffTurnHold();
     if (current) {

@@ -120,11 +120,13 @@ export function withDurableShells(
  * How the daemon says a thing that began at `startSeq` ended, or null while it
  * runs or began after the read — the one test every readout below applies.
  */
-function endedPerDaemon(
+function endedPerDaemon<
+  Status extends RunWorkStatus | RunDelegateState['status'],
+>(
   state: Pick<RunStateDto, 'throughSeq'>,
   startSeq: number,
-  status: RunWorkStatus,
-): RunWorkStatus | null {
+  status: Status,
+): Status | null {
   return status !== 'running' && startSeq <= state.throughSeq ? status : null;
 }
 

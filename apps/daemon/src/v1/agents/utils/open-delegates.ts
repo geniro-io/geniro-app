@@ -5,30 +5,12 @@ import type {
 import { asRecord, asString, parseJsonColumn } from './json-util';
 
 /**
- * The delegates a run's transcript still declares OUT, folded from its own
- * `subagent_info` rows in seq order.
+ * Fold durable delegate declarations so session close and boot reconciliation
+ * can mark missing endings untracked. A parent going away gives no CLI report
+ * about how each child ended.
  *
- * It exists because one shipped CLI announces a background delegate's LAUNCH
- * on its wire and never its ENDING. cursor-agent's ending is read off the
- * delegate's own transcript instead (`AcpSession`'s delegate watch), but that
- * reader lives inside the process — so a daemon SIGKILLed mid-fan-out, or a
- * process closed while a delegate still worked, leaves an open row nothing
- * else will ever close.
- *
- * What CAN say so then is the process. A cursor delegate runs INSIDE the ACP
- * process that launched it — its own permission requests arrive on the parent's
- * session, and killing that group two seconds after the turn left a delegate
- * unable to finish writing its file — so when the session closes, every
- * delegate still out has demonstrably stopped. `ChatService` folds this set at
- * exactly that moment (and once more at boot, for the closes a SIGKILLed daemon
- * never got to write) and states the ending the CLI would not.
- *
- * The RANKING mirrors the renderer's own `subagentBlockStatus`, and has to: a
- * stated `backgroundOutcome` outranks `backgroundOpen`, because a backgrounded
- * delegate's launching call is answered within the second and the outcome is
- * the only field that speaks about the WORK. A row saying neither says nothing
- * — the announcement carrying a delegate's label or its duration is not a
- * lifecycle claim, and reading it as one would close a delegate that is out.
+ * TWIN PARSER: outcome outranks backgroundOpen, as in the renderer's
+ * subagentBlockStatus. Metadata-only declarations make no lifecycle claim.
  */
 /**
  * Which delegate a `subagent_info` payload is about, or null when it names
@@ -103,14 +85,10 @@ export function strandedDelegates(
 export function delegateCloseEvent(
   id: string,
   /**
-   * How it ended. `stopped` is the PROCESS closing — a delegate lives inside
-   * it, so killing it demonstrably stopped the work. `completed` / `failed`
-   * come from the delegate's own transcript saying so. `null` claims nothing
-   * about how: the block stops saying the delegate is out and no more — which
-   * the renderer draws as over, so it is written only where nothing more about
-   * the delegate can ever be learned.
+   * Without a reported ending the daemon has lost tracking, even if the
+   * parent session has closed. A later report may still resolve the outcome.
    */
-  outcome: BackgroundUnitOutcome | null = 'stopped',
+  outcome: BackgroundUnitOutcome | null = 'untracked',
   /** How long it ran, when the closer measured it. */
   durationMs: number | null = null,
 ): AgentEvent {
@@ -131,7 +109,7 @@ export function delegateCloseEvent(
     costUsd: null,
     stepsUnavailableReason: null,
     backgroundOpen: false,
-    backgroundOutcome: outcome,
+    backgroundOutcome: outcome ?? 'untracked',
   };
 }
 

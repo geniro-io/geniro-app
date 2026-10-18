@@ -4222,11 +4222,7 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('running');
   });
 
-  it('stops calling a delegate known only by its ROWS running once the run says none is out', () => {
-    // A delegate that failed at launch on a usage limit and was resumed has
-    // its launch AND its only close older than the loaded window, so the
-    // window holds nothing but its rows — which would read `running` until the
-    // launching turn ends, in a turn that can run for hours.
+  it('waits for the daemon to classify a delegate known only by its rows', () => {
     const rows = [
       delegated('message', { text: 'writing up the findings' }, 'task-old'),
       // The launching thread has spoken since.
@@ -4235,7 +4231,7 @@ describe('buildSubagentBlocks', () => {
     const block = onlyBlock(fold(rows));
 
     expect(block.outlived).toBe(true);
-    expect(subagentBlockStatus(block, null, 0)).toBe('completed');
+    expect(subagentBlockStatus(block, null, 0)).toBe('running');
     // A delegate the run still counts OUT is working, whatever the thread says:
     // it was not waiting on it.
     expect(subagentBlockStatus(block, null, 1)).toBe('running');
@@ -4271,7 +4267,11 @@ describe('buildSubagentBlocks', () => {
     // the window, and discarded.
     const entries = fold([
       delegated('message', { text: 'emitting the reaction event' }, 'task-cut'),
-      item('subagent_info', { id: 'task-cut', backgroundOpen: false }),
+      item('subagent_info', {
+        id: 'task-cut',
+        backgroundOpen: false,
+        backgroundOutcome: 'completed',
+      }),
     ]);
 
     const block = onlyBlock(entries);
@@ -4410,7 +4410,11 @@ describe('buildSubagentBlocks', () => {
       call('Task', 'task-bg', { description: 'Sleep 50 then report ok' }),
       result('task-bg', 'Task started in the background'),
       item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
-      item('subagent_info', { id: 'task-bg', backgroundOpen: false }),
+      item('subagent_info', {
+        id: 'task-bg',
+        backgroundOpen: false,
+        backgroundOutcome: 'completed',
+      }),
     ]);
 
     expect(subagentBlockStatus(onlyBlock(entries))).toBe('completed');
@@ -4536,10 +4540,7 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('running');
   });
 
-  it('stops spinning a delegate whose turn ended without it reporting back', () => {
-    // The stale-spinner shape `ToolGroupEntry.closed` exists for, at block
-    // level: no result ever arrived, but the turn is over, so nothing more is
-    // coming and a spinner would claim work that stopped.
+  it('does not infer a delegate ending from its parent turn ending', () => {
     const block = onlyBlock(
       fold([
         call('Task', 'task-1', { description: 'Review the diff' }),
@@ -4549,7 +4550,7 @@ describe('buildSubagentBlocks', () => {
     );
     expect(block.result).toBeNull();
     expect(block.closed).toBe(true);
-    expect(subagentBlockStatus(block)).toBe('stopped');
+    expect(subagentBlockStatus(block)).toBe('running');
   });
 
   it('keeps a delegate running when only one of its node’s CALLS ended', () => {
@@ -4610,11 +4611,11 @@ describe('buildSubagentBlocks', () => {
       expect(block.lastRowAt).toBe(Date.parse('2026-08-11T17:00:00.000Z'));
     });
 
-    it('is stopped when it said nothing after the run settled', () => {
+    it('does not infer an ending from silence after the run settled', () => {
       const block = midFlight('2026-08-11T17:00:05.000Z');
       expect(
         subagentBlockStatus(block, Date.parse('2026-08-11T17:00:41.000Z')),
-      ).toBe('stopped');
+      ).toBe('running');
     });
 
     it('is STILL RUNNING when its rows are newer than the settle', () => {
@@ -4630,10 +4631,7 @@ describe('buildSubagentBlocks', () => {
       ).toBe('running');
     });
 
-    it('still stops one whose OWN turn ended after its last row', () => {
-      // The seq-based route is untouched by the timestamp one and outranks it:
-      // a turn-end item after the delegate's last row is direct evidence that
-      // nothing more is coming, whatever the run row's clock says.
+    it('leaves a missing ending to the daemon even after a parent turn end', () => {
       const block = onlyBlock(
         fold([
           call('Task', 'task-1', { description: 'Review the diff' }),
@@ -4642,7 +4640,7 @@ describe('buildSubagentBlocks', () => {
         ]),
       );
       expect(block.closed).toBe(true);
-      expect(subagentBlockStatus(block, 0)).toBe('stopped');
+      expect(subagentBlockStatus(block, 0)).toBe('running');
     });
   });
 

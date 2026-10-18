@@ -2725,7 +2725,7 @@ export class GraphExecutorService
       )) {
         if (inScope(delegate)) {
           closes.push({
-            event: delegateCloseEvent(delegate.id, 'stopped'),
+            event: delegateCloseEvent(delegate.id),
             owner: delegate,
           });
         }

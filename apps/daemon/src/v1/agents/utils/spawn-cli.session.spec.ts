@@ -1816,7 +1816,7 @@ describe('a delegate whose own detached command outlives its turn', () => {
     await finish();
   });
 
-  it('announces the held settle as STOPPED, figures kept, when the process ends under its command', () => {
+  it('announces the held settle as untracked, figures kept, when the process ends under its command', () => {
     const { child, last, launch } = openDelegateSession();
     launch('b-1');
     line(child, {
@@ -1830,7 +1830,7 @@ describe('a delegate whose own detached command outlives its turn', () => {
     child.emit('close', 0, null);
     expect(last()).toMatchObject({
       backgroundOpen: false,
-      backgroundOutcome: 'stopped',
+      backgroundOutcome: 'untracked',
       tokens: 1234,
     });
   });
@@ -2838,6 +2838,47 @@ describe('a turn whose background work outlives its result', () => {
     expect(session.alive).toBe(false);
   });
 
+  it.each(['idle', 'silence'] as const)(
+    'marks missing delegate reports untracked on %s and accepts a late completion',
+    async (ending) => {
+      vi.useFakeTimers();
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (event) =>
+        events.push(event),
+      );
+      const handle = session.startTurn({
+        onEvent: (event) => events.push(event),
+      });
+      line(child, {
+        work: 'task-1',
+        phase: 'started',
+        unit: 'agent',
+        call: 'toolu_a',
+      });
+      line(child, { done: true });
+      if (ending === 'idle') {
+        line(child, { state: 'idle' });
+      } else {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      }
+      await handle?.done;
+      expect(
+        events.filter((event) => event.type === 'subagent_info').at(-1),
+      ).toMatchObject({
+        id: 'toolu_a',
+        backgroundOpen: false,
+        backgroundOutcome: 'untracked',
+      });
+      expect(events.at(-1)?.type).toBe('turn_complete');
+      line(child, { work: 'task-1', phase: 'settled', outcome: 'completed' });
+      expect(events.at(-1)).toMatchObject({
+        type: 'subagent_info',
+        id: 'toolu_a',
+        backgroundOutcome: 'completed',
+      });
+    },
+  );
+
   it('releases the held result when the work goes silent too', async () => {
     // The bound, and it is the turn's existing silence deadline rather than a
     // second timer. Its own sentence ("produced nothing… giving up") would be
@@ -2994,11 +3035,31 @@ describe('a turn whose background work outlives its result', () => {
     const logger = { warn: vi.fn(), debug: vi.fn() };
     const { child } = openSession(undefined, logger, (e) => between.push(e));
 
-    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
     line(child, { done: true });
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
 
-    expect(between).toEqual([COMPLETE]);
+    expect(between.map((event) => event.type)).toEqual([
+      'subagent_info',
+      'subagent_info',
+      'turn_complete',
+    ]);
+    expect(between.at(-2)).toMatchObject({
+      id: 'toolu_a',
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked',
+    });
+    line(child, { work: 'task-1', phase: 'settled', outcome: 'completed' });
+    expect(between.at(-1)).toMatchObject({
+      type: 'subagent_info',
+      id: 'toolu_a',
+      backgroundOutcome: 'completed',
+    });
     expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
       'never reported',
     );

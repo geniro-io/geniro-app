@@ -7,6 +7,7 @@ import type { DaemonHandle } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import { withHistoryPages } from '../__tests__/history-page';
+import { emptyRunState } from '../__tests__/run-state';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type {
   ItemDto as ChatItem,
@@ -85,6 +86,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       deleteWorkflow,
     },
     chats: withHistoryPages({
+      readRunState: vi.fn(async () => emptyRunState()),
       listRunItems,
       sendChatMessage: vi.fn(),
       cancelChat: vi.fn(),

@@ -11727,11 +11727,11 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       .sort((a, b) => a.seq - b.seq);
   const payloadOf = (row: Item): Record<string, unknown> =>
     JSON.parse(row.payload as string) as Record<string, unknown>;
-  const stoppedDelegates = (itemDao: FakeItemDao, runId: string): Item[] =>
+  const untrackedDelegates = (itemDao: FakeItemDao, runId: string): Item[] =>
     rowsOf(itemDao, runId).filter(
       (i) =>
         i.kind === 'subagent_info' &&
-        payloadOf(i).backgroundOutcome === 'stopped',
+        payloadOf(i).backgroundOutcome === 'untracked',
     );
 
   it('leaves the delegates and detached commands a pass left running OPEN, and closes them with their process', async () => {
@@ -11757,7 +11757,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     await drain();
 
     // The pass is over, and nothing it left running is claimed to have stopped.
-    expect(stoppedDelegates(itemDao, run.id)).toEqual([]);
+    expect(untrackedDelegates(itemDao, run.id)).toEqual([]);
     expect(
       rowsOf(itemDao, run.id).filter((row) => row.kind === 'shell_info'),
     ).toEqual([]);
@@ -11766,7 +11766,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     // is closed under the node that owns it, after the pass's own ending.
     sessions.closeRun(run.id);
     await drain();
-    const stopped = stoppedDelegates(itemDao, run.id);
+    const stopped = untrackedDelegates(itemDao, run.id);
     // Only what was still out: the delegate that reported back is left alone.
     expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-out']);
     expect(stopped[0]!.nodeId).toBe('a');
@@ -12219,7 +12219,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
 
-    const stopped = stoppedDelegates(itemDao, run.id);
+    const stopped = untrackedDelegates(itemDao, run.id);
     expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-callee']);
     // Filed where the callee's rows are, call id and all — the renderer nests
     // a call's rows under its block by that id.
@@ -12234,13 +12234,13 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     completeTurn(caller, 'done');
     await drain();
     expect(
-      stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
+      untrackedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee']);
     // It is closed when the caller's OWN process goes.
     sessions.close(`${run.id}::node:a`, 'closed');
     await drain();
     expect(
-      stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
+      untrackedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee', 'task-caller']);
   });
 
@@ -12258,7 +12258,9 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     });
     await drain();
     const stoppedIds = (): string[] =>
-      stoppedDelegates(itemDao, run.id).map((row) => String(payloadOf(row).id));
+      untrackedDelegates(itemDao, run.id).map((row) =>
+        String(payloadOf(row).id),
+      );
     const continueWith = async (
       message: string,
       thread: string | undefined,

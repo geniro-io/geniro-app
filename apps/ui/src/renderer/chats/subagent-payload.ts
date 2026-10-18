@@ -137,18 +137,20 @@ export interface SubagentDeclaration {
  * How a delegate ENDED, in the app's own words.
  *
  * TWIN PARSER: `apps/daemon/src/v1/agents/adapters/adapter.types.ts` declares
- * the same three as `BackgroundUnitOutcome` and each CLI's adapter translates
+ * the same outcomes as `BackgroundUnitOutcome` and each CLI's adapter translates
  * its own vocabulary into them. An item payload is `z.unknown()` on the wire BY
  * DESIGN, so no generated type carries this across and the two sides are
  * independent readings of one shape — add a word there and it must be added
  * here, or the new word reads as {@link isBackgroundOutcome} rejecting it.
  */
-export type BackgroundOutcome = 'completed' | 'failed' | 'stopped';
+export type BackgroundOutcome =
+  'completed' | 'failed' | 'stopped' | 'untracked';
 
 const OUTCOMES: ReadonlySet<string> = new Set<BackgroundOutcome>([
   'completed',
   'failed',
   'stopped',
+  'untracked',
 ]);
 
 /** Narrows an unknown payload word to the vocabulary, so no caller casts. */

@@ -5029,10 +5029,10 @@ export interface RunDelegateState {
     kind: string | null;
     /**
      * 
-     * @type {RunWorkStatus}
+     * @type {RunDelegateStatus}
      * @memberof RunDelegateState
      */
-    status: RunWorkStatus;
+    status: RunDelegateStatus;
     /**
      * 
      * @type {number}
@@ -5047,6 +5047,20 @@ export interface RunDelegateState {
     startedAt: string;
 }
 
+
+
+/**
+ * 
+ * @export
+ */
+export const RunDelegateStatus = {
+    Running: 'running',
+    Completed: 'completed',
+    Failed: 'failed',
+    Cancelled: 'cancelled',
+    Untracked: 'untracked'
+} as const;
+export type RunDelegateStatus = typeof RunDelegateStatus[keyof typeof RunDelegateStatus];
 
 /**
  * 

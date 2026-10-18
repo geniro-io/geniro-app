@@ -1,6 +1,7 @@
 import {
   Ban,
   CircleCheck,
+  CircleHelp,
   CircleX,
   Clock,
   Hourglass,
@@ -15,7 +16,7 @@ import { cn } from '../components/ui/utils';
 /**
  * Everything a run or a node can be, display-wise: the run statuses, the
  * node-only `skipped`, and the three no daemon row ever carries —
- * `needs-input`, `held` and the sub-agent-only `unknown`. See
+ * `needs-input`, `held` and the sub-agent-only `untracked`. See
  * {@link displayRunStatus}.
  *
  * There is no `idle`. It was a NINTH member meaning "has not started yet",
@@ -39,7 +40,8 @@ export type RunStatusKind =
   | 'completed'
   | 'failed'
   | 'cancelled'
-  | 'skipped';
+  | 'skipped'
+  | 'untracked';
 
 /**
  * The one status → icon/tone/label mapping, so a run's or agent's state reads
@@ -97,6 +99,11 @@ export const RUN_STATUS_META: Record<
     icon: Ban,
     className: 'text-muted-foreground',
     label: 'cancelled',
+  },
+  untracked: {
+    icon: CircleHelp,
+    className: 'text-warning',
+    label: 'untracked',
   },
   skipped: {
     icon: MinusCircle,

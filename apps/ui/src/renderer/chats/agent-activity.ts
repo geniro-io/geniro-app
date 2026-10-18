@@ -423,7 +423,9 @@ export function subagentThreadsByAgent(
             ? 'failed'
             : status === 'stopped'
               ? 'cancelled'
-              : 'running',
+              : status === 'untracked'
+                ? 'untracked'
+                : 'running',
       sessionId: null,
       callId: block.callId,
     });

@@ -270,6 +270,7 @@ export class AcpSession implements TurnDriver {
   private readonly delegateLaunchedAt = new Map<string, number>();
   /** Background delegates whose close has been emitted — by any closer here. */
   private readonly closedDelegates = new Set<string>();
+  private readonly untrackedDelegates = new Set<string>();
   /** Consecutive reads that found no record, per delegate. */
   private readonly delegateRecordMisses = new Map<string, number>();
 
@@ -286,7 +287,7 @@ export class AcpSession implements TurnDriver {
   readonly unplacedChildSessions = new Set<string>();
   /**
    * How each delegate ended, as the agent STATED it on the wire, by launching
-   * call — null for a child the agent lost track of (`disconnected`).
+   * call, including `untracked` for a disconnected child.
    */
   readonly wireEndings = new Map<string, BackgroundUnitOutcome | null>();
   /** What each child said last, by launching call — its report. */
@@ -309,9 +310,8 @@ export class AcpSession implements TurnDriver {
   /** The pending look at the delegates' records, or null while none is due. */
   private delegateWatch: NodeJS.Timeout | null = null;
   /**
-   * The most recent turn COMPLETED — the one condition under which a delegate
-   * nothing can watch may be closed with no outcome claimed, as a turn that
-   * ran to its end had what it asked its delegates for. Reset as a turn opens.
+   * Once the parent has completed, an unwatchable delegate becomes untracked.
+   * Reset as a turn opens.
    */
   private turnCompleted = false;
   /**
@@ -690,8 +690,19 @@ export class AcpSession implements TurnDriver {
     id: string,
     outcome: BackgroundUnitOutcome | null,
   ): AgentEvent | null {
+    const wasUntracked = this.untrackedDelegates.has(id);
     this.wireEndings.set(id, outcome);
-    if (!this.backgroundDelegates.has(id) || this.closedDelegates.has(id)) {
+    if (
+      outcome !== null &&
+      outcome !== 'untracked' &&
+      this.untrackedDelegates.delete(id)
+    ) {
+      this.closedDelegates.delete(id);
+    }
+    if (
+      (!this.backgroundDelegates.has(id) && !wasUntracked) ||
+      this.closedDelegates.has(id)
+    ) {
       return null;
     }
     const launchedAt = this.delegateLaunchedAt.get(id);
@@ -798,7 +809,7 @@ export class AcpSession implements TurnDriver {
   }
 
   /**
-   * A turn on this session COMPLETED: close, with no outcome claimed, every
+   * A turn on this session COMPLETED: mark untracked every
    * background delegate still out that nothing can watch — no reader, no
    * address, or a record that never turned up.
    *
@@ -812,7 +823,7 @@ export class AcpSession implements TurnDriver {
     this.delegateWaiter = null;
     return this.outstandingDelegates()
       .filter((id) => !this.canWatch(id))
-      .map((id) => this.closeDelegate(id, null, null));
+      .map((id) => this.closeDelegate(id, 'untracked', null));
   }
 
   /**
@@ -870,12 +881,26 @@ export class AcpSession implements TurnDriver {
     );
   }
 
+  /** Remember synthetic closes so a later wire ending can resolve tracking loss. */
+  closeCutOffDelegate(id: string): AgentEvent {
+    return this.closeDelegate(
+      id,
+      this.wireEndings.get(id) ?? 'untracked',
+      null,
+    );
+  }
+
   private closeDelegate(
     id: string,
     outcome: BackgroundUnitOutcome | null,
     durationMs: number | null,
   ): AgentEvent {
     this.closedDelegates.add(id);
+    if (outcome === null || outcome === 'untracked') {
+      this.untrackedDelegates.add(id);
+    } else {
+      this.untrackedDelegates.delete(id);
+    }
     this.delegateRecordMisses.delete(id);
     return delegateCloseEvent(id, outcome, durationMs);
   }
@@ -911,7 +936,7 @@ export class AcpSession implements TurnDriver {
       return this.delegateConversations.get(id) ?? null;
     }
     // Continued by a later delegate: the one that held it was cut off, and
-    // nothing it says from here on is its own. Closed as stopped — and never
+    // nothing it says from here on is its own. Marked untracked — and never
     // reported to the agent, which hears about the work from its continuation.
     for (const [other, conversation] of this.delegateConversations) {
       if (
@@ -920,7 +945,7 @@ export class AcpSession implements TurnDriver {
         !this.closedDelegates.has(other)
       ) {
         this.delegateConversations.delete(other);
-        this.emit(this.closeDelegate(other, 'stopped', null));
+        this.emit(this.closeDelegate(other, 'untracked', null));
       }
     }
     this.delegateConversations.set(id, found);
@@ -1018,8 +1043,8 @@ export class AcpSession implements TurnDriver {
           // nothing else would ever come for it then — nor will a turn that is
           // WAITING on it ever be over, until it is closed.
           if (this.turnCompleted || this.delegateWaiter !== null) {
-            this.emit(this.closeDelegate(id, null, null));
-            this.noteEnded(id, null, null, null, null);
+            this.emit(this.closeDelegate(id, 'untracked', null));
+            this.noteEnded(id, 'untracked', null, null, null);
             closedAny = true;
           }
         }

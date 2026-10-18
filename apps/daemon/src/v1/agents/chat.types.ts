@@ -2876,7 +2876,12 @@ export const RunCallStateSchema = z
   .meta({ id: 'RunCallState' });
 export type RunCallState = z.infer<typeof RunCallStateSchema>;
 
-/** One delegate (sub-agent) a run launched or declared, over the whole conversation. */
+/** Tracking loss is distinct from any observed terminal outcome. */
+export const RunDelegateStatusSchema = z
+  .enum([...RunWorkStatusSchema.options, 'untracked'])
+  .meta({ id: 'RunDelegateStatus' });
+
+/** One delegate (sub-agent) over the whole conversation. */
 export const RunDelegateStateSchema = z
   .object({
     id: z.string().describe('the launching tool call — the block id'),
@@ -2887,7 +2892,7 @@ export const RunDelegateStateSchema = z
       .describe('the call it was launched in; null for its node’s own'),
     label: z.string().nullable(),
     kind: z.string().nullable(),
-    status: RunWorkStatusSchema,
+    status: RunDelegateStatusSchema,
     launchSeq: z.number().int(),
     startedAt: z.string(),
   })

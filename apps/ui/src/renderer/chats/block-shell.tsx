@@ -17,7 +17,8 @@ import { useThreadFlag, useThreadOverride } from './thread-ui-memory';
  * own terms. It is a model, never a word on screen: {@link RUN_STATUS_OF}
  * translates it before anything is drawn.
  */
-export type BlockStatus = 'running' | 'done' | 'error' | 'stopped';
+export type BlockStatus =
+  'running' | 'done' | 'error' | 'stopped' | 'untracked';
 
 /**
  * How the body of an OPEN collapsible {@link BlockShell} folds its card back —
@@ -46,6 +47,7 @@ const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
   done: 'bg-success/15 text-success',
   error: 'bg-destructive/10 text-destructive',
   stopped: 'bg-muted text-muted-foreground',
+  untracked: 'bg-warning/10 text-warning',
 };
 
 /**
@@ -62,6 +64,7 @@ const RUN_STATUS_OF: Record<BlockStatus, RunStatusKind> = {
   done: 'completed',
   error: 'failed',
   stopped: 'cancelled',
+  untracked: 'untracked',
 };
 
 /**
@@ -115,7 +118,7 @@ export function StatusBadge({
           sidebar row and an agent card all reading `cancelled` — one event
           spelled two ways on one screen, which is what "давай стандартизируем
           статусы" was reported against. */}
-      {RUN_STATUS_META[RUN_STATUS_OF[status]].label}
+      {blockStatusLabel(status)}
     </span>
   );
 }
@@ -138,7 +141,7 @@ function BlockStatusMark({
 }: {
   status: BlockStatus;
 }): React.JSX.Element {
-  if (status === 'error' || status === 'stopped') {
+  if (status === 'error' || status === 'stopped' || status === 'untracked') {
     return <StatusBadge status={status} />;
   }
   return (

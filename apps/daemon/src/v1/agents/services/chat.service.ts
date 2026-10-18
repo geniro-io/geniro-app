@@ -3775,9 +3775,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         await this.itemDao.subagentInfoRows(runId, em),
       );
       for (const delegate of stranded) {
-        const mapped = mapEventToItem(
-          delegateCloseEvent(delegate.id, 'stopped'),
-        );
+        const mapped = mapEventToItem(delegateCloseEvent(delegate.id));
         if (mapped === null) {
           continue;
         }

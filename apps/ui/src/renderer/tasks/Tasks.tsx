@@ -27,7 +27,7 @@ import { TaskDetail } from './task-detail';
 import { targetOf } from './task-target';
 import { BOARD_COLUMNS, boardColumns, useBoard } from './use-board';
 
-const TASKS_PER_PAGE = 20;
+const TASKS_PER_BATCH = 20;
 
 /**
  * Which card of a column a drag over it would land ahead of — the first card
@@ -80,14 +80,19 @@ export function Tasks({
   }, [handle]);
 
   const board = useBoard(apis, client);
-  const [pageByStatus, setPageByStatus] = useState<Record<string, number>>({});
+  const [visibleCountByStatus, setVisibleCountByStatus] = useState<
+    Record<string, number>
+  >({});
   useEffect(() => {
-    setPageByStatus({});
+    setVisibleCountByStatus({});
   }, [board.selectedProjectId]);
   const showTaskAt = useCallback((status: string, index: number) => {
-    setPageByStatus((current) => ({
+    setVisibleCountByStatus((current) => ({
       ...current,
-      [status]: Math.floor(index / TASKS_PER_PAGE),
+      [status]: Math.max(
+        current[status] ?? TASKS_PER_BATCH,
+        Math.ceil((index + 1) / TASKS_PER_BATCH) * TASKS_PER_BATCH,
+      ),
     }));
   }, []);
   const refreshProjects = board.refreshProjects;
@@ -569,18 +574,10 @@ export function Tasks({
                 const columnTasks = board.tasks.filter(
                   (row) => row.status === status,
                 );
-                const pageCount = Math.max(
-                  1,
-                  Math.ceil(columnTasks.length / TASKS_PER_PAGE),
-                );
-                const page = Math.min(pageByStatus[status] ?? 0, pageCount - 1);
-                const offset = page * TASKS_PER_PAGE;
-                const visibleTasks = columnTasks.slice(
-                  offset,
-                  offset + TASKS_PER_PAGE,
-                );
-                const nextPageTaskId =
-                  columnTasks[offset + TASKS_PER_PAGE]?.id ?? null;
+                const visibleCount =
+                  visibleCountByStatus[status] ?? TASKS_PER_BATCH;
+                const visibleTasks = columnTasks.slice(0, visibleCount);
+                const nextHiddenTaskId = columnTasks[visibleCount]?.id ?? null;
                 return (
                   <BoardColumn
                     key={status}
@@ -613,14 +610,13 @@ export function Tasks({
                         : undefined
                     }
                     tasks={visibleTasks}
-                    pagination={{
-                      page,
-                      pageSize: TASKS_PER_PAGE,
+                    loadMore={{
+                      batchSize: TASKS_PER_BATCH,
                       total: columnTasks.length,
-                      onPageChange: (nextPage) => {
-                        setPageByStatus((current) => ({
+                      onLoadMore: () => {
+                        setVisibleCountByStatus((current) => ({
                           ...current,
-                          [status]: nextPage,
+                          [status]: visibleCount + TASKS_PER_BATCH,
                         }));
                         setDropTarget(null);
                         setDropBeforeTaskId(null);
@@ -671,7 +667,7 @@ export function Tasks({
                         dropSlotBefore(
                           event,
                           visibleTasks.map((row) => row.id),
-                        ) ?? nextPageTaskId,
+                        ) ?? nextHiddenTaskId,
                       );
                     }}
                     onDragLeave={() => {

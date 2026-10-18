@@ -175,7 +175,7 @@ async function boardOnProject(): Promise<HTMLDivElement> {
 }
 
 describe('Tasks board', () => {
-  it('pages each column independently while keeping its full count', async () => {
+  it('loads more cards independently, preserving earlier cards and scroll position', async () => {
     mocks.reconcileTasks.mockResolvedValue([
       ...Array.from({ length: 41 }, (_, index) =>
         card({ id: `todo-${index}` }),
@@ -187,39 +187,44 @@ describe('Tasks board', () => {
     const el = await board();
     const todo = columnNamed(el, 'To do');
     const done = columnNamed(el, 'Done');
-    const previous = todo.querySelector<HTMLButtonElement>(
-      '[aria-label="Previous To do page"]',
+    const more = todo.querySelector<HTMLButtonElement>(
+      '[data-slot="task-load-more"]',
     )!;
-    const next = todo.querySelector<HTMLButtonElement>(
-      '[aria-label="Next To do page"]',
+    const first = todo.querySelector('[data-task-id="todo-0"]');
+    const scroller = todo.querySelector<HTMLElement>(
+      '[data-slot="task-column-cards"]',
     )!;
+    scroller.scrollTop = 300;
 
     expect(todo.getAttribute('aria-label')).toBe('To do, 41 tasks');
     expect(todo.querySelectorAll('[data-task-id]')).toHaveLength(20);
-    expect(todo.textContent).toContain('1–20 of 41');
-    expect(previous.disabled).toBe(true);
-    await act(async () => next.click());
+    expect(more.textContent).toContain('Load 20 more');
+    expect(more.textContent).toContain('21 remaining');
+    await act(async () => more.click());
+    expect(todo.querySelectorAll('[data-task-id]')).toHaveLength(40);
     expect(todo.querySelector('[data-task-id="todo-20"]')).not.toBeNull();
-    expect(todo.querySelector('[data-task-id="todo-0"]')).toBeNull();
-    expect(todo.textContent).toContain('21–40 of 41');
+    expect(todo.querySelector('[data-task-id="todo-0"]')).toBe(first);
+    expect(todo.querySelector('[data-slot="task-column-cards"]')).toBe(
+      scroller,
+    );
+    expect(scroller.scrollTop).toBe(300);
+    expect(more.textContent).toContain('Load 1 more');
     expect(done.querySelector('[data-task-id="done-0"]')).not.toBeNull();
-    expect(done.textContent).toContain('1–20 of 21');
-    await act(async () => next.click());
-    expect(todo.querySelectorAll('[data-task-id]')).toHaveLength(1);
-    expect(todo.textContent).toContain('41–41 of 41');
-    expect(next.disabled).toBe(true);
-    await act(async () => previous.click());
-    expect(todo.textContent).toContain('21–40 of 41');
+    expect(done.querySelectorAll('[data-task-id]')).toHaveLength(20);
+    await act(async () => more.click());
+    expect(todo.querySelectorAll('[data-task-id]')).toHaveLength(41);
+    expect(todo.querySelector('[data-slot="task-load-more"]')).toBeNull();
+    expect(todo.querySelector('[data-task-id="todo-0"]')).toBe(first);
   });
 
-  it('resets pages when the selected project changes', async () => {
+  it('resets the revealed cards when the selected project changes', async () => {
     mocks.reconcileTasks.mockResolvedValue(
       Array.from({ length: 21 }, (_, index) => card({ id: `task-${index}` })),
     );
     const el = await board();
     await act(async () => {
       el.querySelector<HTMLButtonElement>(
-        '[aria-label="Next To do page"]',
+        '[data-slot="task-load-more"]',
       )!.click();
       headerTrigger(el).click();
     });
@@ -228,11 +233,16 @@ describe('Tasks board', () => {
         .find((node) => node.textContent?.includes(project.name))!
         .click();
     });
-    expect(columnNamed(el, 'To do').textContent).toContain('1–20 of 21');
+    expect(
+      columnNamed(el, 'To do').querySelectorAll('[data-task-id]'),
+    ).toHaveLength(20);
+    expect(
+      columnNamed(el, 'To do').querySelector('[data-slot="task-load-more"]'),
+    ).not.toBeNull();
     expect(el.querySelector('[data-task-id="task-0"]')).not.toBeNull();
   });
 
-  it('keeps a keyboard-reordered card visible and focused across page boundaries', async () => {
+  it('reveals keyboard-moved cards without hiding previously loaded cards', async () => {
     mocks.reconcileTasks.mockResolvedValue(
       Array.from({ length: 21 }, (_, index) => card({ id: `task-${index}` })),
     );
@@ -249,7 +259,10 @@ describe('Tasks board', () => {
         }),
       );
     });
-    expect(columnNamed(el, 'To do').textContent).toContain('21–21 of 21');
+    expect(
+      columnNamed(el, 'To do').querySelectorAll('[data-task-id]'),
+    ).toHaveLength(21);
+    expect(el.querySelector('[data-task-id="task-0"]')).not.toBeNull();
     expect(document.activeElement).toBe(moved());
     await act(async () => {
       moved().dispatchEvent(
@@ -260,11 +273,13 @@ describe('Tasks board', () => {
         }),
       );
     });
-    expect(columnNamed(el, 'To do').textContent).toContain('1–20 of 21');
+    expect(
+      columnNamed(el, 'To do').querySelectorAll('[data-task-id]'),
+    ).toHaveLength(21);
     expect(document.activeElement).toBe(moved());
   });
 
-  it('appends a keyboard-moved card to the visible destination page', async () => {
+  it('reveals a keyboard-moved card at the end of its destination column', async () => {
     mocks.reconcileTasks.mockResolvedValue([
       card({ status: TaskStatus.Backlog }),
       ...Array.from({ length: 21 }, (_, index) =>
@@ -282,7 +297,10 @@ describe('Tasks board', () => {
         }),
       );
     });
-    expect(columnNamed(el, 'To do').textContent).toContain('21–22 of 22');
+    expect(
+      columnNamed(el, 'To do').querySelectorAll('[data-task-id]'),
+    ).toHaveLength(22);
+    expect(el.querySelector('[data-task-id="todo-0"]')).not.toBeNull();
     expect(document.activeElement).toBe(cardNode(el));
     expect(mocks.reorderTasks).toHaveBeenCalledWith({
       reorderTasksDto: {
@@ -342,7 +360,7 @@ describe('Tasks board', () => {
           status: TaskStatus.Todo,
         });
       });
-      expect(cardNode(el)).toBeNull();
+      expect(cardNode(el)).not.toBeNull();
       if (focusElsewhere) {
         headerTrigger(el).focus();
       }
@@ -356,9 +374,9 @@ describe('Tasks board', () => {
     },
   );
 
-  it('clamps to the remaining page when the last card on a page leaves', async () => {
+  it('keeps loaded cards visible when the last revealed card leaves', async () => {
     mocks.reconcileTasks.mockResolvedValue([
-      ...Array.from({ length: 20 }, (_, index) =>
+      ...Array.from({ length: 39 }, (_, index) =>
         card({ id: `task-${index}` }),
       ),
       card(),
@@ -366,7 +384,7 @@ describe('Tasks board', () => {
     const el = await board();
     await act(async () =>
       el
-        .querySelector<HTMLButtonElement>('[aria-label="Next To do page"]')!
+        .querySelector<HTMLButtonElement>('[data-slot="task-load-more"]')!
         .click(),
     );
     await act(async () => {
@@ -379,12 +397,12 @@ describe('Tasks board', () => {
       );
     });
     const todo = columnNamed(el, 'To do');
-    expect(todo.querySelectorAll('[data-task-id]')).toHaveLength(20);
-    expect(todo.getAttribute('aria-label')).toBe('To do, 20 tasks');
-    expect(todo.querySelector('nav')).toBeNull();
+    expect(todo.querySelectorAll('[data-task-id]')).toHaveLength(39);
+    expect(todo.getAttribute('aria-label')).toBe('To do, 39 tasks');
+    expect(todo.querySelector('[data-slot="task-load-more"]')).toBeNull();
   });
 
-  it('drops at the end of a page before the next page’s hidden cards', async () => {
+  it('drops after the revealed cards and before the hidden cards', async () => {
     mocks.reconcileTasks.mockResolvedValue(
       Array.from({ length: 22 }, (_, index) => card({ id: `task-${index}` })),
     );

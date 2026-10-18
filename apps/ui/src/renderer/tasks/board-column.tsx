@@ -1,10 +1,4 @@
-import {
-  ChevronLeft,
-  ChevronRight,
-  CircleAlert,
-  Plus,
-  Zap,
-} from 'lucide-react';
+import { CircleAlert, Plus, Zap } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 import {
@@ -39,7 +33,7 @@ export function BoardColumn({
   onTaskKeyDown,
   onAddTask,
   autopilot,
-  pagination,
+  loadMore,
 }: {
   status: string;
   tasks: TaskDto[];
@@ -72,11 +66,10 @@ export function BoardColumn({
   ) => void;
   /** Absent where a card has no one project to be filed into. */
   onAddTask?: (status: string) => void;
-  pagination?: {
-    page: number;
-    pageSize: number;
+  loadMore?: {
+    batchSize: number;
     total: number;
-    onPageChange: (page: number) => void;
+    onLoadMore: () => void;
   };
   /**
    * Present only on the column the project's autopilot picks work up from.
@@ -116,10 +109,8 @@ export function BoardColumn({
   };
 }): React.JSX.Element {
   const meta = taskStatusMeta(status);
-  const total = pagination?.total ?? tasks.length;
-  const pageCount = pagination
-    ? Math.max(1, Math.ceil(total / pagination.pageSize))
-    : 1;
+  const total = loadMore?.total ?? tasks.length;
+  const remaining = total - tasks.length;
   return (
     <section
       role="group"
@@ -181,7 +172,7 @@ export function BoardColumn({
         <AutopilotBanner {...autopilot} onOpenTask={onOpenTask} />
       ) : null}
       <div
-        key={pagination?.page ?? 0}
+        data-slot="task-column-cards"
         className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto">
         {tasks.map((task) => (
           <div key={task.id} className="flex flex-col gap-2">
@@ -212,42 +203,24 @@ export function BoardColumn({
         {tasks.length === 0 && isDropTarget ? (
           <p className="px-1 py-3 text-xs text-muted-foreground">Drop here</p>
         ) : null}
+        {loadMore && remaining > 0 ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-slot="task-load-more"
+            aria-label={`Load ${Math.min(loadMore.batchSize, remaining)} more ${meta.label} tasks`}
+            onClick={loadMore.onLoadMore}
+            className="h-8 w-full shrink-0 justify-between px-2 text-xs text-muted-foreground">
+            <span>Load {Math.min(loadMore.batchSize, remaining)} more</span>
+            <span className="tabular-nums">{remaining} remaining</span>
+          </Button>
+        ) : null}
       </div>
-      {pagination && pageCount > 1 ? (
-        <nav
-          aria-label={`${meta.label} task pages`}
-          className="flex shrink-0 items-center justify-between gap-1 border-t border-border px-1 pt-2">
-          <span
-            className="text-xs tabular-nums text-muted-foreground"
-            aria-live="polite">
-            {pagination.page * pagination.pageSize + 1}–
-            {Math.min((pagination.page + 1) * pagination.pageSize, total)} of{' '}
-            {total}
-          </span>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              aria-label={`Previous ${meta.label} page`}
-              disabled={pagination.page === 0}
-              onClick={() => pagination.onPageChange(pagination.page - 1)}>
-              <ChevronLeft className="size-3.5" aria-hidden />
-            </Button>
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {pagination.page + 1} / {pageCount}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              aria-label={`Next ${meta.label} page`}
-              disabled={pagination.page === pageCount - 1}
-              onClick={() => pagination.onPageChange(pagination.page + 1)}>
-              <ChevronRight className="size-3.5" aria-hidden />
-            </Button>
-          </div>
-        </nav>
+      {loadMore ? (
+        <span className="sr-only" aria-live="polite">
+          {tasks.length} of {total} {meta.label} tasks shown
+        </span>
       ) : null}
     </section>
   );

@@ -4952,11 +4952,6 @@ export function Chats({
     }
     return workflowSlug ? null : agentKind;
   }, [activeRunId, activeRun, workflowSlug, agentKind]);
-  const { models: agentModels, loading: agentModelsLoading } = useAgentModels(
-    agentsApi,
-    modelKind,
-    vocabularyConfigDir,
-  );
   /**
    * The MODEL the effort listing is about, scoped exactly like `modelKind`:
    * whichever composer is on screen owns the answer, since only one is.
@@ -4975,6 +4970,14 @@ export function Chats({
     }
     return workflowSlug ? null : (models[agentKind] ?? null);
   }, [activeRunId, activeRun, workflowSlug, models, agentKind]);
+  // After `effortModel`, so the model list is asked in the same request as the
+  // three listings below (`requestAgentVocabulary`).
+  const { models: agentModels, loading: agentModelsLoading } = useAgentModels(
+    agentsApi,
+    modelKind,
+    vocabularyConfigDir,
+    effortModel,
+  );
   // Same scoping as the models above — whichever CLI the visible composer is
   // about, or none at all for a workflow target — narrowed to that composer's
   // own model, which is what makes the chip offer only what will apply.

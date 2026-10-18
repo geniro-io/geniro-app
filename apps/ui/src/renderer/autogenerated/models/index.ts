@@ -341,25 +341,25 @@ export interface AgentContextWindow {
 /**
  * 
  * @export
- * @interface AgentContextWindowListingDto
+ * @interface AgentContextWindowListing
  */
-export interface AgentContextWindowListingDto {
+export interface AgentContextWindowListing {
     /**
      * 
      * @type {Array<AgentContextWindow>}
-     * @memberof AgentContextWindowListingDto
+     * @memberof AgentContextWindowListing
      */
     windows: Array<AgentContextWindow>;
     /**
      * 
      * @type {string}
-     * @memberof AgentContextWindowListingDto
+     * @memberof AgentContextWindowListing
      */
     unavailableReason: string | null;
     /**
      * 
      * @type {AgentContextWindowUnavailableKind}
-     * @memberof AgentContextWindowListingDto
+     * @memberof AgentContextWindowListing
      */
     unavailableKind: AgentContextWindowUnavailableKind | null;
 }
@@ -421,19 +421,19 @@ export interface AgentEffort {
 /**
  * 
  * @export
- * @interface AgentEffortListingDto
+ * @interface AgentEffortListing
  */
-export interface AgentEffortListingDto {
+export interface AgentEffortListing {
     /**
      * 
      * @type {Array<AgentEffort>}
-     * @memberof AgentEffortListingDto
+     * @memberof AgentEffortListing
      */
     efforts: Array<AgentEffort>;
     /**
      * 
      * @type {string}
-     * @memberof AgentEffortListingDto
+     * @memberof AgentEffortListing
      */
     unavailableReason: string | null;
 }
@@ -860,31 +860,31 @@ export type AgentMcpServerScopeEnum = typeof AgentMcpServerScopeEnum[keyof typeo
 /**
  * 
  * @export
- * @interface AgentModelDto
+ * @interface AgentModel
  */
-export interface AgentModelDto {
+export interface AgentModel {
     /**
      * Model identifier; ollama/ prefixes select a local provider
      * @type {string}
-     * @memberof AgentModelDto
+     * @memberof AgentModel
      */
     id: string;
     /**
      * 
      * @type {string}
-     * @memberof AgentModelDto
+     * @memberof AgentModel
      */
     label: string;
     /**
      * Reported by the CLI, a documented fallback, or local Ollama
      * @type {string}
-     * @memberof AgentModelDto
+     * @memberof AgentModel
      */
-    source: AgentModelDtoSourceEnum;
+    source: AgentModelSourceEnum;
     /**
      * Why this model cannot run an agent
      * @type {string}
-     * @memberof AgentModelDto
+     * @memberof AgentModel
      */
     unavailableReason?: string;
 }
@@ -893,12 +893,12 @@ export interface AgentModelDto {
 /**
  * @export
  */
-export const AgentModelDtoSourceEnum = {
+export const AgentModelSourceEnum = {
     Cli: 'cli',
     Builtin: 'builtin',
     Ollama: 'ollama'
 } as const;
-export type AgentModelDtoSourceEnum = typeof AgentModelDtoSourceEnum[keyof typeof AgentModelDtoSourceEnum];
+export type AgentModelSourceEnum = typeof AgentModelSourceEnum[keyof typeof AgentModelSourceEnum];
 
 /**
  * 
@@ -955,19 +955,19 @@ export interface AgentModelParameter {
 /**
  * 
  * @export
- * @interface AgentModelParameterListingDto
+ * @interface AgentModelParameterListing
  */
-export interface AgentModelParameterListingDto {
+export interface AgentModelParameterListing {
     /**
      * 
      * @type {Array<AgentModelParameter>}
-     * @memberof AgentModelParameterListingDto
+     * @memberof AgentModelParameterListing
      */
     parameters: Array<AgentModelParameter>;
     /**
      * 
      * @type {string}
-     * @memberof AgentModelParameterListingDto
+     * @memberof AgentModelParameterListing
      */
     unavailableReason: string | null;
 }
@@ -1220,6 +1220,37 @@ export interface AgentUsageCapability {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface AgentVocabularyDto
+ */
+export interface AgentVocabularyDto {
+    /**
+     * 
+     * @type {Array<AgentModel>}
+     * @memberof AgentVocabularyDto
+     */
+    models: Array<AgentModel> | null;
+    /**
+     * 
+     * @type {AgentEffortListing}
+     * @memberof AgentVocabularyDto
+     */
+    efforts: AgentEffortListing | null;
+    /**
+     * 
+     * @type {AgentContextWindowListing}
+     * @memberof AgentVocabularyDto
+     */
+    contextWindows: AgentContextWindowListing | null;
+    /**
+     * 
+     * @type {AgentModelParameterListing}
+     * @memberof AgentVocabularyDto
+     */
+    modelParameters: AgentModelParameterListing | null;
+}
 /**
  * 
  * @export
@@ -7386,302 +7417,470 @@ export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
 export interface ThreadAnalysisDto {
     /**
      * 
-     * @type {ThreadAnalysisDtoAnalysis}
+     * @type {ThreadOverviewDtoAnalysisAnalysis}
      * @memberof ThreadAnalysisDto
      */
-    analysis: ThreadAnalysisDtoAnalysis | null;
+    analysis: ThreadOverviewDtoAnalysisAnalysis | null;
 }
 /**
  * 
  * @export
- * @interface ThreadAnalysisDtoAnalysis
+ * @interface ThreadOverviewDto
  */
-export interface ThreadAnalysisDtoAnalysis {
+export interface ThreadOverviewDto {
+    /**
+     * 
+     * @type {ThreadOverviewDtoState}
+     * @memberof ThreadOverviewDto
+     */
+    state: ThreadOverviewDtoState | null;
+    /**
+     * 
+     * @type {ThreadOverviewDtoTotals}
+     * @memberof ThreadOverviewDto
+     */
+    totals: ThreadOverviewDtoTotals | null;
+    /**
+     * 
+     * @type {ThreadOverviewDtoTimeline}
+     * @memberof ThreadOverviewDto
+     */
+    timeline: ThreadOverviewDtoTimeline | null;
+    /**
+     * 
+     * @type {ThreadOverviewDtoArtifacts}
+     * @memberof ThreadOverviewDto
+     */
+    artifacts: ThreadOverviewDtoArtifacts | null;
+    /**
+     * 
+     * @type {ThreadOverviewDtoAnalysis}
+     * @memberof ThreadOverviewDto
+     */
+    analysis: ThreadOverviewDtoAnalysis | null;
+}
+/**
+ * 
+ * @export
+ * @interface ThreadOverviewDtoAnalysis
+ */
+export interface ThreadOverviewDtoAnalysis {
+    /**
+     * 
+     * @type {ThreadOverviewDtoAnalysisAnalysis}
+     * @memberof ThreadOverviewDtoAnalysis
+     */
+    analysis: ThreadOverviewDtoAnalysisAnalysis | null;
+}
+/**
+ * 
+ * @export
+ * @interface ThreadOverviewDtoAnalysisAnalysis
+ */
+export interface ThreadOverviewDtoAnalysisAnalysis {
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     id: string;
     /**
      * 
      * @type {RunStatus}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     status: RunStatus;
     /**
      * 
      * @type {RunAwaiting}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     awaiting: RunAwaiting | null;
     /**
      * Units of background work this run is being held for; 0 when the agent itself is working
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     holdingFor: number;
     /**
      * Agents of this run waiting on their own calls; 0 when none is waiting
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     awaitingCalls: number;
     /**
      * DAG agents of this workflow run inside a turn (calls excluded); 0 when a message would be taken now
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     rootsWorking: number;
     /**
      * Detached commands this run still has running; 0 when none are out
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     shellsOpen: number;
     /**
      * Background sub-agents this run still has out; 0 when none are out
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     subagentsOut: number;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     title: string | null;
     /**
      * 
      * @type {AgentKind}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     agentKind: AgentKind | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     workflowId: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     cwd: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     startSha: string | null;
     /**
      * 
      * @type {boolean}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     startDirty: boolean | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     model: string | null;
     /**
      * 
      * @type {ChatApprovalMode}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     approval: ChatApprovalMode | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     effort: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     contextWindow: string | null;
     /**
      * 
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     autoCompactPercent: number | null;
     /**
      * Every OTHER model setting this run's next turn asks for, keyed by the CLI's own parameter id; {} when none are set. Sent back verbatim — geniro holds no vocabulary for these
      * @type {{ [key: string]: string; }}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     modelParameters: { [key: string]: string; };
     /**
      * 
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     contextTokens: number | null;
     /**
      * 
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     contextWindowTokens: number | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     configDir: string | null;
     /**
      * 
      * @type {ConfigDirPin}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     configDirPin: ConfigDirPin | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     groupId: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     taskId: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     taskIdentifier: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     analysisSourceRunId: string | null;
     /**
      * 
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     analysisSourceSeq: number | null;
     /**
      * 
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     pinnedPosition: number | null;
     /**
      * 
      * @type {RunGroupColor}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     color: RunGroupColor | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     createdAt: string;
     /**
      * The run's last-activity time
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     updatedAt: string;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     lastMessage: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     lastActivityAt: string | null;
     /**
      * Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first
      * @type {Array<RunPullRequest>}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     pullRequests: Array<RunPullRequest>;
     /**
      * Calls a usage limit stopped that geniro continues when the window reopens
      * @type {Array<RunResetWake>}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     resetWakes: Array<RunResetWake>;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     archivedAt: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     attentionAt: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     seenAt: string | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     notes: string | null;
     /**
      * Each agent's own task list as it stands now, folded from the whole transcript
      * @type {Array<RunTaskGroup>}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     taskList: Array<RunTaskGroup>;
     /**
      * 
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     workedMs: number | null;
     /**
      * 
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     toolCalls: number | null;
     /**
      * 
      * @type {string}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     promptCacheExpiresAt: string | null;
     /**
      * 
      * @type {number}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     promptCacheTtlMs: number | null;
     /**
      * 
      * @type {PromptCacheTtlReason}
-     * @memberof ThreadAnalysisDtoAnalysis
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     promptCacheTtlReason: PromptCacheTtlReason | null;
 }
 
 
+/**
+ * 
+ * @export
+ * @interface ThreadOverviewDtoArtifacts
+ */
+export interface ThreadOverviewDtoArtifacts {
+    /**
+     * 
+     * @type {Array<RunArtifact>}
+     * @memberof ThreadOverviewDtoArtifacts
+     */
+    artifacts: Array<RunArtifact>;
+}
+/**
+ * 
+ * @export
+ * @interface ThreadOverviewDtoState
+ */
+export interface ThreadOverviewDtoState {
+    /**
+     * the approval and question cards still waiting for an answer, oldest first
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof ThreadOverviewDtoState
+     */
+    openRequests: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * every call, in start order
+     * @type {Array<RunCallState>}
+     * @memberof ThreadOverviewDtoState
+     */
+    calls: Array<RunCallState>;
+    /**
+     * every delegate, in launch order
+     * @type {Array<RunDelegateState>}
+     * @memberof ThreadOverviewDtoState
+     */
+    delegates: Array<RunDelegateState>;
+    /**
+     * each dynamic workflow's launching call and reply, and its first and newest announcement
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof ThreadOverviewDtoState
+     */
+    workflowRows: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * every artifact-tool call and its reply
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof ThreadOverviewDtoState
+     */
+    artifactRows: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * every DETACHED command still running
+     * @type {Array<OpenShell>}
+     * @memberof ThreadOverviewDtoState
+     */
+    shells: Array<OpenShell>;
+    /**
+     * the unanswered tool calls of every conversation's open turn — the commands running in the foreground, whatever page a client holds
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof ThreadOverviewDtoState
+     */
+    openToolCalls: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * the run's newest seq when this was read: what it says ended, ended — for anything that started at or before it
+     * @type {number}
+     * @memberof ThreadOverviewDtoState
+     */
+    throughSeq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoState
+     */
+    turnStartedAt: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ThreadOverviewDtoTimeline
+ */
+export interface ThreadOverviewDtoTimeline {
+    /**
+     * 
+     * @type {Array<ChatTimelineMarker>}
+     * @memberof ThreadOverviewDtoTimeline
+     */
+    markers: Array<ChatTimelineMarker>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoTimeline
+     */
+    partialReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ThreadOverviewDtoTotals
+ */
+export interface ThreadOverviewDtoTotals {
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof ThreadOverviewDtoTotals
+     */
+    totals: ChatTotals;
+    /**
+     * on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working, with every `pausedSpans` stretch already cut out — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock
+     * @type {Array<ActiveSpan>}
+     * @memberof ThreadOverviewDtoTotals
+     */
+    activeSpans: Array<ActiveSpan>;
+    /**
+     * on a WORKFLOW run, where it waited on the user — an approval or question card open with no background shell or sub-agent running. The header clock stands still through them, the open one included. Always empty for a chat
+     * @type {Array<PausedSpan>}
+     * @memberof ThreadOverviewDtoTotals
+     */
+    pausedSpans: Array<PausedSpan>;
+}
 
 /**
  * 

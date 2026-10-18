@@ -242,6 +242,7 @@ function PoolMemberRow({
     agentsApi,
     member.agent,
     configDir,
+    member.model ?? null,
   );
   const { efforts } = useAgentEfforts(
     agentsApi,

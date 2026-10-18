@@ -3,6 +3,7 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import type {
   AgentApprovalCapability,
   AgentIdentityCapability,
@@ -203,7 +204,7 @@ describe('AgentPoolEditor', () => {
   });
 
   it('offers a member its model’s context window and other settings', async () => {
-    const agentsApi = {
+    const agentsApi = withVocabulary({
       listAgentModels: vi.fn(async () => []),
       listAgentEfforts: vi.fn(async () => ({
         efforts: [],
@@ -228,14 +229,15 @@ describe('AgentPoolEditor', () => {
         ],
         unavailableReason: null,
       })),
-    } as unknown as DaemonApis['agents'];
+    }) as unknown as DaemonApis['agents'];
 
     renderEditor([{ agent: 'claude', model: 'opus' }], agentsApi);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(agentsApi.listAgentContextWindows).toHaveBeenCalledWith(
+    // The member's own model is the question its vocabulary is asked with.
+    expect(agentsApi.listAgentVocabulary).toHaveBeenCalledWith(
       expect.objectContaining({ agent: 'claude', model: 'opus' }),
     );
     const labels = [
@@ -312,7 +314,7 @@ describe('AgentPoolEditor', () => {
       approveUnavailableReason: null,
       turnToggleUnavailableReason: turnReason,
     });
-    const agentsApi = {
+    const agentsApi = withVocabulary({
       listAgentModels: vi.fn(async () => []),
       listAgentEfforts: vi.fn(async () => ({
         efforts: [],
@@ -338,7 +340,7 @@ describe('AgentPoolEditor', () => {
         interactiveOnlyNote: null,
         pending: false,
       })),
-    } as unknown as DaemonApis['agents'];
+    }) as unknown as DaemonApis['agents'];
 
     const onChange = renderEditor(
       [{ agent: 'codex', mcpDisabled: ['slack'] }],

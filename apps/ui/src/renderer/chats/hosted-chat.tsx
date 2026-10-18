@@ -576,7 +576,7 @@ export function HostedChat({
   }, [held, runId, drainQueue]);
 
   const agentApi = apis?.agents ?? null;
-  const models = useAgentModels(agentApi, agentKind, configDir);
+  const models = useAgentModels(agentApi, agentKind, configDir, model);
   const efforts = useAgentEfforts(agentApi, agentKind, model, configDir);
   const windows = useAgentContextWindows(agentApi, agentKind, model, configDir);
   const parameters = useAgentModelParameters(

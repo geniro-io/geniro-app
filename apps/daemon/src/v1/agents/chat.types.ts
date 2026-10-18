@@ -3082,22 +3082,23 @@ export type AgentSkillWire = z.infer<typeof AgentSkillWireSchema>;
  * means the documented alias set we fall back to when the CLI cannot be asked —
  * an install too old for the subcommand, or one that is not signed in.
  */
-// No `.meta({ id })` on this root: it backs an ARRAY response DTO, and an id
-// there leaves the array pointing at a component that is never emitted (the
-// boot guard in setupSwagger fails on exactly that dangling $ref).
-export const AgentModelWireSchema = z.object({
-  id: z
-    .string()
-    .describe('Model identifier; ollama/ prefixes select a local provider'),
-  label: z.string(),
-  source: z
-    .enum(['cli', 'builtin', 'ollama'])
-    .describe('Reported by the CLI, a documented fallback, or local Ollama'),
-  unavailableReason: z
-    .string()
-    .optional()
-    .describe('Why this model cannot run an agent'),
-});
+// Named: it is a part of the vocabulary answer (`AgentVocabularyWireSchema`)
+// rather than a response root, which is what lets the id be emitted.
+export const AgentModelWireSchema = z
+  .object({
+    id: z
+      .string()
+      .describe('Model identifier; ollama/ prefixes select a local provider'),
+    label: z.string(),
+    source: z
+      .enum(['cli', 'builtin', 'ollama'])
+      .describe('Reported by the CLI, a documented fallback, or local Ollama'),
+    unavailableReason: z
+      .string()
+      .optional()
+      .describe('Why this model cannot run an agent'),
+  })
+  .meta({ id: 'AgentModel' });
 export type AgentModelWire = z.infer<typeof AgentModelWireSchema>;
 
 /**
@@ -3432,18 +3433,18 @@ export type AgentEffortWire = z.infer<typeof AgentEffortWireSchema>;
  * particular model does not. Both are sentences the chip shows on hover; the
  * consumer does not care which.
  */
-export const AgentEffortListingWireSchema = z.object({
-  efforts: z.array(AgentEffortWireSchema),
-  unavailableReason: z
-    .string()
-    .nullable()
-    .describe('Why there are no levels; null when there are.'),
-});
-// No `.meta({ id })` on this one: it is a RESPONSE DTO ROOT, and nestjs-zod
-// would then register the component under the id while the route still points
-// at the DTO class name — the dangling `$ref` `setupSwagger` fails the boot on.
-// The component name a client sees is the DTO class name, which is what every
-// sibling listing here emits.
+export const AgentEffortListingWireSchema = z
+  .object({
+    efforts: z.array(AgentEffortWireSchema),
+    unavailableReason: z
+      .string()
+      .nullable()
+      .describe('Why there are no levels; null when there are.'),
+  })
+  // Named, like its siblings: a part of `AgentVocabularyWireSchema`, never a
+  // response root (an id on a root is the dangling `$ref` `setupSwagger`
+  // fails the boot on).
+  .meta({ id: 'AgentEffortListing' });
 /**
  * One context-window size a model can be run at.
  *
@@ -3489,17 +3490,19 @@ export const AgentContextWindowUnavailableKindSchema = z
   .enum(['no-model', 'no-axis', 'fixed-window', 'unreadable'])
   .meta({ id: 'AgentContextWindowUnavailableKind' });
 
-export const AgentContextWindowListingWireSchema = z.object({
-  windows: z.array(AgentContextWindowWireSchema),
-  unavailableReason: z
-    .string()
-    .nullable()
-    .describe('Why there are no sizes to choose from; null when there are.'),
-  unavailableKind: AgentContextWindowUnavailableKindSchema.nullable().describe(
-    'Which kind of unavailability the reason describes; null when sizes are offered.',
-  ),
-});
-// No `.meta({ id })` — a RESPONSE DTO ROOT, see the sibling above.
+export const AgentContextWindowListingWireSchema = z
+  .object({
+    windows: z.array(AgentContextWindowWireSchema),
+    unavailableReason: z
+      .string()
+      .nullable()
+      .describe('Why there are no sizes to choose from; null when there are.'),
+    unavailableKind:
+      AgentContextWindowUnavailableKindSchema.nullable().describe(
+        'Which kind of unavailability the reason describes; null when sizes are offered.',
+      ),
+  })
+  .meta({ id: 'AgentContextWindowListing' });
 export type AgentContextWindowListingWire = z.infer<
   typeof AgentContextWindowListingWireSchema
 >;
@@ -3552,17 +3555,41 @@ export type AgentModelParameterWire = z.infer<
  * measured 2026-08-26, `optimize_for` exists on exactly one of a cursor
  * account's thirty-four models. There is no union worth serving.
  */
-export const AgentModelParameterListingWireSchema = z.object({
-  parameters: z.array(AgentModelParameterWireSchema),
-  unavailableReason: z
-    .string()
-    .nullable()
-    .describe('Why there are none; null when there are some.'),
-});
-// No `.meta({ id })` — a RESPONSE DTO ROOT, see the sibling above.
+export const AgentModelParameterListingWireSchema = z
+  .object({
+    parameters: z.array(AgentModelParameterWireSchema),
+    unavailableReason: z
+      .string()
+      .nullable()
+      .describe('Why there are none; null when there are some.'),
+  })
+  .meta({ id: 'AgentModelParameterListing' });
 export type AgentModelParameterListingWire = z.infer<
   typeof AgentModelParameterListingWireSchema
 >;
+
+/**
+ * Everything a model picker shows for one CLI, one model and one account, in
+ * ONE answer: the models, and the effort levels, context windows and other
+ * parameters of the model named.
+ *
+ * One answer rather than four routes because every picker asks all four at
+ * once — the composer, the builder's inspector, the board's run settings — and
+ * over the LAN gateway or a tunnel each request is a real round trip, queued
+ * behind a browser's six connections per host.
+ *
+ * A part is `null` when it alone could not be read: a failed probe of one axis
+ * must not blank the picker's other three, and null — not an empty listing — is
+ * how the client tells "could not ask" (retry) from "the CLI offers none".
+ */
+// No `.meta({ id })` — a RESPONSE DTO ROOT.
+export const AgentVocabularyWireSchema = z.object({
+  models: z.array(AgentModelWireSchema).nullable(),
+  efforts: AgentEffortListingWireSchema.nullable(),
+  contextWindows: AgentContextWindowListingWireSchema.nullable(),
+  modelParameters: AgentModelParameterListingWireSchema.nullable(),
+});
+export type AgentVocabularyWire = z.infer<typeof AgentVocabularyWireSchema>;
 
 /**
  * What a manual cache reset threw away.
@@ -4871,6 +4898,44 @@ export const ThreadAnalysisWireSchema = z.object({
   ),
 });
 export type ThreadAnalysisWire = z.infer<typeof ThreadAnalysisWireSchema>;
+
+/**
+ * The reads a thread is opened with, by the name `GET /v1/chats/:runId/overview`
+ * takes them under. Each is its own route as well — the one a hook re-reads
+ * alone on a reconnect, a structural row or a new page — and the overview only
+ * answers several of them in one request, when a client asks for several at
+ * once.
+ */
+export const THREAD_OVERVIEW_PARTS = [
+  'state',
+  'totals',
+  'timeline',
+  'artifacts',
+  'analysis',
+] as const;
+export type ThreadOverviewPart = (typeof THREAD_OVERVIEW_PARTS)[number];
+
+/**
+ * Several of a thread's opening reads in one answer — each exactly what its own
+ * route answers (`:runId/state`, `:runId/totals`, `:runId/timeline`,
+ * `:runId/artifacts`, `:runId/analysis`).
+ *
+ * One request rather than five because a thread opening asks all of them at
+ * once, and over the LAN gateway or a tunnel each request is a real round trip,
+ * queued behind a browser's six connections per host.
+ *
+ * A part is `null` when it was not asked for, or when it alone could not be
+ * read: one failed read must not cost the thread its other four.
+ */
+// No `.meta({ id })` — a RESPONSE DTO ROOT.
+export const ThreadOverviewWireSchema = z.object({
+  state: RunStateWireSchema.nullable(),
+  totals: ChatTotalsResponseSchema.nullable(),
+  timeline: ChatTimelineWireSchema.nullable(),
+  artifacts: RunArtifactsWireSchema.nullable(),
+  analysis: ThreadAnalysisWireSchema.nullable(),
+});
+export type ThreadOverviewWire = z.infer<typeof ThreadOverviewWireSchema>;
 
 /**
  * A run's UNREAD moments after a device reported LOOKING at it — what

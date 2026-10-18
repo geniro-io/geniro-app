@@ -34,6 +34,7 @@ import type {
   ShellOutputWire,
   StoppedDetachedProcesses,
   ThreadAnalysisWire,
+  ThreadOverviewWire,
 } from '../chat.types';
 import {
   AnalyzeThreadDto,
@@ -79,6 +80,8 @@ import {
   SweepArchivedDto,
   SweptArchivedDto,
   ThreadAnalysisDto,
+  ThreadOverviewDto,
+  ThreadOverviewQueryDto,
   UpdateChatSettingsDto,
   UploadChatFileDto,
 } from '../dto/chat.dto';
@@ -102,6 +105,7 @@ import { RunProcessesService } from '../services/run-processes.service';
 import { RunStateService } from '../services/run-state.service';
 import { ShellOutputService } from '../services/shell-output.service';
 import { ThreadAnalysisService } from '../services/thread-analysis.service';
+import { ThreadOverviewService } from '../services/thread-overview.service';
 import { historyConversationOf } from '../utils/history-conversation';
 
 /**
@@ -133,6 +137,7 @@ export class ChatController {
     private readonly processes: RunProcessesService,
     private readonly runState: RunStateService,
     private readonly analyses: ThreadAnalysisService,
+    private readonly overview: ThreadOverviewService,
     private readonly recommendations: RecommendationsApplyService,
   ) {}
 
@@ -359,6 +364,21 @@ export class ChatController {
    * commands, dynamic workflows — for every readout the loaded transcript
    * window must not decide. See `RunStateWireSchema`.
    */
+  /**
+   * Several of a thread's opening reads in one request — the state, totals,
+   * timeline, artifacts and analysis routes' own answers, for the parts named
+   * in `parts`. See `ThreadOverviewWireSchema`.
+   */
+  @Get(':runId/overview')
+  @ApiOperation({ operationId: 'readThreadOverview' })
+  @ZodResponse({ status: 200, type: ThreadOverviewDto })
+  readOverview(
+    @Param('runId') runId: string,
+    @Query() query: ThreadOverviewQueryDto,
+  ): Promise<ThreadOverviewWire> {
+    return this.overview.read(runId, query.parts);
+  }
+
   @Get(':runId/state')
   @ApiOperation({ operationId: 'readRunState' })
   @ZodResponse({ status: 200, type: RunStateDto })

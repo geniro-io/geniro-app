@@ -1070,6 +1070,7 @@ export function Workflows({
     apis?.agents ?? null,
     selected?.kind === 'agent' ? selected.agent : null,
     selectedConfigDir,
+    selected?.kind === 'agent' ? (selected.model ?? null) : null,
   );
   // Same source as the composer's chip, for the same reason the models are:
   // the levels are the CLI's own, so builder and chat cannot offer different

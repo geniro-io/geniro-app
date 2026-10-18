@@ -32,6 +32,7 @@ import { AgentEventBus } from './services/agent-events.bus';
 import { AgentMcpService } from './services/agent-mcp.service';
 import { AgentSessionRegistry } from './services/agent-session.registry';
 import { AgentVersionService } from './services/agent-version.service';
+import { AgentVocabularyService } from './services/agent-vocabulary.service';
 import { AnalysisBroker } from './services/analysis.broker';
 import { AnalysisReportsService } from './services/analysis-reports.service';
 import { ApprovalRegistry } from './services/approval-registry';
@@ -101,6 +102,7 @@ import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
 import { ThreadAnalysisService } from './services/thread-analysis.service';
+import { ThreadOverviewService } from './services/thread-overview.service';
 import { ThreadReaderService } from './services/thread-reader.service';
 import { ThreadTimelineService } from './services/thread-timeline.service';
 import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
@@ -147,6 +149,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ThreadTimelineService,
     ThreadReaderService,
     ThreadAnalysisService,
+    ThreadOverviewService,
     RecommendationsApplyService,
     {
       // Factory because the trailing process listing is a test seam, not a
@@ -260,6 +263,7 @@ import { defaultSpawn } from './utils/spawn-cli';
       ],
     },
     OllamaService,
+    AgentVocabularyService,
     // Plain provider, unlike its siblings above: it has no options bag to seed,
     // because an adapter answers from a documented constant (no spawn, no TTL).
     CliSessionsService,

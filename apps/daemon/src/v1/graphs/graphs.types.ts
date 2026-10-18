@@ -1310,7 +1310,7 @@ export type AgentSubagentCapability = z.infer<
  * Whether ONE CLI offers a reasoning-effort PICKER — the wire home for
  * `AdapterConfig.effortsUnavailableReason`.
  *
- * `GET /v1/agents/efforts` already answers `[]` for a CLI with no such control,
+ * The `efforts` part of `GET /v1/agents/vocabulary` already answers `[]` for a CLI with no such control,
  * and `[]` is enough to hide the picker — but not enough to explain the chip
  * that replaces it. That gap is what got "I cannot change the effort of a Cursor
  * model" reported against a surface working exactly as measured: the composer

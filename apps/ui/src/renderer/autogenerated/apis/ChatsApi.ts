@@ -56,6 +56,7 @@ import type {
   SweepArchivedDto,
   SweptArchivedDto,
   ThreadAnalysisDto,
+  ThreadOverviewDto,
   UpdateChatSettingsDto,
   UploadChatFileDto,
 } from '../models/index';
@@ -167,6 +168,11 @@ export interface ChatsApiReadRunWaterfallRequest {
 export interface ChatsApiReadShellOutputRequest {
     runId: string;
     callId: string;
+}
+
+export interface ChatsApiReadThreadOverviewRequest {
+    runId: string;
+    parts: string;
 }
 
 export interface ChatsApiRenameRunRequest {
@@ -1463,6 +1469,62 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readShellOutput(requestParameters: ChatsApiReadShellOutputRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShellOutputDto> {
         const response = await this.readShellOutputRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readThreadOverviewRaw(requestParameters: ChatsApiReadThreadOverviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ThreadOverviewDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readThreadOverview().'
+            );
+        }
+
+        if (requestParameters['parts'] == null) {
+            throw new runtime.RequiredError(
+                'parts',
+                'Required parameter "parts" was null or undefined when calling readThreadOverview().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['parts'] != null) {
+            queryParameters['parts'] = requestParameters['parts'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/overview`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readThreadOverview(requestParameters: ChatsApiReadThreadOverviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ThreadOverviewDto> {
+        const response = await this.readThreadOverviewRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

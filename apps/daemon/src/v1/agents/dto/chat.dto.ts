@@ -34,7 +34,9 @@ import {
   ShellOutputWireSchema,
   StopDetachedProcessesSchema,
   StoppedDetachedProcessesSchema,
+  THREAD_OVERVIEW_PARTS,
   ThreadAnalysisWireSchema,
+  ThreadOverviewWireSchema,
 } from '../chat.types';
 
 /**
@@ -106,7 +108,7 @@ export const createChatSchema = z.object({
    * the window above is not — only more so: geniro holds no vocabulary for
    * these at all (see `AgentModelParameter`), so there is nothing here that
    * could be checked against. The model is asked what it accepts
-   * (`GET /v1/agents/model-parameters`) and the live agent refuses a value it
+   * (`modelParameters` of `GET /v1/agents/vocabulary`) and the live agent refuses a value it
    * does not, on the turn, with a sentence.
    *
    * Bounded because the values ride a config option on every turn for the life
@@ -412,6 +414,25 @@ export class RunDto extends createZodDto(RunWireSchema) {}
 
 /** A thread's analysis, or null when it has none — see `ThreadAnalysisWireSchema`. */
 export class ThreadAnalysisDto extends createZodDto(ThreadAnalysisWireSchema) {}
+
+/**
+ * Which of a thread's opening reads to answer, comma-separated
+ * (`state,totals,timeline`). One string rather than a repeated key so a single
+ * part and several arrive in the same shape. An unknown name or an empty list
+ * is refused rather than ignored.
+ */
+export const threadOverviewQuerySchema = z.object({
+  parts: z
+    .string()
+    .transform((value) => value.split(','))
+    .pipe(z.array(z.enum(THREAD_OVERVIEW_PARTS)).min(1)),
+});
+export class ThreadOverviewQueryDto extends createZodDto(
+  threadOverviewQuerySchema,
+) {}
+
+/** Several of a thread's opening reads at once — see `ThreadOverviewWireSchema`. */
+export class ThreadOverviewDto extends createZodDto(ThreadOverviewWireSchema) {}
 
 /** A run's unread moments once a device has opened it. */
 export class RunSeenDto extends createZodDto(RunSeenWireSchema) {}

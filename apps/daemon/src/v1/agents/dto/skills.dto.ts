@@ -4,12 +4,9 @@ import { z } from 'zod';
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
   AgentCacheResetWireSchema,
-  AgentContextWindowListingWireSchema,
-  AgentEffortListingWireSchema,
-  AgentModelParameterListingWireSchema,
-  AgentModelWireSchema,
   AgentSessionListingWireSchema,
   AgentSkillWireSchema,
+  AgentVocabularyWireSchema,
 } from '../chat.types';
 
 /**
@@ -35,109 +32,38 @@ export class ListSkillsQueryDto extends createZodDto(listSkillsQuerySchema) {}
 /** One skill / slash command an agent accepts in a working directory. */
 export class AgentSkillDto extends createZodDto(AgentSkillWireSchema) {}
 
-/** Query for the model listing — which agent CLI to ask. */
-export const listModelsQuerySchema = z.object({
-  agent: AgentKindSchema,
-  /**
-   * The run's agent config directory — its ACCOUNT — or absent for the CLI's
-   * own. Every answer on these routes is an account fact (which models exist,
-   * which levels and windows they take, which plugins the CLI reports), so
-   * without it one subscription's vocabulary was cached under the CLI's name
-   * and served to every other. Optional and validated server-side, the same
-   * shape `/v1/agents/mcp` already carries.
-   */
-  configDir: z.string().min(1).optional(),
-});
-export class ListModelsQueryDto extends createZodDto(listModelsQuerySchema) {}
-
-/** One model an agent CLI accepts for `--model`. */
-export class AgentModelDto extends createZodDto(AgentModelWireSchema) {}
-
 /**
- * Query for the effort listing: which CLI, and — the part that makes the answer
- * exact — which of its MODELS.
+ * Query for the vocabulary answer: which CLI, which of its MODELS, and which
+ * account.
  *
  * `model` is optional and its absence is a real question rather than a missing
- * argument: "what does this CLI offer at all" is what the picker asks before a
- * model has been chosen, and it answers with the CLI-wide superset. Naming a
- * model narrows it to what that model actually takes, which for cursor is a
- * different list per model and for claude is the same one.
+ * argument: "what does this CLI offer at all" is what a picker asks before a
+ * model has been chosen. The effort part then answers with the CLI-wide
+ * superset, and the context-window and parameter parts with the sentence
+ * saying a model must be named — their axes exist per model (twelve of a cursor
+ * account's thirty-four offer windows at all, and `optimize_for` exists on
+ * exactly one). The model list itself never depends on it.
  */
-export const listEffortsQuerySchema = z.object({
+export const listVocabularyQuerySchema = z.object({
   agent: AgentKindSchema,
   model: z.string().min(1).optional(),
   /**
    * The run's agent config directory — its ACCOUNT — or absent for the CLI's
-   * own. Every answer on these routes is an account fact (which models exist,
-   * which levels and windows they take, which plugins the CLI reports), so
-   * without it one subscription's vocabulary was cached under the CLI's name
-   * and served to every other. Optional and validated server-side, the same
-   * shape `/v1/agents/mcp` already carries.
+   * own. Every part of this answer is an account fact (which models exist,
+   * which levels and windows they take), so without it one subscription's
+   * vocabulary was cached under the CLI's name and served to every other.
+   * Optional and validated server-side, the same shape `/v1/agents/mcp`
+   * already carries.
    */
   configDir: z.string().min(1).optional(),
 });
-export class ListEffortsQueryDto extends createZodDto(listEffortsQuerySchema) {}
-
-/** The levels one model offers, or the reason it offers none. */
-export class AgentEffortListingDto extends createZodDto(
-  AgentEffortListingWireSchema,
+export class ListVocabularyQueryDto extends createZodDto(
+  listVocabularyQuerySchema,
 ) {}
 
-/**
- * Query for the context-window listing — the same shape as the effort one, and
- * `model` matters MORE here: the sizes belong to the model outright (twelve of
- * a cursor account's thirty-four offer the axis at all, with three different
- * vocabularies among them), so with no model named there is nothing to list and
- * the answer is the sentence saying so.
- */
-export const listContextWindowsQuerySchema = z.object({
-  agent: AgentKindSchema,
-  model: z.string().min(1).optional(),
-  /**
-   * The run's agent config directory — its ACCOUNT — or absent for the CLI's
-   * own. Every answer on these routes is an account fact (which models exist,
-   * which levels and windows they take, which plugins the CLI reports), so
-   * without it one subscription's vocabulary was cached under the CLI's name
-   * and served to every other. Optional and validated server-side, the same
-   * shape `/v1/agents/mcp` already carries.
-   */
-  configDir: z.string().min(1).optional(),
-});
-export class ListContextWindowsQueryDto extends createZodDto(
-  listContextWindowsQuerySchema,
-) {}
-
-/** The window sizes one model offers, or the reason it offers none. */
-export class AgentContextWindowListingDto extends createZodDto(
-  AgentContextWindowListingWireSchema,
-) {}
-
-/**
- * Query for the model-parameter listing — the same shape again, and `model` is
- * required in practice for the same reason the context one is: these axes exist
- * per model, and one of them (`optimize_for`) exists on exactly one model of
- * thirty-four. With none named the answer is the sentence saying so.
- */
-export const listModelParametersQuerySchema = z.object({
-  agent: AgentKindSchema,
-  model: z.string().min(1).optional(),
-  /**
-   * The run's agent config directory — its ACCOUNT — or absent for the CLI's
-   * own. Every answer on these routes is an account fact (which models exist,
-   * which levels and windows they take, which plugins the CLI reports), so
-   * without it one subscription's vocabulary was cached under the CLI's name
-   * and served to every other. Optional and validated server-side, the same
-   * shape `/v1/agents/mcp` already carries.
-   */
-  configDir: z.string().min(1).optional(),
-});
-export class ListModelParametersQueryDto extends createZodDto(
-  listModelParametersQuerySchema,
-) {}
-
-/** Every other setting one model offers, or the reason it offers none. */
-export class AgentModelParameterListingDto extends createZodDto(
-  AgentModelParameterListingWireSchema,
+/** The models, and the chosen model's levels, windows and parameters. */
+export class AgentVocabularyDto extends createZodDto(
+  AgentVocabularyWireSchema,
 ) {}
 
 /** How much a manual cache reset threw away. */

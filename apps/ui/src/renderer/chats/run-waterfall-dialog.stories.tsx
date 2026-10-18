@@ -23,7 +23,15 @@ function lane(
   turns: number,
   toolCalls: number,
 ): RunWaterfallLane {
-  return { nodeId, agentKind, costUsd, turns, toolCalls, workedMs: null };
+  return {
+    nodeId,
+    agentKind,
+    costUsd,
+    turns,
+    toolCalls,
+    delegateToolCalls: 0,
+    workedMs: null,
+  };
 }
 
 let nextSeq = 1;
@@ -41,6 +49,7 @@ function turn(
     timingSource: 'cli',
     outcome: 'completed',
     toolCalls: 12,
+    delegateToolCalls: 0,
     durationMs: (end - start) * SECOND,
     apiMs: null,
     ttftMs: null,
@@ -53,6 +62,7 @@ function turn(
     cacheReadTokens: null,
     contextTokens: null,
     contextWindowTokens: null,
+    modelCosts: null,
     ...over,
   };
 }
@@ -106,12 +116,12 @@ const fanOut: RunWaterfallDto = {
     lane('reviewer', 'cursor-agent', 1.1, 2, 21),
   ],
   toolUse: [
-    { nodeId: 'engineer', name: 'Bash', calls: 28 },
-    { nodeId: 'researcher', name: 'Read', calls: 24 },
-    { nodeId: 'researcher', name: 'Grep', calls: 16 },
-    { nodeId: 'manager', name: 'Read', calls: 12 },
-    { nodeId: 'engineer', name: 'Edit', calls: 12 },
-    { nodeId: 'reviewer', name: 'Read', calls: 6 },
+    { nodeId: 'engineer', name: 'Bash', calls: 28, delegateCalls: 0 },
+    { nodeId: 'researcher', name: 'Read', calls: 24, delegateCalls: 0 },
+    { nodeId: 'researcher', name: 'Grep', calls: 16, delegateCalls: 0 },
+    { nodeId: 'manager', name: 'Read', calls: 12, delegateCalls: 0 },
+    { nodeId: 'engineer', name: 'Edit', calls: 12, delegateCalls: 0 },
+    { nodeId: 'reviewer', name: 'Read', calls: 6, delegateCalls: 0 },
   ],
   turns: [
     turn('manager', 0, 345, {

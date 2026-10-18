@@ -4,7 +4,7 @@ import { cn } from './ui/utils';
 const SIZES = {
   topbar: 'h-[26px]',
   nav: 'h-9',
-  hero: 'h-[72px]',
+  hero: 'h-16',
 } as const;
 
 /**

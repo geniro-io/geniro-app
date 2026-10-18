@@ -28,6 +28,7 @@ export function wfLane(
     costUsd: null,
     turns: 1,
     toolCalls: 0,
+    delegateToolCalls: 0,
     workedMs: null,
     ...over,
   };
@@ -46,6 +47,7 @@ export function wfTurn(
     timingSource: 'cli',
     outcome: 'completed',
     toolCalls: 0,
+    delegateToolCalls: 0,
     durationMs: (end - start) * 1000,
     apiMs: null,
     ttftMs: null,
@@ -58,6 +60,7 @@ export function wfTurn(
     cacheReadTokens: null,
     contextTokens: null,
     contextWindowTokens: null,
+    modelCosts: null,
     ...over,
   };
 }

@@ -118,6 +118,12 @@ export interface TurnInstructionParts {
    * about a transcript it does have.
    */
   includePreamble?: boolean;
+  /**
+   * The CLI's own word on work left running when a turn ends
+   * (`AdapterConfig.backgroundWork.agentNote`). Withheld with the preamble:
+   * a probe has no turn to end and nothing to background.
+   */
+  backgroundWorkNote?: string | null;
   /** The user's own global custom instructions, as snapshotted onto the run. */
   customInstructions?: string | null;
   /**
@@ -139,6 +145,12 @@ export interface TurnInstructionParts {
   instructionBlocks?: string | null;
   /** This turn's own role text — a graph node's `role`. Absent for plain chat. */
   systemPrompt?: string | null;
+  /**
+   * What a turn answering a call is told about where its answer goes — every
+   * callee, whether or not it may call anyone itself. Not gated on the call
+   * tools: it names none.
+   */
+  answeringACallPrompt?: string | null;
   /** The "May call" block, already gated on the call tools being registered. */
   callSurfacePrompt?: string | null;
 }
@@ -148,18 +160,20 @@ export interface TurnInstructionParts {
  *
  * **Order is precedence, and it runs general → specific.** The preamble is
  * first because it is the weakest claim in the stack — facts about the host
- * that anything more specific may qualify. The user's global instructions come
- * next, then what a board card asks of the run working it — its label
- * instructions, written for a class of card, and the report ask that run needs.
+ * that anything more specific may qualify. The CLI's note on background work
+ * follows it: another fact about the host, this one per CLI. The user's global
+ * instructions come next, then what a board card asks of the run working it —
+ * its label instructions, written for a class of card, and the report ask that
+ * run needs.
  * A workflow-editing chat's brief sits beside that one: same kind of claim (the
  * job geniro opened this run for), and a run is only ever one of the two, so
  * their relative order decides nothing.
  * The instruction blocks wired to this node follow — written for a
  * handful of agents rather than for every one of them, but not for this node
  * alone. A graph node's own role comes after all of it, because a node
- * authored for one job is the most specific instruction in the stack. The call
- * surface stays last, where it already was, so this change does not reorder
- * the parts that existed before it.
+ * authored for one job is the most specific instruction in the stack. A
+ * callee's word on where its answer goes follows the role, and the call
+ * surface stays last — its calls-specific half of that rule reads on from it.
  *
  * Blank parts are dropped rather than joined as empty paragraphs — a user who
  * has typed nothing into the settings box must not cost the turn a stray blank
@@ -169,11 +183,13 @@ export interface TurnInstructionParts {
 export function composeTurnInstructions(parts: TurnInstructionParts): string {
   return [
     parts.includePreamble === false ? null : GENIRO_UI_PREAMBLE,
+    parts.includePreamble === false ? null : parts.backgroundWorkNote,
     parts.customInstructions,
     parts.taskInstructions,
     parts.workflowInstructions,
     parts.instructionBlocks,
     parts.systemPrompt,
+    parts.answeringACallPrompt,
     parts.callSurfacePrompt,
   ]
     .map((part) => part?.trim())

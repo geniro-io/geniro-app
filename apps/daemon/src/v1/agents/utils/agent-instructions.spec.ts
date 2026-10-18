@@ -1,9 +1,30 @@
 import { describe, expect, it } from 'vitest';
 
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
+import type { AgentTurnInput } from '../adapters/adapter.types';
+import type { AgentAdapter } from '../adapters/agent-adapter';
+import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { CodexAdapter } from '../adapters/codex/codex.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import {
   composeTurnInstructions,
   GENIRO_UI_PREAMBLE,
 } from './agent-instructions';
+
+/** The block an adapter hands its CLI — the one seam every delivery path calls. */
+function composedBy(
+  adapter: AgentAdapter,
+  input: AgentTurnInput,
+  granted = true,
+): string {
+  return (
+    adapter as unknown as {
+      composeSystemPrompt(input: AgentTurnInput, granted: boolean): string;
+    }
+  ).composeSystemPrompt(input, granted);
+}
+
+const TURN: AgentTurnInput = { prompt: 'go', cwd: '/proj' };
 
 describe('GENIRO_UI_PREAMBLE', () => {
   it('contradicts the terminal claim rather than only stating the truth', () => {
@@ -128,6 +149,112 @@ describe('composeTurnInstructions', () => {
     expect(
       composeTurnInstructions({ customInstructions: '  BE TERSE\n\n' }),
     ).toBe(`${GENIRO_UI_PREAMBLE}\n\nBE TERSE`);
+  });
+});
+
+describe('composeTurnInstructions — background work note', () => {
+  it('puts the CLI’s note right after the preamble, ahead of the user’s own instructions', () => {
+    expect(
+      composeTurnInstructions({
+        backgroundWorkNote: 'NOTE',
+        customInstructions: 'GLOBAL',
+        systemPrompt: 'ROLE',
+      }),
+    ).toBe(`${GENIRO_UI_PREAMBLE}\n\nNOTE\n\nGLOBAL\n\nROLE`);
+  });
+
+  it('withholds the note with the preamble, for a probe that has no turn to end', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        backgroundWorkNote: 'NOTE',
+        systemPrompt: 'ROLE',
+      }),
+    ).toBe('ROLE');
+  });
+});
+
+describe('each CLI’s background work note', () => {
+  const claude = new ClaudeAdapter();
+  const cursor = new CursorAcpAdapter({
+    vocabularyStore: freshVocabularyStore(),
+  });
+  const codex = new CodexAdapter({ clientVersion: '1.0.0' });
+
+  it.each([
+    ['claude', claude],
+    ['cursor-agent', cursor],
+    ['codex', codex],
+  ])(
+    '%s: composes its own note after the preamble, and none into a probe',
+    (_agent, adapter) => {
+      const note = adapter.getConfig().backgroundWork.agentNote!;
+
+      expect(composedBy(adapter, TURN)).toBe(
+        `${GENIRO_UI_PREAMBLE}\n\n${note}`,
+      );
+      expect(composedBy(adapter, { ...TURN, internalProbe: true })).toBe('');
+    },
+  );
+
+  it('tells claude and cursor their turn is held and they are woken, so they end it instead of polling', () => {
+    // geniro HOLDS these two: spawn-cli keeps a claude turn (and the call it
+    // answers) open while a delegate is out, and the ACP session holds a
+    // cursor turn and wakes it with the delegates' reports.
+    const claudeNote = claude.getConfig().backgroundWork.agentNote!;
+    const cursorNote = cursor.getConfig().backgroundWork.agentNote!;
+    for (const note of [claudeNote, cursorNote]) {
+      expect(note).toContain('the call you are answering, if any — stays open');
+      expect(note).toContain('END YOUR TURN instead of waiting');
+      expect(note).toContain(
+        'never poll with sleep, date, ls or until/tail loops',
+      );
+      expect(note).toContain('never predict what they will report');
+      expect(note).toContain('Background COMMANDS are different');
+    }
+    expect(claudeNote).toContain('started again automatically');
+    expect(cursorNote).toContain('prompted with their reports');
+  });
+
+  it('tells codex the opposite — its turn is not held, so it waits with wait_agent', () => {
+    // Nothing holds a codex turn (`onTurnCompleted` settles at once), so the
+    // claude advice to end the turn would hand back an answer without results.
+    const note = codex.getConfig().backgroundWork.agentNote!;
+
+    expect(note).toContain('NOT waited for when you end your turn');
+    expect(note).toContain('wait_agent');
+    expect(note).toContain('if it times out, wait again');
+    expect(note).toContain('a long timeout (minutes)');
+    expect(note).not.toContain('END YOUR TURN');
+  });
+});
+
+describe('composeTurnInstructions — answering a call', () => {
+  it('sits after the role and before the call surface, whose calls-specific rule reads on from it', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        systemPrompt: 'ROLE',
+        answeringACallPrompt: 'ANSWERING',
+        callSurfacePrompt: 'MAY_CALL',
+      }),
+    ).toBe('ROLE\n\nANSWERING\n\nMAY_CALL');
+  });
+
+  it('reaches the CLI even when the call tools were not delivered', () => {
+    // A leaf callee is handed no call tools and so no "May call" block; the
+    // sentence must not be dropped with them.
+    const input = {
+      ...TURN,
+      answeringACallPrompt: 'ANSWERING',
+      callSurfacePrompt: 'MAY_CALL',
+    };
+    const composed = composedBy(new ClaudeAdapter(), input);
+    const withheld = composedBy(new ClaudeAdapter(), input, false);
+
+    expect(composed).toContain('ANSWERING\n\nMAY_CALL');
+    expect(withheld).toContain('ANSWERING');
+    expect(withheld).not.toContain('MAY_CALL');
   });
 });
 

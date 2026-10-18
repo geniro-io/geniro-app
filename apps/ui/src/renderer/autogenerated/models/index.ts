@@ -288,6 +288,27 @@ export interface AgentApprovalProbeModesInner {
 /**
  * 
  * @export
+ * @interface AgentBackgroundWorkNote
+ */
+export interface AgentBackgroundWorkNote {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentBackgroundWorkNote
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentBackgroundWorkNote
+     */
+    note: string | null;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AgentCacheResetDto
  */
 export interface AgentCacheResetDto {
@@ -875,6 +896,24 @@ export interface AgentModelDto {
      * @memberof AgentModelDto
      */
     label: string;
+    /**
+     * The model id this alias runs as
+     * @type {string}
+     * @memberof AgentModelDto
+     */
+    resolvedModel?: string;
+    /**
+     * Known default context window in tokens; omitted when unknown
+     * @type {number}
+     * @memberof AgentModelDto
+     */
+    contextTokens?: number;
+    /**
+     * The agent exposes a separate per-model context-window selector
+     * @type {boolean}
+     * @memberof AgentModelDto
+     */
+    contextWindowSelectable?: boolean;
     /**
      * Reported by the CLI, a documented fallback, or local Ollama
      * @type {string}
@@ -1676,6 +1715,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     hostPreamble: string;
+    /**
+     * Per-CLI note on background work, composed right after the host preamble, one entry per known agent
+     * @type {Array<AgentBackgroundWorkNote>}
+     * @memberof CapabilitiesDto
+     */
+    backgroundWorkNotes: Array<AgentBackgroundWorkNote>;
 }
 
 /**
@@ -6016,11 +6061,17 @@ export interface RunWaterfallLane {
      */
     turns: number;
     /**
-     * 
+     * the lane agent's OWN tool calls
      * @type {number}
      * @memberof RunWaterfallLane
      */
     toolCalls: number;
+    /**
+     * tool calls the lane agent's CLI sub-agents made (rows carrying `parentToolUseId`), filed under the agent that launched them
+     * @type {number}
+     * @memberof RunWaterfallLane
+     */
+    delegateToolCalls: number;
     /**
      * 
      * @type {number}
@@ -6030,6 +6081,25 @@ export interface RunWaterfallLane {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface RunWaterfallModelCost
+ */
+export interface RunWaterfallModelCost {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallModelCost
+     */
+    model: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallModelCost
+     */
+    costUsd: number;
+}
 /**
  * 
  * @export
@@ -6049,11 +6119,17 @@ export interface RunWaterfallToolUse {
      */
     name: string;
     /**
-     * 
+     * the lane agent's OWN calls of this tool
      * @type {number}
      * @memberof RunWaterfallToolUse
      */
     calls: number;
+    /**
+     * its CLI sub-agents' calls of this tool
+     * @type {number}
+     * @memberof RunWaterfallToolUse
+     */
+    delegateCalls: number;
 }
 /**
  * 
@@ -6092,11 +6168,17 @@ export interface RunWaterfallTurn {
      */
     outcome: RunWaterfallTurnOutcomeEnum;
     /**
-     * tool calls this lane made inside the turn's span, sub-agents included
+     * the lane agent's OWN tool calls inside the turn's span — its CLI sub-agents' are `delegateToolCalls`
      * @type {number}
      * @memberof RunWaterfallTurn
      */
     toolCalls: number;
+    /**
+     * tool calls the lane agent's CLI sub-agents made inside the turn's span (rows carrying `parentToolUseId`)
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    delegateToolCalls: number;
     /**
      * 
      * @type {number}
@@ -6133,6 +6215,12 @@ export interface RunWaterfallTurn {
      * @memberof RunWaterfallTurn
      */
     costUsd: number | null;
+    /**
+     * 
+     * @type {Array<RunWaterfallModelCost>}
+     * @memberof RunWaterfallTurn
+     */
+    modelCosts: Array<RunWaterfallModelCost> | null;
     /**
      * 
      * @type {string}

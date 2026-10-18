@@ -104,6 +104,7 @@ import {
   restatesRunAsWorking,
   terminalStatus,
 } from '../utils/event-to-item';
+import { firstTurnWindow } from '../utils/first-turn-window';
 import {
   isHostAnalysisReadCall,
   isHostRecommendationsCall,
@@ -3040,7 +3041,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       );
       await this.rememberContext(runId, SINGLE_AGENT_NODE, {
         contextTokens: event.contextTokens,
-        contextWindowTokens: event.contextWindowTokens ?? null,
+        contextWindowTokens: this.partials.isOwnReading(
+          runId,
+          SINGLE_AGENT_NODE,
+          event.contextModel ?? null,
+        )
+          ? (event.contextWindowTokens ?? null)
+          : null,
       });
       return;
     }
@@ -4474,11 +4481,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const effort = settings.effort ?? undefined;
       const contextWindow = settings.contextWindow ?? undefined;
       const modelParameters = readModelParameters(settings.modelParameters);
-      // The threshold handed to the CLI itself, where it has a control for one
-      // — see `turnAutoCompact`. Resolved per turn rather than once per chat,
-      // because the window it is a share of is learned from the turn that just
-      // settled.
-      const autoCompact = this.turnAutoCompact(run);
       // Re-resolved per turn, exactly like `cwd` above: the row holds the
       // canonical path as of creation, and a directory deleted (or a symlink
       // re-pointed) since then would otherwise reach argv, where the CLI
@@ -4490,6 +4492,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const configDir = settings.configDir
         ? resolveValidConfigDir(settings.configDir)
         : undefined;
+      // The threshold handed to the CLI itself, where it has a control for one
+      // — see `turnAutoCompact`. Resolved per turn rather than once per chat,
+      // because the window it is a share of is learned from the turn that just
+      // settled. After `configDir`: the profile resolves the model.
+      const autoCompact = await this.turnAutoCompact(
+        run,
+        agentKind,
+        model ?? null,
+        configDir ?? null,
+        contextWindow ?? null,
+      );
       // Read off the ROW, not off the app's settings: the value was
       // snapshotted when the chat was created, and re-reading the live setting
       // here is exactly what would respawn this run's CLI process mid-thread
@@ -5845,10 +5858,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // remembered after it would not reach the client until the NEXT
               // reading — which for a CLI reporting one figure per turn is a
               // whole turn of a ring with a numerator and no denominator.
-              if (
+              const ownWindow =
                 event.contextWindowTokens !== undefined &&
-                event.contextWindowTokens !== null
-              ) {
+                event.contextWindowTokens !== null &&
                 this.partials.rememberWindow(
                   runId,
                   SINGLE_AGENT_NODE,
@@ -5856,7 +5868,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                   event.contextModel ?? null,
                   contextWindow,
                 );
-              }
               // The live plane is what lets the meter move DURING the turn
               // instead of only when it ends — and it is EPHEMERAL, so the same
               // reading is filed on the run row beside it.
@@ -5868,7 +5879,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               );
               void this.rememberContext(runId, SINGLE_AGENT_NODE, {
                 contextTokens: event.contextTokens,
-                contextWindowTokens: event.contextWindowTokens ?? null,
+                contextWindowTokens: ownWindow
+                  ? (event.contextWindowTokens ?? null)
+                  : null,
               });
               return;
             }
@@ -5891,8 +5904,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // next turn's live context figure has something to scale
               // against from its very first request — under the model that
               // REPORTED it, so a turn that fell back to a second model
-              // cannot file that model's window under the requested one.
-              this.partials.rememberWindow(
+              // cannot file that model's window under the requested one, nor
+              // take it as this chat's own.
+              const ownWindow = this.partials.rememberWindow(
                 runId,
                 SINGLE_AGENT_NODE,
                 event.usage?.contextWindowTokens ?? null,
@@ -5909,7 +5923,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // never clears it — so this is what gets a new chat its ring.
               void this.rememberContext(runId, SINGLE_AGENT_NODE, {
                 contextTokens: event.usage?.contextTokens ?? null,
-                contextWindowTokens: event.usage?.contextWindowTokens ?? null,
+                contextWindowTokens: ownWindow
+                  ? (event.usage?.contextWindowTokens ?? null)
+                  : null,
               });
               // This turn's worked time and tool count, ADDED to the chat's
               // running totals. Read out and zeroed synchronously, for the
@@ -6748,18 +6764,31 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    *
    * The window is this conversation's own last reading, live first and the row
    * behind it — the same pair {@link autoCompactIfDue} judges on, so the two
-   * rules can never disagree about how full the window is. Null until some turn
-   * has reported one: the flag names a window in TOKENS, and there is nothing
-   * to take a share of before that. The between-turn rule below is what covers
-   * a conversation's first turn, and it is why this returning null is a gap of
-   * one turn rather than a hole.
+   * rules can never disagree about how full the window is. Before any turn has
+   * reported one, the model's known window stands in (`firstTurnWindow`). Null
+   * only when nothing knows it, where the between-turn rule below covers the
+   * first turn.
    */
-  private turnAutoCompact(run: Run): TurnAutoCompact | null {
+  private async turnAutoCompact(
+    run: Run,
+    agent: AgentKind,
+    model: string | null,
+    configDir: string | null,
+    contextWindow: string | null,
+  ): Promise<TurnAutoCompact | null> {
     if (run.autoCompactPercent === null) {
       return null;
     }
     const window =
-      this.contexts.read(run.id)?.window ?? run.contextWindowTokens;
+      this.contexts.read(run.id)?.window ??
+      run.contextWindowTokens ??
+      (await firstTurnWindow(
+        this.adapterFor(agent),
+        this.partials,
+        model,
+        configDir,
+        contextWindow,
+      ));
     if (window === null || window <= 0) {
       return null;
     }

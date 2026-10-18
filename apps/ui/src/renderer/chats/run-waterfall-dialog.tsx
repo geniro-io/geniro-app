@@ -48,8 +48,10 @@ import type {
   WaterfallMark,
 } from './run-waterfall-geometry';
 import {
+  BY_SUB_AGENTS,
   callFailed,
   CONTEXT_PRESSURE,
+  costSplit,
   cumulativeSpend,
   endOf,
   laneIndexOf,
@@ -154,7 +156,7 @@ const FIGURE_HELP: Record<string, { what: string; example: string }> = {
       'You send one message, the agent reads twelve files, edits three and answers → 1 turn, 15 tools.',
   },
   tools: {
-    what: 'How many tool calls the run made — reads, edits, shell commands, MCP calls. Sub-agents are counted in their launcher’s total.',
+    what: 'How many tool calls the agents themselves made — reads, edits, shell commands, MCP calls. What their sub-agents called is counted apart, under the figure.',
     example:
       'An agent that greps a repo, opens nine files and runs the tests has already spent a dozen of these inside a single turn.',
   },
@@ -476,6 +478,10 @@ function Headline({
   span: number;
 }): React.JSX.Element {
   const tools = data.lanes.reduce((sum, lane) => sum + lane.toolCalls, 0);
+  const delegateTools = data.lanes.reduce(
+    (sum, lane) => sum + lane.delegateToolCalls,
+    0,
+  );
   // The LANES' own counts, summed — never `totals.turns`, which counts
   // `turn_complete` rows alone. A run the user stopped mid-turn writes none,
   // so the figure read `turns 0` directly above lanes saying `1 turn` and
@@ -544,11 +550,18 @@ function Headline({
         label="tools"
         help={<FigureHelp label="tools" />}
         value={formatCount(tools)}
-        hint={toolsTitle(tools)}
+        hint={toolsTitle(tools, delegateTools)}
         footnote={
-          data.calls.length === 0
-            ? undefined
-            : `${data.calls.length} agent calls${failed === 0 ? '' : `, ${failed} failed`}`
+          [
+            delegateTools === 0
+              ? null
+              : `+ ${formatCount(delegateTools)} ${BY_SUB_AGENTS}`,
+            data.calls.length === 0
+              ? null
+              : `${data.calls.length} agent calls${failed === 0 ? '' : `, ${failed} failed`}`,
+          ]
+            .filter((part) => part !== null)
+            .join(' · ') || undefined
         }
       />
     </StatGrid>
@@ -975,7 +988,12 @@ function ToolTable({
   focus: string | null | undefined;
 }): React.JSX.Element {
   const rows = toolRows(data, focus);
-  const total = rows.reduce((sum, row) => sum + row.calls, 0);
+  const own = rows.reduce((sum, row) => sum + row.calls, 0);
+  const delegated = rows.reduce((sum, row) => sum + row.delegateCalls, 0);
+  const total = own + delegated;
+  // A run whose agents launched no sub-agent keeps the table it had: a column
+  // of zeros says nothing.
+  const split = delegated > 0;
   if (rows.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
@@ -990,16 +1008,22 @@ function ToolTable({
       <div className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full table-fixed border-collapse text-xs">
           <colgroup>
-            <col className="w-[38%]" />
-            <col className="w-[38%]" />
+            <col className={cn(split ? 'w-[32%]' : 'w-[38%]')} />
+            <col className={cn(split ? 'w-[32%]' : 'w-[38%]')} />
             <col className="w-[12%]" />
+            {split ? <col className="w-[12%]" /> : null}
             <col className="w-[12%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-border bg-muted/30 text-[10px] tracking-wide text-muted-foreground uppercase">
               <th className="h-8 px-3 text-left font-medium">tool</th>
               <th className="h-8 px-3 text-left font-medium">share</th>
-              <th className="h-8 px-3 text-right font-medium">calls</th>
+              <th className="h-8 px-3 text-right font-medium">
+                {split ? 'own' : 'calls'}
+              </th>
+              {split ? (
+                <th className="h-8 px-3 text-right font-medium">sub-agents</th>
+              ) : null}
               <th className="h-8 px-3 text-right font-medium">of total</th>
             </tr>
           </thead>
@@ -1013,13 +1037,18 @@ function ToolTable({
                 </td>
                 <td className="h-9 px-3">
                   <ShareBar
-                    fraction={row.calls / (rows[0]?.calls ?? 1)}
+                    fraction={row.all / (rows[0]?.all ?? 1)}
                     colour={categoryToken(index)}
                   />
                 </td>
                 <td className="h-9 px-3 text-right font-medium tabular-nums text-foreground">
                   {formatCount(row.calls)}
                 </td>
+                {split ? (
+                  <td className="h-9 px-3 text-right tabular-nums text-foreground">
+                    {formatCount(row.delegateCalls)}
+                  </td>
+                ) : null}
                 <td className="h-9 px-3 text-right tabular-nums text-muted-foreground">
                   {/*
                     `formatPercent` takes a PERCENT, not a rate — handed the
@@ -1028,7 +1057,7 @@ function ToolTable({
                   */}
                   {total === 0
                     ? NOT_MEASURED
-                    : formatPercent((row.calls / total) * 100)}
+                    : formatPercent((row.all / total) * 100)}
                 </td>
               </tr>
             ))}
@@ -1036,7 +1065,7 @@ function ToolTable({
         </table>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {formatCount(total)} tool calls, sub-agents included
+        {toolsTitle(own, delegated)}
       </p>
     </div>
   );
@@ -1136,6 +1165,28 @@ function SpendCurve({
 }
 
 /**
+ * Which models a turn's cost went to, under its model's name — absent for a
+ * turn one model paid for whole.
+ */
+function TurnCostSplit({
+  turn,
+}: {
+  turn: RunWaterfallTurn;
+}): React.JSX.Element | null {
+  const split = costSplit(turn);
+  if (split === null) {
+    return null;
+  }
+  return (
+    <span
+      className="block truncate text-[10px] tabular-nums text-muted-foreground"
+      title={split}>
+      {split}
+    </span>
+  );
+}
+
+/**
  * Where the money went, turn by turn — the rows a reader acts on. A row
  * selects its turn on the gantt, so the detail panel can say the rest.
  */
@@ -1228,6 +1279,7 @@ function TopTurns({
                   <span className="block truncate">
                     {turn.model ?? NOT_MEASURED}
                   </span>
+                  <TurnCostSplit turn={turn} />
                 </td>
                 <td className="h-9 px-3">
                   <ShareBar

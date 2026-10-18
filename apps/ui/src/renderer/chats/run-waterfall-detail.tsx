@@ -14,6 +14,7 @@ import {
 import { formatTokens, formatUsd } from './agent-activity';
 import {
   blocksCaller,
+  BY_SUB_AGENTS,
   callFailed,
   type ClockWindow,
   CONTEXT_PRESSURE,
@@ -21,6 +22,7 @@ import {
   laneIndexOf,
   onCriticalPath,
   overlapMs,
+  splitParts,
   turnCacheShare,
   turnContextFill,
   type WaterfallMark,
@@ -351,6 +353,12 @@ function describeTurn(
               ? formatUsd(turn.costUsd)
               : `${formatUsd(turn.costUsd)} · ${formatPercent((turn.costUsd / total) * 100)} of the run`,
       },
+      // Which models that cost went to — the sub-agents' included, which the
+      // token rows below may not count.
+      ...(splitParts(turn) ?? []).map((part) => ({
+        label: part.model,
+        value: formatUsd(part.costUsd),
+      })),
       {
         label: turn.outcome === 'running' ? 'so far' : 'worked',
         value: formatTurnDuration(turn.durationMs),
@@ -372,6 +380,12 @@ function describeTurn(
         ? null
         : { label: 'model calls', value: formatCount(turn.numTurns) },
       { label: 'tools', value: formatCount(turn.toolCalls) },
+      turn.delegateToolCalls === 0
+        ? null
+        : {
+            label: BY_SUB_AGENTS,
+            value: formatCount(turn.delegateToolCalls),
+          },
       turn.inputTokens === null
         ? null
         : { label: 'fresh input', value: formatTokens(turn.inputTokens) },

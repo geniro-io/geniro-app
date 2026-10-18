@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { WorkflowAgentNode } from '../graphs.types';
-import { calleeSummary, flattenText } from './callee-text';
+import {
+  ANSWERING_A_CALL,
+  ANSWERING_WITH_CALLS_OUT,
+  calleeSummary,
+  flattenText,
+} from './callee-text';
 
 function agent(patch: Partial<WorkflowAgentNode> = {}): WorkflowAgentNode {
   return {
@@ -108,5 +113,22 @@ describe('calleeSummary', () => {
       10,
     );
     expect(summary).toBe('Reviewer (agent id: reviewer) — Reviews co…');
+  });
+});
+
+describe('what a callee is told about its answer', () => {
+  it('tells every callee its answer is its final turn’s reply, naming no tool', () => {
+    // Said to a callee that may call nobody, so it must not lean on the call
+    // tools that one is never handed.
+    expect(ANSWERING_A_CALL).toContain(
+      'Your answer to it is the reply you end your final turn in this call with',
+    );
+    expect(ANSWERING_A_CALL).not.toMatch(/call_agent|await_agent/);
+  });
+
+  it('tells a callee that can call that its own calls keep the answer owed', () => {
+    expect(ANSWERING_WITH_CALLS_OUT).toContain(
+      'does NOT hand back your result',
+    );
   });
 });

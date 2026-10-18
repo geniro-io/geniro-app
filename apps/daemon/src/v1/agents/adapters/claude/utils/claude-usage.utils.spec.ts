@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { catalogClaudePrices } from './__tests__/claude-list-prices';
 import { ClaudeCostTotalsFile } from './claude-cost-totals.utils';
@@ -224,6 +224,7 @@ describe('readClaudeUsage', () => {
       numTurns: null,
       promptCacheTtlMs: null,
       promptCacheTtlReason: null,
+      modelCosts: null,
     });
   });
 
@@ -639,6 +640,158 @@ describe('noteDelegateModel — per-process bookkeeping of announced models', ()
     // reads as news rather than as the suppressed repeat it would be if the
     // entry were still held.
     expect(ledger.noteDelegateModel('delegate-0', 'm')).toBe(true);
+  });
+});
+
+/**
+ * `modelUsage` as the CLI writes it: running per-model totals beside
+ * `total_cost_usd`, here a turn whose cost is mostly its sub-agents' model.
+ */
+describe('readClaudeUsage — the cost split by model', () => {
+  // Sonnet is listed FIRST, so a split that comes back haiku-first was sorted.
+  const line = (total: number, haiku: number, sonnet: number) => ({
+    type: 'result',
+    session_id: SESSION,
+    total_cost_usd: total,
+    modelUsage: {
+      'claude-sonnet-5-5': { inputTokens: 10, costUSD: sonnet },
+      'claude-haiku-5-5': { inputTokens: 10, costUSD: haiku },
+    },
+  });
+
+  it('reads a first turn’s split straight off modelUsage, costliest first', () => {
+    const usage = readClaudeUsage(
+      line(40.68, 39.03, 1.65),
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(usage.costUsd).toBeCloseTo(40.68, 9);
+    expect(usage.modelCosts).toEqual([
+      { model: 'claude-haiku-5-5', costUsd: 39.03 },
+      { model: 'claude-sonnet-5-5', costUsd: 1.65 },
+    ]);
+  });
+
+  it('steps each model like the total — a later turn is billed what it added', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    readClaudeUsage(line(3, 2, 1), ledger);
+    const second = readClaudeUsage(line(4.5, 2, 2.5), ledger);
+
+    expect(second.costUsd).toBeCloseTo(1.5, 9);
+    expect(second.modelCosts).toEqual([
+      { model: 'claude-sonnet-5-5', costUsd: 1.5 },
+    ]);
+  });
+
+  it('splits a resumed process that restores nothing from zero, like its total', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    ledger.seedForResume(SESSION, null);
+
+    expect(readClaudeUsage(line(3, 2, 1), ledger).modelCosts).toEqual([
+      { model: 'claude-haiku-5-5', costUsd: 2 },
+      { model: 'claude-sonnet-5-5', costUsd: 1 },
+    ]);
+  });
+
+  it('splits a total that went DOWN whole, as the cost step takes it', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    readClaudeUsage(line(10, 1, 9), ledger);
+
+    expect(readClaudeUsage(line(3, 2, 1), ledger).modelCosts).toEqual([
+      { model: 'claude-haiku-5-5', costUsd: 2 },
+      { model: 'claude-sonnet-5-5', costUsd: 1 },
+    ]);
+  });
+
+  it('reads a model keyed like an Object member as a model, not a property', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    const usage = readClaudeUsage(
+      {
+        type: 'result',
+        session_id: SESSION,
+        total_cost_usd: 2,
+        modelUsage: { constructor: { costUSD: 2 } },
+      },
+      ledger,
+    );
+
+    expect(usage.modelCosts).toEqual([{ model: 'constructor', costUsd: 2 }]);
+  });
+
+  it('steps a resumed process off the per-model totals its transcript restored', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    ledger.seedForResume(SESSION, {
+      costUsd: 3,
+      apiMs: null,
+      costByModel: { 'claude-haiku-5-5': 2, 'claude-sonnet-5-5': 1 },
+    });
+
+    expect(readClaudeUsage(line(4, 3, 1), ledger).modelCosts).toEqual([
+      { model: 'claude-haiku-5-5', costUsd: 1 },
+    ]);
+  });
+
+  it('withholds the split when the base it would step from has none', () => {
+    // A total kept before per-model figures were: the step is known, its
+    // split is not — and a whole running per-model total would not add up.
+    const ledger = new ClaudeSessionCostLedger();
+    ledger.seedForResume(SESSION, { costUsd: 3, apiMs: null });
+
+    const usage = readClaudeUsage(line(4, 3, 1), ledger);
+    expect(usage.costUsd).toBeCloseTo(1, 9);
+    expect(usage.modelCosts).toBeNull();
+  });
+
+  it('withholds the split of a turn whose cost was clipped to its own tokens', () => {
+    // A resumed process's first line: its split adds up to the $50 running
+    // total exactly, and both are history the ledger could not subtract.
+    const usage = readClaudeUsage(
+      {
+        type: 'result',
+        session_id: SESSION,
+        total_cost_usd: 50,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 1_000,
+          cache_read_input_tokens: 100_000,
+          cache_creation_input_tokens: 0,
+        },
+        modelUsage: {
+          'claude-opus-5': {
+            contextWindow: 1_000_000,
+            inputTokens: 100,
+            outputTokens: 1_000,
+            cacheReadInputTokens: 100_000,
+            cacheCreationInputTokens: 0,
+            costUSD: 50,
+          },
+        },
+      },
+      new ClaudeSessionCostLedger(LIST_PRICES),
+    );
+    expect(usage.costUsd).toBeLessThan(1);
+    expect(usage.modelCosts).toBeNull();
+  });
+
+  it('carries the per-model totals through a daemon restart', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-cost-totals-'));
+    const store = new ClaudeCostTotalsFile(join(dir, 'totals.json'));
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      readClaudeUsage(
+        line(3, 2, 1),
+        new ClaudeSessionCostLedger(undefined, store),
+      );
+      // The ledger flushes its totals one batched second after they move.
+      vi.advanceTimersByTime(1_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const after = new ClaudeSessionCostLedger(undefined, store);
+    expect(readClaudeUsage(line(3.5, 2.5, 1), after).modelCosts).toEqual([
+      { model: 'claude-haiku-5-5', costUsd: 0.5 },
+    ]);
   });
 });
 

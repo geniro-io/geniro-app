@@ -22,6 +22,7 @@ import {
 } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { type FakeChild, fakeSpawn } from '../../agents/__tests__/fake-child';
 import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
@@ -75,6 +76,8 @@ import { SessionTranscriptsService } from '../../agents/services/session-transcr
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
+import type { ModelPriceLookup } from '../../agents/utils/model-prices';
+import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import {
   WALL_CLOCK_ROW_KINDS,
   type WallClockRow,
@@ -89,6 +92,10 @@ import {
   type Workflow,
   type WorkflowNode,
 } from '../graphs.types';
+import {
+  ANSWERING_A_CALL,
+  ANSWERING_WITH_CALLS_OUT,
+} from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
@@ -624,6 +631,16 @@ class FakeAdapter {
   sessionsOpened = 0;
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
+
+  /**
+   * The SHIPPED adapter's session key for a turn — what decides whether a kept
+   * process may serve it, which this double's spawn never compares.
+   */
+  sessionKeyOf(input: AgentTurnInput): string {
+    return (
+      this.real as unknown as { sessionKey(input: AgentTurnInput): string }
+    ).sessionKey(input);
+  }
   /**
    * The REAL adapter for this kind, delegated to for every CLI-fact
    * declaration. The double fakes the SPAWN, never the contract: a
@@ -642,16 +659,44 @@ class FakeAdapter {
    * question on a caller.
    */
   projectsNoQuestion = false;
+  /**
+   * What `resolveModel` answers, by the name a turn asked for (`default` for
+   * none) — the stand-in for claude's `initialize` probe, which spawns. The
+   * probe itself is pinned in `claude.adapter.spec.ts`.
+   */
+  resolutions: Record<string, string> = {};
+  /** Every `resolveModel` the executor made, in order. */
+  readonly resolveCalls: { model: string | null; configDir: string | null }[] =
+    [];
+
   constructor(
     readonly kind: 'claude' | 'cursor-agent',
     modeProbe?: ClaudeModeProbe,
+    prices?: ModelPriceLookup,
   ) {
     this.real =
       kind === 'claude'
-        ? new ClaudeAdapter(modeProbe ? { modeProbe } : {})
+        ? new ClaudeAdapter({
+            ...(modeProbe ? { modeProbe } : {}),
+            ...(prices ? { prices } : {}),
+          })
         : new CursorAcpAdapter({
             vocabularyStore: freshVocabularyStore(),
           });
+  }
+  /** When set, `resolveModel` answers only once it settles — a slow probe. */
+  resolveGate: Promise<void> | null = null;
+  async resolveModel(
+    model: string | null,
+    configDir: string | null,
+  ): Promise<string | null> {
+    this.resolveCalls.push({ model, configDir });
+    await this.resolveGate;
+    return this.resolutions[model ?? 'default'] ?? model;
+  }
+  /** The SHIPPED adapter's answer, over the catalog the setup hands it. */
+  catalogWindow(model: string): number | null {
+    return this.real.catalogWindow(model);
   }
   getConfig(): AdapterConfig {
     return this.real.getConfig();
@@ -931,6 +976,18 @@ function setup(
     autoGroupId?: string | null;
     /** The MCP service a node turn's server report is checked against. */
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
+    /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
+    contextWindows?: Record<string, number>;
+    /** What claude resolves each name to — see `FakeAdapter.resolutions`. */
+    resolutions?: Record<string, string>;
+    /** The model catalog the claude adapter prices and sizes models from. */
+    prices?: ModelPriceLookup;
+    /**
+     * Runs claude nodes on the REAL adapter over this spawn instead of the
+     * double — for what only the shipped turn machinery does, such as holding
+     * a turn for a background delegate.
+     */
+    claudeSpawn?: SpawnFn;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -999,7 +1056,8 @@ function setup(
     ensureVerdict: claudeEnsureVerdict,
     wireCapability: () => claudeModes,
   };
-  const claude = new FakeAdapter('claude', claudeProbe);
+  const claude = new FakeAdapter('claude', claudeProbe, opts.prices);
+  claude.resolutions = opts.resolutions ?? {};
   const cursor = new FakeAdapter('cursor-agent');
   const runDao = new FakeRunDao();
   const itemDao = new FakeItemDao();
@@ -1127,7 +1185,7 @@ function setup(
   const spendStore = new FakeUnrecordedSpendStore();
   const partials = new PartialStreamService(
     bus,
-    new FakeContextWindowStore().asStore(),
+    new FakeContextWindowStore(opts.contextWindows).asStore(),
     spendStore.asStore(),
   );
   const deltas: RunDeltaEvent[] = [];
@@ -1232,7 +1290,13 @@ function setup(
     sessions,
     approvals,
     new AgentAdapterRegistry([
-      claude as unknown as ClaudeAdapter,
+      opts.claudeSpawn
+        ? new ClaudeAdapter({
+            spawn: opts.claudeSpawn,
+            waitForMcpServers: false,
+            modeProbe: claudeProbe,
+          })
+        : (claude as unknown as ClaudeAdapter),
       cursor as unknown as CursorAcpAdapter,
     ]),
     callTokens,
@@ -6010,6 +6074,15 @@ describe('GraphExecutorService — agent calls', () => {
       return { ...harness, run, eng, res: claude.starts[2]! };
     }
 
+    it('tells a callee with no callees of its own where its answer goes', async () => {
+      // The Researcher can call nobody, so it gets no "May call" block; the
+      // sentence must reach it on its own.
+      const { res } = await engineerDelegating();
+
+      expect(res.input.callSurfacePrompt).toBeNull();
+      expect(res.input.answeringACallPrompt).toBe(ANSWERING_A_CALL);
+    });
+
     it('HOLDS the Manager’s call while the Engineer’s research runs, and continues the Engineer INSIDE it', async () => {
       // REPORTED as "Manager picked back up — Senior Engineer finished
       // call-4" while the Middle Engineers it had started were still working,
@@ -6017,11 +6090,11 @@ describe('GraphExecutorService — agent calls', () => {
       const { claude, callBroker, run, eng, res, itemDao } =
         await engineerDelegating();
       // Told up front that delegating and ending its turn is not the answer.
-      expect(eng.input.callSurfacePrompt).toContain(
-        'You are answering a call from another agent',
-      );
+      expect(eng.input.answeringACallPrompt).toBe(ANSWERING_A_CALL);
+      expect(eng.input.callSurfacePrompt).toContain(ANSWERING_WITH_CALLS_OUT);
+      expect(claude.starts[0]!.input.answeringACallPrompt).toBeNull();
       expect(claude.starts[0]!.input.callSurfacePrompt).not.toContain(
-        'You are answering a call from another agent',
+        ANSWERING_WITH_CALLS_OUT,
       );
       completeTurn(eng, 'research dispatched — I will report when it lands');
       await drain();
@@ -11886,7 +11959,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       'cd web && pnpm dev:web',
     ]);
     expect(envelope.result.note).toBe(
-      "callee left 1 command(s) it started in this call running in the background: `cd web && pnpm dev:web`. They keep running after this result. To stop them, continue the conversation (call_agent with thread: 'call-1') and ask callee to; otherwise tell the user they are still running.",
+      "callee answered while 1 command(s) it started in the background were still running: `cd web && pnpm dev:web`. Its work may not be finished: they keep running after this result, and what they print arrives in its conversation (call_agent with thread: 'call-1'), which is also where it can be asked to stop them.",
     );
   });
 
@@ -11916,7 +11989,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     expect(envelope.result.commands_still_running).toBe(1);
     expect(envelope.result).not.toHaveProperty('running_commands');
     expect(envelope.result.note).toContain(
-      'callee left 1 command(s) it started in this call running in the background. ',
+      'callee answered while 1 command(s) it started in the background were still running. ',
     );
     expect(envelope.result.note).not.toContain('b7');
   });
@@ -11947,6 +12020,9 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     vi.spyOn(itemDao, 'toolCallsByIds').mockRejectedValueOnce(
       new Error('database is locked'),
     );
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => {});
     completeTurn(callee, 'up on :3050');
     const envelope = (await call) as { result: Record<string, unknown> };
 
@@ -11955,6 +12031,92 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       result: { text: 'up on :3050' },
     });
     expect(envelope.result).not.toHaveProperty('commands_still_running');
+    // Not swallowed: a note that silently stops appearing must leave a trace.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('commands left running failed'),
+    );
+    warn.mockRestore();
+  });
+
+  describe('commands an earlier call on the thread left running', () => {
+    /** The callee's first call, which leaves `pnpm dev:api` up. */
+    const firstCallLeavesServer = async (): Promise<{
+      run: { id: string };
+      claude: FakeAdapter;
+      callBroker: CallBroker;
+    }> => {
+      const { service, claude, callBroker } = setup();
+      const run = await service.startRun({
+        slug: 'bg',
+        workflow: triggered(CALL_WORKFLOW),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const first = callBroker.callAgent(run.id, 'a', {
+        title: 'up',
+        agent: 'callee',
+        message: 'bring the API up',
+      });
+      await drain();
+      const callee = claude.starts[1]!;
+      callee.emit({ type: 'session', sessionId: 'sess-callee' });
+      callee.emit({
+        type: 'tool_call',
+        id: 'toolu_srv',
+        name: 'Bash',
+        input: { command: 'pnpm dev:api', run_in_background: true },
+      });
+      callee.emit({
+        type: 'shell_open',
+        toolCallId: 'toolu_srv',
+        workId: 'b1',
+      });
+      completeTurn(callee, 'the API is up');
+      await first;
+      await drain();
+      return { run, claude, callBroker };
+    };
+
+    it('names one in a continuation’s result, with the call that started it', async () => {
+      // A continued thread answers in the same kept process: the server its
+      // first call started is still out when the second one answers.
+      const { run, claude, callBroker } = await firstCallLeavesServer();
+      const second = callBroker.callAgent(run.id, 'a', {
+        title: 'hit',
+        agent: 'callee',
+        message: 'now hit it',
+        thread: 'call-1',
+      });
+      await drain();
+      completeTurn(claude.starts[2]!, 'it answers 200');
+      const envelope = (await second) as {
+        result: Record<string, unknown> & { note: string };
+      };
+
+      expect(envelope.result.call_id).toBe('call-2');
+      expect(envelope.result.running_commands).toEqual(['pnpm dev:api']);
+      expect(envelope.result.note).toContain(
+        ': `pnpm dev:api` (started in call-1). Its work may not be finished',
+      );
+    });
+
+    it('names none in another conversation of the same agent', async () => {
+      const { run, claude, callBroker } = await firstCallLeavesServer();
+      // A fresh call, not a continuation: its own conversation and process.
+      const fresh = callBroker.callAgent(run.id, 'a', {
+        title: 'other',
+        agent: 'callee',
+        message: 'something else',
+      });
+      await drain();
+      completeTurn(claude.starts[2]!, 'done with that');
+      const envelope = (await fresh) as { result: Record<string, unknown> };
+
+      expect(envelope.result.call_id).toBe('call-2');
+      expect(envelope.result).not.toHaveProperty('commands_still_running');
+      expect(envelope.result).not.toHaveProperty('note');
+    });
   });
 
   it('hands the broker the callee’s cache lifetime and context, so a caller can judge a resume', async () => {
@@ -12789,6 +12951,67 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
   });
 
+  it('keeps a callee thread’s own window when a turn it ran on its own reports a delegate’s', async () => {
+    // The thread listing and the cold-resume refusal read this window: a
+    // delegate's smaller one would show the thread fuller than it is.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('helper')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'Helper',
+      message: 'build it',
+    });
+    await drain();
+    const helper = claude.starts[1]!;
+    helper.emit({ type: 'session', sessionId: 'sess-helper' });
+    helper.emit({ type: 'turn_model', model: 'claude-own-model' });
+    helper.emit({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextTokens: 50_000,
+        contextWindowTokens: 1_000_000,
+        contextModel: 'claude-own-model',
+      },
+      stopReason: 'end_turn',
+      finalText: 'started the build',
+    });
+    helper.finish();
+    await envelope;
+    await drain();
+
+    helper.emitOffTurn({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextTokens: 60_000,
+        contextWindowTokens: 200_000,
+        contextModel: 'a-delegate-model',
+      },
+      stopReason: 'end_turn',
+      finalText: 'the build passed',
+    });
+    await drain();
+
+    const listing = callBroker.listThreads(run.id, 'orch') as {
+      result: { threads: Record<string, unknown>[] };
+    };
+    expect(listing.result.threads).toEqual([
+      expect.objectContaining({
+        agent: 'helper',
+        context: expect.objectContaining({ tokens: 60_000, window: 1_000_000 }),
+      }),
+    ]);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('compacts a callee whose call WOKE the run after its pass ended', async () => {
     // A Dev Team run spends nearly all of its life AWAKE rather than in its
     // pass: the Manager dispatches, ends its turn, and every call after that
@@ -13081,6 +13304,399 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
   });
 
+  /** CHAIN with `a` naming its model by the alias claude resolves itself. */
+  const HAIKU_CHAIN: Workflow = {
+    ...CHAIN,
+    nodes: CHAIN.nodes.map((node) =>
+      node.id === 'a' && node.kind === 'agent'
+        ? { ...node, model: 'haiku' }
+        : node,
+    ),
+  };
+  /** What claude's own `initialize` says the aliases run as. */
+  const RESOLVES = {
+    haiku: 'claude-haiku-5-5',
+    default: 'claude-opus-5-5',
+  };
+  /** The window a turn of `claude-haiku-5-5` once measured. */
+  const HAIKU_MEASURED = {
+    [FakeContextWindowStore.key('claude', 'claude-haiku-5-5')]: 200_000,
+  };
+  /** Run CHAIN-shaped `workflow` once and hand back `a`'s first turn. */
+  const firstTurnOfA = async (
+    harness: ReturnType<typeof setup>,
+    workflow: Workflow,
+    prompt = 'go',
+  ): Promise<FakeTurn> => {
+    const before = turnsOf(harness.claude, 'role-a').length;
+    await harness.service.startRun({
+      slug: 'chain',
+      workflow: triggered(workflow),
+      cwd: dir,
+      prompt,
+    });
+    await drain();
+    return turnsOf(harness.claude, 'role-a')[before]!;
+  };
+  /** Settle `a`'s turn as `model`, reporting `window`, then settle `b`. */
+  const settleAs = async (
+    harness: ReturnType<typeof setup>,
+    turn: FakeTurn,
+    model: string,
+    window: number,
+  ): Promise<void> => {
+    turn.emit({ type: 'turn_model', model });
+    turn.emit({
+      type: 'turn_complete',
+      usage: { ...NO_USAGE, contextWindowTokens: window, contextModel: model },
+      stopReason: 'end_turn',
+      finalText: 'A done',
+    });
+    turn.finish();
+    await drain();
+    const b = turnsOf(harness.claude, 'role-b');
+    completeTurn(b[b.length - 1]!, 'B done');
+    await drain();
+  };
+
+  it('hands the CLI its threshold on a node’s FIRST turn, from the window the model it resolves to was measured at', async () => {
+    const harness = setup(undefined, {
+      contextWindows: HAIKU_MEASURED,
+      resolutions: RESOLVES,
+    });
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 200_000);
+  });
+
+  it('arms a node that names NO model from what the profile’s default resolves to', async () => {
+    const harness = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'claude-opus-5-5')]: 200_000,
+      },
+      resolutions: RESOLVES,
+    });
+    const first = await firstTurnOfA(harness, CHAIN);
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    await settleAs(harness, first, 'claude-opus-5-5', 200_000);
+  });
+
+  it('resolves the node’s model under the node’s own profile, and only for a node with a threshold', async () => {
+    const harness = setup(undefined, { resolutions: RESOLVES });
+    const first = await firstTurnOfA(harness, {
+      ...HAIKU_CHAIN,
+      nodes: HAIKU_CHAIN.nodes.map((node) =>
+        node.id === 'a' && node.kind === 'agent'
+          ? { ...node, configDir: dir }
+          : node,
+      ),
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 200_000);
+
+    // `b` has no threshold, so nothing was resolved for it.
+    expect(harness.claude.resolveCalls).toEqual([
+      { model: 'haiku', configDir: dir },
+    ]);
+  });
+
+  it('falls back to the catalog’s window for a model no turn has measured', async () => {
+    const harness = setup(undefined, {
+      resolutions: RESOLVES,
+      prices: {
+        priceOf: (provider, model) =>
+          provider === 'anthropic' && model === 'claude-haiku-5-5'
+            ? {
+                input: 1,
+                output: 5,
+                cacheRead: null,
+                cacheWrite: null,
+                tiers: [],
+                contextTokens: 1_000_000,
+              }
+            : null,
+      },
+    });
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 1_000_000);
+  });
+
+  /** models.dev listing `claude-haiku-5-5` at 1M. */
+  const HAIKU_CATALOG: ModelPriceLookup = {
+    priceOf: (provider, model) =>
+      provider === 'anthropic' && model === 'claude-haiku-5-5'
+        ? {
+            input: 1,
+            output: 5,
+            cacheRead: null,
+            cacheWrite: null,
+            tiers: [],
+            contextTokens: 1_000_000,
+          }
+        : null,
+  };
+
+  it('prefers the window a turn measured over the catalog’s', async () => {
+    const harness = setup(undefined, {
+      contextWindows: HAIKU_MEASURED,
+      resolutions: RESOLVES,
+      prices: HAIKU_CATALOG,
+    });
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 200_000);
+  });
+
+  it('never sizes a node with a window CHOICE from the catalog', async () => {
+    // The catalog states one window per model; a choice selects another.
+    const harness = setup(undefined, {
+      resolutions: RESOLVES,
+      prices: HAIKU_CATALOG,
+    });
+    const first = await firstTurnOfA(harness, {
+      ...HAIKU_CHAIN,
+      nodes: HAIKU_CHAIN.nodes.map((node) =>
+        node.id === 'a' && node.kind === 'agent'
+          ? { ...node, contextWindow: '1m' }
+          : node,
+      ),
+    });
+
+    expect(first.input.autoCompact).toBeUndefined();
+    await settleAs(harness, first, 'claude-haiku-5-5', 1_000_000);
+  });
+
+  it('launches no turn for a node whose run is stopped while its model is resolved', async () => {
+    const harness = setup(undefined, { resolutions: RESOLVES });
+    let release!: () => void;
+    harness.claude.resolveGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const run = await harness.service.startRun({
+      slug: 'chain',
+      workflow: triggered(HAIKU_CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(harness.claude.resolveCalls).toHaveLength(1);
+
+    await harness.service.cancel(run.id);
+    release();
+    await drain();
+
+    expect(turnsOf(harness.claude, 'role-a')).toHaveLength(0);
+  });
+
+  it('keeps the node’s own window when a delegate’s reading arrives in a turn that then fails', async () => {
+    // No settle overwrites the mid-turn reading here, so it is the guard on
+    // that reading alone that keeps the delegate's window off the node.
+    const harness = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'claude-haiku-5-5')]: 1_000_000,
+      },
+      resolutions: RESOLVES,
+    });
+    const { service, claude } = harness;
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    first.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+    first.emit({
+      type: 'context_progress',
+      contextTokens: 10_000,
+      contextWindowTokens: 200_000,
+      contextModel: 'a-delegate-model',
+    });
+    first.emit({ type: 'error', message: 'boom' });
+    first.finish();
+    await drain();
+    const run = [...harness.runDao.runs.values()][0]!;
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    completeTurn(second, 'ok');
+    await drain();
+    const b = turnsOf(claude, 'role-b');
+    if (b.length > 0) {
+      completeTurn(b[b.length - 1]!, 'ok');
+      await drain();
+    }
+  });
+
+  it('looks the first-turn window up at the node’s window CHOICE', async () => {
+    const harness = setup(undefined, {
+      contextWindows: {
+        ...HAIKU_MEASURED,
+        [FakeContextWindowStore.key('claude', 'claude-haiku-5-5', '1m')]:
+          1_000_000,
+      },
+      resolutions: RESOLVES,
+    });
+    const first = await firstTurnOfA(harness, {
+      ...HAIKU_CHAIN,
+      nodes: HAIKU_CHAIN.nodes.map((node) =>
+        node.id === 'a' && node.kind === 'agent'
+          ? { ...node, contextWindow: '1m' }
+          : node,
+      ),
+    });
+
+    expect(first.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    await settleAs(harness, first, 'claude-haiku-5-5', 1_000_000);
+  });
+
+  it('serves a node’s second turn under the session key its first was spawned with', async () => {
+    // The flag is argv and joins `sessionKey`: a threshold first appearing on
+    // turn two would respawn the node's CLI there.
+    const harness = setup(undefined, {
+      contextWindows: HAIKU_MEASURED,
+      resolutions: RESOLVES,
+    });
+    const { service, claude } = harness;
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    first.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+    fillAndComplete(first, 10_000, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+    const run = [...harness.runDao.runs.values()][0]!;
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.prompt).toContain('next');
+    expect(second.input.autoCompact).toEqual(first.input.autoCompact);
+    expect(claude.sessionKeyOf(second.input)).toBe(
+      claude.sessionKeyOf(first.input),
+    );
+    completeTurn(second, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  it('lets the node’s own reading override its model’s known window when the two differ', async () => {
+    const harness = setup(undefined, {
+      contextWindows: HAIKU_MEASURED,
+      resolutions: RESOLVES,
+    });
+    const { service, claude } = harness;
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    first.emit({
+      type: 'context_progress',
+      contextTokens: 10_000,
+      contextWindowTokens: 1_000_000,
+    });
+    completeTurn(first, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+    const run = [...harness.runDao.runs.values()][0]!;
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    completeTurn(second, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  it('keeps the node’s own window when a delegate’s model out-spends it', async () => {
+    // `modelUsage` names the model that spent the most, and that can be a
+    // delegate on a smaller window: taken as the node's, it would compact the
+    // node at a share of the DELEGATE's window and respawn its CLI.
+    const harness = setup(undefined, {
+      contextWindows: {
+        [FakeContextWindowStore.key('claude', 'claude-haiku-5-5')]: 1_000_000,
+      },
+      resolutions: RESOLVES,
+    });
+    const { service, claude } = harness;
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    first.emit({ type: 'turn_model', model: 'claude-haiku-5-5' });
+    // 150k is 15% of the node's window and 75% of the delegate's — over the
+    // node's 50% only if a delegate's window is taken as the node's.
+    first.emit({
+      type: 'context_progress',
+      contextTokens: 150_000,
+      contextWindowTokens: 200_000,
+      contextModel: 'a-delegate-model',
+    });
+    first.emit({
+      type: 'turn_complete',
+      usage: {
+        ...NO_USAGE,
+        contextTokens: 150_000,
+        contextWindowTokens: 200_000,
+        contextModel: 'a-delegate-model',
+      },
+      stopReason: 'end_turn',
+      finalText: 'A done',
+    });
+    first.finish();
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+    const run = [...harness.runDao.runs.values()][0]!;
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    // The node's next turn is the message, not a compaction.
+    const second = turnsOf(claude, 'role-a')[1]!;
+    expect(second.input.prompt).toContain('next');
+    expect(second.input.autoCompact).toEqual(first.input.autoCompact);
+    expect(second.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 1_000_000,
+    });
+    completeTurn(second, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
+    await drain();
+  });
+
+  it('arms the next run’s first turn from the window its model measured in this one', async () => {
+    const harness = setup(undefined, { resolutions: RESOLVES });
+    const first = await firstTurnOfA(harness, HAIKU_CHAIN);
+    expect(first.input.autoCompact).toBeUndefined();
+    await settleAs(harness, first, 'claude-haiku-5-5', 200_000);
+
+    const next = await firstTurnOfA(harness, HAIKU_CHAIN, 'again');
+    expect(next.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    await settleAs(harness, next, 'claude-haiku-5-5', 200_000);
+  });
+
   it('a run cancelled mid-compaction cancels the compaction and settles', async () => {
     const { service, claude, runDao } = setup();
     const run = await service.startRun({
@@ -13098,5 +13714,254 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
     expect(compaction.cancelled).toBe(true);
     expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+  });
+});
+
+describe('GraphExecutorService — a claude callee whose sub-agent outlives its turn', () => {
+  const WORKFLOW: Workflow = {
+    name: 'held',
+    nodes: [
+      { id: 'orch', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
+      {
+        id: 'rev',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You review.',
+      },
+    ],
+    edges: [{ from: 'orch', to: 'rev', kind: 'call' as const }],
+  };
+
+  /** One stream-json line from the callee's claude, as the CLI prints it. */
+  const line = (child: FakeChild, message: Record<string, unknown>): void =>
+    child.stdout.emitData(
+      `${JSON.stringify({ session_id: 's-rev', ...message })}\n`,
+    );
+
+  it('settles the call on the continuation’s answer, not on the turn that launched the sub-agent', async () => {
+    // claude's background-work note promises a callee that ending its turn
+    // keeps the call open and that it is started again with the results —
+    // this is that promise, through the real claude turn machinery.
+    const { spawn, child } = fakeSpawn();
+    const { service, callBroker, itemDao } = setup(4870, {
+      claudeSpawn: spawn,
+    });
+    const run = await service.startRun({
+      slug: 'held',
+      workflow: triggered(WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'review',
+      agent: 'rev',
+      message: 'review the diff',
+      mode: 'async',
+    });
+    // The real adapter spawns after async preparation of its own: a line the
+    // CLI "prints" before the prompt reached it would land on no turn.
+    await vi.waitFor(() =>
+      expect(child.stdin.written).toContain('review the diff'),
+    );
+    const collect = () =>
+      callBroker.awaitAgent(run.id, 'orch', {
+        call_id: 'call-1',
+        timeout_ms: 10,
+      });
+
+    // Probed on 2.1.295 with the session-state env geniro sets: `running`
+    // comes first, ahead of `init`. Without it the hold reads as a CLI that
+    // never says when its turn is over, and is released on the report.
+    line(child, {
+      type: 'system',
+      subtype: 'session_state_changed',
+      state: 'running',
+    });
+    line(child, { type: 'system', subtype: 'init' });
+    line(child, {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_review',
+            name: 'Agent',
+            input: {
+              description: 'Review: bugs',
+              prompt: 'Find bugs in the diff.',
+              run_in_background: true,
+            },
+          },
+        ],
+      },
+    });
+    line(child, {
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'a-review',
+      tool_use_id: 'toolu_review',
+      description: 'Review: bugs',
+      task_type: 'local_agent',
+    });
+    line(child, {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_review',
+            content: 'Async agent launched successfully.',
+          },
+        ],
+      },
+    });
+    line(child, {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'The reviewer is running.',
+      stop_reason: 'end_turn',
+    });
+    await drain();
+
+    // The stream was consumed through the line before the result — a held
+    // result itself writes nothing, so this is the last durable proof it was
+    // read before the call is asked about…
+    expect(itemDao.items).toContainEqual(
+      expect.objectContaining({
+        kind: 'tool_result',
+        payload: expect.stringContaining('Async agent launched successfully.'),
+      }),
+    );
+    // …and with its sub-agent out, the turn's ending leaves the call open.
+    expect(await collect()).toMatchObject({ status: 'pending' });
+
+    line(child, {
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'a-review',
+      tool_use_id: 'toolu_review',
+      status: 'completed',
+    });
+    line(child, {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'REVIEW: one bug, in parse().' }],
+      },
+    });
+    line(child, {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'REVIEW: one bug, in parse().',
+      stop_reason: 'end_turn',
+      origin: { kind: 'task-notification' },
+    });
+    line(child, {
+      type: 'system',
+      subtype: 'session_state_changed',
+      state: 'idle',
+    });
+    await drain();
+
+    expect(await collect()).toMatchObject({
+      status: 'ok',
+      result: { text: 'REVIEW: one bug, in parse().' },
+    });
+  });
+
+  it('hands a plain auto node’s CONTINUATION downstream, not the turn that launched the sub-agent', async () => {
+    // A node that neither calls nor answers a call used to run one-shot with
+    // its stdin closed, where nothing held its turn: "LAUNCHED" went
+    // downstream. It runs on a kept process now, held like every other.
+    const PLAIN: Workflow = {
+      name: 'plain',
+      nodes: [
+        {
+          id: 'rev',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You review.',
+        },
+        { id: 'next', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
+      ],
+      edges: [{ from: 'rev', to: 'next', kind: 'data' as const }],
+    };
+    const { spawn, child } = fakeSpawn();
+    const { service, cursor } = setup(4870, { claudeSpawn: spawn });
+    await service.startRun({
+      slug: 'plain',
+      workflow: triggered(PLAIN),
+      cwd: dir,
+      prompt: 'review the diff',
+    });
+    await vi.waitFor(() =>
+      expect(child.stdin.written).toContain('review the diff'),
+    );
+
+    line(child, {
+      type: 'system',
+      subtype: 'session_state_changed',
+      state: 'running',
+    });
+    line(child, { type: 'system', subtype: 'init' });
+    line(child, {
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'a-review',
+      tool_use_id: 'toolu_review',
+      description: 'Review: bugs',
+      task_type: 'local_agent',
+    });
+    line(child, {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'LAUNCHED',
+      stop_reason: 'end_turn',
+    });
+    await drain();
+    // Held: the node has not finished, so nothing downstream has started.
+    expect(child.stdin.ended).toBe(false);
+    expect(cursor.starts).toEqual([]);
+
+    line(child, {
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'a-review',
+      tool_use_id: 'toolu_review',
+      status: 'completed',
+    });
+    line(child, {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'REVIEW: one bug, in parse().' }],
+      },
+    });
+    line(child, {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'REVIEW: one bug, in parse().',
+      stop_reason: 'end_turn',
+      origin: { kind: 'task-notification' },
+    });
+    line(child, {
+      type: 'system',
+      subtype: 'session_state_changed',
+      state: 'idle',
+    });
+    await drain();
+
+    const downstream = cursor.starts[0]!.input.prompt;
+    expect(downstream).toContain('REVIEW: one bug, in parse().');
+    expect(downstream).not.toContain('LAUNCHED');
   });
 });

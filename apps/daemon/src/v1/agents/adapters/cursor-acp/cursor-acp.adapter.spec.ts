@@ -100,6 +100,9 @@ function sessionUpdate(payload: Record<string, unknown>): string {
   });
 }
 
+/** What every user-facing cursor turn leads with: the preamble, then its note. */
+const HOST_BLOCK = `${GENIRO_UI_PREAMBLE}\n\n${new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }).getConfig().backgroundWork.agentNote}`;
+
 /** The two `*_once` options every ACP permission request must offer. */
 const ONCE_OPTIONS = [
   { optionId: 'o-allow', name: 'Allow', kind: 'allow_once' },
@@ -414,9 +417,7 @@ describe('CursorAcpAdapter spawn', () => {
       sessionId: 'sess-9',
       // ACP carries no system-prompt field, so the host preamble rides the
       // prompt text itself — ahead of the user's message, on every turn.
-      prompt: [
-        { type: 'text', text: `ship it\n\n${hostBlock(GENIRO_UI_PREAMBLE)}` },
-      ],
+      prompt: [{ type: 'text', text: `ship it\n\n${hostBlock(HOST_BLOCK)}` }],
     });
   });
 });
@@ -752,7 +753,7 @@ describe('CursorAcpAdapter turn shaping', () => {
     // The node role still leads the user's message; the host preamble sits
     // ahead of both, per composeTurnInstructions' general → specific order.
     expect(prompt.prompt[0]?.text).toBe(
-      `ship it\n\n${hostBlock(`${GENIRO_UI_PREAMBLE}\n\nYou are a reviewer.`)}`,
+      `ship it\n\n${hostBlock(`${HOST_BLOCK}\n\nYou are a reviewer.`)}`,
     );
   });
 
@@ -780,7 +781,7 @@ describe('CursorAcpAdapter turn shaping', () => {
       (frame) => frame.method === 'session/prompt',
     )?.params as { prompt: { text: string }[] };
     expect(prompt.prompt[0]?.text).toBe(
-      `ship it\n\n${hostBlock(`${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.`)}`,
+      `ship it\n\n${hostBlock(`${HOST_BLOCK}\n\nAlways answer in British English.`)}`,
     );
   });
 
@@ -812,7 +813,7 @@ describe('CursorAcpAdapter turn shaping', () => {
       (frame) => frame.method === 'session/prompt',
     )?.params as { prompt: { text: string }[] };
     expect(prompt.prompt[0]?.text).toBe(
-      `ship it\n\n${hostBlock(`${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nPrefer short sentences.\n\nYou are a reviewer.`)}`,
+      `ship it\n\n${hostBlock(`${HOST_BLOCK}\n\nAlways answer in British English.\n\nPrefer short sentences.\n\nYou are a reviewer.`)}`,
     );
   });
 
@@ -3017,18 +3018,14 @@ describe('CursorAcpAdapter misuse', () => {
         ?.params,
     ).toEqual({
       sessionId: 'sess-a',
-      prompt: [
-        { type: 'text', text: `turn A\n\n${hostBlock(GENIRO_UI_PREAMBLE)}` },
-      ],
+      prompt: [{ type: 'text', text: `turn A\n\n${hostBlock(HOST_BLOCK)}` }],
     });
     expect(
       framesOn(childB).find((frame) => frame.method === 'session/prompt')
         ?.params,
     ).toEqual({
       sessionId: 'sess-b',
-      prompt: [
-        { type: 'text', text: `turn B\n\n${hostBlock(GENIRO_UI_PREAMBLE)}` },
-      ],
+      prompt: [{ type: 'text', text: `turn B\n\n${hostBlock(HOST_BLOCK)}` }],
     });
   });
   describe('listModels', () => {

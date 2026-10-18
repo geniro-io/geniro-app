@@ -1,6 +1,7 @@
 import { EntityManager, type FilterQuery, raw } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
+import type { ExpressionBuilder } from 'kysely';
 
 import { Item } from '../../runs/entity/item.entity';
 import type { ItemKind } from '../../runs/runs.types';
@@ -109,6 +110,26 @@ function seqFilter(range: SeqRange | undefined): {
     : { seq: { $gt: range.after } };
 }
 
+/**
+ * One field of an item's JSON payload — null, never a thrown error, for a row
+ * whose payload is not JSON: SQLite's `json_extract` throws on malformed text,
+ * which would fail the whole read over one row.
+ */
+function payloadField<T = string | null>(
+  eb: ExpressionBuilder<ChatTextDatabase, 'items'>,
+  path: string,
+) {
+  return eb.fn<T>('json_extract', [
+    eb
+      .case()
+      .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
+      .then(eb.ref('payload'))
+      .else(eb.val('{}'))
+      .end(),
+    eb.val(path),
+  ]);
+}
+
 @Injectable()
 export class ItemDao extends BaseDao<Item> {
   constructor(em: EntityManager) {
@@ -156,16 +177,7 @@ export class ItemDao extends BaseDao<Item> {
       .where('role', '=', 'user')
       .where('deleted_at', 'is', null)
       .where(
-        (eb) =>
-          eb.fn<string>('json_extract', [
-            eb
-              .case()
-              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-              .then(eb.ref('payload'))
-              .else(eb.val('{}'))
-              .end(),
-            eb.val('$.clientMessageId'),
-          ]),
+        (eb) => payloadField<string>(eb, '$.clientMessageId'),
         '=',
         clientMessageId,
       )
@@ -636,23 +648,13 @@ export class ItemDao extends BaseDao<Item> {
         .getKysely<ChatTextDatabase>({ convertValues: false })
         .selectFrom('items')
         .select((eb) => {
-          const field = (path: string) =>
-            eb.fn<string | null>('json_extract', [
-              eb
-                .case()
-                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-                .then(eb.ref('payload'))
-                .else(eb.val('{}'))
-                .end(),
-              eb.val(path),
-            ]);
           return [
             'seq',
             'kind',
             'node_id',
             'created_at',
-            field('$.id').as('card_id'),
-            field('$.callId').as('call_id'),
+            payloadField(eb, '$.id').as('card_id'),
+            payloadField(eb, '$.callId').as('call_id'),
           ];
         })
         .where('run_id', '=', runId)
@@ -744,23 +746,13 @@ export class ItemDao extends BaseDao<Item> {
         .getKysely<ChatTextDatabase>({ convertValues: false })
         .selectFrom('items')
         .select((eb) => {
-          const field = (path: string) =>
-            eb.fn<string | null>('json_extract', [
-              eb
-                .case()
-                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-                .then(eb.ref('payload'))
-                .else(eb.val('{}'))
-                .end(),
-              eb.val(path),
-            ]);
           return [
             'seq',
             'kind',
             'node_id',
             'created_at',
-            field('$.id').as('card_id'),
-            field('$.callId').as('call_id'),
+            payloadField(eb, '$.id').as('card_id'),
+            payloadField(eb, '$.callId').as('call_id'),
           ];
         })
         .where('run_id', '=', runId)
@@ -1195,10 +1187,6 @@ export class ItemDao extends BaseDao<Item> {
    * names its six kinds. `json_extract` does it inside the engine and about
    * twenty rows come back: 237ms on that same run.
    *
-   * A raw query rather than the query builder because MikroORM has no grouping
-   * over a JSON path, and it is safe to render: `runId` is the only value in
-   * it and it is bound by the driver's own escaping, with `LIMIT` a literal.
-   *
    * A row whose payload names no tool is dropped by the `not null` — a call
    * geniro could not read is not a tool anybody can be told about.
    *
@@ -1208,41 +1196,79 @@ export class ItemDao extends BaseDao<Item> {
    * states the measurements behind it — which is also why this groups by the
    * raw name and the fold re-aggregates, rather than the engine answering with
    * the final rows.
+   *
+   * `delegate` splits the agent's OWN calls from its CLI sub-agents' — the rows
+   * carrying `parentToolUseId`, filed under the launching agent's lane.
    */
   async toolUsage(
     runId: string,
     limit: number,
     txEm?: EntityManager,
   ): Promise<ToolUsageGroup[]> {
-    const em = txEm ?? this.em;
-    const rows = await em.getConnection().execute<
-      {
-        node_id: string | null;
-        tool_name: string;
-        tool_kind: string | null;
-        calls: number;
-      }[]
-    >(
-      `select node_id,
-              json_extract(payload, '$.name') as tool_name,
-              json_extract(payload, '$.toolKind') as tool_kind,
-              count(*) as calls
-         from items
-        where run_id = ?
-          and kind = 'tool_call'
-          and deleted_at is null
-          and json_extract(payload, '$.name') is not null
-        group by node_id, tool_name, tool_kind
-        order by calls desc
-        limit ?`,
-      [runId, limit],
-    );
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom((db) =>
+        db
+          .selectFrom('items')
+          .select((eb) => {
+            return [
+              'node_id',
+              payloadField(eb, '$.name').as('tool_name'),
+              payloadField(eb, '$.toolKind').as('tool_kind'),
+              eb(payloadField(eb, '$.parentToolUseId'), 'is not', null).as(
+                'delegate',
+              ),
+            ];
+          })
+          .where('run_id', '=', runId)
+          .where('kind', '=', 'tool_call')
+          .where('deleted_at', 'is', null)
+          .as('tool_calls'),
+      )
+      .select((eb) => [
+        'node_id',
+        'tool_name',
+        'tool_kind',
+        'delegate',
+        eb.fn.countAll<number>().as('calls'),
+      ])
+      .where('tool_name', 'is not', null)
+      .groupBy(['node_id', 'tool_name', 'tool_kind', 'delegate'])
+      .orderBy('calls', 'desc')
+      .limit(limit)
+      .execute();
     return rows.map((row) => ({
       nodeId: row.node_id,
       name: String(row.tool_name),
       toolKind: row.tool_kind === null ? null : String(row.tool_kind),
+      delegate: Boolean(row.delegate),
       calls: Number(row.calls),
     }));
+  }
+
+  /**
+   * The seqs of one run's SUB-AGENT tool calls — `tool_call` rows carrying
+   * `parentToolUseId` — up to `maxSeq`: what lets the payload-free spine tell
+   * an agent's own calls from its delegates'. Only the seq crosses.
+   */
+  async delegateToolCallSeqs(
+    runId: string,
+    txEm?: EntityManager,
+    maxSeq?: number,
+  ): Promise<number[]> {
+    let query = (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('seq')
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'tool_call')
+      .where('deleted_at', 'is', null)
+      .where((eb) => payloadField(eb, '$.parentToolUseId'), 'is not', null);
+    if (maxSeq !== undefined) {
+      query = query.where('seq', '<=', maxSeq);
+    }
+    const rows = await query.execute();
+    return rows.map((row) => row.seq);
   }
 
   /**
@@ -1264,30 +1290,19 @@ export class ItemDao extends BaseDao<Item> {
     const rows = await em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
-      .select((eb) => {
-        const payload = eb
-          .case()
-          .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-          .then(eb.ref('payload'))
-          .else(eb.val('{}'))
-          .end();
-        return [
-          'seq',
-          'kind',
-          'node_id',
-          'in_call',
-          'created_at',
-          eb
-            .fn<string | null>('json_extract', [payload, eb.val('$.id')])
-            .as('tool_id'),
-          eb
-            .fn<string | null>('json_extract', [payload, eb.val('$.name')])
-            .as('tool_name'),
-          eb
-            .fn<number | null>('json_extract', [payload, eb.val('$.isError')])
-            .as('tool_is_error'),
-        ];
-      })
+      .select((eb) => [
+        'seq',
+        'kind',
+        'node_id',
+        'in_call',
+        'created_at',
+        payloadField(eb, '$.id').as('tool_id'),
+        payloadField(eb, '$.name').as('tool_name'),
+        payloadField<number | null>(eb, '$.isError').as('tool_is_error'),
+        eb(payloadField(eb, '$.parentToolUseId'), 'is not', null).as(
+          'delegate',
+        ),
+      ])
       .where('run_id', '=', runId)
       .where('kind', 'in', ['tool_call', 'tool_result'])
       .where('seq', '<=', maxSeq)
@@ -1302,6 +1317,7 @@ export class ItemDao extends BaseDao<Item> {
       at: Number(row.created_at),
       toolId: row.tool_id === null ? null : String(row.tool_id),
       name: row.tool_name === null ? null : String(row.tool_name),
+      delegate: Boolean(row.delegate),
       // SQLite's json_extract answers a JSON `true` as 1.
       isError: row.kind === 'tool_result' && Number(row.tool_is_error) === 1,
     }));
@@ -1474,32 +1490,14 @@ export class ItemDao extends BaseDao<Item> {
     }
     if (pick.ownThread === true) {
       heads = heads.where(
-        (eb) =>
-          eb.fn<string | null>('json_extract', [
-            eb
-              .case()
-              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-              .then(eb.ref('payload'))
-              .else(eb.val('{}'))
-              .end(),
-            eb.val('$.parentToolUseId'),
-          ]),
+        (eb) => payloadField(eb, '$.parentToolUseId'),
         'is',
         null,
       );
     }
     if (pick.snapshot === true) {
       heads = heads.where(
-        (eb) =>
-          eb.fn<string>('json_extract', [
-            eb
-              .case()
-              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-              .then(eb.ref('payload'))
-              .else(eb.val('{}'))
-              .end(),
-            eb.val('$.mode'),
-          ]),
+        (eb) => payloadField<string>(eb, '$.mode'),
         '=',
         'snapshot',
       );
@@ -1512,15 +1510,7 @@ export class ItemDao extends BaseDao<Item> {
         (eb) =>
           eb.fn<string>('trim', [
             eb.fn<string>('coalesce', [
-              eb.fn<string>('json_extract', [
-                eb
-                  .case()
-                  .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-                  .then(eb.ref('payload'))
-                  .else(eb.val('{}'))
-                  .end(),
-                eb.val(`$.${said}`),
-              ]),
+              payloadField<string>(eb, `$.${said}`),
               eb.val(''),
             ]),
             eb.val(' \t\n\r'),
@@ -1568,16 +1558,7 @@ export class ItemDao extends BaseDao<Item> {
         .where('kind', 'in', [...kinds])
         .where('deleted_at', 'is', null)
         .where(
-          (eb) =>
-            eb.fn<string>('json_extract', [
-              eb
-                .case()
-                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-                .then(eb.ref('payload'))
-                .else(eb.val('{}'))
-                .end(),
-              eb.val('$.id'),
-            ]),
+          (eb) => payloadField<string>(eb, '$.id'),
           'in',
           ids.slice(at, at + PAYLOAD_ID_BATCH),
         )
@@ -1610,17 +1591,7 @@ export class ItemDao extends BaseDao<Item> {
         'kind',
         'seq',
         'in_call',
-        eb
-          .fn<string | null>('json_extract', [
-            eb
-              .case()
-              .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-              .then(eb.ref('payload'))
-              .else(eb.val('{}'))
-              .end(),
-            eb.val('$.callId'),
-          ])
-          .as('call_id'),
+        payloadField(eb, '$.callId').as('call_id'),
       ])
       .where('run_id', '=', runId)
       .where('kind', 'in', ['call_started', 'call_result'])
@@ -1672,20 +1643,7 @@ export class ItemDao extends BaseDao<Item> {
         .where('run_id', '=', runId)
         .where('kind', '=', 'call_started')
         .where('deleted_at', 'is', null)
-        .where(
-          (eb) =>
-            eb.fn<string>('json_extract', [
-              eb
-                .case()
-                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-                .then(eb.ref('payload'))
-                .else(eb.val('{}'))
-                .end(),
-              eb.val('$.callId'),
-            ]),
-          'in',
-          [...callIds],
-        )
+        .where((eb) => payloadField<string>(eb, '$.callId'), 'in', [...callIds])
         .execute()
     ).map((row) => row.id);
     return this.getRepo(em).find(
@@ -2181,15 +2139,7 @@ export class ItemDao extends BaseDao<Item> {
       .where(
         (eb) =>
           eb.fn<number>('coalesce', [
-            eb.fn<number>('json_extract', [
-              eb
-                .case()
-                .when(eb.fn('json_valid', [eb.ref('payload')]), '=', 1)
-                .then(eb.ref('payload'))
-                .else(eb.val('{}'))
-                .end(),
-              eb.val('$.insideTurn'),
-            ]),
+            payloadField<number>(eb, '$.insideTurn'),
             eb.val(0),
           ]),
         '=',

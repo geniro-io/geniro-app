@@ -151,19 +151,22 @@ describe('breakdownRows', () => {
 });
 
 describe('toolRows', () => {
-  it('folds the same tool across agents into one row, busiest first', () => {
+  it('folds the same tool across agents into one row, busiest counting sub-agents first', () => {
     const data = wfDto(100, {
       toolUse: [
-        { nodeId: 'mgr', name: 'Read', calls: 3 },
-        { nodeId: 'eng', name: 'Bash', calls: 2 },
-        { nodeId: 'eng', name: 'Read', calls: 4 },
+        { nodeId: 'mgr', name: 'Read', calls: 3, delegateCalls: 0 },
+        { nodeId: 'eng', name: 'Bash', calls: 2, delegateCalls: 7 },
+        { nodeId: 'eng', name: 'Read', calls: 4, delegateCalls: 1 },
       ],
     });
 
+    // Bash has fewer own calls than Read but more in all, so it ranks first.
     expect(toolRows(data, undefined)).toEqual([
-      { name: 'Read', calls: 7 },
-      { name: 'Bash', calls: 2 },
+      { name: 'Bash', calls: 2, delegateCalls: 7, all: 9 },
+      { name: 'Read', calls: 7, delegateCalls: 1, all: 8 },
     ]);
-    expect(toolRows(data, 'mgr')).toEqual([{ name: 'Read', calls: 3 }]);
+    expect(toolRows(data, 'mgr')).toEqual([
+      { name: 'Read', calls: 3, delegateCalls: 0, all: 3 },
+    ]);
   });
 });

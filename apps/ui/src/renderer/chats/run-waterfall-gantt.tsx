@@ -28,6 +28,7 @@ import {
 import { formatTokens, formatUsd } from './agent-activity';
 import {
   blocksCaller,
+  BY_SUB_AGENTS,
   callFailed,
   type ClockWindow,
   CONTEXT_PRESSURE,
@@ -37,7 +38,9 @@ import {
   type Placed,
   placeIn,
   sameMark,
+  splitParts,
   stackRows,
+  toolsCaption,
   toolsTitle,
   TURN_OUTCOME_CLASS,
   turnCacheShare,
@@ -359,17 +362,10 @@ function LaneLabel({
   faded: boolean;
   onFocus: () => void;
 }): React.JSX.Element {
-  // THREE lines, each with one job, and none of them allowed to wrap.
-  //
-  // It was name / kind / then the three figures in a `flex gap-2`, and at
-  // 168px that flex wrapped: `5` sat above `turns` and `220` above `tools`, so
-  // the column read as a broken table rather than as a caption. REPORTED as
-  // "левое описание каждого агента неправильное, и всё там как-то криво".
-  //
-  // The money moves to the END of the name row — a right-aligned column the
-  // eye can run down across lanes — and the two counts share the last line as
-  // one nowrap phrase. Everything truncates rather than wrapping, because a
-  // shortened node name is readable where a reflowed figure is not.
+  // Name, then kind and turns, then the tools — one job per line. At this
+  // width a wrapped figure stacks above its unit, so every line truncates
+  // instead: a shortened node name is readable where a reflowed figure is not.
+  // The money ends the name row, a right-aligned column across lanes.
   //
   // A BUTTON, because pressing it focuses the agent: the other lanes fade and
   // the tables under the gantt narrow to this one.
@@ -398,12 +394,15 @@ function LaneLabel({
           {lane.costUsd === null ? NOT_MEASURED : formatUsd(lane.costUsd)}
         </span>
       </span>
+      <span className="truncate pl-3.5 text-[11px] whitespace-nowrap text-muted-foreground">
+        {lane.agentKind ?? NOT_MEASURED} · {lane.turns}{' '}
+        {lane.turns === 1 ? 'turn' : 'turns'}
+      </span>
+      {/* Its own line, so the label width never cuts the tool split. */}
       <span
         className="truncate pl-3.5 text-[11px] whitespace-nowrap text-muted-foreground"
-        title={toolsTitle(lane.toolCalls)}>
-        {lane.agentKind ?? NOT_MEASURED} · {lane.turns}{' '}
-        {lane.turns === 1 ? 'turn' : 'turns'} · {formatCount(lane.toolCalls)}{' '}
-        tools
+        title={toolsTitle(lane.toolCalls, lane.delegateToolCalls)}>
+        {toolsCaption(lane.toolCalls, lane.delegateToolCalls)}
       </span>
     </button>
   );
@@ -1244,6 +1243,12 @@ export function turnRows(
 ): TooltipRow[] {
   const rows: TooltipRow[] = [
     measuredRow('cost', turn.costUsd === null ? null : formatUsd(turn.costUsd)),
+    // Which models that cost went to — the sub-agents' included, which the
+    // token rows below may not count.
+    ...(splitParts(turn) ?? []).map((part) => ({
+      label: part.model,
+      value: formatUsd(part.costUsd),
+    })),
     {
       label: turn.outcome === 'running' ? 'so far' : 'worked',
       value: formatTurnDuration(turn.durationMs),
@@ -1253,6 +1258,14 @@ export function turnRows(
       value: formatTurnDuration(Date.parse(turn.startedAt) - runFrom),
     },
     { label: 'tools', value: formatCount(turn.toolCalls) },
+    ...(turn.delegateToolCalls === 0
+      ? []
+      : [
+          {
+            label: BY_SUB_AGENTS,
+            value: formatCount(turn.delegateToolCalls),
+          },
+        ]),
     { label: 'model', value: turn.model ?? '—' },
   ];
   if (turn.apiMs !== null) {

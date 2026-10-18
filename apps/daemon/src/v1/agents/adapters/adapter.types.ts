@@ -263,6 +263,23 @@ export interface AgentUsage {
    * reason was given, the ordinary case.
    */
   promptCacheTtlReason?: PromptCacheTtlReason | null;
+  /**
+   * {@link costUsd} split by the model that spent it — the turn's own model
+   * beside every model its sub-agents and side calls ran on — costliest first.
+   *
+   * The split exists because a turn's TOKEN fields can be its main thread's
+   * alone (claude's `usage`) while its cost covers everything, so tokens times
+   * price does not reproduce the cost without it. Reported only when the parts
+   * sum to {@link costUsd}; optional and null alike mean no CLI-stated split.
+   */
+  modelCosts?: AgentModelCost[] | null;
+}
+
+/** One model's share of a turn's cost — see {@link AgentUsage.modelCosts}. */
+export interface AgentModelCost {
+  /** The model id as the CLI keyed it. */
+  model: string;
+  costUsd: number;
 }
 
 // ── What the window currently HOLDS ─────────────────────────────────────────
@@ -1841,6 +1858,9 @@ export interface FollowUpMessage {
 export interface AgentModel {
   id: string;
   label: string;
+  resolvedModel?: string;
+  /** Numeric window reported by the CLI; never inferred from a choice label. */
+  contextTokens?: number;
   /** How this entry was obtained — the UI says so when it is not live. */
   source: 'cli' | 'builtin' | 'ollama';
   unavailableReason?: string;
@@ -2997,7 +3017,10 @@ export interface ApprovalResolution {
 export interface TurnAutoCompact {
   /** Whole percent of the window, 10–95 — `AutoCompactPercentSchema`'s range. */
   percent: number;
-  /** The MODEL's own window in tokens, as this conversation last measured it. */
+  /**
+   * The MODEL's own window in tokens: as this conversation last measured it,
+   * or before its first reading, as that model was last measured anywhere.
+   */
   windowTokens: number;
 }
 
@@ -3201,6 +3224,13 @@ export interface AgentTurnInput {
    * and their order is the precedence rule.
    */
   callSurfacePrompt?: string | null;
+  /**
+   * Set on every turn that answers a call: where that answer goes. Its own
+   * field rather than part of {@link callSurfacePrompt}: a callee with no
+   * callees gets no "May call" block, and that block is dropped when the call
+   * tools are not delivered, while this text names no tool.
+   */
+  answeringACallPrompt?: string | null;
   /**
    * Tool-approval mode. `ask` blocks each permission-gated tool call on a
    * user verdict (elicitation card); `acceptEdits` auto-approves file edits
@@ -4132,6 +4162,29 @@ export interface AdapterConfig {
      * is the client's own list of the same names, matched exactly too.
      */
     readonly launchToolNames: readonly string[];
+  };
+
+  /**
+   * What the agent is told about work it leaves running when its turn ends.
+   */
+  readonly backgroundWork: {
+    /**
+     * Composed into every user-facing turn right after the host preamble, and
+     * served on `GET /v1/capabilities` → `backgroundWorkNotes[]`. Null for a
+     * CLI with nothing to say.
+     *
+     * Per CLI because the truth differs: geniro holds a claude or cursor turn —
+     * and the call it answers — open while its background sub-agents run and
+     * starts it again with their reports, while a codex turn settles the moment
+     * it ends. An agent told nothing assumes the terminal it was built for and
+     * polls with `sleep` for results that would have woken it. Every sentence
+     * must hold for its CLI; re-check them against the hold whenever it moves.
+     *
+     * Static text only: nothing keys a kept process on it, so a process keeps
+     * the text it started with — on claude's argv, and on ACP the block sent
+     * once per session.
+     */
+    readonly agentNote: string | null;
   };
 
   /**
@@ -5103,6 +5156,13 @@ export type AdapterListPrice =
       readonly kind: 'catalog';
       /** The catalog provider the CLI's model ids are that provider's API ids under. */
       readonly provider: ModelPriceProvider;
+      /**
+       * Whether the catalog's context window for a model is the window this
+       * CLI enforces — what a turn's `--autocompact` threshold may be a share
+       * of before the CLI has reported one itself. A MEASUREMENT per CLI: the
+       * catalog states the vendor API's limit, and a CLI can apply its own.
+       */
+      readonly catalogWindows: boolean;
     }
   | {
       readonly kind: 'unavailable';

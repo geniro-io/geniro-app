@@ -16,6 +16,7 @@ import { RunWaterfallDialog } from './run-waterfall-dialog';
 import {
   callFailed,
   place,
+  toolsCaption,
   toolsTitle,
   TURN_OUTCOME_CLASS,
   turnTitle,
@@ -102,21 +103,15 @@ const WaterfallLane = memo(function WaterfallLane({
           );
         })}
       </div>
-      <div className="flex gap-2 text-[11px] tabular-nums text-muted-foreground">
-        <span>
+      {/* Wraps rather than truncating, so a narrow panel keeps the whole tool split. */}
+      <div className="flex flex-wrap gap-x-2 text-[11px] tabular-nums text-muted-foreground">
+        <span className="shrink-0">
           {lane.turns} {lane.turns === 1 ? 'turn' : 'turns'}
         </span>
-        {/*
-          The daemon folds this off the payload-free spine, so a delegate's
-          tool calls land in the lane of the agent that launched it — and the
-          agent card directly above states `Run.toolCalls`, the agent's OWN
-          toolbelt, which on a fan-out thread is a fraction of this figure
-          (measured: 237 against 636). Two figures about one lane, differing
-          nearly threefold, with nothing saying why — so this says why, the
-          same answer `conversation-timeline.tsx` gives for its message count.
-        */}
-        <span title={toolsTitle(lane.toolCalls)}>{lane.toolCalls} tools</span>
-        <span className="ml-auto">
+        <span title={toolsTitle(lane.toolCalls, lane.delegateToolCalls)}>
+          {toolsCaption(lane.toolCalls, lane.delegateToolCalls)}
+        </span>
+        <span className="ml-auto shrink-0">
           {lane.workedMs === null
             ? NOT_MEASURED
             : formatDuration(lane.workedMs)}

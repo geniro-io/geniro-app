@@ -59,6 +59,7 @@ import { codexTurnMcpOverrides } from './utils/codex-mcp.utils';
 import {
   baselineOf,
   type CodexSpend,
+  type CodexSubagentsSpend,
   readTokenUsage,
   spendBetween,
   sumSpends,
@@ -953,7 +954,7 @@ export class CodexTurnDriver {
   }
 
   /** The sub-agents' spend no turn has recorded yet. */
-  private subagentSpend(): CodexSpend | null {
+  private subagentSpend(): CodexSubagentsSpend | null {
     return this.session.subagentSpend.unbilled(
       (model) => this.session.listPriceOf(model),
       this.session.threadModel,

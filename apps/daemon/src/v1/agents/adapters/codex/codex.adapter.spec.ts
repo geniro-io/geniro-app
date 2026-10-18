@@ -207,6 +207,26 @@ describe('CodexAdapter config', () => {
     expect(config.auth.inheritedEnvKeys).not.toContain('CODEX_HOME');
   });
 
+  it('never sizes a turn from the catalog, whose window codex does not enforce', async () => {
+    // models.dev states gpt-6.1-sol at 1,050,000; codex enforces 475,000 by
+    // default and 828,400 at `872k` (measured 2026-10-16).
+    const adapter = adapterWith({
+      prices: {
+        priceOf: () => ({
+          input: 1,
+          output: 5,
+          cacheRead: null,
+          cacheWrite: null,
+          tiers: [],
+          contextTokens: 1_050_000,
+        }),
+      },
+    });
+    expect(adapter.catalogWindow('gpt-6.1-sol')).toBeNull();
+    // codex's model names are its ids: nothing to resolve.
+    expect(await adapter.resolveModel('gpt-6.1-sol', null)).toBe('gpt-6.1-sol');
+  });
+
   it('recognises codex’s own usage-limit wording and when it resets', () => {
     const adapter = adapterWith();
     expect(
@@ -376,6 +396,11 @@ describe('the turn', () => {
     const withheld = instructionsFor(input);
     expect(withheld).toContain('ROLE: review the parser');
     expect(withheld).not.toContain('MAY CALL: researcher');
+    // The thread's own instructions are where codex hears that its turn is
+    // not held for sub-agents — the one CLI told to wait rather than end.
+    expect(withheld).toContain(
+      adapterWith().getConfig().backgroundWork.agentNote!,
+    );
   });
 
   it('hands a conversation to the terminal as `codex -m <model> resume <id>`', () => {

@@ -239,7 +239,7 @@ describe('Onboarding', () => {
 
     // claude is now non-ready and visibly so — but the auto-expand already
     // fired once and must not re-open cards after later degradations.
-    expect(container.textContent).toContain('not installed');
+    expect(container.textContent).toContain('Not installed');
     expect(pathInput('claude')).toBeNull();
   });
 
@@ -262,6 +262,29 @@ describe('Onboarding', () => {
       },
     });
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks which agent to start with on the first-launch step, not on the agents step', async () => {
+    await mount();
+    expect(container.querySelector('#first-agent')).toBeNull();
+
+    await click(buttonByText('Continue'));
+    await click(buttonByText('Skip for now'));
+    await click(container.querySelector<HTMLButtonElement>('#first-agent')!);
+    const cursor = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((option) => option.textContent?.includes('cursor-agent'));
+    await act(async () => {
+      cursor!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await click(buttonByText('Open chat'));
+
+    expect(geniro.completeOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({ lastChatTarget: 'cursor-agent' }),
+    );
+    expect(onDone).toHaveBeenCalledWith(
+      expect.objectContaining({ route: 'chat', agent: 'cursor-agent' }),
+    );
   });
 
   it('explains the three concepts before agent setup, with four steps', async () => {

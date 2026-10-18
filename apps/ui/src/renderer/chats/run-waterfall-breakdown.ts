@@ -207,7 +207,12 @@ export function breakdownRows(
 
 export interface ToolRow {
   name: string;
+  /** The agents' own calls. */
   calls: number;
+  /** Their CLI sub-agents' calls, filed under the agent that launched them. */
+  delegateCalls: number;
+  /** Both together — what the row is ranked and shared by. */
+  all: number;
 }
 
 /**
@@ -220,14 +225,21 @@ export function toolRows(
   data: RunWaterfallDto,
   focus: string | null | undefined,
 ): ToolRow[] {
-  const byName = new Map<string, number>();
+  const byName = new Map<string, { calls: number; delegateCalls: number }>();
   for (const use of data.toolUse) {
     if (focus !== undefined && use.nodeId !== focus) {
       continue;
     }
-    byName.set(use.name, (byName.get(use.name) ?? 0) + use.calls);
+    const row = byName.get(use.name) ?? { calls: 0, delegateCalls: 0 };
+    row.calls += use.calls;
+    row.delegateCalls += use.delegateCalls;
+    byName.set(use.name, row);
   }
   return [...byName.entries()]
-    .map(([name, calls]) => ({ name, calls }))
-    .sort((a, b) => b.calls - a.calls);
+    .map(([name, row]) => ({
+      name,
+      ...row,
+      all: row.calls + row.delegateCalls,
+    }))
+    .sort((a, b) => b.all - a.all);
 }

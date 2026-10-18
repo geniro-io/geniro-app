@@ -26,6 +26,7 @@ function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
     costUsd: 12.5,
     turns: 2,
     toolCalls: 40,
+    delegateToolCalls: 0,
     workedMs: 600_000,
     ...over,
   };
@@ -39,12 +40,14 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
     timingSource: 'cli',
     outcome: 'completed',
     toolCalls: 0,
+    delegateToolCalls: 0,
     durationMs: 60_000,
     apiMs: null,
     ttftMs: null,
     timeToRequestMs: null,
     numTurns: null,
     costUsd: 1,
+    modelCosts: null,
     model: 'opus-5',
     inputTokens: null,
     outputTokens: null,
@@ -299,18 +302,31 @@ describe('RunWaterfall', () => {
     expect(view.querySelector('li')).toBeNull();
   });
 
-  it('says whose tools it counted, because the card above counts fewer', () => {
-    // The fold reads the payload-free spine, so a delegate's calls land in its
-    // launcher's lane — while the agent card directly above this one states
-    // `Run.toolCalls`, the agent's own toolbelt. Measured on a real fan-out
-    // thread: 237 there against 636 here. Unqualified, the larger figure reads
-    // as one of the two being wrong.
+  it('states a lane’s own tool calls apart from its sub-agents’', () => {
+    // The card states the agent's own figure, and the sum appears nowhere.
+    const view = show(
+      dto({ lanes: [lane({ toolCalls: 845, delegateToolCalls: 1_041 })] }),
+    );
+
+    const tools = [...view.querySelectorAll('span')].find(
+      (node) => node.textContent === '845 own + 1,041 by sub-agents',
+    );
+    expect(tools?.getAttribute('title')).toBe(
+      '845 tool calls made by the agents themselves, 1,041 by their sub-agents',
+    );
+    expect(view.textContent).not.toContain('1,886');
+  });
+
+  it('says only the own count for a lane no sub-agent worked in', () => {
     const view = show(dto({ lanes: [lane({ toolCalls: 636 })] }));
 
-    const tools = [...view.querySelectorAll('span')].find((node) =>
-      node.textContent?.includes('636 tools'),
+    const tools = [...view.querySelectorAll('span')].find(
+      (node) => node.textContent === '636 tools',
     );
-    expect(tools?.getAttribute('title')).toContain('sub-agents included');
+    // The hover no longer claims sub-agents are folded into the figure.
+    expect(tools?.getAttribute('title')).toBe(
+      '636 tool calls made by the agents themselves',
+    );
   });
 
   it('keeps a span that starts at the very end inside its lane', () => {

@@ -9,7 +9,6 @@ import type {
 } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { callIdOf, callNumber } from '../../agents/utils/call-seed';
-import { redactSecrets } from '../../diagnostics/utils/redact';
 import type {
   CalleePoolPlan,
   CalleeTurnOutcome,
@@ -31,11 +30,7 @@ import {
   poolSize,
 } from '../utils/agent-pool';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
-import {
-  flattenText,
-  LEFT_RUNNING_COMMAND_MAX,
-  PUBLISHED_PAGES_NOTE,
-} from '../utils/callee-text';
+import { PUBLISHED_PAGES_NOTE, quotedCommand } from '../utils/callee-text';
 import {
   callerConversationOf,
   callerKey,
@@ -3885,6 +3880,18 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * The ids of the calls recorded on the callee conversation `conversationId`
+   * (its first call's id) — the calls whose rows that conversation wrote. A
+   * call is recorded once it settles, so the one settling now is not listed.
+   */
+  recordedCallsOf(runId: string, conversationId: string): string[] {
+    const state = this.runs.get(runId);
+    return state === undefined
+      ? []
+      : threadEntriesOf(state, conversationId).map(([callId]) => callId);
+  }
+
+  /**
    * A page is being published inside call `callId` (see
    * {@link callAnsweredBy}): record it on that call AND on every call above it
    * still running, so each caller up the chain is told in its envelope — a
@@ -4813,15 +4820,17 @@ function toEnvelope(
     const stillOut = outcome.delegatesStillOut ?? 0;
     const callsOut = outcome.callsStillOut ?? 0;
     const commandsOut = outcome.shellsStillOut?.length ?? 0;
-    // Redacted: the words go to the CALLER's provider, and a command line
-    // can carry a credential (`TOKEN=… pnpm dev`).
-    const commands = (outcome.shellsStillOut ?? []).flatMap((command) => {
-      const line =
-        command === null
-          ? ''
-          : flattenText(redactSecrets(command), LEFT_RUNNING_COMMAND_MAX);
-      return line === '' ? [] : [line];
+    const quoted = (outcome.shellsStillOut ?? []).flatMap((shell) => {
+      const line = shell.command === null ? '' : quotedCommand(shell.command);
+      return line === '' ? [] : [{ line, callId: shell.callId }];
     });
+    const commands = quoted.map((shell) => shell.line);
+    // A command an earlier call on the thread started says so: a server the
+    // caller asked for then is not work this call left unfinished.
+    const listed = quoted.map(
+      (shell) =>
+        `${inlineCode(shell.line)}${shell.callId === callId ? '' : ` (started in ${shell.callId})`}`,
+    );
     // Said IN the envelope, because the text alone reads as a finished
     // answer — which is exactly how a partial one was taken for done.
     const notes = [
@@ -4837,7 +4846,9 @@ function toEnvelope(
         : []),
       ...(commandsOut > 0
         ? [
-            `${calleeId} left ${commandsOut} command(s) it started in this call running in the background${commands.length > 0 ? `: ${commands.map(inlineCode).join('; ')}` : ''}. They keep running after this result. To stop them, continue the conversation (call_agent with thread: '${callId}') and ask ${calleeId} to; otherwise tell the user they are still running.`,
+            // Facts, not orders: a test run still going is as likely as a
+            // server the caller asked for, and nothing here tells them apart.
+            `${calleeId} answered while ${commandsOut} command(s) it started in the background were still running${listed.length > 0 ? `: ${listed.join('; ')}` : ''}. Its work may not be finished: they keep running after this result, and what they print arrives in its conversation (call_agent with thread: '${callId}'), which is also where it can be asked to stop them.`,
           ]
         : []),
       ...(published.size > 0 ? [PUBLISHED_PAGES_NOTE] : []),
@@ -4936,13 +4947,22 @@ function conversationCache(
   return { ...facts, promptCacheTtlMs: ttl };
 }
 
+/** Every recorded call of one conversation, by call id. */
+function threadEntriesOf(
+  state: RunCallState,
+  conversationId: string,
+): [string, ThreadRecord][] {
+  return [...state.threads.entries()].filter(
+    ([, thread]) => thread.conversationId === conversationId,
+  );
+}
+
 /** Every call of one conversation, in call order. */
 function callsOfConversation(
   state: RunCallState,
   conversationId: string,
 ): ThreadRecord[] {
-  return [...state.threads.entries()]
-    .filter(([, thread]) => thread.conversationId === conversationId)
+  return threadEntriesOf(state, conversationId)
     .sort(([a], [b]) => byCallNumber(a, b))
     .map(([, thread]) => thread);
 }

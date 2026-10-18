@@ -7,17 +7,19 @@ import type {
   RunWaterfallCall,
   RunWaterfallDelegate,
   RunWaterfallLane,
+  RunWaterfallModelCost,
   RunWaterfallTurn,
   RunWaterfallWait,
   RunWaterfallWire,
 } from '../chat.types';
 import type { ChatTotalsWire, RunWaterfallFold } from '../chat.types';
-import { HOST_QUESTION_TOOL } from '../chat.types';
+import { HOST_QUESTION_TOOL, MAX_WATERFALL_LABEL_CHARS } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { isUserQuestion } from '../utils/approval-answer';
 import { asBoolean, asNumber, asRecord, asString } from '../utils/json-util';
+import { splitOf } from '../utils/model-costs';
 import { delegateIdOf } from '../utils/open-delegates';
 import {
   addPolledSpendToTotals,
@@ -164,11 +166,13 @@ export class ChatWaterfallService {
     if (run === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    const [spine, payloadRows, nodeStates] = await Promise.all([
+    const [spine, payloadRows, nodeStates, delegateSeqs] = await Promise.all([
       this.itemDao.timelineSpine(runId, em, maxSeq),
       this.itemDao.waterfallPayloadRows(runId, em, maxSeq),
       this.nodeStateDao.listByRun(runId, em),
+      this.itemDao.delegateToolCallSeqs(runId, em, maxSeq),
     ]);
+    const delegated = new Set(delegateSeqs);
 
     if (spine.length === 0) {
       return null;
@@ -192,6 +196,7 @@ export class ChatWaterfallService {
         (a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt),
       ),
       spine,
+      delegated,
     );
     const calls = foldCalls(payloadRows, working, to);
     const waits = foldWaits(payloadRows);
@@ -244,6 +249,7 @@ export class ChatWaterfallService {
     const lanes = foldLanes({
       selfPricedCost: selfPricedCost(payloadRows, agentKinds, pollsSpend),
       spine,
+      delegated,
       turnStarts: laneTurnStarts(payloadRows),
       turns,
       agentKinds,
@@ -461,12 +467,14 @@ function foldTurns(
       timingSource: usable === null ? 'derived' : 'cli',
       outcome: 'completed',
       toolCalls: 0,
+      delegateToolCalls: 0,
       durationMs,
       apiMs: asNumber(usage.apiMs),
       ttftMs: asNumber(usage.ttftMs),
       timeToRequestMs: asNumber(usage.timeToRequestMs),
       numTurns: asNumber(usage.numTurns),
       costUsd: asNumber(usage.costUsd),
+      modelCosts: readModelCosts(usage.modelCosts, asNumber(usage.costUsd)),
       model: asString(usage.contextModel),
       inputTokens: asNumber(usage.inputTokens),
       outputTokens: asNumber(usage.outputTokens),
@@ -476,6 +484,35 @@ function foldTurns(
     });
   }
   return { turns: out, ends };
+}
+
+/**
+ * A `turn_complete`'s cost split as the adapter stored it — re-checked against
+ * the row's own cost, since the row is read back from disk, and limited to
+ * entries the wire can carry.
+ */
+function readModelCosts(
+  value: unknown,
+  costUsd: number | null,
+): RunWaterfallModelCost[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const entries: RunWaterfallModelCost[] = [];
+  for (const item of value) {
+    const entry = asRecord(item);
+    const model = asString(entry?.model);
+    const cost = asNumber(entry?.costUsd);
+    if (
+      model === null ||
+      cost === null ||
+      model.length > MAX_WATERFALL_LABEL_CHARS
+    ) {
+      return null;
+    }
+    entries.push({ model, costUsd: cost });
+  }
+  return splitOf(entries, costUsd);
 }
 
 /** One (node, call) conversation — the grain a turn opens and closes on. */
@@ -509,12 +546,14 @@ function bracketedTurn(
     timingSource: 'derived',
     outcome,
     toolCalls: 0,
+    delegateToolCalls: 0,
     durationMs,
     apiMs: null,
     ttftMs: null,
     timeToRequestMs: null,
     numTurns: null,
     costUsd: null,
+    modelCosts: null,
     model: null,
     inputTokens: null,
     outputTokens: null,
@@ -653,46 +692,56 @@ function foldUnfinishedChatTurns(
 }
 
 /**
- * Each turn's own tool count: the lane's tool calls inside its span.
+ * Each turn's tool counts: the lane's tool calls inside its span, the agent's
+ * own apart from its CLI sub-agents' (`delegated`, by seq).
  *
- * Off the payload-free spine like the lane's total, so a delegate's calls count
- * in the turn that launched it — the lane's own `sub-agents included` wording
- * covers it. Two concurrent calls on one node overlap, and a tool call inside
- * both is counted in both: the spine names no call, and the figure says what
- * happened while the turn ran rather than claiming an owner.
+ * A delegate's calls land in the lane, and so the turn, that launched it. Two
+ * concurrent calls on one node overlap, and a tool call inside both is counted
+ * in both: the spine names no call, and the figure says what happened while the
+ * turn ran rather than claiming an owner.
  */
 function withToolCounts(
   turns: RunWaterfallTurn[],
   spine: readonly SpineRow[],
+  delegated: ReadonlySet<number>,
 ): RunWaterfallTurn[] {
-  const times = new Map<string | null, number[]>();
+  const own = new Map<string | null, number[]>();
+  const delegates = new Map<string | null, number[]>();
   for (const row of spine) {
     if (row.kind !== 'tool_call') {
       continue;
     }
-    const own = times.get(row.nodeId);
-    if (own === undefined) {
-      times.set(row.nodeId, [row.createdAt.getTime()]);
+    const byLane = delegated.has(row.seq) ? delegates : own;
+    const times = byLane.get(row.nodeId);
+    if (times === undefined) {
+      byLane.set(row.nodeId, [row.createdAt.getTime()]);
     } else {
-      own.push(row.createdAt.getTime());
+      times.push(row.createdAt.getTime());
     }
   }
-  for (const own of times.values()) {
-    own.sort((a, b) => a - b);
+  for (const times of [...own.values(), ...delegates.values()]) {
+    times.sort((a, b) => a - b);
   }
-  return turns.map((turn) => {
-    const own = times.get(turn.nodeId);
-    if (own === undefined) {
-      return turn;
+  const inside = (
+    times: readonly number[] | undefined,
+    turn: RunWaterfallTurn,
+  ): number => {
+    if (times === undefined) {
+      return 0;
     }
     const startMs = Date.parse(turn.startedAt);
     // Both ends inclusive: a tool call landing on the very instant a turn
     // opened or closed belongs to it.
-    const inside =
-      countBefore(own, (at) => at <= startMs + turn.durationMs) -
-      countBefore(own, (at) => at < startMs);
-    return { ...turn, toolCalls: inside };
-  });
+    return (
+      countBefore(times, (at) => at <= startMs + turn.durationMs) -
+      countBefore(times, (at) => at < startMs)
+    );
+  };
+  return turns.map((turn) => ({
+    ...turn,
+    toolCalls: inside(own.get(turn.nodeId), turn),
+    delegateToolCalls: inside(delegates.get(turn.nodeId), turn),
+  }));
 }
 
 /** How many leading entries of sorted `times` satisfy `before` (a prefix test). */
@@ -1056,18 +1105,15 @@ function laneCost(
  * The tool count is read off the SPINE, which carries no payload — which is
  * what makes a lane affordable on a run holding thousands of tool calls.
  *
- * A DELEGATE's tool calls are therefore counted in the lane of the agent that
- * launched it: what separates the two is `payload.parentToolUseId`, and the
- * spine deliberately carries no payload, so the exclusion every sibling fold
- * applies is unreachable here without paying for the text column — the same
- * trade {@link ChatTimelineService} makes for its message count. It is answered
- * by the WORDING rather than by a filter: the card says `sub-agents included`
- * on that figure, because it sits directly under an agent card stating
- * `Run.toolCalls`, which is the agent's OWN toolbelt and is legitimately a
- * fraction of this one (measured on a fan-out thread: 237 against 636).
+ * A DELEGATE's tool calls land in the lane of the agent that launched it and
+ * are counted apart (`delegated`, the seqs `ItemDao.delegateToolCallSeqs`
+ * found): `toolCalls` is the agent's own, matching the `Run.toolCalls` its
+ * agent card states, and `delegateToolCalls` its CLI sub-agents'.
  */
 function foldLanes(input: {
   spine: readonly SpineRow[];
+  /** Seqs of the spine's sub-agent tool calls. */
+  delegated: ReadonlySet<number>;
   turnStarts: ReadonlyMap<string | null, number>;
   turns: readonly RunWaterfallTurn[];
   agentKinds: ReadonlyMap<string | null, AgentKind | null>;
@@ -1075,20 +1121,27 @@ function foldLanes(input: {
   /** Per lane, what its self-pricing turns cost ({@link selfPricedCost}). */
   selfPricedCost: ReadonlyMap<string | null, number>;
 }): RunWaterfallLane[] {
-  const { spine, turnStarts, turns, agentKinds, polledByNode, selfPricedCost } =
-    input;
-  const lanes = new Map<
-    string | null,
-    { toolCalls: number; turnRows: number }
-  >();
-  const laneFor = (
-    nodeId: string | null,
-  ): { toolCalls: number; turnRows: number } => {
+  const {
+    spine,
+    delegated,
+    turnStarts,
+    turns,
+    agentKinds,
+    polledByNode,
+    selfPricedCost,
+  } = input;
+  type LaneCounts = {
+    toolCalls: number;
+    delegateToolCalls: number;
+    turnRows: number;
+  };
+  const lanes = new Map<string | null, LaneCounts>();
+  const laneFor = (nodeId: string | null): LaneCounts => {
     const existing = lanes.get(nodeId);
     if (existing !== undefined) {
       return existing;
     }
-    const fresh = { toolCalls: 0, turnRows: 0 };
+    const fresh = { toolCalls: 0, delegateToolCalls: 0, turnRows: 0 };
     lanes.set(nodeId, fresh);
     return fresh;
   };
@@ -1111,7 +1164,11 @@ function foldLanes(input: {
       lane.turnRows += 1;
       continue;
     }
-    lane.toolCalls += 1;
+    if (delegated.has(row.seq)) {
+      lane.delegateToolCalls += 1;
+    } else {
+      lane.toolCalls += 1;
+    }
   }
   // A turn still running is work too, even before it has called a tool — an
   // agent's first minutes are routinely spent reading its brief and thinking.
@@ -1154,6 +1211,7 @@ function foldLanes(input: {
           // wrote.
           turns: Math.max(lane.turnRows, turnStarts.get(nodeId) ?? 0),
           toolCalls: lane.toolCalls,
+          delegateToolCalls: lane.delegateToolCalls,
           // The CLI's OWN time only. A derived span is drawn so the lane is
           // visible; summing it here would report a measurement nobody made.
           workedMs:
@@ -1172,7 +1230,7 @@ function foldLanes(input: {
       // does not have, so the two cases stay apart by construction.
       .filter(
         (lane) =>
-          lane.toolCalls > 0 ||
+          lane.toolCalls + lane.delegateToolCalls > 0 ||
           turns.some((turn) => turn.nodeId === lane.nodeId),
       )
   );

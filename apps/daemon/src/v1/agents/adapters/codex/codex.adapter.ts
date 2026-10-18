@@ -214,6 +214,13 @@ export class CodexAdapter extends AgentAdapter {
         // as a `subagent_info` row; nothing admits it by a tool name.
         launchToolNames: [],
       },
+      backgroundWork: {
+        // Nothing holds a codex turn: `onTurnCompleted` settles it at once.
+        // `wait_agent` is the CLI's own blocking wait (0.162.0: "Returns empty
+        // status when timed out"), hence "wait again".
+        agentNote:
+          '## Work you leave running\n\nSub-agents you spawn are NOT waited for when you end your turn: your answer goes back at once, without their results. Before your final answer, wait for every sub-agent still running with wait_agent, giving it a long timeout (minutes); if it times out, wait again — never check on them with sleep, list_agents or shell commands in a loop. Background commands are not waited for either: run a command whose result you need in the foreground.',
+      },
       // `CODEX_TOOL_NAMES` is every tool this adapter maps, and none publishes
       // an artifact.
       artifactToolNames: [],
@@ -371,7 +378,13 @@ export class CodexAdapter extends AgentAdapter {
         // profile, so a Plus and an Enterprise profile price the same turn the
         // same. An id the catalog does not list (`codex-auto-review`) is
         // unpriced.
-        listPrice: { kind: 'catalog', provider: 'openai' },
+        listPrice: {
+          kind: 'catalog',
+          provider: 'openai',
+          // Measured 2026-10-16: models.dev states gpt-6.1-sol at 1,050,000,
+          // while codex enforces 475,000 by default and 828,400 at `872k`.
+          catalogWindows: false,
+        },
       },
       handoff: {
         kind: 'resume-command',

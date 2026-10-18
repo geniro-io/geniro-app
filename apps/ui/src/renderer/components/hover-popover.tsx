@@ -32,6 +32,28 @@ const HOVER_OPEN_DELAY_MS = 250;
 const HOVER_CLOSE_GRACE_MS = 120;
 
 /**
+ * Whether the most recent input was a key rather than a pointer press — the
+ * rule `:focus-visible` follows, recorded here so a focus can be judged by the
+ * input that caused it. A dialog focuses its first control on open and gives
+ * focus back to its opener on close; neither is the user reaching for a panel.
+ */
+let lastInputWasKey = false;
+if (typeof document !== 'undefined') {
+  const pointer = (): void => {
+    lastInputWasKey = false;
+  };
+  document.addEventListener(
+    'keydown',
+    () => {
+      lastInputWasKey = true;
+    },
+    true,
+  );
+  document.addEventListener('pointerdown', pointer, true);
+  document.addEventListener('mousedown', pointer, true);
+}
+
+/**
  * A small control that reveals a panel on hover, and PINS it on a press.
  *
  * The app's one implementation of that behaviour. It began as the context
@@ -248,8 +270,9 @@ export function HoverPopover({
         }}
         // Focus is the keyboard's press, not its hover: it is already
         // deliberate, so it opens without the delay a pointer has to earn.
+        // Only a focus that follows a KEY, though — see `lastInputWasKey`.
         onFocus={() => {
-          if (hoverOpens) {
+          if (hoverOpens && lastInputWasKey) {
             setHovered(true);
           }
         }}>

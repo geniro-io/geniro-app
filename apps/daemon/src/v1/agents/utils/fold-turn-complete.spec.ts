@@ -48,6 +48,49 @@ describe('foldTurnComplete', () => {
     });
   });
 
+  it('merges both segments’ cost splits per model', () => {
+    const folded = foldTurnComplete(
+      complete({
+        costUsd: 3,
+        modelCosts: [
+          { model: 'opus', costUsd: 2 },
+          { model: 'haiku', costUsd: 1 },
+        ],
+      }),
+      complete({
+        costUsd: 1.5,
+        modelCosts: [{ model: 'haiku', costUsd: 1.5 }],
+      }),
+    );
+
+    expect(folded.usage?.modelCosts).toEqual([
+      { model: 'haiku', costUsd: 2.5 },
+      { model: 'opus', costUsd: 2 },
+    ]);
+  });
+
+  it.each([null, 0])(
+    'keeps the split beside a segment that cost %s',
+    (cost) => {
+      const folded = foldTurnComplete(
+        complete({ costUsd: 3, modelCosts: [{ model: 'opus', costUsd: 3 }] }),
+        complete({ costUsd: cost }),
+      );
+
+      expect(folded.usage?.modelCosts).toEqual([{ model: 'opus', costUsd: 3 }]);
+    },
+  );
+
+  it('drops the split when one segment spent money it did not split', () => {
+    const folded = foldTurnComplete(
+      complete({ costUsd: 3, modelCosts: [{ model: 'opus', costUsd: 3 }] }),
+      complete({ costUsd: 1 }),
+    );
+
+    expect(folded.usage?.costUsd).toBe(4);
+    expect(folded.usage?.modelCosts).toBeNull();
+  });
+
   it('keeps a figure neither segment measured as not measured, never zero', () => {
     const folded = foldTurnComplete(
       complete({ costUsd: 1 }),

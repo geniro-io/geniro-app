@@ -69,7 +69,10 @@ import {
 import { CallBroker } from '../../graphs/services/call-broker.service';
 import { TaskBoardBroker } from '../../graphs/services/task-board.broker';
 import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
-import { ANSWERING_A_CALL } from '../../graphs/utils/callee-text';
+import {
+  ANSWERING_A_CALL,
+  ANSWERING_WITH_CALLS_OUT,
+} from '../../graphs/utils/callee-text';
 import { callerKey } from '../../graphs/utils/caller-key';
 import { AgentKind } from '../../runs/runs.types';
 import type { ShareService } from '../../shares/services/share.service';
@@ -585,7 +588,9 @@ describe('McpServerService', () => {
         json().result as { tools: { name: string; description: string }[] }
       ).tools.find((t) => t.name === 'call_agent')!.description;
     };
-    expect(await callAgentDescription('call-4')).toContain(ANSWERING_A_CALL);
+    expect(await callAgentDescription('call-4')).toContain(
+      `${ANSWERING_A_CALL} ${ANSWERING_WITH_CALLS_OUT}`,
+    );
     // Its own conversation answers nobody, so it is told no such thing.
     expect(await callAgentDescription(null)).not.toContain(
       'You are answering a call from another agent',

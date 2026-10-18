@@ -2471,7 +2471,9 @@ export class AcpTurnDriver {
     // what moves it — while `turn_model` reports what this turn asked to run
     // as. The two differ exactly while a switch is unconfirmed, and that
     // difference is load-bearing downstream: it is what
-    // `PartialStreamService.rememberWindow`'s anti-poisoning guard compares.
+    // `PartialStreamService.rememberWindow`'s anti-poisoning guard compares —
+    // a settle reading labelled with the unconfirmed model is refused, and the
+    // owner keeps the window it already had.
     // Writing `wanted` here would collapse both of that guard's operands onto
     // this one field — cursor's context reading names no model, so a window's
     // own label falls back to it too — leaving the guard comparing a value
@@ -3057,6 +3059,13 @@ export class AcpTurnDriver {
    * Only delegates the session can WATCH hold it: one whose record cannot be
    * found would hold the turn for a report that never comes, so it is closed
    * with the turn as before.
+   *
+   * The agent is TOLD it can rely on this hold (`AdapterConfig.backgroundWork
+   * .agentNote` of every adapter declaring a `wakePrompt`): a change to what
+   * it holds for, or when it wakes, changes what that note may promise. Its
+   * bounds ({@link DELEGATE_HOLD_IDLE_MS}, {@link MAX_DELEGATE_WAKES}) are
+   * deliberately NOT in the note: they are safety valves the agent cannot act
+   * on, and a stated wait limit is what agents turn into a polling rhythm.
    */
   private holdForDelegates(
     stopReason: string | null,

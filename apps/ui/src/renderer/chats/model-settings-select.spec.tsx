@@ -208,6 +208,37 @@ function profileRows(
 }
 
 describe('ModelSettingsSelect', () => {
+  it('shows fixed windows and keeps selectable window sizes out of model names', () => {
+    const { el, picked } = render({
+      models: [
+        {
+          id: 'haiku',
+          label: 'Haiku 5.5',
+          resolvedModel: 'claude-haiku-5-5',
+          contextTokens: 1_000_000,
+          source: 'cli',
+        },
+        {
+          id: 'gpt-6.1-sol',
+          label: 'GPT 6.1 Sol',
+          contextTokens: 475_000,
+          contextWindowSelectable: true,
+          source: 'cli',
+        },
+        { id: 'unknown', label: 'Unknown', source: 'cli' },
+      ],
+    });
+    open(el);
+    openAxis(el, 'Model');
+    const haiku = submenuRow(el, 'Haiku 5.5 · 1M')!;
+    expect(haiku.textContent).toContain('haiku → claude-haiku-5-5');
+    expect(submenuRow(el, 'GPT 6.1 Sol')).toBeDefined();
+    expect(submenuRow(el, 'GPT 6.1 Sol · 475k')).toBeUndefined();
+    expect(submenuRow(el, 'Unknown')).toBeDefined();
+    act(() => haiku.click());
+    expect(picked).toContainEqual(['model', 'haiku']);
+  });
+
   it('offers local models in the model submenu and blocks models without tools', () => {
     const { el, picked } = render({
       models: [

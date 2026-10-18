@@ -52,6 +52,27 @@ describe('readLastClaudeCostState', () => {
     expect(readLastClaudeCostState(path, SESSION)).toEqual({
       costUsd: 0.0329,
       apiMs: 2254,
+      costByModel: null,
+    });
+  });
+
+  it('reads the saved per-model totals a resume restores beside the total', () => {
+    const path = sessionFile([
+      JSON.stringify({
+        type: 'cost-state',
+        sessionId: SESSION,
+        totalCostUSD: 64.35,
+        totalAPIDuration: 10,
+        modelUsage: {
+          'claude-opus-5-5': { inputTokens: 1405, costUSD: 64.03 },
+          'claude-haiku-5-5': { inputTokens: 16, costUSD: 0.32 },
+        },
+      }),
+    ]);
+
+    expect(readLastClaudeCostState(path, SESSION)?.costByModel).toEqual({
+      'claude-opus-5-5': 64.03,
+      'claude-haiku-5-5': 0.32,
     });
   });
 

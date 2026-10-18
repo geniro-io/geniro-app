@@ -209,12 +209,14 @@ export function ConfigProfileList({
       {profiles.length === 0 ? (
         // A sentence, not an empty box: this list is empty for most installs
         // and will stay that way, so the empty state has to say what the
-        // feature is FOR rather than that there is nothing here.
-        <p className="text-sm text-muted-foreground">
-          {compact
-            ? 'No extra profiles yet.'
-            : 'None yet — add one to give a config directory a name and a colour.'}
-        </p>
+        // feature is FOR rather than that there is nothing here. Onboarding's
+        // row already says "Default setup" beside this list, so the compact
+        // form is the Add button alone.
+        compact ? null : (
+          <p className="text-sm text-muted-foreground">
+            None yet — add one to give a config directory a name and a colour.
+          </p>
+        )
       ) : (
         <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
           {profiles.map((profile) => (

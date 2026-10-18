@@ -10,6 +10,8 @@ export interface ToolUsageGroup {
   name: string;
   /** `payload.toolKind` — the shared classifier's own word for what it does. */
   toolKind: string | null;
+  /** The calls of the lane's CLI sub-agents (`parentToolUseId`), not its own. */
+  delegate: boolean;
   calls: number;
 }
 
@@ -85,17 +87,25 @@ export function foldToolUsage(
   for (const group of groups) {
     const name = toolLabel(group.name, group.toolKind);
     const key = `${group.nodeId ?? ''}\u0000${name}`;
-    const seen = byLabel.get(key);
-    if (seen === undefined) {
-      byLabel.set(key, { nodeId: group.nodeId, name, calls: group.calls });
-      continue;
+    const row = byLabel.get(key) ?? {
+      nodeId: group.nodeId,
+      name,
+      calls: 0,
+      delegateCalls: 0,
+    };
+    byLabel.set(key, row);
+    if (group.delegate) {
+      row.delegateCalls += group.calls;
+    } else {
+      row.calls += group.calls;
     }
-    seen.calls += group.calls;
   }
   // Busiest first, then by name — a stable order, so two reads of one settled
   // run cannot shuffle the table's rows past each other.
   const rows = [...byLabel.values()].sort(
-    (a, b) => b.calls - a.calls || a.name.localeCompare(b.name),
+    (a, b) =>
+      b.calls + b.delegateCalls - (a.calls + a.delegateCalls) ||
+      a.name.localeCompare(b.name),
   );
   return { toolUse: rows.slice(0, limit), capped: rows.length > limit };
 }

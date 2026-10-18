@@ -84,6 +84,24 @@ describe('CapabilitiesService', () => {
     );
   });
 
+  it('serves each CLI’s own background-work note, the text its turns are composed with', () => {
+    const notes = new Map(
+      service()
+        .service.capabilitiesWire()
+        .backgroundWorkNotes.map((entry) => [entry.agent, entry.note]),
+    );
+
+    expect([...notes.keys()]).toEqual([...registry().all().keys()]);
+    for (const [agent, adapter] of registry().all()) {
+      expect(notes.get(agent)).toBe(
+        adapter.getConfig().backgroundWork.agentNote,
+      );
+    }
+    // Per CLI, not one shared text: the two transports disagree on whether a
+    // turn is held for its sub-agents.
+    expect(notes.get('codex')).not.toBe(notes.get('claude'));
+  });
+
   it('answers for EVERY registered CLI, not a hand-written list', () => {
     // Why the composition iterates the registry: a new adapter must appear
     // here the moment it is registered. A literal naming the shipped CLIs

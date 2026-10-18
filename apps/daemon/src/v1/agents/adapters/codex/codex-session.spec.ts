@@ -487,6 +487,7 @@ describe('a turn', () => {
             cacheRead: 0.4,
             cacheWrite: 5,
             tiers: [],
+            contextTokens: null,
           };
         },
       },
@@ -1631,6 +1632,7 @@ describe('what a turn spends', () => {
     cacheRead: 0.4,
     cacheWrite: 5,
     tiers: [],
+    contextTokens: null,
   };
   const SUB = '01a0e3aa-0000-7000-8000-00000000aaaa';
 

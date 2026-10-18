@@ -1088,22 +1088,51 @@ describe('ItemDao (in-memory sqlite)', () => {
       );
       await insert('run-a', 3, 'tool_call', 'not json');
       await insert('run-a', 4, 'tool_call', JSON.stringify({ id: 't2' }));
+      await insert(
+        'run-a',
+        5,
+        'tool_call',
+        JSON.stringify({ id: 't3', name: 'Read', parentToolUseId: 'toolu_a' }),
+      );
       await insert('run-b', 0, 'tool_call', JSON.stringify({ id: 'x' }));
 
       const rows = await dao.toolCallTimes('run-a', 3);
 
       expect(
-        rows.map(({ seq, kind, toolId, name }) => ({
+        rows.map(({ seq, kind, toolId, name, delegate }) => ({
           seq,
           kind,
           toolId,
           name,
+          delegate,
         })),
       ).toEqual([
-        { seq: 0, kind: 'tool_call', toolId: 't1', name: 'Bash' },
-        { seq: 2, kind: 'tool_result', toolId: 't1', name: null },
-        { seq: 3, kind: 'tool_call', toolId: null, name: null },
+        {
+          seq: 0,
+          kind: 'tool_call',
+          toolId: 't1',
+          name: 'Bash',
+          delegate: false,
+        },
+        {
+          seq: 2,
+          kind: 'tool_result',
+          toolId: 't1',
+          name: null,
+          delegate: false,
+        },
+        {
+          seq: 3,
+          kind: 'tool_call',
+          toolId: null,
+          name: null,
+          delegate: false,
+        },
       ]);
+      expect(
+        (await dao.toolCallTimes('run-a', 5)).at(-1)?.delegate,
+        'a sub-agent call is marked',
+      ).toBe(true);
       expect(typeof rows[0]!.at).toBe('number');
       expect(rows[2]!.at).toBeGreaterThanOrEqual(rows[0]!.at);
     });
@@ -1267,6 +1296,36 @@ describe('ItemDao (in-memory sqlite)', () => {
     ]);
   });
 
+  it('reads the named tool calls of one run, in seq order, and nothing else', async () => {
+    // What every listing of open commands reads its words from: a shell row
+    // names only its launching call.
+    const call = (
+      runId: string,
+      seq: number,
+      id: string,
+      kind: ItemKind = 'tool_call',
+    ) =>
+      dao.create({
+        runId,
+        seq,
+        kind,
+        nodeId: 'callee',
+        payload: JSON.stringify({ id, name: 'Bash', input: { command: id } }),
+      });
+    await call('run-a', 2, 'toolu_b');
+    await call('run-a', 0, 'toolu_a');
+    await call('run-a', 1, 'toolu_other');
+    await call('run-a', 3, 'toolu_a', 'tool_result');
+    await call('run-b', 4, 'toolu_a');
+
+    const ids = (rows: { payload: unknown }[]): unknown[] =>
+      rows.map((row) => JSON.parse(String(row.payload)).id);
+    expect(
+      ids(await dao.toolCallsByIds('run-a', ['toolu_a', 'toolu_b'])),
+    ).toEqual(['toolu_a', 'toolu_b']);
+    expect(await dao.toolCallsByIds('run-a', [])).toEqual([]);
+  });
+
   it("reads a run's call rows in seq order — starts and results, and nothing else", async () => {
     // What the call seed folds after a daemon restart: the start (id, parties,
     // the thread it continued) and the result (the callee's session), in the
@@ -1313,6 +1372,101 @@ describe('ItemDao (in-memory sqlite)', () => {
       JSON.stringify({ callId: 'call-1' }),
       JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
     ]);
+  });
+
+  describe('toolUsage and delegateToolCallSeqs', () => {
+    const call = (
+      seq: number,
+      nodeId: string | null,
+      payload: Record<string, unknown> | string,
+    ) =>
+      dao.create({
+        runId: 'run-a',
+        seq,
+        kind: 'tool_call',
+        nodeId,
+        payload:
+          typeof payload === 'string' ? payload : JSON.stringify(payload),
+      });
+
+    beforeEach(async () => {
+      await call(0, 'eng', { name: 'Bash', toolKind: 'execute' });
+      await call(1, 'eng', { name: 'Bash', toolKind: 'execute' });
+      await call(2, 'eng', {
+        name: 'Bash',
+        toolKind: 'execute',
+        parentToolUseId: 'toolu_agent',
+      });
+      await call(3, 'eng', {
+        name: 'Read',
+        toolKind: 'read',
+        parentToolUseId: 'toolu_agent',
+      });
+      // A call that names no tool, and a payload that is not JSON at all.
+      await call(4, 'eng', { toolKind: 'read' });
+      await call(5, 'eng', 'not json');
+      await dao.create({
+        runId: 'other-run',
+        seq: 0,
+        kind: 'tool_call',
+        nodeId: 'eng',
+        payload: JSON.stringify({ name: 'Bash', parentToolUseId: 'x' }),
+      });
+    });
+
+    it('groups a run’s tool calls per lane, its own apart from its sub-agents’', async () => {
+      const groups = await dao.toolUsage('run-a', 10);
+
+      expect(
+        groups.sort(
+          (a, b) =>
+            a.name.localeCompare(b.name) ||
+            Number(a.delegate) - Number(b.delegate),
+        ),
+      ).toEqual([
+        {
+          nodeId: 'eng',
+          name: 'Bash',
+          toolKind: 'execute',
+          delegate: false,
+          calls: 2,
+        },
+        {
+          nodeId: 'eng',
+          name: 'Bash',
+          toolKind: 'execute',
+          delegate: true,
+          calls: 1,
+        },
+        {
+          nodeId: 'eng',
+          name: 'Read',
+          toolKind: 'read',
+          delegate: true,
+          calls: 1,
+        },
+      ]);
+    });
+
+    it('answers the busiest groups first, up to the limit', async () => {
+      const groups = await dao.toolUsage('run-a', 1);
+      expect(groups).toEqual([
+        {
+          nodeId: 'eng',
+          name: 'Bash',
+          toolKind: 'execute',
+          delegate: false,
+          calls: 2,
+        },
+      ]);
+    });
+
+    it('lists the seqs of the run’s sub-agent calls, up to a snapshot', async () => {
+      expect((await dao.delegateToolCallSeqs('run-a')).sort()).toEqual([2, 3]);
+      expect(await dao.delegateToolCallSeqs('run-a', undefined, 2)).toEqual([
+        2,
+      ]);
+    });
   });
 
   describe('toolResultSeqAt', () => {

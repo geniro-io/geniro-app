@@ -10,6 +10,10 @@ import { lock } from 'proper-lockfile';
 import { atomicWrite } from '../../../../utils/atomic-file';
 import { AgentKind } from '../../../runs/runs.types';
 import { adapterQuestionOf } from '../../utils/card-questions';
+import {
+  ModelVocabularyCache,
+  volatile,
+} from '../../utils/model-vocabulary-cache';
 import type {
   AdapterConfig,
   AdapterDaemonDeps,
@@ -84,6 +88,7 @@ import {
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
   CLAUDE_COST_TOTALS_FILE,
   CLAUDE_CREDENTIAL_ENV_KEYS,
+  CLAUDE_DEFAULT_MODEL_VALUE,
   CLAUDE_DEFAULT_PROFILE_DIR,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
@@ -113,6 +118,11 @@ import {
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_MODEL_CACHE_FILE,
   CLAUDE_MODEL_FLAG,
+  CLAUDE_MODEL_RESOLUTION_ARGS,
+  CLAUDE_MODEL_RESOLUTION_RETRY_AFTER_MS,
+  CLAUDE_MODEL_RESOLUTION_STORE_MODEL,
+  CLAUDE_MODEL_RESOLUTION_TIMEOUT_MS,
+  CLAUDE_MODEL_RESOLUTION_TTL_MS,
   CLAUDE_PARTIAL_MESSAGES_FLAG,
   CLAUDE_PERMISSION_MODE_DEFAULT,
   CLAUDE_PERMISSION_MODE_FLAG,
@@ -181,6 +191,12 @@ import {
 import { claudeDisallowedMcpArgs } from './utils/claude-mcp-tool-name.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
+import {
+  type ClaudeModelResolutions,
+  isModelResolutions,
+  modelResolutionRequestLine,
+  readModelResolutions,
+} from './utils/claude-model-resolution.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
   readPlanLimitsReply,
@@ -367,6 +383,15 @@ export class ClaudeAdapter extends AgentAdapter {
         stepsUnavailableReason: null,
         // The Task tool, and the Agent name the CLI also launches one under.
         launchToolNames: ['Task', 'Agent'],
+      },
+      backgroundWork: {
+        // spawn-cli holds the turn (and so the call it answers) while a
+        // delegate is out, and the CLI itself starts the next turn with the
+        // `task-notification` continuation — on every user-facing turn, since
+        // each runs on a kept process (`canHostSession`). A backgrounded
+        // command holds nothing.
+        agentNote:
+          '## Work you leave running\n\nSub-agents you start in the background keep running after you end your turn. This conversation — and the call you are answering, if any — stays open until they report, and you are started again automatically with their results. With nothing else to do, say briefly what you launched and END YOUR TURN instead of waiting: never poll with sleep, date, ls or until/tail loops, never start a background timer to check on them, never read their output files, and never predict what they will report. Your answer is the reply you give in the turn that has nothing left running. Background COMMANDS are different: they are not waited for — run a command whose result you need in the foreground.',
       },
       // The Artifact tool, whose reply carries the published page's URL.
       artifactToolNames: ['Artifact'],
@@ -857,7 +882,14 @@ export class ClaudeAdapter extends AgentAdapter {
         // stays the CLI's; the catalog prices only what the CLI will not —
         // one DELEGATE — and is calibrated against the turn it ran in (see
         // `ClaudeDelegateCostLedger`).
-        listPrice: { kind: 'catalog', provider: 'anthropic' },
+        listPrice: {
+          kind: 'catalog',
+          provider: 'anthropic',
+          // Measured 2026-10-16 on 2.1.295: models.dev's `limit.context` for
+          // claude-haiku/opus/sonnet-5-5 and claude-fable-5-1 (1,000,000) is
+          // the `maxTokens` the CLI's own `get_context_usage` reports.
+          catalogWindows: true,
+        },
       },
       handoff: {
         kind: 'resume-command',
@@ -979,6 +1011,18 @@ export class ClaudeAdapter extends AgentAdapter {
    */
   private readonly modeProbe: ClaudeModeProbe | null;
 
+  /** One process's memory of {@link resolveModel}'s probe, per profile. */
+  private readonly modelResolutionCache =
+    new ModelVocabularyCache<ClaudeModelResolutions | null>({
+      ttlMs: CLAUDE_MODEL_RESOLUTION_TTL_MS,
+      now: Date.now,
+    });
+  /**
+   * When each profile's probe last failed. A turn waits on this probe, so a
+   * CLI that cannot answer must not cost every first turn the whole timeout.
+   */
+  private readonly modelResolutionFailedAt = new Map<string, number>();
+
   constructor(private readonly claudeOptions: ClaudeAdapterOptions = {}) {
     super(claudeOptions);
     // In the BODY rather than as a field initializer, which would read the
@@ -1026,7 +1070,148 @@ export class ClaudeAdapter extends AgentAdapter {
       versions: deps.versions,
       logger: deps.logger(ClaudeAdapter.name),
       prices: deps.prices,
+      vocabularyStore: deps.vocabularyStore,
     });
+  }
+
+  /**
+   * What `model` runs as under this profile — the CLI's own answer, from a
+   * one-shot `initialize` (see `CLAUDE_MODEL_RESOLUTION_ARGS`), kept per
+   * profile and binary version in memory and in the vocabulary store, so it
+   * is asked about once per version rather than per turn. A name the reply
+   * does not list (an id such as `claude-opus-5[1m]`) is its own answer.
+   */
+  override async resolveModel(
+    model: string | null,
+    configDir: string | null,
+  ): Promise<string | null> {
+    const asked = model === '' ? null : model;
+    const resolutions = await this.modelResolutions(configDir);
+    return (
+      resolutions?.[asked ?? CLAUDE_DEFAULT_MODEL_VALUE]?.resolvedModel ?? asked
+    );
+  }
+
+  override async modelDetails(
+    model: AgentModel,
+    configDir: string | null,
+  ): Promise<AgentModel> {
+    const resolutions = await this.modelResolutions(configDir);
+    return resolutions?.[model.id] ?? model;
+  }
+
+  /**
+   * {@link resolveModel}'s memory, on the menu bar's reset. The DURABLE half is
+   * `ModelVocabularyStore`'s and is cleared by the same service.
+   */
+  override clearCaches(): number {
+    this.modelResolutionFailedAt.clear();
+    return this.modelResolutionCache.clear();
+  }
+
+  /**
+   * The same memory on an ACCOUNT change: the default model is the account's,
+   * and a probe still running was asked under the replaced credentials, so it
+   * is detached and its reply not filed (`ModelVocabularyCache.forget`).
+   */
+  override forgetAccountCaches(): number {
+    this.modelResolutionFailedAt.clear();
+    return this.modelResolutionCache.forget(this.getConfig().kind);
+  }
+
+  private async modelResolutions(
+    configDir: string | null,
+  ): Promise<ClaudeModelResolutions | null> {
+    try {
+      const kind = this.getConfig().kind;
+      const profile = this.vocabularyProfile(configDir);
+      const version = await this.resolveBinaryVersion({});
+      const stored = this.claudeOptions.vocabularyStore?.read(
+        kind,
+        CLAUDE_MODEL_RESOLUTION_STORE_MODEL,
+        profile,
+        version,
+        isModelResolutions,
+      );
+      if (stored) {
+        if (stored.stale) {
+          void this.takeModelResolutions(kind, profile, version);
+        }
+        return stored.value;
+      }
+      return await this.takeModelResolutions(kind, profile, version);
+    } catch {
+      return null;
+    }
+  }
+
+  /** The probe, joined through the memory cache; never rejects. */
+  private takeModelResolutions(
+    kind: AgentKind,
+    profile: string | null,
+    version: string | null,
+  ): Promise<ClaudeModelResolutions | null> {
+    const failedAt = this.modelResolutionFailedAt.get(profile ?? '');
+    if (
+      failedAt !== undefined &&
+      Date.now() - failedAt < CLAUDE_MODEL_RESOLUTION_RETRY_AFTER_MS
+    ) {
+      return Promise.resolve(null);
+    }
+    const store = this.claudeOptions.vocabularyStore;
+    return this.modelResolutionCache
+      .read(
+        kind,
+        CLAUDE_MODEL_RESOLUTION_STORE_MODEL,
+        profile,
+        version,
+        async () => {
+          // Read BEFORE the probe: an answer whose probe straddled a sign-in
+          // is the previous account's, and the store refuses it by this.
+          const askedAt = store?.epoch(kind);
+          const fresh = await this.probeModelResolutions(profile);
+          if (fresh === null) {
+            // Served, never kept: one failed probe must not answer for the TTL.
+            this.modelResolutionFailedAt.set(profile ?? '', Date.now());
+            return volatile(null);
+          }
+          this.modelResolutionFailedAt.delete(profile ?? '');
+          store?.remember(
+            kind,
+            CLAUDE_MODEL_RESOLUTION_STORE_MODEL,
+            profile,
+            version,
+            fresh,
+            askedAt,
+          );
+          return fresh;
+        },
+      )
+      .catch(() => null);
+  }
+
+  private async probeModelResolutions(
+    configDir: string | null,
+  ): Promise<ClaudeModelResolutions | null> {
+    let cwd = '';
+    try {
+      cwd = this.makeProbeRoot('models');
+      const stdout = await this.runCommand([...CLAUDE_MODEL_RESOLUTION_ARGS], {
+        cwd,
+        stdinWrites: [modelResolutionRequestLine()],
+        endStdin: true,
+        settleWhen: (out) => readModelResolutions(out) !== null,
+        timeoutMs: CLAUDE_MODEL_RESOLUTION_TIMEOUT_MS,
+        ...(configDir ? { env: { [CLAUDE_CONFIG_DIR_ENV]: configDir } } : {}),
+      });
+      return stdout === null ? null : readModelResolutions(stdout);
+    } catch {
+      return null;
+    } finally {
+      if (cwd !== '') {
+        this.removeProbeRoot(cwd);
+      }
+    }
   }
 
   /**
@@ -1142,33 +1327,19 @@ export class ClaudeAdapter extends AgentAdapter {
     return written.length === 0 ? undefined : discard;
   }
 
-  /**
-   * claude has no list-models subcommand to run, so nothing is spawned: the
-   * list is the documented tier aliases plus the account-specific models the
-   * CLI caches in `~/.claude.json` for its own picker. Synchronous work behind
-   * an async signature — the contract is shared with cursor, which really does
-   * shell out.
-   *
-   * The alias floor comes from `config.builtinModels` — the declared fallback
-   * surface — never from the const behind it, so config stays the one place a
-   * CLI's static values are read.
-   */
-  override listModels({ configDir }: AgentModelsInput): Promise<AgentModel[]> {
-    // The RUN's profile, not the home dir. The extra models an account offers
-    // are cached by the CLI in the config directory's own `.claude.json`, so
-    // reading the home copy answered with the DEFAULT profile's account for
-    // every chat, whatever subscription it actually ran on. Measured on the
-    // reporter's own machine, the two profiles of one login report different
-    // subscriptions (`max` against `team`) — the same CLI binary, so no version
-    // check could ever have caught it. Their cached lists happen to coincide
-    // today, which is precisely why this had to be found by reading rather than
-    // by looking at a screen.
-    return Promise.resolve(
-      claudeModels(
-        this.getConfig().builtinModels,
-        this.modelCacheDir(configDir),
-      ),
-    );
+  /** The initialize reply supplies account models, display names and alias ids. */
+  override async listModels({
+    configDir,
+  }: AgentModelsInput): Promise<AgentModel[]> {
+    // Both sources belong to the run's profile: one binary can serve accounts
+    // with different model access.
+    const resolutions = await this.modelResolutions(configDir);
+    return resolutions !== null
+      ? Object.values(resolutions)
+      : claudeModels(
+          this.getConfig().builtinModels,
+          this.modelCacheDir(configDir),
+        );
   }
 
   /**
@@ -2099,14 +2270,17 @@ export class ClaudeAdapter extends AgentAdapter {
    * stdin was closed. `system/init` is re-emitted at the head of each turn, so
    * the session saver and the MCP harvest keep seeing what they read today.
    *
-   * The predicate is `keepStdinOpen`'s, deliberately reused rather than
-   * restated, exactly as `buildApprovalModePayload` reuses it: "can this turn
-   * carry a dialogue" and "can this process take another prompt" are the same
-   * question about the same open pipe, and a second copy of the condition is
-   * how the two would come to disagree.
+   * Every turn that carries the dialogue, and every `auto` turn without it:
+   * a kept process is what holds a turn — and the call it answers — while its
+   * background sub-agents run, which is what the background-work note tells
+   * the agent to rely on. An `auto` workflow node spawned one-shot with its
+   * stdin closed got none of that: it settled on its launching result and
+   * passed "the reviewers are running" downstream. Its stdin carries no
+   * dialogue, so the base serves a later turn in another mode on a fresh
+   * spawn rather than re-moding it.
    */
   protected override canHostSession(input: AgentTurnInput): boolean {
-    return this.keepStdinOpen(input);
+    return this.keepStdinOpen(input) || input.approvalMode === 'auto';
   }
 
   /**
@@ -2141,13 +2315,16 @@ export class ClaudeAdapter extends AgentAdapter {
    * the process still alive. That is what lets Stop leave the run's MCP
    * servers — and a browser one of them owns — running.
    *
-   * Gated on the same open-stdin predicate as its neighbours: a turn spawned
-   * under `--dangerously-skip-permissions` has no channel to be told anything.
+   * Offered wherever stdin can still be open — a kept `auto` process
+   * included: on 2.1.295 one spawned under `--dangerously-skip-permissions`
+   * answered this request `success` and went on to serve the next prompt. A
+   * one-shot turn's stdin is already closed, so the write fails and the turn
+   * is stopped by killing its group, as before.
    */
   protected override buildInterruptPayload(
     input: AgentTurnInput,
   ): string | undefined {
-    if (!this.keepStdinOpen(input)) {
+    if (!this.canHostSession(input)) {
       return undefined;
     }
     return `${JSON.stringify({
@@ -2237,11 +2414,12 @@ export class ClaudeAdapter extends AgentAdapter {
     mode: AgentApprovalMode,
   ): string | undefined {
     // The predicate is `keepStdinOpen`'s, deliberately reused rather than
-    // restated: "can this turn be re-moded" and "does this turn hold the stdin
-    // dialogue" are the SAME question, and a second copy of the condition is
-    // how the two would come to disagree after a change to buildArgs. A turn
-    // spawned under --dangerously-skip-permissions has no prompt tool, so a
-    // gate cannot be reintroduced into it by any message.
+    // restated: "can this turn be re-moded into" and "does this turn hold the
+    // stdin dialogue" are the SAME question, and a second copy of the
+    // condition is how the two would come to disagree after a change to
+    // buildArgs. A process spawned under --dangerously-skip-permissions has no
+    // prompt tool, so a gate cannot be reintroduced into it by any message —
+    // the base refuses that switch itself (`spawnedOnDialogue`).
     if (!this.keepStdinOpen(input)) {
       return undefined;
     }

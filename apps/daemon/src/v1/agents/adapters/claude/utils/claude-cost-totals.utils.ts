@@ -7,6 +7,49 @@ import { asNumber, asRecord } from '../../../utils/json-util';
 export interface ClaudeSessionTotals {
   costUsd: number | null;
   apiMs: number | null;
+  /**
+   * {@link costUsd} by model, as `modelUsage[<model>].costUSD` states it —
+   * running like the total. Absent or null when the source carried none.
+   */
+  costByModel?: Record<string, number> | null;
+}
+
+/**
+ * Each model's `costUSD` out of a claude `modelUsage` block — the `result`
+ * line's and the transcript `cost-state`'s carry the same shape. Null when the
+ * block is absent or prices no model.
+ */
+export function readModelUsageCosts(
+  modelUsage: unknown,
+): Record<string, number> | null {
+  const block = asRecord(modelUsage);
+  if (block === null) {
+    return null;
+  }
+  const out: Record<string, number> = {};
+  for (const [model, entry] of Object.entries(block)) {
+    const cost = asNumber(asRecord(entry)?.costUSD);
+    if (cost !== null) {
+      out[model] = cost;
+    }
+  }
+  return Object.keys(out).length === 0 ? null : out;
+}
+
+/** A persisted `costByModel` — model → number, anything else dropped. */
+function readCostByModel(value: unknown): Record<string, number> | null {
+  const record = asRecord(value);
+  if (record === null) {
+    return null;
+  }
+  const out: Record<string, number> = {};
+  for (const [model, cost] of Object.entries(record)) {
+    const figure = asNumber(cost);
+    if (figure !== null) {
+      out[model] = figure;
+    }
+  }
+  return out;
 }
 
 /**
@@ -40,6 +83,7 @@ export class ClaudeCostTotalsFile {
             {
               costUsd: asNumber(totals.costUsd),
               apiMs: asNumber(totals.apiMs),
+              costByModel: readCostByModel(totals.costByModel),
             },
           ]);
         }

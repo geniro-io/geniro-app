@@ -103,6 +103,19 @@ function build(
             })),
         ),
       toolUsage: () => Promise.resolve(toolUsage),
+      // Mirrors the DAO's `json_extract(…) is not null` and its snapshot bound.
+      delegateToolCallSeqs: (_runId: string, _em: unknown, maxSeq?: number) =>
+        Promise.resolve(
+          rows
+            .filter(
+              (r) =>
+                r.kind === 'tool_call' &&
+                (r.payload as { parentToolUseId?: string | null } | null)
+                  ?.parentToolUseId != null &&
+                (maxSeq === undefined || r.seq <= maxSeq),
+            )
+            .map((r) => r.seq),
+        ),
     } as unknown as ItemDao,
     {
       listByRun: () =>
@@ -253,14 +266,60 @@ describe('ChatWaterfallService', () => {
     it('reports which tools a lane called, and how often', async () => {
       const result = await build([row(0, 'tool_call', null, 1, 'eng')], {
         toolUsage: [
-          { nodeId: 'eng', name: 'Bash', toolKind: 'execute', calls: 8939 },
-          { nodeId: 'eng', name: 'Read', toolKind: 'read', calls: 2672 },
+          {
+            nodeId: 'eng',
+            name: 'Bash',
+            toolKind: 'execute',
+            delegate: false,
+            calls: 8939,
+          },
+          {
+            nodeId: 'eng',
+            name: 'Read',
+            toolKind: 'read',
+            delegate: false,
+            calls: 2672,
+          },
         ],
       }).read('run-a');
 
       expect(result.toolUse).toEqual([
-        { nodeId: 'eng', name: 'Bash', calls: 8939 },
-        { nodeId: 'eng', name: 'Read', calls: 2672 },
+        { nodeId: 'eng', name: 'Bash', calls: 8939, delegateCalls: 0 },
+        { nodeId: 'eng', name: 'Read', calls: 2672, delegateCalls: 0 },
+      ]);
+    });
+
+    it('counts a tool’s sub-agent calls apart from the lane’s own, busiest by both', async () => {
+      // A lane whose sub-agents read far more than the agent itself.
+      const result = await build([row(0, 'tool_call', null, 1, 'middle')], {
+        toolUsage: [
+          {
+            nodeId: 'middle',
+            name: 'Bash',
+            toolKind: 'execute',
+            delegate: false,
+            calls: 300,
+          },
+          {
+            nodeId: 'middle',
+            name: 'Read',
+            toolKind: 'read',
+            delegate: false,
+            calls: 100,
+          },
+          {
+            nodeId: 'middle',
+            name: 'Read',
+            toolKind: 'read',
+            delegate: true,
+            calls: 600,
+          },
+        ],
+      }).read('run-a');
+
+      expect(result.toolUse).toEqual([
+        { nodeId: 'middle', name: 'Read', calls: 100, delegateCalls: 600 },
+        { nodeId: 'middle', name: 'Bash', calls: 300, delegateCalls: 0 },
       ]);
     });
 
@@ -277,21 +336,29 @@ describe('ChatWaterfallService', () => {
             nodeId: 'qa',
             name: `\`${'gh pr view 5251 --json body '.repeat(40)}\``,
             toolKind: 'execute',
+            delegate: false,
             calls: 1,
           },
           {
             nodeId: 'qa',
             name: '`pnpm build`',
             toolKind: 'execute',
+            delegate: false,
             calls: 1,
           },
-          { nodeId: 'qa', name: 'Read File', toolKind: 'read', calls: 40 },
+          {
+            nodeId: 'qa',
+            name: 'Read File',
+            toolKind: 'read',
+            delegate: false,
+            calls: 40,
+          },
         ],
       }).read('run-a');
 
       expect(result.toolUse).toEqual([
-        { nodeId: 'qa', name: 'Read File', calls: 40 },
-        { nodeId: 'qa', name: 'execute', calls: 2 },
+        { nodeId: 'qa', name: 'Read File', calls: 40, delegateCalls: 0 },
+        { nodeId: 'qa', name: 'execute', calls: 2, delegateCalls: 0 },
       ]);
       expect(
         RunWaterfallWireSchema.safeParse(result).success,
@@ -645,6 +712,109 @@ describe('ChatWaterfallService', () => {
       expect(result.lanes[0]?.toolCalls).toBe(5);
       expect(result.turns).toHaveLength(1);
       expect(result.turns[0]?.toolCalls).toBe(3);
+    });
+
+    it('counts a lane’s and a turn’s sub-agent tool calls apart from its own', async () => {
+      const delegated = { parentToolUseId: 'toolu_agent' };
+      const result = await build([
+        row(0, 'tool_call', null, 5, 'middle'),
+        row(1, 'tool_call', delegated, 12, 'middle'),
+        row(2, 'tool_call', delegated, 14, 'middle'),
+        row(3, 'tool_call', null, 20, 'middle'),
+        row(
+          4,
+          'turn_complete',
+          { usage: { durationMs: 20_000 } },
+          30,
+          'middle',
+        ),
+        row(5, 'tool_call', delegated, 31, 'middle'),
+      ]).read('run-a');
+
+      expect(result.lanes[0]).toMatchObject({
+        toolCalls: 2,
+        delegateToolCalls: 3,
+      });
+      expect(result.turns[0]).toMatchObject({
+        toolCalls: 1,
+        delegateToolCalls: 2,
+      });
+    });
+
+    it('keeps a lane whose only tool calls were its sub-agents’', async () => {
+      const result = await build([
+        row(0, 'tool_call', { parentToolUseId: 'toolu_agent' }, 5, 'lead'),
+      ]).read('run-a');
+
+      expect(result.lanes.map((lane) => lane.nodeId)).toEqual(['lead']);
+    });
+
+    it('carries a turn’s cost split by model, and drops one that does not add up', async () => {
+      const result = await build([
+        row(0, 'tool_call', null, 1, 'middle'),
+        row(
+          1,
+          'turn_complete',
+          {
+            usage: {
+              durationMs: 1_000,
+              costUsd: 40.68,
+              modelCosts: [
+                { model: 'claude-haiku-5-5', costUsd: 39.03 },
+                { model: 'claude-sonnet-5-5', costUsd: 1.65 },
+              ],
+            },
+          },
+          10,
+          'middle',
+        ),
+        row(
+          2,
+          'turn_complete',
+          {
+            usage: {
+              durationMs: 1_000,
+              costUsd: 5,
+              modelCosts: [{ model: 'claude-haiku-5-5', costUsd: 1 }],
+            },
+          },
+          20,
+          'middle',
+        ),
+      ]).read('run-a');
+
+      expect(result.turns.map((turn) => turn.modelCosts)).toEqual([
+        [
+          { model: 'claude-haiku-5-5', costUsd: 39.03 },
+          { model: 'claude-sonnet-5-5', costUsd: 1.65 },
+        ],
+        null,
+      ]);
+      expect(RunWaterfallWireSchema.safeParse(result).success).toBe(true);
+    });
+
+    it('drops a stored split it cannot carry, and still answers the card', async () => {
+      const turnWith = (seq: number, at: number, modelCosts: unknown) =>
+        row(
+          seq,
+          'turn_complete',
+          { usage: { durationMs: 1_000, costUsd: 2, modelCosts } },
+          at,
+          'middle',
+        );
+      const result = await build([
+        row(0, 'tool_call', null, 1, 'middle'),
+        turnWith(1, 10, [{ model: 'm'.repeat(201), costUsd: 2 }]),
+        turnWith(2, 20, { model: 'opus', costUsd: 2 }),
+        turnWith(3, 30, [{ model: 'opus', costUsd: '2' }]),
+      ]).read('run-a');
+
+      expect(result.turns.map((turn) => turn.modelCosts)).toEqual([
+        null,
+        null,
+        null,
+      ]);
+      expect(RunWaterfallWireSchema.safeParse(result).success).toBe(true);
     });
 
     it("gives a chat run's single lane the run row's own agent", async () => {

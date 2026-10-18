@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GeniroApi } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { afterPopstate } from '../__tests__/after-popstate';
+import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import { NO_TOTALS, totals } from '../__tests__/chat-totals';
 import { withHistoryPages } from '../__tests__/history-page';
 import type {
@@ -163,7 +164,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: vi.fn(() => ({
     chats: pagedApi,
-    agents: agentsApi,
+    agents: withVocabulary(agentsApi),
     workflows: workflowApi,
     groups: groupApi,
     capabilities: capabilitiesApi,

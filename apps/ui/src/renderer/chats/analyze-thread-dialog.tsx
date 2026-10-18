@@ -122,6 +122,7 @@ export function AnalyzeThreadDialog({
     agentsApi,
     open ? kind : null,
     configDir,
+    config.model,
   );
   const efforts = useAgentEfforts(
     agentsApi,

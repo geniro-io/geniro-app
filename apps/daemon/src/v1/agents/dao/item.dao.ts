@@ -63,20 +63,6 @@ const NOT_IN_A_CALL = {
 } as const;
 
 /**
- * How many run heads one preview read may name.
- *
- * Each head is one `(run_id = … and seq = …)` term OR-ed into the WHERE, and
- * SQLite parses an OR chain as a tree one level deeper per term — past 1,000 it
- * refuses the whole statement ("Expression tree is too large (maximum depth
- * 1000)"). Measured: 1,100 runs with a message failed the chat list outright,
- * a 500 and an empty sidebar. Half the limit leaves the WHERE's other clauses
- * (the kind, the two exclusions) all the headroom they could want, and each
- * head is ONE run, so splitting the list never splits a run's rows across two
- * reads.
- */
-const PREVIEW_HEADS_PER_QUERY = 500;
-
-/**
  * How many ids one {@link ItemDao.rowsByPayloadId} query names at once. MikroORM
  * writes every value into the statement's text, so this bounds a statement's
  * length rather than a bind-parameter limit — and each batch is another pass
@@ -355,85 +341,64 @@ export class ItemDao extends BaseDao<Item> {
    * looking for the chat you were last in. Alternation is the price of the
    * asked-for behaviour, and a preview tracks where a conversation has got to.
    *
-   * Two bounded reads, never the full transcripts: first the (runId, seq)
-   * pairs of message items (integers + ids only, no payloads), reduced to the
-   * per-run head in memory, then just those head rows' payloads — in slices of
-   * {@link PREVIEW_HEADS_PER_QUERY}, which is what keeps a long chat list under
-   * SQLite's expression-depth limit. Runs with no message items (or a head
-   * with neither text nor pictures) are simply absent from the map.
+   * One read per run, walking its `(run_id, kind, seq)` index from the newest
+   * message down and stopping at the first that is the run's own: the
+   * exclusions are text matches, so a read that collected every run's heads at
+   * once had to open the payload of EVERY message of every listed run.
+   * Measured on a 5.9 GB profile: 0.6 s of an archive listing's 0.8 s, and one
+   * statement of the old shape took 7 s on a cold cache, because a `kind`
+   * beside an OR of `(run_id, seq)` pairs sends SQLite to the `kind` index.
+   * Runs with no message items (or a head with neither text nor pictures) are
+   * simply absent from the map.
    */
   async latestMessageTextPerRun(
     runIds: string[],
     txEm?: EntityManager,
   ): Promise<Map<string, string>> {
-    if (runIds.length === 0) {
-      return new Map();
-    }
     const repo = this.getRepo(txEm);
-    const heads = await repo.find(
-      {
-        runId: { $in: runIds },
-        kind: 'message',
-        $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
-      },
-      { fields: ['runId', 'seq'], disableIdentityMap: true },
-    );
-    // ONE head per run now — the highest seq. The role no longer decides
-    // anything, so the two-map fold this used to need (an agent head and an
-    // any-role head, resolved afterwards) collapses to a single running max.
-    const headSeq = new Map<string, number>();
-    for (const head of heads) {
-      const prev = headSeq.get(head.runId);
-      if (prev === undefined || head.seq > prev) {
-        headSeq.set(head.runId, head.seq);
-      }
-    }
-    if (headSeq.size === 0) {
-      return new Map();
-    }
-    const headPairs = [...headSeq];
     const previews = new Map<string, string>();
-    for (
-      let start = 0;
-      start < headPairs.length;
-      start += PREVIEW_HEADS_PER_QUERY
-    ) {
-      const rows = await repo.find(
+    for (const runId of runIds) {
+      // Newest first, ties broken the same way as the reading below, so the
+      // row found is the one that reading would let win.
+      const head = await repo.findOne(
+        { runId, kind: 'message', $and: [NOT_A_DELEGATE, NOT_IN_A_CALL] },
         {
-          // The kind is repeated deliberately. `(runId, seq)` is not a key: a
-          // transcript written before `ItemSeqAllocator` can hold two rows on
-          // one seq, and without this filter a tool row sharing the head's
-          // number comes back too — `messagePreview` reads null off it, and
-          // whichever of the pair the database returned last decided whether
-          // the run had a preview line at all.
-          kind: 'message',
-          // Repeated with the head query above for the same reason the kind
-          // is: this second read fetches BY (runId, seq), and a delegate's row
-          // can share a seq with the head on a transcript written before
-          // `ItemSeqAllocator` — so without it the row excluded a moment ago
-          // comes back anyway.
-          $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
-          $or: headPairs
-            .slice(start, start + PREVIEW_HEADS_PER_QUERY)
-            .map(([runId, seq]) => ({ runId, seq })),
-        },
-        {
-          // Same reason, for the case where BOTH rows on that seq are
-          // messages: an unordered read let the two take turns winning across
-          // refetches, which is the sidebar preview flicking between the
-          // user's last message and the agent's. `createdAt` is the tie-break
-          // the seq cannot be — the later message is the later row — with the
-          // (random uuid) primary key behind it only so the answer is total
-          // rather than merely usually decided.
-          orderBy: { seq: 'asc', createdAt: 'asc', id: 'asc' },
-          fields: ['runId', 'payload'],
+          orderBy: { seq: 'desc', createdAt: 'desc', id: 'desc' },
+          fields: ['seq', 'payload'],
           disableIdentityMap: true,
         },
       );
-      for (const row of rows) {
-        const preview = messagePreview(row.payload);
-        if (preview !== null) {
-          previews.set(row.runId, preview);
+      if (head === null) {
+        continue;
+      }
+      const preview = messagePreview(head.payload);
+      if (preview !== null) {
+        previews.set(runId, preview);
+        continue;
+      }
+      // `(runId, seq)` is not a key: a transcript written before
+      // `ItemSeqAllocator` can hold two messages on one seq. The newest saying
+      // nothing leaves the line to another message on the SAME seq — never to
+      // an earlier one — in the order an unordered read once let them take
+      // turns in (the sidebar flicking between the user's line and the
+      // agent's): `createdAt`, then the primary key so the answer is total.
+      const sameSeq = await repo.find(
+        {
+          runId,
+          seq: head.seq,
+          kind: 'message',
+          $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
+        },
+        {
+          orderBy: { createdAt: 'asc', id: 'asc' },
+          fields: ['payload'],
+          disableIdentityMap: true,
+        },
+      );
+      for (const row of sameSeq) {
+        const fallback = messagePreview(row.payload);
+        if (fallback !== null) {
+          previews.set(runId, fallback);
         }
       }
     }
@@ -2346,12 +2311,16 @@ export class ItemDao extends BaseDao<Item> {
     const all = [...unique.values()];
     const times = new Map<string, Map<number, Date>>();
     for (let start = 0; start < all.length; start += CHUNK) {
+      // `kind` sits inside EACH branch, never beside the `$or`: with it outside,
+      // SQLite answers the `kind` equality from the `kind` index and filters
+      // every tool result in history against the branches — measured 1.6-12 s
+      // per chunk on a 5.9 GB profile, on the boot path. Inside, each branch is
+      // one `(run_id, kind, seq)` index probe (0.03 s for the same chunk).
       const rows = await this.getAll(
         {
-          kind: 'tool_result',
           $or: all
             .slice(start, start + CHUNK)
-            .map(({ runId, seq }) => ({ runId, seq })),
+            .map(({ runId, seq }) => ({ runId, kind: 'tool_result', seq })),
         },
         {
           fields: ['runId', 'seq', 'createdAt'],

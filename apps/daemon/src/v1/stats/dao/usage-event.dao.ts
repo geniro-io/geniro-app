@@ -194,36 +194,6 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
   }
 
   /**
-   * File every recorded turn under the model its transcript row says the CLI
-   * RAN on, where the two differ — returns how many rows moved.
-   *
-   * The ledger used to file a turn under the model the run ASKED for, which
-   * is null whenever the CLI picked — 18% of a real ledger's spend sat under
-   * a "CLI default" row naming no model. One statement against the turn rows'
-   * own transcript rows (the `(run_id, seq)` index serves the join), so it is
-   * cheap enough to run on every launch and moves nothing once done; a turn
-   * whose transcript row is gone keeps what it had.
-   */
-  async fileTurnsUnderReportedModel(txEm?: EntityManager): Promise<number> {
-    const em = txEm ?? this.em;
-    const reported = `json_extract(i.payload, '$.usage.contextModel')`;
-    const result = await em.getConnection().execute(
-      `update usage_events set model = ${reported}
-         from items i
-        where i.run_id = usage_events.run_id
-          and i.seq = usage_events.seq
-          and usage_events.seq >= 0
-          and json_valid(i.payload)
-          and ${reported} is not null
-          and ${reported} <> ''
-          and (usage_events.model is null or usage_events.model <> ${reported})`,
-      [],
-      'run',
-    );
-    return (result as { affectedRows?: number }).affectedRows ?? 0;
-  }
-
-  /**
    * Insert one ledger row WITHOUT flushing the caller's unit of work.
    *
    * `BaseDao.create` flushes the whole EntityManager it is handed, and both

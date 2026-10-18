@@ -17,15 +17,12 @@ import * as runtime from '../runtime';
 import type {
   AddMcpServerDto,
   AgentCacheResetDto,
-  AgentContextWindowListingDto,
-  AgentEffortListingDto,
   AgentKind,
   AgentMcpConfigDto,
   AgentMcpListingDto,
-  AgentModelDto,
-  AgentModelParameterListingDto,
   AgentSessionListingDto,
   AgentSkillDto,
+  AgentVocabularyDto,
   CopyPluginMcpServerDto,
   RecheckMcpServerDto,
   SetMcpServerEnabledDto,
@@ -40,34 +37,11 @@ export interface AgentsApiCopyAgentMcpPluginServerRequest {
     copyPluginMcpServerDto: CopyPluginMcpServerDto;
 }
 
-export interface AgentsApiListAgentContextWindowsRequest {
-    agent: AgentKind;
-    model?: string;
-    configDir?: string;
-}
-
-export interface AgentsApiListAgentEffortsRequest {
-    agent: AgentKind;
-    model?: string;
-    configDir?: string;
-}
-
 export interface AgentsApiListAgentMcpServersRequest {
     agent: AgentKind;
     cwd?: string;
     configDir?: string;
     refresh?: string;
-}
-
-export interface AgentsApiListAgentModelParametersRequest {
-    agent: AgentKind;
-    model?: string;
-    configDir?: string;
-}
-
-export interface AgentsApiListAgentModelsRequest {
-    agent: AgentKind;
-    configDir?: string;
 }
 
 export interface AgentsApiListAgentSessionsRequest {
@@ -80,6 +54,12 @@ export interface AgentsApiListAgentSessionsRequest {
 export interface AgentsApiListAgentSkillsRequest {
     agent: AgentKind;
     cwd: string;
+    configDir?: string;
+}
+
+export interface AgentsApiListAgentVocabularyRequest {
+    agent: AgentKind;
+    model?: string;
     configDir?: string;
 }
 
@@ -239,118 +219,6 @@ export class AgentsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async listAgentContextWindowsRaw(requestParameters: AgentsApiListAgentContextWindowsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentContextWindowListingDto>> {
-        if (requestParameters['agent'] == null) {
-            throw new runtime.RequiredError(
-                'agent',
-                'Required parameter "agent" was null or undefined when calling listAgentContextWindows().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        if (requestParameters['agent'] != null) {
-            queryParameters['agent'] = requestParameters['agent'];
-        }
-
-        if (requestParameters['model'] != null) {
-            queryParameters['model'] = requestParameters['model'];
-        }
-
-        if (requestParameters['configDir'] != null) {
-            queryParameters['configDir'] = requestParameters['configDir'];
-        }
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/agents/context-windows`;
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async listAgentContextWindows(requestParameters: AgentsApiListAgentContextWindowsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentContextWindowListingDto> {
-        const response = await this.listAgentContextWindowsRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * 
-     */
-    async listAgentEffortsRaw(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentEffortListingDto>> {
-        if (requestParameters['agent'] == null) {
-            throw new runtime.RequiredError(
-                'agent',
-                'Required parameter "agent" was null or undefined when calling listAgentEfforts().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        if (requestParameters['agent'] != null) {
-            queryParameters['agent'] = requestParameters['agent'];
-        }
-
-        if (requestParameters['model'] != null) {
-            queryParameters['model'] = requestParameters['model'];
-        }
-
-        if (requestParameters['configDir'] != null) {
-            queryParameters['configDir'] = requestParameters['configDir'];
-        }
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/agents/efforts`;
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async listAgentEfforts(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentEffortListingDto> {
-        const response = await this.listAgentEffortsRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * 
-     */
     async listAgentMcpServersRaw(requestParameters: AgentsApiListAgentMcpServersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentMcpListingDto>> {
         if (requestParameters['agent'] == null) {
             throw new runtime.RequiredError(
@@ -405,114 +273,6 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async listAgentMcpServers(requestParameters: AgentsApiListAgentMcpServersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpListingDto> {
         const response = await this.listAgentMcpServersRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * 
-     */
-    async listAgentModelParametersRaw(requestParameters: AgentsApiListAgentModelParametersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentModelParameterListingDto>> {
-        if (requestParameters['agent'] == null) {
-            throw new runtime.RequiredError(
-                'agent',
-                'Required parameter "agent" was null or undefined when calling listAgentModelParameters().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        if (requestParameters['agent'] != null) {
-            queryParameters['agent'] = requestParameters['agent'];
-        }
-
-        if (requestParameters['model'] != null) {
-            queryParameters['model'] = requestParameters['model'];
-        }
-
-        if (requestParameters['configDir'] != null) {
-            queryParameters['configDir'] = requestParameters['configDir'];
-        }
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/agents/model-parameters`;
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async listAgentModelParameters(requestParameters: AgentsApiListAgentModelParametersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentModelParameterListingDto> {
-        const response = await this.listAgentModelParametersRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * 
-     */
-    async listAgentModelsRaw(requestParameters: AgentsApiListAgentModelsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<AgentModelDto>>> {
-        if (requestParameters['agent'] == null) {
-            throw new runtime.RequiredError(
-                'agent',
-                'Required parameter "agent" was null or undefined when calling listAgentModels().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        if (requestParameters['agent'] != null) {
-            queryParameters['agent'] = requestParameters['agent'];
-        }
-
-        if (requestParameters['configDir'] != null) {
-            queryParameters['configDir'] = requestParameters['configDir'];
-        }
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/agents/models`;
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async listAgentModels(requestParameters: AgentsApiListAgentModelsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<AgentModelDto>> {
-        const response = await this.listAgentModelsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -636,6 +396,62 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async listAgentSkills(requestParameters: AgentsApiListAgentSkillsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<AgentSkillDto>> {
         const response = await this.listAgentSkillsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listAgentVocabularyRaw(requestParameters: AgentsApiListAgentVocabularyRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentVocabularyDto>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling listAgentVocabulary().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['model'] != null) {
+            queryParameters['model'] = requestParameters['model'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/vocabulary`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listAgentVocabulary(requestParameters: AgentsApiListAgentVocabularyRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentVocabularyDto> {
+        const response = await this.listAgentVocabularyRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

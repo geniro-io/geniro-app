@@ -82,6 +82,7 @@ export function useRunConfigVocabulary({
     agentsApi,
     agentKind,
     configDir,
+    model,
   );
   const { efforts, loading: effortsLoading } = useAgentEfforts(
     agentsApi,

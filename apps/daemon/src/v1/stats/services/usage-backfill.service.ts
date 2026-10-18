@@ -137,11 +137,15 @@ export class UsageBackfillService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     // Each sweep fails on its own: a transcript that could not be read is no
     // reason to leave the polled bills or the activity ledger unseeded, nor the
-    // reverse. The model repair runs BEFORE the polled sweep, which files each
-    // run's polled bill under the model that run's turns reported.
+    // reverse.
+    //
+    // Nothing here may read the whole transcript: the window waits on this
+    // method. A one-off repair that joined every ledger row to its transcript
+    // row ran here on every launch and was measured at 7-30 s on a 5.9 GB
+    // profile (cold cache) while moving nothing, which pushed the boot past
+    // the supervisor's start deadline.
     for (const [name, sweep] of [
       ['usage backfill', () => this.backfill()],
-      ['reported model repair', () => this.fileTurnsUnderReportedModel()],
       ['polled spend backfill', () => this.backfillPolledSpend()],
     ] as const) {
       try {
@@ -169,25 +173,6 @@ export class UsageBackfillService implements OnModuleInit {
         `activity backfill failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-  }
-
-  /**
-   * File every recorded turn under the model its own transcript row says the
-   * CLI ran on (`UsageEventDao.fileTurnsUnderReportedModel`) — the repair for
-   * rows written while the ledger filed a turn under the model the run ASKED
-   * for. A no-op once done, so it runs on every launch rather than behind a
-   * marker that could be wrong.
-   */
-  async fileTurnsUnderReportedModel(): Promise<number> {
-    const moved = await this.usageDao.fileTurnsUnderReportedModel(
-      this.em.fork(),
-    );
-    if (moved > 0) {
-      this.logger.log(
-        `filed ${moved} recorded turn(s) under the model the CLI reported`,
-      );
-    }
-    return moved;
   }
 
   /**

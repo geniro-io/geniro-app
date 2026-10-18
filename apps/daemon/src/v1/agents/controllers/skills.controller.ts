@@ -4,41 +4,28 @@ import { ZodResponse } from 'nestjs-zod';
 
 import type {
   AgentCacheResetWire,
-  AgentContextWindowListingWire,
-  AgentEffortListingWire,
-  AgentModelParameterListingWire,
-  AgentModelWire,
   AgentSessionListingWire,
   AgentSkillWire,
+  AgentVocabularyWire,
 } from '../chat.types';
 import {
   AgentCacheResetDto,
-  AgentContextWindowListingDto,
-  AgentEffortListingDto,
-  AgentModelDto,
-  AgentModelParameterListingDto,
   AgentSessionListingDto,
   AgentSkillDto,
+  AgentVocabularyDto,
   ListAgentSessionsQueryDto,
-  ListContextWindowsQueryDto,
-  ListEffortsQueryDto,
-  ListModelParametersQueryDto,
-  ListModelsQueryDto,
   ListSkillsQueryDto,
+  ListVocabularyQueryDto,
 } from '../dto/skills.dto';
+import { AgentVocabularyService } from '../services/agent-vocabulary.service';
 import { CacheResetService } from '../services/cache-reset.service';
 import { CliSessionsService } from '../services/cli-sessions.service';
-import { ContextWindowsService } from '../services/context-windows.service';
-import { EffortsService } from '../services/efforts.service';
-import { ModelParametersService } from '../services/model-parameters.service';
-import { ModelsService } from '../services/models.service';
 import { SkillsService } from '../services/skills.service';
 
 /**
  * Loopback agent-capability REST surface (token-gated by the global
  * LoopbackTokenGuard): what an agent kind can be invoked with in a folder —
- * the composer's `/` autocomplete listing, and its model and effort
- * vocabularies. The MCP servers it would load are `McpController`'s, which
+ * the composer's `/` autocomplete listing, and its model vocabulary. The MCP servers it would load are `McpController`'s, which
  * owns them together with the switch that changes them.
  */
 @Controller('v1/agents')
@@ -47,10 +34,7 @@ import { SkillsService } from '../services/skills.service';
 export class SkillsController {
   constructor(
     private readonly skillsService: SkillsService,
-    private readonly modelsService: ModelsService,
-    private readonly effortsService: EffortsService,
-    private readonly contextWindowsService: ContextWindowsService,
-    private readonly modelParametersService: ModelParametersService,
+    private readonly vocabularyService: AgentVocabularyService,
     private readonly cliSessionsService: CliSessionsService,
     private readonly cacheResetService: CacheResetService,
   ) {}
@@ -66,11 +50,21 @@ export class SkillsController {
     );
   }
 
-  @Get('models')
-  @ApiOperation({ operationId: 'listAgentModels' })
-  @ZodResponse({ status: 200, type: [AgentModelDto] })
-  listModels(@Query() query: ListModelsQueryDto): Promise<AgentModelWire[]> {
-    return this.modelsService.list(query.agent, query.configDir ?? null);
+  /**
+   * The models, and the effort levels, context windows and other parameters of
+   * the model named — one answer for a picker that shows all four.
+   */
+  @Get('vocabulary')
+  @ApiOperation({ operationId: 'listAgentVocabulary' })
+  @ZodResponse({ status: 200, type: AgentVocabularyDto })
+  listVocabulary(
+    @Query() query: ListVocabularyQueryDto,
+  ): Promise<AgentVocabularyWire> {
+    return this.vocabularyService.read(
+      query.agent,
+      query.model ?? null,
+      query.configDir ?? null,
+    );
   }
 
   /**
@@ -88,59 +82,6 @@ export class SkillsController {
       query.cwd ?? null,
       query.configDir ?? null,
       query.query ?? null,
-    );
-  }
-
-  /**
-   * The effort levels available for one CLI, narrowed to one MODEL when the
-   * caller names one — see {@link ListEffortsQueryDto}.
-   */
-  @Get('efforts')
-  @ApiOperation({ operationId: 'listAgentEfforts' })
-  @ZodResponse({ status: 200, type: AgentEffortListingDto })
-  listEfforts(
-    @Query() query: ListEffortsQueryDto,
-  ): Promise<AgentEffortListingWire> {
-    return this.effortsService.list(
-      query.agent,
-      query.model ?? null,
-      query.configDir ?? null,
-    );
-  }
-
-  /**
-   * The context-window sizes one MODEL of a CLI can be run at — reported by
-   * the CLI itself, never from a table here (see
-   * `AgentContextWindowListingWireSchema`).
-   */
-  @Get('context-windows')
-  @ApiOperation({ operationId: 'listAgentContextWindows' })
-  @ZodResponse({ status: 200, type: AgentContextWindowListingDto })
-  listContextWindows(
-    @Query() query: ListContextWindowsQueryDto,
-  ): Promise<AgentContextWindowListingWire> {
-    return this.contextWindowsService.listWire(
-      query.agent,
-      query.model ?? null,
-      query.configDir ?? null,
-    );
-  }
-
-  /**
-   * Every OTHER setting one MODEL offers — whatever the CLI enumerates beyond
-   * the model, its effort and its context window, each of which already has a
-   * control of its own. See `AgentModelParameter`.
-   */
-  @Get('model-parameters')
-  @ApiOperation({ operationId: 'listAgentModelParameters' })
-  @ZodResponse({ status: 200, type: AgentModelParameterListingDto })
-  listModelParameters(
-    @Query() query: ListModelParametersQueryDto,
-  ): Promise<AgentModelParameterListingWire> {
-    return this.modelParametersService.listWire(
-      query.agent,
-      query.model ?? null,
-      query.configDir ?? null,
     );
   }
 

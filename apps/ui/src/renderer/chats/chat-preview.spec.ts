@@ -113,4 +113,14 @@ describe('previewTextOf', () => {
   ])('previews %s', (_case, payload, expected) => {
     expect(previewTextOf(payload)).toBe(expected);
   });
+
+  it('cuts a long message to the line it is drawn as, never inside a surrogate pair', () => {
+    // 399 letters then an emoji (two UTF-16 units) then more: a cut by code
+    // unit at 400 would end on half of the emoji. The same string is pinned
+    // on the other side of the twin, so the two cut at one place.
+    const long = `${'a'.repeat(399)}😀${'b'.repeat(5_000)}`;
+    const cut = previewTextOf({ text: long });
+    expect(Array.from(cut ?? '')).toHaveLength(400);
+    expect(cut).toBe(`${'a'.repeat(399)}😀`);
+  });
 });

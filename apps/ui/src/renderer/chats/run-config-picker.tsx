@@ -686,6 +686,9 @@ function RunConfigEditor({
     agentsApi,
     vocabularyKind,
     vocabularyConfigDir,
+    // The model the window and parameter listings below ask about, so the
+    // three share one request (the effort listing asks CLI-wide).
+    draft.model,
   );
   const efforts = useAgentEfforts(
     agentsApi,

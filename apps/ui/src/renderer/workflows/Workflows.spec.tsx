@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonHandle } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import { withHistoryPages } from '../__tests__/history-page';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type {
@@ -90,7 +91,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       updateChatSettings: vi.fn(),
     }),
     capabilities: { getCapabilities },
-    agents: {
+    agents: withVocabulary({
       listAgentModels: vi.fn(async () => []),
       // Each of these three answers a LISTING, not a bare array — the hooks
       // read `.efforts` / `.windows` / `.parameters` off it.
@@ -113,7 +114,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
         unavailableReason: null,
         pending: false,
       })),
-    },
+    }),
   }),
 }));
 

@@ -17,6 +17,7 @@ import { BottomTabBar } from './components/bottom-tab-bar';
 import { ConnectionBanner } from './components/connection-banner';
 import { EmptyState } from './components/empty-state';
 import { type AppView, NavRail } from './components/nav-rail';
+import { StartupScreen } from './components/startup-screen';
 import { TitleBar } from './components/title-bar';
 import { cn } from './components/ui/utils';
 import { useNarrowViewport } from './components/use-narrow-viewport';
@@ -183,6 +184,16 @@ export function App(): React.JSX.Element {
    * its own schedule.
    */
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  /**
+   * Why the daemon could not be STARTED — the supervisor's own reason, while
+   * no handle has ever arrived. Kept apart from `connectionError`: a start
+   * still in flight is not a failure and the startup screen says so, while a
+   * socket that dropped after the daemon answered is the banner's business.
+   */
+  const [startError, setStartError] = useState<string | null>(null);
+  /** When the shell began waiting for a daemon — the startup screen's clock. */
+  const [waitingSince, setWaitingSince] = useState(() => Date.now());
+  const handleRef = useRef<DaemonHandle | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   /**
@@ -300,6 +311,20 @@ export function App(): React.JSX.Element {
   useEffect(() => window.geniro.onFlushLineMeasurements(answerLineFlush), []);
 
   const attachDaemon = useCallback((daemonHandle: DaemonHandle): void => {
+    // The launch's start answers twice — the `onDaemonRestarted` push and the
+    // mount's own `ensureDaemon`, which joins that same start — and a second
+    // attach of one handle would only drop a socket that is already opening.
+    const held = handleRef.current;
+    if (
+      held !== null &&
+      held.host === daemonHandle.host &&
+      held.port === daemonHandle.port &&
+      held.token === daemonHandle.token
+    ) {
+      return;
+    }
+    handleRef.current = daemonHandle;
+    setStartError(null);
     // Published for the DevTools extension's Geniro panel, which runs in an
     // extension origin with no preload and no module graph of ours — its only
     // channel to this page is `inspectedWindow.eval`, so the host, port and
@@ -334,45 +359,31 @@ export function App(): React.JSX.Element {
     setHandle(daemonHandle);
   }, []);
 
-  const connectDaemon = useCallback(
-    async (mode: 'read' | 'ensure' = 'read'): Promise<void> => {
-      setReconnecting(true);
-      try {
-        // The banner's Retry ENSURES — asks main to start a daemon that died or
-        // never came up. Reading the handle alone could only ever report that
-        // there was none, so the button did nothing a second press could fix.
-        // Mount still only reads: the launch's own start is in flight then, and
-        // announces its handle through `onDaemonRestarted` when it lands.
-        const daemonHandle =
-          mode === 'ensure'
-            ? await window.geniro.ensureDaemon()
-            : await window.geniro.getDaemonHandle();
-        if (!daemonHandle) {
-          setConnected(false);
-          // A missing handle is a DIFFERENT failure from a refused socket: there
-          // is no address to dial, because the supervisor never got the daemon
-          // to a healthy listen. Said in those terms rather than left as
-          // silence, which is what it was — the app simply showed an empty
-          // shell.
-          setConnectionError(
-            'The local engine has not started yet, so there is nothing to connect to.',
-          );
-          return;
-        }
-        attachDaemon(daemonHandle);
-      } catch (err) {
-        setConnected(false);
-        setConnectionError(
-          err instanceof Error
-            ? err.message
-            : 'Could not reach the local engine.',
-        );
-      } finally {
-        setReconnecting(false);
+  const connectDaemon = useCallback(async (): Promise<void> => {
+    setReconnecting(true);
+    try {
+      // Always ENSURES, on mount as on a Retry. On mount the launch's own start
+      // is usually still in flight, and `ensureDaemon` joins it rather than
+      // starting a second — so its answer is the one signal for both endings:
+      // the handle once the daemon listens, or the supervisor's reason when it
+      // gave up. Reading the handle instead answered "none" mid-boot, which
+      // the window used to show as a red "not connected" on every launch.
+      attachDaemon(await window.geniro.ensureDaemon());
+    } catch (err) {
+      setConnected(false);
+      const reason =
+        err instanceof Error
+          ? err.message
+          : 'Could not reach the local engine.';
+      if (handleRef.current === null) {
+        setStartError(reason);
+      } else {
+        setConnectionError(reason);
       }
-    },
-    [attachDaemon],
-  );
+    } finally {
+      setReconnecting(false);
+    }
+  }, [attachDaemon]);
 
   useEffect(() => {
     let cancelled = false;
@@ -507,13 +518,20 @@ export function App(): React.JSX.Element {
   // Both of these render before the shell exists, so neither has a top row of
   // its own to drag the window by — see `WindowDragStrip`.
   if (phase === 'loading') {
+    // The same screen the shell shows while the daemon starts, so the first
+    // paint does not swap one waiting message for another a moment later.
     return (
       <>
         <WindowDragStrip />
-        <EmptyState>Loading…</EmptyState>
+        <StartupScreen since={waitingSince} />
       </>
     );
   }
+
+  // Until the first daemon answers, the views have nothing to draw — every one
+  // of them is daemon calls. Settings is the exception, because a start that
+  // failed may be fixed there (an agent's binary path, the inspector switch).
+  const showStartup = handle === null && view !== 'settings';
 
   if (phase === 'onboarding') {
     return (
@@ -537,7 +555,8 @@ export function App(): React.JSX.Element {
           for why it is not three rows in three columns any more. */}
           <TitleBar
             title={
-              view !== 'chats'
+              // No chat exists to name until the daemon answers.
+              view !== 'chats' || showStartup
                 ? VIEW_TITLE[view]
                 : narrowViewport && !chatsPhoneDetail
                   ? // The phone's chat LIST page names the place, like
@@ -609,13 +628,31 @@ export function App(): React.JSX.Element {
             and a builder that cannot save, all at once. Outside the per-view
             wrappers so it survives a nav switch — the connection is app state,
             not any one screen's. */}
-              {connected ? null : (
+              {/* Not while the daemon is still starting: that is the startup
+            screen's to say, and a start is not a failure. On Settings, with no
+            daemon yet, it appears once the start has actually failed. */}
+              {connected ||
+              showStartup ||
+              (handle === null && startError === null) ? null : (
                 <ConnectionBanner
-                  reason={connectionError}
+                  reason={connectionError ?? startError}
                   retrying={reconnecting}
-                  onRetry={() => void connectDaemon('ensure')}
+                  onRetry={() => void connectDaemon()}
                 />
               )}
+              {showStartup ? (
+                <StartupScreen
+                  since={waitingSince}
+                  reason={startError}
+                  onRetry={() => {
+                    // Back to the starting view, clock and all: this is a
+                    // fresh start, and its failure brings the reason back.
+                    setStartError(null);
+                    setWaitingSince(Date.now());
+                    void connectDaemon();
+                  }}
+                />
+              ) : null}
               {/* No update strip here. It and the nav rail's version row were two
             controls for one action in one window; the row is where the running
             version is already written, so that is the one that stayed. The
@@ -625,7 +662,10 @@ export function App(): React.JSX.Element {
               {/* Chats stays mounted (hidden) across nav switches so its live WS room
             and active-run selection survive a trip to Settings/Workflows. */}
               <div
-                className={cn('min-h-0 flex-1', view !== 'chats' && 'hidden')}>
+                className={cn(
+                  'min-h-0 flex-1',
+                  (view !== 'chats' || showStartup) && 'hidden',
+                )}>
                 {handle && clientRef.current ? (
                   <Chats
                     client={clientRef.current}
@@ -653,9 +693,7 @@ export function App(): React.JSX.Element {
                       setThreadRequest(null);
                     }}
                   />
-                ) : (
-                  <EmptyState>Connecting to the daemon…</EmptyState>
-                )}
+                ) : null}
               </div>
               <Suspense fallback={<EmptyState>Loading…</EmptyState>}>
                 {/* `min-h-0 flex-1`, not `h-full`: `main` is now a flex COLUMN whose
@@ -665,7 +703,7 @@ export function App(): React.JSX.Element {
                 <div
                   className={cn(
                     'min-h-0 flex-1',
-                    view !== 'workflows' && 'hidden',
+                    (view !== 'workflows' || showStartup) && 'hidden',
                   )}>
                   {workflowsMounted ? (
                     <Workflows
@@ -680,7 +718,7 @@ export function App(): React.JSX.Element {
                 <div
                   className={cn(
                     'min-h-0 flex-1',
-                    view !== 'tasks' && 'hidden',
+                    (view !== 'tasks' || showStartup) && 'hidden',
                   )}>
                   {tasksMounted ? (
                     <Tasks
@@ -701,7 +739,7 @@ export function App(): React.JSX.Element {
               the page holds no unsaved edit and no live subscription, and a
               fresh mount is how a revisit gets figures that are current
               rather than however stale the last visit left them. */}
-                {view === 'stats' ? (
+                {view === 'stats' && !showStartup ? (
                   <div className="min-h-0 flex-1">
                     <Stats handle={handle} client={clientRef.current} />
                   </div>

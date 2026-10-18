@@ -676,9 +676,10 @@ function main(): void {
 
     // Open the window FIRST and let the daemon boot in parallel: first paint
     // and the renderer bundle load overlap the spawn + health poll instead of
-    // trailing them (the renderer shows "Connecting to the daemon…" and
-    // subscribes to onDaemonRestarted before its initial status fetch, so
-    // both ready-vs-mount orderings deliver the handle).
+    // trailing them (the renderer shows its startup screen, subscribes to
+    // onDaemonRestarted and joins this start through `ensureDaemon`, so both
+    // ready-vs-mount orderings deliver the handle — and a failed start its
+    // reason).
     createWindow();
 
     ensureDaemon();

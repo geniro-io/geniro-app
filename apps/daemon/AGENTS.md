@@ -350,7 +350,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 
 ### Plan limits
 
-- **Plan limits are the ACCOUNT's**: the ledger (`utils/plan-limits-ledger.ts`) is keyed by CLI plus the account's config directory (the folder pin first, else the run's profile). A real reading beats a newer `estimated` one for 30 min. In memory only.
+- **Plan limits are the ACCOUNT's**: the ledger (`utils/plan-limits-ledger.ts`) is keyed by CLI plus the account's config directory (the folder pin first, else the run's profile). A real reading beats a newer `estimated` one for 5 min (`REAL_READING_PREFERRED_MS`), except on the readout's refresh press, where the agent's live answer stands. In memory only.
 
 ### Daemon endpoints (loopback)
 

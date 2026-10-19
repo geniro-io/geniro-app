@@ -355,6 +355,7 @@ export class ChatMetricsService implements OnModuleInit {
       stored: stored?.plan
         ? { plan: stored.plan, takenAt: epochOf(stored.takenAt) }
         : null,
+      refresh,
     });
     const plan = planReading?.plan ?? null;
     return {
@@ -1029,7 +1030,12 @@ export class ChatMetricsService implements OnModuleInit {
       const agent = await this.readFromAgent(target, em);
       // Shared with the account even when nothing is filed below: a prewarm
       // is the commonest moment a fresh allowance is taken at all.
-      this.settlePlan(target, { ...agent, takenAt: Date.now(), stored: null });
+      this.settlePlan(target, {
+        ...agent,
+        takenAt: Date.now(),
+        stored: null,
+        refresh: false,
+      });
       if (agent.context === null && agent.plan === null) {
         return;
       }
@@ -1050,7 +1056,9 @@ export class ChatMetricsService implements OnModuleInit {
    * An account that ANSWERED with no windows has none now, so nothing older is
    * filled in: it would show limits the account no longer has. The live answer
    * outranks this run's own stored one, which is offered only where there is
-   * none — the ledger then decides between it and every other chat's.
+   * none — the ledger then decides between it and every other chat's. On a
+   * REFRESH the live answer stands over that choice: the user pressed it to
+   * see now, not the best of what was already known.
    */
   private settlePlan(
     target: ReadingTarget,
@@ -1059,6 +1067,8 @@ export class ChatMetricsService implements OnModuleInit {
       planNotReported: boolean;
       takenAt: number;
       stored: PlanReading | null;
+      /** The readout's refresh press. */
+      refresh: boolean;
     },
   ): PlanReading | null {
     if (reading.planNotReported) {
@@ -1075,6 +1085,9 @@ export class ChatMetricsService implements OnModuleInit {
       // offered — it would otherwise outrank or lose to everything at random.
       offered !== null && Number.isFinite(offered.takenAt) ? offered : null,
       Date.now(),
+      // The agent's own answer only — the stored reading offered in its place
+      // is no fresher than what the ledger already holds.
+      reading.refresh && reading.plan !== null,
     );
   }
 

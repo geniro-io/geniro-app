@@ -26,6 +26,38 @@ describe('buildChildEnv', () => {
     expect(env.CHILD_ENV_SPEC_PLAIN).toBe('kept');
   });
 
+  it('strips the daemon’s Electron-as-Node switch but keeps the user’s other ELECTRON_ keys', () => {
+    // The daemon runs as `ELECTRON_RUN_AS_NODE=1 electron`; inherited, every
+    // Electron app an agent starts boots as plain Node.
+    const saved = {
+      run: process.env.ELECTRON_RUN_AS_NODE,
+      mirror: process.env.ELECTRON_MIRROR,
+    };
+    process.env.ELECTRON_RUN_AS_NODE = '1';
+    process.env.ELECTRON_MIRROR = 'https://mirror.example/electron/';
+    try {
+      const env = buildChildEnv();
+
+      expect('ELECTRON_RUN_AS_NODE' in env).toBe(false);
+      expect(env.ELECTRON_MIRROR).toBe('https://mirror.example/electron/');
+      // A caller that means to run Electron as Node still can, explicitly.
+      expect(
+        buildChildEnv({ ELECTRON_RUN_AS_NODE: '1' }).ELECTRON_RUN_AS_NODE,
+      ).toBe('1');
+    } finally {
+      for (const [key, value] of [
+        ['ELECTRON_RUN_AS_NODE', saved.run],
+        ['ELECTRON_MIRROR', saved.mirror],
+      ] as const) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
   it('strips a registered name and nothing it was not told about', () => {
     // The set is the union adapters register as they are constructed, so the
     // strip must follow the registry exactly: a name nobody registered is an

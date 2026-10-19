@@ -31,11 +31,20 @@ import { subagentState } from './utils/codex-items.utils';
 import { CodexSubagentSpend } from './utils/codex-usage.utils';
 
 /**
- * A refused `turn/steer` is the one reply that still matters after its turn has
- * ended: it is how the user learns that a message they sent was not taken.
+ * Ending a stopped turn's commands is asked AFTER that turn ended, often while
+ * the next one runs, so its replies — answers and refusals — must still reach
+ * the turn that asked.
+ */
+function outlivesItsTurn(kind: CodexPendingKind): boolean {
+  return kind === 'terminals_list' || kind === 'terminal_terminate';
+}
+
+/**
+ * A refused `turn/steer` also still matters after its turn has ended: it is how
+ * the user learns that a message they sent was not taken.
  */
 function refusalOutlivesItsTurn(kind: CodexPendingKind): boolean {
-  return kind === 'turn_steer';
+  return kind === 'turn_steer' || outlivesItsTurn(kind);
 }
 
 /** What a {@link CodexSession} needs from the adapter that built it. */
@@ -99,6 +108,19 @@ export class CodexSession implements TurnDriver {
    * item's start.
    */
   readonly items = new Map<string, CodexItem>();
+  /**
+   * The codex turn ids that ended stopped or failed — the turns whose frames
+   * may still arrive after them.
+   *
+   * codex does not end a command on `turn/interrupt`: the command runs on and
+   * reports under the stopped turn's id, often after the next turn opened.
+   * Notifications go to whichever driver is current, so the next turn would
+   * take that report as its own; a frame naming one of these turns does only
+   * the session's bookkeeping instead. On the session because the frames
+   * outlive the driver they belong to, and keyed by codex's id because they
+   * can land before the next turn's own id is known.
+   */
+  readonly endedTurns = new Set<string>();
   /**
    * Server requests awaiting the user's verdict, by encoded id. Thread-scoped
    * rather than per-turn: a request left unanswered when its turn settles is
@@ -191,10 +213,10 @@ export class CodexSession implements TurnDriver {
     const message = classifyMessage(obj);
     switch (message.kind) {
       case 'response': {
-        const entry = this.pending.take(message.id, this.turn);
+        const entry = this.pending.take(message.id, this.turn, outlivesItsTurn);
         return entry === null
           ? []
-          : entry.turn.onReply(entry.kind, message.result);
+          : entry.turn.onReply(entry.kind, message.result, entry.detail);
       }
       case 'error': {
         const entry = this.pending.take(
@@ -321,7 +343,8 @@ export class CodexSession implements TurnDriver {
 
   /**
    * Send one request, answering whether it actually went out. `detail` is what
-   * the turn wants said if the reply is a refusal.
+   * the turn wants said about the reply. `owner` is the turn the reply goes to:
+   * the current one, unless an ended turn is still finishing its own work.
    */
   request(
     method: string,
@@ -329,12 +352,13 @@ export class CodexSession implements TurnDriver {
     kind: CodexPendingKind,
     events: AgentEvent[],
     detail: string | null = null,
+    owner: CodexTurnDriver = this.turn,
   ): boolean {
     const id = this.pending.send(
       method,
       params,
       kind,
-      this.turn,
+      owner,
       (frame) => this.write(frame),
       detail,
     );

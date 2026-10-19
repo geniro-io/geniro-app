@@ -1449,7 +1449,12 @@ class RealSpawnAdapter extends BareAdapter {
   }
 
   run(args: string[], options: AgentCommandOptions): Promise<string | null> {
-    return this.runCommand(args, options);
+    // The suite runs under Electron, and `buildChildEnv` no longer passes the
+    // daemon's `ELECTRON_RUN_AS_NODE` down, so the child asks for it itself.
+    return this.runCommand(args, {
+      ...options,
+      env: { ELECTRON_RUN_AS_NODE: '1', ...options.env },
+    });
   }
 }
 

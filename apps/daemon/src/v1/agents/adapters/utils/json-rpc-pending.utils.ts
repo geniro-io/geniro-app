@@ -10,6 +10,11 @@ export interface PendingRequest<K extends string, T> {
    * null when the frame has nothing of its own to add.
    */
   detail: string | null;
+  /**
+   * The `FollowUpMessage.deliveryId` of the user message the frame carries,
+   * for a refusal to be reported as that message dropped; null otherwise.
+   */
+  deliveryId: string | null;
 }
 
 /**
@@ -47,9 +52,10 @@ export class PendingRequests<K extends string, T> {
     turn: T,
     write: (frame: string) => boolean,
     detail: string | null = null,
+    deliveryId: string | null = null,
   ): JsonRpcId | null {
     const id = this.nextId++;
-    this.entries.set(id, { kind, turn, detail });
+    this.entries.set(id, { kind, turn, detail, deliveryId });
     if (!write(encodeRequest(id, method, params))) {
       this.entries.delete(id);
       return null;
@@ -63,7 +69,7 @@ export class PendingRequests<K extends string, T> {
    */
   frame(method: string, params: unknown, kind: K, turn: T): string {
     const id = this.nextId++;
-    this.entries.set(id, { kind, turn, detail: null });
+    this.entries.set(id, { kind, turn, detail: null, deliveryId: null });
     return encodeRequest(id, method, params);
   }
 

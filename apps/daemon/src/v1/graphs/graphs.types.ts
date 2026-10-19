@@ -900,7 +900,15 @@ export const ALWAYS_LOADED_TOOL_META = {
 
 /** What became of a caller's message into one running call. */
 export type CalleeMessageOutcome =
-  | { delivered: true; interrupts: boolean }
+  | {
+      delivered: true;
+      interrupts: boolean;
+      /**
+       * The `FollowUpMessage.deliveryId` it rode into the turn with, which a
+       * later drop names (`CallBroker.markMessageDropped`).
+       */
+      deliveryId?: string;
+    }
   | { delivered: false; reason: 'not_started' | 'refused' };
 
 /** One command a callee left running, as {@link CalleeTurnOutcome} names it. */
@@ -1645,8 +1653,13 @@ export interface RunCallCapability {
    * turn, the CLI refused the message, or the CLI's follow-up would INTERRUPT
    * the turn (`AdapterConfig.followUp.interrupts`): stopping a caller's tool
    * call to relay a question costs more than letting its next wait deliver it.
+   *
+   * A turn can still end before it takes a message it accepted
+   * (`follow_up_dropped`). `redeliver` then runs once that turn has ended;
+   * without one the drop is let go — right for a question or a result, which
+   * a tell leaves untold, so the conversation's drain wakes it with them.
    */
-  tellLiveNode(caller: string, prompt: string): boolean;
+  tellLiveNode(caller: string, prompt: string, redeliver?: () => void): boolean;
 }
 
 /**

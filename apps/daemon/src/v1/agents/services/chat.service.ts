@@ -7010,12 +7010,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const attachments = images.map((image) =>
       this.attachments.save(runId, image.mediaType, image.data),
     );
+    // Names this row to the turn: a driver that accepts the message but never
+    // gets it to the agent reports it by this id (`follow_up_dropped`), and the
+    // renderer pairs that report back to the row through the same key.
+    // TWIN PARSER: `apps/ui/src/renderer/chats/not-sent-messages.ts` reads the
+    // row's `deliveryId`; rename it on both sides.
+    const deliveryId = randomUUID();
     const delivered = handle.sendUserMessage({
       text,
       images: attachments.map((attachment) => ({
         path: this.attachments.pathOf(runId, attachment.id),
         mediaType: attachment.mediaType,
       })),
+      deliveryId,
     });
     if (!delivered) {
       throw busy;
@@ -7041,6 +7048,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     return this.persist(em, runId, seq, 'message', 'user', {
       text,
       ...(attachments.length > 0 ? { images: attachments } : {}),
+      deliveryId,
       // NOT stamped with how it was sent. A `midTurn: true` flag used to ride
       // here so the renderer could caption the row ("Sent into the turn already
       // running — the agent picks this up when its current step finishes"),

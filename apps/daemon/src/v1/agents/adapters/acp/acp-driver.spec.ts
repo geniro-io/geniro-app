@@ -4344,6 +4344,66 @@ describe('AcpSession — a message delivered into the running turn', () => {
     }
   });
 
+  /** Where the drop sits relative to the event that ends the turn. */
+  function dropBeforeTerminal(events: AgentEvent[]): void {
+    const types = events.map((event) => event.type);
+    const terminal = types.findIndex(
+      (type) =>
+        type === 'turn_cancelled' ||
+        type === 'turn_complete' ||
+        type === 'error',
+    );
+    expect(types.indexOf('follow_up_dropped')).toBeGreaterThanOrEqual(0);
+    expect(types.indexOf('follow_up_dropped')).toBeLessThan(terminal);
+  }
+
+  // A message accepted while the cancel is in flight has already been written
+  // as a sent row by its caller; a Stop landing before the agent confirms
+  // drops it, so the turn has to say which messages never reached the agent.
+  it.each([
+    ['answers `cancelled`', STOPPED],
+    ['fails', { id: 3, error: { code: -32603, message: 'Internal error' } }],
+    ['ends normally', { id: 3, result: { stopReason: 'end_turn' } }],
+  ])(
+    'reports every message a Stop dropped from the cancel window when the stopped prompt %s',
+    (_reply, reply) => {
+      const h = running();
+      const first = { text: 'do X instead', deliveryId: 'delivery-1' };
+      const second = { text: 'and then Y', deliveryId: 'delivery-2' };
+      expect(h.driver.sendFollowUp(first)).toBe(true);
+      expect(h.driver.sendFollowUp(second)).toBe(true);
+      h.driver.buildInterruptPayload();
+
+      const events = h.feed(reply);
+
+      expect(prompts(h)).toHaveLength(1);
+      expect(events).toContainEqual({
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1', 'delivery-2'],
+      });
+      dropBeforeTerminal(events);
+    },
+  );
+
+  it('reports the dropped message ahead of the failure the stopped prompt reported', () => {
+    const h = running({
+      agentFailure: {
+        read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+      },
+    });
+    h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' });
+    h.driver.buildInterruptPayload();
+    h.feed(chunk('agent_message_chunk', '\n\nError: ProviderError: gone'));
+
+    const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+    expect(events).toContainEqual({
+      type: 'follow_up_dropped',
+      deliveryIds: ['delivery-1'],
+    });
+    dropBeforeTerminal(events);
+  });
+
   it('sends the message anyway, and says so, when the agent never confirms', () => {
     // A message held forever is worse than the duplicated work the wait
     // prevents. The stopped prompt's reply, whenever it lands, then settles
@@ -4476,6 +4536,59 @@ describe('AcpSession — a message delivered into the running turn', () => {
   it('refuses before there is a session at all', () => {
     const h = harness();
     expect(h.driver.sendFollowUp({ text: 'too early' })).toBe(false);
+  });
+
+  it('hands back the message waiting behind an unconfirmed cancel when the process ends under the turn', () => {
+    const h = running();
+    h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' });
+    h.driver.buildInterruptPayload();
+
+    expect(h.driver.onProcessEnded()).toEqual([
+      { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+    ]);
+  });
+
+  it('reports the waiting message dropped when its prompt cannot be written after the agent confirms', () => {
+    let writable = true;
+    const h = harness({}, () => writable);
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    expect(
+      h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' }),
+    ).toBe(true);
+    writable = false;
+
+    const events = h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+
+    expect(prompts(h)).toHaveLength(1);
+    expect(events).toContainEqual({
+      type: 'follow_up_dropped',
+      deliveryIds: ['delivery-1'],
+    });
+    dropBeforeTerminal(events);
+  });
+
+  it('reports the waiting message dropped when the agent never confirms and the late prompt cannot be written', () => {
+    vi.useFakeTimers();
+    try {
+      let writable = true;
+      const h = harness({}, () => writable);
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+      h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' });
+      writable = false;
+
+      vi.advanceTimersByTime(INTERRUPT_ACK_DEADLINE_MS);
+
+      expect(prompts(h)).toHaveLength(1);
+      expect(h.emitted).toContainEqual({
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1'],
+      });
+      dropBeforeTerminal(h.emitted);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('answers FALSE when the cancel does not land, and stays settleable', () => {

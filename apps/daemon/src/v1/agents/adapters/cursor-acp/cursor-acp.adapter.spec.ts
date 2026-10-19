@@ -758,6 +758,45 @@ describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => 
     expect(methods).not.toContain('session/prompt');
     expect(child.kills).toBe(0);
   });
+
+  it('reports a follow-up waiting behind an unanswered cancel dropped when Stop falls back to killing the process', () => {
+    vi.useFakeTimers();
+    try {
+      const { spawn, child } = fakeSpawn();
+      const events: AgentEvent[] = [];
+      const session = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).startSession(BASE, { runScoped: true });
+      const handle = session.startTurn(BASE, (event) => events.push(event));
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(stdoutLine({ id: 2, result: { sessionId: 's' } }));
+      expect(
+        handle?.sendUserMessage({
+          text: 'do X instead',
+          deliveryId: 'delivery-1',
+        }),
+      ).toBe(true);
+
+      handle?.cancel();
+      vi.advanceTimersByTime(5_000);
+      expect(child.kills).toBeGreaterThan(0);
+      child.emit('close', null, 'SIGTERM');
+
+      const types = events.map((event) => event.type);
+      expect(events).toContainEqual({
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1'],
+      });
+      expect(types.indexOf('follow_up_dropped')).toBeLessThan(
+        types.indexOf('turn_cancelled'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('CursorAcpAdapter turn shaping', () => {

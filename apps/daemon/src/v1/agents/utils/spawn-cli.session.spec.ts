@@ -1311,6 +1311,48 @@ describe('cancelling a session turn', () => {
     expect(child.killSignal).toBe('SIGTERM');
   });
 
+  it('emits what the driver still held ahead of the cancel when the interrupt fallback kills the process', () => {
+    // A follow-up accepted behind an interrupt the CLI never acknowledged has
+    // a row that reads as sent; only the driver knows it now never will be.
+    vi.useFakeTimers();
+    const { session, child } = openSession();
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn({
+      onEvent: (event) => events.push(event),
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      onProcessEnded: () => [
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ],
+    });
+
+    handle?.cancel();
+    vi.advanceTimersByTime(5_000);
+    child.emit('close', null, 'SIGTERM');
+
+    expect(events).toEqual([
+      { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      { type: 'turn_cancelled' },
+    ]);
+  });
+
+  it('emits what the driver still held ahead of the error when the process errors under the turn', () => {
+    const { session, child } = openSession();
+    const events: AgentEvent[] = [];
+    session.startTurn({
+      onEvent: (event) => events.push(event),
+      onProcessEnded: () => [
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ],
+    });
+
+    child.emit('error', new Error('write EPIPE'));
+
+    expect(events.map((event) => event.type)).toEqual([
+      'follow_up_dropped',
+      'error',
+    ]);
+  });
+
   it('does not let a second Stop skip the interrupt grace', () => {
     // Found by this test: the second press used to fall straight through to
     // the group kill, destroying the MCP servers immediately — the exact
@@ -4857,6 +4899,24 @@ describe('a request the CLI stops waiting on, or that outlives the turn it was r
 });
 
 describe('a stdin that breaks under a turn in flight', () => {
+  it('emits what the driver still held ahead of the error', () => {
+    const { session, child } = openSession();
+    const events: AgentEvent[] = [];
+    session.startTurn({
+      onEvent: (e) => events.push(e),
+      onProcessEnded: () => [
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ],
+    });
+
+    child.stdin.breakPipe();
+
+    expect(events.map((event) => event.type)).toEqual([
+      'follow_up_dropped',
+      'error',
+    ]);
+  });
+
   it('signals the process group and escalates, instead of forgetting a live process', () => {
     // `endProcess` marks the session gone and resolves `closed`, so its owner
     // forgets it. Without a signal, a CLI that had only stopped reading its

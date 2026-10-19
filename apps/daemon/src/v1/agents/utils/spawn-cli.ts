@@ -200,6 +200,14 @@ export interface CliTurnOptions {
    */
   withdrawPrompt?: () => boolean;
   /**
+   * Asked when the PROCESS ends under this turn before the turn's own terminal
+   * event — the 5s interrupt fallback's group kill, a crash, a process
+   * `error`, or a stdin that broke — for what the driver still holds that only it can report
+   * (`TurnDriver.onProcessEnded`). Its events are emitted ahead of the
+   * terminal this module writes.
+   */
+  onProcessEnded?: () => AgentEvent[];
+  /**
    * Awaited BEFORE this turn's opening payload is written, for a CLI that can
    * accept a prompt before it is ready to serve one (claude's MCP servers are
    * still dialling for the first seconds of a process — see
@@ -2795,6 +2803,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     turn.options.onEvent(normalized);
   };
 
+  /**
+   * What the driver still holds that only it can report, for a turn whose
+   * process ended or broke under it — emitted ahead of the terminal this
+   * module writes (`CliTurnOptions.onProcessEnded`).
+   */
+  const emitProcessEnded = (turn: TurnState): void => {
+    for (const event of turn.options.onProcessEnded?.() ?? []) {
+      emit(event);
+    }
+  };
+
   let child: SpawnedProcess;
   try {
     child = spawnFn(opts.command, opts.args, {
@@ -2965,6 +2984,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return;
     }
     if (current && !current.settled) {
+      emitProcessEnded(current);
       emit({
         type: 'error',
         message: `${opts.command} process error: ${err.message}`,
@@ -2985,6 +3005,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   ): void => {
     buffer.flush();
     if (current && !current.terminalEmitted) {
+      emitProcessEnded(current);
       if (signal && current.cancelRequested) {
         emit({ type: 'turn_cancelled' });
       } else if (signal) {
@@ -3230,6 +3251,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         opts.logger?.warn(failure.message);
         return;
       }
+      emitProcessEnded(current);
       emit(failure);
       // The same abandon as the between-turns case, for the same reason.
       // Ending the session with no signal at all — `endProcess` marks it gone

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import {
   type BeforeApplicationShutdown,
@@ -2424,6 +2426,98 @@ export class GraphExecutorService
       callMessages.set(callId, [...(callMessages.get(callId) ?? []), text]);
     };
     /**
+     * `message_agent` messages handed to a callee's running turn, by the
+     * delivery id they rode in with. A turn that reports one dropped
+     * (`follow_up_dropped`) has the broker record it undelivered, so its
+     * caller is told — a user message the same report names is a row instead.
+     */
+    const brokerDeliveries = new Map<
+      string,
+      { callId: string; text: string }
+    >();
+    /** A settled call's entries: nothing it was handed can be dropped now. */
+    const forgetCallDeliveries = (callId: string): void => {
+      for (const [deliveryId, delivery] of brokerDeliveries) {
+        if (delivery.callId === callId) {
+          brokerDeliveries.delete(deliveryId);
+        }
+      }
+    };
+    /**
+     * Prompts handed to a WORKING conversation's turn — a broker tell
+     * (`tellLiveNode`) or a wake that found the conversation working — by the
+     * delivery id they rode in with. A turn that drops one
+     * (`follow_up_dropped`) has its `redeliver` run once that turn has ended
+     * (`endConversationTurn`); one the turn ended without dropping, it took.
+     * Registered even with nothing to redeliver, so a dropped tell is never
+     * read as the user's own message.
+     */
+    const promptDeliveries = new Map<
+      string,
+      { caller: string; redeliver?: () => void }
+    >();
+    /** Dropped prompts' redeliveries, by the conversation whose turn ends. */
+    const droppedPrompts = new Map<string, (() => void)[]>();
+    const redeliverWhenEnded = (
+      caller: string,
+      redeliver: () => void,
+    ): void => {
+      droppedPrompts.set(caller, [
+        ...(droppedPrompts.get(caller) ?? []),
+        redeliver,
+      ]);
+    };
+    /**
+     * A run follow-up's per-root delivery ids. One message reaches several
+     * roots under ONE row, so nothing is said until every root has answered
+     * for it — dropped it, or ended its turn having taken it. All dropped:
+     * the row reads "not sent". Some: a note names each root that missed it.
+     */
+    interface SharedDelivery {
+      /** The `deliveryId` on the message's own row. */
+      rowDeliveryId: string;
+      /** Roots it went to, live or started fresh with it. */
+      roots: number;
+      /** Roots that took it: started fresh with it, or ended without a drop. */
+      took: number;
+      dropped: { nodeId: string; name: string }[];
+    }
+    const rootDeliveries = new Map<
+      string,
+      { delivery: SharedDelivery; nodeId: string; name: string }
+    >();
+    /** Say what became of a shared delivery once every root has answered. */
+    const settleSharedDelivery = async (
+      delivery: SharedDelivery,
+    ): Promise<string | null> => {
+      if (delivery.took + delivery.dropped.length < delivery.roots) {
+        return null;
+      }
+      if (delivery.took === 0) {
+        return delivery.rowDeliveryId;
+      }
+      for (const missed of delivery.dropped) {
+        await persistItem(missed.nodeId, 'system', null, {
+          message: `Not sent to ${missed.name} — its turn ended before it took the message. The other agents got it.`,
+          severity: 'warning',
+          caption: 'Not sent',
+          nodeId: missed.nodeId,
+        });
+      }
+      return null;
+    };
+    /** A root's own turn ended: what it was handed and did not drop, it took. */
+    const forgetRootDeliveries = async (nodeId: string): Promise<void> => {
+      for (const [deliveryId, rooted] of [...rootDeliveries]) {
+        if (rooted.nodeId !== nodeId) {
+          continue;
+        }
+        rootDeliveries.delete(deliveryId);
+        rooted.delivery.took += 1;
+        await settleSharedDelivery(rooted.delivery);
+      }
+    };
+    /**
      * Calls a CALLER asked to stop (`cancel_agent`), by call id.
      *
      * A mark rather than only a `handle.cancel()`, because at depth 1 the
@@ -2577,6 +2671,19 @@ export class GraphExecutorService
       // turn's prompt, not inside a wait of this one.
       this.callBroker.forgetUserMessage(runId, caller);
       this.callBroker.drainCaller(runId, caller);
+      // What the turn was handed and did not drop, it took. What it dropped is
+      // delivered again now — after the drain, so it joins any turn the drain
+      // opened rather than racing it.
+      for (const [deliveryId, prompted] of promptDeliveries) {
+        if (prompted.caller === caller) {
+          promptDeliveries.delete(deliveryId);
+        }
+      }
+      const dropped = droppedPrompts.get(caller) ?? [];
+      droppedPrompts.delete(caller);
+      for (const redeliver of dropped) {
+        redeliver();
+      }
     };
     let cancelRequested = false;
     /**
@@ -3771,14 +3878,20 @@ export class GraphExecutorService
           this.callBroker.confirmWakingMessages(runId, callContext.callId);
         }
         const arrived = terminalStatus(event);
-        if (
+        const ended =
           arrived === 'completed' ||
           arrived === 'failed' ||
-          arrived === 'cancelled'
-        ) {
+          arrived === 'cancelled';
+        if (ended) {
           outcome = arrived;
         }
         enqueue(async () => {
+          if (ended && callContext === undefined) {
+            // On the chain, so a drop this turn reported ahead of its terminal
+            // has been matched first. A call sub-turn of the same node holds
+            // none of them.
+            await forgetRootDeliveries(node.id);
+          }
           // Whether THIS event's approval request is the agent asking something
           // — set by the routing branch below and read by the registry track
           // further down. Per-event, declared here because the two blocks that
@@ -3816,6 +3929,52 @@ export class GraphExecutorService
                   card === null ? [] : [card],
                 )();
               }
+            }
+            return;
+          }
+          if (event.type === 'follow_up_dropped') {
+            const userDeliveries: string[] = [];
+            for (const deliveryId of event.deliveryIds) {
+              const prompted = promptDeliveries.get(deliveryId);
+              const brokered = brokerDeliveries.get(deliveryId);
+              const rooted = rootDeliveries.get(deliveryId);
+              if (prompted !== undefined) {
+                promptDeliveries.delete(deliveryId);
+                if (prompted.redeliver !== undefined) {
+                  redeliverWhenEnded(prompted.caller, prompted.redeliver);
+                }
+              } else if (brokered !== undefined) {
+                brokerDeliveries.delete(deliveryId);
+                this.callBroker.markMessageDropped(
+                  runId,
+                  brokered.callId,
+                  brokered.text,
+                  deliveryId,
+                );
+              } else if (rooted !== undefined) {
+                rootDeliveries.delete(deliveryId);
+                rooted.delivery.dropped.push({
+                  nodeId: rooted.nodeId,
+                  name: rooted.name,
+                });
+                const rowId = await settleSharedDelivery(rooted.delivery);
+                if (rowId !== null) {
+                  userDeliveries.push(rowId);
+                }
+              } else {
+                userDeliveries.push(deliveryId);
+              }
+            }
+            const mapped =
+              userDeliveries.length === 0
+                ? null
+                : mapEventToItem({ ...event, deliveryIds: userDeliveries });
+            if (mapped) {
+              await persistItem(node.id, mapped.kind, mapped.role, {
+                ...(mapped.payload as Record<string, unknown>),
+                nodeId: node.id,
+                ...(callContext ? { callId: callContext.callId } : {}),
+              });
             }
             return;
           }
@@ -5867,6 +6026,7 @@ export class GraphExecutorService
                 asReported,
               );
               callMessages.delete(callId);
+              forgetCallDeliveries(callId);
               return reported;
             }
             const next = attempts[index + 1]!;
@@ -6149,15 +6309,46 @@ export class GraphExecutorService
         );
       }
       const { stored, turnImages } = this.storeImages(runId, images);
+      // TWIN PARSER: the renderer reads the row's `deliveryId` back
+      // (`chats/not-sent-messages.ts`). Each root is told under its own id.
+      const deliveryId = randomUUID();
+      const shared: SharedDelivery = {
+        rowDeliveryId: deliveryId,
+        roots: roots.length,
+        took: 0,
+        dropped: [],
+      };
+      const told: string[] = [];
       for (const root of roots) {
         const running =
           runningHandles.get(root.id) ?? continuationHandles.get(root.id);
+        if (!running) {
+          // Started fresh with the message below: it cannot be dropped.
+          shared.took += 1;
+          continue;
+        }
+        const rootDeliveryId = randomUUID();
         // Told FIRST, recorded after: only a delivery the CLI confirmed may be
         // written to the transcript — the reverse leaves a message on screen
         // that no agent received.
-        if (running && !running.sendUserMessage({ text, images: turnImages })) {
+        if (
+          !running.sendUserMessage({
+            text,
+            images: turnImages,
+            deliveryId: rootDeliveryId,
+          })
+        ) {
+          for (const id of told) {
+            rootDeliveries.delete(id);
+          }
           throw busy(`${root.name ?? root.id} is finishing a turn`);
         }
+        told.push(rootDeliveryId);
+        rootDeliveries.set(rootDeliveryId, {
+          delivery: shared,
+          nodeId: root.id,
+          name: root.name ?? root.id,
+        });
       }
       // The roots this message will START a turn for are counted live from
       // NOW, across the write below: on an awake run the woken work can drain
@@ -6173,11 +6364,17 @@ export class GraphExecutorService
       let item: ItemWire;
       let persisted = false;
       try {
-        item = await persistUserMessage(null, messagePayload(text, stored));
+        item = await persistUserMessage(null, {
+          ...messagePayload(text, stored),
+          deliveryId,
+        });
         persisted = true;
       } finally {
         liveSubTurns -= starting.length;
         if (!persisted) {
+          for (const id of told) {
+            rootDeliveries.delete(id);
+          }
           for (const { root, reservation } of starting) {
             startingContinuations.delete(root.id);
             reservation.release();
@@ -6256,8 +6453,11 @@ export class GraphExecutorService
       }
       const { handle, callee, conversationId } = subTurn;
       const { stored, turnImages } = this.storeImages(runId, images);
+      // TWIN PARSER: the renderer reads it back off the row
+      // (`chats/not-sent-messages.ts`).
+      const deliveryId = randomUUID();
       // Told FIRST, recorded after, for `deliverFollowUp`'s reason.
-      if (!handle.sendUserMessage({ text, images: turnImages })) {
+      if (!handle.sendUserMessage({ text, images: turnImages, deliveryId })) {
         throw new ConflictException(
           'CALL_MESSAGE_REFUSED',
           `${callee.name ?? callee.id} can't take a message while it works — its CLI accepts none mid-turn, or the turn is ending`,
@@ -6271,6 +6471,7 @@ export class GraphExecutorService
         ...messagePayload(text, stored),
         nodeId: callee.id,
         callId,
+        deliveryId,
       });
     };
 
@@ -6450,9 +6651,11 @@ export class GraphExecutorService
               return { delivered: false, reason: 'not_started' };
             }
             const { handle, callee, conversationId } = subTurn;
-            if (!handle.sendUserMessage({ text, images: [] })) {
+            const deliveryId = randomUUID();
+            if (!handle.sendUserMessage({ text, images: [], deliveryId })) {
               return { delivered: false, reason: 'refused' };
             }
+            brokerDeliveries.set(deliveryId, { callId, text });
             noteCallMessage(callId, text);
             // `deliverToCall`'s reason: a callee that is itself a caller may be
             // blocked waiting on ITS callees, and would read this only then.
@@ -6461,12 +6664,13 @@ export class GraphExecutorService
               delivered: true,
               interrupts: this.adapterFor(callee.agent).getConfig().followUp
                 .interrupts,
+              deliveryId,
             };
           },
           // Per CONVERSATION: a node's callee turns say nothing about whether
           // its own conversation — or another call's — has a turn to answer in.
           isNodeLive: (caller) => liveConversations.has(caller),
-          tellLiveNode: (caller, prompt) => {
+          tellLiveNode: (caller, prompt, redeliver) => {
             const node = agentNodeOfConversation(caller);
             if (
               node === null ||
@@ -6481,12 +6685,17 @@ export class GraphExecutorService
             // of the call it is answering, which the node-wide lookup this
             // replaced never reached, so a question for a working callee was
             // pushed nowhere and timed out.
-            return (
+            const deliveryId = randomUUID();
+            const told =
               conversationHandle(caller)?.sendUserMessage({
                 text: prompt,
                 images: [],
-              }) ?? false
-            );
+                deliveryId,
+              }) ?? false;
+            if (told) {
+              promptDeliveries.set(deliveryId, { caller, redeliver });
+            }
+            return told;
           },
           wakeNode: (caller, prompt) => {
             const nodeId = callerNodeOf(caller);
@@ -6537,10 +6746,27 @@ export class GraphExecutorService
                 // opening a second one on it. Asked of the CONVERSATION: a node
                 // "live" only through a callee turn has no handle here, and the
                 // prompt its wake was already counted as told went nowhere.
-                conversationHandle(caller)?.sendUserMessage({
-                  text: prompt,
-                  images: [],
-                });
+                // A turn that drops it — or is already ending and refuses it —
+                // has it woken for again once that turn has ended.
+                const deliveryId = randomUUID();
+                const rewake = (): void => {
+                  liveSubTurns += 1;
+                  enqueue(deliverWake);
+                };
+                if (
+                  conversationHandle(caller)?.sendUserMessage({
+                    text: prompt,
+                    images: [],
+                    deliveryId,
+                  })
+                ) {
+                  promptDeliveries.set(deliveryId, {
+                    caller,
+                    redeliver: rewake,
+                  });
+                } else {
+                  redeliverWhenEnded(caller, rewake);
+                }
                 // This path opens NO turn, so nothing else would put a run that
                 // woke for this wake back to sleep.
                 await finishRunIfSettled();

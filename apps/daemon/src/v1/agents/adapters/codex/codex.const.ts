@@ -182,6 +182,14 @@ export const CODEX_DELEGATE_LABEL_MAX_CHARS = 80;
 export const CODEX_STEER_PREVIEW_MAX_CHARS = 60;
 
 /**
+ * How long a finished turn's ending is held for steers codex has not answered
+ * yet, so a refusal is reported as its message dropped while the turn it was
+ * sent into is still open. Past it the turn ends, and a later refusal is a
+ * notice quoting the message.
+ */
+export const CODEX_STEER_ANSWER_GRACE_MS = 5000;
+
+/**
  * The words codex refuses a `thread/resume` with while ANOTHER codex process
  * holds the thread — it allows one writer per thread. Measured on 0.157.1:
  * `thread <id> already has an active writer`, as JSON-RPC -32600, the code

@@ -79,6 +79,7 @@ import {
   isRunBusyError,
 } from '../daemon-api';
 import { DaemonClient } from '../daemon-client';
+import { reportRendererIssue } from '../debug/report-ui-errors';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
 import { randomId } from '../random-id';
@@ -187,6 +188,14 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { browserImageCodec } from './normalize-image';
+import {
+  callTargetOf,
+  notSentDeliveryIds,
+  restoreIntoEmpty,
+  stagedFrom,
+  unsentMessageContent,
+  userDeliveryId,
+} from './not-sent-messages';
 import { OlderMessagesControl } from './older-messages-control';
 import { PromptCacheNotice } from './prompt-cache-notice';
 import {
@@ -1067,6 +1076,11 @@ export function Chats({
   // Ref indirection: the stable addItem callback fires the drain on a turn's
   // terminal item, before the turn start the drain sends through exists.
   const drainQueueRef = useRef<(runId: string) => void>(() => {});
+  // Set once the transcript rows exist, below; `useChatRun` calls it on a
+  // live "not sent" row.
+  const onLiveUnsentRef = useRef<
+    (runId: string, deliveryIds: string[], rowId: string) => void
+  >(() => {});
 
   /**
    * Park the composer's contents under `from`, and put `to`'s back.
@@ -1107,20 +1121,25 @@ export function Chats({
    */
   const restoreUnsent = useCallback(
     (runId: string, text: string, staged: StagedAttachment[]): void => {
+      const restored = { text, staged };
       if (composerOwnerRef.current === runId) {
-        setInput((current) => (current.length === 0 ? text : current));
+        setInput(
+          (current) =>
+            restoreIntoEmpty({ text: current, staged: [] }, restored).text,
+        );
         if (attachmentsRef.current.length === 0) {
           attachments.restore(staged);
         }
         return;
       }
       const draft = draftsRef.current.get(runId);
+      const next = restoreIntoEmpty(
+        { text: draft?.text ?? '', staged: draft?.images ?? [] },
+        restored,
+      );
       draftsRef.current.set(runId, {
-        text: draft !== undefined && draft.text.length > 0 ? draft.text : text,
-        images:
-          draft !== undefined && draft.images.length > 0
-            ? draft.images
-            : staged,
+        text: next.text,
+        images: [...next.staged],
       });
     },
     [attachments],
@@ -1191,6 +1210,7 @@ export function Chats({
     resetSteerStatus,
     hasQueuedMessages,
     drainQueueRef,
+    onLiveUnsentRef,
   });
 
   // A thread opening (a row tapped, a jump from Tasks, the composer's first
@@ -4738,6 +4758,135 @@ export function Chats({
       },
     };
   }, [activeWorkflowRunId, callQueues, capabilities]);
+  // User messages a turn accepted and then dropped because it ended before
+  // the agent took them, each drawn "not sent" with a Resend.
+  const notSentIds = useMemo(
+    () => notSentDeliveryIds(transcriptRows),
+    [transcriptRows],
+  );
+  // The rows the call cards are folded from: a call's `call_started` can be an
+  // anchor from before the loaded window.
+  const foldItemsRef = useRef(foldItems);
+  foldItemsRef.current = foldItems;
+  /** A dropped message's words and pictures, read back from its own row. */
+  const unsentContent = useCallback(
+    (item: ChatItem) => unsentMessageContent(item, loadAttachment),
+    [loadAttachment],
+  );
+  const resendNotSent = useCallback(
+    (item: ChatItem): void => {
+      const runId = item.runId;
+      void unsentContent(item)
+        .then(({ text, images }) => {
+          // A message to ONE callee goes back to that callee's call, never to
+          // the agents the run's trigger feeds.
+          const call = callTargetOf(item, foldItemsRef.current);
+          if (call === null) {
+            throw new Error(
+              'This message was for a call that is no longer on screen — send it from that call.',
+            );
+          }
+          if (call !== 'run') {
+            callQueues.enqueue(call, text, images);
+            void callQueues.drain(call);
+            return;
+          }
+          enqueueMessage(runId, { text, images, clientMessageId: randomId() });
+          // The kick `sendFollowUp` would make for a message typed now: not
+          // while the agent is working, whose turn end drains the queue anyway.
+          // Read at this moment, after the pictures loaded, from the refs.
+          const decision = followUpDelivery({
+            streaming: activeRunIdRef.current === runId && streamingRef.current,
+            queued: true,
+            held: holdingRef.current.has(runId),
+            awaitingCalls: awaitingCallsRef.current.has(runId),
+            rootsIdle: rootsIdleRef.current.has(runId),
+            subagentsOut: delegatesOutRef.current.has(runId),
+            shellsOut: shellsOutRef.current.has(runId),
+          });
+          if (decision.action !== 'queue' || decision.kickDrain) {
+            drainQueueRef.current(runId);
+          }
+        })
+        .catch((err: unknown) => {
+          if (activeRunIdRef.current === runId) {
+            setError(describeDaemonError(err));
+          }
+        });
+    },
+    [unsentContent, callQueues, enqueueMessage],
+  );
+  const notSent = useMemo(
+    () => ({ unsent: notSentIds, resend: resendNotSent }),
+    [notSentIds, resendNotSent],
+  );
+  // A drop that happens NOW also puts the words back in the composer — only
+  // into an empty one, which `restoreUnsent` already guarantees. A message to a
+  // callee is left to its own row: the composer would send it to the trigger.
+  // Each live marker waits for the render holding its rows (it can arrive in
+  // the same batch as the message it names), is restored once, and is dropped
+  // with its thread.
+  const [liveUnsent, setLiveUnsent] = useState<
+    readonly { rowId: string; runId: string; deliveryIds: string[] }[]
+  >([]);
+  onLiveUnsentRef.current = (
+    runId: string,
+    deliveryIds: string[],
+    rowId: string,
+  ): void => {
+    setLiveUnsent((pending) =>
+      pending.some((entry) => entry.rowId === rowId)
+        ? pending
+        : [...pending, { rowId, runId, deliveryIds }],
+    );
+  };
+  useEffect(() => {
+    if (liveUnsent.length === 0) {
+      return;
+    }
+    const resolved: string[] = [];
+    for (const entry of liveUnsent) {
+      if (entry.runId !== activeRunId) {
+        resolved.push(entry.rowId);
+        continue;
+      }
+      const dropped = transcriptRows.filter((row) => {
+        const id = userDeliveryId(row);
+        return (
+          id !== null &&
+          entry.deliveryIds.includes(id) &&
+          payloadString(row.payload, 'callId') === null
+        );
+      });
+      if (dropped.length === 0) {
+        continue;
+      }
+      resolved.push(entry.rowId);
+      const { runId } = entry;
+      void Promise.all(dropped.map(unsentContent))
+        .then((contents) => {
+          restoreUnsent(
+            runId,
+            contents.map((content) => content.text).join('\n\n'),
+            contents.flatMap((content) =>
+              content.images.map((image) => stagedFrom(image, runId)),
+            ),
+          );
+        })
+        .catch((err: unknown) => {
+          // The row still says "not sent" and offers Resend.
+          reportRendererIssue('could not restore a message that was not sent', {
+            runId,
+            error: String(err),
+          });
+        });
+    }
+    if (resolved.length > 0) {
+      setLiveUnsent((pending) =>
+        pending.filter((entry) => !resolved.includes(entry.rowId)),
+      );
+    }
+  }, [liveUnsent, activeRunId, transcriptRows, unsentContent, restoreUnsent]);
   /**
    * The open thread is shelved, so its composer is inert.
    *
@@ -8480,7 +8629,8 @@ export function Chats({
         runSettledAt={activeRunSettledAt}
         delegatesOut={activeDelegatesOut}
         callConversations={callConversations}
-        applyRecommendations={applyRecommendations}>
+        applyRecommendations={applyRecommendations}
+        notSent={notSent}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

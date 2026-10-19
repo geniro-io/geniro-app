@@ -69,6 +69,7 @@ function cardRow(): ChatItem {
 
 function chatState(overrides: Partial<HostedChatState>): HostedChatState {
   return {
+    liveUnsent: [],
     run: {
       id: 'analysis-1',
       status: 'completed',
@@ -186,6 +187,86 @@ describe('AnalysisDialog', () => {
 
     getThreadAnalysis.mockResolvedValueOnce({ analysis: null });
     await expect(hosted.args!.open()).rejects.toThrow('no analysis');
+  });
+
+  describe('a message a Stop dropped', () => {
+    const userRow = {
+      id: 'i5',
+      runId: 'analysis-1',
+      seq: 5,
+      kind: 'message',
+      role: 'user',
+      nodeId: null,
+      payload: { text: 'look again', deliveryId: 'd-1' },
+      createdAt: '2026-10-15T00:00:05.000Z',
+    } as unknown as ChatItem;
+    const marker = {
+      id: 'i6',
+      runId: 'analysis-1',
+      seq: 6,
+      kind: 'system',
+      role: null,
+      nodeId: null,
+      payload: {
+        message: 'Your message was not sent',
+        severity: 'warning',
+        caption: 'Not sent',
+        unsentMessages: ['d-1'],
+      },
+      createdAt: '2026-10-15T00:00:06.000Z',
+    } as unknown as ChatItem;
+    const doc = (): Document => container.ownerDocument;
+
+    it('resends it through the queue when the run can take it', async () => {
+      hosted.state = chatState({ items: [userRow, marker] });
+      await paint(SOURCE);
+
+      const resend = [...doc().querySelectorAll('button')].find(
+        (button) => button.textContent === 'Resend',
+      );
+      await act(async () => {
+        resend!.click();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(hosted.state.post).toHaveBeenCalledWith(
+        'look again',
+        [],
+        expect.any(String),
+      );
+    });
+
+    it('puts it back in the empty composer when it was dropped just now', async () => {
+      hosted.state = chatState({
+        items: [userRow, marker],
+        liveUnsent: [{ rowId: 'i6', deliveryIds: ['d-1'] }],
+      });
+      await paint(SOURCE);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(doc().querySelector('textarea')?.value).toBe('look again');
+    });
+
+    it('waits for the message row when the marker lands first', async () => {
+      hosted.state = chatState({
+        items: [marker],
+        liveUnsent: [{ rowId: 'i6', deliveryIds: ['d-1'] }],
+      });
+      await paint(SOURCE);
+      expect(doc().querySelector('textarea')?.value).toBe('');
+
+      hosted.state = { ...hosted.state, items: [userRow, marker] };
+      await paint(SOURCE);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(doc().querySelector('textarea')?.value).toBe('look again');
+    });
   });
 
   it('draws nothing while no thread is chosen', async () => {

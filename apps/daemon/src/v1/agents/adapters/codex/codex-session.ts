@@ -204,7 +204,12 @@ export class CodexSession implements TurnDriver {
         );
         return entry === null
           ? []
-          : entry.turn.onErrorReply(entry.kind, message.message, entry.detail);
+          : entry.turn.onErrorReply(
+              entry.kind,
+              message.message,
+              entry.detail,
+              entry.deliveryId,
+            );
       }
       case 'request':
         return this.turn.onServerRequest(
@@ -229,6 +234,22 @@ export class CodexSession implements TurnDriver {
 
   sendFollowUp(message: FollowUpMessage): boolean {
     return this.turn.sendFollowUp(message);
+  }
+
+  withdrawHeldPrompt(): boolean {
+    return this.turn.withdrawHeldPrompt();
+  }
+
+  /** Whether `turn` is the one this session is serving now. */
+  isCurrentTurn(turn: CodexTurnDriver): boolean {
+    return this.turn === turn;
+  }
+
+  /** Emit to the turn now open, outside any reply — the held ending's release. */
+  emitNow(events: readonly AgentEvent[]): void {
+    for (const event of events) {
+      this.io?.emit(event);
+    }
   }
 
   buildInterruptPayload(): string | undefined {
@@ -329,6 +350,7 @@ export class CodexSession implements TurnDriver {
     kind: CodexPendingKind,
     events: AgentEvent[],
     detail: string | null = null,
+    deliveryId: string | null = null,
   ): boolean {
     const id = this.pending.send(
       method,
@@ -337,6 +359,7 @@ export class CodexSession implements TurnDriver {
       this.turn,
       (frame) => this.write(frame),
       detail,
+      deliveryId,
     );
     if (id === null) {
       events.push({

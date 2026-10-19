@@ -62,6 +62,7 @@ describe('PendingRequests', () => {
       kind: 'prompt',
       turn: first,
       detail: 'quoted',
+      deliveryId: null,
     });
     expect(pending.take(id!, first)).toBeNull();
   });
@@ -85,13 +86,22 @@ describe('PendingRequests', () => {
 
   it('hands over a stale entry when the kind is one that still matters', () => {
     const { pending, logged } = pendingRequests();
-    const steer = pending.send('s', {}, 'turn_steer', first, lands, 'the text');
+    const steer = pending.send(
+      's',
+      {},
+      'turn_steer',
+      first,
+      lands,
+      'the text',
+      'delivery-1',
+    );
     const prompt = pending.send('p', {}, 'prompt', first, lands);
     const outlivesItsTurn = (kind: Kind) => kind === 'turn_steer';
     expect(pending.take(steer!, second, outlivesItsTurn)).toEqual({
       kind: 'turn_steer',
       turn: first,
       detail: 'the text',
+      deliveryId: 'delivery-1',
     });
     // The predicate is per kind: a prompt's reply is still dropped.
     expect(pending.take(prompt!, second, outlivesItsTurn)).toBeNull();

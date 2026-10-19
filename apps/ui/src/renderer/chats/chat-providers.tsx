@@ -31,6 +31,10 @@ import {
   AttachmentLoaderContext,
 } from './message-attachments';
 import {
+  type NotSentMessages,
+  NotSentMessagesContext,
+} from './not-sent-messages';
+import {
   type ArtifactUrlBuilder,
   ArtifactUrlContext,
 } from './published-artifact';
@@ -112,6 +116,7 @@ export function ChatProviders({
   callConversations = null,
   jumpMark = null,
   applyRecommendations = null,
+  notSent = null,
   children,
 }: {
   /**
@@ -178,6 +183,11 @@ export function ChatProviders({
    * Absent draws the card read-only (the workflow dock has no analysis).
    */
   applyRecommendations?: RecommendationsApplier | null;
+  /**
+   * The user messages a turn dropped, and how to resend one — see
+   * `NotSentMessagesContext`. Absent marks no message.
+   */
+  notSent?: NotSentMessages | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -195,13 +205,15 @@ export function ChatProviders({
                           <DelegatesOutContext.Provider value={delegatesOut}>
                             <RecommendationsApplyContext.Provider
                               value={applyRecommendations}>
-                              {transcript === undefined ? (
-                                children
-                              ) : (
-                                <SurfaceContexts {...transcript}>
-                                  {children}
-                                </SurfaceContexts>
-                              )}
+                              <NotSentMessagesContext.Provider value={notSent}>
+                                {transcript === undefined ? (
+                                  children
+                                ) : (
+                                  <SurfaceContexts {...transcript}>
+                                    {children}
+                                  </SurfaceContexts>
+                                )}
+                              </NotSentMessagesContext.Provider>
                             </RecommendationsApplyContext.Provider>
                           </DelegatesOutContext.Provider>
                         </RunSettledContext.Provider>

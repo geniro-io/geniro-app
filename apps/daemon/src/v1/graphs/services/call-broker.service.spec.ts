@@ -58,7 +58,7 @@ function harness(options?: {
   /** Whether a caller can be woken; default: never (the pre-wake behaviour). */
   wakeNode?: (nodeId: string, prompt: string) => boolean;
   /** Whether a working caller takes a message; default: never. */
-  tellLiveNode?: (nodeId: string, prompt: string) => boolean;
+  tellLiveNode?: RunCallCapability['tellLiveNode'];
   /** What an earlier daemon's pass of the run left in the transcript. */
   seed?: RunCallSeed;
   /** Whether a running callee takes a message; default: yes, joining its turn. */
@@ -4242,6 +4242,39 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
 
     expect(told).toHaveLength(1);
     expect(wakeNode).not.toHaveBeenCalled();
+  });
+
+  it('wakes the caller with the news once the turn that dropped it has ended', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    let live = true;
+    let dropped: (() => void) | undefined;
+    const wakeNode = vi.fn(() => true);
+    const { broker } = harness({
+      isNodeLive: () => live,
+      tellLiveNode: (_node, _prompt, redeliver) => {
+        dropped = redeliver;
+        return true;
+      },
+      wakeNode,
+      instantOutcome: RATE_LIMITED,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    vi.advanceTimersByTime(72 * 60_000);
+    expect(wakeNode).not.toHaveBeenCalled();
+
+    // The executor runs this once the working turn ended without taking it.
+    live = false;
+    dropped!();
+
+    expect(wakeNode).toHaveBeenCalledExactlyOnceWith(
+      'orch',
+      expect.stringContaining('has reset'),
+    );
   });
 
   it('fires nothing into a run that was torn down meanwhile', async () => {

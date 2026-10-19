@@ -48,6 +48,40 @@ export const TUNNEL_URL_WAIT_MS = 45_000;
  */
 export const TUNNEL_OUTPUT_KEPT = 40;
 
+/** How often an open tunnel's client is asked whether it still holds a connection. */
+export const TUNNEL_LIVENESS_POLL_MS = 15_000;
+
+/**
+ * How long a tunnel may hold no connection before its address is reported as
+ * expired.
+ *
+ * Must stay below the time after which the provider deletes an unconnected
+ * quick tunnel (about thirteen minutes for cloudflared's), so a Mac back from
+ * a night's sleep is told within {@link TUNNEL_EXPIRY_CONFIRM_MS} plus two
+ * polls of waking; and above the outages a tunnel comes back from on the same
+ * address (a few minutes).
+ */
+export const TUNNEL_EXPIRED_AFTER_MS = 10 * 60_000;
+
+/** How long a readiness probe may take before it counts as "no connection". */
+export const TUNNEL_READY_PROBE_TIMEOUT_MS = 3_000;
+
+/**
+ * How far apart two readiness answers may be and still belong to one
+ * continuous watch. Two further apart had a sleep between them. Above how far
+ * App Nap stretches a hidden window's timers, and below the provider's
+ * deletion of an unconnected quick tunnel.
+ */
+export const TUNNEL_ANSWER_GAP_MS = 5 * 60_000;
+
+/**
+ * How long "no connection" must be answered without a break before the
+ * address is reported as expired — so one failed answer, such as the first
+ * after a wake while the network is still coming back, never ends a tunnel
+ * that reconnects.
+ */
+export const TUNNEL_EXPIRY_CONFIRM_MS = 60_000;
+
 /**
  * Wrong codes a device may offer before it is locked out, and for how long.
  *

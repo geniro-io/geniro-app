@@ -28,6 +28,7 @@ import {
 } from '../utils/session-keys';
 import type {
   CliSessionOptions,
+  SessionCloseOptions,
   SpawnedProcess,
   SpawnFn,
 } from '../utils/spawn-cli';
@@ -157,10 +158,19 @@ class FakeSession implements AgentSession {
     this.closeCause = cause;
   }
 
-  close(cause?: SessionCloseCause): void {
+  /** What each close asked for — a graceful close or an immediate one. */
+  closeOptions: (SessionCloseOptions | undefined)[] = [];
+
+  /** Set to keep the process running after a close, until {@link exit}. */
+  lingers = false;
+
+  close(cause?: SessionCloseCause, options?: SessionCloseOptions): void {
     this.closes += 1;
     this.closeCause ??= cause ?? null;
-    this.resolveClosed();
+    this.closeOptions.push(options);
+    if (!this.lingers) {
+      this.resolveClosed();
+    }
     if (this.closeThrows) {
       throw new Error('close boom');
     }
@@ -176,6 +186,11 @@ class FakeSession implements AgentSession {
       commands: this.runningCommands,
     };
     this.processGone = true;
+    this.resolveClosed();
+  }
+
+  /** A lingering process finally exits after its close. */
+  exit(): void {
     this.resolveClosed();
   }
 
@@ -1003,6 +1018,108 @@ describe('AgentSessionRegistry — the user’s idle window', () => {
     expect(sessions.map((session) => session.closes)).toEqual([0, 0, 0]);
     await vi.advanceTimersByTimeAsync(1);
     expect(sessions.map((session) => session.closes)).toEqual([1, 1, 1]);
+  });
+});
+
+describe('AgentSessionRegistry — closing an idle process gracefully', () => {
+  it('lets a process that went unused finish on its own', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    expect(at(sessions, 0).closeOptions).toEqual([{ graceful: true }]);
+    expect(registry.liveCount).toBe(0);
+  });
+
+  it('closes at once for an eviction, a teardown and shutdown', async () => {
+    const registry = new AgentSessionRegistry(2);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('evicted', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    registry.startTurn('torn-down', adapter, INPUT, noop);
+    await at(sessions, 1).endTurn();
+    registry.startTurn('third', adapter, INPUT, noop);
+    registry.closeRun('torn-down');
+    await at(sessions, 2).endTurn();
+
+    registry.closeAll();
+
+    expect(sessions.map((session) => session.closeOptions)).toEqual([
+      [undefined],
+      [undefined],
+      [undefined],
+    ]);
+  });
+
+  it('still reports a process in a graceful close as the run’s until it exits', async () => {
+    // What `RunProcessSweep` and `RunProcessReaper.held` read: the reap must
+    // not find the run unheld and signal a CLI that is finishing on its own.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    const cli = at(sessions, 0);
+    cli.pid = 4242;
+    await cli.endTurn();
+    cli.lingers = true;
+
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    expect(cli.closeOptions).toEqual([{ graceful: true }]);
+    expect(registry.liveCount).toBe(0);
+    expect(registry.processRoots('run-1').map((root) => root.pid)).toEqual([
+      4242,
+    ]);
+    expect(registry.processRoots().map((root) => root.pid)).toEqual([4242]);
+    cli.exit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(registry.processRoots('run-1')).toEqual([]);
+  });
+
+  it('escalates a graceful close still under way when the run is torn down', async () => {
+    // An archive or delete wants the processes gone now.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn(nodeSessionKey('run-1', 'qa'), adapter, INPUT, noop);
+    registry.startTurn('run-2', adapter, INPUT, noop);
+    for (const session of sessions) {
+      await session.endTurn();
+      session.lingers = true;
+    }
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    registry.closeRun('run-1');
+
+    expect(sessions.map((session) => session.closeOptions)).toEqual([
+      [{ graceful: true }, undefined],
+      [{ graceful: true }],
+    ]);
+    // Escalated, so no longer held as finishing; the other run's still is.
+    expect(registry.processRoots('run-1')).toEqual([]);
+  });
+
+  it('escalates a graceful close still under way when the daemon shuts down', async () => {
+    // `cursor-agent acp` ignores EOF and its deadline is a timer in the
+    // daemon: left alone, it and its MCP servers outlive the shutdown.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).lingers = true;
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    registry.closeAll();
+
+    expect(at(sessions, 0).closeOptions).toEqual([
+      { graceful: true },
+      undefined,
+    ]);
   });
 });
 

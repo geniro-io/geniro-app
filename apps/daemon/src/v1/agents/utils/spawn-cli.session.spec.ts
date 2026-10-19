@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
@@ -1383,6 +1383,131 @@ describe('cancelling a session turn', () => {
     await handle?.done;
     await session.closed;
     expect(session.alive).toBe(false);
+  });
+});
+
+describe('closing an idle session gracefully', () => {
+  /** An idle session over a child whose pid is its own group's id. */
+  async function idleSession(): Promise<{
+    session: ReturnType<typeof runCliSession>;
+    child: FakeChild;
+    kill: MockInstance<typeof process.kill>;
+  }> {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const { session, child } = openSession(new FakeChild(4242));
+    const handle = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await handle?.done;
+    return { session, child, kill };
+  }
+
+  it('closes stdin first and SIGTERMs only the CLI’s own group once it exits', async () => {
+    // A SIGTERM to the CLI alone left an MCP server's inner worker orphaned
+    // at ppid 1; the group signal after the exit is what reaches it.
+    const { session, child, kill } = await idleSession();
+    try {
+      session.close(undefined, { graceful: true });
+      expect(child.stdin.ended).toBe(true);
+      expect(kill).not.toHaveBeenCalled();
+
+      child.emit('exit', 0, null);
+      expect(kill.mock.calls).toEqual([[-4242, 'SIGTERM']]);
+      vi.advanceTimersByTime(2000);
+      // Never the daemon's own process or group — the group is the child's.
+      const targets = kill.mock.calls.map(([pid]) => pid);
+      expect(targets).not.toContain(process.pid);
+      expect(targets).not.toContain(-process.pid);
+      expect(targets.every((pid) => pid === -4242)).toBe(true);
+      child.emit('close', 0, null);
+      await session.closed;
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('SIGTERMs the group 2s on when the CLI ignores EOF', async () => {
+    // `cursor-agent acp` does not exit on EOF — the deadline is what ends it.
+    const { session, kill } = await idleSession();
+    try {
+      session.close(undefined, { graceful: true });
+      vi.advanceTimersByTime(1999);
+      expect(kill).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(kill).toHaveBeenCalledWith(-4242, 'SIGTERM');
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('signals at once when a turn is still in flight', () => {
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+
+    session.close(undefined, { graceful: true });
+
+    expect(child.killSignal).toBe('SIGTERM');
+    expect(child.stdin.ended).toBe(false);
+  });
+
+  it('signals an idle process at once when the close is not graceful', async () => {
+    // Eviction, a teardown and shutdown want the memory back now.
+    const { session, child, kill } = await idleSession();
+    try {
+      session.close();
+      expect(kill).toHaveBeenCalledWith(-4242, 'SIGTERM');
+      expect(child.stdin.ended).toBe(false);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('keeps a Stop’s cause for the exit it waits for, so a delegate still out ends stopped', async () => {
+    // The exit, not the close, settles the delegates still out — and it reads
+    // the cause the close recorded before returning without a signal.
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession(
+        new FakeChild(4242),
+        undefined,
+        (event) => events.push(event),
+      );
+      const handle = session.startTurn({ onEvent: () => {} });
+      line(child, { done: true });
+      await handle?.done;
+      // Launched between turns: no turn is in flight, so the close is graceful.
+      line(child, {
+        work: 'a-delegate',
+        phase: 'started',
+        unit: 'agent',
+        call: 'toolu_launch',
+      });
+      const last = () =>
+        events
+          .filter(
+            (e): e is Extract<AgentEvent, { type: 'subagent_info' }> =>
+              e.type === 'subagent_info' && e.id === 'toolu_launch',
+          )
+          .at(-1);
+      expect(last()?.backgroundOpen).toBe(true);
+
+      session.close('user-stop', { graceful: true });
+      expect(child.stdin.ended).toBe(true);
+      expect(session.closeCause).toBe('user-stop');
+
+      child.emit('exit', 0, null);
+      child.emit('close', 0, null);
+      await session.closed;
+      expect(last()).toMatchObject({
+        backgroundOpen: false,
+        backgroundOutcome: 'stopped',
+      });
+      expect(last()).not.toHaveProperty('trackingLost');
+    } finally {
+      kill.mockRestore();
+    }
   });
 });
 

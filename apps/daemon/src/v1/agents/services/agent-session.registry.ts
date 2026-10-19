@@ -32,6 +32,7 @@ import {
 import type {
   BetweenTurnApproval,
   CliSessionOptions,
+  SessionCloseOptions,
 } from '../utils/spawn-cli';
 import { currentRunOwner } from './run-process-attribution.service';
 
@@ -329,6 +330,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     string,
     { rows: string[]; prompts: string[] }
   >();
+  /**
+   * Processes the idle close has asked to finish gracefully
+   * (`SessionCloseOptions`) and that have not exited yet, with the key each
+   * was closed under. A graceful close signals nothing at first, so the CLI
+   * can run for a few seconds after its entry is gone — and it is still this
+   * registry's to end: shutdown ({@link closeAll}) and a teardown
+   * ({@link closeRun}) escalate it, and it is still reported as the run's
+   * ({@link processRoots}), so no reap signals it mid-exit. An immediate close
+   * is not kept here: its process is already being signalled.
+   */
+  private readonly closing = new Map<SessionEntry, string>();
   private shuttingDown = false;
   private readonly closeListeners = new Set<
     (
@@ -640,6 +652,12 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   closeRun(runId: string): void {
     const prefix = runSessionKeyPrefix(runId);
+    // At once: a process still finishing an idle close under the run too.
+    for (const [entry, key] of [...this.closing]) {
+      if (key === runId || key.startsWith(prefix)) {
+        this.escalate(key, entry);
+      }
+    }
     for (const [key, entry] of [...this.entries]) {
       if (key === runId || key.startsWith(prefix)) {
         this.closeEntry(key, entry, 'its run was torn down', false);
@@ -873,6 +891,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       }
       roots.push({ key, agent: entry.agent, cwd: entry.cwd, pid });
     }
+    // Still the run's until it exits — see {@link closing}. `pid` reads null
+    // once the CLI has exited.
+    for (const [entry, key] of this.closing) {
+      if (prefix !== null && key !== runId && !key.startsWith(prefix)) {
+        continue;
+      }
+      const pid = entry.session.pid;
+      if (pid !== null) {
+        roots.push({ key, agent: entry.agent, cwd: entry.cwd, pid });
+      }
+    }
     return roots;
   }
 
@@ -925,6 +954,11 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   closeAll(): void {
     this.shuttingDown = true;
+    // A graceful close still under way would outlive the daemon: `cursor-agent
+    // acp` ignores EOF, and its deadline is a timer in this process.
+    for (const [entry, key] of [...this.closing]) {
+      this.escalate(key, entry);
+    }
     for (const [runId, entry] of [...this.entries]) {
       this.closeEntry(runId, entry, 'the daemon is shutting down');
     }
@@ -1229,7 +1263,10 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
-   * Let {@link onIdleFarewell} have its last word, then close.
+   * Let {@link onIdleFarewell} have its last word, then close — gracefully
+   * (`SessionCloseOptions`): nothing is waiting on this process, so it may
+   * finish on its own, and the group signal after it exits reaches what an MCP
+   * server left behind. The only graceful close here.
    *
    * The entry stays in the map for the duration, which is what lets the
    * listener reach the process through {@link peek} — and is also why the state
@@ -1256,7 +1293,25 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     if (this.entries.get(runId) !== entry || !entry.session.idle) {
       return;
     }
-    this.closeEntry(runId, entry, 'it went unused');
+    this.closeEntry(runId, entry, 'it went unused', true, undefined, {
+      graceful: true,
+    });
+  }
+
+  /**
+   * Turn a graceful close still under way into an immediate one — a signal to
+   * the group now — and stop counting the process as {@link closing}, as an
+   * immediate close never does.
+   */
+  private escalate(key: string, entry: SessionEntry): void {
+    this.closing.delete(entry);
+    try {
+      entry.session.close();
+    } catch (err) {
+      this.logger.warn(
+        `failed to close the agent session for run ${key}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -1270,6 +1325,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     reason: string,
     tell = true,
     explicitCause?: SessionCloseCause,
+    options?: SessionCloseOptions,
   ): void {
     const cause = explicitCause ?? entry.session.closeCause ?? undefined;
     // Read BEFORE the entry is dropped and the timer disarmed — both are what
@@ -1285,8 +1341,12 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     }
     this.disarm(entry);
     this.entries.delete(runId);
+    if (options?.graceful === true) {
+      this.closing.set(entry, runId);
+      void entry.session.closed.then(() => this.closing.delete(entry));
+    }
     try {
-      entry.session.close(cause);
+      entry.session.close(cause, options);
     } catch (err) {
       // One session that cannot be closed must not stop the others — this runs
       // in a loop on shutdown, where giving up would orphan every later

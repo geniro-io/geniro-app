@@ -18,6 +18,7 @@ import type {
 } from '../utils/model-prices';
 import type {
   SessionAsk,
+  SessionCloseOptions,
   SessionLogger,
   SpawnFn,
   StoppedCommands,
@@ -3497,9 +3498,10 @@ export interface AgentSession {
    * the session owns that obligation: nothing else will reap it.
    *
    * `cause` says why, when that decides how the work still out ended — see
-   * {@link SessionCloseCause}.
+   * {@link SessionCloseCause}. `graceful` closes an idle process's stdin
+   * first — see `SessionCloseOptions`.
    */
-  close(cause?: SessionCloseCause): void;
+  close(cause?: SessionCloseCause, options?: SessionCloseOptions): void;
   /** See `CliSession.noteCloseCause` — the one place a close's cause is kept. */
   noteCloseCause?(cause: SessionCloseCause | null): void;
   readonly closeCause?: SessionCloseCause | null;

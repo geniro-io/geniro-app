@@ -31,11 +31,20 @@ import { subagentState } from './utils/codex-items.utils';
 import { CodexSubagentSpend } from './utils/codex-usage.utils';
 
 /**
- * A refused `turn/steer` is the one reply that still matters after its turn has
- * ended: it is how the user learns that a message they sent was not taken.
+ * Ending a stopped turn's commands is asked AFTER that turn ended, often while
+ * the next one runs, so its replies — answers and refusals — must still reach
+ * the turn that asked.
+ */
+function outlivesItsTurn(kind: CodexPendingKind): boolean {
+  return kind === 'terminals_list' || kind === 'terminal_terminate';
+}
+
+/**
+ * A refused `turn/steer` also still matters after its turn has ended: it is how
+ * the user learns that a message they sent was not taken.
  */
 function refusalOutlivesItsTurn(kind: CodexPendingKind): boolean {
-  return kind === 'turn_steer';
+  return kind === 'turn_steer' || outlivesItsTurn(kind);
 }
 
 /** What a {@link CodexSession} needs from the adapter that built it. */
@@ -204,10 +213,10 @@ export class CodexSession implements TurnDriver {
     const message = classifyMessage(obj);
     switch (message.kind) {
       case 'response': {
-        const entry = this.pending.take(message.id, this.turn);
+        const entry = this.pending.take(message.id, this.turn, outlivesItsTurn);
         return entry === null
           ? []
-          : entry.turn.onReply(entry.kind, message.result);
+          : entry.turn.onReply(entry.kind, message.result, entry.detail);
       }
       case 'error': {
         const entry = this.pending.take(
@@ -334,7 +343,8 @@ export class CodexSession implements TurnDriver {
 
   /**
    * Send one request, answering whether it actually went out. `detail` is what
-   * the turn wants said if the reply is a refusal.
+   * the turn wants said about the reply. `owner` is the turn the reply goes to:
+   * the current one, unless an ended turn is still finishing its own work.
    */
   request(
     method: string,
@@ -342,12 +352,13 @@ export class CodexSession implements TurnDriver {
     kind: CodexPendingKind,
     events: AgentEvent[],
     detail: string | null = null,
+    owner: CodexTurnDriver = this.turn,
   ): boolean {
     const id = this.pending.send(
       method,
       params,
       kind,
-      this.turn,
+      owner,
       (frame) => this.write(frame),
       detail,
     );

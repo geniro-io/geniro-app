@@ -96,6 +96,11 @@ export const CODEX_METHODS = {
   turnStart: 'turn/start',
   turnSteer: 'turn/steer',
   turnInterrupt: 'turn/interrupt',
+  // Experimental (codex 0.162.0; needs `experimentalApi`, which the handshake
+  // already declares): the only way to end a command `turn/interrupt` leaves
+  // running.
+  backgroundTerminalsList: 'thread/backgroundTerminals/list',
+  backgroundTerminalsTerminate: 'thread/backgroundTerminals/terminate',
   modelList: 'model/list',
   skillsList: 'skills/list',
   rateLimitsRead: 'account/rateLimits/read',
@@ -181,12 +186,20 @@ export const CODEX_DELEGATE_LABEL_MAX_CHARS = 80;
 /**
  * The results a tool call is closed with when its turn was stopped, or failed,
  * before the call reported back. The close is the call's only ending — see
- * `CodexSession.endedTurns` — so neither may claim the step itself ended.
+ * `CodexSession.endedTurns`. A command a Stop could not end gets a notice of
+ * its own (`CodexTurnDriver.endStoppedCommands`), so these never claim more
+ * than that the step's turn ended.
  */
 export const CODEX_STOPPED_TOOL_RESULT =
-  'The turn was stopped before this step reported back. codex may still be running it, and its result will not be shown.';
+  'Stopped — its turn was stopped before this step reported back.';
 export const CODEX_FAILED_TOOL_RESULT =
   'Cut off — the turn this step ran in failed before its result came back.';
+
+/** The longest a command is quoted in the notice that it may still be running. */
+export const CODEX_STOPPED_COMMAND_PREVIEW_MAX_CHARS = 80;
+
+/** Background-terminal listing pages a Stop follows before giving up. */
+export const CODEX_TERMINAL_LIST_MAX_PAGES = 20;
 
 /** The longest a refused follow-up is quoted back in the notice that says so. */
 export const CODEX_STEER_PREVIEW_MAX_CHARS = 60;

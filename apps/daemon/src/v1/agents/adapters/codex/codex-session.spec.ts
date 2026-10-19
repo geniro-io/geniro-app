@@ -1273,6 +1273,189 @@ describe('later turns on the kept process', () => {
     },
   );
 
+  describe('ending the commands a Stop left running', () => {
+    const command = (id: string, words: string) => ({
+      threadId: THREAD,
+      turnId: TURN,
+      item: { type: 'commandExecution', id, command: words },
+    });
+    function stopWith(session: CodexSession, ...started: string[]): void {
+      for (const id of started) {
+        feed(session, {
+          method: 'item/started',
+          params: command(id, `sleep 60 # ${id}`),
+        });
+      }
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'interrupted' } },
+      });
+    }
+    const listed = (...entries: [string, string][]) => ({
+      data: entries.map(([itemId, processId]) => ({
+        itemId,
+        processId,
+        command: 'sleep 60',
+        cwd: '/repo',
+        osPid: null,
+      })),
+      nextCursor: null,
+    });
+
+    it('ends exactly the stopped turn’s running command, even once the next turn has opened', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: command('done', 'ls') });
+      feed(session, {
+        method: 'item/completed',
+        params: command('done', 'ls'),
+      });
+      stopWith(session, 'running');
+      const list = frameFor('thread/backgroundTerminals/list');
+      expect(list.params).toEqual({ threadId: THREAD });
+      session.openTurn(io(), turnInput({ prompt: 'next' }));
+      written = [];
+      // `dev` is a server an earlier turn left running on purpose.
+      expect(
+        feed(session, {
+          id: list.id,
+          result: listed(['dev', '9'], ['running', '41']),
+        }),
+      ).toEqual([]);
+      expect(
+        frames().filter(
+          (frame) => frame.method === 'thread/backgroundTerminals/terminate',
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          params: { threadId: THREAD, processId: '41' },
+        }),
+      ]);
+      expect(
+        feed(session, {
+          id: frameFor('thread/backgroundTerminals/terminate').id,
+          result: { terminated: true },
+        }),
+      ).toEqual([]);
+    });
+
+    it('says nothing of a command that finished by itself before the listing came back', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopWith(session, 'running');
+      feed(session, {
+        method: 'item/completed',
+        params: command('running', 'sleep 60 # running'),
+      });
+      expect(
+        feed(session, {
+          id: frameFor('thread/backgroundTerminals/list').id,
+          result: listed(),
+        }),
+      ).toEqual([]);
+    });
+
+    it('stops following a listing whose cursor repeats', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopWith(session, 'running');
+      const page = { ...listed(['dev', '9']), nextCursor: 'same' };
+      feed(session, {
+        id: frameFor('thread/backgroundTerminals/list').id,
+        result: page,
+      });
+      const again = feed(session, {
+        id: frameFor('thread/backgroundTerminals/list').id,
+        result: page,
+      });
+      expect(
+        frames().filter(
+          (frame) => frame.method === 'thread/backgroundTerminals/list',
+        ),
+      ).toHaveLength(2);
+      expect(again).toEqual([
+        expect.objectContaining({ type: 'notice', severity: 'warning' }),
+      ]);
+    });
+
+    it('asks nothing when the stopped turn left no command running', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopWith(session);
+      expect(
+        frames().some(
+          (frame) => frame.method === 'thread/backgroundTerminals/list',
+        ),
+      ).toBe(false);
+    });
+
+    it('follows the listing’s pages until it has found the command', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopWith(session, 'running');
+      feed(session, {
+        id: frameFor('thread/backgroundTerminals/list').id,
+        result: { ...listed(['dev', '9']), nextCursor: 'page-2' },
+      });
+      const second = frameFor('thread/backgroundTerminals/list');
+      expect(second.params).toEqual({ threadId: THREAD, cursor: 'page-2' });
+      feed(session, { id: second.id, result: listed(['running', '41']) });
+      expect(frameFor('thread/backgroundTerminals/terminate').params).toEqual({
+        threadId: THREAD,
+        processId: '41',
+      });
+    });
+
+    it.each([
+      [
+        'the listing does not show it',
+        (session: CodexSession) =>
+          feed(session, {
+            id: frameFor('thread/backgroundTerminals/list').id,
+            result: listed(['dev', '9']),
+          }),
+        'codex did not list it as running',
+      ],
+      [
+        'codex refuses the listing',
+        (session: CodexSession) =>
+          feed(session, {
+            id: frameFor('thread/backgroundTerminals/list').id,
+            error: { code: -32600, message: 'experimental api required' },
+          }),
+        'codex refused to list its running commands (experimental api required)',
+      ],
+      [
+        'codex cannot end it',
+        (session: CodexSession) => {
+          feed(session, {
+            id: frameFor('thread/backgroundTerminals/list').id,
+            result: listed(['running', '41']),
+          });
+          return feed(session, {
+            id: frameFor('thread/backgroundTerminals/terminate').id,
+            result: { terminated: false },
+          });
+        },
+        'codex reported it could not end it',
+      ],
+    ])(
+      'says the command may still be running when %s',
+      (_case, answer, reason) => {
+        const session = openSession();
+        acceptTurnStart(session);
+        stopWith(session, 'running');
+        expect(answer(session)).toEqual([
+          {
+            type: 'notice',
+            severity: 'warning',
+            message: `The Stop did not end \`sleep 60 # running\` — ${reason}. It may still be running.`,
+          },
+        ]);
+      },
+    );
+  });
+
   describe('a frame naming a stopped turn, once the next has opened', () => {
     const NEXT = '01a0e3aa-ffff-7493-8c1f-01cff8862a2c';
     const stoppedFrame = (extra: Record<string, unknown>) => ({

@@ -38,6 +38,7 @@ import {
   toolResultBody,
 } from './tool-render';
 import {
+  isDeliveryAcknowledgement,
   payloadNumber,
   payloadString,
   type TranscriptNodeMeta,
@@ -416,6 +417,9 @@ export const TranscriptItem = memo(function TranscriptItem({
       return <MessageBubble variant="note">{line}</MessageBubble>;
     }
     case 'system': {
+      if (isDeliveryAcknowledgement(item.payload)) {
+        return null;
+      }
       const message = payloadString(item.payload, 'message');
       if (message === null) {
         return null;

@@ -51,6 +51,15 @@ export function payloadString(payload: unknown, key: string): string | null {
   return null;
 }
 
+export function isDeliveryAcknowledgement(payload: unknown): boolean {
+  return (
+    payload !== null &&
+    typeof payload === 'object' &&
+    'messageDeliveryNotices' in payload &&
+    Array.isArray(payload.messageDeliveryNotices)
+  );
+}
+
 /**
  * Read a boolean field out of an item's payload, defensively.
  *

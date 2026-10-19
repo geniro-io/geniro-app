@@ -508,6 +508,10 @@ describe('a turn', () => {
     expect(
       running?.type === 'cost_progress' ? running.costUsd : undefined,
     ).toBeCloseTo(0.0648, 10);
+    // codex states no price, so all of it is geniro's list-price estimate.
+    expect(
+      running?.type === 'cost_progress' ? running.estimatedCostUsd : undefined,
+    ).toBeCloseTo(0.0648, 10);
     const [zero, terminal] = feed(session, {
       method: 'turn/completed',
       params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },

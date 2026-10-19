@@ -474,6 +474,7 @@ function foldTurns(
       timeToRequestMs: asNumber(usage.timeToRequestMs),
       numTurns: asNumber(usage.numTurns),
       costUsd: asNumber(usage.costUsd),
+      estimatedCostUsd: asNumber(usage.estimatedCostUsd),
       modelCosts: readModelCosts(usage.modelCosts, asNumber(usage.costUsd)),
       model: asString(usage.contextModel),
       inputTokens: asNumber(usage.inputTokens),
@@ -553,6 +554,7 @@ function bracketedTurn(
     timeToRequestMs: null,
     numTurns: null,
     costUsd: null,
+    estimatedCostUsd: null,
     modelCosts: null,
     model: null,
     inputTokens: null,
@@ -1185,6 +1187,7 @@ function foldLanes(input: {
       .map(([nodeId, lane]) => {
         const own = turns.filter((turn) => turn.nodeId === nodeId);
         const costed = own.filter((turn) => turn.costUsd !== null);
+        const estimated = own.filter((turn) => turn.estimatedCostUsd !== null);
         const timed = own.filter((turn) => turn.timingSource === 'cli');
         return {
           nodeId,
@@ -1201,6 +1204,13 @@ function foldLanes(input: {
               : costed.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0),
             selfPricedCost.get(nodeId) ?? null,
           ),
+          estimatedCostUsd:
+            estimated.length === 0
+              ? null
+              : estimated.reduce(
+                  (sum, turn) => sum + (turn.estimatedCostUsd ?? 0),
+                  0,
+                ),
           // Whichever channel saw more of this lane's turns. They record
           // different moments — a status row when a turn OPENS (written by the
           // executor alone), a `turn_complete` when one ENDS — so neither is

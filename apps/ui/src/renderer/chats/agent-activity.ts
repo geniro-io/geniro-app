@@ -49,11 +49,18 @@ export interface AgentActivity {
    * question and not an instance's.
    */
   mainContextTokens: number | null;
+  /** Whether {@link mainContextTokens} is geniro's stand-in for a reading. */
+  mainContextEstimated: boolean;
   mainContextWindowTokens: number | null;
   /** The node's most recent status transition; null before its first one. */
   lastStatus: NodeRunStatus | null;
   /** Prompt-side tokens of the agent's LATEST settled turn (its context). */
   contextTokens: number | null;
+  /**
+   * Whether {@link contextTokens} is geniro's stand-in for an occupancy the CLI
+   * did not state (`usage.contextEstimated`) — it travels with the count.
+   */
+  contextEstimated: boolean;
   /** That turn's model window as the CLI reported it; null if it reported none. */
   contextWindowTokens: number | null;
   /**
@@ -68,6 +75,8 @@ export interface AgentActivity {
   contextModel: string | null;
   /** Cumulative cost across all of the agent's settled turns. */
   spentUsd: number | null;
+  /** Of {@link spentUsd}, the part geniro priced itself; null when none. */
+  spentEstimatedUsd: number | null;
   /**
    * What the agent has SPENT in tokens, summed over its settled turns — the
    * figure that stands beside {@link spentUsd}.
@@ -221,7 +230,11 @@ export interface AgentDisplay {
    * against a window nobody named.
    */
   contextWindowTokens: number | null;
+  /** Whether {@link contextTokens} is geniro's stand-in for a reading. */
+  contextEstimated?: boolean;
   spentUsd: number | null;
+  /** Of {@link spentUsd}, the part geniro priced itself; absent when none. */
+  spentEstimatedUsd?: number | null;
   /** What it has spent in tokens — see {@link AgentActivity.inputTokens}. */
   inputTokens: number | null;
   outputTokens: number | null;
@@ -278,6 +291,8 @@ interface AgentThreadFields {
    * its own.
    */
   contextTokens?: number | null;
+  /** Whether {@link contextTokens} is geniro's stand-in for a reading. */
+  contextEstimated?: boolean;
   contextWindowTokens?: number | null;
   /**
    * For a SUB-AGENT: the call thread of its agent it was launched in — which
@@ -309,6 +324,8 @@ interface AgentThreadFields {
    */
   spentTokens?: number | null;
   spentUsd?: number | null;
+  /** Of {@link spentUsd}, the part geniro priced itself; null when none. */
+  spentEstimatedUsd?: number | null;
   /**
    * For a CALL thread of a POOLED agent: which pool member (1-based) the
    * conversation runs on — its newest call's settle, else its hand-off, else
@@ -378,6 +395,7 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
           : 'completed',
     sessionId: null,
     contextTokens: activity.mainContextTokens,
+    contextEstimated: activity.mainContextEstimated,
     contextWindowTokens: activity.mainContextWindowTokens,
   };
   return [main, ...calls];
@@ -480,12 +498,15 @@ function emptyActivity(): AgentActivity {
     turnStarts: 0,
     mainTurnStarts: 0,
     mainContextTokens: null,
+    mainContextEstimated: false,
     mainContextWindowTokens: null,
     lastStatus: null,
     contextTokens: null,
+    contextEstimated: false,
     contextWindowTokens: null,
     contextModel: null,
     spentUsd: null,
+    spentEstimatedUsd: null,
     inputTokens: null,
     outputTokens: null,
     cacheTokens: null,
@@ -644,8 +665,10 @@ export function computeAgentActivity(
       // A reading the compaction itself reported lands BELOW this row and
       // overwrites the null, which is why this is a reset rather than a stop.
       entry(key).contextTokens = null;
+      entry(key).contextEstimated = false;
       if (callIdOf(item) === null) {
         entry(key).mainContextTokens = null;
+        entry(key).mainContextEstimated = false;
       }
       continue;
     }
@@ -749,8 +772,10 @@ export function computeAgentActivity(
       // CLI reported no per-request breakdown, so falling back to it overwrote
       // a real reading with `12 of 1M · 0%`.
       const context = usage.contextTokens;
+      const contextEstimated = usage.contextEstimated === true;
       if (typeof context === 'number' && context > 0) {
         agent.contextTokens = context;
+        agent.contextEstimated = contextEstimated;
       }
       // REMEMBERED, on exactly the rule the count above follows — and it did
       // not used to be, which is the `ctx 357.2k` with no ring beside it.
@@ -798,6 +823,7 @@ export function computeAgentActivity(
       if (callIdOf(item) === null) {
         if (typeof context === 'number' && context > 0) {
           agent.mainContextTokens = context;
+          agent.mainContextEstimated = contextEstimated;
         }
         if (typeof window === 'number' && window > 0) {
           agent.mainContextWindowTokens = window;
@@ -817,6 +843,13 @@ export function computeAgentActivity(
       );
       if (typeof usage.costUsd === 'number') {
         agent.spentUsd = (agent.spentUsd ?? 0) + usage.costUsd;
+      }
+      const estimated =
+        typeof usage.estimatedCostUsd === 'number'
+          ? usage.estimatedCostUsd
+          : null;
+      if (isEstimatedCost(estimated)) {
+        agent.spentEstimatedUsd = (agent.spentEstimatedUsd ?? 0) + estimated;
       }
       // A COUNT of requests, on the same rule as the token counters above.
       agent.numTurns = addTokens(agent.numTurns, usage.numTurns);
@@ -998,3 +1031,75 @@ export function formatExactUsd(amount: number): string {
   }
   return `$${USD_DIGITS.format(amount)}`;
 }
+
+/**
+ * Whether a cost carries a part geniro PRICED itself — token counts at the
+ * public list price — rather than read off the agent's own bill. The daemon
+ * states that part beside every cost (`estimatedCostUsd`); null or 0 is none.
+ */
+export function isEstimatedCost(
+  estimatedUsd: number | null | undefined,
+): estimatedUsd is number {
+  return (
+    typeof estimatedUsd === 'number' &&
+    Number.isFinite(estimatedUsd) &&
+    estimatedUsd > 0
+  );
+}
+
+/**
+ * A formatted amount with its provenance: `≈` ahead of it when any of it is
+ * geniro's estimate. A MARK over {@link formatUsd} / {@link formatExactUsd},
+ * never a third money format — the same `≈` a delegate's priced cost carries.
+ */
+export function markEstimate(
+  formatted: string,
+  estimatedUsd: number | null | undefined,
+): string {
+  return isEstimatedCost(estimatedUsd) ? `≈${formatted}` : formatted;
+}
+
+/**
+ * The sentence that says which part of a cost is geniro's estimate, or null
+ * when all of it is the agent's own bill. Hover text and readout lines take it
+ * so the word reaches a reader the glyph alone may not.
+ */
+export function costEstimateNote(
+  costUsd: number | null,
+  estimatedUsd: number | null | undefined,
+): string | null {
+  if (!isEstimatedCost(estimatedUsd)) {
+    return null;
+  }
+  // "All of it" only within rounding: half a cent, and never more than 0.5% of
+  // the cost — so neither a sub-cent turn nor a large period calls a part the
+  // agent billed itself geniro's.
+  if (
+    costUsd === null ||
+    costUsd - estimatedUsd <
+      Math.min(ESTIMATE_WHOLE_SLACK_USD, costUsd * ESTIMATE_WHOLE_FRACTION)
+  ) {
+    return "geniro's estimate — priced from token counts at list price, not the agent's own bill";
+  }
+  return `includes ≈${formatExactUsd(estimatedUsd)} geniro estimated from token counts at list price`;
+}
+
+/** {@link costEstimateNote} as a `title` attribute — absent when none. */
+export function costEstimateTitle(
+  costUsd: number | null,
+  estimatedUsd: number | null | undefined,
+): string | undefined {
+  return costEstimateNote(costUsd, estimatedUsd) ?? undefined;
+}
+
+const ESTIMATE_WHOLE_SLACK_USD = 0.005;
+const ESTIMATE_WHOLE_FRACTION = 0.005;
+
+/** A context count with its provenance: `≈` ahead of geniro's stand-in. */
+export function markContextEstimate(text: string, estimated: boolean): string {
+  return estimated ? `≈${text}` : text;
+}
+
+/** What a context count geniro stood in for says about itself. */
+export const CONTEXT_ESTIMATE_NOTE =
+  "geniro's estimate — the agent stated no context reading, so this is its last input count";

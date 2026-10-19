@@ -127,6 +127,8 @@ describe('turnUsageOf', () => {
     expect(usage.durationMs).toBe(8316);
     // codex prices nothing on its wire, and nothing priced this model.
     expect(usage.costUsd).toBeNull();
+    // No cost is not an estimated cost.
+    expect(usage.estimatedCostUsd).toBeUndefined();
   });
 
   it('reports no token figures, rather than zeros, when nothing was measured', () => {
@@ -190,6 +192,8 @@ describe('turnUsageOf', () => {
     expect(usage.outputTokens).toBe(30_000);
     // 150k × $10 + 400k × $1 + 50k × $12.5 + 30k × $50, per million.
     expect(usage.costUsd).toBeCloseTo(1.5 + 0.4 + 0.625 + 1.5, 10);
+    // All of it is geniro's list-price arithmetic, so all of it is marked.
+    expect(usage.estimatedCostUsd).toBeCloseTo(1.5 + 0.4 + 0.625 + 1.5, 10);
   });
 
   it('bills reasoning ONCE, as the share of output codex already counts it as', () => {

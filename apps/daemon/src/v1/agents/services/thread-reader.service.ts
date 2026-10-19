@@ -317,6 +317,10 @@ export class ThreadReaderService {
           outputTokens: turn.outputTokens,
           cacheReadTokens: turn.cacheReadTokens,
           costUsd: turn.costUsd,
+          // The part of that cost geniro priced from tokens, not the CLI's bill.
+          ...(turn.estimatedCostUsd === null
+            ? {}
+            : { estimatedCostUsd: turn.estimatedCostUsd }),
           ...(turn.modelCosts === null ? {} : { modelCosts: turn.modelCosts }),
         });
       }
@@ -545,7 +549,12 @@ function itemEntry(row: Item): Answer {
 
 type TurnUsage = Pick<
   RunWaterfallTurn,
-  'nodeId' | 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'costUsd'
+  | 'nodeId'
+  | 'inputTokens'
+  | 'outputTokens'
+  | 'cacheReadTokens'
+  | 'costUsd'
+  | 'estimatedCostUsd'
 >;
 
 /**
@@ -561,6 +570,8 @@ function usageOf(
   outputTokens: number | null;
   cacheReadTokens: number | null;
   costUsd: number | null;
+  /** Of {@link costUsd}, the part geniro priced from tokens; null when none. */
+  estimatedCostUsd: number | null;
 } {
   const own = turns.filter(
     (turn) => nodeId === undefined || turn.nodeId === nodeId,
@@ -575,6 +586,7 @@ function usageOf(
     outputTokens: sum((turn) => turn.outputTokens),
     cacheReadTokens: sum((turn) => turn.cacheReadTokens),
     costUsd: sum((turn) => turn.costUsd),
+    estimatedCostUsd: sum((turn) => turn.estimatedCostUsd),
   };
 }
 

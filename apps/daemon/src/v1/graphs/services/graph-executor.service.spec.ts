@@ -414,6 +414,7 @@ interface FakeNodeRow {
   status: string;
   agentSessionId: string | null;
   contextTokens: number | null;
+  contextEstimated?: boolean | null;
   contextWindowTokens: number | null;
   workedMs: number | null;
   toolCalls: number | null;
@@ -433,6 +434,7 @@ class FakeNodeStateDao {
     const found = this.row(runId, nodeId);
     if (found) {
       found.contextTokens = null;
+      found.contextEstimated = null;
     }
   }
   async clearSessionId(runId: string, nodeId: string): Promise<void> {
@@ -460,8 +462,15 @@ class FakeNodeStateDao {
   async rememberContext(
     runId: string,
     nodeId: string,
-    contextTokens: number | null,
-    contextWindowTokens: number | null,
+    {
+      contextTokens = null,
+      contextWindowTokens = null,
+      contextEstimated = false,
+    }: {
+      contextTokens?: number | null;
+      contextWindowTokens?: number | null;
+      contextEstimated?: boolean;
+    },
   ): Promise<void> {
     const found = this.row(runId, nodeId);
     if (!found) {
@@ -469,6 +478,7 @@ class FakeNodeStateDao {
     }
     if (contextTokens !== null && contextTokens > 0) {
       found.contextTokens = contextTokens;
+      found.contextEstimated = contextEstimated ? true : null;
     }
     if (contextWindowTokens !== null && contextWindowTokens > 0) {
       found.contextWindowTokens = contextWindowTokens;
@@ -968,6 +978,7 @@ interface FakeCallContextRow {
   nodeId: string;
   contextTokens: number | null;
   contextWindowTokens: number | null;
+  contextEstimated?: boolean;
 }
 
 function setup(
@@ -1218,8 +1229,15 @@ function setup(
       runId: string,
       callId: string,
       nodeId: string,
-      contextTokens: number | null,
-      contextWindowTokens: number | null,
+      {
+        contextTokens = null,
+        contextWindowTokens = null,
+        contextEstimated = false,
+      }: {
+        contextTokens?: number | null;
+        contextWindowTokens?: number | null;
+        contextEstimated?: boolean;
+      },
     ) {
       this.rows.set(`${runId}:${callId}`, {
         runId,
@@ -1227,6 +1245,7 @@ function setup(
         nodeId,
         contextTokens,
         contextWindowTokens,
+        contextEstimated,
       });
     },
     async listByRun(runId: string) {
@@ -10984,6 +11003,50 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
   });
 
+  it('files a settled stand-in count as an estimate, until a stated one replaces it', async () => {
+    const { service, claude, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: 900,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: 900,
+        contextEstimated: true,
+        contextWindowTokens: null,
+        contextModel: null,
+        costUsd: null,
+        durationMs: null,
+        apiMs: null,
+        ttftMs: null,
+        timeToRequestMs: null,
+        numTurns: null,
+      },
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    await drain();
+    expect(nodeDao.row(run.id, 'a')).toMatchObject({
+      contextTokens: 900,
+      contextEstimated: true,
+    });
+    const [node] = (await service.getNodeStates(run.id)).filter(
+      (state) => state.nodeId === 'a',
+    );
+    expect(node?.contextEstimated).toBe(true);
+    claude.starts[0]!.finish();
+    await drain();
+  });
+
   it('files the RESOLVED window on a node whose own readings carried none', async () => {
     // The truthful denominator for a node. `turn_model` resolves a known window
     // into the live plane and writes nothing durable, and `context_progress`
@@ -11504,6 +11567,54 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
   });
 
+  it('files a CALL’s settled stand-in count as an estimate on its own row', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    claude.starts[1]!.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: 900,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: 900,
+        contextEstimated: true,
+        contextWindowTokens: null,
+        contextModel: null,
+        costUsd: null,
+        durationMs: null,
+        apiMs: null,
+        ttftMs: null,
+        timeToRequestMs: null,
+        numTurns: null,
+      },
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    await drain();
+
+    const nodes = await service.getNodeStates(run.id);
+    expect(nodes.find((n) => n.nodeId === 'callee')?.calls[0]).toMatchObject({
+      callId: 'call-1',
+      contextTokens: 900,
+      contextEstimated: true,
+    });
+  });
+
   it('exposes the per-call readings on the nodes route, grouped by node', async () => {
     // The PRODUCER hop of this wire field, revertible independently of the
     // renderer's reader: a reading that reaches the row and not the route is
@@ -11534,6 +11645,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
       {
         callId: 'call-1',
         contextTokens: 10_000,
+        contextEstimated: false,
         contextWindowTokens: null,
         totals: expect.objectContaining({ turns: 0, costUsd: null }),
         // No turn has ended yet, so there is no cache to lapse.

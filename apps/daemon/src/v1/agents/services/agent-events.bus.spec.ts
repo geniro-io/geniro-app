@@ -30,6 +30,22 @@ describe('AgentEventBus', () => {
     sub.unsubscribe();
   });
 
+  it('stamps whether that reading is geniro’s stand-in beside it', () => {
+    const contexts = new RunContextRegistry();
+    contexts.remember('r1', { tokens: 900, window: 200_000, estimated: true });
+    const bus = new AgentEventBus(contexts);
+    const seen: RunStatusEvent[] = [];
+    const sub = bus.allStatuses().subscribe((e) => seen.push(e));
+
+    bus.publishRunStatus({ runId: 'r1', status: null, activity: 'working' });
+
+    expect(seen[0]).toMatchObject({
+      contextTokens: 900,
+      contextEstimated: true,
+    });
+    sub.unsubscribe();
+  });
+
   it('stamps the run’s context reading onto every status event', () => {
     // The seam the whole fix rests on. There are five announce sites in the
     // chat service, three in the title service and one shared settle helper —

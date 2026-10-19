@@ -13,7 +13,11 @@ describe('RunContextRegistry', () => {
     contexts.remember('r1', { tokens: 10_000, window: 200_000 });
     contexts.remember('r1', { tokens: 42_000, window: null });
 
-    expect(contexts.read('r1')).toEqual({ tokens: 42_000, window: 200_000 });
+    expect(contexts.read('r1')).toEqual({
+      tokens: 42_000,
+      window: 200_000,
+      estimated: false,
+    });
   });
 
   it('drops the COUNT on a compaction and keeps the window', () => {
@@ -26,7 +30,28 @@ describe('RunContextRegistry', () => {
 
     contexts.forgetTokens('r1');
 
-    expect(contexts.read('r1')).toEqual({ tokens: null, window: 200_000 });
+    expect(contexts.read('r1')).toEqual({
+      tokens: null,
+      window: 200_000,
+      estimated: false,
+    });
+  });
+
+  it('keeps an estimate with the count it describes, and only that count', () => {
+    const contexts = new RunContextRegistry();
+
+    contexts.remember('r1', {
+      tokens: 9_000,
+      window: 200_000,
+      estimated: true,
+    });
+    // A window-only reading says nothing about the count, so it stays marked.
+    contexts.remember('r1', { tokens: null, window: 210_000 });
+    expect(contexts.read('r1')?.estimated).toBe(true);
+
+    // A stated count replaces the stand-in, and the mark goes with it.
+    contexts.remember('r1', { tokens: 12_000, window: null });
+    expect(contexts.read('r1')?.estimated).toBe(false);
   });
 
   it('holds nothing for a run whose reading was never a reading', () => {

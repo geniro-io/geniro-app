@@ -26,6 +26,7 @@ function dto(from: string): RunWaterfallDto {
       turns: 0,
       costedTurns: 0,
       costUsd: null,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,

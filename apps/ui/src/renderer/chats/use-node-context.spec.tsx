@@ -126,6 +126,7 @@ describe('useNodeDurableReadings', () => {
           promptCacheExpiresAt: null,
           callId: 'call-1',
           contextTokens: 10_000,
+          contextEstimated: false,
           contextWindowTokens: 200_000,
           totals: NO_TOTALS,
           start: null,
@@ -134,6 +135,7 @@ describe('useNodeDurableReadings', () => {
           promptCacheExpiresAt: '2026-10-11T11:00:00.000Z',
           callId: 'call-2',
           contextTokens: 91_000,
+          contextEstimated: false,
           contextWindowTokens: 200_000,
           totals: NO_TOTALS,
           start: null,
@@ -150,6 +152,7 @@ describe('useNodeDurableReadings', () => {
       {
         callId: 'call-1',
         contextTokens: 10_000,
+        contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
@@ -158,6 +161,7 @@ describe('useNodeDurableReadings', () => {
       {
         callId: 'call-2',
         contextTokens: 91_000,
+        contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,

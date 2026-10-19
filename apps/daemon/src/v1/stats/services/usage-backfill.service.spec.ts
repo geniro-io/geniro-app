@@ -196,6 +196,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       cwd: null,
       workflowName: null,
       costUsd: 0.4,
+      estimatedCostUsd: null,
       inputTokens: 800,
       outputTokens: 150,
       cacheReadTokens: 40,

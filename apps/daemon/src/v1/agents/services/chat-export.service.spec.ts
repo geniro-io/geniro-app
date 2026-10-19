@@ -18,6 +18,7 @@ const TOTALS: ChatTotalsWire = {
   turns: 2,
   costedTurns: 2,
   costUsd: 0.42,
+  estimatedCostUsd: null,
   inputTokens: 100,
   outputTokens: 200,
   cacheReadTokens: null,

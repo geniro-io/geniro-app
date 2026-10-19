@@ -88,7 +88,7 @@ export interface LiveTextEvent {
    * their own figure because they are priced apart and dominate the input side
    * of any resumed conversation.
    *
-   * CLAUDE ONLY, and null for cursor — which exposes no token accounting a
+   * claude and codex, and null for cursor — which exposes no token accounting a
    * client can reach at all (see the daemon's `RunDeltaEvent` for the four
    * channels that were measured and found empty). Null is "not measured", so
    * the row simply does not draw the figure rather than showing a zero.
@@ -103,9 +103,15 @@ export interface LiveTextEvent {
    *
    * So it is ADDED to the daemon's recorded totals (`withLiveCost` in
    * `call-context.ts`), never chosen between: the sum is what a running call
-   * has cost so far. CLAUDE ONLY, null elsewhere.
+   * has cost so far. claude and codex (codex's list-priced, so all of it is
+   * {@link spentEstimatedCostUsd}), null elsewhere.
    */
   spentCostUsd: number | null;
+  /**
+   * Of {@link spentCostUsd}, the part geniro priced itself; null or absent
+   * when none.
+   */
+  spentEstimatedCostUsd?: number | null;
 }
 
 /** What one agent is doing right now, as the transcript renders it. */
@@ -123,6 +129,7 @@ export interface LiveState {
   spentOutputTokens: number | null;
   spentCacheReadTokens: number | null;
   spentCostUsd: number | null;
+  spentEstimatedCostUsd?: number | null;
 }
 
 /**
@@ -187,6 +194,12 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
     // become durable, and it has to REPLACE the last figure rather than be
     // dropped as "unmeasured" — or the same money is counted in both.
     spentCostUsd: nonNegativeNumber(record.spentCostUsd),
+    // Absent unless some of that spend is geniro's own pricing.
+    ...(positiveNumber(record.spentEstimatedCostUsd) === null
+      ? {}
+      : {
+          spentEstimatedCostUsd: positiveNumber(record.spentEstimatedCostUsd),
+        }),
   };
 }
 
@@ -368,6 +381,9 @@ export function applyLiveText(
       spentOutputTokens: event.spentOutputTokens,
       spentCacheReadTokens: event.spentCacheReadTokens,
       spentCostUsd: event.spentCostUsd,
+      ...(event.spentEstimatedCostUsd == null
+        ? {}
+        : { spentEstimatedCostUsd: event.spentEstimatedCostUsd }),
     });
   }
   return next;

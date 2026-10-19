@@ -60,6 +60,7 @@ function metrics(): ChatMetricsDto {
       turns: 3,
       costedTurns: 3,
       costUsd: 1.5,
+      estimatedCostUsd: null,
       inputTokens: 100,
       outputTokens: 200,
       cacheReadTokens: null,
@@ -69,6 +70,35 @@ function metrics(): ChatMetricsDto {
     },
   };
 }
+
+describe('the thread totals', () => {
+  it('marks a spend geniro priced itself, and says which part', () => {
+    const base = metrics();
+    render(
+      <ContextPanel
+        metrics={{
+          ...base,
+          totals: { ...base.totals, costUsd: 1.5, estimatedCostUsd: 0.5 },
+        }}
+        loading={false}
+        error={null}
+      />,
+    );
+    expect(container.textContent).toContain('≈$1.50');
+    expect(
+      container.querySelector('[data-slot="cost-estimate-note"]')?.textContent,
+    ).toContain('includes ≈$0.50 geniro estimated');
+  });
+
+  it('states a spend that is all the agent’s own bill plainly', () => {
+    render(<ContextPanel metrics={metrics()} loading={false} error={null} />);
+    expect(container.textContent).toContain('$1.50');
+    expect(container.textContent).not.toContain('≈');
+    expect(
+      container.querySelector('[data-slot="cost-estimate-note"]'),
+    ).toBeNull();
+  });
+});
 
 describe('the folded group headers', () => {
   it('sets its own type, because a button does not inherit the panel’s', () => {

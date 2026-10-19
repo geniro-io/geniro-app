@@ -936,7 +936,12 @@ export class CodexTurnDriver {
       if (cost > 0) {
         this.session.liveCostReported = true;
       }
-      events.push({ type: 'cost_progress', costUsd: cost });
+      // List-priced like the turn's own cost, so all of it is an estimate.
+      events.push({
+        type: 'cost_progress',
+        costUsd: cost,
+        ...(cost > 0 ? { estimatedCostUsd: cost } : {}),
+      });
     }
     return events;
   }

@@ -11,7 +11,7 @@ import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 import { categoryToken } from '../stats/charts/chart-theme';
 import { formatDuration, NOT_MEASURED } from '../stats/stats-format';
-import { formatUsd } from './agent-activity';
+import { costEstimateTitle, formatUsd, markEstimate } from './agent-activity';
 import { RunWaterfallDialog } from './run-waterfall-dialog';
 import {
   callFailed,
@@ -69,8 +69,13 @@ const WaterfallLane = memo(function WaterfallLane({
           {lane.nodeId ?? 'agent'}
         </span>
         <span className="truncate text-muted-foreground">{lane.agentKind}</span>
-        <span className="ml-auto shrink-0 tabular-nums text-foreground">
-          {lane.costUsd === null ? NOT_MEASURED : formatUsd(lane.costUsd)}
+        <span
+          data-slot="waterfall-lane-cost"
+          className="ml-auto shrink-0 tabular-nums text-foreground"
+          title={costEstimateTitle(lane.costUsd, lane.estimatedCostUsd)}>
+          {lane.costUsd === null
+            ? NOT_MEASURED
+            : markEstimate(formatUsd(lane.costUsd), lane.estimatedCostUsd)}
         </span>
       </div>
       <div className="relative h-4 w-full overflow-hidden rounded-[3px] bg-muted/40">
@@ -243,8 +248,15 @@ export const RunWaterfall = memo(function RunWaterfall({
           value={
             data.totals.costUsd === null
               ? NOT_MEASURED
-              : formatUsd(data.totals.costUsd)
+              : markEstimate(
+                  formatUsd(data.totals.costUsd),
+                  data.totals.estimatedCostUsd,
+                )
           }
+          title={costEstimateTitle(
+            data.totals.costUsd,
+            data.totals.estimatedCostUsd,
+          )}
         />
         <Figure label="wall clock" value={formatDuration(clock.span)} />
         <Figure
@@ -303,12 +315,14 @@ export const RunWaterfall = memo(function RunWaterfall({
 function Figure({
   label,
   value,
+  title,
 }: {
   label: string;
   value: string;
+  title?: string;
 }): React.JSX.Element {
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col" title={title}>
       <dt className="text-[11px] text-muted-foreground">{label}</dt>
       <dd className="tabular-nums text-foreground">{value}</dd>
     </div>

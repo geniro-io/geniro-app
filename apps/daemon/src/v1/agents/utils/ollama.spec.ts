@@ -100,7 +100,10 @@ describe('offline Ollama model routing', () => {
       qualifyOllamaEvent({ type: 'turn_model', model: 'qwen3.8:27b' }, model),
     ).toEqual({ type: 'turn_model', model });
     expect(
-      qualifyOllamaEvent({ type: 'cost_progress', costUsd: 4 }, model),
+      qualifyOllamaEvent(
+        { type: 'cost_progress', costUsd: 4, estimatedCostUsd: 4 },
+        model,
+      ),
     ).toEqual({ type: 'cost_progress', costUsd: 0 });
     const settled = {
       type: 'turn_complete' as const,
@@ -138,5 +141,71 @@ describe('offline Ollama model routing', () => {
     });
     expect(settled.usage.costUsd).toBe(4);
     expect(qualifyOllamaEvent(settled, 'opus')).toBe(settled);
+  });
+
+  it('prices a FAILED or stopped local turn at $0 too, estimate and split dropped', () => {
+    const usage = {
+      inputTokens: 12,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      contextTokens: null,
+      contextWindowTokens: null,
+      contextModel: null,
+      costUsd: 4,
+      estimatedCostUsd: 4,
+      durationMs: null,
+      apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
+      modelCosts: [{ model: 'claude-sonnet-5-5', costUsd: 4 }],
+    };
+    for (const event of [
+      { type: 'error' as const, message: 'result: is_error', usage },
+      { type: 'turn_cancelled' as const, usage },
+    ]) {
+      const qualified = qualifyOllamaEvent(event, 'ollama/qwen3.8:27b');
+      expect(qualified).toMatchObject({
+        usage: { costUsd: 0, modelCosts: null },
+      });
+      expect(
+        'usage' in qualified && qualified.usage
+          ? 'estimatedCostUsd' in qualified.usage
+          : true,
+      ).toBe(false);
+    }
+  });
+
+  it('drops a hosted-price estimate, since a local turn costing $0 is a fact', () => {
+    const settled = {
+      type: 'turn_complete' as const,
+      stopReason: null,
+      finalText: null,
+      usage: {
+        inputTokens: 12,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: null,
+        contextWindowTokens: null,
+        contextModel: null,
+        costUsd: 4,
+        estimatedCostUsd: 4,
+        durationMs: null,
+        apiMs: null,
+        ttftMs: null,
+        timeToRequestMs: null,
+        numTurns: null,
+      },
+    };
+    const qualified = qualifyOllamaEvent(settled, 'ollama/qwen3.8:27b');
+    if (qualified.type !== 'turn_complete' || qualified.usage === null) {
+      throw new Error('expected a turn_complete carrying usage');
+    }
+    expect(qualified.usage.costUsd).toBe(0);
+    expect('estimatedCostUsd' in qualified.usage).toBe(false);
   });
 });

@@ -937,6 +937,18 @@ describe('turn_complete — how long the turn worked', () => {
     expect(container.textContent).not.toContain('0.4200');
   });
 
+  it('marks a cost geniro priced itself as an estimate, and says so on hover', () => {
+    render(
+      <TranscriptItem
+        item={done({ usage: { costUsd: 0.42, estimatedCostUsd: 0.42 } })}
+      />,
+    );
+    expect(container.textContent).toBe('✓ done · ≈$0.42');
+    const title =
+      container.querySelector('[title]')?.getAttribute('title') ?? '';
+    expect(title).toContain("geniro's estimate");
+  });
+
   it('still refuses to round a sub-cent turn away to $0.00', () => {
     // The other half, and the reason the bare 2-decimal format is not what
     // this row wants either: cheap turns are most turns, and `$0.00` would be

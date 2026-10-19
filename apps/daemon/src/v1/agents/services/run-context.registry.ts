@@ -4,6 +4,8 @@ import { Injectable } from '@nestjs/common';
 export interface RunContextReading {
   tokens: number | null;
   window: number | null;
+  /** Whether `tokens` is geniro's stand-in; travels with the count. */
+  estimated: boolean;
 }
 
 /**
@@ -51,9 +53,14 @@ export class RunContextRegistry {
    */
   remember(runId: string, reading: Partial<RunContextReading>): void {
     const current = this.readings.get(runId);
+    const tokens = reading.tokens ?? current?.tokens ?? null;
     const next: RunContextReading = {
-      tokens: reading.tokens ?? current?.tokens ?? null,
+      tokens,
       window: reading.window ?? current?.window ?? null,
+      estimated:
+        reading.tokens != null
+          ? reading.estimated === true
+          : tokens !== null && current?.estimated === true,
     };
     if (next.tokens === null && next.window === null) {
       return;
@@ -80,7 +87,11 @@ export class RunContextRegistry {
       this.readings.delete(runId);
       return;
     }
-    this.readings.set(runId, { tokens: null, window: current.window });
+    this.readings.set(runId, {
+      tokens: null,
+      window: current.window,
+      estimated: false,
+    });
   }
 
   /** What to stamp on this run's next status broadcast, or null for nothing. */

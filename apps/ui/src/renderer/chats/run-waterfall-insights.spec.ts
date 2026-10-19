@@ -115,6 +115,25 @@ describe('waterfallInsights', () => {
     });
   });
 
+  it('marks the failed turn’s cost when geniro priced it', () => {
+    const detail = (estimatedCostUsd: number | null): string | undefined =>
+      waterfallInsights(
+        wfDto(600, {
+          turns: [
+            wfTurn('rev', 0, 60, {
+              outcome: 'failed',
+              costUsd: 0.7,
+              estimatedCostUsd,
+            }),
+          ],
+        }),
+      ).find((insight) => insight.id === 'failed-turn-0')?.detail;
+
+    expect(detail(0.7)).toContain('≈$0.70');
+    expect(detail(null)).toContain('$0.70');
+    expect(detail(null)).not.toContain('≈');
+  });
+
   it('names the cache collapsing between two turns of one agent', () => {
     const data = wfDto(600, {
       turns: [

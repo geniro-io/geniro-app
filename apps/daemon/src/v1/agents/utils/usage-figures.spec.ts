@@ -24,6 +24,7 @@ describe('usageFiguresFrom', () => {
       usageFiguresFrom({
         usage: {
           costUsd: 0.4,
+          estimatedCostUsd: 0.4,
           inputTokens: 800,
           outputTokens: 150,
           cacheReadTokens: 40,
@@ -38,6 +39,7 @@ describe('usageFiguresFrom', () => {
       }),
     ).toEqual({
       costUsd: 0.4,
+      estimatedCostUsd: 0.4,
       inputTokens: 800,
       outputTokens: 150,
       cacheReadTokens: 40,
@@ -58,6 +60,7 @@ describe('usageFiguresFrom', () => {
       usageFiguresFrom({ usage: { inputTokens: 800, outputTokens: 150 } }),
     ).toEqual({
       costUsd: null,
+      estimatedCostUsd: null,
       inputTokens: 800,
       outputTokens: 150,
       cacheReadTokens: null,
@@ -100,6 +103,7 @@ describe('usageFiguresFrom', () => {
     // added into.
     expect(figures).toEqual({
       costUsd: null,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,
@@ -127,6 +131,7 @@ describe('usageFiguresFrom', () => {
     // with every figure unmeasured.
     expect(usageFiguresFrom({ usage: {} })).toEqual({
       costUsd: null,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,
@@ -160,6 +165,7 @@ describe('usageFiguresFromRaw', () => {
 function figures(overrides: Partial<UsageFigures> = {}): UsageFigures {
   return {
     costUsd: 0.1,
+    estimatedCostUsd: null,
     inputTokens: 100,
     outputTokens: 20,
     cacheReadTokens: 5,
@@ -180,6 +186,7 @@ describe('emptyTotals', () => {
       turns: 0,
       costedTurns: 0,
       costUsd: null,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,
@@ -201,6 +208,7 @@ describe('addUsage', () => {
       turns: 2,
       costedTurns: 2,
       costUsd: 0.2,
+      estimatedCostUsd: null,
       inputTokens: 200,
       outputTokens: 40,
       cacheReadTokens: 10,
@@ -248,6 +256,25 @@ describe('addUsage', () => {
     expect(totals.turns).toBe(3);
     expect(totals.costedTurns).toBe(2);
     expect(totals.costUsd).toBe(1);
+  });
+
+  it('totals the part geniro priced itself apart from the CLIs’ own bills', () => {
+    const totals = emptyTotals();
+
+    addUsage(totals, figures({ costUsd: 1, estimatedCostUsd: 1 }));
+    addUsage(totals, figures({ costUsd: 2, estimatedCostUsd: null }));
+
+    // $3 spent, of which $1 is geniro's list-price arithmetic.
+    expect(totals.costUsd).toBe(3);
+    expect(totals.estimatedCostUsd).toBe(1);
+  });
+
+  it('states no estimate for a period whose costs were all the CLIs’ own', () => {
+    const totals = emptyTotals();
+
+    addUsage(totals, figures({ costUsd: 1 }));
+
+    expect(totals.estimatedCostUsd).toBeNull();
   });
 
   it('leaves worked time unmeasured when the CLI reported no duration', () => {

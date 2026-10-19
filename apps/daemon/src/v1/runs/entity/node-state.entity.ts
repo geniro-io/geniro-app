@@ -62,6 +62,14 @@ export class NodeState extends TimestampsEntity {
   @Property({ type: 'integer', nullable: true })
   contextTokens: number | null = null;
 
+  /**
+   * Whether {@link contextTokens} is geniro's stand-in rather than an
+   * occupancy the CLI stated (`AgentUsage.contextEstimated`). Written with
+   * every count and cleared with it; null reads as stated.
+   */
+  @Property({ type: 'boolean', nullable: true })
+  contextEstimated: boolean | null = null;
+
   @Property({ type: 'integer', nullable: true })
   contextWindowTokens: number | null = null;
 

@@ -11,7 +11,12 @@ import {
   formatPercent,
   NOT_MEASURED,
 } from '../stats/stats-format';
-import { formatTokens, formatUsd } from './agent-activity';
+import {
+  costEstimateTitle,
+  formatTokens,
+  formatUsd,
+  markEstimate,
+} from './agent-activity';
 import {
   blocksCaller,
   BY_SUB_AGENTS,
@@ -46,6 +51,8 @@ interface Row {
   label: string;
   value: React.ReactNode;
   tone?: 'warning' | 'danger';
+  /** A line under the value, for what the figure cannot say about itself. */
+  note?: string;
 }
 
 function Rows({ rows }: { rows: readonly (Row | null)[] }): React.JSX.Element {
@@ -62,6 +69,9 @@ function Rows({ rows }: { rows: readonly (Row | null)[] }): React.JSX.Element {
                 row.tone === 'danger' && 'text-destructive',
               )}>
               {row.value}
+              {row.note === undefined ? null : (
+                <span className="block text-muted-foreground">{row.note}</span>
+              )}
             </dd>
           </div>
         ),
@@ -201,6 +211,14 @@ function describe(
         0,
       );
       const priced = answering.filter((turn) => turn.costUsd !== null);
+      const calleeCost = priced.reduce(
+        (sum, turn) => sum + (turn.costUsd ?? 0),
+        0,
+      );
+      const calleeEstimated = priced.reduce(
+        (sum, turn) => sum + (turn.estimatedCostUsd ?? 0),
+        0,
+      );
       const callee = laneName(call.calleeNodeId);
       const caller = laneName(call.callerNodeId);
       const wall = Math.max(1, Date.parse(data.to) - Date.parse(data.from));
@@ -243,9 +261,8 @@ function describe(
             value:
               priced.length === 0
                 ? NOT_MEASURED
-                : formatUsd(
-                    priced.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0),
-                  ),
+                : markEstimate(formatUsd(calleeCost), calleeEstimated),
+            note: costEstimateTitle(calleeCost, calleeEstimated),
           },
           {
             // The part of the call nobody on the far side was working — a
@@ -325,6 +342,10 @@ function describeTurn(
   at: (startedAt: string) => string,
 ): Described {
   const total = data.totals.costUsd;
+  const turnCost =
+    turn.costUsd === null
+      ? NOT_MEASURED
+      : markEstimate(formatUsd(turn.costUsd), turn.estimatedCostUsd);
   const share = turnCacheShare(turn);
   const fill = turnContextFill(turn);
   const outcome =
@@ -350,14 +371,15 @@ function describeTurn(
           turn.costUsd === null
             ? NOT_MEASURED
             : total === null || total <= 0
-              ? formatUsd(turn.costUsd)
-              : `${formatUsd(turn.costUsd)} · ${formatPercent((turn.costUsd / total) * 100)} of the run`,
+              ? turnCost
+              : `${turnCost} · ${formatPercent((turn.costUsd / total) * 100)} of the run`,
+        note: costEstimateTitle(turn.costUsd, turn.estimatedCostUsd),
       },
       // Which models that cost went to — the sub-agents' included, which the
       // token rows below may not count.
       ...(splitParts(turn) ?? []).map((part) => ({
         label: part.model,
-        value: formatUsd(part.costUsd),
+        value: markEstimate(formatUsd(part.costUsd), turn.estimatedCostUsd),
       })),
       {
         label: turn.outcome === 'running' ? 'so far' : 'worked',

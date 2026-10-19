@@ -553,6 +553,8 @@ describe('readClaudeUsage — a running total that carries history', () => {
     // Its API time comes from the same restored total and has nothing to be
     // priced by — unmeasured, never 15 minutes of somebody else's turns.
     expect(usage.apiMs).toBeNull();
+    // That figure is geniro's own pricing, not the CLI's bill.
+    expect(usage.estimatedCostUsd).toBeCloseTo(0.0755, 6);
   });
 
   it('bounds an UNCALIBRATED turn at the long-context rate, so a 1M-window turn is not clipped', () => {
@@ -580,6 +582,8 @@ describe('readClaudeUsage — a running total that carries history', () => {
     );
     expect(usage.costUsd).toBeCloseTo(0.08, 9);
     expect(usage.apiMs).toBe(900_000);
+    // The CLI's own figure, kept whole, is not an estimate.
+    expect(usage.estimatedCostUsd).toBeUndefined();
   });
 
   it('counts the turn’s delegates into the bound, so a real fan-out is not clipped', () => {

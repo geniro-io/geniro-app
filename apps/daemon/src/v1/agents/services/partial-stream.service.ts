@@ -76,6 +76,8 @@ interface LiveState {
    * Null until a CLI that can say so has said so.
    */
   spentCostUsd: number | null;
+  /** Of {@link spentCostUsd}, the part geniro priced itself; null when none. */
+  spentEstimatedCostUsd: number | null;
   /**
    * The tool whose arguments the model is writing RIGHT NOW, or null when it
    * is not writing one.
@@ -488,14 +490,19 @@ export class PartialStreamService {
     ownerKey: string,
     nodeId: string | null,
     costUsd: number,
+    estimatedCostUsd: number | null = null,
   ): void {
     try {
       const state = this.stateOf(runId, ownerKey);
-      if (state.spentCostUsd === costUsd) {
+      if (
+        state.spentCostUsd === costUsd &&
+        state.spentEstimatedCostUsd === estimatedCostUsd
+      ) {
         return;
       }
       state.spentCostUsd = costUsd;
-      this.spendStore.set(runId, ownerKey, costUsd);
+      state.spentEstimatedCostUsd = estimatedCostUsd;
+      this.spendStore.set(runId, ownerKey, costUsd, estimatedCostUsd);
       this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('cost', err);
@@ -523,6 +530,7 @@ export class PartialStreamService {
         return;
       }
       state.spentCostUsd = null;
+      state.spentEstimatedCostUsd = null;
       this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('retireCost', err);
@@ -545,6 +553,7 @@ export class PartialStreamService {
       state.spentOutputTokens = null;
       state.spentCacheReadTokens = null;
       state.spentCostUsd = null;
+      state.spentEstimatedCostUsd = null;
       // Whatever the row still owed this owner — a figure a previous process
       // left before a restart — is the CLI's to bill on this turn's `result`
       // (it restores its own running total), so it comes down with the rest.
@@ -744,6 +753,7 @@ export class PartialStreamService {
       spentOutputTokens: null,
       spentCacheReadTokens: null,
       spentCostUsd: null,
+      spentEstimatedCostUsd: null,
       composingTool: null,
       composingBytes: 0,
     };
@@ -780,6 +790,7 @@ export class PartialStreamService {
       spentOutputTokens: state.spentOutputTokens,
       spentCacheReadTokens: state.spentCacheReadTokens,
       spentCostUsd: state.spentCostUsd,
+      spentEstimatedCostUsd: state.spentEstimatedCostUsd,
       composingTool: state.composingTool,
       // Null rather than 0 when nothing is being composed, so the pair reads as
       // one group the way the reasoning fields do: a client that sees a byte
@@ -852,6 +863,7 @@ export class PartialStreamService {
           composingTool: null,
           // The turn is over: see `retireCost`.
           spentCostUsd: null,
+          spentEstimatedCostUsd: null,
         }),
       );
       return tail;
@@ -925,6 +937,7 @@ export class PartialStreamService {
             composingTool: null,
             // The turn is over: see `retireCost`.
             spentCostUsd: null,
+            spentEstimatedCostUsd: null,
           }),
         );
       }
@@ -947,9 +960,14 @@ export class PartialStreamService {
   async rehydrateUnrecordedSpend(): Promise<void> {
     try {
       let seeded = 0;
-      for (const [runId, spend] of await this.spendStore.loadAll()) {
+      for (const [
+        runId,
+        { spend, estimates },
+      ] of await this.spendStore.loadAll()) {
         for (const [ownerKey, costUsd] of spend) {
-          this.stateOf(runId, ownerKey).spentCostUsd = costUsd;
+          const state = this.stateOf(runId, ownerKey);
+          state.spentCostUsd = costUsd;
+          state.spentEstimatedCostUsd = estimates.get(ownerKey) ?? null;
           seeded += 1;
         }
       }

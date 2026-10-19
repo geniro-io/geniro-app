@@ -178,7 +178,22 @@ export interface AgentUsage {
    * fallback model's window under the requested one.
    */
   contextModel: string | null;
+  /**
+   * Whether {@link contextTokens} is geniro's stand-in rather than an
+   * occupancy the CLI stated — a different figure put on the meter because no
+   * occupancy was reported. Travels with the reading it describes. Optional and
+   * false alike mean the CLI stated it.
+   */
+  contextEstimated?: boolean;
   costUsd: number | null;
+  /**
+   * Of {@link costUsd}, the part geniro PRICED itself — token counts at the
+   * public list price (`ModelPriceCatalog`) — rather than read off the CLI's
+   * own bill. Equal to `costUsd` when all of it was priced here, and a part of
+   * it once segments fold. Optional and null alike mean none of it was: the
+   * cost is the CLI's, or there is no cost at all.
+   */
+  estimatedCostUsd?: number | null;
   /**
    * How long the turn took, as the CLI ITSELF measured it.
    *
@@ -964,18 +979,21 @@ type AgentEventBody =
        * turns that have FINISHED, as if that were the whole bill — a small
        * fraction of a call hours into its turn. The tokens are already live
        * (`usage_progress`), but pricing them here is not possible for a model
-       * the price table has no row for. The CLI prices its own requests, so
-       * the figure is ASKED of it.
+       * the price table has no row for — so where the CLI prices its own
+       * requests, the figure is ASKED of it.
        *
-       * CLAUDE ONLY today — read over the `get_usage` control request (see
-       * `CLAUDE_LIVE_COST_ASK_INTERVAL_MS` in `claude.const.ts`). A CLI with no
-       * such channel never emits it, and its running figure stays what the
-       * finished turns add up to.
+       * claude answers over the `get_usage` control request (see
+       * `CLAUDE_LIVE_COST_ASK_INTERVAL_MS` in `claude.const.ts`); codex states
+       * no price, so its figure is its tokens at list price and all of it is
+       * `estimatedCostUsd`. A CLI with neither never emits it, and its running
+       * figure stays what the finished turns add up to.
        *
        * EPHEMERAL like its siblings: never persisted, never replayed.
        */
       type: 'cost_progress';
       costUsd: number;
+      /** Of `costUsd`, the part geniro priced itself — see `AgentUsage`. */
+      estimatedCostUsd?: number;
     }
   | { type: 'reasoning'; text: string }
   | {

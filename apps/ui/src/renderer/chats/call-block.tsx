@@ -7,7 +7,14 @@ import { HoverPopover } from '../components/hover-popover';
 import { avatarTone, initialsOf } from '../components/ui/avatar';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../components/ui/utils';
-import { formatExactUsd, formatTokens } from './agent-activity';
+import {
+  CONTEXT_ESTIMATE_NOTE,
+  costEstimateTitle,
+  formatExactUsd,
+  formatTokens,
+  markContextEstimate,
+  markEstimate,
+} from './agent-activity';
 import {
   BlockPendingLine,
   BlockRequest,
@@ -280,7 +287,9 @@ function CallFigures({
   callId,
   contextTokens,
   contextWindowTokens,
+  contextEstimated,
   costUsd,
+  estimatedCostUsd,
 }: {
   slot: 'call-summary' | 'call-footer';
   tasks: readonly AgentTaskRow[];
@@ -292,7 +301,11 @@ function CallFigures({
   callId: string;
   contextTokens: number | null;
   contextWindowTokens: number | null;
+  /** Whether {@link contextTokens} is geniro's stand-in for a reading. */
+  contextEstimated: boolean;
   costUsd: number | null;
+  /** Of {@link costUsd}, the part geniro priced itself; null when none. */
+  estimatedCostUsd: number | null;
 }): React.JSX.Element {
   return (
     <>
@@ -315,6 +328,7 @@ function CallFigures({
             callId={callId}
             contextTokens={contextTokens}
             contextWindowTokens={contextWindowTokens}
+            contextEstimated={contextEstimated}
             live={live}
           />
         </span>
@@ -328,15 +342,24 @@ function CallFigures({
           actually moved — 8.7k over a call that read 4.26M tokens out of cache.
           What a call holds is this figure; what it SPENT is the cost beside. */}
       {contextTokens === null ? null : (
-        <span data-slot={`${slot}-tokens`} className="shrink-0 tabular-nums">
-          {contextWindowTokens === null
-            ? `${formatTokens(contextTokens)} context`
-            : `${formatTokens(contextTokens)} / ${formatTokens(contextWindowTokens)}`}
+        <span
+          data-slot={`${slot}-tokens`}
+          className="shrink-0 tabular-nums"
+          title={contextEstimated ? CONTEXT_ESTIMATE_NOTE : undefined}>
+          {markContextEstimate(
+            contextWindowTokens === null
+              ? `${formatTokens(contextTokens)} context`
+              : `${formatTokens(contextTokens)} / ${formatTokens(contextWindowTokens)}`,
+            contextEstimated,
+          )}
         </span>
       )}
       {costUsd === null ? null : (
-        <span data-slot={`${slot}-cost`} className="shrink-0 tabular-nums">
-          {formatExactUsd(costUsd)}
+        <span
+          data-slot={`${slot}-cost`}
+          className="shrink-0 tabular-nums"
+          title={costEstimateTitle(costUsd, estimatedCostUsd)}>
+          {markEstimate(formatExactUsd(costUsd), estimatedCostUsd)}
         </span>
       )}
     </>
@@ -436,7 +459,7 @@ export const CallBlock = memo(function CallBlock({
   // call hours into its turn otherwise states its FINISHED turns as the bill.
   const usage = withLiveCost(
     live?.spend ?? foldedUsage,
-    live?.liveCostUsd ?? null,
+    live?.liveCost ?? null,
   );
   /**
    * Every tool this AGENT has run, on the same rule and for the same reason —
@@ -451,6 +474,10 @@ export const CallBlock = memo(function CallBlock({
   const toolCount = live?.toolCalls ?? countTools(block.entries);
   const context = {
     contextTokens: live?.contextTokens ?? folded.contextTokens,
+    contextEstimated:
+      live?.contextTokens != null
+        ? live.contextEstimated === true
+        : folded.contextEstimated === true,
     contextWindowTokens:
       live?.contextWindowTokens ?? folded.contextWindowTokens,
   };
@@ -546,7 +573,9 @@ export const CallBlock = memo(function CallBlock({
       callId={block.callId}
       contextTokens={context.contextTokens}
       contextWindowTokens={context.contextWindowTokens}
+      contextEstimated={context.contextEstimated}
       costUsd={usage.costUsd}
+      estimatedCostUsd={usage.estimatedCostUsd ?? null}
     />
   );
   /**

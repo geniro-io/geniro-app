@@ -6,6 +6,7 @@ import type { DaemonClient } from '../daemon-client';
 /** Every figure this hook reports, absent. */
 const NO_TOTALS = {
   costUsd: null,
+  estimatedCostUsd: null,
   costedTurns: null,
   turns: null,
   workedMs: null,
@@ -20,6 +21,7 @@ interface ChatTotalsState {
   /** Which chat these figures were read from — see the state below for why. */
   runId: string | null;
   costUsd: number | null;
+  estimatedCostUsd: number | null;
   costedTurns: number | null;
   turns: number | null;
   workedMs: number | null;
@@ -87,6 +89,8 @@ export function useChatTotals(
   clockKey = '',
 ): {
   costUsd: number | null;
+  /** Of {@link costUsd}, the part geniro priced itself; null when none. */
+  estimatedCostUsd: number | null;
   /**
    * How many of {@link turns} carried a PRICE — the daemon's own count, and the
    * only thing that can tell an unpriced thread from an unanswered read.
@@ -201,6 +205,7 @@ export function useChatTotals(
           setState({
             runId,
             costUsd: answer.totals.costUsd,
+            estimatedCostUsd: answer.totals.estimatedCostUsd,
             costedTurns: answer.totals.costedTurns,
             turns: answer.totals.turns,
             workedMs: answer.totals.workedMs,
@@ -245,6 +250,7 @@ export function useChatTotals(
   const current = state.runId === runId ? state : { runId, ...NO_TOTALS };
   return {
     costUsd: current.costUsd,
+    estimatedCostUsd: current.estimatedCostUsd,
     costedTurns: current.costedTurns,
     turns: current.turns,
     workedMs: current.workedMs,

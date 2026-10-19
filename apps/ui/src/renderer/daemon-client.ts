@@ -405,6 +405,8 @@ export interface RunStatusEvent {
    */
   contextTokens?: number | null;
   contextWindowTokens?: number | null;
+  /** Whether that count is geniro's stand-in; rides with the pair. */
+  contextEstimated?: boolean;
   /**
    * What the run said as it reached this status — the agent's closing words, or
    * a failure's message.
@@ -586,6 +588,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     toolCalls,
     contextTokens,
     contextWindowTokens,
+    contextEstimated,
     summary,
     notify,
     preview,
@@ -721,6 +724,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
             Number.isFinite(contextWindowTokens)
               ? Math.max(0, Math.trunc(contextWindowTokens))
               : null,
+          contextEstimated: contextEstimated === true,
         }
       : {}),
     // Three states, and the empty string is deliberately one of the CLEARING

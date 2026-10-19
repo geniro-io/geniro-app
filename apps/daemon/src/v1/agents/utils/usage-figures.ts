@@ -36,6 +36,7 @@ import { asNumber, asRecord, asString } from './json-util';
 type MeasuredUsageKey = Extract<
   keyof AgentUsage,
   | 'costUsd'
+  | 'estimatedCostUsd'
   | 'inputTokens'
   | 'outputTokens'
   | 'cacheReadTokens'
@@ -92,6 +93,9 @@ export function usageFiguresFrom(payload: unknown): UsageFigures | null {
   // fabricating a figure or poisoning a total with NaN.
   return {
     costUsd: asNumber(usage.costUsd),
+    // Absent on every turn whose cost is the CLI's own, and on every turn
+    // recorded before geniro said which part it priced.
+    estimatedCostUsd: asNumber(usage.estimatedCostUsd),
     inputTokens: asNumber(usage.inputTokens),
     outputTokens: asNumber(usage.outputTokens),
     cacheReadTokens: asNumber(usage.cacheReadTokens),
@@ -132,6 +136,7 @@ export function emptyTotals(): ChatTotalsWire {
     turns: 0,
     costedTurns: 0,
     costUsd: null,
+    estimatedCostUsd: null,
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,
@@ -158,6 +163,7 @@ export function addUsage(totals: ChatTotalsWire, figures: UsageFigures): void {
     totals.costedTurns += 1;
   }
   add(totals, 'costUsd', figures.costUsd);
+  add(totals, 'estimatedCostUsd', figures.estimatedCostUsd);
   add(totals, 'inputTokens', figures.inputTokens);
   add(totals, 'outputTokens', figures.outputTokens);
   add(totals, 'cacheReadTokens', figures.cacheReadTokens);

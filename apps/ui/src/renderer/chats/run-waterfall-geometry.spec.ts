@@ -39,6 +39,7 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
     timeToRequestMs: null,
     numTurns: null,
     costUsd: 1,
+    estimatedCostUsd: null,
     modelCosts: null,
     model: 'opus-5',
     inputTokens: null,
@@ -55,6 +56,7 @@ function lane(nodeId: string | null): RunWaterfallLane {
     nodeId,
     agentKind: 'claude',
     costUsd: 1,
+    estimatedCostUsd: null,
     turns: 1,
     toolCalls: 1,
     delegateToolCalls: 0,
@@ -77,6 +79,7 @@ function dto(nodeIds: (string | null)[]): RunWaterfallDto {
       turns: 0,
       costedTurns: 0,
       costUsd: null,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,
@@ -125,10 +128,34 @@ describe('cumulativeSpend', () => {
       FROM,
     );
 
-    expect(points[0]).toEqual({ atMs: 0, spentUsd: 0 });
+    expect(points[0]).toEqual({
+      atMs: 0,
+      spentUsd: 0,
+      spentEstimatedUsd: null,
+    });
     const spends = points.map((point) => point.spentUsd);
     expect(spends).toEqual([...spends].sort((a, b) => a - b));
     expect(spends.at(-1)).toBe(3);
+  });
+
+  it('accumulates the estimated part alongside, null until a turn carries one', () => {
+    const points = cumulativeSpend(
+      [
+        turn({ costUsd: 2, startedAt: new Date(FROM).toISOString() }),
+        turn({
+          costUsd: 1,
+          estimatedCostUsd: 1,
+          startedAt: new Date(FROM + 30_000).toISOString(),
+        }),
+      ],
+      FROM,
+    );
+
+    expect(points.map((point) => point.spentEstimatedUsd)).toEqual([
+      null,
+      null,
+      1,
+    ]);
   });
 
   it('leaves out a turn that priced nothing rather than adding a zero', () => {
@@ -208,6 +235,23 @@ describe('costSplit', () => {
   it('says nothing for one model or no stated split', () => {
     expect(costSplit(turn({ modelCosts: [SPLIT[0]!] }))).toBeNull();
     expect(costSplit(turn({ modelCosts: null }))).toBeNull();
+  });
+
+  it('marks every model’s share with the turn’s own provenance', () => {
+    expect(
+      costSplit(turn({ modelCosts: SPLIT, estimatedCostUsd: 40.68 })),
+    ).toBe('claude-haiku-5-5 ≈$39.03 · claude-sonnet-5-5 ≈$1.65');
+  });
+
+  it('marks an estimated turn’s hover cost and says whose price it is', () => {
+    const estimated = turnTitle(turn({ costUsd: 3, estimatedCostUsd: 3 }));
+    const billed = turnTitle(turn({ costUsd: 3, estimatedCostUsd: null }));
+
+    expect(estimated).toContain('≈$3.00');
+    expect(estimated).toContain("geniro's estimate");
+    expect(billed).toContain('$3.00');
+    expect(billed).not.toContain('≈');
+    expect(billed).not.toContain('estimate');
   });
 
   it('rides the turn’s hover sentence after its cost, with the split tools', () => {

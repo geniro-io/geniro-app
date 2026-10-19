@@ -12,7 +12,12 @@ import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { usePersistedFlag } from '../components/use-persisted-flag';
 import { formatPercent } from '../stats/stats-format';
-import { formatTokens, formatUsd } from './agent-activity';
+import {
+  costEstimateNote,
+  formatTokens,
+  formatUsd,
+  markEstimate,
+} from './agent-activity';
 import {
   contextCategoryColor,
   formatTimeUntil,
@@ -622,7 +627,9 @@ function Totals({
   live: boolean;
 }): React.JSX.Element {
   const parts = [
-    totals.costUsd === null ? null : formatUsd(totals.costUsd),
+    totals.costUsd === null
+      ? null
+      : markEstimate(formatUsd(totals.costUsd), totals.estimatedCostUsd),
     // A turn in flight is STATED rather than counted, and it replaces the count
     // outright while there is nothing to count — `0 turns` is the one reading
     // that is both technically true and read by everyone as "this is broken",
@@ -657,10 +664,16 @@ function Totals({
       ? null
       : `cached ${formatTokens(totals.cacheCreationTokens)}`,
   ].filter((part): part is string => part !== null);
+  const estimate = costEstimateNote(totals.costUsd, totals.estimatedCostUsd);
   return (
     <div className="flex flex-col gap-0.5 border-t border-border pt-2">
       <span className="font-medium text-foreground">This thread</span>
       <span className="text-muted-foreground">{parts.join(' · ')}</span>
+      {estimate === null ? null : (
+        <span data-slot="cost-estimate-note" className="text-muted-foreground">
+          {estimate}
+        </span>
+      )}
       {tokens.length > 0 ? (
         <span className="text-muted-foreground">{tokens.join(' · ')}</span>
       ) : null}

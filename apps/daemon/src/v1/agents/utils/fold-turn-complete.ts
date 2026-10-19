@@ -50,6 +50,12 @@ export function foldUsage(
   // one segment under the other segment's model name would be filed under the
   // wrong model by the cross-run window cache.
   const windowReading = later.contextWindowTokens !== null ? later : earlier;
+  // Whether the count is an estimate belongs to the count it describes.
+  const contextReading = later.contextTokens !== null ? later : earlier;
+  const estimatedCostUsd = sum(
+    earlier.estimatedCostUsd ?? null,
+    later.estimatedCostUsd ?? null,
+  );
   return {
     inputTokens: sum(earlier.inputTokens, later.inputTokens),
     outputTokens: sum(earlier.outputTokens, later.outputTokens),
@@ -59,10 +65,14 @@ export function foldUsage(
       later.cacheCreationTokens,
     ),
     thinkingTokens: sum(earlier.thinkingTokens, later.thinkingTokens),
-    contextTokens: later.contextTokens ?? earlier.contextTokens,
+    contextTokens: contextReading.contextTokens,
+    ...(contextReading.contextEstimated === true
+      ? { contextEstimated: true }
+      : {}),
     contextWindowTokens: windowReading.contextWindowTokens,
     contextModel: windowReading.contextModel,
     costUsd: sum(earlier.costUsd, later.costUsd),
+    ...(estimatedCostUsd === null ? {} : { estimatedCostUsd }),
     durationMs: sum(earlier.durationMs, later.durationMs),
     apiMs: sum(earlier.apiMs, later.apiMs),
     // A COUNT of requests made, like the token fields above — sums.

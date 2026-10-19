@@ -19,6 +19,7 @@ export interface UsageEventInput {
   cwd: string | null;
   workflowName: string | null;
   costUsd: number | null;
+  estimatedCostUsd: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
   cacheReadTokens: number | null;

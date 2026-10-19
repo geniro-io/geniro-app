@@ -4,6 +4,7 @@ import { BaseDao } from '@packages/mikroorm';
 
 import { CallContext } from '../../runs/entity/call-context.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
+import type { ContextLevel } from '../chat.types';
 import { positive } from '../utils/positive-figure';
 
 /**
@@ -87,13 +88,14 @@ export class CallContextDao extends BaseDao<CallContext> {
     runId: string,
     callId: string,
     nodeId: string,
-    contextTokens: number | null,
-    contextWindowTokens: number | null,
+    reading: ContextLevel,
     txEm?: EntityManager,
   ): Promise<void> {
+    const { contextTokens, contextWindowTokens, contextEstimated } = reading;
     const data: Partial<CallContext> = {};
     if (positive(contextTokens)) {
       data.contextTokens = contextTokens;
+      data.contextEstimated = contextEstimated === true ? true : null;
     }
     if (positive(contextWindowTokens)) {
       data.contextWindowTokens = contextWindowTokens;
@@ -130,7 +132,7 @@ export class CallContextDao extends BaseDao<CallContext> {
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
       { runId, callId },
-      { contextTokens: null },
+      { contextTokens: null, contextEstimated: null },
     );
   }
 }

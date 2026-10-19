@@ -68,6 +68,22 @@ describe('ChartTooltip', () => {
     expect(el.textContent).not.toContain(NOT_MEASURED);
   });
 
+  it('draws a row’s note under its figure', () => {
+    const el = render(
+      <ChartTooltip
+        title="Monday"
+        rows={[
+          { label: 'Spend', value: '≈$2.00', note: 'geniro’s estimate' },
+          { label: 'Turns', value: '4 turns' },
+        ]}
+      />,
+    );
+
+    const rows = el.querySelectorAll('li');
+    expect(rows[0]!.textContent).toContain('geniro’s estimate');
+    expect(rows[1]!.textContent).not.toContain('estimate');
+  });
+
   it('shows a measured zero as zero, not as unmeasured', () => {
     // `unmeasured` is passed explicitly rather than inferred from a falsy
     // value, so a genuine $0.00 — a subscription-priced turn — still reads as

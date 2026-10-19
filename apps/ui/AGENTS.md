@@ -106,6 +106,7 @@ Smaller rules:
 - `host-guard.ts` admits a `*.suffix` only while a tunnel is open. The match is at a label boundary. A bare `*` and one-label suffixes are refused.
 - The tunnel mask is derived from the URL the client printed, never stored per provider.
 - `tunnel.ts` providers are a table in preference order (cloudflared, then ngrok). The client is spawned with only `PATH` and `HOME`.
+- An open tunnel is watched after its address is shown: an exit nobody asked for, or cloudflared's loopback `/ready` failing for `TUNNEL_EXPIRED_AFTER_MS` on the wall clock (a quick tunnel is deleted ~13 min after it disconnects, e.g. through sleep), ends it as `status: 'error'` and reaps the client. A connection counts only when two answers in a row report it (the client reports its pre-sleep connection for seconds after wake), and expiry needs `TUNNEL_EXPIRY_CONFIRM_MS` of failures without a break. It is never reopened unasked, and the public URL is never probed.
 - `pairing.ts` is a constant-time compare, bounded per address and globally. The global trip rotates the code.
 - `device-registry.ts` stores only a token hash, written atomically with mode 0600.
 - Revoking a device, or stopping the gateway, destroys that device's upgraded sockets.

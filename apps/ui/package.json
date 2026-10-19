@@ -16,8 +16,8 @@
     "check-types": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src .storybook",
     "lint:fix": "eslint src .storybook --fix",
-    "test": "vitest run",
-    "test:unit": "vitest run"
+    "test": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run",
+    "test:unit": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run"
   },
   "dependencies": {
     "@geniro/daemon": "workspace:*",

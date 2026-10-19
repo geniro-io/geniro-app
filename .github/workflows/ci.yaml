@@ -93,6 +93,7 @@ jobs:
       # fine everywhere except the one suite that opens a real sqlite driver —
       # base.dao.spec.ts — where it fails the suite and then segfaults the
       # runner (exit 139). Same command AGENTS.md prescribes for local dev.
+      # `@geniro/ui` runs under Electron too, for its Node APIs; it loads no sqlite.
       - name: Rebuild native modules for Electron's ABI
         run: pnpm rebuild:native
 

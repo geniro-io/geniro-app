@@ -69,6 +69,7 @@ import {
   type ItemWire,
   type RecommendationApply,
   type RunGroupColor,
+  type RunListPage,
   type RunPreview,
   type RunSeenWire,
   type RunWire,
@@ -2074,9 +2075,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     return { deleted };
   }
 
-  async listChats(scope: ChatListScope = 'active'): Promise<RunWire[]> {
+  async listChats(
+    scope: ChatListScope = 'active',
+    page: RunListPage = {},
+  ): Promise<RunWire[]> {
     const em = this.em.fork();
-    const runs = await this.runDao.listChats(scope, em);
+    const runs = await this.runDao.listChats(scope, em, page);
     // Incremental and error-swallowing by construction, so this is a `max(seq)`
     // read per run in the steady state and can never fail the listing.
     await this.pullRequests.sync(runs, em);

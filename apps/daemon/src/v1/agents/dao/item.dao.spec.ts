@@ -1469,6 +1469,39 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('rowsByPayloadId', () => {
+    it('reads past a row whose payload is not JSON', async () => {
+      await insert('run-ids', 1, 'tool_call', 'not json');
+      await insert('run-ids', 2, 'tool_call', JSON.stringify({ id: 'call-1' }));
+
+      const rows = await dao.rowsByPayloadId(
+        'run-ids',
+        ['tool_call'],
+        ['call-1'],
+      );
+
+      expect(rows.map((row) => row.seq)).toEqual([2]);
+    });
+  });
+
+  describe('pullRequestCandidates', () => {
+    it('reads only the tool results inside the seq window it is given', async () => {
+      const url = JSON.stringify({ result: 'https://github.com/o/r/pull/1' });
+      for (const seq of [1, 5, 9]) {
+        await insert('run-pr', seq, 'tool_result', url);
+      }
+      await insert('run-pr', 6, 'tool_result', url);
+      await insert('run-pr', 7, 'message', url);
+
+      const window = await dao.pullRequestCandidates('run-pr', 1, undefined, 6);
+      const open = await dao.pullRequestCandidates('run-pr', 1);
+
+      // Both edges: the window opens after its first seq and closes on its last.
+      expect(window.map((row) => row.seq)).toEqual([5, 6]);
+      expect(open.map((row) => row.seq)).toEqual([5, 6, 9]);
+    });
+  });
+
   describe('toolResultSeqAt', () => {
     it('answers the newest tool result at or before the moment, else the oldest after, else null', async () => {
       const em = orm.em.fork();

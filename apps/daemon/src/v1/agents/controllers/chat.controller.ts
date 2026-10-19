@@ -107,6 +107,7 @@ import { ShellOutputService } from '../services/shell-output.service';
 import { ThreadAnalysisService } from '../services/thread-analysis.service';
 import { ThreadOverviewService } from '../services/thread-overview.service';
 import { historyConversationOf } from '../utils/history-conversation';
+import { runListPageOf } from '../utils/run-list-page';
 
 /**
  * Loopback chat REST surface (token-gated by the global LoopbackTokenGuard).
@@ -152,7 +153,10 @@ export class ChatController {
   @ApiOperation({ operationId: 'listChats' })
   @ZodResponse({ status: 200, type: [RunDto] })
   listChats(@Query() query: ListChatsQueryDto): Promise<RunWire[]> {
-    return this.chatService.listChats(query.scope ?? 'active');
+    return this.chatService.listChats(
+      query.scope ?? 'active',
+      runListPageOf(query),
+    );
   }
 
   /**

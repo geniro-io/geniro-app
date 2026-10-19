@@ -35,6 +35,7 @@ import {
   type ItemWire,
   type PersistedResetWake,
   type RunCallSeed,
+  type RunListPage,
   type RunWire,
   type SendMessageImage,
 } from '../../agents/chat.types';
@@ -1827,9 +1828,12 @@ export class GraphExecutorService
    * the two halves of one list have to agree about how much of the archive they
    * are showing.
    */
-  async listRuns(scope: ChatListScope = 'active'): Promise<RunWire[]> {
+  async listRuns(
+    scope: ChatListScope = 'active',
+    page: RunListPage = {},
+  ): Promise<RunWire[]> {
     const em = this.em.fork();
-    const runs = await this.runDao.listWorkflowRuns(scope, em);
+    const runs = await this.runDao.listWorkflowRuns(scope, em, page);
     // The chat listing's own backfill, on the same terms: incremental and
     // error-swallowing by construction, so this is a `max(seq)` read per run in
     // the steady state and can never fail the listing. It is what recovers a

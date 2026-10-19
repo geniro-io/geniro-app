@@ -34,6 +34,7 @@ import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
 import { ItemCallIndexService } from './v1/agents/services/item-call-index.service';
 import { PartialStreamService } from './v1/agents/services/partial-stream.service';
+import { PullRequestCaptureService } from './v1/agents/services/pull-request-capture.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
 import { WallWorkService } from './v1/agents/services/wall-work.service';
 import {
@@ -111,6 +112,7 @@ const bootstrapper = buildBootstrapper({
  */
 let callIndex: ItemCallIndexService | null = null;
 let wallWork: WallWorkService | null = null;
+let pullRequests: PullRequestCaptureService | null = null;
 bootstrapper.addExtension(
   buildHttpServerExtension(
     {
@@ -171,6 +173,10 @@ bootstrapper.addExtension(
         // before the wall ledger existed, and the ledger's per-turn key makes
         // it safe beside the live catch-up.
         void wallWork?.sweepAllQuietly();
+        // Off the boot path for the same reason: it re-reads from the start
+        // every run scanned under an older pull-request rule — the one pass that
+        // does, since a listing only carries a run on from its marker.
+        void pullRequests?.rescanOutdatedQuietly();
       },
     },
     async (app: INestApplication) => {
@@ -262,6 +268,7 @@ bootstrapper.addExtension(
       // reads the container.
       callIndex = app.get(ItemCallIndexService);
       wallWork = app.get(WallWorkService);
+      pullRequests = app.get(PullRequestCaptureService);
 
       // Sweep what a prior crash left behind — per-turn files and directories
       // whose disposer only runs on a clean settle. Each adapter knows its own;

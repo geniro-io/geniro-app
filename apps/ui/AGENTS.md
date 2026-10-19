@@ -530,7 +530,9 @@ Appearance:
 - Report "seen" only while the thread is actually watched (`useWindowWatched`).
 - Drafts, the queue and turn-end banners stay per device.
 - Archive is the row action. Permanent delete exists only inside the archive. Workflow rows archive too.
-- `refreshRuns` drops a stale generation.
+- `refreshRuns` drops a stale generation, and runs one listing per scope at a time plus one queued; only a scope switch supersedes one in flight.
+- The archive and `Show all` are paged (`chats/run-list-pages.ts`, `RUN_LIST_PAGE` rows per half, `limit` + `before*` cursor); the desk is never paged. A re-list keeps the depth already read. Rows one half has but the other has not reached yet are held back (`horizonOf`), and the list ends in "Load older chats".
+- An unknown run is adopted by fetching that one row (`runId` on both listings), never by re-listing, and only on an announce of it doing something (a status or an activity). A pull-request, title or context announce never adopts.
 - `placeRun` re-files a row on archive or unarchive, and `dropRun` is for permanent delete only.
 - Row actions read `run.archivedAt`, never the scope.
 - A scope switch keeps the open thread only if the new scope lists it.

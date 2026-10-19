@@ -19,6 +19,7 @@ import {
   RunDto,
   SendMessageDto,
 } from '../../agents/dto/chat.dto';
+import { runListPageOf } from '../../agents/utils/run-list-page';
 import {
   CreateWorkflowDto,
   ExportedDto,
@@ -77,7 +78,10 @@ export class WorkflowsController {
   @ApiOperation({ operationId: 'listWorkflowRuns' })
   @ZodResponse({ status: 200, type: [RunDto] })
   listRuns(@Query() query: ListChatsQueryDto): Promise<RunWire[]> {
-    return this.executor.listRuns(query.scope ?? 'active');
+    return this.executor.listRuns(
+      query.scope ?? 'active',
+      runListPageOf(query),
+    );
   }
 
   @Get('runs/:runId/nodes')

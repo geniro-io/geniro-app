@@ -63,6 +63,19 @@ function render(el: React.ReactNode): void {
 }
 
 describe('TranscriptItem — agent-call rows', () => {
+  it('keeps internal delivery acknowledgements out of the conversation', () => {
+    render(
+      <TranscriptItem
+        item={item('system', {
+          severity: 'info',
+          message: 'Delivery receipts for your earlier message_agent sends',
+          messageDeliveryNotices: ['delivery-1'],
+        })}
+      />,
+    );
+    expect(container.textContent).toBe('');
+  });
+
   it('RENDERS the silence advisory the call broker writes', () => {
     // The payload key is the whole of this pin. `system` rows are read for
     // `message` and draw NOTHING when it is absent, so a producer writing the
@@ -212,7 +225,7 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
       />,
     );
     const text = container.textContent ?? '';
-    expect(text).toContain('message → helper');
+    expect(text).toContain('message → helper · delivered');
     expect(text).toContain('keep the old labels');
     expect(text).not.toContain('orphaned');
   });

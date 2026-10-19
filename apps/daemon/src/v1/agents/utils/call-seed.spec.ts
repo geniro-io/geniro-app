@@ -25,6 +25,50 @@ describe('callNumber', () => {
 });
 
 describe('readCallSeed', () => {
+  it('replays undelivered receipts across a restart until their sender was notified', () => {
+    const failure = {
+      deliveryId: 'delivery-1',
+      callId: 'call-1',
+      callerNodeId: 'worker',
+      callerConversationId: 'call-parent',
+      calleeNodeId: 'helper',
+      message: 'keep the labels',
+      reason: 'CALLEE_CANCELLED',
+      outcome: 'undelivered',
+    };
+    const failed = { kind: 'call_answer', payload: JSON.stringify(failure) };
+    const seed = readCallSeed([failed]);
+    expect(seed.messageFailures).toEqual([
+      {
+        deliveryId: 'delivery-1',
+        callId: 'call-1',
+        callerNodeId: 'worker',
+        callerConversationId: 'call-parent',
+        calleeNodeId: 'helper',
+        message: 'keep the labels',
+        reason: 'CALLEE_CANCELLED',
+      },
+    ]);
+    expect(
+      readCallSeed([
+        failed,
+        { kind: 'system', payload: { messageDeliveryNotices: ['delivery-1'] } },
+        {
+          kind: 'call_answer',
+          payload: {
+            ...failure,
+            deliveryId: 'delivery-2',
+            message: 'a later correction',
+          },
+        },
+      ]).messageFailures,
+    ).toEqual([
+      expect.objectContaining({
+        deliveryId: 'delivery-2',
+        message: 'a later correction',
+      }),
+    ]);
+  });
   it('continues the counter past the highest id and files each callee session onto its call', () => {
     const seed = readCallSeed([
       {

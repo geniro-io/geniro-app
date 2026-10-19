@@ -99,6 +99,29 @@ function doc(items: ItemDto[]): ChatExportDto {
 }
 
 describe('chatToMarkdown', () => {
+  it('omits internal delivery acknowledgements while keeping the failed message and other notices', () => {
+    const acknowledgement = row('system', {
+      severity: 'info',
+      message: 'Delivery receipts for your earlier message_agent sends',
+      messageDeliveryNotices: ['delivery-1'],
+    });
+    const out = chatToMarkdown(
+      doc([
+        row('call_answer', {
+          outcome: 'undelivered',
+          message: 'keep the old labels',
+        }),
+        acknowledgement,
+        row('system', { severity: 'info', message: 'An unrelated notice' }),
+      ]),
+    );
+    expect(out).toContain('not delivered');
+    expect(out).toContain('keep the old labels');
+    expect(out).toContain('An unrelated notice');
+    expect(out).not.toContain('Delivery receipts for your earlier');
+    expect(out).not.toContain(` · seq ${acknowledgement.seq} · `);
+  });
+
   it('gives EVERY kind a section, including the ones with no prose form', () => {
     // The milestone's own criterion, and the reason the fallback exists: a
     // serializer that quietly dropped what it did not recognise produces a
@@ -160,7 +183,9 @@ describe('chatToMarkdown', () => {
       ]),
     );
 
-    expect(out).toContain('**💬 message to the running call**\n\nstop after 3');
+    expect(out).toContain(
+      '**💬 message to the running call — delivered**\n\nstop after 3',
+    );
     expect(out).toContain(
       '**✗ message to the call — not delivered**\n\ntoo late',
     );

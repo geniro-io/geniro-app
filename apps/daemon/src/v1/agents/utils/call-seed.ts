@@ -3,6 +3,7 @@ import type {
   CallResultPayload,
   CallSeedRecord,
   CallStartedPayload,
+  MessageDeliveryFailure,
   RunCallSeed,
 } from '../chat.types';
 import { asNumber, parseJsonColumn } from './json-util';
@@ -80,12 +81,55 @@ function cacheFactsOf(
  */
 export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
   const records = new Map<string, CallSeedRecord>();
+  const messageFailures = new Map<string, MessageDeliveryFailure>();
   let callSeq = 0;
   for (const row of rows) {
     // The column holds JSON text; a fake or an in-memory row may hold the
     // object itself. Both read the same.
     const payload = parseJsonColumn(row.payload);
     if (typeof payload !== 'object' || payload === null) {
+      continue;
+    }
+    const delivery = payload as Record<string, unknown>;
+    if (
+      row.kind === 'system' &&
+      Array.isArray(delivery.messageDeliveryNotices)
+    ) {
+      for (const id of delivery.messageDeliveryNotices) {
+        if (typeof id === 'string') {
+          messageFailures.delete(id);
+        }
+      }
+      continue;
+    }
+    if (row.kind === 'call_answer' && delivery.outcome === 'undelivered') {
+      const deliveryId = readString(delivery.deliveryId);
+      const callId = readString(delivery.callId);
+      const callerNodeId = readString(delivery.callerNodeId);
+      const calleeNodeId = readString(delivery.calleeNodeId);
+      const message = readString(delivery.message);
+      const reason = readString(delivery.reason);
+      const conversation = readString(delivery.callerConversationId);
+      if (
+        deliveryId &&
+        callId &&
+        callerNodeId &&
+        calleeNodeId &&
+        message &&
+        reason
+      ) {
+        messageFailures.set(deliveryId, {
+          deliveryId,
+          callId,
+          callerNodeId,
+          calleeNodeId,
+          message,
+          reason,
+          ...(conversation !== null
+            ? { callerConversationId: conversation }
+            : {}),
+        });
+      }
       continue;
     }
     const fields = payload as Partial<
@@ -140,7 +184,13 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
       }
     }
   }
-  return { callSeq, records: [...records.values()] };
+  return {
+    callSeq,
+    records: [...records.values()],
+    ...(messageFailures.size > 0
+      ? { messageFailures: [...messageFailures.values()] }
+      : {}),
+  };
 }
 
 /**

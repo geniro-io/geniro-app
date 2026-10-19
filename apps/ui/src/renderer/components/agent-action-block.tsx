@@ -92,14 +92,16 @@ export function AgentActionBlock({
   );
   const label = failed
     ? action === 'message'
-      ? 'Not sent'
+      ? 'Not delivered'
       : 'Failed'
     : status === 'running'
       ? action === 'message'
         ? 'Sending'
         : 'Requesting stop'
       : status === 'stopped'
-        ? 'Not completed'
+        ? action === 'message'
+          ? 'Delivery unconfirmed'
+          : 'Not completed'
         : state === 'delivered'
           ? 'Delivered'
           : state === 'queued'

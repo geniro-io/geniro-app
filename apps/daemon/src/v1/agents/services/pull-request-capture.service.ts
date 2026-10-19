@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
@@ -22,6 +24,7 @@ import {
 } from '../utils/pull-request-capture';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import { ItemSeqAllocator } from './item-seq.allocator';
 import { SessionTranscriptsService } from './session-transcripts.service';
 
 /**
@@ -33,15 +36,33 @@ import { SessionTranscriptsService } from './session-transcripts.service';
 const TURN_ENDING_KINDS = new Set(['turn_complete', 'turn_cancelled', 'error']);
 
 /**
- * How long one listing may spend re-reading, from the start, runs scanned
- * under an older capture rule. A re-read runs `LIKE` over a run's whole
- * history — seconds for one long thread — and the renderer abandons a listing
- * at 30 s (`REQUEST_TIMEOUT_MS`), leaving no sidebar at all. Runs past the
- * budget stay incremental under their old rule until a later listing, or their
- * own turn's end, reaches them; the list is newest first, so the threads in use
- * are re-read first.
+ * How many runs the boot re-scan takes between yields to the event loop. A
+ * re-read runs `LIKE` over a run's whole history — seconds for one long
+ * thread — on a synchronous SQLite driver, so an unbroken sweep would hold
+ * every request the daemon serves meanwhile.
  */
-export const PULL_REQUEST_RESCAN_BUDGET_MS = 2_000;
+const RESCAN_BATCH = 5;
+
+/** The yield between {@link RESCAN_BATCH}es. */
+const RESCAN_BATCH_PAUSE_MS = 50;
+
+/**
+ * How many seqs one candidate read covers. A re-read from the start runs a
+ * `LIKE` over a run's whole history, which on a long thread holds the event
+ * loop for seconds; cut into windows with a yield between them, every other
+ * request the daemon serves gets a turn — as `run-named-paths.service.ts`
+ * reads a history.
+ */
+const CANDIDATE_WINDOW_SEQS = 2000;
+
+/** The columns a pass writes to its run's row. */
+type ScanState = Pick<
+  Run,
+  | 'pullRequests'
+  | 'touchedPullRequests'
+  | 'pullRequestsScannedSeq'
+  | 'pullRequestsScanVersion'
+>;
 
 /**
  * One `Item.payload` as an object, or null.
@@ -88,8 +109,11 @@ function parseRow(payload: string): Record<string, unknown> | null {
  *   starts at -1, which is what makes the BACKFILL free rather than a migration
  *   — every pull request opened before this feature existed is recovered the
  *   first time its chat is listed. A marker reached under an older capture
- *   rule (`PULL_REQUEST_SCAN_VERSION`) counts as never scanned, so a rule
- *   change recovers what the old rule missed — once, not on every listing.
+ *   rule (`PULL_REQUEST_SCAN_VERSION`) is re-read from the start once — by the
+ *   boot sweep ({@link rescanOutdatedQuietly}) or the run's own turn end, never
+ *   by a listing: a re-read is a `LIKE` over a run's whole history on a
+ *   synchronous driver, and inside a request it holds every other request the
+ *   daemon serves.
  * - It **never fails a caller**. This runs inside the chat list, and a chat
  *   list that 500s because a transcript could not be scanned is a far worse
  *   outcome than a thread missing its pull-request row. Every error is logged
@@ -99,6 +123,18 @@ function parseRow(payload: string): Record<string, unknown> | null {
 export class PullRequestCaptureService implements OnModuleInit {
   private readonly logger = new Logger(PullRequestCaptureService.name);
 
+  /** The newest pass queued per run; every pass of a run waits on the one before. */
+  private readonly passes = new Map<string, Promise<void>>();
+
+  /**
+   * What each run's last pass in this process wrote to its row. This service is
+   * the only writer of these columns, so the record is the row as stored.
+   */
+  private readonly written = new Map<string, ScanState>();
+
+  /** Runs deleted in this process, so a pass still in flight remembers nothing for them. */
+  private readonly deleted = new Set<string>();
+
   constructor(
     private readonly itemDao: ItemDao,
     private readonly runDao: RunDao,
@@ -106,6 +142,7 @@ export class PullRequestCaptureService implements OnModuleInit {
     private readonly bus: AgentEventBus,
     private readonly sessionTranscripts: SessionTranscriptsService,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly seqs: ItemSeqAllocator,
   ) {}
 
   /**
@@ -154,6 +191,10 @@ export class PullRequestCaptureService implements OnModuleInit {
       }
       void this.captureAndAnnounce(event.runId);
     });
+    this.bus.allDeleted().subscribe((runId) => {
+      this.deleted.add(runId);
+      this.written.delete(runId);
+    });
   }
 
   /** Scan one run on a turn's end — {@link syncOne} announces what it finds. */
@@ -164,7 +205,7 @@ export class PullRequestCaptureService implements OnModuleInit {
       if (run === null) {
         return;
       }
-      await this.syncOne(run, em, true);
+      await this.syncSerialized(run, em, true);
     } catch (error) {
       // Swallowed on this path too, and for the listing's own reason: a
       // subscriber that rejects takes the RxJS stream down with it, which
@@ -191,10 +232,9 @@ export class PullRequestCaptureService implements OnModuleInit {
    * previous pass's answer.
    */
   async sync(runs: readonly Run[], em: EntityManager): Promise<void> {
-    const rescanUntil = Date.now() + PULL_REQUEST_RESCAN_BUDGET_MS;
     for (const run of runs) {
       try {
-        await this.syncOne(run, em, Date.now() < rescanUntil);
+        await this.syncSerialized(run, em, false);
       } catch (error) {
         this.logger.warn(
           `run ${run.id}: could not capture pull requests: ${
@@ -202,6 +242,106 @@ export class PullRequestCaptureService implements OnModuleInit {
           }`,
         );
       }
+    }
+  }
+
+  /**
+   * The boot entry point: every run scanned under another capture rule (or
+   * never scanned) re-read from the start, newest first. Not awaited by boot;
+   * never throws. A run it misses is re-read at its next turn end, and the next
+   * launch asks again — the version column is the marker, so a finished sweep
+   * costs one query.
+   */
+  async rescanOutdatedQuietly(): Promise<void> {
+    try {
+      const runs = await this.runDao.listOutdatedPullRequestScans(
+        PULL_REQUEST_SCAN_VERSION,
+        this.em.fork(),
+      );
+      let failed = 0;
+      for (const [index, run] of runs.entries()) {
+        if (index > 0 && index % RESCAN_BATCH === 0) {
+          await sleep(RESCAN_BATCH_PAUSE_MS);
+        }
+        try {
+          await this.syncSerialized(run, this.em.fork(), true);
+        } catch (error) {
+          failed += 1;
+          this.logger.warn(
+            `run ${run.id}: could not re-scan pull requests: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      if (runs.length > 0) {
+        this.logger.log(
+          `re-scanned pull requests of ${runs.length - failed} run(s)`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `pull-request re-scan failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * {@link syncOne}, one pass per run at a time, each over the row as stored.
+   *
+   * The caller's row was read when its request started, and a listing, the
+   * boot sweep and a turn's end can all reach the same run meanwhile: computed
+   * against a copy another pass has since moved, `changed` holds again and the
+   * same pull requests are announced once per pass.
+   *
+   * A listing (`mayRescan` false) never waits on a pass already in flight —
+   * one of the boot sweep's re-reads can take seconds — and projects the row
+   * as last written instead; the pass in flight announces what it captures.
+   */
+  private syncSerialized(
+    run: Run,
+    em: EntityManager,
+    mayRescan: boolean,
+  ): Promise<void> {
+    const previous = this.passes.get(run.id);
+    if (previous !== undefined && !mayRescan) {
+      const stored = this.written.get(run.id);
+      if (stored !== undefined) {
+        Object.assign(run, stored);
+      }
+      return Promise.resolve();
+    }
+    const pass = (async () => {
+      await previous?.catch(() => undefined);
+      const stored = this.written.get(run.id);
+      if (stored !== undefined) {
+        Object.assign(run, stored);
+      }
+      await this.syncOne(run, em, mayRescan);
+    })();
+    this.passes.set(run.id, pass);
+    void pass
+      .finally(() => {
+        if (this.passes.get(run.id) === pass) {
+          this.passes.delete(run.id);
+        }
+      })
+      .catch(() => undefined);
+    return pass;
+  }
+
+  /** Write a pass's columns to the row, the caller's copy and {@link written}. */
+  private async remember(
+    run: Run,
+    em: EntityManager,
+    state: ScanState,
+  ): Promise<void> {
+    await this.runDao.updateWithoutActivity(run.id, state, em);
+    Object.assign(run, state);
+    if (!this.deleted.has(run.id)) {
+      this.written.set(run.id, state);
     }
   }
 
@@ -223,15 +363,40 @@ export class PullRequestCaptureService implements OnModuleInit {
       fromStart || current
         ? PULL_REQUEST_SCAN_VERSION
         : run.pullRequestsScanVersion;
-    const maxSeq = await this.itemDao.maxSeq(run.id, em);
+    // Clamped to what is fully written: a seq is reserved before its row is
+    // inserted, and a marker past an unwritten one would never read it.
+    const maxSeq = this.seqs.writtenThrough(
+      run.id,
+      await this.itemDao.maxSeq(run.id, em),
+    );
     if (maxSeq <= scanned) {
+      // A run with nothing to read is read under this rule all the same; left
+      // unmarked, every launch's sweep would list it again.
+      if (fromStart && run.pullRequestsScanVersion !== version) {
+        await this.remember(run, em, {
+          pullRequests: run.pullRequests,
+          touchedPullRequests: run.touchedPullRequests,
+          pullRequestsScannedSeq: maxSeq,
+          pullRequestsScanVersion: version,
+        });
+      }
       return;
     }
-    const rows = await this.itemDao.pullRequestCandidates(run.id, scanned, em);
-    const captured: RunPullRequest[] = [];
-    for (const row of rows) {
-      captured.push(...(await this.capturedFrom(run.id, row, em)));
+    const rows: Awaited<ReturnType<ItemDao['pullRequestCandidates']>> = [];
+    for (let from = scanned; from < maxSeq; from += CANDIDATE_WINDOW_SEQS) {
+      if (from > scanned) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      rows.push(
+        ...(await this.itemDao.pullRequestCandidates(
+          run.id,
+          from,
+          em,
+          Math.min(maxSeq, from + CANDIDATE_WINDOW_SEQS),
+        )),
+      );
     }
+    const captured = await this.capturedFrom(run.id, rows, em);
     const carried = readRunPullRequests(run.pullRequests);
     const merged = mergePullRequests(carried, captured);
     const carriedTouched = readRunPullRequests(run.touchedPullRequests);
@@ -255,20 +420,13 @@ export class PullRequestCaptureService implements OnModuleInit {
     // Bookkeeping, not activity: this pass runs over every run a chat list
     // returns, so stamping `updatedAt` here re-dated a whole archive to the
     // moment it was opened (see `RunDao.updateWithoutActivity`).
-    await this.runDao.updateWithoutActivity(
-      run.id,
-      {
-        pullRequests,
-        touchedPullRequests,
-        pullRequestsScannedSeq: maxSeq,
-        pullRequestsScanVersion: version,
-      },
-      em,
-    );
-    run.pullRequests = pullRequests;
-    run.touchedPullRequests = touchedPullRequests;
-    run.pullRequestsScannedSeq = maxSeq;
-    run.pullRequestsScanVersion = version;
+    const state: ScanState = {
+      pullRequests,
+      touchedPullRequests,
+      pullRequestsScannedSeq: maxSeq,
+      pullRequestsScanVersion: version,
+    };
+    await this.remember(run, em, state);
     if (changed && (pullRequests !== null || touchedPullRequests !== null)) {
       this.announce(
         run.id,
@@ -476,28 +634,49 @@ export class PullRequestCaptureService implements OnModuleInit {
    * The pair lookup only happens for a row that already carries a URL, which is
    * a handful of rows in the longest transcript here (31 in 14,068).
    */
+  /**
+   * The pull requests these candidate results report opening: each result that
+   * prints a pull-request URL, whose call ran `gh pr create`. The calls are
+   * read in one lookup by id rather than one per result — on a long thread a
+   * per-result search of the whole tool history held the event loop for a
+   * quarter of a second each.
+   */
   private async capturedFrom(
     runId: string,
-    row: { seq: number; payload: string },
+    rows: readonly { seq: number; payload: string }[],
     em: EntityManager,
   ): Promise<RunPullRequest[]> {
-    const payload = parseRow(row.payload);
-    const callId = asString(payload?.id);
-    const text = resultText(payload?.result);
-    if (callId === null || text === null) {
+    const reported = rows.flatMap((row) => {
+      const payload = parseRow(row.payload);
+      const callId = asString(payload?.id);
+      const text = resultText(payload?.result);
+      if (callId === null || text === null) {
+        return [];
+      }
+      const urls = readPullRequestUrls(text);
+      return urls.length === 0 ? [] : [{ seq: row.seq, callId, urls }];
+    });
+    if (reported.length === 0) {
       return [];
     }
-    const urls = readPullRequestUrls(text);
-    if (urls.length === 0) {
-      return [];
+    const calls = new Map<string, Record<string, unknown> | null>();
+    for (const call of await this.itemDao.rowsByPayloadId(
+      runId,
+      ['tool_call'],
+      [...new Set(reported.map((entry) => entry.callId))],
+      undefined,
+      em,
+    )) {
+      const payload = parseRow(call.payload);
+      const id = asString(payload?.id);
+      if (id !== null && !calls.has(id)) {
+        calls.set(id, payload);
+      }
     }
-    const { call } = await this.itemDao.findToolCallPair(runId, callId, em);
-    if (call === null) {
-      return [];
-    }
-    if (!isPullRequestCreateCall(parseRow(call.payload)?.input)) {
-      return [];
-    }
-    return urls.map((url) => ({ ...url, seq: row.seq }));
+    return reported.flatMap(({ seq, callId, urls }) =>
+      isPullRequestCreateCall(calls.get(callId)?.input)
+        ? urls.map((url) => ({ ...url, seq }))
+        : [],
+    );
   }
 }

@@ -38,6 +38,7 @@ import {
   toolResultBody,
 } from './tool-render';
 import {
+  isDeliveryAcknowledgement,
   payloadNumber,
   payloadString,
   type TranscriptNodeMeta,
@@ -416,6 +417,9 @@ export const TranscriptItem = memo(function TranscriptItem({
       return <MessageBubble variant="note">{line}</MessageBubble>;
     }
     case 'system': {
+      if (isDeliveryAcknowledgement(item.payload)) {
+        return null;
+      }
       const message = payloadString(item.payload, 'message');
       if (message === null) {
         return null;
@@ -612,7 +616,9 @@ export const TranscriptItem = memo(function TranscriptItem({
       // "orphaned" line below, which is the opposite of what happened.
       if (outcome === 'message') {
         return (
-          <MessageBubble variant="call" role={tag(`💬 message → ${callee}`)}>
+          <MessageBubble
+            variant="call"
+            role={tag(`💬 message → ${callee} · delivered`)}>
             <div className="whitespace-pre-wrap break-words">
               {payloadString(item.payload, 'message') ?? ''}
             </div>

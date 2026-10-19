@@ -76,6 +76,51 @@ function spinning(): boolean {
   return container.querySelector('.animate-spin') !== null;
 }
 
+it.each([
+  {
+    scenario: 'successful',
+    envelope: { status: 'ok', result: { state: 'delivered', agent: 'worker' } },
+    isError: false,
+    label: 'Delivered',
+  },
+  {
+    scenario: 'failed',
+    envelope: { status: 'error', error: 'CALLEE_CANCELLED' },
+    isError: true,
+    label: 'Not delivered',
+  },
+  {
+    scenario: 'interrupted',
+    envelope: null,
+    isError: false,
+    label: 'Delivery unconfirmed',
+  },
+])(
+  'renders a $scenario message action receipt as $label',
+  ({ envelope, isError, label }) => {
+    const group = makeGroup([
+      toolItem('tool_call', {
+        id: 'message',
+        name: 'mcp__geniro-run-1__message_agent',
+        input: { call_id: 'call-1', message: 'keep the old labels' },
+      }),
+      ...(envelope === null
+        ? []
+        : [
+            toolItem('tool_result', {
+              id: 'message',
+              result: JSON.stringify(envelope),
+              isError,
+            }),
+          ]),
+    ]);
+    render(group, envelope === null);
+    const row = container.querySelector('[data-role="agent-action"]');
+    expect(row?.textContent).toContain(label);
+    expect(row?.textContent).toContain('keep the old labels');
+  },
+);
+
 /** Each expanded tool row's status, in row order, off its own status glyph. */
 function rowStatuses(): (string | null)[] {
   return [

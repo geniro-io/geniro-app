@@ -33,6 +33,7 @@ export function BoardColumn({
   onTaskKeyDown,
   onAddTask,
   autopilot,
+  loadMore,
 }: {
   status: string;
   tasks: TaskDto[];
@@ -65,6 +66,11 @@ export function BoardColumn({
   ) => void;
   /** Absent where a card has no one project to be filed into. */
   onAddTask?: (status: string) => void;
+  loadMore?: {
+    batchSize: number;
+    total: number;
+    onLoadMore: () => void;
+  };
   /**
    * Present only on the column the project's autopilot picks work up from.
    *
@@ -103,10 +109,12 @@ export function BoardColumn({
   };
 }): React.JSX.Element {
   const meta = taskStatusMeta(status);
+  const total = loadMore?.total ?? tasks.length;
+  const remaining = total - tasks.length;
   return (
     <section
       role="group"
-      aria-label={`${meta.label}, ${tasks.length} task${tasks.length === 1 ? '' : 's'}`}
+      aria-label={`${meta.label}, ${total} task${total === 1 ? '' : 's'}`}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
@@ -141,7 +149,7 @@ export function BoardColumn({
         />
         <span className="text-sm font-medium">{meta.label}</span>
         <span className="text-xs tabular-nums text-muted-foreground">
-          {tasks.length}
+          {total}
         </span>
         {onAddTask === undefined ? null : (
           <button
@@ -163,7 +171,9 @@ export function BoardColumn({
       {autopilot ? (
         <AutopilotBanner {...autopilot} onOpenTask={onOpenTask} />
       ) : null}
-      <div className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto">
+      <div
+        data-slot="task-column-cards"
+        className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto">
         {tasks.map((task) => (
           <div key={task.id} className="flex flex-col gap-2">
             {dropBeforeTaskId === task.id ? <DropLine /> : null}
@@ -181,7 +191,11 @@ export function BoardColumn({
             />
           </div>
         ))}
-        {tasks.length > 0 && dropBeforeTaskId === null ? <DropLine /> : null}
+        {tasks.length > 0 &&
+        dropBeforeTaskId !== undefined &&
+        !tasks.some((task) => task.id === dropBeforeTaskId) ? (
+          <DropLine />
+        ) : null}
         {/* Nothing at rest. An empty column already LOOKS empty, and on a
             fresh board "No tasks" was written four times across a screen whose
             own emptiness said it once. The drop hint stays: that one is a
@@ -189,7 +203,25 @@ export function BoardColumn({
         {tasks.length === 0 && isDropTarget ? (
           <p className="px-1 py-3 text-xs text-muted-foreground">Drop here</p>
         ) : null}
+        {loadMore && remaining > 0 ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-slot="task-load-more"
+            aria-label={`Load ${Math.min(loadMore.batchSize, remaining)} more ${meta.label} tasks`}
+            onClick={loadMore.onLoadMore}
+            className="h-8 w-full shrink-0 justify-between px-2 text-xs text-muted-foreground">
+            <span>Load {Math.min(loadMore.batchSize, remaining)} more</span>
+            <span className="tabular-nums">{remaining} remaining</span>
+          </Button>
+        ) : null}
       </div>
+      {loadMore ? (
+        <span className="sr-only" aria-live="polite">
+          {tasks.length} of {total} {meta.label} tasks shown
+        </span>
+      ) : null}
     </section>
   );
 }

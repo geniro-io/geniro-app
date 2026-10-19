@@ -13,7 +13,11 @@ import {
   subagentRef,
 } from './subagent-payload';
 import { isAgentToolName } from './tool-kind';
-import { payloadNumber, payloadString } from './transcript-payload';
+import {
+  isDeliveryAcknowledgement,
+  payloadNumber,
+  payloadString,
+} from './transcript-payload';
 import { formatDuration } from './turn-duration';
 
 /**
@@ -210,7 +214,7 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
     const message = payloadString(item.payload, 'message');
     const outcome = payloadString(item.payload, 'outcome');
     if (outcome === 'message' && message !== null) {
-      return [`**💬 message to the running call**`, '', message];
+      return [`**💬 message to the running call — delivered**`, '', message];
     }
     // Held until the callee could take it, and the call ended first.
     if (outcome === 'undelivered' && message !== null) {
@@ -346,6 +350,9 @@ function ownerOf(item: ItemDto, who: Attribution): string {
 }
 
 function itemSection(item: ItemDto, agent: string, who: Attribution): string[] {
+  if (item.kind === 'system' && isDeliveryAcknowledgement(item.payload)) {
+    return [];
+  }
   const body = RENDERERS[item.kind]?.(item, agent) ?? fallbackSection(item);
   // The seq is in the heading rather than a bare timestamp, because it is what
   // the app's own search and jump address a row by — so a line quoted out of

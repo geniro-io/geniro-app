@@ -35,6 +35,7 @@ import {
   type ItemWire,
   type PersistedResetWake,
   type RunCallSeed,
+  type RunListPage,
   type RunWire,
   type SendMessageImage,
 } from '../../agents/chat.types';
@@ -1827,9 +1828,12 @@ export class GraphExecutorService
    * the two halves of one list have to agree about how much of the archive they
    * are showing.
    */
-  async listRuns(scope: ChatListScope = 'active'): Promise<RunWire[]> {
+  async listRuns(
+    scope: ChatListScope = 'active',
+    page: RunListPage = {},
+  ): Promise<RunWire[]> {
     const em = this.em.fork();
-    const runs = await this.runDao.listWorkflowRuns(scope, em);
+    const runs = await this.runDao.listWorkflowRuns(scope, em, page);
     // The chat listing's own backfill, on the same terms: incremental and
     // error-swallowing by construction, so this is a `max(seq)` read per run in
     // the steady state and can never fail the listing. It is what recovers a
@@ -3478,6 +3482,7 @@ export class GraphExecutorService
         resumeSessionId?: string | null;
         images?: TurnImage[];
         poolMember?: number;
+        compaction?: boolean;
       } = {},
     ): Promise<{
       handle: AgentTurnHandle;
@@ -3518,6 +3523,11 @@ export class GraphExecutorService
         : nodeSessionKey(runId, node.id);
       // WHO this turn is, to the call broker: the node, in this conversation.
       const caller = callerKey(node.id, callContext?.conversationId ?? null);
+      const deliveryNotice =
+        extras.compaction || adapter.geniroCommandFor(prompt) !== null
+          ? null
+          : this.callBroker.messageDeliveryNotice(runId, caller);
+      let deliveryNoticeAcknowledged = false;
       // An automatic carried compaction replaced this conversation: its summary
       // rides this turn, once, and the session it replaced is not resumed.
       const carried = this.carriedSummaries.get(sessionKey) ?? null;
@@ -3659,7 +3669,12 @@ export class GraphExecutorService
         .catch(() => false);
       const input: AgentTurnInput = {
         ...(streamPartials ? { streamPartials: true } : {}),
-        prompt: withCarriedContext(carried, prompt),
+        prompt: withCarriedContext(
+          carried,
+          deliveryNotice !== null
+            ? `${deliveryNotice.prompt}\n\n${prompt}`
+            : prompt,
+        ),
         ...(extras.images?.length ? { images: extras.images } : {}),
         cwd,
         model: node.model ?? null,
@@ -3742,6 +3757,19 @@ export class GraphExecutorService
       // chat path's `compactions`, for a node's or a callee's own window.
       const compactions = new CompactionRows();
       const onEvent = (event: AgentEvent): void => {
+        const promptTaken =
+          event.parentToolUseId === undefined &&
+          (event.type === 'text' ||
+            event.type === 'text_delta' ||
+            event.type === 'reasoning' ||
+            event.type === 'reasoning_delta' ||
+            event.type === 'thinking_progress' ||
+            event.type === 'tool_compose' ||
+            event.type === 'tool_call' ||
+            event.type === 'turn_complete');
+        if (promptTaken && callContext !== undefined && !extras.compaction) {
+          this.callBroker.confirmWakingMessages(runId, callContext.callId);
+        }
         const arrived = terminalStatus(event);
         if (
           arrived === 'completed' ||
@@ -3798,6 +3826,19 @@ export class GraphExecutorService
             }
             await saveSessionId(event.sessionId);
             return;
+          }
+          // Session creation alone does not mean the CLI took its prompt.
+          if (
+            deliveryNotice !== null &&
+            !deliveryNoticeAcknowledged &&
+            promptTaken
+          ) {
+            deliveryNoticeAcknowledged = true;
+            this.callBroker.acknowledgeMessageDeliveryNotice(
+              runId,
+              caller,
+              deliveryNotice,
+            );
           }
           if (event.type === 'slash_commands') {
             // The CLI's own invokable set for this run's cwd — feeds the
@@ -4783,7 +4824,10 @@ export class GraphExecutorService
           callContext
             ? { ...callContext, resumeSessionId: turn.sessionId }
             : undefined,
-          callContext ? {} : { resumeSessionId: turn.sessionId },
+          {
+            ...(callContext ? {} : { resumeSessionId: turn.sessionId }),
+            compaction: true,
+          },
         );
         compactionHandles.add(compaction.handle);
         try {
@@ -6398,7 +6442,11 @@ export class GraphExecutorService
           },
           messageCallee: (callId, text) => {
             const subTurn = subTurns.get(callId);
-            if (subTurn === undefined || cancelRequested) {
+            if (
+              subTurn === undefined ||
+              cancelRequested ||
+              cancelledCalls.has(callId)
+            ) {
               return { delivered: false, reason: 'not_started' };
             }
             const { handle, callee, conversationId } = subTurn;

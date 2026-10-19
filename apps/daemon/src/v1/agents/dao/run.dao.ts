@@ -1,4 +1,4 @@
-import { EntityManager } from '@mikro-orm/sqlite';
+import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
@@ -6,6 +6,7 @@ import { Run } from '../../runs/entity/run.entity';
 import type {
   ChatListScope,
   PromptCacheTtlReason,
+  RunListPage,
   RunPullRequest,
   SettleFigures,
 } from '../chat.types';
@@ -40,19 +41,55 @@ export class RunDao extends BaseDao<Run> {
    * it belongs to the thread it reads, opens in that thread's popup, and is
    * found through {@link listAnalysesOf}. Nothing else is hidden by kind.
    */
-  async listChats(scope: ChatListScope, txEm?: EntityManager): Promise<Run[]> {
-    return this.getRepo(txEm).find(
+  async listChats(
+    scope: ChatListScope,
+    txEm?: EntityManager,
+    page: RunListPage = {},
+  ): Promise<Run[]> {
+    return this.listPage(
       {
         workflowId: null,
         editsWorkflowSlug: null,
         analysisSourceRunId: null,
-        ...(scope === 'all'
-          ? {}
-          : { archivedAt: scope === 'archived' ? { $ne: null } : null }),
+        ...scopeFilter(scope),
       },
+      page,
+      txEm,
+    );
+  }
+
+  /**
+   * One page of a listing, newest first. `id` breaks a `createdAt` tie so the
+   * cursor names one place in the order and no row is skipped or repeated
+   * across pages.
+   */
+  private listPage(
+    where: FilterQuery<Run>,
+    page: RunListPage,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    const { before, runId, limit } = page;
+    const narrowed: FilterQuery<Run>[] = [where];
+    if (runId !== undefined) {
+      narrowed.push({ id: runId });
+    }
+    if (before !== undefined) {
+      narrowed.push({
+        $or: [
+          { createdAt: { $lt: before.createdAt } },
+          { createdAt: before.createdAt, id: { $lt: before.id } },
+        ],
+      });
+    }
+    return this.getRepo(txEm).find(
+      narrowed.length === 1 ? where : { $and: narrowed },
       // Read-only list paths: skip identity-map tracking so a long run history
       // doesn't accumulate managed entities in the forked EM (see item.dao).
-      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+      {
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        ...(limit === undefined ? {} : { limit }),
+        disableIdentityMap: true,
+      },
     );
   }
 
@@ -365,6 +402,25 @@ export class RunDao extends BaseDao<Run> {
       promptCacheTtlMs: row.promptCacheTtlMs,
       promptCacheTtlReason: row.promptCacheTtlReason,
     };
+  }
+
+  /**
+   * Every run whose pull-request marker was reached under a capture rule other
+   * than `version`, never-scanned runs included, newest first.
+   */
+  async listOutdatedPullRequestScans(
+    version: number,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      {
+        $or: [
+          { pullRequestsScanVersion: null },
+          { pullRequestsScanVersion: { $ne: version } },
+        ],
+      },
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
   }
 
   /**
@@ -809,15 +865,12 @@ export class RunDao extends BaseDao<Run> {
   async listWorkflowRuns(
     scope: ChatListScope,
     txEm?: EntityManager,
+    page: RunListPage = {},
   ): Promise<Run[]> {
-    return this.getRepo(txEm).find(
-      {
-        workflowId: { $ne: null },
-        ...(scope === 'all'
-          ? {}
-          : { archivedAt: scope === 'archived' ? { $ne: null } : null }),
-      },
-      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    return this.listPage(
+      { workflowId: { $ne: null }, ...scopeFilter(scope) },
+      page,
+      txEm,
     );
   }
 
@@ -848,4 +901,13 @@ export class RunDao extends BaseDao<Run> {
       { disableIdentityMap: true },
     );
   }
+}
+
+/** The archive half of a listing's filter; `all` states no condition. */
+function scopeFilter(scope: ChatListScope): {
+  archivedAt?: { $ne: null } | null;
+} {
+  return scope === 'all'
+    ? {}
+    : { archivedAt: scope === 'archived' ? { $ne: null } : null };
 }

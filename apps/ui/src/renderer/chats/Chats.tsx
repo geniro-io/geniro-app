@@ -212,6 +212,7 @@ import {
   runGroupSummary,
   splitPinnedRuns,
 } from './run-group';
+import { inScope } from './run-list-pages';
 import { lastActivityOf, sortRunsForSidebar } from './run-order';
 import { effectiveConfigDir } from './run-profile';
 import {
@@ -1168,6 +1169,9 @@ export function Chats({
     addItem,
     rememberRunContext,
     refreshRuns,
+    hasOlderRuns,
+    loadingOlderRuns,
+    loadOlderRuns,
     chatScope,
     showScope,
     addRun,
@@ -3755,9 +3759,7 @@ export function Chats({
   const handleShowScope = useCallback(
     (next: ChatListScope): void => {
       const open = runsRef.current.find((run) => run.id === activeRunId);
-      const kept =
-        open !== undefined &&
-        (next === 'all' || (open.archivedAt != null) === (next === 'archived'));
+      const kept = open !== undefined && inScope(open, next);
       if (!kept) {
         deactivateRun();
       }
@@ -8878,6 +8880,18 @@ export function Chats({
                             {chatScope === 'archived'
                               ? 'Nothing archived yet'
                               : 'No chats yet'}
+                          </li>
+                        ) : null}
+                        {hasOlderRuns ? (
+                          <li>
+                            <OlderMessagesControl
+                              slot="older-runs"
+                              className="px-1"
+                              loading={loadingOlderRuns}
+                              onLoad={loadOlderRuns}
+                              label="Load older chats"
+                              loadingLabel="Loading older chats…"
+                            />
                           </li>
                         ) : null}
                       </>

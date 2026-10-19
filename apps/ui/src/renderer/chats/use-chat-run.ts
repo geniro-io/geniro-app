@@ -44,6 +44,25 @@ import {
 import { discardsContextReading } from './compaction-payload';
 import { isCallRow, mergeAnchorRows } from './history-anchors';
 import type { LiveState } from './live-text';
+import {
+  belowHorizon,
+  deeper,
+  deepest,
+  depthOf,
+  horizonOf,
+  inScope,
+  isPagedScope,
+  type ListingDepth,
+  type ListingPages,
+  type ListPageQuery,
+  newestFirst,
+  olderPageQuery,
+  pageRows,
+  probeLimit,
+  reconcileListing,
+  RUN_LIST_MAX,
+  RUN_LIST_PAGE,
+} from './run-list-pages';
 import { activityAfterAnnounce, isSettledRunStatus } from './run-status';
 import { runStatusRowFields } from './run-status-row';
 import { replayTail, settledRunStatus } from './settled-status';
@@ -486,6 +505,12 @@ export interface ChatRunState {
     window: number | null,
   ) => void;
   refreshRuns: () => void;
+  /** A paged listing (anything but the desk) has rows below the ones on show. */
+  hasOlderRuns: boolean;
+  /** {@link loadOlderRuns} is in flight. */
+  loadingOlderRuns: boolean;
+  /** Show the next page of a paged listing. */
+  loadOlderRuns: () => void;
   /** How much of the archive the sidebar is showing. */
   chatScope: ChatListScope;
   /** Switch what the sidebar covers and refetch. */
@@ -502,7 +527,7 @@ export interface ChatRunState {
   /**
    * Re-file rows ANOTHER client changed (`runs_changed`): each held row goes
    * through {@link placeRun}, and a row this scope should now hold but does
-   * not re-lists the sidebar.
+   * not is asked for by itself.
    */
   refileChangedRuns: (runs: ChatRun[], closeOpen: () => void) => void;
   activateRun: (runId: string) => Promise<void>;
@@ -1329,19 +1354,166 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     renamedRuns.current.add(runId);
   }, []);
 
+  /**
+   * Take the snapshot facts of listed rows in — the counts and holds a window
+   * opened late, or one that just reconnected, has no announce for.
+   *
+   * `replace` for a whole listing, which states them for every run on show;
+   * otherwise only `rows` are added to what is held (a page further down, one
+   * adopted row), and no other run's facts are touched.
+   */
+  const seedRowFacts = useCallback(
+    (rows: readonly ChatRun[], replace: boolean): void => {
+      const ids = (pick: (run: ChatRun) => boolean): string[] =>
+        rows.filter(pick).map((run) => run.id);
+      const into = (
+        prev: ReadonlySet<string>,
+        add: readonly string[],
+      ): Set<string> => new Set(replace ? add : [...prev, ...add]);
+      // Seeded from the SNAPSHOT, not only from the live announce. The hold
+      // starts with one broadcast and then lasts as long as the delegates do,
+      // so a window opened after it — or one that just reconnected — would
+      // otherwise read a held run as a working agent and queue the user's
+      // message behind delegates that have minutes left to run.
+      //
+      // A hold this window already knew keeps its START: restamping every
+      // hold to now on each reconnect's refetch would begin the parked
+      // stretch subtracted from the worked time again each time.
+      const holds = new Map(replace ? [] : holdingRef.current);
+      for (const id of ids((r) => r.holdingFor > 0)) {
+        holds.set(id, holdingRef.current.get(id) ?? Date.now());
+      }
+      holdingRef.current = holds;
+      setHolding(holds);
+      // Seeded from the SNAPSHOT for the reason the hold above is, and on a
+      // longer clock: a manager's wait on its engineers is measured in tens
+      // of minutes, so a window opened (or a thread revisited) meanwhile
+      // would queue every message behind callees that have barely started.
+      setAwaitingCalls((prev) =>
+        into(
+          prev,
+          ids((r) => r.awaitingCalls > 0),
+        ),
+      );
+      const idle = into(rootsIdleRef.current, ids(workflowRootsIdle));
+      rootsIdleRef.current = idle;
+      setRootsIdle(idle);
+      // Seeded from the SNAPSHOT for a sharper version of the reason above: a
+      // detached command routinely outlives the turn that launched it, so a
+      // window opened afterwards sees no turn and no announce for it at all —
+      // the row is the only place the fact exists for that window.
+      setShellsOut((prev) =>
+        into(
+          prev,
+          ids((r) => r.shellsOpen > 0),
+        ),
+      );
+      // Same seed, and it matters more here: a background delegate outlives
+      // its turn by construction and its CLI may never speak of it again, so
+      // for a window opened afterwards the row is not merely the best source
+      // but the only one there will ever be.
+      setDelegatesOut((prev) =>
+        into(
+          prev,
+          ids((r) => r.subagentsOut > 0),
+        ),
+      );
+      // A listing that reports a run settled is the settle this window may
+      // have missed the announce of (a reconnect, a refresh racing it), so it
+      // releases whatever ending was waiting on that announce.
+      const listed = new Map(rows.map((row) => [row.id, row] as const));
+      setSettleOwed((prev) => {
+        const next = new Set(
+          [...prev].filter((runId) => {
+            const row = listed.get(runId);
+            return row === undefined || !isSettledRunStatus(row.status);
+          }),
+        );
+        return next.size === prev.size ? prev : next;
+      });
+      // A thread opened before its row was listed — a card run from the
+      // board, opened from the card — could not say at activation whether it
+      // was working, so it opened with no Stop. The row has arrived; answer
+      // it now, on the activation's own reading.
+      const opened = workingUnknownRef.current;
+      const row = opened === null ? undefined : listed.get(opened);
+      if (row !== undefined && opened === activeRunIdRef.current) {
+        workingUnknownRef.current = null;
+        const tail = replayTail(itemsRef.current);
+        if (
+          row.status === 'running' &&
+          !sawLiveTerminalRef.current &&
+          (tail === undefined || settledRunStatus(tail) === null)
+        ) {
+          setStreaming(true);
+        }
+      }
+    },
+    [],
+  );
+
+  /** The listing in flight per scope, and whether it was asked for again meanwhile. */
+  const listingRef = useRef<{ scope: ChatListScope; rerun: boolean } | null>(
+    null,
+  );
+  /** How far a paged scope's listing has read; null on the desk. */
+  const pagesRef = useRef<ListingPages | null>(null);
+  const [hasOlderRuns, setHasOlderRuns] = useState(false);
+  const [loadingOlderRuns, setLoadingOlderRuns] = useState(false);
+  /** {@link loadingOlderRuns}, read synchronously by a press that lands twice. */
+  const loadingOlderRunsRef = useRef(false);
+  const refreshRunsRef = useRef<() => void>(() => undefined);
+  /**
+   * The listing generation current when each row was taken in by itself — a
+   * listing asked for before that is silent about the row, never a witness
+   * that it is gone.
+   */
+  const takenInRef = useRef(new Map<string, number>());
+
   const refreshRuns = useCallback((): void => {
     const scope = chatScopeRef.current;
+    // ONE listing per scope at a time, and one more after it however many were
+    // asked for meanwhile: callers fire in bursts (a reconnect, a refile, a
+    // press), each listing is real daemon work on a synchronous database, and
+    // listings started per call queue every other request behind them. A
+    // different scope still supersedes: that is the user changing what the
+    // list is for.
+    const inFlight = listingRef.current;
+    if (inFlight !== null && inFlight.scope === scope) {
+      inFlight.rerun = true;
+      return;
+    }
+    const listing = { scope, rerun: false };
+    listingRef.current = listing;
     const generation = ++refreshGenerationRef.current;
+    const previous =
+      pagesRef.current?.scope === scope ? pagesRef.current : null;
+    // A re-list keeps the depth already read, so a refresh never takes rows
+    // the user paged to out from under them.
+    const paged = isPagedScope(scope);
+    const wantedOf = (depth: ListingDepth | undefined): number | null =>
+      paged
+        ? Math.min(
+            RUN_LIST_MAX - 1,
+            Math.max(RUN_LIST_PAGE, depth?.loaded ?? 0),
+          )
+        : null;
+    const chatWanted = wantedOf(previous?.chats);
+    const runWanted = wantedOf(previous?.runs);
     void Promise.all([
       // The param is omitted for the default rather than sent as `'active'`,
       // so the common request is the one the daemon reads with no query at all.
-      chatApi.listChats(scope === 'active' ? {} : { scope }),
+      chatApi.listChats(
+        chatWanted === null ? {} : { scope, limit: probeLimit(chatWanted) },
+      ),
       // The SAME scope to both halves, and the same omit-the-default rule.
       // Workflow runs used to be excluded from `archived` outright, on the
       // reading that they had no archive — they do now, so the scope is a
       // question about how much of the shelf to show and never about the run
       // kind.
-      workflowApi.listWorkflowRuns(scope === 'active' ? {} : { scope }),
+      workflowApi.listWorkflowRuns(
+        runWanted === null ? {} : { scope, limit: probeLimit(runWanted) },
+      ),
     ])
       .then(([chats, workflowRuns]) => {
         if (generation !== refreshGenerationRef.current) {
@@ -1357,98 +1529,60 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
             ),
           ).values(),
         ];
+        const deleted = deletedRunIdsRef.current;
+        const chatPage =
+          chatWanted === null ? chats : chats.slice(0, chatWanted);
+        const runPage =
+          runWanted === null ? workflowRuns : workflowRuns.slice(0, runWanted);
         const all = keepFresherRows(
-          [...chats, ...workflowRuns].sort((a, b) =>
-            b.createdAt.localeCompare(a.createdAt),
+          newestFirst([...chatPage, ...runPage]).filter(
+            (row) => !deleted.has(row.id),
           ),
           known,
         );
-        setRuns(all);
-        // What this listing leaves behind is KEPT rather than forgotten when the
-        // scope is what hid it: a thread still exists on the other side of the
-        // archive filter, and still owes the user its banner and its unread
-        // mark. Under `all` nothing is hidden, so a missing row is a deleted one.
-        const listed = new Map(all.map((row) => [row.id, row] as const));
-        const kept =
-          scope === 'all'
-            ? []
-            : known.filter(
-                (row) =>
-                  !listed.has(row.id) && !deletedRunIdsRef.current.has(row.id),
-              );
-        setOffScopeRuns(kept.length === 0 ? NO_OFF_SCOPE_RUNS : kept);
-        // A listing that reports a run settled is the settle this window may
-        // have missed the announce of (a reconnect, a refresh racing it), so it
-        // releases whatever ending was waiting on that announce.
-        setSettleOwed((prev) => {
-          const next = new Set(
-            [...prev].filter((runId) => {
-              const row = listed.get(runId);
-              return row === undefined || !isSettledRunStatus(row.status);
-            }),
-          );
-          return next.size === prev.size ? prev : next;
+        const listedDepth =
+          chatWanted === null || runWanted === null
+            ? null
+            : {
+                chats: depthOf(chats, chatWanted),
+                runs: depthOf(workflowRuns, runWanted),
+              };
+        // What THIS listing covers decides which rows it is silent about; the
+        // stored depth may reach further — a page read meanwhile, or rows read
+        // past what one request may ask for — and is kept, so the next page
+        // continues below what is on screen.
+        const horizon = listedDepth === null ? null : horizonOf(listedDepth);
+        const current =
+          pagesRef.current?.scope === scope ? pagesRef.current : null;
+        const pages =
+          listedDepth === null
+            ? null
+            : {
+                scope,
+                chats: deepest(listedDepth.chats, current?.chats),
+                runs: deepest(listedDepth.runs, current?.runs),
+              };
+        const { shown, held, kept, seeded } = reconcileListing({
+          all,
+          known,
+          heldBefore: current?.held ?? [],
+          horizon,
+          scope,
+          deleted,
+          takenInSince: (runId) =>
+            (takenInRef.current.get(runId) ?? -1) >= generation,
         });
-        // Seeded from the SNAPSHOT, not only from the live announce. The hold
-        // starts with one broadcast and then lasts as long as the delegates do,
-        // so a window opened after it — or one that just reconnected — would
-        // otherwise read a held run as a working agent and queue the user's
-        // message behind delegates that have minutes left to run.
-        //
-        // A hold this window already knew keeps its START: restamping every
-        // hold to now on each reconnect's refetch would begin the parked
-        // stretch subtracted from the worked time again each time.
-        const holds = new Map(
-          all
-            .filter((r) => r.holdingFor > 0)
-            .map(
-              (r) =>
-                [r.id, holdingRef.current.get(r.id) ?? Date.now()] as const,
-            ),
+        pagesRef.current = pages === null ? null : { ...pages, held };
+        setHasOlderRuns(
+          pages !== null && (pages.chats.hasMore || pages.runs.hasMore),
         );
-        holdingRef.current = holds;
-        setHolding(holds);
-        // Seeded from the SNAPSHOT for the reason the hold above is, and on a
-        // longer clock: a manager's wait on its engineers is measured in tens
-        // of minutes, so a window opened (or a thread revisited) meanwhile
-        // would queue every message behind callees that have barely started.
-        setAwaitingCalls(
-          new Set(all.filter((r) => r.awaitingCalls > 0).map((r) => r.id)),
-        );
-        const idle = new Set(all.filter(workflowRootsIdle).map((r) => r.id));
-        rootsIdleRef.current = idle;
-        setRootsIdle(idle);
-        // Seeded from the SNAPSHOT for a sharper version of the reason above: a
-        // detached command routinely outlives the turn that launched it, so a
-        // window opened afterwards sees no turn and no announce for it at all —
-        // the row is the only place the fact exists for that window.
-        setShellsOut(
-          new Set(all.filter((r) => r.shellsOpen > 0).map((r) => r.id)),
-        );
-        // Same seed, and it matters more here: a background delegate outlives
-        // its turn by construction and its CLI may never speak of it again, so
-        // for a window opened afterwards the row is not merely the best source
-        // but the only one there will ever be.
-        setDelegatesOut(
-          new Set(all.filter((r) => r.subagentsOut > 0).map((r) => r.id)),
-        );
-        // A thread opened before its row was listed — a card run from the
-        // board, opened from the card — could not say at activation whether it
-        // was working, so it opened with no Stop. The row has arrived; answer
-        // it now, on the activation's own reading.
-        const opened = workingUnknownRef.current;
-        if (opened !== null && opened === activeRunIdRef.current) {
-          workingUnknownRef.current = null;
-          const row = all.find((r) => r.id === opened);
-          const tail = replayTail(itemsRef.current);
-          if (
-            row?.status === 'running' &&
-            !sawLiveTerminalRef.current &&
-            (tail === undefined || settledRunStatus(tail) === null)
-          ) {
-            setStreaming(true);
-          }
-        }
+        setRuns(shown);
+        // What this listing leaves behind is KEPT rather than forgotten: a
+        // thread still exists on the other side of the archive filter, and
+        // still owes the user its banner and its unread mark. Only a run this
+        // window saw deleted is let go.
+        setOffScopeRuns(kept.length === 0 ? NO_OFF_SCOPE_RUNS : kept);
+        seedRowFacts(seeded, true);
       })
       .catch((err: unknown) => {
         // Superseded on both arms, not only the happy one: a failed fetch of
@@ -1464,8 +1598,144 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         if (generation === refreshGenerationRef.current) {
           setRunsLoaded(true);
         }
+        if (listingRef.current === listing) {
+          listingRef.current = null;
+          if (listing.rerun) {
+            refreshRunsRef.current();
+          }
+        }
       });
-  }, [chatApi, workflowApi]);
+  }, [chatApi, workflowApi, seedRowFacts]);
+  refreshRunsRef.current = refreshRuns;
+
+  /**
+   * The next page of a paged listing, below what is on screen. Rows it brings
+   * that both halves now reach are shown; the rest wait in
+   * {@link ListingPages.held} for the page that reaches them.
+   */
+  const loadOlderRuns = useCallback((): void => {
+    const pages = pagesRef.current;
+    if (
+      pages === null ||
+      pages.scope !== chatScopeRef.current ||
+      loadingOlderRunsRef.current
+    ) {
+      return;
+    }
+    const generation = refreshGenerationRef.current;
+    const pageOf = (
+      depth: ListingDepth,
+      fetch: (query: ListPageQuery) => Promise<ChatRun[]>,
+    ): Promise<ChatRun[]> =>
+      depth.hasMore && depth.oldest !== null
+        ? fetch(olderPageQuery(pages.scope, depth.oldest))
+        : Promise.resolve([]);
+    loadingOlderRunsRef.current = true;
+    setLoadingOlderRuns(true);
+    void Promise.all([
+      pageOf(pages.chats, (query) => chatApi.listChats(query)),
+      pageOf(pages.runs, (query) => workflowApi.listWorkflowRuns(query)),
+    ])
+      .then(([chats, workflowRuns]) => {
+        if (
+          generation !== refreshGenerationRef.current ||
+          pagesRef.current !== pages
+        ) {
+          return;
+        }
+        const next = {
+          scope: pages.scope,
+          chats: pages.chats.hasMore ? deeper(pages.chats, chats) : pages.chats,
+          runs: pages.runs.hasMore
+            ? deeper(pages.runs, workflowRuns)
+            : pages.runs,
+        };
+        const horizon = horizonOf(next);
+        const onScreen = new Set(runsRef.current.map((row) => row.id));
+        const deleted = deletedRunIdsRef.current;
+        const arrived = newestFirst([
+          ...pages.held,
+          ...pageRows(chats),
+          ...pageRows(workflowRuns),
+        ]).filter((row) => !onScreen.has(row.id) && !deleted.has(row.id));
+        const reached = arrived.filter((row) => !belowHorizon(row, horizon));
+        pagesRef.current = {
+          ...next,
+          held: arrived.filter((row) => belowHorizon(row, horizon)),
+        };
+        setHasOlderRuns(next.chats.hasMore || next.runs.hasMore);
+        setRuns((prev) => newestFirst([...prev, ...reached]));
+        setOffScopeRuns((prev) => {
+          const taken = new Set(reached.map((row) => row.id));
+          const left = prev.filter((row) => !taken.has(row.id));
+          return left.length === prev.length
+            ? prev
+            : left.length === 0
+              ? NO_OFF_SCOPE_RUNS
+              : left;
+        });
+        seedRowFacts(reached, false);
+      })
+      .catch((err: unknown) => {
+        if (generation === refreshGenerationRef.current) {
+          setError(String(err));
+        }
+      })
+      .finally(() => {
+        loadingOlderRunsRef.current = false;
+        setLoadingOlderRuns(false);
+      });
+  }, [chatApi, workflowApi, seedRowFacts]);
+
+  /**
+   * Take one run in by itself — asked for by `runId` on both listings, so it
+   * is projected exactly as a listing projects it. A row the scope on show
+   * holds joins the list in order; any other is kept off scope, where its
+   * announces and the notification rules still reach it.
+   */
+  const takeInRun = useCallback(
+    (runId: string): void => {
+      void Promise.all([
+        chatApi.listChats({ scope: 'all', runId }),
+        workflowApi.listWorkflowRuns({ scope: 'all', runId }),
+      ])
+        .then(([chats, workflowRuns]) => {
+          const row = [...chats, ...workflowRuns].find(
+            (run) => run.id === runId,
+          );
+          if (row === undefined || deletedRunIdsRef.current.has(runId)) {
+            return;
+          }
+          takenInRef.current.set(runId, refreshGenerationRef.current);
+          const pages = pagesRef.current;
+          if (pages?.held.some((run) => run.id === runId)) {
+            pagesRef.current = {
+              ...pages,
+              held: pages.held.filter((run) => run.id !== runId),
+            };
+          }
+          const replace = (rows: readonly ChatRun[]): ChatRun[] => [
+            ...keepFresherRows([row], rows),
+            ...rows.filter((run) => run.id !== runId),
+          ];
+          if (inScope(row, chatScopeRef.current)) {
+            setRuns((prev) => newestFirst(replace(prev)));
+            setOffScopeRuns((prev) =>
+              prev.some((run) => run.id === runId)
+                ? prev.filter((run) => run.id !== runId)
+                : prev,
+            );
+          } else {
+            setOffScopeRuns((prev) => replace(prev));
+          }
+          seedRowFacts([row], false);
+        })
+        .catch((err: unknown) => {
+          setError(String(err));
+        });
+    },
+    [chatApi, workflowApi, seedRowFacts],
+  );
 
   /**
    * Switch what the sidebar covers, and refetch.
@@ -1506,13 +1776,14 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // to be asked of the listing — and asking would arrive a moment later
       // and overwrite the row below with the daemon's copy of it.
       resolvedRunIdsRef.current.add(run.id);
+      takenInRef.current.set(run.id, refreshGenerationRef.current);
       if (chatScopeRef.current === 'archived') {
         showScope('active');
         return;
       }
       // The listing may hold it already: a route that sends the run's first
       // message before answering has it announced, and so
-      // adopted by a re-list, before the creator gets its copy — which was
+      // taken in by itself, before the creator gets its copy — which was
       // taken before that send, so the fresher row of the two is kept.
       setRuns((prev) => [
         ...keepFresherRows([run], prev),
@@ -1534,10 +1805,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    */
   const placeRun = useCallback(
     (run: ChatRun, closeOpen: () => void, keepLiveCounts = false): void => {
-      const scope = chatScopeRef.current;
-      const belongs =
-        scope === 'all' || (run.archivedAt != null) === (scope === 'archived');
-      if (belongs) {
+      if (inScope(run, chatScopeRef.current)) {
         // Read off the row being replaced inside the updater, never off
         // `runsRef`: an announce that moved the counts may not have rendered yet.
         setRuns((prev) =>
@@ -1579,14 +1847,30 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * does ({@link placeRun}), so an archive on the phone takes the row off the
    * desktop's desk and closes the thread there if it was open. A row it does
    * NOT hold but should — a thread unarchived elsewhere while the desk is on
-   * show — re-lists instead of being prepended: the listing is what knows the
-   * order, the workflow runs beside the chats and the pull-request pass, the
-   * reasoning `adoptUnknownRun` records. Once per broadcast, however many rows.
+   * show — is asked for by itself ({@link takeInRun}) rather than prepended
+   * from the broadcast, whose projection lacks a workflow run's live counts.
    */
   const refileChangedRuns = useCallback(
     (changed: ChatRun[], closeOpen: () => void): void => {
-      const scope = chatScopeRef.current;
-      let unlisted = false;
+      const pages = pagesRef.current;
+      const heldIds = new Set(pages?.held.map((row) => row.id));
+      if (pages !== null && changed.some((run) => heldIds.has(run.id))) {
+        // Rows fetched but not shown yet are refiled too, or the page that
+        // shows them would draw the copy from before the change. Only on a
+        // hit: a fresh object would read to a page in flight as superseded.
+        const byId = new Map(changed.map((run) => [run.id, run] as const));
+        pagesRef.current = {
+          ...pages,
+          held: pages.held.flatMap((row) => {
+            const next = byId.get(row.id);
+            return next === undefined
+              ? [row]
+              : inScope(next, pages.scope)
+                ? [next]
+                : [];
+          }),
+        };
+      }
       for (const run of changed) {
         if (runsRef.current.some((row) => row.id === run.id)) {
           // A refile is projected by the CHAT service, which has no call
@@ -1594,18 +1878,16 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // Taken as given they would read a working workflow as idle and
           // drain its queue into the running Manager's turn.
           placeRun(run, closeOpen, true);
-        } else if (
-          scope === 'all' ||
-          (run.archivedAt != null) === (scope === 'archived')
-        ) {
-          unlisted = true;
+        } else if (heldIds.has(run.id)) {
+          continue;
+        } else if (inScope(run, chatScopeRef.current)) {
+          // Asked for by itself for the same reason: the listing's own
+          // projection carries the counts this broadcast cannot.
+          takeInRun(run.id);
         }
       }
-      if (unlisted) {
-        refreshRuns();
-      }
     },
-    [placeRun, refreshRuns],
+    [placeRun, takeInRun],
   );
 
   /**
@@ -1646,33 +1928,28 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * listing — which is exactly the pair of symptoms reported: a working thread
    * missing from the sidebar, and readable only by the way in that skips it.
    *
-   * The whole LISTING is refetched rather than the one run, and that is a
-   * reuse decision rather than an economy: there is no single-run route, and
-   * the listing is what already knows the scope on show, the sort order, the
-   * workflow runs beside the chats, and the pull-request capture pass. A route
-   * for one run would have to restate all of it.
+   * The one run is asked for ({@link takeInRun}), never the whole listing
+   * again: a paged listing need not hold an older run, and a burst of
+   * announces must not become a burst of whole listings.
    *
    * ONCE per run id, which is what keeps it from being a fetch per
-   * announcement — those fire many times a second through a turn. A refresh
-   * that does not produce the row (an active run announcing while the archive
-   * is on show) is therefore also asked for once and then let be, rather than
-   * retried for the life of the run.
+   * announcement — those fire many times a second through a turn.
    */
   const adoptUnknownRun = useCallback(
     (runId: string): void => {
       if (
         runsRef.current.some((run) => run.id === runId) ||
-        // Known, merely off the listing on show — re-listing would not bring
-        // it back, and its announces already reach its kept row.
+        // Known, merely off the listing on show — its announces already reach
+        // its kept row.
         offScopeRef.current.some((run) => run.id === runId) ||
         resolvedRunIdsRef.current.has(runId)
       ) {
         return;
       }
       resolvedRunIdsRef.current.add(runId);
-      refreshRuns();
+      takeInRun(runId);
     },
-    [refreshRuns],
+    [takeInRun],
   );
 
   const activateRun = useCallback(
@@ -1871,8 +2148,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // A run nobody in this window started, announcing itself for the first
       // time — a card the board just ran, or the autopilot's own. The row
       // update below is a `prev.map`, so without this it would be dropped
-      // silently and the thread would work away unlisted.
-      adoptUnknownRun(event.runId);
+      // silently and the thread would work away unlisted. Only an announce of
+      // the run DOING something: a pull-request, title or context announce is
+      // about a thread that may sit anywhere in the archive, and a listing's
+      // own pull-request pass sends one for every thread it captures in.
+      if (event.status !== null || event.activity !== undefined) {
+        adoptUnknownRun(event.runId);
+      }
       const status = event.status;
       // An activity-only announce carries no status and must not touch the
       // badge. It fires on every tool call without reading the run, so while
@@ -2910,6 +3192,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     addItem,
     rememberRunContext,
     refreshRuns,
+    hasOlderRuns,
+    loadingOlderRuns,
+    loadOlderRuns,
     chatScope,
     showScope,
     addRun,

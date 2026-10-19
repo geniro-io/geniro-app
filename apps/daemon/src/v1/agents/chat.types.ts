@@ -5069,6 +5069,18 @@ export const ChatListScopeSchema = z.enum(['active', 'all', 'archived']);
 export type ChatListScope = z.infer<typeof ChatListScopeSchema>;
 
 /**
+ * Which part of a run listing to answer, newest first by `(createdAt, id)`.
+ * Every field absent is the whole listing. `before` is the last row of the
+ * previous page; `runId` narrows the listing to that one run, which is how a
+ * client takes in a row it was never handed without listing everything again.
+ */
+export interface RunListPage {
+  limit?: number;
+  before?: { createdAt: Date; id: string };
+  runId?: string;
+}
+
+/**
  * What a run's newest transcript rows say about it, for the list projection:
  * the preview line and the moment of its last activity (`RunWire.lastMessage`,
  * `RunWire.lastActivityAt`). Null halves are a run with no such row yet.
@@ -5260,6 +5272,17 @@ export interface RunCallSeed {
   callSeq: number;
   /** Every earlier call, in transcript order (a continuation after its parent). */
   records: CallSeedRecord[];
+  messageFailures?: MessageDeliveryFailure[];
+}
+
+export interface MessageDeliveryFailure {
+  deliveryId: string;
+  callId: string;
+  callerNodeId: string;
+  callerConversationId?: string;
+  calleeNodeId: string;
+  message: string;
+  reason: string;
 }
 
 /**

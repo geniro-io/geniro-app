@@ -1326,7 +1326,7 @@ describe('ItemDao (in-memory sqlite)', () => {
     expect(await dao.toolCallsByIds('run-a', [])).toEqual([]);
   });
 
-  it("reads a run's call rows in seq order — starts and results, and nothing else", async () => {
+  it("reads a run's call rows and delivery notices in seq order", async () => {
     // What the call seed folds after a daemon restart: the start (id, parties,
     // the thread it continued) and the result (the callee's session), in the
     // order they happened, so a continuation lands after its parent. Inserted
@@ -1360,17 +1360,42 @@ describe('ItemDao (in-memory sqlite)', () => {
       kind: 'call_started',
       payload: JSON.stringify({ callId: 'call-1' }),
     });
+    await dao.create({
+      runId: 'run-a',
+      seq: 4,
+      kind: 'call_answer',
+      payload: JSON.stringify({
+        outcome: 'undelivered',
+        message: 'correction',
+      }),
+    });
+    await dao.create({
+      runId: 'run-a',
+      seq: 5,
+      kind: 'system',
+      payload: JSON.stringify({ messageDeliveryNotices: ['delivery-1'] }),
+    });
+    await dao.create({
+      runId: 'run-a',
+      seq: 6,
+      kind: 'system',
+      payload: JSON.stringify({ message: 'unrelated system note' }),
+    });
 
     const rows = await dao.callRecordRows('run-a');
     expect(rows.map((row) => row.kind)).toEqual([
       'call_started',
       'call_result',
+      'call_answer',
+      'system',
     ]);
     // The column comes back as it is stored — JSON text — which the fold
     // parses for itself.
     expect(rows.map((row) => row.payload)).toEqual([
       JSON.stringify({ callId: 'call-1' }),
       JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
+      JSON.stringify({ outcome: 'undelivered', message: 'correction' }),
+      JSON.stringify({ messageDeliveryNotices: ['delivery-1'] }),
     ]);
   });
 
@@ -1466,6 +1491,39 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(await dao.delegateToolCallSeqs('run-a', undefined, 2)).toEqual([
         2,
       ]);
+    });
+  });
+
+  describe('rowsByPayloadId', () => {
+    it('reads past a row whose payload is not JSON', async () => {
+      await insert('run-ids', 1, 'tool_call', 'not json');
+      await insert('run-ids', 2, 'tool_call', JSON.stringify({ id: 'call-1' }));
+
+      const rows = await dao.rowsByPayloadId(
+        'run-ids',
+        ['tool_call'],
+        ['call-1'],
+      );
+
+      expect(rows.map((row) => row.seq)).toEqual([2]);
+    });
+  });
+
+  describe('pullRequestCandidates', () => {
+    it('reads only the tool results inside the seq window it is given', async () => {
+      const url = JSON.stringify({ result: 'https://github.com/o/r/pull/1' });
+      for (const seq of [1, 5, 9]) {
+        await insert('run-pr', seq, 'tool_result', url);
+      }
+      await insert('run-pr', 6, 'tool_result', url);
+      await insert('run-pr', 7, 'message', url);
+
+      const window = await dao.pullRequestCandidates('run-pr', 1, undefined, 6);
+      const open = await dao.pullRequestCandidates('run-pr', 1);
+
+      // Both edges: the window opens after its first seq and closes on its last.
+      expect(window.map((row) => row.seq)).toEqual([5, 6]);
+      expect(open.map((row) => row.seq)).toEqual([5, 6, 9]);
     });
   });
 

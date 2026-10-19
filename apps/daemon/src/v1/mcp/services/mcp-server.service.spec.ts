@@ -3434,6 +3434,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const message = find(tools, 'message_agent');
     expect(message).toMatch(/next tool boundary/);
     expect(message).toMatch(/step in flight/);
+    expect(message).toContain('not delivered');
+    expect(message).toContain('at your next turn');
 
     // Every tool in the listing, not only this one: the same sentence could be
     // written into any of its siblings.

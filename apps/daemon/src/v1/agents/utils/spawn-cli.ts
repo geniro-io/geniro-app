@@ -1270,10 +1270,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * (`error_during_execution`, `terminal_reason: aborted_streaming`) — and
    * NOTHING after it for five seconds, while a second message on the same
    * process ran to its own `result`. That `result` line is what settles the
-   * turn, so no tail is left to mistake for the next turn's output. It used to
-   * be set for every Stop, REPORTED as "я его остановил. У него был открыт
-   * браузер Playwright. Потом он написал новое сообщение, и Playwright сразу
-   * закрылся" — the respawn taking the browser with the old process.
+   * turn, so no tail is left to mistake for the next turn's output. (codex does
+   * leave one, fenced by turn id in its own driver — `CodexSession.endedTurns`.)
+   *
+   * It used to be set for every Stop, REPORTED as "я его остановил. У него был
+   * открыт браузер Playwright. Потом он написал новое сообщение, и Playwright
+   * сразу закрылся" — the respawn taking the browser with the old process.
    *
    * The defect retiring guards against, for the record: after a Stop, a
    * cancelled turn's trailing `result` line settled the NEXT turn the moment it
@@ -1335,8 +1337,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     void sweepDetachedShells();
     // Asked to stop AND ended some other way than on the CLI's own terminal
     // line — see {@link cancelledTurnMayStillEmit}. A stopped turn the CLI ended
-    // ITSELF leaves nothing to trail, so the process goes on serving turns and
-    // the user's MCP servers — a browser among them — survive the Stop.
+    // ITSELF leaves nothing here to trail (codex's tail is fenced in its own
+    // driver), so the process goes on serving turns and the user's MCP servers
+    // — a browser among them — survive the Stop.
     //
     // Keyed on the cancel, NOT on the broader "did not end by itself". The
     // silence deadline settles a turn the same way, but the deadline path

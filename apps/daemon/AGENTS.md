@@ -57,6 +57,7 @@ The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent exec
   - One process holds a thread: a refused resume (`active writer`) retries ~2.5s, then FAILS naming the holder. Never start a fresh thread there (it would replace the run's session).
   - MCP listing is a dialogue over an ephemeral thread. Never `codex mcp list --json`. Only servers in the user `config.toml` get a switch.
   - Sub-agent spend (`CodexSubagentSpend`) is folded into the turn that ends and marked billed; stopped/failed turns carry usage on `turn_cancelled` / `error`.
+  - `turn/interrupt` does not end a running command: it reports later under the stopped turn's id, often after the next turn opened on the kept process (workflow nodes and callees; a chat's Stop closes the process). A stopped or failed turn closes its open tool calls at `turn/completed` and joins `CodexSession.endedTurns`; an item, delta or plan frame naming such a turn does session bookkeeping only (items map, sub-agent tracking and its open/close rows), never text, tool or plan rows. Usage readings, errors and reroutes still pass.
 - `services/agent-session.registry`: kept CLI processes, one per run key, separate from `ProcessRegistry` (which tracks turns). It must subscribe to `session.closed` (a dead session is not idle and would hold a slot).
   - Ceiling `sessionCeilingFor`: total memory / 8 / ~1GB, clamped [2, 16].
   - Eviction never takes a turn in flight, a parked card, or an entry with off-turn activity within `OFF_TURN_ACTIVE_MS`. That window must equal `DELEGATE_ROW_LEASE_MS`.

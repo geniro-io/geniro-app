@@ -178,6 +178,16 @@ export const CODEX_REASONING_SUMMARY = 'auto';
 /** The longest a delegate's label (its brief's first line) is drawn. */
 export const CODEX_DELEGATE_LABEL_MAX_CHARS = 80;
 
+/**
+ * The results a tool call is closed with when its turn was stopped, or failed,
+ * before the call reported back. The close is the call's only ending — see
+ * `CodexSession.endedTurns` — so neither may claim the step itself ended.
+ */
+export const CODEX_STOPPED_TOOL_RESULT =
+  'The turn was stopped before this step reported back. codex may still be running it, and its result will not be shown.';
+export const CODEX_FAILED_TOOL_RESULT =
+  'Cut off — the turn this step ran in failed before its result came back.';
+
 /** The longest a refused follow-up is quoted back in the notice that says so. */
 export const CODEX_STEER_PREVIEW_MAX_CHARS = 60;
 

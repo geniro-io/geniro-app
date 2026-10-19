@@ -100,6 +100,19 @@ export class CodexSession implements TurnDriver {
    */
   readonly items = new Map<string, CodexItem>();
   /**
+   * The codex turn ids that ended stopped or failed — the turns whose frames
+   * may still arrive after them.
+   *
+   * codex does not end a command on `turn/interrupt`: the command runs on and
+   * reports under the stopped turn's id, often after the next turn opened.
+   * Notifications go to whichever driver is current, so the next turn would
+   * take that report as its own; a frame naming one of these turns does only
+   * the session's bookkeeping instead. On the session because the frames
+   * outlive the driver they belong to, and keyed by codex's id because they
+   * can land before the next turn's own id is known.
+   */
+  readonly endedTurns = new Set<string>();
+  /**
    * Server requests awaiting the user's verdict, by encoded id. Thread-scoped
    * rather than per-turn: a request left unanswered when its turn settles is
    * re-offered to the next turn, and its verdict has to find it there.

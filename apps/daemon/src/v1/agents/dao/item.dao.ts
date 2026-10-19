@@ -1817,6 +1817,29 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Every run that recorded a delegate recovery ref since `since`, once each.
+   * Every run's `subagent_info` rows are matched against the payload text, so
+   * this is a boot-time read, not a per-request one.
+   */
+  async subagentRecoveryRunIds(
+    since: Date,
+    txEm?: EntityManager,
+  ): Promise<string[]> {
+    const em = txEm ?? this.em.fork();
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('run_id')
+      .distinct()
+      .where('kind', '=', 'subagent_info')
+      .where('created_at', '>=', since.getTime())
+      .where('deleted_at', 'is', null)
+      .where('payload', 'like', '%"recovery":%')
+      .execute();
+    return rows.map((row) => row.run_id);
+  }
+
+  /**
    * One run's rows of `kinds`, optionally only those in `range` — the
    * structural rows a page of transcript is anchored by (`ChatHistoryService`)
    * and the run-wide readouts are folded from (`RunStateService`).
@@ -1825,14 +1848,6 @@ export class ItemDao extends BaseDao<Item> {
    * declarations, workflow announcements), which the `(runId, kind, seq)` index
    * serves without touching the transcript's text.
    */
-  async subagentRecoveryRunIds(txEm?: EntityManager): Promise<string[]> {
-    const rows = await this.getRepo(txEm).find(
-      { kind: 'subagent_info', payload: { $like: '%"recovery":%' } },
-      { fields: ['runId'], disableIdentityMap: true },
-    );
-    return [...new Set(rows.map((row) => row.runId))];
-  }
-
   async rowsOfKinds(
     runId: string,
     kinds: readonly ItemKind[],
@@ -1956,7 +1971,7 @@ export class ItemDao extends BaseDao<Item> {
     runId: string,
     afterSeq: number,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'seq' | 'nodeId' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'seq' | 'nodeId' | 'kind' | 'payload'>[]> {
     return this.getRepo(txEm).find(
       {
         runId,
@@ -1966,7 +1981,7 @@ export class ItemDao extends BaseDao<Item> {
       },
       {
         orderBy: { seq: 'asc' },
-        fields: ['seq', 'nodeId', 'payload'],
+        fields: ['seq', 'nodeId', 'kind', 'payload'],
         disableIdentityMap: true,
       },
     );

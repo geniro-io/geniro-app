@@ -100,8 +100,11 @@ export function blockStatusLabel(status: BlockStatus): string {
 
 export function StatusBadge({
   status,
+  title,
 }: {
   status: BlockStatus;
+  /** What the word means here, for a status a word alone cannot explain. */
+  title?: string;
 }): React.JSX.Element {
   return (
     <span
@@ -109,6 +112,7 @@ export function StatusBadge({
       // decision the shell makes per status — and a test that answers it by
       // matching utility classes re-answers it every time one is retuned.
       data-slot="block-status-badge"
+      title={title}
       className={cn(
         'rounded px-1.5 py-0.5 text-[10px] font-medium',
         STATUS_BADGE_CLASS[status],
@@ -133,16 +137,18 @@ export function StatusBadge({
  * and in the one place the eye lands first. `running` had a pill AND a spinner
  * beside it, saying it twice.
  *
- * `error` and `stopped` keep the pill, because those two are not
+ * `error`, `stopped` and `untracked` keep the pill, because those are not
  * self-evident from a glyph and are exactly the rows a reader is scanning for.
  */
 function BlockStatusMark({
   status,
+  title,
 }: {
   status: BlockStatus;
+  title?: string;
 }): React.JSX.Element {
   if (status === 'error' || status === 'stopped' || status === 'untracked') {
-    return <StatusBadge status={status} />;
+    return <StatusBadge status={status} title={title} />;
   }
   return (
     <span className="flex shrink-0 items-center">
@@ -589,6 +595,7 @@ export function BlockShell({
   eyebrowIcon,
   header,
   status,
+  statusTitle,
   collapsible = false,
   defaultOpen = false,
   toggleLabel,
@@ -612,6 +619,8 @@ export function BlockShell({
   /** Identity line inside the card header (avatars, names). */
   header: React.ReactNode;
   status: BlockStatus;
+  /** What {@link status} means for this block, when its pill shows a word. */
+  statusTitle?: string;
   /** A control sitting beside the header — outside the disclosure button. */
   headerAction?: React.ReactNode;
   /**
@@ -739,7 +748,7 @@ export function BlockShell({
         <span className="sr-only">{eyebrow}</span>
       </span>
       {header}
-      <BlockStatusMark status={status} />
+      <BlockStatusMark status={status} title={statusTitle} />
     </>
   );
   const headerClass =

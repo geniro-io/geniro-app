@@ -51,7 +51,9 @@ export function recoverCodexSubagent(
     !Number.isFinite(completedAt) ||
     completedAt <= 0 ||
     completedAt < startedAt ||
-    completedAt * 1000 < ref.launchedAtMs
+    // Turn dates are whole seconds but the launch is in milliseconds: an ending
+    // is too early only when its whole second ended before the launch.
+    (completedAt + 1) * 1000 <= ref.launchedAtMs
   ) {
     return null;
   }

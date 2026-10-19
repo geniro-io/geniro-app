@@ -21,7 +21,7 @@ import {
   qualifyOllamaEvent,
   validateOllamaModel,
 } from '../utils/ollama';
-import { delegateCloseEvent } from '../utils/open-delegates';
+import { delegateDeclarationEvent } from '../utils/open-delegates';
 import { listProcesses, type ProcessRow } from '../utils/process-descendants';
 import { repositoryRootOf } from '../utils/repository-root';
 import {
@@ -2812,12 +2812,7 @@ export abstract class AgentAdapter {
             mapped.push({ ...event, recovery: ref });
           } else {
             // Foreground work can lose its stream before its launching call returns.
-            mapped.push(event, {
-              ...delegateCloseEvent(id),
-              backgroundOpen: null,
-              backgroundOutcome: null,
-              recovery: ref,
-            });
+            mapped.push(event, delegateDeclarationEvent(id, { recovery: ref }));
           }
         }
         return mapped;
@@ -3123,7 +3118,11 @@ export abstract class AgentAdapter {
       get endedRunning() {
         return session.endedRunning;
       },
-      close: () => session.close(),
+      close: (cause) => session.close(cause),
+      noteCloseCause: (cause) => session.noteCloseCause?.(cause),
+      get closeCause() {
+        return session.closeCause ?? null;
+      },
       closed: session.closed,
     };
   }

@@ -181,12 +181,40 @@ describe('SubagentBlock', () => {
     };
     act(() => root.render(<TranscriptEntryView entry={block} />));
     expect(badge()?.textContent).toBe('untracked');
+    // Shut, the card still says what the bare word means.
+    expect(badge()?.getAttribute('title')).toContain('may still be running');
+    expect(
+      container.querySelector('[data-slot="subagent-untracked-summary"]')
+        ?.textContent,
+    ).toBe('May still be running');
     act(() => disclosure()?.click());
     expect(
       container.querySelector('[data-role="subagent-untracked"]')?.textContent,
     ).toContain('may still be running');
     expect(container.textContent).not.toContain('has not done anything yet');
     expect(container.querySelector('[data-role="working-row"]')).toBeNull();
+  });
+
+  it('says a delegate whose process ended is over, not that it may still run', () => {
+    const block = {
+      ...makeBlock({ withResult: false }),
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked' as const,
+      processEnded: true,
+      entries: [],
+    };
+    act(() => root.render(<TranscriptEntryView entry={block} />));
+    expect(badge()?.getAttribute('title')).toContain('process ended');
+    expect(
+      container.querySelector('[data-slot="subagent-untracked-summary"]')
+        ?.textContent,
+    ).toBe('Ended without reporting an outcome');
+    act(() => disclosure()?.click());
+    const line = container.querySelector(
+      '[data-role="subagent-untracked"]',
+    )?.textContent;
+    expect(line).toContain('process ended');
+    expect(line).not.toContain('may still be running');
   });
 
   it('OPENS a delegate that drew a findings card, with no press', () => {

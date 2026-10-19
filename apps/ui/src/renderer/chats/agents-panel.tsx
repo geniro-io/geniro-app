@@ -42,6 +42,7 @@ import {
   CHAT_AGENT_KEY,
   formatTokens,
   formatUsd,
+  subagentMayStillRun,
 } from './agent-activity';
 import {
   type AgentInstance,
@@ -70,6 +71,7 @@ import {
   RUN_STATUS_META,
   RunStatusIcon,
   RunStatusLabel,
+  untrackedExplanation,
 } from './run-status';
 import { RunWaterfall } from './run-waterfall';
 import type { ShellRun } from './shell-activity';
@@ -517,7 +519,16 @@ function ThreadRow({
   const cells = (
     <>
       {leading}
-      <RunStatusIcon status={thread.status} />
+      {thread.status === 'untracked' ? (
+        <span
+          data-slot="untracked-status"
+          className="flex shrink-0"
+          title={untrackedExplanation(thread.processEnded === true)}>
+          <RunStatusIcon status={thread.status} />
+        </span>
+      ) : (
+        <RunStatusIcon status={thread.status} />
+      )}
       {openSubagent ? (
         <button
           type="button"
@@ -906,8 +917,10 @@ function ConversationSections({
   const running = subagents.filter(
     (thread) => thread.status === 'running',
   ).length;
+  // Only the ones that may still be running: a delegate whose process ended
+  // is finished work whose outcome is unknown.
   const untracked = subagents.filter(
-    (thread) => thread.status === 'untracked',
+    (thread) => thread.status === 'untracked' && subagentMayStillRun(thread),
   ).length;
   const progress = taskProgress(tasks);
   const toggle = (kind: ConversationSectionKind, wasOpen: boolean): void =>

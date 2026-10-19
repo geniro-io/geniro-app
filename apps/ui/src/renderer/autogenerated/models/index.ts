@@ -5034,6 +5034,12 @@ export interface RunDelegateState {
      */
     status: RunDelegateStatus;
     /**
+     * an untracked delegate whose hosting process is gone: its work is over, only its outcome is unknown
+     * @type {boolean}
+     * @memberof RunDelegateState
+     */
+    processEnded: boolean;
+    /**
      * 
      * @type {number}
      * @memberof RunDelegateState

@@ -10891,10 +10891,61 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     );
     expect(closes).toHaveLength(1);
     expect(closes[0]?.payload).toContain('"id":"task-a"');
-    // The delegate never reported its ending, so its outcome remains unknown.
+    // The delegate never reported its ending, so its outcome remains unknown;
+    // its work is over with the process that hosted it.
     expect(closes[0]?.payload).toContain('"backgroundOpen":false');
+    expect(closes[0]?.payload).toContain('"trackingLost":"process-ended"');
     // And the count every row reads goes with it, in the same breath.
     expect(statuses.at(-1)?.subagentsOut).toBe(0);
+  });
+
+  it('closes a delegate the user’s Stop cut off as stopped', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'subagent_info',
+      id: 'task-a',
+      label: 'Review: bugs dimension',
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: true,
+      backgroundOutcome: null,
+    });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    await service.cancel(run.id);
+    await drain();
+
+    const closes = itemDao.items.filter(
+      (item) =>
+        item.kind === 'subagent_info' &&
+        item.payload.includes('"backgroundOpen":false'),
+    );
+    expect(closes).toHaveLength(1);
+    expect(closes[0]?.payload).toContain('"backgroundOutcome":"stopped"');
+    expect(closes[0]?.payload).not.toContain('trackingLost');
   });
 
   it('leaves a delegate the CLI already closed alone', async () => {

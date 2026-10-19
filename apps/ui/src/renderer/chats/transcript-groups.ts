@@ -435,16 +435,19 @@ export interface SubagentBlockEntry {
    * See `BackgroundUnitOutcome` in the daemon's `adapter.types.ts`.
    */
   backgroundOutcome: BackgroundOutcome | null;
+  /**
+   * The daemon can still look its ending up — a recovery ref stands — so a
+   * close naming no outcome reads `untracked`; without one it reads as it
+   * always did. See {@link SubagentDeclaration.recoverable}.
+   */
+  recoverable: boolean;
+  /**
+   * An untracked delegate whose hosting process is gone: its work is over and
+   * only how it ended is unknown, so it counts as settled.
+   */
+  processEnded: boolean;
   /** Status read from the daemon's whole-conversation snapshot. */
   daemonStatus?: 'running' | BackgroundOutcome;
-  /**
-   * Known from its OWN rows alone — no launch and no declaration of it in the
-   * loaded window — and the thread that launched it has spoken since its last
-   * row. With the run reporting no delegate out, that is a delegate whose
-   * ending is simply older than what is loaded; see {@link subagentBlockStatus}.
-   * Optional so a block built by hand elsewhere reads as not outlived.
-   */
-  outlived?: boolean;
   /**
    * That result was an error — `isError` on the `tool_result` payload, which
    * `apps/daemon/src/v1/agents/utils/event-to-item.ts` persists verbatim.
@@ -511,27 +514,13 @@ export interface SubagentBlockEntry {
    */
   stepsUnavailableReason: string | null;
   /**
-   * A turn ended after this block's last row — so whatever was coming has
-   * come. Same rule, and the same reason, as {@link ToolGroupEntry.closed}: a
-   * delegate with no result is only evidence of work in flight while its turn
-   * could still be running, and a spinner past that claims work that stopped.
-   *
-   * TWIN PARSER: `foldRunDelegates`' `endings` in
-   * apps/daemon/src/v1/agents/utils/run-state-folds.ts closes a delegate off
-   * the window on a turn ending too — measured from the launch rather than the
-   * block's last row, and not counting an `insideTurn` completion.
-   */
-  closed: boolean;
-  /**
    * When this delegate last put anything on screen (ms), or null if it never
    * has — the newest row inside the block, else its own launch.
    *
-   * Read against the moment the RUN settled, which is a different question from
-   * {@link closed} and cannot be answered by it: `closed` is a seq comparison
-   * against a turn-end ITEM, and the paths that settle a run without writing
-   * one (a cancel) or that settle it wrongly (a stale `completed`) leave no seq
-   * to compare with. A timestamp is what makes "this delegate has spoken since"
-   * answerable at all.
+   * Read against the moment the RUN settled: the paths that settle a run
+   * without writing a turn-end item (a cancel) or that settle it wrongly (a
+   * stale `completed`) leave no seq to compare with. A timestamp is what makes
+   * "this delegate has spoken since" answerable at all.
    */
   lastRowAt: number | null;
   entries: TranscriptEntry[];
@@ -1271,11 +1260,18 @@ export function subagentSpokeSince(
   return block.lastRowAt !== null && block.lastRowAt > runSettledAt;
 }
 
-/** The daemon resolves missing endings; local rows supply explicit outcomes. */
+/**
+ * How a delegate stands. The daemon's whole-conversation reading wins; without
+ * it, the block's own rows supply explicit outcomes, and a parent settling or
+ * disappearing is left for that reading to resolve.
+ *
+ * TWIN PARSER: `delegateStatus` in
+ * apps/daemon/src/v1/agents/utils/run-state-folds.ts — a close naming no
+ * outcome reads `untracked` only while a recovery ref stands, and `completed`
+ * otherwise.
+ */
 export function subagentBlockStatus(
   block: SubagentBlockEntry,
-  _runSettledAt: RunSettleAt = null,
-  _delegatesOut: number | null = null,
 ): 'running' | BackgroundOutcome {
   if (block.daemonStatus !== undefined) {
     return block.daemonStatus;
@@ -1289,11 +1285,12 @@ export function subagentBlockStatus(
   if (block.backgroundOpen === true) {
     return 'running';
   }
-  if (block.backgroundOpen === null && block.returned) {
+  if (block.backgroundOpen === false) {
+    return block.recoverable ? 'untracked' : 'completed';
+  }
+  if (block.returned) {
     return 'completed';
   }
-  // A parent settling or disappearing does not report how its child ended.
-  // The daemon's whole-conversation snapshot resolves missing endings.
   return 'running';
 }
 
@@ -2057,6 +2054,9 @@ export function buildSubagentBlocks(
       stepsUnavailableReason: declared?.stepsUnavailableReason ?? null,
       backgroundOpen: declared?.backgroundOpen ?? null,
       backgroundOutcome: declared?.backgroundOutcome ?? null,
+      recoverable: declared?.recoverable ?? false,
+      processEnded:
+        declared?.backgroundOutcome === 'untracked' && declared.processEnded,
       returned: launch?.result != null,
       failed: payload?.isError === true,
       // Only stringify a body that EXISTS. `toolResultText(null)` returns
@@ -2065,7 +2065,6 @@ export function buildSubagentBlocks(
       result: body == null ? null : toolResultText(body),
       // Decided in the pass below, once the delegate's rows are known.
       resultIsOwn: false,
-      closed: false,
       lastRowAt: null,
       entries: [],
     };
@@ -2134,38 +2133,11 @@ export function buildSubagentBlocks(
     return out;
   }
 
-  const turnEnds = items.filter((item) => TURN_END_KINDS.has(item.kind));
   for (const block of blocks.values()) {
-    // Scoped to the delegating NODE and its CALL, not the whole run. Under
-    // graph fan-out several nodes settle independently, so an unscoped read
-    // let node A's `turn_complete` mark node B's still-working delegate
-    // `stopped` — the failure showing up exactly when several agents run at
-    // once, which is when this feature matters most. A node's calls are the
-    // same fan-out one level down: each is a conversation of its own, and one
-    // of them ending says nothing about a delegate another one launched.
     const lastSeq = Math.max(
       maxSeqOf(block.entries),
       anchorSeq.get(block.id) ?? 0,
     );
-    block.closed = turnEnds.some(
-      (item) =>
-        item.nodeId === block.nodeId &&
-        payloadString(item.payload, 'callId') === block.callId &&
-        item.seq > lastSeq,
-    );
-    // The same scoping, asked of ANY row of the launching thread — a delegate
-    // it did not wait on leaves it free to speak, so this alone proves nothing;
-    // it becomes evidence only beside the run's own count of delegates out.
-    block.outlived =
-      !launches.has(block.id) &&
-      !declarations.has(block.id) &&
-      items.some(
-        (item) =>
-          item.seq > lastSeq &&
-          item.nodeId === block.nodeId &&
-          payloadString(item.payload, 'callId') === block.callId &&
-          subagentIdOf(item) === null,
-      );
     // Whose answer the result is — see {@link SubagentBlockEntry.resultIsOwn}.
     // `lastSeq` already folds in `anchorSeq`, which for an answered block IS
     // that answer's seq, so `lastSeq > answered` says exactly "a row of this

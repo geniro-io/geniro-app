@@ -791,7 +791,8 @@ describe('subagentThreadsByAgent', () => {
       stepsUnavailableReason: null,
       backgroundOpen: null,
       backgroundOutcome: null,
-      closed: false,
+      recoverable: false,
+      processEnded: false,
       entries: [],
       ...over,
     };
@@ -836,31 +837,48 @@ describe('subagentThreadsByAgent', () => {
   });
 
   it('translates each block state into the panel status vocabulary', () => {
-    const statusOf = (
-      over: Partial<SubagentBlockEntry>,
-      runSettledAt: number | null = null,
-    ): string | undefined =>
-      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY, runSettledAt).get(
+    const statusOf = (over: Partial<SubagentBlockEntry>): string | undefined =>
+      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY).get(
         CHAT_AGENT_KEY,
       )?.[0]?.status;
 
     expect(statusOf({})).toBe('running');
     expect(statusOf({ returned: true })).toBe('completed');
     expect(statusOf({ failed: true, returned: true })).toBe('failed');
-    // Parent state alone cannot end a child; the daemon supplies its status.
-    expect(statusOf({ closed: true })).toBe('running');
     expect(statusOf({ daemonStatus: 'untracked' })).toBe('untracked');
     expect(statusOf({ daemonStatus: 'stopped' })).toBe('cancelled');
-    expect(statusOf({ lastRowAt: 500 }, 1_000)).toBe('running');
-    // …and the panel reads the SAME exception the block does: a delegate whose
-    // rows are newer than the settle is working, so the panel cannot report it
-    // cancelled while the block beside it draws a spinner.
-    expect(statusOf({ lastRowAt: 2_000 }, 1_000)).toBe('running');
+  });
+
+  it('reads a close that named no outcome as untracked only while the delegate can be recovered', () => {
+    const statusOf = (over: Partial<SubagentBlockEntry>): string | undefined =>
+      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY).get(
+        CHAT_AGENT_KEY,
+      )?.[0]?.status;
+
+    // Every close written before recovery refs existed has this shape.
+    expect(statusOf({ backgroundOpen: false })).toBe('completed');
+    expect(statusOf({ backgroundOpen: false, recoverable: true })).toBe(
+      'untracked',
+    );
+  });
+
+  it('carries a delegate’s ended process onto its thread, only while it is untracked', () => {
+    const threadOf = (over: Partial<SubagentBlockEntry>) =>
+      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY).get(
+        CHAT_AGENT_KEY,
+      )?.[0];
+
+    expect(
+      threadOf({ daemonStatus: 'untracked', processEnded: true }),
+    ).toMatchObject({ status: 'untracked', processEnded: true });
+    expect(
+      threadOf({ daemonStatus: 'completed', processEnded: true }),
+    ).not.toHaveProperty('processEnded');
   });
 
   it('reports what the CLI said a settled delegate CAME TO, not merely that it stopped', () => {
     const statusOf = (over: Partial<SubagentBlockEntry>): string | undefined =>
-      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY, null).get(
+      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY).get(
         CHAT_AGENT_KEY,
       )?.[0]?.status;
 

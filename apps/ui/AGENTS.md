@@ -188,7 +188,7 @@ Anchors and run state:
 - Whatever replaces anchors calls `forget`. A page landing after a live answer merges.
 - Rows refused by `addItem`'s away-from-tail guard bring no anchors.
 - Never rebuild a call heuristically from its later rows: it draws ghost cards.
-- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window supplies details; the daemon decides what has ENDED: a shell, delegate or call the page reads as running that began at or before the read's `throughSeq` and that the read says is over, is over (`withoutDaemonEndedShells`, `withDaemonDelegateEndings`, `callEndedPerDaemon`). The open turns' unanswered calls (`openToolCalls`) are folded in with the page, so a foreground command shows while the reader is elsewhere. Open requests off the tail are the daemon's too.
+- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window supplies details; the daemon decides what has ENDED: a shell, delegate or call the page reads as running that began at or before the read's `throughSeq` and that the read says is over, is over (`withoutDaemonEndedShells`, `applyDaemonReadings` in `durable-transcript.ts`, `callEndedPerDaemon`). The open turns' unanswered calls (`openToolCalls`) are folded in with the page, so a foreground command shows while the reader is elsewhere. Open requests off the tail are the daemon's too.
 
 Jumps (search, global search, timeline, the Agents chip) — `chats/use-transcript-jump.ts`, DOM contract in `chats/jump-target.ts`:
 
@@ -232,7 +232,7 @@ One home for each concern:
 - `settled-status.ts`: only a live terminal item mirrors its status onto the run row. A replay takes one reading from its last item (`reconcileFromTail`).
 - A `turn_complete` stamped `insideTurn` is not terminal. Never mirror it.
 - `RunStatusEvent.noTerminalItem` lets `use-chat-run.ts` end `streaming` and drain the queue.
-- A run settling is a moment, not a flag. `settleMomentOf` reads the last terminal item first and the row's `updatedAt` only as a fallback. `subagentBlockStatus` and `taskCardIsLive` use that moment.
+- A run settling is a moment, not a flag. `settleMomentOf` reads the last terminal item first and the row's `updatedAt` only as a fallback. `subagentSpokeSince` and `taskCardIsLive` use that moment. A sub-agent's own status (`subagentBlockStatus`) reads no run state at all: its rows, else the daemon's whole-conversation reading (`daemonSubagentReadings` + `applyDaemonReadings` in `durable-transcript.ts`), which is the only place a missing ending is resolved.
 - A null activity means "working, nothing named". Both live rows fall back to the one `STANDING_ACTIVITY`. `WORKING_WORDS[0]` is its twin.
 - Live clocks count from durable-row timestamps, never from their own mount.
 - The chat live-plane key is `CHAT_LIVE_KEY` (`liveTextKey`), never the daemon's owner key `agent`. Node id is the discriminator.

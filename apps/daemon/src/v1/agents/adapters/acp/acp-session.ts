@@ -1,4 +1,7 @@
-import { delegateCloseEvent } from '../../utils/open-delegates';
+import {
+  delegateCloseEvent,
+  delegateDeclarationEvent,
+} from '../../utils/open-delegates';
 import type {
   AgentEvent,
   AgentTurnInput,
@@ -932,7 +935,8 @@ export class AcpSession implements TurnDriver {
       return this.delegateConversations.get(id) ?? null;
     }
     // Continued by a later delegate: the one that held it was cut off, and
-    // nothing it says from here on is its own. Marked untracked — and never
+    // nothing it says from here on is its own. Marked stopped, with recovery
+    // off since its record now belongs to the continuation — and never
     // reported to the agent, which hears about the work from its continuation.
     for (const [other, conversation] of this.delegateConversations) {
       if (
@@ -941,17 +945,12 @@ export class AcpSession implements TurnDriver {
         !this.closedDelegates.has(other)
       ) {
         this.delegateConversations.delete(other);
-        const closed = this.closeDelegate(other, 'untracked', null);
+        const closed = this.closeDelegate(other, 'stopped', null);
         this.emit({ ...closed, recovery: null });
       }
     }
     this.delegateConversations.set(id, found);
-    this.emit({
-      ...delegateCloseEvent(id),
-      backgroundOpen: null,
-      backgroundOutcome: null,
-      subagentSessionId: found,
-    });
+    this.emit(delegateDeclarationEvent(id, { subagentSessionId: found }));
     return found;
   }
 

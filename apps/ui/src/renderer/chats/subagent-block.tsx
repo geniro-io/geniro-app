@@ -13,12 +13,8 @@ import {
   blockStatusLabel,
   BlockTitle,
 } from './block-shell';
-import {
-  DelegatesOutContext,
-  formatElapsed,
-  RunSettledContext,
-  WorkingRow,
-} from './live-row';
+import { formatElapsed, WorkingRow } from './live-row';
+import { untrackedExplanation, untrackedSummary } from './run-status';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
 import { SubagentMetaChips } from './subagent-meta';
 import { taskProgress } from './task-payload';
@@ -27,7 +23,6 @@ import {
   type CardEntry,
   countTools,
   isCardEntry,
-  type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
   subagentTitle,
@@ -35,12 +30,8 @@ import {
 } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
 
-function shellStatusOf(
-  block: SubagentBlockEntry,
-  runSettledAt: RunSettleAt,
-  delegatesOut: number | null,
-): BlockStatus {
-  switch (subagentBlockStatus(block, runSettledAt, delegatesOut)) {
+function shellStatusOf(block: SubagentBlockEntry): BlockStatus {
+  switch (subagentBlockStatus(block)) {
     case 'completed':
       return 'done';
     case 'failed':
@@ -427,13 +418,10 @@ export function SubagentThread({
   factsStated?: boolean;
 }): React.JSX.Element {
   const title = subagentTitle(block);
-  // Read from the SAME source the header's own spinner uses, so the block
-  // cannot show a live row under a header that says the delegate has stopped.
-  const runSettledAt = useContext(RunSettledContext);
-  const delegatesOut = useContext(DelegatesOutContext);
   // ONE reading for both the live row and the ending below it, so the thread
-  // can never show a spinner and a "completed" line at once.
-  const status = shellStatusOf(block, runSettledAt, delegatesOut);
+  // can never show a spinner and a "completed" line at once — and the same
+  // reading the header's own status uses.
+  const status = shellStatusOf(block);
   const working = status === 'running';
   return (
     <NestedThreadContext.Provider value={true}>
@@ -492,8 +480,11 @@ export function SubagentThread({
         />
       ) : null}
       {status === 'untracked' ? (
-        <p data-role="subagent-untracked" className="m-0 text-xs text-warning">
-          Tracking was lost. This sub-agent may still be running.
+        <p
+          data-role="subagent-untracked"
+          className="m-0 flex items-center gap-1.5 text-[11px] text-warning">
+          <BlockStatusIcon status={status} className="size-3" />
+          <span>{untrackedExplanation(block.processEnded)}</span>
         </p>
       ) : (
         <SubagentEnded block={block} status={status} />
@@ -534,26 +525,33 @@ export const SubagentBlock = memo(function SubagentBlock({
   chatAgentName?: string | null;
 }): React.JSX.Element {
   const openDetail = useContext(SubagentDetailContext);
-  const runSettledAt = useContext(RunSettledContext);
-  const delegatesOut = useContext(DelegatesOutContext);
   const title = subagentTitle(block);
   const toolCount = countTools(block.entries);
   const tasks = subagentTaskProgress(block);
   const cards = renderCards(block.entries);
   const cardSummary = renderCardSummary(cards);
+  const status = shellStatusOf(block);
+  const untracked = status === 'untracked';
   return (
     <div data-role="subagent-block" data-subagent={block.id} className="w-full">
       <BlockShell
         eyebrow="Sub-agent"
         eyebrowIcon={<Bot aria-hidden="true" className="size-3" />}
-        status={shellStatusOf(block, runSettledAt, delegatesOut)}
+        status={status}
+        statusTitle={
+          untracked ? untrackedExplanation(block.processEnded) : undefined
+        }
         collapsible
         memoryKey={`subagent:${block.id}`}
         defaultOpen={cards.length > 0}
         summary={
-          cardSummary === null ? undefined : (
+          cardSummary !== null ? (
             <span data-slot="subagent-card-summary">{cardSummary}</span>
-          )
+          ) : untracked ? (
+            <span data-slot="subagent-untracked-summary">
+              {untrackedSummary(block.processEnded)}
+            </span>
+          ) : undefined
         }
         toggleLabel={`Show ${title}'s conversation`}
         header={

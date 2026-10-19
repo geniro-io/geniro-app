@@ -22,6 +22,7 @@ import type {
   SpawnFn,
   StoppedCommands,
 } from '../utils/spawn-cli';
+import type { SubagentRecoveryRefSchema } from '../utils/subagent-recovery-ref';
 
 // ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
 // The two names that identify OUR server and OUR tools inside a CLI's config
@@ -468,15 +469,16 @@ export interface AgentSessionReadInput {
 }
 
 /** Durable identity used only to read a lost delegate's existing CLI record. */
-export interface SubagentRecoveryRef {
-  agentKind: AgentKind;
-  sessionId: string;
-  cwd: string;
-  configDir: string | null;
-  toolCallId: string;
-  launchedAtMs: number;
-  childSessionId: string | null;
-}
+export type SubagentRecoveryRef = z.infer<typeof SubagentRecoveryRefSchema>;
+
+export type SubagentTrackingLost = 'process-ended';
+
+/**
+ * Why a session is closed, when it decides how the work still out ended:
+ * `user-stop` — the user's Stop, so every delegate it cuts off is `stopped`.
+ * Any other close leaves them `untracked`, its process having ended.
+ */
+export type SessionCloseCause = 'user-stop';
 
 export type RecoveredSubagentOutcome = Exclude<
   BackgroundUnitOutcome,
@@ -1349,6 +1351,12 @@ type AgentEventBody =
       subagentSessionId?: string;
       /** Internal recovery metadata; the renderer does not interpret it. */
       recovery?: SubagentRecoveryRef | null;
+      /**
+       * On an `untracked` close the daemon wrote: `process-ended` when the
+       * process hosting the delegate is gone, so its work is over and only its
+       * outcome is unknown. Absent when tracking was lost while it may still run.
+       */
+      trackingLost?: SubagentTrackingLost;
     }
   | {
       /**
@@ -3469,8 +3477,14 @@ export interface AgentSession {
    *
    * This is the ONLY thing that stops a run-scoped process, so whoever holds
    * the session owns that obligation: nothing else will reap it.
+   *
+   * `cause` says why, when that decides how the work still out ended — see
+   * {@link SessionCloseCause}.
    */
-  close(): void;
+  close(cause?: SessionCloseCause): void;
+  /** See `CliSession.noteCloseCause` — the one place a close's cause is kept. */
+  noteCloseCause?(cause: SessionCloseCause | null): void;
+  readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
 }

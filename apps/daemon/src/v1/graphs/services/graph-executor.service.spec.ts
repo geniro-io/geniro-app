@@ -34,6 +34,7 @@ import type {
   AgentTurnInput,
   ApprovalResolution,
   InstalledApprovalSupport,
+  SessionCloseCause,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
@@ -781,6 +782,7 @@ class FakeAdapter {
     this.sessionsOpened += 1;
     let live: FakeTurn | null = null;
     let closed = false;
+    let closeCause: SessionCloseCause | null = null;
     let resolveClosed!: () => void;
     const closedPromise = new Promise<void>((resolve) => {
       resolveClosed = resolve;
@@ -802,6 +804,7 @@ class FakeAdapter {
         if (!canTakeTurn()) {
           return null;
         }
+        closeCause = null;
         const turn = this.start(turnInput, onEvent);
         live = this.starts[this.starts.length - 1]!;
         live.emitOffTurn = (event) => opts.onBetweenTurnEvent?.(event);
@@ -821,10 +824,17 @@ class FakeAdapter {
       runningCommands: [],
       endedRunning: null,
       pid: null,
-      close: () => {
+      noteCloseCause: (cause: SessionCloseCause | null) => {
+        closeCause = cause;
+      },
+      get closeCause() {
+        return closeCause;
+      },
+      close: (cause?: SessionCloseCause) => {
         if (closed) {
           return;
         }
+        closeCause ??= cause ?? null;
         closed = true;
         if (live) {
           live.sessionClosed = true;
@@ -11820,12 +11830,43 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     // Only what was still out: the delegate that reported back is left alone.
     expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-out']);
     expect(stopped[0]!.nodeId).toBe('a');
+    expect(payloadOf(stopped[0]!).trackingLost).toBe('process-ended');
     const rows = rowsOf(itemDao, run.id);
     const terminal = rows.findIndex(
       (row) => row.kind === 'turn_complete' && row.nodeId === null,
     );
     expect(terminal).toBeGreaterThan(-1);
     expect(rows.indexOf(stopped[0]!)).toBeGreaterThan(terminal);
+  });
+
+  it('closes a delegate out when the user stopped the run as stopped, whenever its process goes', async () => {
+    const { service, claude, itemDao, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const turn = claude.starts[0]!;
+    turn.emit(delegate('task-out', true));
+    completeTurn(turn, 'done');
+    await drain();
+
+    await service.cancel(run.id);
+    // The processes are kept past the Stop; the close comes later.
+    sessions.closeRun(run.id);
+    await drain();
+
+    const closes = rowsOf(itemDao, run.id).filter(
+      (row) =>
+        row.kind === 'subagent_info' &&
+        payloadOf(row).id === 'task-out' &&
+        payloadOf(row).backgroundOpen === false,
+    );
+    expect(closes.map((row) => payloadOf(row).backgroundOutcome)).toEqual([
+      'stopped',
+    ]);
   });
 
   it('announces the run’s detached commands and background delegates as their counts move', async () => {

@@ -1,6 +1,6 @@
 import { awakeTimeout, type AwakeTimer } from '../../../../utils/sleep-watch';
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
-import { delegateCloseEvent } from '../../utils/open-delegates';
+import { delegateDeclarationEvent } from '../../utils/open-delegates';
 import type {
   AgentEvent,
   AgentReportedCommand,
@@ -4207,12 +4207,9 @@ export class AcpTurnDriver {
       this.session.childSessions.set(spawn.childSessionId, launch);
       this.session.noteDelegateLaunch(launch);
       return [
-        {
-          ...delegateCloseEvent(launch),
-          backgroundOpen: null,
-          backgroundOutcome: null,
+        delegateDeclarationEvent(launch, {
           subagentSessionId: spawn.childSessionId,
-        },
+        }),
       ];
     }
     const end = readSubagentEnd(update);

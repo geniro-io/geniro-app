@@ -4594,12 +4594,6 @@ export function Chats({
       activeRun && activeRun.analysisSourceRunId == null ? activeRun.id : null,
     refreshKey: analysisGeneration,
   });
-  /**
-   * How many delegates the open run reports out — the daemon's fold over every
-   * declaration the run wrote, which a block the loaded window knows only by
-   * its rows cannot see (`subagentBlockStatus`'s `delegatesOut`).
-   */
-  const activeDelegatesOut = activeRun?.subagentsOut ?? null;
   // The repository a TASK run's worktree was cut from, for the header chip —
   // asked only for a task's run, whose folder geniro named by the task's id.
   const taskWorktreeOf = useWorktreeOrigin(
@@ -5740,8 +5734,8 @@ export function Chats({
    * that had finished speaking, and swallowed its turn-end notification with it.
    */
   const subagentRunning = useMemo(
-    () => anySubagentRunning(durableEntries, runStoppedAt, activeDelegatesOut),
-    [durableEntries, runStoppedAt, activeDelegatesOut],
+    () => anySubagentRunning(durableEntries, runStoppedAt),
+    [durableEntries, runStoppedAt],
   );
   /**
    * The badge reading WITHOUT the background-command clause — what the run
@@ -6478,13 +6472,11 @@ export function Chats({
         subagentThreadsByAgent(
           collectSubagentBlocks(durableEntries),
           CHAT_AGENT_KEY,
-          runStoppedAt,
-          activeDelegatesOut,
         ),
         runState.delegates,
         CHAT_AGENT_KEY,
       ),
-    [durableEntries, runStoppedAt, activeDelegatesOut, runState.delegates],
+    [durableEntries, runState.delegates],
   );
   const agents = useMemo((): AgentDisplay[] => {
     if (!activeRun) {
@@ -8475,7 +8467,6 @@ export function Chats({
         // `thread-ui-memory.ts`.
         threadId={activeRunId}
         runSettledAt={activeRunSettledAt}
-        delegatesOut={activeDelegatesOut}
         callConversations={callConversations}
         applyRecommendations={applyRecommendations}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>

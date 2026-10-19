@@ -9,7 +9,6 @@ import {
   callResultStatus,
   conversationRoot,
   resolveCallChains,
-  type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
   subagentTitle,
@@ -261,6 +260,12 @@ interface AgentThreadFields {
   label: string;
   status: RunStatusKind;
   /**
+   * For an `untracked` SUB-AGENT: its hosting process has ended, so its work
+   * is over and only its outcome is unknown — settled, unlike one that may
+   * still be running.
+   */
+  processEnded?: boolean;
+  /**
    * Resume handle for a call thread's terminal (from its call_result item);
    * null for main threads — the daemon resolves those from node_state — and
    * always null for a sub-agent, which never had one.
@@ -329,6 +334,18 @@ interface AgentThreadFields {
  * conversation it holds is a call thread, keyed by its call id.
  */
 export const MAIN_THREAD_ID = 'main';
+
+/**
+ * Whether a sub-agent thread may still be working: running, or untracked
+ * while its process lives. The one reading every surface that counts live
+ * delegates uses, so an instance cannot read finished and live at once.
+ */
+export function subagentMayStillRun(thread: AgentThread): boolean {
+  return (
+    thread.status === 'running' ||
+    (thread.status === 'untracked' && thread.processEnded !== true)
+  );
+}
 
 /**
  * The display threads an agent's activity implies: its main conversation
@@ -400,13 +417,10 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
 export function subagentThreadsByAgent(
   blocks: readonly SubagentBlockEntry[],
   chatAgentKey: string,
-  runSettledAt: RunSettleAt = null,
-  /** The run's own count of delegates out — see `subagentBlockStatus`. */
-  delegatesOut: number | null = null,
 ): Map<string, AgentThread[]> {
   const byAgent = new Map<string, AgentThread[]>();
   for (const block of blocks) {
-    const status = subagentBlockStatus(block, runSettledAt, delegatesOut);
+    const status = subagentBlockStatus(block);
     const key = block.nodeId ?? chatAgentKey;
     const threads = byAgent.get(key) ?? [];
     threads.push({
@@ -426,6 +440,9 @@ export function subagentThreadsByAgent(
               : status === 'untracked'
                 ? 'untracked'
                 : 'running',
+      ...(status === 'untracked' && block.processEnded
+        ? { processEnded: true }
+        : {}),
       sessionId: null,
       callId: block.callId,
     });

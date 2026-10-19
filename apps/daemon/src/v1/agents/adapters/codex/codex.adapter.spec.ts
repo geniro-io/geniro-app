@@ -14,6 +14,7 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { clearSecrets, redactSecrets } from '../../../diagnostics/utils/redact';
 import { AgentKind } from '../../../runs/runs.types';
+import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import { MAX_ANSWER_LENGTH } from '../../chat.types';
 import type { AgentVersionService } from '../../services/agent-version.service';
 import type { ProcessRegistry } from '../../services/process-registry';
@@ -1728,5 +1729,101 @@ describe('CodexAdapter.recoverSubagent', () => {
     const adapter = adapterWith({ groupSpawnFn: server.groupSpawnFn });
     expect(await adapter.recoverSubagent({ ...ref, ...invalid })).toBeNull();
     expect(server.calls).toHaveLength(0);
+  });
+});
+
+describe('CodexAdapter sub-agent recovery references', () => {
+  const CHILD = '01a0e3aa-7dc4-7703-8a60-497958241fd2';
+  const TURN = '01a0e3aa-959f-7493-8c1f-01cff8862a2a';
+
+  /** A turn past its handshake and thread start, with the child to feed. */
+  function openTurn(): { child: FakeChild; events: AgentEvent[] } {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    adapterWith({ spawn }).start({ prompt: 'go', cwd: '/repo' }, (event) =>
+      events.push(event),
+    );
+    const sent = (method: string): { id: number } =>
+      child.stdin.written
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as { id: number; method?: string })
+        .find((frame) => frame.method === method)!;
+    const reply = (id: number, result: unknown): void =>
+      child.stdout.emitData(`${JSON.stringify({ id, result })}\n`);
+    reply(sent('initialize').id, {});
+    reply(sent('thread/start').id, { thread: { id: THREAD } });
+    reply(sent('turn/start').id, { turn: { id: TURN } });
+    return { child, events };
+  }
+
+  function itemStarted(child: FakeChild, item: Record<string, unknown>): void {
+    child.stdout.emitData(
+      `${JSON.stringify({
+        method: 'item/started',
+        params: { threadId: THREAD, turnId: TURN, item },
+      })}\n`,
+    );
+  }
+
+  function infoOf(events: AgentEvent[], id: string): unknown {
+    return events.find(
+      (event) => event.type === 'subagent_info' && event.id === id,
+    ) as { recovery?: SubagentRecoveryRef | null } | undefined;
+  }
+
+  it('names the native child thread on the reference of a subAgentActivity launch', () => {
+    const { child, events } = openTurn();
+    itemStarted(child, {
+      type: 'subAgentActivity',
+      id: 'call_activity',
+      kind: 'started',
+      agentThreadId: CHILD,
+      agentPath: '/root/worker',
+    });
+
+    expect(infoOf(events, 'call_activity')).toMatchObject({
+      recovery: {
+        agentKind: AgentKind.Codex,
+        sessionId: THREAD,
+        toolCallId: 'call_activity',
+        childSessionId: CHILD,
+      },
+    });
+  });
+
+  it('names the native child thread on the reference of a collab spawn', () => {
+    const { child, events } = openTurn();
+    child.stdout.emitData(
+      `${JSON.stringify({
+        method: 'item/completed',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          item: {
+            type: 'collabAgentToolCall',
+            id: 'call_spawn',
+            tool: 'spawnAgent',
+            status: 'completed',
+            receiverThreadIds: [CHILD],
+            agentsStates: { [CHILD]: { status: 'running' } },
+          },
+        },
+      })}\n`,
+    );
+
+    expect(
+      events.filter(
+        (event) => event.type === 'subagent_info' && event.id === 'call_spawn',
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        recovery: expect.objectContaining({
+          sessionId: THREAD,
+          toolCallId: 'call_spawn',
+          childSessionId: CHILD,
+        }),
+      }),
+    );
   });
 });

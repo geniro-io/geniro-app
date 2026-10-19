@@ -13,6 +13,7 @@ import type {
   AgentSession,
   AgentTurnHandle,
   AgentTurnInput,
+  SessionCloseCause,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { KeptProcessRoot } from '../chat.types';
@@ -320,7 +321,12 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   >();
   private shuttingDown = false;
   private readonly closeListeners = new Set<
-    (runId: string, interrupted: boolean, exited: boolean) => void
+    (
+      runId: string,
+      interrupted: boolean,
+      exited: boolean,
+      cause: SessionCloseCause | null,
+    ) => void
   >();
   /** See {@link onIdleFarewell} — one listener, not a set: it is a question put
    *  to the process, and the close waits for it. */
@@ -374,9 +380,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * closed ({@link worksOffTurn}) — the difference between housekeeping and
    * cutting a running agent off, which the listener cannot see from here and
    * which decides whether the transcript owes the user a sentence.
+   *
+   * `cause` is the one {@link close} was given, so the listener closes the
+   * work still out the way the session did; null for every other ending.
    */
   onClosed(
-    listener: (runId: string, interrupted: boolean, exited: boolean) => void,
+    listener: (
+      runId: string,
+      interrupted: boolean,
+      exited: boolean,
+      cause: SessionCloseCause | null,
+    ) => void,
   ): void {
     this.closeListeners.add(listener);
   }
@@ -447,6 +461,8 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     onHeldApproval?: CliSessionOptions['onHeldApproval'],
   ): AgentTurnHandle {
     const existing = this.entries.get(runId);
+    // Asked to work again, replaced or reused: a later close is not the Stop's.
+    existing?.session.noteCloseCause?.(null);
     if (
       existing !== undefined &&
       existing.stale !== null &&
@@ -578,10 +594,25 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * commands owes the key's next turn a note quoting it ("its turn was
    * retried").
    */
-  close(runId: string, reason: string): void {
+  close(runId: string, reason: string, cause?: SessionCloseCause): void {
     const entry = this.entries.get(runId);
     if (entry) {
-      this.closeEntry(runId, entry, reason);
+      this.closeEntry(runId, entry, reason, true, cause);
+    }
+  }
+
+  /**
+   * The user stopped this run's work while its processes are kept: whenever
+   * one of them is closed before it is asked anything again, the close is the
+   * Stop's ({@link SessionCloseCause}). A workflow keeps its processes across
+   * a Stop, so the close that ends their delegates comes later.
+   */
+  noteUserStop(runId: string): void {
+    const prefix = runSessionKeyPrefix(runId);
+    for (const [key, entry] of this.entries) {
+      if (key === runId || key.startsWith(prefix)) {
+        entry.session.noteCloseCause?.('user-stop');
+      }
     }
   }
 
@@ -908,7 +939,12 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
           endedCommandsNote(ended.commands, ended.running),
         );
       }
-      this.notifyClosed(runId, interrupted, true);
+      this.notifyClosed(
+        runId,
+        interrupted,
+        true,
+        entry.session.closeCause ?? null,
+      );
     });
   }
 
@@ -1196,7 +1232,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     entry: SessionEntry,
     reason: string,
     tell = true,
+    explicitCause?: SessionCloseCause,
   ): void {
+    const cause = explicitCause ?? entry.session.closeCause ?? undefined;
     // Read BEFORE the entry is dropped and the timer disarmed — both are what
     // the answer is computed from.
     const interrupted = this.worksOffTurn(entry);
@@ -1211,7 +1249,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     this.disarm(entry);
     this.entries.delete(runId);
     try {
-      entry.session.close();
+      entry.session.close(cause);
     } catch (err) {
       // One session that cannot be closed must not stop the others — this runs
       // in a loop on shutdown, where giving up would orphan every later
@@ -1221,7 +1259,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       );
     }
     this.logger.log(`closed the agent session for run ${runId} — ${reason}`);
-    this.notifyClosed(runId, interrupted, false);
+    this.notifyClosed(runId, interrupted, false, cause ?? null);
   }
 
   /**
@@ -1234,13 +1272,14 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     runId: string,
     interrupted: boolean,
     exited: boolean,
+    cause: SessionCloseCause | null = null,
   ): void {
     if (this.shuttingDown) {
       return;
     }
     for (const listener of this.closeListeners) {
       try {
-        listener(runId, interrupted, exited);
+        listener(runId, interrupted, exited, cause);
       } catch (err) {
         // One listener's failure must not stop the others, and must never stop
         // a close: this runs inside `evictIfFull` and the teardown path, where

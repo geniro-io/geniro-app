@@ -58,6 +58,7 @@ export function withDurableDelegates(
         delegate.kind ??
         `Sub-agent ${subagentRef(delegate.id)}`,
       status: delegate.status,
+      ...(delegate.processEnded ? { processEnded: true } : {}),
       sessionId: null,
       callId: delegate.callId,
     });
@@ -120,42 +121,12 @@ export function withDurableShells(
  * How the daemon says a thing that began at `startSeq` ended, or null while it
  * runs or began after the read — the one test every readout below applies.
  */
-function endedPerDaemon<
-  Status extends RunWorkStatus | RunDelegateState['status'],
->(
+function endedPerDaemon<Status extends RunWorkStatus>(
   state: Pick<RunStateDto, 'throughSeq'>,
   startSeq: number,
   status: Status,
 ): Status | null {
   return status !== 'running' && startSeq <= state.throughSeq ? status : null;
-}
-
-/**
- * The window's sub-agent threads with the daemon's ending laid over each it
- * still reads as running — see the doc block above.
- */
-export function withDaemonDelegateEndings(
-  byAgent: ReadonlyMap<string, AgentThread[]>,
-  state: Pick<RunStateDto, 'throughSeq' | 'delegates'>,
-): Map<string, AgentThread[]> {
-  const delegates = new Map(
-    state.delegates.map((delegate) => [delegate.id, delegate] as const),
-  );
-  const out = new Map<string, AgentThread[]>();
-  for (const [key, threads] of byAgent) {
-    out.set(
-      key,
-      threads.map((thread) => {
-        const delegate = delegates.get(thread.id);
-        const ended =
-          thread.status === 'running' && delegate !== undefined
-            ? endedPerDaemon(state, delegate.launchSeq, delegate.status)
-            : null;
-        return ended === null ? thread : { ...thread, status: ended };
-      }),
-    );
-  }
-  return out;
 }
 
 /**

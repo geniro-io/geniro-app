@@ -1,12 +1,16 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
+import { open, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentKind } from '../../../../runs/runs.types';
 import type { SubagentRecoveryRef } from '../../adapter.types';
 import { recoverClaudeSubagent } from './claude-subagent-recovery.utils';
+
+vi.mock('node:fs/promises', { spy: true });
 
 const roots: string[] = [];
 const ref: SubagentRecoveryRef = {
@@ -19,22 +23,27 @@ const ref: SubagentRecoveryRef = {
   childSessionId: null,
 };
 
+beforeEach(() => {
+  vi.mocked(readdir).mockClear();
+});
+
 afterEach(() => {
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-function profile(lines: unknown[]): string {
+function profileRaw(lines: string[], dirName = '-work'): string {
   const root = mkdtempSync(join(tmpdir(), 'claude-subagent-recovery-'));
   roots.push(root);
-  const dir = join(root, 'projects', '-work');
+  const dir = join(root, 'projects', dirName);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, `${ref.sessionId}.jsonl`),
-    lines.map((line) => JSON.stringify(line)).join('\n') + '\n',
-  );
+  writeFileSync(join(dir, `${ref.sessionId}.jsonl`), lines.join('\n') + '\n');
   return root;
+}
+
+function profile(lines: unknown[]): string {
+  return profileRaw(lines.map((line) => JSON.stringify(line)));
 }
 
 function foreground(
@@ -134,11 +143,81 @@ describe('recoverClaudeSubagent', () => {
     ).toBeNull();
   });
 
-  it('withholds a previous ending while a later record is malformed or incomplete', async () => {
+  it('withholds a previous ending while the last record is an unfinished fragment', async () => {
     const root = profile([foreground()]);
     const path = join(root, 'projects', '-work', `${ref.sessionId}.jsonl`);
     writeFileSync(path, JSON.stringify(foreground()) + '\n{"type":"user",');
     expect(await recoverClaudeSubagent(root, ref)).toBeNull();
+  });
+
+  it.each([
+    [
+      'one that names the tool call',
+      `{"type":"user","id":"${ref.toolCallId}",`,
+    ],
+    ['one that does not', '{"type":"assistant","message":'],
+  ])(
+    'withholds an earlier ending when an unparseable line in the middle follows it (%s)',
+    async (_name, torn) => {
+      // The later, parseable ending differs from the earlier one, so reading
+      // past the torn line would answer 'completed' instead of nothing.
+      expect(
+        await recoverClaudeSubagent(
+          profileRaw([
+            JSON.stringify(notification('failed')),
+            torn,
+            JSON.stringify(foreground('completed')),
+          ]),
+          ref,
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it.each([
+    ['no timestamp', undefined],
+    ['an invalid timestamp', 'not-a-date'],
+  ])(
+    'withholds an earlier ending when a later record for the same call has %s',
+    async (_name, timestamp) => {
+      const undated = notification('failed');
+      if (timestamp === undefined) {
+        delete undated.timestamp;
+      } else {
+        undated.timestamp = timestamp;
+      }
+      expect(
+        await recoverClaudeSubagent(profile([foreground(), undated]), ref),
+      ).toBeNull();
+    },
+  );
+
+  it('answers nothing when the read fails partway through', async () => {
+    const root = profile([foreground()]);
+    vi.mocked(open).mockImplementationOnce(
+      async () =>
+        ({
+          read: async () => {
+            throw new Error('EIO: i/o error, read');
+          },
+          close: async () => undefined,
+        }) as unknown as FileHandle,
+    );
+    expect(await recoverClaudeSubagent(root, ref)).toBeNull();
+    // The same file reads fine once the failure is gone.
+    expect(await recoverClaudeSubagent(root, ref)).toBe('completed');
+  });
+
+  it('finds the session from the cwd without listing the profile', async () => {
+    const root = profile([foreground()]);
+    expect(await recoverClaudeSubagent(root, ref)).toBe('completed');
+    expect(readdir).not.toHaveBeenCalled();
+  });
+
+  it('still finds the session when the cwd does not name its directory', async () => {
+    const root = profileRaw([JSON.stringify(foreground())], '-private-work');
+    expect(await recoverClaudeSubagent(root, ref)).toBe('completed');
+    expect(readdir).toHaveBeenCalled();
   });
 
   it.each(['origin', 'promptSource', 'turnOrigin'])(

@@ -131,6 +131,21 @@ export interface SubagentDeclaration {
    * as success.
    */
   backgroundOutcome: BackgroundOutcome | null;
+  /**
+   * Whether the daemon can still look this delegate's ending up: `true` once
+   * a row carried a recovery ref, `false` once one withdrew it
+   * (`recovery: null`), `null` while no row has said either — every row from
+   * before refs existed.
+   *
+   * TWIN of `Declared.recoverable` in
+   * apps/daemon/src/v1/agents/utils/run-state-folds.ts.
+   */
+  recoverable: boolean | null;
+  /**
+   * The row that stated {@link backgroundOutcome} said the delegate's hosting
+   * process had ended (`trackingLost: 'process-ended'`).
+   */
+  processEnded: boolean;
 }
 
 /**
@@ -207,7 +222,36 @@ export function readSubagentDeclaration(
     backgroundOutcome: isBackgroundOutcome(record.backgroundOutcome)
       ? record.backgroundOutcome
       : null,
+    recoverable:
+      record.recovery === null
+        ? false
+        : isRecoveryRefFor(record.recovery, id)
+          ? true
+          : null,
+    processEnded: record.trackingLost === 'process-ended',
   };
+}
+
+/**
+ * A recovery ref for delegate `id`, as far as this side can tell.
+ *
+ * TWIN PARSER: `isRecoveryRefFor` in
+ * apps/daemon/src/v1/agents/utils/run-state-folds.ts, which applies the
+ * service's own schema; the renderer cannot import it, so it checks the
+ * fields that identify the ref.
+ */
+function isRecoveryRefFor(value: unknown, id: string): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const ref = value as Record<string, unknown>;
+  return (
+    ref.toolCallId === id &&
+    str(ref.agentKind) !== null &&
+    str(ref.sessionId) !== null &&
+    str(ref.cwd) !== null &&
+    num(ref.launchedAtMs) !== null
+  );
 }
 
 /** Later non-null fields win; the id is the same by construction. */
@@ -248,6 +292,14 @@ export function mergeSubagentDeclarations(
       next.backgroundOpen === true
         ? next.backgroundOutcome
         : (next.backgroundOutcome ?? base.backgroundOutcome),
+    recoverable: next.recoverable ?? base.recoverable,
+    // It travels with the outcome it explains.
+    processEnded:
+      next.backgroundOpen === true
+        ? false
+        : next.backgroundOutcome !== null
+          ? next.processEnded
+          : base.processEnded,
   };
 }
 

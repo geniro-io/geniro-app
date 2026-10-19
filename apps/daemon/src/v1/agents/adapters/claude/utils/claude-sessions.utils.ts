@@ -643,16 +643,33 @@ async function collectSessionFiles(profileDir: string): Promise<SessionFile[]> {
  *
  * The id therefore reaches a path, which the scan it replaced never let it do,
  * so a separator in it is refused rather than joined. It arrives over HTTP.
+ *
+ * `cwd`, when the caller has it, names the directory to try FIRST: one `stat`
+ * instead of one per project directory. It is only a hint. The flattening is
+ * the CLI's undocumented and lossy rule, so a miss — a spelling that differs
+ * (`/var` vs `/private/var`), a long path the CLI shortens — falls through to
+ * the scan, and a hit is still the file named by the id.
  */
 export async function findSessionFile(
   profileDir: string,
   sessionId: string,
+  cwd?: string | null,
 ): Promise<string | null> {
   if (!isPlainSessionId(sessionId)) {
     return null;
   }
   const name = `${sessionId}${CLAUDE_SESSION_FILE_SUFFIX}`;
   const root = join(profileDir, CLAUDE_SESSIONS_DIR_NAME);
+  if (cwd !== undefined && cwd !== null && cwd !== '') {
+    const guess = join(root, claudeProjectDirName(cwd), name);
+    try {
+      if ((await stat(guess)).isFile()) {
+        return guess;
+      }
+    } catch {
+      // Not filed under that spelling: scan below.
+    }
+  }
   let dirs: string[];
   try {
     dirs = (await readdir(root, { withFileTypes: true }))
@@ -672,6 +689,14 @@ export async function findSessionFile(
     }),
   );
   return hits.find((path) => path !== null) ?? null;
+}
+
+/**
+ * The directory the CLI files a folder's sessions under: every character that
+ * is not a letter or digit becomes `-` (`/Users/me/.x` → `-Users-me--x`).
+ */
+function claudeProjectDirName(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
 /**
@@ -724,13 +749,29 @@ function toTitle(text: string): string {
  * could not be opened: an unparseable line is skipped, because one truncated
  * append (a session the CLI was writing when the machine slept) must not cost
  * the whole transcript.
+ *
+ * `onMalformed` fires for a line that does not parse, and for an unterminated
+ * final line even when it parses (the CLI may still be appending to it, so it
+ * is not a complete record). The line is still fed to `onLine` when it parses.
+ *
+ * `contains` skips the `JSON.parse` of every line that lacks that substring,
+ * for a caller after a handful of records in a long transcript. A skipped line
+ * is not parsed, so it counts as malformed when it is not one balanced object
+ * (`isBalancedObject`) — which a torn write never is. The substring is matched
+ * against the raw line, so it is ignored when JSON would spell it differently
+ * (a quote, backslash or control char).
  */
 export async function eachJsonLine(
   path: string,
   budgetBytes: number | null,
   onLine: (line: Record<string, unknown>) => boolean,
   onMalformed?: () => void,
+  contains?: string,
 ): Promise<boolean> {
+  const needle =
+    contains !== undefined && JSON.stringify(contains).slice(1, -1) === contains
+      ? contains
+      : undefined;
   let handle;
   try {
     handle = await open(path, 'r');
@@ -763,7 +804,7 @@ export async function eachJsonLine(
       while (cut >= 0) {
         const line = rest.slice(0, cut);
         rest = rest.slice(cut + 1);
-        if (line.trim() !== '' && !feed(line, onLine, onMalformed)) {
+        if (line.trim() !== '' && !feed(line, onLine, onMalformed, needle)) {
           return true;
         }
         cut = rest.indexOf('\n');
@@ -781,7 +822,7 @@ export async function eachJsonLine(
     // The last line of a file the CLI is still appending to has no newline yet.
     if (rest.trim() !== '') {
       onMalformed?.();
-      feed(rest, onLine, onMalformed);
+      feed(rest, onLine, onMalformed, needle);
     }
     return true;
   } finally {
@@ -789,11 +830,58 @@ export async function eachJsonLine(
   }
 }
 
+/**
+ * Whether `line` is one object whose braces and brackets close, read outside
+ * string literals — the check a skipped line gets in place of a parse. A
+ * write cut off part way leaves something unclosed, even when it happens to
+ * end on a nested `}`.
+ */
+function isBalancedObject(line: string): boolean {
+  const text = line.trim();
+  if (!text.startsWith('{')) {
+    return false;
+  }
+  let depth = 0;
+  let inString = false;
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    if (inString) {
+      if (char === '\\') {
+        at += 1;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{' || char === '[') {
+      depth += 1;
+    } else if (char === '}' || char === ']') {
+      depth -= 1;
+      if (depth === 0 && at !== text.length - 1) {
+        return false;
+      }
+      if (depth < 0) {
+        return false;
+      }
+    }
+  }
+  return depth === 0 && !inString;
+}
+
 function feed(
   line: string,
   onLine: (line: Record<string, unknown>) => boolean,
   onMalformed?: () => void,
+  contains?: string,
 ): boolean {
+  if (contains !== undefined && !line.includes(contains)) {
+    if (!isBalancedObject(line)) {
+      onMalformed?.();
+    }
+    return true;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);

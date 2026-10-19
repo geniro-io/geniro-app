@@ -1,9 +1,9 @@
 import {
   Ban,
   CircleCheck,
-  CircleHelp,
   CircleX,
   Clock,
+  EyeOff,
   Hourglass,
   Loader2,
   MessageCircleQuestion,
@@ -100,8 +100,11 @@ export const RUN_STATUS_META: Record<
     className: 'text-muted-foreground',
     label: 'cancelled',
   },
+  // Amber like `needs-input`, but not a question mark: nothing here waits on
+  // the user, and at 12px two question glyphs side by side in one panel read
+  // as the same state. `CircleDashed` is a pending task's glyph, so not that.
   untracked: {
-    icon: CircleHelp,
+    icon: EyeOff,
     className: 'text-warning',
     label: 'untracked',
   },
@@ -387,6 +390,24 @@ export function isSettledRunStatus(status: RunStatusKind): boolean {
     status === 'cancelled' ||
     status === 'skipped'
   );
+}
+
+/**
+ * What `untracked` means for one sub-agent, in the words every surface that
+ * shows the bare word explains it with: the block's pill and body, and the
+ * panel's row glyph.
+ */
+export function untrackedExplanation(processEnded: boolean): string {
+  return processEnded
+    ? 'Its process ended before it reported how it finished.'
+    : 'Tracking was lost. This sub-agent may still be running.';
+}
+
+/** {@link untrackedExplanation} in a few words, for a shut card's summary. */
+export function untrackedSummary(processEnded: boolean): string {
+  return processEnded
+    ? 'Ended without reporting an outcome'
+    : 'May still be running';
 }
 
 /**

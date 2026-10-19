@@ -5,14 +5,6 @@ import type {
 import { asRecord, asString, parseJsonColumn } from './json-util';
 
 /**
- * Fold durable delegate declarations so session close and boot reconciliation
- * can mark missing endings untracked. A parent going away gives no CLI report
- * about how each child ended.
- *
- * TWIN PARSER: outcome outranks backgroundOpen, as in the renderer's
- * subagentBlockStatus. Metadata-only declarations make no lifecycle claim.
- */
-/**
  * Which delegate a `subagent_info` payload is about, or null when it names
  * none.
  *
@@ -114,6 +106,38 @@ export function delegateCloseEvent(
 }
 
 /**
+ * The close for a delegate whose hosting process is gone: its work is over,
+ * and only how it ended is unknown, until its CLI's own record says.
+ */
+export function processEndedCloseEvent(
+  id: string,
+): Extract<AgentEvent, { type: 'subagent_info' }> {
+  return { ...delegateCloseEvent(id), trackingLost: 'process-ended' };
+}
+
+/**
+ * A `subagent_info` row that states facts about a delegate and nothing about
+ * its lifecycle — every lifecycle field null, so the fold keeps whatever the
+ * delegate's other rows said.
+ */
+export function delegateDeclarationEvent(
+  id: string,
+  facts: Partial<
+    Omit<
+      Extract<AgentEvent, { type: 'subagent_info' }>,
+      'type' | 'id' | 'backgroundOpen' | 'backgroundOutcome'
+    >
+  > = {},
+): Extract<AgentEvent, { type: 'subagent_info' }> {
+  return {
+    ...delegateCloseEvent(id),
+    ...facts,
+    backgroundOpen: null,
+    backgroundOutcome: null,
+  };
+}
+
+/**
  * The owner fields every row a workflow node persists carries in its payload,
  * for a close written on that node's behalf — without them the renderer files
  * the close outside the call block holding the unit it closes. Empty for a
@@ -129,6 +153,14 @@ export function ownerFields(owner: {
   };
 }
 
+/**
+ * The delegates whose declarations leave them open, which a closer that knows
+ * their process is gone has to close.
+ *
+ * TWIN PARSER: a stated outcome outranks `backgroundOpen`, as in the renderer's
+ * `subagentBlockStatus`. A declaration stating neither makes no lifecycle
+ * claim.
+ */
 export function openDelegateIds(payloads: readonly unknown[]): string[] {
   // Insertion-ordered, so the closes are written in the order the delegates
   // were launched — a re-`set` keeps a key's original position, which is what

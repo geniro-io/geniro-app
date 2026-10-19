@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import type { PathLike } from 'node:fs';
+import { mkdir, mkdtemp, open, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +13,8 @@ import {
   locateCursorDelegateTranscript,
   readCursorDelegateEnding,
 } from './cursor-delegate-transcript.utils';
+
+vi.mock('node:fs/promises', { spy: true });
 
 /**
  * The lines below are the shapes read off real transcripts on
@@ -193,6 +196,44 @@ describe('cursor transcripts on disk', () => {
       await expect(
         readCursorDelegateEnding(at('agent-3'), home),
       ).resolves.toBeNull();
+    });
+
+    describe('when the file is checked against the launch time', () => {
+      const ended = `${WORKING_LINE}\n${REPORT_LINE}\n${ENDED_LINE('success')}\n`;
+      const launched = { ...at('agent-5'), notBeforeMs: 1_000 };
+      const path = (): string =>
+        join(transcripts(), 'agent-5', 'agent-5.jsonl');
+
+      it('reads an ended record whose mtime holds still', async () => {
+        await write(path(), ended);
+        await utimes(path(), 2, 2);
+        await expect(
+          readCursorDelegateEnding(launched, home),
+        ).resolves.toMatchObject({ state: 'ended', outcome: 'completed' });
+      });
+
+      it('answers null when the file is written to while the report is read', async () => {
+        await write(path(), ended);
+        await utimes(path(), 2, 2);
+        const real = (
+          await vi.importActual<typeof import('node:fs/promises')>(
+            'node:fs/promises',
+          )
+        ).open;
+        // The first open is the tail that decides the ending, the second is
+        // the longer read for the report: the CLI appends in between.
+        vi.mocked(open).mockImplementationOnce(real);
+        vi.mocked(open).mockImplementationOnce((async (
+          target: PathLike,
+          flags?: string,
+        ) => {
+          await utimes(path(), 3, 3);
+          return real(target, flags);
+        }) as typeof open);
+        await expect(
+          readCursorDelegateEnding(launched, home),
+        ).resolves.toBeNull();
+      });
     });
 
     it('reads only the tail of a long transcript', async () => {

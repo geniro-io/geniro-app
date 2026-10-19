@@ -1819,7 +1819,7 @@ describe('a delegate whose own detached command outlives its turn', () => {
     await finish();
   });
 
-  it('announces the held settle as untracked, figures kept, when the process ends under its command', () => {
+  it('announces the held settle as stopped, figures kept, when the process ends under its command', () => {
     const { child, last, launch } = openDelegateSession();
     launch('b-1');
     line(child, {
@@ -1833,8 +1833,59 @@ describe('a delegate whose own detached command outlives its turn', () => {
     child.emit('close', 0, null);
     expect(last()).toMatchObject({
       backgroundOpen: false,
-      backgroundOutcome: 'untracked',
+      backgroundOutcome: 'stopped',
       tokens: 1234,
+    });
+    expect(last()).not.toHaveProperty('trackingLost');
+  });
+
+  it('closes a delegate still out when the process ends as untracked, saying the process ended', () => {
+    const { child, last, launch } = openDelegateSession();
+    launch();
+    expect(last()?.backgroundOpen).toBe(true);
+
+    child.emit('close', 0, null);
+    expect(last()).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked',
+      trackingLost: 'process-ended',
+    });
+  });
+
+  it('closes a delegate still out as stopped when the user’s Stop closed the process', () => {
+    const { session, child, last, launch } = openDelegateSession();
+    launch();
+
+    session.close('user-stop');
+    child.emit('close', null, 'SIGTERM');
+    expect(last()).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'stopped',
+    });
+    expect(last()).not.toHaveProperty('trackingLost');
+  });
+
+  it('closes them as stopped when a recorded Stop ends the process by any other way', () => {
+    // A workflow Stop is recorded ahead of the cancel; the process can then
+    // end from its own kill after a refused interrupt, with no close() at all.
+    const { session, child, last, launch } = openDelegateSession();
+    launch();
+
+    session.noteCloseCause?.('user-stop');
+    child.emit('close', null, 'SIGKILL');
+    expect(last()).toMatchObject({ backgroundOutcome: 'stopped' });
+  });
+
+  it('forgets a recorded Stop once it is withdrawn', () => {
+    const { session, child, last, launch } = openDelegateSession();
+    launch();
+
+    session.noteCloseCause?.('user-stop');
+    session.noteCloseCause?.(null);
+    child.emit('close', 0, null);
+    expect(last()).toMatchObject({
+      backgroundOutcome: 'untracked',
+      trackingLost: 'process-ended',
     });
   });
 
@@ -2872,6 +2923,10 @@ describe('a turn whose background work outlives its result', () => {
         backgroundOpen: false,
         backgroundOutcome: 'untracked',
       });
+      // The process still runs, so the delegate may too.
+      expect(
+        events.filter((event) => event.type === 'subagent_info').at(-1),
+      ).not.toHaveProperty('trackingLost');
       expect(events.at(-1)?.type).toBe('turn_complete');
       line(child, { work: 'task-1', phase: 'settled', outcome: 'completed' });
       expect(events.at(-1)).toMatchObject({

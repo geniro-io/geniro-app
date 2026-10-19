@@ -99,7 +99,6 @@ describe('recoverCodexSubagent', () => {
     { completedAt: -1 },
     { startedAt: 1_800_000_002 },
     { startedAt: 1_799_999_998, completedAt: 1_799_999_999 },
-    { completedAt: 1_800_000_000 },
   ])('requires current, finite, ordered Unix-second dates: %j', (dates) => {
     expect(
       recoverCodexSubagent(ref, reply({ turns: [{ ...completed, ...dates }] })),
@@ -113,6 +112,26 @@ describe('recoverCodexSubagent', () => {
         reply(),
       ),
     ).toBe('completed');
+  });
+
+  it('accepts an ending inside the launch second and rejects one from an earlier second', () => {
+    const launched = { ...ref, launchedAtMs: 1_800_000_010_500 };
+    const endedAt = (completedAt: number): unknown =>
+      reply({
+        turns: [{ ...completed, startedAt: 1_800_000_000, completedAt }],
+      });
+
+    expect(recoverCodexSubagent(launched, endedAt(1_800_000_010))).toBe(
+      'completed',
+    );
+    expect(recoverCodexSubagent(launched, endedAt(1_800_000_009))).toBeNull();
+    // The boundary itself: a second that ended exactly as the launch began.
+    expect(
+      recoverCodexSubagent(
+        { ...launched, launchedAtMs: 1_800_000_010_000 },
+        endedAt(1_800_000_009),
+      ),
+    ).toBeNull();
   });
 
   it.each([

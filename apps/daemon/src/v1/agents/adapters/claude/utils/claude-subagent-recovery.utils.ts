@@ -25,7 +25,7 @@ export async function recoverClaudeSubagent(
   if (!isPlainSessionId(ref.sessionId) || !isPlainSessionId(ref.toolCallId)) {
     return null;
   }
-  const path = await findSessionFile(profileDir, ref.sessionId);
+  const path = await findSessionFile(profileDir, ref.sessionId, ref.cwd);
   if (path === null) {
     return null;
   }
@@ -57,6 +57,11 @@ export async function recoverClaudeSubagent(
       () => {
         malformed = true;
       },
+      // Both endings carry the tool call id verbatim — the foreground result as
+      // `tool_use_id`, the notification inside its `<tool-use-id>` — and
+      // nothing else in the file is read, so every other line is skipped
+      // unparsed.
+      ref.toolCallId,
     );
     return read && !malformed ? outcome : null;
   } catch {

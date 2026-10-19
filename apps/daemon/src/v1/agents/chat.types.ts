@@ -2893,6 +2893,11 @@ export const RunDelegateStateSchema = z
     label: z.string().nullable(),
     kind: z.string().nullable(),
     status: RunDelegateStatusSchema,
+    processEnded: z
+      .boolean()
+      .describe(
+        'an untracked delegate whose hosting process is gone: its work is over, only its outcome is unknown',
+      ),
     launchSeq: z.number().int(),
     startedAt: z.string(),
   })
@@ -5125,6 +5130,8 @@ export interface TurnEnding {
   seq: number;
   nodeId: string | null;
   callId: string | null;
+  /** The turn was stopped (`turn_cancelled`) rather than finished or failed. */
+  cancelled: boolean;
 }
 
 /**

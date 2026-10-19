@@ -6,6 +6,8 @@ import type {
   AgentEvent,
   AgentTurnHandle,
   FollowUpMessage,
+  SessionCloseCause,
+  SubagentTrackingLost,
   TurnIo,
 } from '../adapters/adapter.types';
 import { isUserQuestion } from './approval-answer';
@@ -458,8 +460,19 @@ export interface CliSession {
    * reads what it took from here.
    */
   readonly endedRunning: StoppedCommands | null;
-  /** Terminate the process group (the CLI plus every grandchild). */
-  close(): void;
+  /**
+   * Terminate the process group (the CLI plus every grandchild). On a
+   * `user-stop` the delegates still out are closed `stopped`, not `untracked`.
+   */
+  close(cause?: SessionCloseCause): void;
+  /**
+   * Record why the process will be closed, ahead of whatever ends it — a
+   * later close, its own kill after a refused interrupt, or its exit. Null
+   * withdraws it; the next turn withdraws it too.
+   */
+  noteCloseCause?(cause: SessionCloseCause | null): void;
+  /** The cause recorded by {@link noteCloseCause} or `close`, or null. */
+  readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
 }
@@ -1239,6 +1252,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * the ratio that turned out to be the diagnosis.
    */
   const approvalSeenAt = new Map<string, number>();
+  /** Why the process was closed, when a close said — see `CliSession.close`. */
+  let closeCause: SessionCloseCause | null = null;
   let processGone = false;
   /**
    * The child's `exit` has fired — set SYNCHRONOUSLY, ahead of the settle.
@@ -1462,7 +1477,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // would otherwise hold every turn after it for as long as the session
         // lives. `delegateWork` is deliberately left alone so a late report
         // can resolve its outcome.
-        untrackOpenDelegates();
+        closeOpenDelegates();
         openWork.clear();
         finishTurn(turn, held);
         return;
@@ -1796,6 +1811,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const announceDelegateWork = (
     event: Extract<AgentEvent, { type: 'background_work' }>,
+    trackingLost?: SubagentTrackingLost,
   ): void => {
     const toolCallId =
       event.phase === 'started'
@@ -1902,11 +1918,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // A foreground `started` returned above, so both other arms here open it.
       backgroundOpen: event.phase !== 'settled',
       // What the settle SAID, not merely that it happened. Null on a `started`
-      // and on a settle whose CLI names no outcome, on the same terms as every
-      // other field here: absent claims nothing, so a CLI with no such
-      // vocabulary leaves the block reading exactly as it did before.
+      // and on a settle whose CLI names no outcome: absent claims no outcome,
+      // so a recoverable delegate's block reads untracked until its record
+      // is read (`foldRunDelegates`).
       backgroundOutcome:
         event.phase === 'settled' ? (event.outcome ?? null) : null,
+      ...(trackingLost === undefined ? {} : { trackingLost }),
     };
     // To whoever can carry it. A delegate launched between turns is the whole
     // reason this is not simply `turn.options.onEvent`: that path had no turn,
@@ -1919,17 +1936,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     opts.onBetweenTurnEvent?.(announcement);
   };
 
-  const untrackOpenDelegates = (): void => {
+  const closeOpenDelegates = (
+    outcome: 'untracked' | 'stopped' = 'untracked',
+    trackingLost?: SubagentTrackingLost,
+  ): void => {
     for (const id of openWork) {
       if (delegateWork.has(id)) {
-        announceDelegateWork({
-          type: 'background_work',
-          id,
-          phase: 'settled',
-          unit: 'agent',
-          toolCallId: null,
-          outcome: 'untracked',
-        });
+        announceDelegateWork(
+          {
+            type: 'background_work',
+            id,
+            phase: 'settled',
+            unit: 'agent',
+            toolCallId: null,
+            outcome,
+          },
+          trackingLost,
+        );
       }
     }
   };
@@ -1958,7 +1981,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       );
       // Written off exactly as the turn's deadline writes its own units off,
       // and for the same reason: they must not hold anything after this.
-      untrackOpenDelegates();
+      closeOpenDelegates();
       openWork.clear();
       releaseOffTurnHold();
     }, TURN_SILENCE_DEADLINE_MS);
@@ -2002,7 +2025,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         opts.logger?.warn(
           `${opts.command}: the CLI went idle with ${openWork.size} unit(s) of background work never reported — settling the held '${held.type}'`,
         );
-        untrackOpenDelegates();
+        closeOpenDelegates();
         openWork.clear();
       } else {
         opts.logger?.debug?.(
@@ -2940,14 +2963,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     osDetachedShells.clear();
     executeCalls.clear();
     // A delegate's own commands die with the group as well, so a settle held
-    // for them is owed now as untracked, figures kept: the CLI never reported
-    // the final ending. This matches the session-close sweep.
+    // for them is owed now as stopped, figures kept: its CLI reported it done
+    // while those commands ran, and ending the group is what stopped them.
     delegateCommands.clear();
     delegateCommandCalls.clear();
     unownedDelegateCommands.clear();
     delegateCallOwner.clear();
     for (const held of [...heldDelegateSettles.values()]) {
-      announceDelegateWork({ ...held, outcome: 'untracked' });
+      announceDelegateWork({ ...held, outcome: 'stopped' });
     }
     // `runningShells` as well as `shellWork`: a unit the CLI announced with no
     // launching call is in the first alone, and closing only the second left
@@ -2971,7 +2994,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // so the loop above did not settle it — but it died with the group too.
     runningShells.clear();
     callCommands.clear();
-    untrackOpenDelegates();
+    // The user's Stop is what ended them; any other end of the process says
+    // only that their work is over.
+    if (closeCause === 'user-stop') {
+      closeOpenDelegates('stopped');
+    } else {
+      closeOpenDelegates('untracked', 'process-ended');
+    }
     openWork.clear();
     releaseOffTurnHold();
     if (current) {
@@ -3283,6 +3312,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     ) {
       return null;
     }
+    // Asked to work again: whatever closes it next is not the Stop's.
+    closeCause = null;
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
@@ -3747,14 +3778,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get endedRunning() {
       return endedRunning;
     },
-    close: () => {
+    close: (cause) => {
       if (processGone) {
         return;
       }
+      closeCause ??= cause ?? null;
       if (current) {
         current.cancelRequested = true;
       }
       killGroup();
+    },
+    noteCloseCause: (cause) => {
+      if (!processGone) {
+        closeCause = cause;
+      }
+    },
+    get closeCause() {
+      return closeCause;
     },
     closed,
   };

@@ -411,13 +411,8 @@ export function HostedChat({
       ? settleMomentOf(run, chat.items)
       : null;
   const subagentRunning = useMemo(
-    () =>
-      anySubagentRunning(
-        durableEntries,
-        runStoppedAt,
-        run?.subagentsOut ?? null,
-      ),
-    [durableEntries, runStoppedAt, run?.subagentsOut],
+    () => anySubagentRunning(durableEntries, runStoppedAt),
+    [durableEntries, runStoppedAt],
   );
   const status =
     run === null
@@ -757,7 +752,6 @@ export function HostedChat({
       callChannel={null}
       artifactUrl={artifactUrl}
       runSettledAt={runSettledAt}
-      delegatesOut={run?.subagentsOut ?? null}
       transcript={{
         collapseToolSteps,
         runActivity: chat.activity,

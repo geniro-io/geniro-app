@@ -17,11 +17,7 @@ import {
   ChatMetricsLoaderContext,
 } from './chat-metrics';
 import { CliLoginContext, type SignInResolver } from './cli-login-context';
-import {
-  DelegatesOutContext,
-  RunActivityContext,
-  RunSettledContext,
-} from './live-row';
+import { RunActivityContext, RunSettledContext } from './live-row';
 import {
   type LocalImageLoader,
   LocalImageLoaderContext,
@@ -106,7 +102,6 @@ export function ChatProviders({
   artifactSharing = null,
   threadId,
   runSettledAt,
-  delegatesOut,
   transcript,
   loadAttachment = null,
   callConversations = null,
@@ -127,8 +122,6 @@ export function ChatProviders({
    * read it, so it is provided for the whole surface.
    */
   runSettledAt: RunSettleAt;
-  /** How many of the run's delegates still report out — see `DelegatesOutContext`. */
-  delegatesOut: number | null;
   /**
    * Everything a transcript row reads, for a surface that is ALL transcript
    * (the workflow dock). The chat screen leaves it out: it provides the
@@ -192,18 +185,16 @@ export function ChatProviders({
                     <ThreadUiMemoryContext.Provider value={threadId}>
                       <AttachmentLoaderContext.Provider value={loadAttachment}>
                         <RunSettledContext.Provider value={runSettledAt}>
-                          <DelegatesOutContext.Provider value={delegatesOut}>
-                            <RecommendationsApplyContext.Provider
-                              value={applyRecommendations}>
-                              {transcript === undefined ? (
-                                children
-                              ) : (
-                                <SurfaceContexts {...transcript}>
-                                  {children}
-                                </SurfaceContexts>
-                              )}
-                            </RecommendationsApplyContext.Provider>
-                          </DelegatesOutContext.Provider>
+                          <RecommendationsApplyContext.Provider
+                            value={applyRecommendations}>
+                            {transcript === undefined ? (
+                              children
+                            ) : (
+                              <SurfaceContexts {...transcript}>
+                                {children}
+                              </SurfaceContexts>
+                            )}
+                          </RecommendationsApplyContext.Provider>
                         </RunSettledContext.Provider>
                       </AttachmentLoaderContext.Provider>
                     </ThreadUiMemoryContext.Provider>

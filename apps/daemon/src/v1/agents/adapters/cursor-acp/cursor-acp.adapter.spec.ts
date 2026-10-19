@@ -2118,7 +2118,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       ).toBe(false);
     });
 
-    it('hands a transcript to the delegate RESUMING it, and closes the cut-off one as untracked', async () => {
+    it('hands a transcript to the delegate RESUMING it, and closes the cut-off one as stopped with recovery off', async () => {
       // Run `bd1e43ae`: a reviewer cut off by a dropped stream never wrote
       // `turn_ended`, and its relaunch appended a new brief to its transcript.
       const { child, events } = launchInBackground();
@@ -2157,7 +2157,8 @@ ${RESUMED}
       });
       expect(closes(events)[0]).toMatchObject({
         id: 'toolu_018bc',
-        backgroundOutcome: 'untracked',
+        backgroundOutcome: 'stopped',
+        recovery: null,
       });
 
       // And the transcript's ending is now the continuation's.
@@ -2808,6 +2809,26 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
     expect(info.every((event) => event.stepsUnavailableReason === null)).toBe(
       true,
     );
+  });
+
+  it('names the native child session on the recovery reference of its delegate', () => {
+    const { child, events } = start();
+    launch(child, false);
+
+    const info = events.filter(
+      (event) => event.type === 'subagent_info' && event.id === 'tool_A',
+    );
+    expect(info.length).toBeGreaterThan(0);
+    for (const event of info) {
+      expect(event).toMatchObject({
+        recovery: {
+          agentKind: 'cursor-agent',
+          sessionId: 's',
+          toolCallId: 'tool_A',
+          childSessionId: 'agent-1',
+        },
+      });
+    }
   });
 
   it('drops the steps of a sub-agent it cannot place, rather than reading them as the parent’s', () => {

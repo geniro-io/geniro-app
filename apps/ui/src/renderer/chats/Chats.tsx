@@ -114,7 +114,9 @@ import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
 import {
   type CalleeReading,
+  type CallSpend,
   liveConversationCost,
+  liveCostOf,
   liveNodeCost,
   liveRunCost,
   resolveConversationCacheExpiry,
@@ -122,12 +124,17 @@ import {
   resolveConversationSpend,
   resolveNodeToolCalls,
   spendOfTotals,
+  spentOf,
   withLiveCost,
 } from './call-context';
 import type { CallConversationLoader } from './call-conversation';
 import type { CallMessageChannel } from './call-message-box';
 import { ChatChangesDialog } from './chat-changes-dialog';
-import { chatContextFigures, useContextRing } from './chat-context';
+import {
+  chatContextFigures,
+  type ContextFigures,
+  useContextRing,
+} from './chat-context';
 import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
@@ -465,6 +472,30 @@ function callThreadStatusOf(
   status: CallBlockEntry['status'],
 ): AgentThread['status'] {
   return status === 'pending' ? 'running' : status;
+}
+
+/** The ring's figures as an agent card's three context fields. */
+function agentContextFields(figures: ContextFigures): {
+  contextTokens: number | null;
+  contextWindowTokens: number | null;
+  contextEstimated: boolean;
+} {
+  return {
+    contextTokens: figures.tokens,
+    contextWindowTokens: figures.window,
+    contextEstimated: figures.estimated === true,
+  };
+}
+
+/** A spend as the header's two money props. */
+function headerSpendOf(spend: CallSpend): {
+  costUsd: number | null;
+  estimatedCostUsd: number | null;
+} {
+  return {
+    costUsd: spend.costUsd,
+    estimatedCostUsd: spend.estimatedCostUsd ?? null,
+  };
 }
 
 /**
@@ -4676,7 +4707,7 @@ export function Chats({
         callIds,
       ),
       spend: resolveConversationSpend(nodeReadings, calleeNodeId, callIds),
-      liveCostUsd: liveConversationCost(liveText, calleeNodeId, callIds),
+      liveCost: liveConversationCost(liveText, calleeNodeId, callIds),
       toolCalls: resolveNodeToolCalls(nodeReadings, calleeNodeId),
     }),
     [liveText, nodeReadings],
@@ -6526,28 +6557,37 @@ export function Chats({
           // Skipping it put the last SETTLED turn's figure on this card beside a
           // ring reading the daemon's newer one — `2%` against `46%` on a
           // thread reopened mid-turn.
-          contextTokens:
-            liveText.get(CHAT_LIVE_KEY)?.contextTokens ??
-            activeRun.contextTokens ??
-            chatActivity?.contextTokens ??
-            null,
-          contextWindowTokens:
-            liveText.get(CHAT_LIVE_KEY)?.contextWindowTokens ??
-            activeRun.contextWindowTokens ??
-            chatActivity?.contextWindowTokens ??
-            null,
+          ...agentContextFields(
+            chatContextFigures({
+              live: liveText.get(CHAT_LIVE_KEY),
+              run: activeRun,
+              transcript: chatActivity,
+              // The card has no recalled reading to fall back on.
+              itemsLoaded: true,
+              recall: () => null,
+            }),
+          ),
           // The DAEMON's totals over every turn, the figures the header and
           // the context readout state — the transcript fold covers only the
           // loaded window, so on a long thread it left the oldest turns out and
           // the card read a smaller spend than the readout beside it. The fold
           // stays underneath for the moment before the totals read lands.
-          spentUsd: withLiveCost(
-            {
-              tokens: null,
-              costUsd: threadTotals.costUsd ?? chatActivity?.spentUsd ?? null,
-            },
-            liveText.get(CHAT_LIVE_KEY)?.spentCostUsd ?? null,
-          ).costUsd,
+          ...spentOf(
+            withLiveCost(
+              threadTotals.costUsd !== null
+                ? {
+                    tokens: null,
+                    costUsd: threadTotals.costUsd,
+                    estimatedCostUsd: threadTotals.estimatedCostUsd,
+                  }
+                : {
+                    tokens: null,
+                    costUsd: chatActivity?.spentUsd ?? null,
+                    estimatedCostUsd: chatActivity?.spentEstimatedUsd ?? null,
+                  },
+              liveCostOf(liveText.get(CHAT_LIVE_KEY)),
+            ),
+          ),
           inputTokens:
             threadTotals.inputTokens ?? chatActivity?.inputTokens ?? null,
           outputTokens:
@@ -6592,7 +6632,11 @@ export function Chats({
       nodeActivity: AgentActivity | undefined,
     ): Pick<
       AgentDisplay,
-      'spentUsd' | 'inputTokens' | 'outputTokens' | 'cacheTokens'
+      | 'spentUsd'
+      | 'spentEstimatedUsd'
+      | 'inputTokens'
+      | 'outputTokens'
+      | 'cacheTokens'
     > => {
       const totals = nodeReadings.get(nodeId)?.totals;
       // What the agent's running turns have spent that no row records yet —
@@ -6601,18 +6645,32 @@ export function Chats({
       const live = liveNodeCost(liveText, nodeId);
       if (totals === undefined || totals.turns === 0) {
         return {
-          spentUsd: withLiveCost(
-            { tokens: null, costUsd: nodeActivity?.spentUsd ?? null },
-            live,
-          ).costUsd,
+          ...spentOf(
+            withLiveCost(
+              {
+                tokens: null,
+                costUsd: nodeActivity?.spentUsd ?? null,
+                estimatedCostUsd: nodeActivity?.spentEstimatedUsd ?? null,
+              },
+              live,
+            ),
+          ),
           inputTokens: nodeActivity?.inputTokens ?? null,
           outputTokens: nodeActivity?.outputTokens ?? null,
           cacheTokens: nodeActivity?.cacheTokens ?? null,
         };
       }
       return {
-        spentUsd: withLiveCost({ tokens: null, costUsd: totals.costUsd }, live)
-          .costUsd,
+        ...spentOf(
+          withLiveCost(
+            {
+              tokens: null,
+              costUsd: totals.costUsd,
+              estimatedCostUsd: totals.estimatedCostUsd,
+            },
+            live,
+          ),
+        ),
         inputTokens: totals.inputTokens,
         outputTokens: totals.outputTokens,
         cacheTokens:
@@ -6649,15 +6707,22 @@ export function Chats({
           // its running turn has spent that no row records yet.
           const spend = withLiveCost(
             spendOfTotals(nodeReadings.get(nodeId)?.mainTotals),
-            live?.spentCostUsd ?? null,
+            liveCostOf(live),
           );
           return {
             ...thread,
             contextTokens: live?.contextTokens ?? thread.contextTokens ?? null,
+            contextEstimated:
+              live?.contextTokens == null && thread.contextEstimated === true,
             contextWindowTokens:
               live?.contextWindowTokens ?? thread.contextWindowTokens ?? null,
             spentTokens: spend?.tokens ?? thread.spentTokens ?? null,
-            spentUsd: spend?.costUsd ?? thread.spentUsd ?? null,
+            ...(spend?.costUsd != null
+              ? spentOf(spend)
+              : {
+                  spentUsd: thread.spentUsd ?? null,
+                  spentEstimatedUsd: thread.spentEstimatedUsd ?? null,
+                }),
             promptCacheExpiresAt:
               nodeReadings.get(nodeId)?.promptCacheExpiresAt ?? null,
           };
@@ -6700,7 +6765,7 @@ export function Chats({
           ),
           latest: block === undefined ? null : callBlockLatest(block),
           spentTokens: usage?.tokens ?? null,
-          spentUsd: usage?.costUsd ?? null,
+          ...spentOf(usage),
           member: conversationMember(block, thread.callIds),
           promptCacheExpiresAt: resolveConversationCacheExpiry(
             nodeReadings,
@@ -6796,7 +6861,7 @@ export function Chats({
           ),
           latest: block === undefined ? null : callBlockLatest(block),
           spentTokens: usage?.tokens ?? null,
-          spentUsd: usage?.costUsd ?? null,
+          ...spentOf(usage),
           member: conversationMember(block, callIds),
           promptCacheExpiresAt: resolveConversationCacheExpiry(
             nodeReadings,
@@ -6847,6 +6912,7 @@ export function Chats({
     ): {
       contextTokens?: number | null;
       contextWindowTokens?: number | null;
+      contextEstimated?: boolean;
     } => {
       const own = liveText.get(nodeId);
       if ((own?.contextTokens ?? null) !== null) {
@@ -6925,6 +6991,7 @@ export function Chats({
         status: displayStatus(nodeActivity, awaitingAnswer.has(node.id)),
         activeTurns: nodeActivity?.activeTurns ?? 0,
         contextTokens: nodeContext?.contextTokens ?? null,
+        contextEstimated: nodeContext?.contextEstimated === true,
         contextWindowTokens: nodeContext?.contextWindowTokens ?? null,
         ...nodeSpendOf(node.id, nodeActivity),
         threads: [...callThreads, ...(subagentThreads.get(node.id) ?? [])],
@@ -6955,6 +7022,7 @@ export function Chats({
           status: displayStatus(nodeActivity, awaitingAnswer.has(nodeId)),
           activeTurns: nodeActivity.activeTurns,
           contextTokens: nodeContext.contextTokens ?? null,
+          contextEstimated: nodeContext.contextEstimated === true,
           contextWindowTokens: nodeContext.contextWindowTokens ?? null,
           ...nodeSpendOf(nodeId, nodeActivity),
           threads: [...callThreads, ...(subagentThreads.get(nodeId) ?? [])],
@@ -7041,6 +7109,7 @@ export function Chats({
       return {
         tokens: root?.contextTokens ?? null,
         window: root?.contextWindowTokens ?? null,
+        estimated: root?.contextEstimated === true,
       };
     }
     return chatContextFigures({
@@ -9230,12 +9299,16 @@ export function Chats({
                         turnCount={threadTotalsShown.turns}
                         // The recorded total plus what the running turns
                         // have spent that no row carries yet.
-                        costUsd={
+                        {...headerSpendOf(
                           withLiveCost(
-                            { tokens: null, costUsd: threadTotals.costUsd },
+                            {
+                              tokens: null,
+                              costUsd: threadTotals.costUsd,
+                              estimatedCostUsd: threadTotals.estimatedCostUsd,
+                            },
                             liveRunCost(liveText),
-                          ).costUsd
-                        }
+                          ),
+                        )}
                         costedTurns={threadTotals.costedTurns}
                         // Only while the run is actually live. A transcript
                         // whose last row is a user message describes an open
@@ -10014,6 +10087,7 @@ export function Chats({
                                 }
                                 contextTokens={chatContext.tokens}
                                 contextWindowTokens={chatContext.window}
+                                contextEstimated={chatContext.estimated}
                                 awaitingReading={awaitingReading}
                                 // Whether the readout has to keep itself
                                 // current. The BADGE reading, not the run
@@ -10073,6 +10147,7 @@ export function Chats({
                                   nodeId={wfNodes.rootId}
                                   contextTokens={chatContext.tokens}
                                   contextWindowTokens={chatContext.window}
+                                  contextEstimated={chatContext.estimated}
                                   live={isWorkingRunStatus(activeRunStatus)}
                                   side="top"
                                 />

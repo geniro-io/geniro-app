@@ -51,7 +51,7 @@ ${
 A user-instruction change reaches every project that agent works in: recommend one only for a habit that does not belong to this repository, and never for an agent whose file \`path\` is null (it keeps none; the reason says where its rules live instead).`,
     `## Method
 
-1. Timeline. Read view=overview first. Note wall time, active time, time waiting on the user, the critical path, and the tokens and cost spent.
+1. Timeline. Read view=overview first. Note wall time, active time, time waiting on the user, the critical path, and the tokens and cost spent. \`estimatedCostUsd\` is the part of a cost geniro priced from token counts at list price, not the CLI's own bill.
 2. Critical path. Name the three spans that held it longest (view=spans kinds=["critical"]). Time off the critical path is not worth optimising first.
 3. Serial work. Find calls or steps that ran one after another with no data dependency, and nodes that sat idle while another worked.
 4. Loops. Same-intent re-calls, review↔fix ping-pong, retries, the same file read again and again, steps repeated after the goal was met.

@@ -8,6 +8,7 @@ function totals(overrides: Partial<ChatTotals> = {}): ChatTotals {
     turns: 2,
     costedTurns: 2,
     costUsd: 1,
+    estimatedCostUsd: null,
     inputTokens: 100,
     outputTokens: 20,
     cacheReadTokens: null,
@@ -313,5 +314,47 @@ describe('toRankedRows', () => {
 
     expect(rows[0]!.label).toBe('claude');
     expect(rows[0]!.title).toBe('claude-opus-5[thinking=true,context=300k]');
+  });
+});
+
+describe('estimated cost carried through the folds', () => {
+  it('keeps each day’s estimated part and accumulates it, null while none is estimated', () => {
+    const points = toDayPoints([
+      day('2026-08-10', { costUsd: 1 }),
+      day('2026-08-11', { costUsd: 2, estimatedCostUsd: 0.5 }),
+      day('2026-08-12', { costUsd: 1, estimatedCostUsd: 0.25 }),
+    ]);
+
+    expect(points.map((point) => point.estimatedCostUsd)).toEqual([
+      null,
+      0.5,
+      0.25,
+    ]);
+    expect(points.map((point) => point.cumulativeEstimatedUsd)).toEqual([
+      null,
+      0.5,
+      0.75,
+    ]);
+  });
+
+  it('hands a ranked row its group’s estimated part', () => {
+    const groups: UsageGroup[] = [
+      { key: 'codex', totals: totals({ costUsd: 3, estimatedCostUsd: 3 }) },
+      { key: 'claude', totals: totals({ costUsd: 2 }) },
+    ];
+    const seen: (number | null)[] = [];
+
+    const rows = toRankedRows(
+      groups,
+      (key) => key ?? '',
+      (row) => {
+        seen.push(row.estimatedCostUsd);
+        return '';
+      },
+      true,
+    );
+
+    expect(seen).toEqual([3, null]);
+    expect(rows.map((row) => row.estimatedCostUsd)).toEqual([3, null]);
   });
 });

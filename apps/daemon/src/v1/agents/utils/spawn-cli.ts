@@ -870,6 +870,8 @@ interface TurnState {
    * last `result` line — kept so {@link heldCostOf} can be added to it.
    */
   liveCostUsd: number;
+  /** Of {@link liveCostUsd}, the part geniro priced itself. */
+  liveEstimatedCostUsd: number;
   /**
    * Whether a non-zero `cost_progress` has been published for this turn, so
    * its ending owes the live plane a zero ahead of the terminal that records
@@ -890,8 +892,11 @@ interface TurnState {
  * only what it spent after the latest continuation (run `07d68eea`, call-15,
  * whose session files price at ~$15).
  */
-function heldCostOf(turn: TurnState): number {
-  let total = 0;
+function heldCostOf(turn: TurnState): {
+  costUsd: number;
+  estimatedCostUsd: number;
+} {
+  const total = { costUsd: 0, estimatedCostUsd: 0 };
   const held = [
     turn.deferredTerminal,
     turn.supersededTerminal,
@@ -901,12 +906,16 @@ function heldCostOf(turn: TurnState): number {
     if (segment?.type !== 'turn_complete') {
       continue;
     }
-    const cost = segment.usage?.costUsd;
-    if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) {
-      total += cost;
-    }
+    total.costUsd += positiveOrZero(segment.usage?.costUsd);
+    total.estimatedCostUsd += positiveOrZero(segment.usage?.estimatedCostUsd);
   }
   return total;
+}
+
+function positiveOrZero(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
 }
 
 /**
@@ -1286,10 +1295,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * (`error_during_execution`, `terminal_reason: aborted_streaming`) — and
    * NOTHING after it for five seconds, while a second message on the same
    * process ran to its own `result`. That `result` line is what settles the
-   * turn, so no tail is left to mistake for the next turn's output. It used to
-   * be set for every Stop, REPORTED as "я его остановил. У него был открыт
-   * браузер Playwright. Потом он написал новое сообщение, и Playwright сразу
-   * закрылся" — the respawn taking the browser with the old process.
+   * turn, so no tail is left to mistake for the next turn's output. (codex does
+   * leave one, fenced by turn id in its own driver — `CodexSession.endedTurns`.)
+   *
+   * It used to be set for every Stop, REPORTED as "я его остановил. У него был
+   * открыт браузер Playwright. Потом он написал новое сообщение, и Playwright
+   * сразу закрылся" — the respawn taking the browser with the old process.
    *
    * The defect retiring guards against, for the record: after a Stop, a
    * cancelled turn's trailing `result` line settled the NEXT turn the moment it
@@ -1351,8 +1362,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     void sweepDetachedShells();
     // Asked to stop AND ended some other way than on the CLI's own terminal
     // line — see {@link cancelledTurnMayStillEmit}. A stopped turn the CLI ended
-    // ITSELF leaves nothing to trail, so the process goes on serving turns and
-    // the user's MCP servers — a browser among them — survive the Stop.
+    // ITSELF leaves nothing here to trail (codex's tail is fenced in its own
+    // driver), so the process goes on serving turns and the user's MCP servers
+    // — a browser among them — survive the Stop.
     //
     // Keyed on the cancel, NOT on the broader "did not end by itself". The
     // silence deadline settles a turn the same way, but the deadline path
@@ -1759,12 +1771,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * figure that was up.
    */
   const publishLiveCost = (turn: TurnState): void => {
-    const costUsd = turn.liveCostUsd + heldCostOf(turn);
+    const held = heldCostOf(turn);
+    const costUsd = turn.liveCostUsd + held.costUsd;
     if (costUsd <= 0 && !turn.costPublished) {
       return;
     }
     turn.costPublished = costUsd > 0;
-    turn.options.onEvent({ type: 'cost_progress', costUsd });
+    const estimatedCostUsd = turn.liveEstimatedCostUsd + held.estimatedCostUsd;
+    turn.options.onEvent({
+      type: 'cost_progress',
+      costUsd,
+      ...(estimatedCostUsd > 0 ? { estimatedCostUsd } : {}),
+    });
   };
 
   const finishTurn = (turn: TurnState, ending: AgentEvent): void => {
@@ -1779,6 +1797,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // The terminal records every held segment, so the live figure comes down
     // AHEAD of it — a reader adding the two never counts that money twice.
     turn.liveCostUsd = 0;
+    turn.liveEstimatedCostUsd = 0;
     publishLiveCost(turn);
     if (opts.stdinLifetime === 'turn') {
       endStdin();
@@ -2790,6 +2809,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // forgets every segment this turn is still holding — see `heldCostOf`.
     if (normalized.type === 'cost_progress') {
       turn.liveCostUsd = normalized.costUsd > 0 ? normalized.costUsd : 0;
+      turn.liveEstimatedCostUsd = positiveOrZero(normalized.estimatedCostUsd);
       armSilenceDeadline(turn);
       publishLiveCost(turn);
       return;
@@ -3338,6 +3358,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       supersededTerminal: null,
       continuedSegment: null,
       liveCostUsd: 0,
+      liveEstimatedCostUsd: 0,
       costPublished: false,
     };
     current = turn;

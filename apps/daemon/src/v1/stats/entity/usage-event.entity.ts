@@ -103,6 +103,14 @@ export class UsageEvent extends TimestampsEntity {
   @Property({ type: 'float', nullable: true })
   costUsd: number | null = null;
 
+  /**
+   * Of {@link costUsd}, the part geniro priced from token counts rather than
+   * read off the CLI's bill. Null on every row written before it was recorded,
+   * which therefore reads as the CLI's own figure.
+   */
+  @Property({ type: 'float', nullable: true })
+  estimatedCostUsd: number | null = null;
+
   @Property({ type: 'integer', nullable: true })
   inputTokens: number | null = null;
 

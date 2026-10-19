@@ -48,6 +48,42 @@ describe('foldTurnComplete', () => {
     });
   });
 
+  it('sums only the priced-here part of the cost, keeping the CLI’s part plain', () => {
+    const folded = foldTurnComplete(
+      complete({ costUsd: 1, estimatedCostUsd: 1 }),
+      complete({ costUsd: 0.5 }),
+    );
+
+    expect(folded.usage?.costUsd).toBe(1.5);
+    expect(folded.usage?.estimatedCostUsd).toBe(1);
+  });
+
+  it('states no estimate when neither segment priced anything itself', () => {
+    const folded = foldTurnComplete(
+      complete({ costUsd: 1 }),
+      complete({ costUsd: 0.5 }),
+    );
+
+    expect(folded.usage).not.toHaveProperty('estimatedCostUsd');
+  });
+
+  it('keeps a context estimate with the count it describes', () => {
+    // The later count is the CLI's, so the earlier stand-in no longer applies.
+    expect(
+      foldTurnComplete(
+        complete({ contextTokens: 900, contextEstimated: true }),
+        complete({ contextTokens: 1_200 }),
+      ).usage,
+    ).not.toHaveProperty('contextEstimated');
+    // The later segment said nothing, so the earlier stand-in is what is shown.
+    expect(
+      foldTurnComplete(
+        complete({ contextTokens: 900, contextEstimated: true }),
+        complete({}),
+      ).usage,
+    ).toMatchObject({ contextTokens: 900, contextEstimated: true });
+  });
+
   it('merges both segments’ cost splits per model', () => {
     const folded = foldTurnComplete(
       complete({

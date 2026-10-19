@@ -215,7 +215,7 @@ pnpm commit             # conventional commit via commitizen
 ## Testing conventions
 
 - Vitest, transformed by swc (`vitest.base.ts`); tests run from source.
-- `@geniro/daemon` and `@packages/mikroorm` run their suites under Electron, so `pnpm rebuild:native` must have run.
+- `@geniro/daemon`, `@packages/mikroorm` and `@geniro/ui` run their suites under Electron's Node (`ELECTRON_RUN_AS_NODE`), the runtime the code ships on. The daemon and mikroorm suites open better-sqlite3, so `pnpm rebuild:native` must have run; the UI suite needs Electron's Node APIs, which the system Node can lack (`net.Socket#setTypeOfService` is missing from Node 24.14).
 - Unit tests are co-located `*.spec.{ts,tsx}`. Run them through the package scripts, never `vitest` directly.
 - Specs are type-checked: `check-types` uses `tsconfig.json`, which includes specs and `__tests__/`. Never narrow it to the spec-excluding `tsconfig.build.json`.
 - React component tests put `// @vitest-environment jsdom` on line 1. Wrap module-scope spies used in a `vi.mock` factory in `vi.hoisted(() => ({ … }))`.
@@ -270,7 +270,7 @@ pnpm commit             # conventional commit via commitizen
 
 - No Python runtime; the whole stack is TypeScript.
 - Secrets live in the macOS Keychain only, never SQLite or a file. The one kind the app stores is a share key (service `geniro.share`, account = share id), written through `/usr/bin/security -i` on stdin so it never rides argv. The loopback token in `daemon.json` is not a user secret.
-- Child env: `buildChildEnv` (`utils/child-env.ts`) strips every `GENIRO_`-prefixed key and every adapter's `auth.isolatedEnvKeys`, then each adapter re-injects only its own `auth.inheritedEnvKeys`. Never un-strip a name: an inherited user credential must not reach another CLI's child.
+- Child env: `buildChildEnv` (`utils/child-env.ts`) strips every `GENIRO_`-prefixed key, the daemon's own `ELECTRON_RUN_AS_NODE` (inherited, it makes every Electron app an agent starts boot as plain Node) and every adapter's `auth.isolatedEnvKeys`, then each adapter re-injects only its own `auth.inheritedEnvKeys`. Never un-strip a name: an inherited user credential must not reach another CLI's child.
 - Every child process the daemon spawns registers with `ProcessRegistry` (claim → register → auto-unregister on settle). Never spawn an unmanaged child.
 - Every detached child group is also recorded in the child journal (`v1/agents/utils/child-journal.ts` → `<userData>/children.json`) inside the spawn helper itself (`defaultSpawn`, `AgentAdapter.runAsProcessGroup`, `runManagedCommand`). The next boot reaps survivors (`services/stranded-child-reaper.service.ts`, first in `main.ts`).
 - The reaper never kills on a pid alone: it re-confirms identity through `utils/process-identity`, and leaves an unconfirmable entry alone. A plain short `execFile` utility child is not journaled.

@@ -44,6 +44,7 @@ function reading(
       'callee',
       {
         contextTokens: null,
+        contextEstimated: false,
         contextWindowTokens: null,
         model: null,
         calls,
@@ -94,6 +95,7 @@ describe('resolveCalleeContext', () => {
         promptCacheExpiresAt: null,
         callId: 'call-1',
         contextTokens: 64_500,
+        contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
@@ -114,6 +116,7 @@ describe('resolveCalleeContext', () => {
         promptCacheExpiresAt: null,
         callId: 'call-1',
         contextTokens: 64_500,
+        contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
@@ -138,6 +141,7 @@ describe('resolveCalleeContext', () => {
         promptCacheExpiresAt: null,
         callId: 'call-1',
         contextTokens: 64_500,
+        contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
@@ -159,6 +163,7 @@ describe('resolveCalleeContext', () => {
         promptCacheExpiresAt: null,
         callId: 'call-2',
         contextTokens: 64_500,
+        contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
@@ -185,6 +190,7 @@ describe('resolveConversationContext', () => {
         promptCacheExpiresAt: null,
         callId: 'call-22',
         contextTokens: 40_000,
+        contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
@@ -193,6 +199,7 @@ describe('resolveConversationContext', () => {
         promptCacheExpiresAt: null,
         callId: 'call-24',
         contextTokens: 90_000,
+        contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
@@ -213,6 +220,7 @@ describe('resolveConversationContext', () => {
         promptCacheExpiresAt: null,
         callId: 'call-22',
         contextTokens: 40_000,
+        contextEstimated: false,
         contextWindowTokens: null,
         totals: NO_TOTALS,
         start: null,
@@ -221,6 +229,7 @@ describe('resolveConversationContext', () => {
         promptCacheExpiresAt: null,
         callId: 'call-23',
         contextTokens: 55_000,
+        contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
         start: null,
@@ -249,6 +258,7 @@ describe('resolveConversationSpend', () => {
         promptCacheExpiresAt: null,
         callId: 'call-10',
         contextTokens: null,
+        contextEstimated: false,
         contextWindowTokens: null,
         totals: totals({
           turns: 4,
@@ -262,6 +272,7 @@ describe('resolveConversationSpend', () => {
         promptCacheExpiresAt: null,
         callId: 'call-12',
         contextTokens: null,
+        contextEstimated: false,
         contextWindowTokens: null,
         totals: totals({ turns: 1, costUsd: 12.38, outputTokens: 250 }),
         start: null,
@@ -282,6 +293,7 @@ describe('resolveConversationSpend', () => {
         promptCacheExpiresAt: null,
         callId: 'call-1',
         contextTokens: 5,
+        contextEstimated: false,
         contextWindowTokens: 10,
         totals: NO_TOTALS,
         start: null,
@@ -313,9 +325,22 @@ describe('the running part of a conversation’s cost', () => {
   ]);
 
   it('sums the calls a conversation names, under their per-call keys', () => {
-    expect(liveConversationCost(plane, 'callee', ['call-1', 'call-2'])).toBe(
-      1.75,
+    expect(liveConversationCost(plane, 'callee', ['call-1', 'call-2'])).toEqual(
+      { costUsd: 1.75, estimatedCostUsd: null },
     );
+  });
+
+  it('sums the part of the running cost geniro priced itself', () => {
+    const priced: ReadonlyMap<string, LiveState> = new Map([
+      [
+        partialOwnerKey('callee', 'call-1'),
+        { ...costing(1), spentEstimatedCostUsd: 1 },
+      ],
+      [partialOwnerKey('callee', 'call-2'), costing(0.5)],
+    ]);
+    expect(
+      liveConversationCost(priced, 'callee', ['call-1', 'call-2']),
+    ).toEqual({ costUsd: 1.5, estimatedCostUsd: 1 });
   });
 
   it('answers null — not 0 — when nothing running has reported', () => {
@@ -324,25 +349,31 @@ describe('the running part of a conversation’s cost', () => {
   });
 
   it('sums EVERY conversation of one node for its card, and no other node’s', () => {
-    expect(liveNodeCost(plane, 'callee')).toBe(3.75);
+    expect(liveNodeCost(plane, 'callee')?.costUsd).toBe(3.75);
   });
 
   it('sums the whole open run for the thread’s header', () => {
-    expect(liveRunCost(plane)).toBe(12.75);
+    expect(liveRunCost(plane)?.costUsd).toBe(12.75);
   });
 
   it('adds the running part to a recorded spend', () => {
     // The reported undercount: a call hours into its turn stated the turns
     // that had FINISHED as the bill.
-    expect(withLiveCost({ tokens: 900, costUsd: 1.25 }, 3)).toEqual({
-      tokens: 900,
-      costUsd: 4.25,
-    });
+    expect(
+      withLiveCost(
+        { tokens: 900, costUsd: 1.25 },
+        { costUsd: 3, estimatedCostUsd: null },
+      ),
+    ).toEqual({ tokens: 900, costUsd: 4.25 });
   });
 
   it('takes the running part as the whole cost of a first turn still going', () => {
-    expect(withLiveCost(null, 0.4)).toEqual({ tokens: null, costUsd: 0.4 });
-    expect(withLiveCost({ tokens: 10, costUsd: null }, 0.4)).toEqual({
+    const running = { costUsd: 0.4, estimatedCostUsd: null };
+    expect(withLiveCost(null, running)).toEqual({
+      tokens: null,
+      costUsd: 0.4,
+    });
+    expect(withLiveCost({ tokens: 10, costUsd: null }, running)).toEqual({
       tokens: 10,
       costUsd: 0.4,
     });
@@ -351,8 +382,26 @@ describe('the running part of a conversation’s cost', () => {
   it('leaves a spend alone when nothing is running, or nothing is unrecorded', () => {
     const spend = { tokens: 5, costUsd: 1 };
     expect(withLiveCost(spend, null)).toBe(spend);
-    expect(withLiveCost(spend, 0)).toBe(spend);
+    expect(withLiveCost(spend, { costUsd: 0, estimatedCostUsd: null })).toBe(
+      spend,
+    );
     expect(withLiveCost(null, null)).toBeNull();
+  });
+
+  it('adds the running part geniro priced itself to the recorded estimate', () => {
+    expect(
+      withLiveCost(
+        { tokens: 5, costUsd: 1, estimatedCostUsd: 0.25 },
+        { costUsd: 2, estimatedCostUsd: 2 },
+      ),
+    ).toEqual({ tokens: 5, costUsd: 3, estimatedCostUsd: 2.25 });
+    // A running part that is the CLI's own bill leaves the estimate as it was.
+    expect(
+      withLiveCost(
+        { tokens: 5, costUsd: 1, estimatedCostUsd: 0.25 },
+        { costUsd: 2, estimatedCostUsd: null },
+      ).estimatedCostUsd,
+    ).toBe(0.25);
   });
 });
 
@@ -363,6 +412,7 @@ describe('resolveConversationCacheExpiry', () => {
   ): NodeDurableReading['calls'][number] => ({
     callId,
     contextTokens: null,
+    contextEstimated: false,
     contextWindowTokens: null,
     totals: NO_TOTALS,
     start: null,

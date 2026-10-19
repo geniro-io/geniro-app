@@ -336,6 +336,21 @@ describe('parseRunStatus — the run_status twin', () => {
     expect(skewed).not.toHaveProperty('seenAt');
   });
 
+  it('carries whether the stamped context count is geniro’s stand-in', () => {
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        contextTokens: 900,
+        contextWindowTokens: 200_000,
+        contextEstimated: true,
+      }),
+    ).toMatchObject({ contextTokens: 900, contextEstimated: true });
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, contextTokens: 900 }),
+    ).toMatchObject({ contextTokens: 900, contextEstimated: false });
+  });
+
   it('reads the prompt-cache expiry a settle carries, and drops one that is not an instant', () => {
     expect(
       parseRunStatus({

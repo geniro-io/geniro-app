@@ -25,7 +25,13 @@ import {
   formatDuration,
   NOT_MEASURED,
 } from '../stats/stats-format';
-import { formatTokens, formatUsd } from './agent-activity';
+import {
+  costEstimateNote,
+  costEstimateTitle,
+  formatTokens,
+  formatUsd,
+  markEstimate,
+} from './agent-activity';
 import {
   blocksCaller,
   BY_SUB_AGENTS,
@@ -155,6 +161,24 @@ function HoverTip({ tip }: { tip: MarkTip }): React.JSX.Element {
 /** A figure that was never measured, said as such rather than shown as zero. */
 export function measuredRow(label: string, value: string | null): TooltipRow {
   return { label, value: value ?? '', unmeasured: value === null };
+}
+
+/**
+ * A cost row: the figure with its `≈` when geniro priced any of it, and the
+ * note saying which part, or not-measured when no cost was reported.
+ */
+function costRow(
+  label: string,
+  costUsd: number | null,
+  estimatedUsd: number | null,
+): TooltipRow {
+  return {
+    ...measuredRow(
+      label,
+      costUsd === null ? null : markEstimate(formatUsd(costUsd), estimatedUsd),
+    ),
+    note: costEstimateTitle(costUsd, estimatedUsd),
+  };
 }
 
 /**
@@ -390,8 +414,12 @@ function LaneLabel({
         <span className="truncate text-sm font-medium text-foreground">
           {lane.nodeId ?? 'agent'}
         </span>
-        <span className="ml-auto shrink-0 text-sm tabular-nums text-foreground">
-          {lane.costUsd === null ? NOT_MEASURED : formatUsd(lane.costUsd)}
+        <span
+          className="ml-auto shrink-0 text-sm tabular-nums text-foreground"
+          title={costEstimateTitle(lane.costUsd, lane.estimatedCostUsd)}>
+          {lane.costUsd === null
+            ? NOT_MEASURED
+            : markEstimate(formatUsd(lane.costUsd), lane.estimatedCostUsd)}
         </span>
       </span>
       <span className="truncate pl-3.5 text-[11px] whitespace-nowrap text-muted-foreground">
@@ -587,10 +615,7 @@ function LaneTrack({
           rows: [
             { label: 'agent', value: lane.agentKind ?? '—' },
             { label: 'at', value: atOf(pct) },
-            measuredRow(
-              'spent',
-              lane.costUsd === null ? null : formatUsd(lane.costUsd),
-            ),
+            costRow('spent', lane.costUsd, lane.estimatedCostUsd),
           ],
         });
       }}>
@@ -784,7 +809,7 @@ function LaneTrack({
             data-slot="waterfall-turn"
             data-mark={markKey(mark)}
             data-outcome={turn.outcome}
-            aria-label={`${laneName} turn${turn.costUsd === null ? '' : `, ${formatUsd(turn.costUsd)}`}`}
+            aria-label={turnLabel(laneName, turn)}
             className={cn(
               'absolute top-2 flex h-5 items-center overflow-hidden rounded-[4px] px-1',
               TURN_OUTCOME_CLASS[turn.outcome],
@@ -801,7 +826,7 @@ function LaneTrack({
             })}>
             {wide && turn.costUsd !== null ? (
               <span className="truncate text-[10px] font-medium tabular-nums text-background">
-                {formatUsd(turn.costUsd)}
+                {markEstimate(formatUsd(turn.costUsd), turn.estimatedCostUsd)}
                 {share !== null && share >= HOT_SHARE
                   ? ` · ${Math.round(share * 100)}%`
                   : ''}
@@ -1228,6 +1253,15 @@ function CallArrows({
   );
 }
 
+/** A turn mark's accessible name: its lane, its cost, and whose price that is. */
+function turnLabel(laneName: string, turn: RunWaterfallTurn): string {
+  if (turn.costUsd === null) {
+    return `${laneName} turn`;
+  }
+  const note = costEstimateNote(turn.costUsd, turn.estimatedCostUsd);
+  return `${laneName} turn, ${markEstimate(formatUsd(turn.costUsd), turn.estimatedCostUsd)}${note === null ? '' : ` (${note})`}`;
+}
+
 /**
  * Everything the CLI said about one turn, as rows rather than one long line.
  *
@@ -1242,12 +1276,12 @@ export function turnRows(
   runFrom: number,
 ): TooltipRow[] {
   const rows: TooltipRow[] = [
-    measuredRow('cost', turn.costUsd === null ? null : formatUsd(turn.costUsd)),
+    costRow('cost', turn.costUsd, turn.estimatedCostUsd),
     // Which models that cost went to — the sub-agents' included, which the
     // token rows below may not count.
     ...(splitParts(turn) ?? []).map((part) => ({
       label: part.model,
-      value: formatUsd(part.costUsd),
+      value: markEstimate(formatUsd(part.costUsd), turn.estimatedCostUsd),
     })),
     {
       label: turn.outcome === 'running' ? 'so far' : 'worked',

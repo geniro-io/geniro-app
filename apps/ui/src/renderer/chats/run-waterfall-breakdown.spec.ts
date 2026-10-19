@@ -170,3 +170,54 @@ describe('toolRows', () => {
     ]);
   });
 });
+
+describe('breakdownRows estimated cost', () => {
+  it("takes a lane's estimated part on the whole run, null when none", () => {
+    const data = wfDto(100, {
+      lanes: [
+        wfLane('a', { costUsd: 4, estimatedCostUsd: 3 }),
+        wfLane('b', { costUsd: 2 }),
+      ],
+      turns: [wfTurn('a', 0, 50), wfTurn('b', 0, 50)],
+    });
+
+    const rows = breakdownRows(data, whole(100), 'agent', undefined);
+
+    expect(rows.map((row) => row.estimatedCostUsd)).toEqual([3, null]);
+  });
+
+  it('sums only the estimated turns that ended in the window, by agent and by model', () => {
+    const data = wfDto(100, {
+      lanes: [wfLane('eng', { costUsd: 6 })],
+      turns: [
+        wfTurn('eng', 0, 30, { costUsd: 2, estimatedCostUsd: 2, model: 'm1' }),
+        wfTurn('eng', 40, 90, { costUsd: 3, model: 'm2' }),
+      ],
+    });
+
+    const [agent] = breakdownRows(data, between(0, 60), 'agent', undefined);
+    const models = breakdownRows(data, whole(100), 'model', undefined);
+
+    expect(agent?.costUsd).toBe(2);
+    expect(agent?.estimatedCostUsd).toBe(2);
+    expect(
+      Object.fromEntries(models.map((row) => [row.key, row.estimatedCostUsd])),
+    ).toEqual({ m1: 2, m2: null });
+  });
+
+  it('carries the callees’ estimated part into the with-callees figure', () => {
+    const data = wfDto(100, {
+      lanes: [wfLane('mgr', { costUsd: 1 }), wfLane('eng')],
+      turns: [wfTurn('eng', 10, 20, { costUsd: 4, estimatedCostUsd: 4 })],
+      calls: [wfCall('mgr', 'eng', 5, 25)],
+    });
+
+    const mgr = breakdownRows(data, whole(100), 'agent', undefined).find(
+      (row) => row.nodeId === 'mgr',
+    );
+
+    expect(mgr?.withCalleesUsd).toBe(5);
+    expect(mgr?.withCalleesEstimatedUsd).toBe(4);
+    expect(mgr?.estimatedCostUsd).toBeNull();
+  });
+});

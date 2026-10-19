@@ -11,10 +11,12 @@ const day = (date: string): DayPoint => ({
   title: date,
   turns: 1,
   costUsd: 1,
+  estimatedCostUsd: null,
   inputTokens: 10,
   outputTokens: 5,
   totalTokens: 15,
   cumulativeUsd: 1,
+  cumulativeEstimatedUsd: null,
   threadsCreated: 1,
   pullRequests: 0,
   linesAdded: null,
@@ -165,5 +167,24 @@ describe('daily metric axes', () => {
     const [added, removed] = dailyMetricOf('lines').series;
     expect(added?.fillOpacity).toBeUndefined();
     expect(removed?.fillOpacity).toBeLessThan(1);
+  });
+});
+
+describe('dayRows spend', () => {
+  const spend = (patch: Partial<DayPoint>) =>
+    dayRows({ ...day('2026-10-01'), ...patch }, dailyMetricOf('cost'))[0]!;
+
+  it('marks a day geniro priced and says so in a note', () => {
+    const row = spend({ costUsd: 2, estimatedCostUsd: 2 });
+
+    expect(row.value).toBe('≈$2.00');
+    expect(row.note).toContain('geniro');
+  });
+
+  it('shows a day the agents billed plain, with no note', () => {
+    const row = spend({ costUsd: 2, estimatedCostUsd: null });
+
+    expect(row.value).toBe('$2.00');
+    expect(row.note).toBeUndefined();
   });
 });

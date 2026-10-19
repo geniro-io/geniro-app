@@ -40,8 +40,11 @@ import {
   type AgentThread,
   type AgentWork,
   CHAT_AGENT_KEY,
+  costEstimateNote,
+  costEstimateTitle,
   formatTokens,
   formatUsd,
+  markEstimate,
   subagentMayStillRun,
 } from './agent-activity';
 import {
@@ -569,6 +572,7 @@ function ThreadRow({
         runId={null}
         contextTokens={thread.contextTokens ?? null}
         contextWindowTokens={thread.contextWindowTokens ?? null}
+        contextEstimated={thread.contextEstimated === true}
         spentUsd={null}
         live={thread.status === 'running'}
         className="size-5 shrink-0 justify-center"
@@ -1127,7 +1131,11 @@ function InstanceSummary({
       </span>
       {open ? null : <InstanceCounts instance={instance} />}
       {usd === null ? null : (
-        <span className="shrink-0 tabular-nums">{formatUsd(usd)}</span>
+        <span
+          className="shrink-0 tabular-nums"
+          title={costEstimateTitle(usd, thread.spentEstimatedUsd)}>
+          {markEstimate(formatUsd(usd), thread.spentEstimatedUsd)}
+        </span>
       )}
     </p>
   );
@@ -1499,9 +1507,14 @@ function AgentSpend({
       {agent.spentUsd === null ? null : (
         <span
           data-slot="agent-spend"
-          title={breakdown.join(' \u00b7 ')}
+          title={[
+            breakdown.join(' \u00b7 '),
+            costEstimateNote(agent.spentUsd, agent.spentEstimatedUsd),
+          ]
+            .filter((part) => part !== null && part !== '')
+            .join('. ')}
           className="truncate text-[11px] tabular-nums text-muted-foreground">
-          {formatUsd(agent.spentUsd)}
+          {markEstimate(formatUsd(agent.spentUsd), agent.spentEstimatedUsd)}
         </span>
       )}
       {/* Its own line under the spend rather than more of it: one answers what
@@ -2560,7 +2573,9 @@ export function AgentsPanel({
                           nodeId={metricsByNode ? agent.id : null}
                           contextTokens={agent.contextTokens}
                           contextWindowTokens={agent.contextWindowTokens}
+                          contextEstimated={agent.contextEstimated === true}
                           spentUsd={agent.spentUsd}
+                          spentEstimatedUsd={agent.spentEstimatedUsd ?? null}
                           // This card's OWN status, not the run's: the panel lists
                           // several agents and only the working one's readout has
                           // anything to keep current.

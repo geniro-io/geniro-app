@@ -108,6 +108,7 @@ export class AgentEventBus {
     return {
       ...event,
       contextTokens: reading.tokens,
+      contextEstimated: reading.estimated,
       contextWindowTokens: reading.window,
     };
   }

@@ -971,6 +971,7 @@ export function HostedChat({
               runId={run.id}
               contextTokens={ring.tokens}
               contextWindowTokens={ring.window}
+              contextEstimated={ring.estimated}
               awaitingReading={awaitingReading}
               live={isWorkingRunStatus(status)}
               side="top"

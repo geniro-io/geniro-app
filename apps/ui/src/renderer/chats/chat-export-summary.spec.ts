@@ -41,8 +41,20 @@ describe('chatExportSummary — spend per agent', () => {
     ]);
 
     expect(summary.agents).toEqual([
-      { agent: 'manager', turns: 2, costUsd: 2, workedMs: 3000 },
-      { agent: 'engineer', turns: 1, costUsd: 9, workedMs: 60000 },
+      {
+        agent: 'manager',
+        turns: 2,
+        costUsd: 2,
+        estimatedCostUsd: null,
+        workedMs: 3000,
+      },
+      {
+        agent: 'engineer',
+        turns: 1,
+        costUsd: 9,
+        estimatedCostUsd: null,
+        workedMs: 60000,
+      },
     ]);
   });
 
@@ -51,7 +63,15 @@ describe('chatExportSummary — spend per agent', () => {
     // run would say nothing the facts above the table do not already say.
     expect(
       chatExportSummary([turn({ costUsd: 0.2, durationMs: 500 })]).agents,
-    ).toEqual([{ agent: 'agent', turns: 1, costUsd: 0.2, workedMs: 500 }]);
+    ).toEqual([
+      {
+        agent: 'agent',
+        turns: 1,
+        costUsd: 0.2,
+        estimatedCostUsd: null,
+        workedMs: 500,
+      },
+    ]);
   });
 
   it('keeps a figure nothing measured ABSENT rather than zero', () => {
@@ -63,7 +83,15 @@ describe('chatExportSummary — spend per agent', () => {
         turn({ costUsd: null, durationMs: null }),
         turn({ costUsd: null, durationMs: 400 }),
       ]).agents,
-    ).toEqual([{ agent: 'agent', turns: 2, costUsd: null, workedMs: 400 }]);
+    ).toEqual([
+      {
+        agent: 'agent',
+        turns: 2,
+        costUsd: null,
+        estimatedCostUsd: null,
+        workedMs: 400,
+      },
+    ]);
   });
 
   it('does not count the settle of a turn answered inside a continuation as a second turn', () => {
@@ -82,7 +110,15 @@ describe('chatExportSummary — spend per agent', () => {
           answeredByContinuation: true,
         }),
       ]).agents,
-    ).toEqual([{ agent: 'agent', turns: 1, costUsd: 5.08, workedMs: 584_467 }]);
+    ).toEqual([
+      {
+        agent: 'agent',
+        turns: 1,
+        costUsd: 5.08,
+        estimatedCostUsd: null,
+        workedMs: 584_467,
+      },
+    ]);
   });
 });
 
@@ -122,6 +158,7 @@ describe('chatExportSummary — agent calls', () => {
         calleeNodeId: 'engineer',
         durationMs: 150_000,
         costUsd: 4.25,
+        estimatedCostUsd: null,
         outcome: 'ok',
       },
     ]);
@@ -158,6 +195,7 @@ describe('chatExportSummary — agent calls', () => {
       outcome: 'unsettled',
       durationMs: null,
       costUsd: null,
+      estimatedCostUsd: null,
     });
   });
 

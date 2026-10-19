@@ -571,6 +571,23 @@ describe('ChatHeader — how long this thread WORKED', () => {
     expect(metricsTitle(el)).not.toContain('No cost reported');
   });
 
+  it('marks a price geniro computed itself as an estimate, and says so on hover', () => {
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="completed"
+        workedMs={252_000}
+        turnCount={6}
+        costUsd={1.25}
+        estimatedCostUsd={1.25}
+        costedTurns={6}
+      />,
+    );
+
+    expect(metrics(el)).toContain('≈$1.25');
+    expect(metricsTitle(el)).toContain("geniro's estimate");
+  });
+
   it('says "1 turn" rather than "1 turns" for a single-turn thread', () => {
     // The figure IS that turn, and `1 turns` is the kind of small wrongness a
     // reader trusts a number less for.

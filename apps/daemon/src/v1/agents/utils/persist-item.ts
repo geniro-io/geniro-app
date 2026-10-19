@@ -224,6 +224,7 @@ export function runToWire(
     autoCompactPercent: run.autoCompactPercent,
     modelParameters: readModelParameters(run.modelParameters),
     contextTokens: run.contextTokens,
+    contextEstimated: run.contextEstimated === true,
     contextWindowTokens: run.contextWindowTokens,
     workedMs: servedWorkedMs(run.workedMs, wallWorkedMs),
     toolCalls: run.toolCalls,

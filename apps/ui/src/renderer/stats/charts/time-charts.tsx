@@ -12,7 +12,12 @@ import {
   YAxis,
 } from 'recharts';
 
-import { formatTokens, formatUsd } from '../../chats/agent-activity';
+import {
+  costEstimateTitle,
+  formatTokens,
+  formatUsd,
+  markEstimate,
+} from '../../chats/agent-activity';
 import { EmptyState } from '../../components/empty-state';
 import type { DayPoint } from '../chart-data';
 import {
@@ -323,7 +328,16 @@ export function DailySeriesChart({
  */
 export function dayRows(day: DayPoint, metric: DailyMetric): TooltipRow[] {
   return [
-    figureRow('Spend', 'costUsd', day.costUsd, formatUsd, metric),
+    {
+      ...figureRow(
+        'Spend',
+        'costUsd',
+        day.costUsd,
+        (usd) => markEstimate(formatUsd(usd), day.estimatedCostUsd),
+        metric,
+      ),
+      note: costEstimateTitle(day.costUsd, day.estimatedCostUsd),
+    },
     figureRow('Tokens', 'totalTokens', day.totalTokens, formatTokens, metric),
     figureRow(
       'Threads',
@@ -415,13 +429,27 @@ export function CumulativeSpendChart({
                 rows={[
                   {
                     label: 'Total so far',
-                    value: formatUsd(day.cumulativeUsd),
+                    value: markEstimate(
+                      formatUsd(day.cumulativeUsd),
+                      day.cumulativeEstimatedUsd,
+                    ),
                     color: SERIES.spend,
+                    note: costEstimateTitle(
+                      day.cumulativeUsd,
+                      day.cumulativeEstimatedUsd,
+                    ),
                   },
                   {
                     label: 'That day',
-                    value: day.costUsd === null ? '' : formatUsd(day.costUsd),
+                    value:
+                      day.costUsd === null
+                        ? ''
+                        : markEstimate(
+                            formatUsd(day.costUsd),
+                            day.estimatedCostUsd,
+                          ),
                     unmeasured: day.costUsd === null,
+                    note: costEstimateTitle(day.costUsd, day.estimatedCostUsd),
                   },
                 ]}
               />

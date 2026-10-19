@@ -6,6 +6,8 @@ export interface ContextReading {
   tokens: number;
   /** The model's own window, or null when the CLI never reported one. */
   window: number | null;
+  /** Whether {@link tokens} is geniro's stand-in rather than a stated count. */
+  estimated?: boolean;
 }
 
 /**

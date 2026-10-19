@@ -159,20 +159,14 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   const seedRun = async (runId: string): Promise<void> => {
     await runDao.create({ id: runId, agentKind: 'claude', cwd: '/work' });
     await nodeStateDao.createPending(runId, 'node-a');
-    await callContextDao.rememberContext(
-      runId,
-      'call-1',
-      'node-a',
-      4200,
-      200000,
-    );
-    await callContextDao.rememberContext(
-      runId,
-      'call-2',
-      'node-a',
-      91000,
-      200000,
-    );
+    await callContextDao.rememberContext(runId, 'call-1', 'node-a', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+    });
+    await callContextDao.rememberContext(runId, 'call-2', 'node-a', {
+      contextTokens: 91000,
+      contextWindowTokens: 200000,
+    });
   };
 
   it('closes the run’s CLIs, then reaps what its agents left running — that run’s only', async () => {

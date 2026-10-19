@@ -44,6 +44,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     taken?: string;
     /** What a `done` line's segment cost, for the cases that fold two. */
     cost?: number;
+    /** Of {@link cost}, the part geniro priced itself. */
+    estimated?: number;
     /** Whose thread it came from: absent is the main one, a value a delegate's. */
     parent?: string;
     /** How the settling unit ended, when the fake line states it. */
@@ -60,6 +62,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     owned?: boolean;
     /** The CLI's running cost since its last `result` (claude's `get_usage`). */
     live?: number;
+    /** Of {@link live}, the part geniro priced itself (codex's list price). */
+    liveEstimated?: number;
     /** A tool call with this id — a delegate's own when `parent` is set. */
     run?: string;
     /** The command line that `run` call ran. */
@@ -77,7 +81,15 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     ];
   }
   if (typeof row.live === 'number') {
-    return [{ type: 'cost_progress', costUsd: row.live }];
+    return [
+      {
+        type: 'cost_progress',
+        costUsd: row.live,
+        ...(row.liveEstimated === undefined
+          ? {}
+          : { estimatedCostUsd: row.liveEstimated }),
+      },
+    ];
   }
   if (row.state !== undefined) {
     return [{ type: 'session_state', idle: row.state === 'idle' }];
@@ -127,6 +139,9 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
           contextWindowTokens: null,
           contextModel: null,
           costUsd: row.cost,
+          ...(row.estimated === undefined
+            ? {}
+            : { estimatedCostUsd: row.estimated }),
           durationMs: null,
           apiMs: null,
           ttftMs: null,
@@ -2233,6 +2248,39 @@ describe('a turn whose background work outlives its result', () => {
     expect(zeroAt).toBeGreaterThan(-1);
     expect(zeroAt).toBeLessThan(endAt);
     expect(events[endAt]).toMatchObject({ usage: { costUsd: 1.75 } });
+  });
+
+  it('carries the part of a held segment’s cost geniro priced onto the LIVE plane', async () => {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    const live = ():
+      Extract<AgentEvent, { type: 'cost_progress' }> | undefined =>
+      events.findLast(
+        (e): e is Extract<AgentEvent, { type: 'cost_progress' }> =>
+          e.type === 'cost_progress',
+      );
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, cost: 1.25, estimated: 1.25 });
+    // The held segment was list-priced; the continuation's running figure is
+    // the CLI's own, so only the held part is an estimate.
+    line(child, { says: 'back to work' });
+    line(child, { live: 0.4 });
+    expect(live()).toMatchObject({ costUsd: 1.65, estimatedCostUsd: 1.25 });
+    line(child, { live: 0.5, liveEstimated: 0.5 });
+    expect(live()?.estimatedCostUsd).toBeCloseTo(1.75);
+
+    await reportAndGoIdle(child, 'task-1');
+    line(child, { live: 0 });
+    line(child, { done: true, cost: 0.5 });
+    await handle?.done;
+
+    // The zero that takes the figure down carries no estimate of its own.
+    expect(live()).toEqual({ type: 'cost_progress', costUsd: 0 });
+    expect(events.find((e) => e.type === 'turn_complete')).toMatchObject({
+      usage: { costUsd: 1.75, estimatedCostUsd: 1.25 },
+    });
   });
 
   it('keeps what the superseded result cost when the resumed turn then FAILS', async () => {

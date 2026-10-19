@@ -316,6 +316,7 @@ class FakeRunDao {
     reading: {
       contextTokens?: number | null;
       contextWindowTokens?: number | null;
+      contextEstimated?: boolean;
     },
   ): Promise<void> {
     const run = this.runs.get(id);
@@ -327,6 +328,7 @@ class FakeRunDao {
       reading.contextTokens > 0
     ) {
       run.contextTokens = reading.contextTokens;
+      run.contextEstimated = reading.contextEstimated === true ? true : null;
     }
     if (
       typeof reading.contextWindowTokens === 'number' &&
@@ -4024,6 +4026,44 @@ describe('ChatService', () => {
       const third = cursor.start.mock.calls[2]?.[0] as AgentTurnInput;
       expect(third.prompt).toBe('and again');
       await turn(cursor, 'ok');
+    });
+
+    it('files a settled stand-in count as an estimate on the row and the registry', async () => {
+      const { service, cursor, runDao, contexts } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hi');
+      cursor.emit({ type: 'session', sessionId: 'sess-1' });
+      cursor.emit({
+        type: 'turn_complete',
+        usage: {
+          inputTokens: 900,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
+          contextTokens: 900,
+          contextEstimated: true,
+          contextWindowTokens: null,
+          contextModel: null,
+          costUsd: null,
+          durationMs: null,
+          apiMs: null,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
+        },
+        stopReason: 'end_turn',
+        finalText: 'done',
+      });
+      cursor.finish();
+      await drain();
+      await drain();
+
+      expect(runDao.runs.get(run.id)?.contextEstimated).toBe(true);
+      expect(contexts.read(run.id)?.estimated).toBe(true);
     });
 
     it('forgets the count the registry holds, not only the stored one, when a summary is carried', async () => {

@@ -5,6 +5,7 @@ import { BaseDao } from '@packages/mikroorm';
 import { Run } from '../../runs/entity/run.entity';
 import type {
   ChatListScope,
+  ContextLevel,
   PromptCacheTtlReason,
   RunListPage,
   RunPullRequest,
@@ -259,15 +260,13 @@ export class RunDao extends BaseDao<Run> {
    */
   async rememberContext(
     runId: string,
-    reading: {
-      contextTokens?: number | null;
-      contextWindowTokens?: number | null;
-    },
+    reading: ContextLevel,
     txEm?: EntityManager,
   ): Promise<void> {
     const data: Partial<Run> = {};
     if (positive(reading.contextTokens)) {
       data.contextTokens = reading.contextTokens;
+      data.contextEstimated = reading.contextEstimated === true ? true : null;
     }
     if (positive(reading.contextWindowTokens)) {
       data.contextWindowTokens = reading.contextWindowTokens;
@@ -486,7 +485,7 @@ export class RunDao extends BaseDao<Run> {
   async forgetContext(runId: string, txEm?: EntityManager): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
       { id: runId },
-      { contextTokens: null },
+      { contextTokens: null, contextEstimated: null },
     );
   }
 

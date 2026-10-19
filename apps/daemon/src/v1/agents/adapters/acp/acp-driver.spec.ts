@@ -2944,6 +2944,8 @@ describe('AcpSession turn completion', () => {
         costUsd: 0.42,
       },
     });
+    // The occupancy the agent stated is not an estimate.
+    expect(event).not.toHaveProperty('usage.contextEstimated');
   });
 
   it('falls back to the input count when no usage_update ever arrived', () => {
@@ -2955,7 +2957,9 @@ describe('AcpSession turn completion', () => {
         usage: { inputTokens: 77, outputTokens: 1 },
       },
     });
-    expect(event).toMatchObject({ usage: { contextTokens: 77 } });
+    expect(event).toMatchObject({
+      usage: { contextTokens: 77, contextEstimated: true },
+    });
   });
 
   it('refuses to report a non-USD cost in the costUsd field', () => {

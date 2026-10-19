@@ -3037,7 +3037,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // What a continuation the CLI opened by itself has spent so far — the
       // same live figure the in-turn site publishes, and ephemeral for the
       // same reason: its `result` line zeroes it as it writes the durable row.
-      this.partials.cost(runId, SINGLE_AGENT_NODE, null, event.costUsd);
+      this.partials.cost(
+        runId,
+        SINGLE_AGENT_NODE,
+        null,
+        event.costUsd,
+        event.estimatedCostUsd ?? null,
+      );
       return;
     }
     if (event.type === 'context_progress') {
@@ -3318,6 +3324,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     reading: {
       contextTokens?: number | null;
       contextWindowTokens?: number | null;
+      contextEstimated?: boolean;
     },
   ): Promise<void> {
     // A reading that names no window borrows the one the live plane already
@@ -3335,6 +3342,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     this.contexts.remember(runId, {
       tokens: reading.contextTokens ?? null,
       window,
+      estimated: reading.contextEstimated === true,
     });
     const tokens = reading.contextTokens ?? null;
     if (
@@ -5866,7 +5874,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // The dollars this turn has spent that its `turn_complete` has
               // not recorded yet — what the header adds to the thread's
               // recorded total while the turn runs.
-              this.partials.cost(runId, SINGLE_AGENT_NODE, null, event.costUsd);
+              this.partials.cost(
+                runId,
+                SINGLE_AGENT_NODE,
+                null,
+                event.costUsd,
+                event.estimatedCostUsd ?? null,
+              );
               return;
             }
             if (event.type === 'context_progress') {
@@ -5943,6 +5957,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 contextWindowTokens: ownWindow
                   ? (event.usage?.contextWindowTokens ?? null)
                   : null,
+                contextEstimated: event.usage?.contextEstimated === true,
               });
               // This turn's worked time and tool count, ADDED to the chat's
               // running totals. Read out and zeroed synchronously, for the

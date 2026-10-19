@@ -1,4 +1,7 @@
-import type { UnrecordedSpendStore } from '../unrecorded-spend.store';
+import type {
+  OutstandingSpend,
+  UnrecordedSpendStore,
+} from '../unrecorded-spend.store';
 
 /**
  * An in-memory {@link UnrecordedSpendStore} for specs that drive the live
@@ -14,6 +17,8 @@ import type { UnrecordedSpendStore } from '../unrecorded-spend.store';
 export class FakeUnrecordedSpendStore {
   /** run → owner → dollars, as the column would hold it. */
   readonly runs = new Map<string, Map<string, number>>();
+  /** run → owner → the part of those dollars priced here. */
+  readonly estimates = new Map<string, Map<string, number>>();
 
   constructor(seed: Record<string, Record<string, number>> = {}) {
     for (const [runId, owners] of Object.entries(seed)) {
@@ -21,23 +26,49 @@ export class FakeUnrecordedSpendStore {
     }
   }
 
-  set(runId: string, ownerKey: string, costUsd: number | null): void {
+  set(
+    runId: string,
+    ownerKey: string,
+    costUsd: number | null,
+    estimatedCostUsd: number | null = null,
+  ): void {
     const spend = this.runs.get(runId) ?? new Map<string, number>();
+    const estimates = this.estimates.get(runId) ?? new Map<string, number>();
     if (costUsd !== null && Number.isFinite(costUsd) && costUsd > 0) {
       spend.set(ownerKey, costUsd);
     } else {
       spend.delete(ownerKey);
     }
+    if (
+      spend.has(ownerKey) &&
+      estimatedCostUsd !== null &&
+      Number.isFinite(estimatedCostUsd) &&
+      estimatedCostUsd > 0
+    ) {
+      estimates.set(ownerKey, estimatedCostUsd);
+    } else {
+      estimates.delete(ownerKey);
+    }
+    this.estimates.set(runId, estimates);
     this.store(runId, spend);
   }
 
   clearRun(runId: string): void {
     this.runs.delete(runId);
+    this.estimates.delete(runId);
   }
 
-  loadAll(): Promise<Map<string, Map<string, number>>> {
+  loadAll(): Promise<Map<string, OutstandingSpend>> {
     return Promise.resolve(
-      new Map([...this.runs].map(([runId, spend]) => [runId, new Map(spend)])),
+      new Map(
+        [...this.runs].map(([runId, spend]) => [
+          runId,
+          {
+            spend: new Map(spend),
+            estimates: new Map(this.estimates.get(runId) ?? []),
+          },
+        ]),
+      ),
     );
   }
 

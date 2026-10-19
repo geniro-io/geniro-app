@@ -2073,6 +2073,7 @@ export class GraphExecutorService
       pushCall(call.nodeId, {
         callId: call.callId,
         contextTokens: call.contextTokens,
+        contextEstimated: call.contextEstimated === true,
         contextWindowTokens: call.contextWindowTokens,
         totals: callTotals.get(call.callId)?.totals ?? emptyTotals(),
         promptCacheExpiresAt: cacheExpiryOf(callCache.get(call.callId)),
@@ -2095,6 +2096,7 @@ export class GraphExecutorService
       pushCall((spent?.nodeId ?? started?.nodeId)!, {
         callId,
         contextTokens: null,
+        contextEstimated: false,
         contextWindowTokens: null,
         totals: spent?.totals ?? emptyTotals(),
         promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
@@ -2106,6 +2108,7 @@ export class GraphExecutorService
       nodeId: row.nodeId,
       status: row.status,
       contextTokens: row.contextTokens,
+      contextEstimated: row.contextEstimated === true,
       contextWindowTokens: row.contextWindowTokens,
       model: models.get(row.nodeId) ?? null,
       calls: callsByNode.get(row.nodeId) ?? [],
@@ -3912,7 +3915,13 @@ export class GraphExecutorService
             // under the same owner key — so a CALL's card adds its own running
             // turn to what its finished turns recorded, rather than showing the
             // finished turns alone as if they were the bill.
-            this.partials.cost(runId, ownerKey, node.id, event.costUsd);
+            this.partials.cost(
+              runId,
+              ownerKey,
+              node.id,
+              event.costUsd,
+              event.estimatedCostUsd ?? null,
+            );
             return;
           }
           if (event.type === 'context_progress') {
@@ -3971,8 +3980,10 @@ export class GraphExecutorService
                   .rememberContext(
                     runId,
                     node.id,
-                    event.contextTokens,
-                    windowTokens,
+                    {
+                      contextTokens: event.contextTokens,
+                      contextWindowTokens: windowTokens,
+                    },
                     em,
                   )
                   .catch(() => {}),
@@ -3988,8 +3999,10 @@ export class GraphExecutorService
                     runId,
                     callContext.callId,
                     node.id,
-                    event.contextTokens,
-                    windowTokens,
+                    {
+                      contextTokens: event.contextTokens,
+                      contextWindowTokens: windowTokens,
+                    },
                     em,
                   )
                   .catch(() => {}),
@@ -4063,8 +4076,11 @@ export class GraphExecutorService
                   .rememberContext(
                     runId,
                     node.id,
-                    event.usage?.contextTokens ?? null,
-                    settledWindowTokens,
+                    {
+                      contextTokens: event.usage?.contextTokens ?? null,
+                      contextWindowTokens: settledWindowTokens,
+                      contextEstimated: event.usage?.contextEstimated === true,
+                    },
                     em,
                   )
                   .catch(() => {}),
@@ -4077,8 +4093,11 @@ export class GraphExecutorService
                     runId,
                     callContext.callId,
                     node.id,
-                    event.usage?.contextTokens ?? null,
-                    settledWindowTokens,
+                    {
+                      contextTokens: event.usage?.contextTokens ?? null,
+                      contextWindowTokens: settledWindowTokens,
+                      contextEstimated: event.usage?.contextEstimated === true,
+                    },
                     em,
                   )
                   .catch(() => {}),

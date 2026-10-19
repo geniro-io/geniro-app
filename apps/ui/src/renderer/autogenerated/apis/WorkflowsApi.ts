@@ -82,6 +82,10 @@ export interface WorkflowsApiListWorkflowRunNodesRequest {
 
 export interface WorkflowsApiListWorkflowRunsRequest {
     scope?: ListWorkflowRunsScopeEnum;
+    limit?: number;
+    beforeCreatedAt?: string;
+    beforeId?: string;
+    runId?: string;
 }
 
 export interface WorkflowsApiOpenWorkflowChatRequest {
@@ -633,6 +637,22 @@ export class WorkflowsApi extends runtime.BaseAPI {
 
         if (requestParameters['scope'] != null) {
             queryParameters['scope'] = requestParameters['scope'];
+        }
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        if (requestParameters['beforeCreatedAt'] != null) {
+            queryParameters['beforeCreatedAt'] = requestParameters['beforeCreatedAt'];
+        }
+
+        if (requestParameters['beforeId'] != null) {
+            queryParameters['beforeId'] = requestParameters['beforeId'];
+        }
+
+        if (requestParameters['runId'] != null) {
+            queryParameters['runId'] = requestParameters['runId'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};

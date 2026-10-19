@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { StopDetachedProcessesSchema } from '../chat.types';
 import type { RunDao } from '../dao/run.dao';
+import { listChatsQuerySchema } from '../dto/chat.dto';
 import type { AgentSessionRegistry } from '../services/agent-session.registry';
 import { RunProcessAttribution } from '../services/run-process-attribution.service';
 import { RunProcessReaper } from '../services/run-process-reaper.service';
@@ -276,5 +277,29 @@ describe('POST /v1/chats/:runId/processes/stop', () => {
     Array.from({ length: RUN_PROCESS_CAP + 1 }, (_, i) => i + 2),
   ])('rejects unsafe request pids %j', (...pids) => {
     expect(StopDetachedProcessesSchema.safeParse({ pids }).success).toBe(false);
+  });
+});
+
+describe('GET /v1/chats', () => {
+  it('hands the service the page the query names', async () => {
+    const listChats = vi.fn(async () => []);
+    const controller = Object.create(
+      ChatController.prototype,
+    ) as ChatController;
+    Object.assign(controller, { chatService: { listChats } });
+
+    await controller.listChats(
+      listChatsQuerySchema.parse({
+        scope: 'archived',
+        limit: '50',
+        beforeCreatedAt: '2026-10-01T10:00:00.000Z',
+        beforeId: 'run-9',
+      }),
+    );
+
+    expect(listChats).toHaveBeenCalledWith('archived', {
+      limit: 50,
+      before: { createdAt: new Date('2026-10-01T10:00:00.000Z'), id: 'run-9' },
+    });
   });
 });

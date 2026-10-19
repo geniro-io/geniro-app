@@ -55,6 +55,7 @@ import type {
   RunCreatedEvent,
   RunDeltaEvent,
   RunItemEvent,
+  RunListPage,
   RunPreview,
   RunStatusEvent,
   RunWire,
@@ -253,14 +254,23 @@ class FakeRunDao {
       .filter((run) => run.analysisSourceRunId === sourceRunId)
       .reverse();
   }
-  /** Mirrors the real query — chat runs only, filtered by archive scope. */
-  async listChats(scope: ChatListScope): Promise<Run[]> {
-    return [...this.runs.values()].filter(
+  /**
+   * Mirrors the real query — chat runs only, filtered by archive scope, then
+   * narrowed to the one run or cut to the limit a page names.
+   */
+  async listChats(
+    scope: ChatListScope,
+    _em?: unknown,
+    page: RunListPage = {},
+  ): Promise<Run[]> {
+    const listed = [...this.runs.values()].filter(
       (run) =>
         run.workflowId === null &&
         (scope === 'all' ||
-          (run.archivedAt !== null) === (scope === 'archived')),
+          (run.archivedAt !== null) === (scope === 'archived')) &&
+        (page.runId === undefined || run.id === page.runId),
     );
+    return page.limit === undefined ? listed : listed.slice(0, page.limit);
   }
   async setPendingContext(id: string, context: string | null): Promise<void> {
     const run = this.runs.get(id);
@@ -4399,6 +4409,21 @@ describe('ChatService', () => {
       );
       // Its own was replaced meanwhile: the thread's analysis is the answer.
       expect((await service.findAnalysis('source', 'gone'))?.id).toBe(newer.id);
+    });
+  });
+
+  describe('listChats', () => {
+    it('lists only the page it is asked for', async () => {
+      const { service } = setup();
+      const first = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      expect(await service.listChats('active', { limit: 1 })).toHaveLength(1);
+      expect(
+        (await service.listChats('active', { runId: first.id })).map(
+          (r) => r.id,
+        ),
+      ).toEqual([first.id]);
     });
   });
 

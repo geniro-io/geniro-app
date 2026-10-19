@@ -830,16 +830,23 @@ export class ItemDao extends BaseDao<Item> {
    * {@link findToolCallPair}, because a call and its result can straddle the
    * scanned boundary — the call was persisted on the previous pass and only its
    * result is new.
+   *
+   * `throughSeq` closes the range, so a caller reading a whole history can cut
+   * it into windows: the `LIKE` runs on the event loop.
    */
   async pullRequestCandidates(
     runId: string,
     afterSeq: number,
     txEm?: EntityManager,
+    throughSeq?: number,
   ): Promise<Pick<Item, 'seq' | 'payload'>[]> {
     return this.getRepo(txEm).find(
       {
         runId,
-        seq: { $gt: afterSeq },
+        seq: {
+          $gt: afterSeq,
+          ...(throughSeq === undefined ? {} : { $lte: throughSeq }),
+        },
         kind: 'tool_result',
         payload: { $like: '%/pull/%' },
       },
@@ -1859,7 +1866,12 @@ export class ItemDao extends BaseDao<Item> {
           {
             runId,
             kind: { $in: [...kinds] },
-            [raw((alias) => `json_extract(${alias}.payload, '$.id')`)]: {
+            // Guarded like `payloadField`: one malformed payload must not fail
+            // the whole read.
+            [raw(
+              (alias) =>
+                `json_extract(CASE WHEN json_valid(${alias}.payload) THEN ${alias}.payload ELSE '{}' END, '$.id')`,
+            )]: {
               $in: ids.slice(at, at + PAYLOAD_ID_BATCH),
             },
             ...seqFilter(range),

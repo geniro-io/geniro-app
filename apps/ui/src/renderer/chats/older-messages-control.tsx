@@ -4,7 +4,8 @@ import { cn } from '../components/ui/utils';
 
 /**
  * "Load earlier messages", or the spinner standing in for it while a page
- * loads — the transcript's and an opened call card's alike.
+ * loads — the transcript's and an opened call card's alike, and the sidebar's
+ * paged listing under its own words.
  *
  * A FIXED height: the button and the spinner differ by 8px, and a page load
  * must not shift the reader.
@@ -14,12 +15,16 @@ export function OlderMessagesControl({
   onLoad,
   slot,
   className,
+  label = 'Load earlier messages',
+  loadingLabel = 'Loading earlier messages…',
 }: {
   loading: boolean;
   onLoad: () => void;
   /** The wrapper's `data-slot`; the button's is `<slot>-load`. */
   slot: string;
   className?: string;
+  label?: string;
+  loadingLabel?: string;
 }): React.JSX.Element {
   return (
     <div
@@ -31,7 +36,7 @@ export function OlderMessagesControl({
       {loading ? (
         <>
           <Spinner />
-          Loading earlier messages…
+          {loadingLabel}
         </>
       ) : (
         <Button
@@ -41,7 +46,7 @@ export function OlderMessagesControl({
           data-slot={`${slot}-load`}
           className="h-6 px-2 text-xs text-muted-foreground"
           onClick={onLoad}>
-          Load earlier messages
+          {label}
         </Button>
       )}
     </div>

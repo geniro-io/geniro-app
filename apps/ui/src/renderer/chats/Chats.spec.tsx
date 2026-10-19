@@ -25,6 +25,7 @@ import type { SettingsSection } from '../settings/Settings';
 import { Chats } from './Chats';
 import { COMPOSER_MAX_LINES } from './composer-card';
 import type { LiveTextEvent } from './live-text';
+import { RUN_LIST_PAGE } from './run-list-pages';
 import { HISTORY_PAGE } from './use-chat-run';
 import { REREAD_DELAY_MS } from './use-run-state';
 
@@ -10592,13 +10593,60 @@ describe('Chats sidebar list', () => {
     // the desk's would satisfy the first expectation on its own.
     expect(container.textContent).toContain('Shelved chat');
     expect(container.textContent).not.toContain('My chat');
-    // The query the daemon actually parses — `archived=true` as a string,
-    // since `z.stringbool()` reads the query value rather than a JSON boolean.
-    expect(api.listChats).toHaveBeenCalledWith({ scope: 'archived' });
+    // The scope enum the daemon parses, and a paged scope's first page with
+    // its probe row.
+    expect(api.listChats).toHaveBeenCalledWith({
+      scope: 'archived',
+      limit: RUN_LIST_PAGE + 1,
+    });
 
     await pickScope(container, 'Active chats');
     expect(container.textContent).toContain('My chat');
     expect(container.textContent).not.toContain('Shelved chat');
+  });
+
+  it('offers the next page of a full archive at the end of the list, and only then', async () => {
+    const shelved = (n: number): ChatRun => ({
+      ...run1,
+      id: `r-arch-${n}`,
+      title: `Shelved ${n}`,
+      archivedAt: 'then',
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 1_000 - n)).toISOString(),
+    });
+    const fullPage = Array.from({ length: RUN_LIST_PAGE + 1 }, (_, n) =>
+      shelved(n),
+    );
+    api.listChats.mockImplementation(
+      (params?: { scope?: string; beforeId?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(
+          params?.scope !== 'archived'
+            ? [run1]
+            : params.beforeId === undefined
+              ? fullPage
+              : [fullPage[RUN_LIST_PAGE]!],
+        ),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    const loadOlder = (): HTMLButtonElement | null =>
+      container.querySelector('[data-slot="older-runs-load"]');
+    expect(loadOlder()).toBeNull();
+
+    await pickScope(container, 'Archived only');
+    expect(loadOlder()?.textContent).toBe('Load older chats');
+
+    await act(async () => {
+      loadOlder()!.click();
+    });
+
+    expect(api.listChats).toHaveBeenLastCalledWith({
+      scope: 'archived',
+      limit: RUN_LIST_PAGE + 1,
+      beforeCreatedAt: fullPage[RUN_LIST_PAGE - 1]!.createdAt,
+      beforeId: fullPage[RUN_LIST_PAGE - 1]!.id,
+    });
+    expect(container.textContent).toContain(`Shelved ${RUN_LIST_PAGE}`);
+    expect(loadOlder()).toBeNull();
   });
 
   it('sends the SAME scope to both halves of the listing', async () => {
@@ -10633,6 +10681,7 @@ describe('Chats sidebar list', () => {
 
     expect(workflowApi.listWorkflowRuns).toHaveBeenCalledWith({
       scope: 'archived',
+      limit: RUN_LIST_PAGE + 1,
     });
     expect(container.textContent).toContain('Call Demo');
   });
@@ -10664,7 +10713,10 @@ describe('Chats sidebar list', () => {
 
     await pickScope(container, 'Show all');
 
-    expect(api.listChats).toHaveBeenCalledWith({ scope: 'all' });
+    expect(api.listChats).toHaveBeenCalledWith({
+      scope: 'all',
+      limit: RUN_LIST_PAGE + 1,
+    });
     expect(container.textContent).toContain('My chat');
     expect(container.textContent).toContain('Shelved');
     // The live row offers the reversible action and NOT the one-way one; the
@@ -11238,10 +11290,10 @@ describe('Chats sidebar list', () => {
     expect(api.listChats.mock.calls.length).toBe(listed);
   });
 
-  it('re-lists when ANOTHER client unarchives a thread this desk does not hold', async () => {
-    // The row has to APPEAR, and where it goes is the listing's answer (order,
-    // workflow runs beside the chats), so the list is fetched again rather
-    // than the row prepended.
+  it('takes in by itself a thread ANOTHER client unarchived that this desk does not hold', async () => {
+    // The row has to APPEAR, projected as a listing projects it (a workflow
+    // run's live counts), so that one run is asked for rather than the
+    // broadcast's copy prepended — and never the whole listing again.
     api.listChats.mockResolvedValue([]);
     const { client, emitRunsChanged } = makeClient();
     const container = await mount(client);
@@ -11253,6 +11305,10 @@ describe('Chats sidebar list', () => {
     });
 
     expect(sidebarRow(container, 'My chat')).toBeDefined();
+    expect(api.listChats).toHaveBeenLastCalledWith({
+      scope: 'all',
+      runId: run1.id,
+    });
   });
 
   it('ignores a run ANOTHER client archived that this desk never listed', async () => {
@@ -18091,7 +18147,10 @@ describe('Chats — searching every chat', () => {
     await pickScope(container, 'Archived only');
     api.listChats.mockClear();
     await pickHit(container);
-    expect(api.listChats).toHaveBeenCalledWith({ scope: 'all' });
+    expect(api.listChats).toHaveBeenCalledWith({
+      scope: 'all',
+      limit: RUN_LIST_PAGE + 1,
+    });
   });
 
   it('shows the archive too when the hit is in an archived chat', async () => {
@@ -18101,7 +18160,10 @@ describe('Chats — searching every chat', () => {
     });
     const container = await mount(makeClient().client);
     await pickHit(container);
-    expect(api.listChats).toHaveBeenCalledWith({ scope: 'all' });
+    expect(api.listChats).toHaveBeenCalledWith({
+      scope: 'all',
+      limit: RUN_LIST_PAGE + 1,
+    });
   });
 
   it('drops the jump when another chat is opened before the hit’s chat loads', async () => {

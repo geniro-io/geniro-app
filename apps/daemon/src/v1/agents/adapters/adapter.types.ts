@@ -22,6 +22,7 @@ import type {
   SpawnFn,
   StoppedCommands,
 } from '../utils/spawn-cli';
+import type { SubagentRecoveryRefSchema } from '../utils/subagent-recovery-ref';
 
 // ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
 // The two names that identify OUR server and OUR tools inside a CLI's config
@@ -70,7 +71,8 @@ export const GENIRO_MCP_CALL_TOOLS = [
  * which is why translating at the read site is the only place it can be done
  * once.
  */
-export type BackgroundUnitOutcome = 'completed' | 'failed' | 'stopped';
+export type BackgroundUnitOutcome =
+  'completed' | 'failed' | 'stopped' | 'untracked';
 
 export interface BackgroundUnitUsage {
   /** Every token the unit spent, prompt and completion together. */
@@ -480,6 +482,23 @@ export interface AgentSessionReadInput {
   /** That conversation's CLI session id, or null before the CLI names one. */
   sessionId: string | null;
 }
+
+/** Durable identity used only to read a lost delegate's existing CLI record. */
+export type SubagentRecoveryRef = z.infer<typeof SubagentRecoveryRefSchema>;
+
+export type SubagentTrackingLost = 'process-ended';
+
+/**
+ * Why a session is closed, when it decides how the work still out ended:
+ * `user-stop` — the user's Stop, so every delegate it cuts off is `stopped`.
+ * Any other close leaves them `untracked`, its process having ended.
+ */
+export type SessionCloseCause = 'user-stop';
+
+export type RecoveredSubagentOutcome = Exclude<
+  BackgroundUnitOutcome,
+  'untracked'
+>;
 
 /**
  * One rate-limit window an account's plan enforces — the thing that actually
@@ -1346,6 +1365,16 @@ type AgentEventBody =
        * nothing here and keeps the old reading, where the tool result is the end.
        */
       backgroundOpen: boolean | null;
+      /** The child conversation identity, when this CLI exposes one. */
+      subagentSessionId?: string;
+      /** Internal recovery metadata; the renderer does not interpret it. */
+      recovery?: SubagentRecoveryRef | null;
+      /**
+       * On an `untracked` close the daemon wrote: `process-ended` when the
+       * process hosting the delegate is gone, so its work is over and only its
+       * outcome is unknown. Absent when tracking was lost while it may still run.
+       */
+      trackingLost?: SubagentTrackingLost;
     }
   | {
       /**
@@ -3393,6 +3422,8 @@ export interface AgentTurnInput {
  * is logged into. A process per turn tears that down on every message.
  */
 export interface AgentSession {
+  /** A live subordinate command still holds this delegate's terminal report. */
+  subagentRecoveryBlocked?(id: string): boolean;
   /**
    * Open a turn on this process. Null when this session cannot serve it: the
    * process is gone, a turn is already in flight, this CLI hosts one turn per
@@ -3464,8 +3495,14 @@ export interface AgentSession {
    *
    * This is the ONLY thing that stops a run-scoped process, so whoever holds
    * the session owns that obligation: nothing else will reap it.
+   *
+   * `cause` says why, when that decides how the work still out ended — see
+   * {@link SessionCloseCause}.
    */
-  close(): void;
+  close(cause?: SessionCloseCause): void;
+  /** See `CliSession.noteCloseCause` — the one place a close's cause is kept. */
+  noteCloseCause?(cause: SessionCloseCause | null): void;
+  readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
 }

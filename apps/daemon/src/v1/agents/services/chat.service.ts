@@ -34,6 +34,7 @@ import type {
   AgentMcpServer,
   AgentSession,
   AgentUsage,
+  SessionCloseCause,
   TurnAutoCompact,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
@@ -136,6 +137,7 @@ import {
   delegateCloseEvent,
   openDelegateIds,
   ownerFields,
+  processEndedCloseEvent,
   strandedDelegates,
 } from '../utils/open-delegates';
 import {
@@ -313,8 +315,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * side effect.
    */
   onModuleInit(): void {
-    this.sessions.onClosed((runId, interrupted, exited) => {
-      void this.settleAfterSessionClosed(runId, interrupted, exited);
+    this.sessions.onClosed((runId, interrupted, exited, cause) => {
+      void this.settleAfterSessionClosed(runId, interrupted, exited, cause);
     });
   }
 
@@ -2475,15 +2477,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * converge on ONE registry key. It cannot call that service — `GraphsModule`
    * imports `AgentsModule`, so the dependency points one way — and it does not
    * need to, because cancelling the aggregate handle runs the executor's own
-   * teardown: the per-node sessions close and the run's call tokens are
-   * revoked. A workflow row left `running` by a crash is that engine's boot
-   * reconcile to fix, and it does.
+   * teardown and revokes the run's call tokens; its kept processes are closed
+   * by the archive's teardown, as the Stop's (`noteUserStop`, the mark
+   * `GraphExecutorService.cancel` sets too). A workflow row left `running` by
+   * a crash is that engine's boot reconcile to fix, and it does.
    */
   private async stopForArchive(run: Run): Promise<void> {
     if (run.workflowId === null) {
       await this.cancel(run.id);
       return;
     }
+    this.sessions.noteUserStop(run.id);
     this.registry.cancel(run.id);
   }
 
@@ -2606,7 +2610,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     this.offTurnRuns.delete(runId);
     this.offTurnSignalClaims.delete(runId);
     this.partials.retire(runId, SINGLE_AGENT_NODE, null);
-    this.sessions.close(runId, 'its turn was stopped');
+    this.sessions.close(runId, 'its turn was stopped', 'user-stop');
   }
 
   private ownsSession(runId: string, session: AgentSession | null): boolean {
@@ -3650,6 +3654,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     interrupted = false,
     exited = false,
+    cause: SessionCloseCause | null = null,
   ): Promise<void> {
     this.clearDelegateLease(runId);
     // A WORKFLOW's sessions reach this listener too, under the executor's
@@ -3667,7 +3672,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // `completed`, and its delegates were still out. Skipped only for a run
     // being deleted, whose transcript is going away with it.
     if (!this.deleting.has(runId)) {
-      await this.closeStrandedDelegates(runId);
+      await this.closeStrandedDelegates(runId, cause === 'user-stop');
     }
     const restoreTo = this.offTurnRuns.get(runId);
     if (
@@ -3746,9 +3751,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * daemon writes a close for every unit still open when the CLI process dies.
    * Delegates were simply the half of that rule nobody had written.
    *
-   * `stopped` rather than `completed`, on the vocabulary's own terms: the
-   * delegate did not report back, so claiming it finished its work would be an
-   * outcome nothing measured.
+   * `untracked` with `trackingLost: 'process-ended'`, on the vocabulary's own
+   * terms: the delegate did not report back, so `completed` is an outcome
+   * nothing measured, while its work is over. Its CLI's record may still say
+   * how it ended (`SubagentRecoveryService`). On the user's Stop it is
+   * `stopped`: the Stop is what ended it.
    *
    * A TURN settling closes nothing here. A turn-settle closer existed for a
    * release, writing a close with no outcome for every delegate still out when
@@ -3763,7 +3770,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * ONE writer and a closing row a client folds is byte-identical to one a CLI
    * produced.
    */
-  private async closeStrandedDelegates(runId: string): Promise<void> {
+  private async closeStrandedDelegates(
+    runId: string,
+    /** The user's Stop closed the session, which is what ended them. */
+    stopped = false,
+  ): Promise<void> {
     try {
       const em = this.em.fork();
       // WHERE each delegate belongs, taken from its own rows — the node, and the
@@ -3788,7 +3799,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       );
       for (const delegate of stranded) {
         const mapped = mapEventToItem(
-          delegateCloseEvent(delegate.id, 'stopped'),
+          stopped
+            ? delegateCloseEvent(delegate.id, 'stopped')
+            : processEndedCloseEvent(delegate.id),
         );
         if (mapped === null) {
           continue;

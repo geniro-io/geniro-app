@@ -5,32 +5,6 @@ import type {
 import { asRecord, asString, parseJsonColumn } from './json-util';
 
 /**
- * The delegates a run's transcript still declares OUT, folded from its own
- * `subagent_info` rows in seq order.
- *
- * It exists because one shipped CLI announces a background delegate's LAUNCH
- * on its wire and never its ENDING. cursor-agent's ending is read off the
- * delegate's own transcript instead (`AcpSession`'s delegate watch), but that
- * reader lives inside the process — so a daemon SIGKILLed mid-fan-out, or a
- * process closed while a delegate still worked, leaves an open row nothing
- * else will ever close.
- *
- * What CAN say so then is the process. A cursor delegate runs INSIDE the ACP
- * process that launched it — its own permission requests arrive on the parent's
- * session, and killing that group two seconds after the turn left a delegate
- * unable to finish writing its file — so when the session closes, every
- * delegate still out has demonstrably stopped. `ChatService` folds this set at
- * exactly that moment (and once more at boot, for the closes a SIGKILLed daemon
- * never got to write) and states the ending the CLI would not.
- *
- * The RANKING mirrors the renderer's own `subagentBlockStatus`, and has to: a
- * stated `backgroundOutcome` outranks `backgroundOpen`, because a backgrounded
- * delegate's launching call is answered within the second and the outcome is
- * the only field that speaks about the WORK. A row saying neither says nothing
- * — the announcement carrying a delegate's label or its duration is not a
- * lifecycle claim, and reading it as one would close a delegate that is out.
- */
-/**
  * Which delegate a `subagent_info` payload is about, or null when it names
  * none.
  *
@@ -103,17 +77,13 @@ export function strandedDelegates(
 export function delegateCloseEvent(
   id: string,
   /**
-   * How it ended. `stopped` is the PROCESS closing — a delegate lives inside
-   * it, so killing it demonstrably stopped the work. `completed` / `failed`
-   * come from the delegate's own transcript saying so. `null` claims nothing
-   * about how: the block stops saying the delegate is out and no more — which
-   * the renderer draws as over, so it is written only where nothing more about
-   * the delegate can ever be learned.
+   * Without a reported ending the daemon has lost tracking, even if the
+   * parent session has closed. A later report may still resolve the outcome.
    */
-  outcome: BackgroundUnitOutcome | null = 'stopped',
+  outcome: BackgroundUnitOutcome | null = 'untracked',
   /** How long it ran, when the closer measured it. */
   durationMs: number | null = null,
-): AgentEvent {
+): Extract<AgentEvent, { type: 'subagent_info' }> {
   return {
     type: 'subagent_info',
     id,
@@ -131,7 +101,39 @@ export function delegateCloseEvent(
     costUsd: null,
     stepsUnavailableReason: null,
     backgroundOpen: false,
-    backgroundOutcome: outcome,
+    backgroundOutcome: outcome ?? 'untracked',
+  };
+}
+
+/**
+ * The close for a delegate whose hosting process is gone: its work is over,
+ * and only how it ended is unknown, until its CLI's own record says.
+ */
+export function processEndedCloseEvent(
+  id: string,
+): Extract<AgentEvent, { type: 'subagent_info' }> {
+  return { ...delegateCloseEvent(id), trackingLost: 'process-ended' };
+}
+
+/**
+ * A `subagent_info` row that states facts about a delegate and nothing about
+ * its lifecycle — every lifecycle field null, so the fold keeps whatever the
+ * delegate's other rows said.
+ */
+export function delegateDeclarationEvent(
+  id: string,
+  facts: Partial<
+    Omit<
+      Extract<AgentEvent, { type: 'subagent_info' }>,
+      'type' | 'id' | 'backgroundOpen' | 'backgroundOutcome'
+    >
+  > = {},
+): Extract<AgentEvent, { type: 'subagent_info' }> {
+  return {
+    ...delegateCloseEvent(id),
+    ...facts,
+    backgroundOpen: null,
+    backgroundOutcome: null,
   };
 }
 
@@ -151,6 +153,14 @@ export function ownerFields(owner: {
   };
 }
 
+/**
+ * The delegates whose declarations leave them open, which a closer that knows
+ * their process is gone has to close.
+ *
+ * TWIN PARSER: a stated outcome outranks `backgroundOpen`, as in the renderer's
+ * `subagentBlockStatus`. A declaration stating neither makes no lifecycle
+ * claim.
+ */
 export function openDelegateIds(payloads: readonly unknown[]): string[] {
   // Insertion-ordered, so the closes are written in the order the delegates
   // were launched — a re-`set` keeps a key's original position, which is what

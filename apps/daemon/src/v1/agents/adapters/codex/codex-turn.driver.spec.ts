@@ -171,3 +171,38 @@ describe('the model codex reports for a turn', () => {
     expect(notices(events)).toHaveLength(2);
   });
 });
+
+describe('subagent tracking loss', () => {
+  it('keeps an unknown child ending distinct from failure, then accepts a reported completion', () => {
+    const { session } = conversation();
+    session.subagents.set('child', 'spawn-call');
+    session.openSubagent('spawn-call');
+    expect(
+      session.onMessage({
+        method: 'turn/completed',
+        params: { threadId: 'child', turn: { id: 'child-turn' } },
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'spawn-call',
+        backgroundOutcome: 'untracked',
+      }),
+    );
+    expect(
+      session.onMessage({
+        method: 'turn/completed',
+        params: {
+          threadId: 'child',
+          turn: { id: 'child-turn', status: 'completed' },
+        },
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'spawn-call',
+        backgroundOutcome: 'completed',
+      }),
+    );
+  });
+});

@@ -34,6 +34,7 @@ import type {
   AgentTurnInput,
   ApprovalResolution,
   InstalledApprovalSupport,
+  SessionCloseCause,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
@@ -791,6 +792,7 @@ class FakeAdapter {
     this.sessionsOpened += 1;
     let live: FakeTurn | null = null;
     let closed = false;
+    let closeCause: SessionCloseCause | null = null;
     let resolveClosed!: () => void;
     const closedPromise = new Promise<void>((resolve) => {
       resolveClosed = resolve;
@@ -812,6 +814,7 @@ class FakeAdapter {
         if (!canTakeTurn()) {
           return null;
         }
+        closeCause = null;
         const turn = this.start(turnInput, onEvent);
         live = this.starts[this.starts.length - 1]!;
         live.emitOffTurn = (event) => opts.onBetweenTurnEvent?.(event);
@@ -831,10 +834,17 @@ class FakeAdapter {
       runningCommands: [],
       endedRunning: null,
       pid: null,
-      close: () => {
+      noteCloseCause: (cause: SessionCloseCause | null) => {
+        closeCause = cause;
+      },
+      get closeCause() {
+        return closeCause;
+      },
+      close: (cause?: SessionCloseCause) => {
         if (closed) {
           return;
         }
+        closeCause ??= cause ?? null;
         closed = true;
         if (live) {
           live.sessionClosed = true;
@@ -11889,11 +11899,11 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       .sort((a, b) => a.seq - b.seq);
   const payloadOf = (row: Item): Record<string, unknown> =>
     JSON.parse(row.payload as string) as Record<string, unknown>;
-  const stoppedDelegates = (itemDao: FakeItemDao, runId: string): Item[] =>
+  const untrackedDelegates = (itemDao: FakeItemDao, runId: string): Item[] =>
     rowsOf(itemDao, runId).filter(
       (i) =>
         i.kind === 'subagent_info' &&
-        payloadOf(i).backgroundOutcome === 'stopped',
+        payloadOf(i).backgroundOutcome === 'untracked',
     );
 
   it('leaves the delegates and detached commands a pass left running OPEN, and closes them with their process', async () => {
@@ -11919,7 +11929,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     await drain();
 
     // The pass is over, and nothing it left running is claimed to have stopped.
-    expect(stoppedDelegates(itemDao, run.id)).toEqual([]);
+    expect(untrackedDelegates(itemDao, run.id)).toEqual([]);
     expect(
       rowsOf(itemDao, run.id).filter((row) => row.kind === 'shell_info'),
     ).toEqual([]);
@@ -11928,16 +11938,47 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     // is closed under the node that owns it, after the pass's own ending.
     sessions.closeRun(run.id);
     await drain();
-    const stopped = stoppedDelegates(itemDao, run.id);
+    const stopped = untrackedDelegates(itemDao, run.id);
     // Only what was still out: the delegate that reported back is left alone.
     expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-out']);
     expect(stopped[0]!.nodeId).toBe('a');
+    expect(payloadOf(stopped[0]!).trackingLost).toBe('process-ended');
     const rows = rowsOf(itemDao, run.id);
     const terminal = rows.findIndex(
       (row) => row.kind === 'turn_complete' && row.nodeId === null,
     );
     expect(terminal).toBeGreaterThan(-1);
     expect(rows.indexOf(stopped[0]!)).toBeGreaterThan(terminal);
+  });
+
+  it('closes a delegate out when the user stopped the run as stopped, whenever its process goes', async () => {
+    const { service, claude, itemDao, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const turn = claude.starts[0]!;
+    turn.emit(delegate('task-out', true));
+    completeTurn(turn, 'done');
+    await drain();
+
+    await service.cancel(run.id);
+    // The processes are kept past the Stop; the close comes later.
+    sessions.closeRun(run.id);
+    await drain();
+
+    const closes = rowsOf(itemDao, run.id).filter(
+      (row) =>
+        row.kind === 'subagent_info' &&
+        payloadOf(row).id === 'task-out' &&
+        payloadOf(row).backgroundOpen === false,
+    );
+    expect(closes.map((row) => payloadOf(row).backgroundOutcome)).toEqual([
+      'stopped',
+    ]);
   });
 
   it('announces the run’s detached commands and background delegates as their counts move', async () => {
@@ -12462,7 +12503,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
 
-    const stopped = stoppedDelegates(itemDao, run.id);
+    const stopped = untrackedDelegates(itemDao, run.id);
     expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-callee']);
     // Filed where the callee's rows are, call id and all — the renderer nests
     // a call's rows under its block by that id.
@@ -12477,13 +12518,13 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     completeTurn(caller, 'done');
     await drain();
     expect(
-      stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
+      untrackedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee']);
     // It is closed when the caller's OWN process goes.
     sessions.close(`${run.id}::node:a`, 'closed');
     await drain();
     expect(
-      stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
+      untrackedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee', 'task-caller']);
   });
 
@@ -12501,7 +12542,9 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     });
     await drain();
     const stoppedIds = (): string[] =>
-      stoppedDelegates(itemDao, run.id).map((row) => String(payloadOf(row).id));
+      untrackedDelegates(itemDao, run.id).map((row) =>
+        String(payloadOf(row).id),
+      );
     const continueWith = async (
       message: string,
       thread: string | undefined,

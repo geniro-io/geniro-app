@@ -2229,6 +2229,44 @@ describe('AgentsPanel — sub-agent threads', () => {
     return el;
   }
 
+  it('shows untracked delegates without calling them finished or hiding their rows', () => {
+    const el = render(
+      <AgentsPanel
+        agents={[
+          { ...delegator, threads: [{ ...subagent, status: 'untracked' }] },
+        ]}
+        terminalReasons={TERMINALS}
+        onOpenThread={() => undefined}
+      />,
+    );
+    const section = el.querySelector('[data-slot="agent-subagent-section"]');
+    expect(section?.querySelector(':scope > button')?.textContent).toBe(
+      'Sub-agents1 untracked',
+    );
+    expect(section?.textContent).toContain('Review the diff');
+    expect(section?.textContent).not.toContain('finished');
+  });
+
+  it('counts an untracked delegate whose process ended as finished, and keeps its section shut', () => {
+    const el = render(
+      <AgentsPanel
+        agents={[
+          {
+            ...delegator,
+            threads: [{ ...subagent, status: 'untracked', processEnded: true }],
+          },
+        ]}
+        terminalReasons={TERMINALS}
+        onOpenThread={() => undefined}
+      />,
+    );
+    const section = el.querySelector('[data-slot="agent-subagent-section"]');
+    expect(section?.querySelector(':scope > button')?.textContent).toBe(
+      'Sub-agents1 finished',
+    );
+    expect(section?.textContent).not.toContain('Review the diff');
+  });
+
   it('lists a sub-agent as a thread of the agent that launched it', () => {
     const el = renderWithSubagent();
     expect(el.textContent).toContain('Review the diff');

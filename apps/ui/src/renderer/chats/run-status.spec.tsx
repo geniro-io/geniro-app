@@ -283,6 +283,7 @@ describe('isSettledRunStatus', () => {
     'running',
     'held',
     'needs-input',
+    'untracked',
   ];
 
   it('reports the four end states as settled', () => {

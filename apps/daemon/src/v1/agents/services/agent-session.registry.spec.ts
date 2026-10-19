@@ -11,6 +11,7 @@ import type {
   AgentSession,
   AgentTurnHandle,
   AgentTurnInput,
+  SessionCloseCause,
 } from '../adapters/adapter.types';
 import { AgentAdapter } from '../adapters/agent-adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
@@ -73,6 +74,8 @@ class FakeSession implements AgentSession {
   parked = false;
   /** Detached commands the process is still running — a dev server, say. */
   shellsRunning = 0;
+  /** The delegate ids whose own command this process is still running. */
+  blockedDelegates = new Set<string>();
   /** The command lines of those detached commands. */
   runningCommands: string[] = [];
   /**
@@ -144,8 +147,19 @@ class FakeSession implements AgentSession {
     return this.closes === 0 && !this.processGone;
   }
 
-  close(): void {
+  subagentRecoveryBlocked(id: string): boolean {
+    return this.blockedDelegates.has(id);
+  }
+
+  closeCause: SessionCloseCause | null = null;
+
+  noteCloseCause(cause: SessionCloseCause | null): void {
+    this.closeCause = cause;
+  }
+
+  close(cause?: SessionCloseCause): void {
     this.closes += 1;
+    this.closeCause ??= cause ?? null;
     this.resolveClosed();
     if (this.closeThrows) {
       throw new Error('close boom');
@@ -877,6 +891,134 @@ describe('AgentSessionRegistry — work between turns', () => {
     // not doing any of that work any more.
     at(sessions, 1).dieWithoutSettling();
     expect(registry.workingOffTurn).toBe(0);
+  });
+});
+
+describe('AgentSessionRegistry — why a session closed', () => {
+  function opened(key: string) {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const heard: (string | null)[] = [];
+    registry.onClosed((_key, _interrupted, _exited, cause) => {
+      heard.push(cause);
+    });
+    registry.startTurn(key, adapter, INPUT, noop);
+    return { registry, adapter, sessions, heard };
+  }
+
+  it('hands a close’s cause to the session and to every listener', () => {
+    const { registry, sessions, heard } = opened('run-1');
+
+    registry.close('run-1', 'its turn was stopped', 'user-stop');
+
+    expect(at(sessions, 0).closeCause).toBe('user-stop');
+    expect(heard).toEqual(['user-stop']);
+  });
+
+  it('makes a later close of a stopped run the Stop’s, until it is asked to work again', () => {
+    const { registry, adapter, sessions, heard } = opened(
+      nodeSessionKey('run-1', 'manager'),
+    );
+    registry.noteUserStop('run-1');
+    registry.closeRun('run-1');
+    expect(at(sessions, 0).closeCause).toBe('user-stop');
+    expect(heard).toEqual(['user-stop']);
+
+    // A new turn on a stopped run's process clears it.
+    const key = nodeSessionKey('run-2', 'manager');
+    registry.startTurn(key, adapter, INPUT, noop);
+    registry.noteUserStop('run-2');
+    registry.startTurn(key, adapter, INPUT, noop);
+    registry.closeRun('run-2');
+    expect(at(sessions, 1).closeCause).toBeNull();
+    expect(heard.at(-1)).toBeNull();
+  });
+});
+
+describe('AgentSessionRegistry.subagentRecoveryBlocked', () => {
+  // The subagent recovery service skips writing a terminal row for a delegate
+  // while this answers true, so a false negative here ends a delegate whose
+  // command is still running.
+  const DELEGATE = 'toolu_delegate';
+
+  function blockedSession(key: string): {
+    registry: AgentSessionRegistry;
+    session: FakeSession;
+  } {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn(key, adapter, INPUT, noop);
+    const session = at(sessions, 0);
+    session.blockedDelegates.add(DELEGATE);
+    return { registry, session };
+  }
+
+  it.each([
+    ['the run’s own session', 'run-1'],
+    ['only a call session of the same run', callSessionKey('run-1', 'call-1')],
+    ['only a node session of the same run', nodeSessionKey('run-1', 'manager')],
+  ])('is true when %s is running that delegate’s command', (_where, key) => {
+    const { registry } = blockedSession(key);
+
+    expect(registry.subagentRecoveryBlocked('run-1', DELEGATE)).toBe(true);
+  });
+
+  it('asks the run’s other sessions too when the first one is not running it', () => {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    registry.startTurn(callSessionKey('run-1', 'call-1'), adapter, INPUT, noop);
+    at(sessions, 1).blockedDelegates.add(DELEGATE);
+
+    expect(registry.subagentRecoveryBlocked('run-1', DELEGATE)).toBe(true);
+  });
+
+  it('is false when the session answers false for that delegate', () => {
+    const { registry, session } = blockedSession('run-1');
+
+    expect(session.subagentRecoveryBlocked('toolu_other')).toBe(false);
+    expect(registry.subagentRecoveryBlocked('run-1', 'toolu_other')).toBe(
+      false,
+    );
+  });
+
+  it('is false when the delegate’s command is held by another run’s session', () => {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    // `run-10` shares the characters of `run-1` up to the separator: a prefix
+    // test without it would claim this session for `run-1`.
+    registry.startTurn('run-10', adapter, INPUT, noop);
+    registry.startTurn(
+      nodeSessionKey('run-10', 'manager'),
+      adapter,
+      INPUT,
+      noop,
+    );
+    registry.startTurn('run-2', adapter, INPUT, noop);
+    for (const session of sessions) {
+      session.blockedDelegates.add(DELEGATE);
+    }
+
+    expect(registry.subagentRecoveryBlocked('run-1', DELEGATE)).toBe(false);
+    // The control: the sessions do answer true for the runs they belong to.
+    expect(registry.subagentRecoveryBlocked('run-10', DELEGATE)).toBe(true);
+    expect(registry.subagentRecoveryBlocked('run-2', DELEGATE)).toBe(true);
+  });
+
+  it('is false when the session that held the command is no longer alive', () => {
+    const { registry, session } = blockedSession('run-1');
+    // Dead but still filed: the window before the registry's settle removes
+    // the entry, and a dead process still reports the commands it last knew.
+    session.dieWithoutSettling();
+
+    expect(session.subagentRecoveryBlocked(DELEGATE)).toBe(true);
+    expect(registry.subagentRecoveryBlocked('run-1', DELEGATE)).toBe(false);
+  });
+
+  it('is false for a run with no session', () => {
+    const registry = new AgentSessionRegistry(CEILING);
+
+    expect(registry.subagentRecoveryBlocked('run-1', DELEGATE)).toBe(false);
   });
 });
 

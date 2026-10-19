@@ -1042,6 +1042,96 @@ class InterruptibleSessionAdapter extends SessionWithoutModeChangeAdapter {
   }
 }
 
+/**
+ * The same fake CLI, with a vocabulary for a delegate that runs a command of
+ * its own: a launch, the delegate's tool call, and the command's start and
+ * end — the lines that make the underlying session hold a delegate's command.
+ */
+class DelegateCommandAdapter extends SessionWithoutModeChangeAdapter {
+  protected override mapMessage(obj: unknown): AgentEvent[] {
+    const row = obj as {
+      launch?: string;
+      run?: string;
+      parent?: string;
+      command?: string;
+      settle?: string;
+    };
+    if (typeof row.launch === 'string') {
+      return [
+        {
+          type: 'background_work',
+          id: 'delegate-work',
+          phase: 'started',
+          unit: 'agent',
+          toolCallId: row.launch,
+        },
+      ];
+    }
+    if (typeof row.run === 'string') {
+      return [
+        {
+          type: 'tool_call',
+          id: row.run,
+          name: 'Bash',
+          input: {},
+          parentToolUseId: row.parent,
+        },
+      ];
+    }
+    if (typeof row.command === 'string') {
+      return [
+        {
+          type: 'background_work',
+          id: row.command,
+          phase: 'started',
+          unit: 'other',
+          toolCallId: `toolu_${row.command}`,
+          ownedByDelegate: true,
+        },
+      ];
+    }
+    if (typeof row.settle === 'string') {
+      return [
+        {
+          type: 'background_work',
+          id: row.settle,
+          phase: 'settled',
+          unit: 'other',
+          toolCallId: null,
+        },
+      ];
+    }
+    return super.mapMessage(obj);
+  }
+}
+
+describe('AgentAdapter session — the delegate-command hold reaches the registry', () => {
+  // The subagent recovery service writes a terminal row for a delegate unless
+  // the registry's session says the delegate's command is still running, and
+  // the registry can only ask the object the adapter handed it.
+  it('answers subagentRecoveryBlocked with what the underlying CLI session says', () => {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = { prompt: 'first', cwd: '/proj' };
+    const session = new DelegateCommandAdapter(spawn).startSession(input, {
+      runScoped: true,
+    });
+    session.startTurn(input, () => {});
+
+    child.stdout.emitData('{"launch":"toolu_launch"}\n');
+    child.stdout.emitData(
+      '{"run":"toolu_build","parent":"toolu_launch"}\n{"command":"build"}\n',
+    );
+
+    // The delegate named by the launching call is blocked; another is not.
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(true);
+    expect(session.subagentRecoveryBlocked?.('toolu_unrelated')).toBe(false);
+
+    child.stdout.emitData('{"settle":"build"}\n');
+
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(false);
+  });
+});
+
 describe('AgentAdapter keeps a stopped session serving turns', () => {
   it('does not retire a session whose stopped turn the CLI ended itself', async () => {
     // Stop leaves the process RUNNING — pressing it must not take the user's

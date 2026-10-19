@@ -16,14 +16,19 @@ import type { AcpEndedDelegate } from '../../acp/acp-driver';
 export function cursorDelegateWakePrompt(
   ended: readonly AcpEndedDelegate[],
 ): string {
+  const untracked = ended.some((delegate) => delegate.outcome === 'untracked');
   return [
-    ended.length === 1
-      ? 'Your background sub-agent has finished.'
-      : `Your ${ended.length} background sub-agents have finished.`,
+    untracked
+      ? 'Some background sub-agents are untracked and may still be running.'
+      : ended.length === 1
+        ? 'Your background sub-agent has finished.'
+        : `Your ${ended.length} background sub-agents have finished.`,
     'This message is how you learn it: their results do not reach you on their own — the `task` call that launched each one either returned before it did any work, or was cut off by an interruption while it ran on. Their reports are below.',
     '',
     ...cursorDelegateReports(ended),
-    'Carry on with the task you were working on, using these results, and finish it in this turn.',
+    untracked
+      ? 'Carry on using the available reports. Do not assume an untracked sub-agent has finished or launch it again solely because tracking was lost.'
+      : 'Carry on with the task you were working on, using these results, and finish it in this turn.',
   ].join('\n');
 }
 
@@ -48,7 +53,11 @@ export function cursorDelegateReports(
     }
     const report = delegate.finalText?.trim() ?? '';
     if (report === '') {
-      lines.push('(It left no final report.)');
+      lines.push(
+        delegate.outcome === 'untracked'
+          ? '(No final report was received.)'
+          : '(It left no final report.)',
+      );
     } else {
       const room = Math.max(0, Math.min(REPORT_CHARS, budget));
       budget -= Math.min(report.length, room);
@@ -69,10 +78,14 @@ const REPORT_CHARS = 20_000;
 /** How much of ALL the reports together — a fan-out of ten stays bounded. */
 const TOTAL_REPORT_CHARS = 80_000;
 
-const OUTCOME_WORDS: Record<string, string> = {
+const OUTCOME_WORDS: Record<
+  NonNullable<AcpEndedDelegate['outcome']> | 'unknown',
+  string
+> = {
   completed: 'finished',
   failed: 'failed',
   stopped: 'was stopped',
+  untracked: 'is untracked (it may still be running)',
   unknown: 'ended (its transcript could not be read, so how is not known)',
 };
 

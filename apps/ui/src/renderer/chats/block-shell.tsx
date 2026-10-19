@@ -17,7 +17,8 @@ import { useThreadFlag, useThreadOverride } from './thread-ui-memory';
  * own terms. It is a model, never a word on screen: {@link RUN_STATUS_OF}
  * translates it before anything is drawn.
  */
-export type BlockStatus = 'running' | 'done' | 'error' | 'stopped';
+export type BlockStatus =
+  'running' | 'done' | 'error' | 'stopped' | 'untracked';
 
 /**
  * How the body of an OPEN collapsible {@link BlockShell} folds its card back —
@@ -46,6 +47,7 @@ const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
   done: 'bg-success/15 text-success',
   error: 'bg-destructive/10 text-destructive',
   stopped: 'bg-muted text-muted-foreground',
+  untracked: 'bg-warning/10 text-warning',
 };
 
 /**
@@ -62,6 +64,7 @@ const RUN_STATUS_OF: Record<BlockStatus, RunStatusKind> = {
   done: 'completed',
   error: 'failed',
   stopped: 'cancelled',
+  untracked: 'untracked',
 };
 
 /**
@@ -97,8 +100,11 @@ export function blockStatusLabel(status: BlockStatus): string {
 
 export function StatusBadge({
   status,
+  title,
 }: {
   status: BlockStatus;
+  /** What the word means here, for a status a word alone cannot explain. */
+  title?: string;
 }): React.JSX.Element {
   return (
     <span
@@ -106,6 +112,7 @@ export function StatusBadge({
       // decision the shell makes per status — and a test that answers it by
       // matching utility classes re-answers it every time one is retuned.
       data-slot="block-status-badge"
+      title={title}
       className={cn(
         'rounded px-1.5 py-0.5 text-[10px] font-medium',
         STATUS_BADGE_CLASS[status],
@@ -115,7 +122,7 @@ export function StatusBadge({
           sidebar row and an agent card all reading `cancelled` — one event
           spelled two ways on one screen, which is what "давай стандартизируем
           статусы" was reported against. */}
-      {RUN_STATUS_META[RUN_STATUS_OF[status]].label}
+      {blockStatusLabel(status)}
     </span>
   );
 }
@@ -130,16 +137,18 @@ export function StatusBadge({
  * and in the one place the eye lands first. `running` had a pill AND a spinner
  * beside it, saying it twice.
  *
- * `error` and `stopped` keep the pill, because those two are not
+ * `error`, `stopped` and `untracked` keep the pill, because those are not
  * self-evident from a glyph and are exactly the rows a reader is scanning for.
  */
 function BlockStatusMark({
   status,
+  title,
 }: {
   status: BlockStatus;
+  title?: string;
 }): React.JSX.Element {
-  if (status === 'error' || status === 'stopped') {
-    return <StatusBadge status={status} />;
+  if (status === 'error' || status === 'stopped' || status === 'untracked') {
+    return <StatusBadge status={status} title={title} />;
   }
   return (
     <span className="flex shrink-0 items-center">
@@ -586,6 +595,7 @@ export function BlockShell({
   eyebrowIcon,
   header,
   status,
+  statusTitle,
   collapsible = false,
   defaultOpen = false,
   toggleLabel,
@@ -609,6 +619,8 @@ export function BlockShell({
   /** Identity line inside the card header (avatars, names). */
   header: React.ReactNode;
   status: BlockStatus;
+  /** What {@link status} means for this block, when its pill shows a word. */
+  statusTitle?: string;
   /** A control sitting beside the header — outside the disclosure button. */
   headerAction?: React.ReactNode;
   /**
@@ -736,7 +748,7 @@ export function BlockShell({
         <span className="sr-only">{eyebrow}</span>
       </span>
       {header}
-      <BlockStatusMark status={status} />
+      <BlockStatusMark status={status} title={statusTitle} />
     </>
   );
   const headerClass =

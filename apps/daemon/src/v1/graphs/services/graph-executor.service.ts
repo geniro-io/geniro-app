@@ -22,6 +22,7 @@ import type {
   AgentTurnInput,
   ApprovalResolution,
   InstalledApprovalSupport,
+  SessionCloseCause,
   TurnImage,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
@@ -106,6 +107,7 @@ import { readNodePoolMembers } from '../../agents/utils/node-pool-members';
 import {
   delegateCloseEvent,
   ownerFields,
+  processEndedCloseEvent,
   strandedDelegates,
 } from '../../agents/utils/open-delegates';
 import {
@@ -791,7 +793,10 @@ export class GraphExecutorService
    * numbered by this executor's own counter. So the executor listens for its
    * own keys.
    */
-  private readonly sessionClosers = new Map<string, () => void>();
+  private readonly sessionClosers = new Map<
+    string,
+    (cause: SessionCloseCause | null) => void
+  >();
 
   /**
    * The summary an automatic CARRIED compaction owes the next turn on one
@@ -921,11 +926,11 @@ export class GraphExecutorService
       // detached commands stayed counted for the life of the daemon.
       this.backgroundWork.forget(runId);
     });
-    this.sessions.onClosed((key) => {
+    this.sessions.onClosed((key, _interrupted, _exited, cause) => {
       const closer = this.sessionClosers.get(key);
       if (closer) {
         this.sessionClosers.delete(key);
-        closer();
+        closer(cause);
       }
     });
     this.callBroker.useResetWakeHooks({
@@ -1385,6 +1390,10 @@ export class GraphExecutorService
     // Kind-guarded mirror of ChatService.cancel (shared assert — the two
     // cancels converge on one registry key) + the 404 the chat siblings return.
     assertWorkflowRun(await this.runDao.getById(runId, em), runId);
+    // Before the cancel, which can end a process at once: whatever closes the
+    // run's processes from here — that, or a later close, since they are kept
+    // past the Stop — says it was the Stop's.
+    this.sessions.noteUserStop(runId);
     return { cancelled: this.registry.cancel(runId) };
   }
 
@@ -2714,6 +2723,8 @@ export class GraphExecutorService
     const closeStrandedWork = async (
       scope: { callId: string } | { nodeId: string } | null,
       withShells: boolean,
+      /** The user's Stop is what ended the process. */
+      stopped = false,
     ): Promise<void> => {
       const inScope = (unit: {
         nodeId: string | null;
@@ -2732,7 +2743,9 @@ export class GraphExecutorService
       )) {
         if (inScope(delegate)) {
           closes.push({
-            event: delegateCloseEvent(delegate.id, 'stopped'),
+            event: stopped
+              ? delegateCloseEvent(delegate.id, 'stopped')
+              : processEndedCloseEvent(delegate.id),
             owner: delegate,
           });
         }
@@ -4569,7 +4582,7 @@ export class GraphExecutorService
         calls.add(callContext.callId);
         callsBySessionKey.set(sessionKey, calls);
       }
-      this.sessionClosers.set(sessionKey, () => {
+      this.sessionClosers.set(sessionKey, (cause) => {
         // Read as the process CLOSES: the calls it served are the ones whose
         // work died with it, and a process spawned on this key later starts
         // its own list.
@@ -4585,7 +4598,7 @@ export class GraphExecutorService
             return;
           }
           for (const scope of scopes) {
-            await closeStrandedWork(scope, false);
+            await closeStrandedWork(scope, false, cause === 'user-stop');
           }
           // The process that owed this stretch's terminal event is gone, so
           // nothing else could ever end it — the second of the two endings

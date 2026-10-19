@@ -867,7 +867,15 @@ export class CodexTurnDriver {
       }
       if (receiverThreadsOf(item).length > 0) {
         this.session.openSubagent(item.id);
-        events.push(subagentState(item.id, { open: true }));
+        events.push(
+          subagentState(item.id, {
+            open: true,
+            childSessionId:
+              receiverThreadsOf(item).length === 1
+                ? receiverThreadsOf(item)[0]
+                : undefined,
+          }),
+        );
       }
     }
     for (const { threadId, outcome } of finishedAgentsOf(item)) {
@@ -891,7 +899,13 @@ export class CodexTurnDriver {
     if (activity.kind === 'started') {
       this.session.subagents.set(activity.threadId, item.id);
       this.session.openSubagent(item.id);
-      return [subagentState(item.id, { open: true, label: activity.name })];
+      return [
+        subagentState(item.id, {
+          open: true,
+          label: activity.name,
+          childSessionId: activity.threadId,
+        }),
+      ];
     }
     const outcome = subagentOutcomeOf(activity.kind);
     return outcome === null
@@ -942,7 +956,7 @@ export class CodexTurnDriver {
         const status = asString(asRecord(record.turn)?.status);
         return this.session.closeSubagent(
           threadId,
-          subagentOutcomeOf(status) ?? 'failed',
+          subagentOutcomeOf(status) ?? 'untracked',
         );
       }
       default:

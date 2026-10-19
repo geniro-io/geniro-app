@@ -9,8 +9,12 @@ import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { rowsWithId, workflowEdgeRows } from '../utils/history-anchors';
 import { itemToWire } from '../utils/item-wire';
-import { parseJsonColumn, payloadString } from '../utils/json-util';
-import { foldRunCalls, foldRunDelegates } from '../utils/run-state-folds';
+import { payloadString } from '../utils/json-util';
+import {
+  foldRunCalls,
+  foldRunDelegates,
+  turnEndingOf,
+} from '../utils/run-state-folds';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ApprovalRegistry } from './approval-registry';
 import { ChatShellsService } from './chat-shells.service';
@@ -142,14 +146,13 @@ export class RunStateService {
       launches: delegationCalls,
       replies: delegateReplies,
       runSettled,
-      endings: runSettled
-        ? []
-        : await this.endingsAfterUnanswered(
-            runId,
-            [...delegationCalls, ...declarations],
-            idsOf(delegateReplies),
-            em,
-          ),
+      runCancelled: run.status === 'cancelled',
+      endings: await this.endingsAfterUnanswered(
+        runId,
+        [...delegationCalls, ...declarations],
+        idsOf(delegateReplies),
+        em,
+      ),
     });
     const workflowRows = [
       ...workflowEdgeRows(announcements, workflowIds),
@@ -251,11 +254,7 @@ export class RunStateService {
       return [];
     }
     return (await this.itemDao.turnEndingsAfter(runId, oldest, em)).map(
-      (row) => ({
-        seq: row.seq,
-        nodeId: row.nodeId,
-        callId: payloadString(parseJsonColumn(row.payload), 'callId'),
-      }),
+      turnEndingOf,
     );
   }
 }

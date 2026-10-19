@@ -17,6 +17,8 @@ import type { AgentSessionRecord } from '../../adapter.types';
 import {
   carryClaudeSession,
   deleteClaudeSession,
+  eachJsonLine,
+  findSessionFile,
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './claude-sessions.utils';
@@ -1127,5 +1129,129 @@ describe('deleteClaudeSession', () => {
 
     expect(result.deleted).toBe(false);
     expect(existsSync(file)).toBe(true);
+  });
+});
+
+describe('eachJsonLine', () => {
+  /** Reads `body` through `eachJsonLine`, returning what each callback saw. */
+  async function scan(
+    body: string,
+    contains?: string,
+  ): Promise<{ seen: Record<string, unknown>[]; malformed: number }> {
+    const root = profile([]);
+    const path = join(root, 'transcript.jsonl');
+    writeFileSync(path, body);
+    const seen: Record<string, unknown>[] = [];
+    let malformed = 0;
+    await eachJsonLine(
+      path,
+      null,
+      (line) => {
+        seen.push(line);
+        return true;
+      },
+      () => {
+        malformed += 1;
+      },
+      contains,
+    );
+    return { seen, malformed };
+  }
+
+  it('flags an unparseable line as malformed and keeps reading', async () => {
+    const { seen, malformed } = await scan('{"a":1}\n{"a":\n{"a":2}\n');
+    expect(seen).toEqual([{ a: 1 }, { a: 2 }]);
+    expect(malformed).toBe(1);
+  });
+
+  it('flags an unterminated final line as malformed even when it parses', async () => {
+    const { seen, malformed } = await scan('{"a":1}\n{"a":2}');
+    expect(seen).toEqual([{ a: 1 }, { a: 2 }]);
+    expect(malformed).toBe(1);
+  });
+
+  it('does not flag a complete, parseable file', async () => {
+    const { malformed } = await scan('{"a":1}\n{"a":2}\n');
+    expect(malformed).toBe(0);
+  });
+
+  describe('with a substring to look for', () => {
+    it('hands over only the parseable lines that carry it', async () => {
+      const { seen } = await scan(
+        '{"id":"keep-me"}\n{"id":"other"}\n{"id":"keep-me","n":2}\n',
+        'keep-me',
+      );
+      expect(seen).toEqual([{ id: 'keep-me' }, { id: 'keep-me', n: 2 }]);
+    });
+
+    it('does not parse a line without it, so an object-shaped one is not judged', async () => {
+      const { seen, malformed } = await scan(
+        '{"id":"keep-me"}\n{not json but object-shaped}\n',
+        'keep-me',
+      );
+      expect(seen).toEqual([{ id: 'keep-me' }]);
+      expect(malformed).toBe(0);
+    });
+
+    it('still flags a line without it that is not object-shaped, as a torn write', async () => {
+      const { malformed } = await scan(
+        '{"id":"keep-me"}\n{"id":"other","partial\n{"id":"keep-me"}\n',
+        'keep-me',
+      );
+      expect(malformed).toBe(1);
+    });
+
+    it('flags a torn line without it even when it ends on a nested brace', async () => {
+      const { malformed } = await scan(
+        '{"id":"keep-me"}\n{"id":"other","msg":{"a":1}\n{"id":"keep-me"}\n',
+        'keep-me',
+      );
+      expect(malformed).toBe(1);
+    });
+
+    it('does not flag a whole nested line without it, braces inside strings included', async () => {
+      const { malformed } = await scan(
+        '{"id":"keep-me"}\n{"id":"other","msg":{"text":"a } and a {"},"list":[1,{"b":"\\\\\\"}"}]}\n',
+        'keep-me',
+      );
+      expect(malformed).toBe(0);
+    });
+
+    it('still flags an unparseable line that carries it', async () => {
+      const { seen, malformed } = await scan(
+        '{"id":"keep-me"}\n{"id":"keep-me",\n',
+        'keep-me',
+      );
+      expect(seen).toEqual([{ id: 'keep-me' }]);
+      expect(malformed).toBe(1);
+    });
+
+    it('reads every line when the substring would be spelled differently in JSON', async () => {
+      const { seen } = await scan('{"id":"a\\"b"}\n{"id":"c"}\n', 'a"b');
+      expect(seen).toEqual([{ id: 'a"b' }, { id: 'c' }]);
+    });
+  });
+});
+
+describe('findSessionFile', () => {
+  const ID = 'eeeeeeee-1111-2222-3333-444444444444';
+
+  it('prefers the directory its cwd flattens to over a scan hit elsewhere', async () => {
+    // The decoy sorts first, so a scan that ran before the derived directory
+    // was tried would return it.
+    const root = profile([
+      { dir: '-0-decoy', id: ID, lines: [] },
+      { dir: '-Users-me--x', id: ID, lines: [] },
+    ]);
+    expect(await findSessionFile(root, ID, '/Users/me/.x')).toBe(
+      join(root, 'projects', '-Users-me--x', `${ID}.jsonl`),
+    );
+  });
+
+  it('falls back to the scan when the cwd names the wrong directory', async () => {
+    const root = profile([{ dir: '-private-var-x', id: ID, lines: [] }]);
+    expect(await findSessionFile(root, ID, '/var/x')).toBe(
+      join(root, 'projects', '-private-var-x', `${ID}.jsonl`),
+    );
   });
 });

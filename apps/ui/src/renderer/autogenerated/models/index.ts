@@ -5047,10 +5047,16 @@ export interface RunDelegateState {
     kind: string | null;
     /**
      * 
-     * @type {RunWorkStatus}
+     * @type {RunDelegateStatus}
      * @memberof RunDelegateState
      */
-    status: RunWorkStatus;
+    status: RunDelegateStatus;
+    /**
+     * an untracked delegate whose hosting process is gone: its work is over, only its outcome is unknown
+     * @type {boolean}
+     * @memberof RunDelegateState
+     */
+    processEnded: boolean;
     /**
      * 
      * @type {number}
@@ -5065,6 +5071,20 @@ export interface RunDelegateState {
     startedAt: string;
 }
 
+
+
+/**
+ * 
+ * @export
+ */
+export const RunDelegateStatus = {
+    Running: 'running',
+    Completed: 'completed',
+    Failed: 'failed',
+    Cancelled: 'cancelled',
+    Untracked: 'untracked'
+} as const;
+export type RunDelegateStatus = typeof RunDelegateStatus[keyof typeof RunDelegateStatus];
 
 /**
  * 

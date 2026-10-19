@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../__tests__/temp-dir';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
-import type { AcpSessionOptions, AcpTurnOptions } from './acp-driver';
+import type {
+  AcpDelegateProtocol,
+  AcpSessionOptions,
+  AcpTurnOptions,
+} from './acp-driver';
 import {
   CUT_OFF_TOOL_RESULT,
   HOST_CONTEXT_NOTE,
@@ -54,6 +58,14 @@ interface Harness {
     turnOverrides?: Partial<AcpTurnOptions>,
   ) => void;
 }
+
+const UNWATCHABLE_DELEGATE: AcpDelegateProtocol = {
+  method: 'test/task',
+  launchMarker: { key: '_toolName', value: 'task' },
+  read: () => null,
+  resultIsBookkeeping: true,
+  stepsUnavailableReason: null,
+};
 
 const BASE_INPUT: AgentTurnInput = { prompt: 'do the thing', cwd: '/work' };
 
@@ -2715,6 +2727,35 @@ describe('AcpSession turn completion', () => {
       rawInput: { command: 'pnpm test' },
     });
 
+    it('marks an unwatchable delegate untracked when its parent request fails', () => {
+      const h = primed({ ...resumable(), delegate: UNWATCHABLE_DELEGATE });
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'delegate',
+          title: 'Review',
+          status: 'in_progress',
+          rawInput: { _toolName: 'task' },
+        }),
+      );
+      h.feed(chunk('agent_message_chunk', DROP));
+      const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'subagent_info',
+          id: 'delegate',
+          backgroundOutcome: 'untracked',
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_result',
+          id: 'delegate',
+          isError: false,
+        }),
+      );
+    });
+
     it('closes a step the failed request left open, which the agent never will', () => {
       // Read out of cursor-agent 2026.10.01-e373342: when its run throws it
       // writes `Error: …`, answers `end_turn`, and sends no `tool_call_update`
@@ -4283,6 +4324,35 @@ describe('AcpSession — a message delivered into the running turn', () => {
       type: 'approval_withdrawn',
       id: card?.type === 'approval_request' ? card.id : '',
     });
+  });
+
+  it('marks an unwatchable delegate untracked when a follow-up interrupts its parent', () => {
+    const h = running({ delegate: UNWATCHABLE_DELEGATE });
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'delegate',
+        title: 'Review',
+        status: 'in_progress',
+        rawInput: { _toolName: 'task' },
+      }),
+    );
+    h.driver.sendFollowUp({ text: 'do something else' });
+    const events = h.feed(STOPPED);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'delegate',
+        backgroundOutcome: 'untracked',
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_result',
+        id: 'delegate',
+        isError: false,
+      }),
+    );
   });
 
   it('closes the tool calls the stopped prompt left running, and only those', () => {

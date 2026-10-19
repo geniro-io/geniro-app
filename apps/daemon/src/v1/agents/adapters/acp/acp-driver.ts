@@ -1,6 +1,6 @@
 import { awakeTimeout, type AwakeTimer } from '../../../../utils/sleep-watch';
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
-import { delegateCloseEvent } from '../../utils/open-delegates';
+import { delegateDeclarationEvent } from '../../utils/open-delegates';
 import type {
   AgentEvent,
   AgentReportedCommand,
@@ -145,6 +145,8 @@ export interface AcpDelegateRef {
   cwd: string;
   /** The PARENT session's id, when it is known yet. */
   sessionId: string | null;
+  /** Recovery must not accept a previous execution's terminal record. */
+  notBeforeMs?: number;
 }
 
 /** What is known about a delegate that has no address yet. */
@@ -320,8 +322,8 @@ export interface AcpDelegateProtocol {
   /**
    * How a delegate the launching call said is still running can be seen to
    * end — see {@link AcpDelegateEndings}. An adapter that declares none has its
-   * background delegates closed, with no outcome claimed, when the turn that
-   * launched them completes: nothing more about them could ever be learned.
+   * background delegates marked untracked when the launching turn completes,
+   * because no further observation channel is available.
    */
   endings?: AcpDelegateEndings;
   /**
@@ -2160,20 +2162,29 @@ export class AcpTurnDriver {
     }
   }
 
-  /**
-   * Close every tool call the stopped prompt left open — see
-   * {@link openToolCalls} for why everything open is that prompt's.
-   */
-  private closeInterruptedToolCalls(): AgentEvent[] {
-    const events: AgentEvent[] = [];
-    for (const id of this.openToolCalls) {
-      events.push({
+  /** A parent request stopping is not a report about its delegate's outcome. */
+  private cutOffToolCall(id: string, result: string): AgentEvent[] {
+    const delegate = this.session.delegateToolCalls.has(id);
+    const events: AgentEvent[] = [
+      {
         type: 'tool_result',
         id,
         name: this.session.toolNames.get(id) ?? null,
-        result: INTERRUPTED_TOOL_RESULT,
-        isError: true,
-      });
+        result: delegate ? null : result,
+        isError: !delegate,
+      },
+    ];
+    if (delegate) {
+      events.push(this.session.closeCutOffDelegate(id));
+    }
+    return events;
+  }
+
+  /** Close the calls the stopped prompt left open. */
+  private closeInterruptedToolCalls(): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    for (const id of this.openToolCalls) {
+      events.push(...this.cutOffToolCall(id, INTERRUPTED_TOOL_RESULT));
     }
     this.openToolCalls.clear();
     return events;
@@ -3358,8 +3369,7 @@ export class AcpTurnDriver {
    * cut off would draw a verifier that went on to finish as one that did not;
    * it is closed the way a background launch closes — its call answered, its
    * block left open — and its own record says when it is over. One that cannot
-   * be watched (no brief, no reader) is closed like any other step, since
-   * nothing would ever close it otherwise.
+   * be watched (no brief, no reader) is marked untracked.
    */
   private settleCutOffToolCalls(events: AgentEvent[]): string[] {
     const stillRunning: string[] = [];
@@ -3384,7 +3394,7 @@ export class AcpTurnDriver {
             result: null,
             isError: false,
           },
-          delegateCloseEvent(id, this.session.wireEndings.get(id) ?? null),
+          this.session.closeCutOffDelegate(id),
         );
         continue;
       }
@@ -3418,13 +3428,7 @@ export class AcpTurnDriver {
         );
         continue;
       }
-      events.push({
-        type: 'tool_result',
-        id,
-        name: this.session.toolNames.get(id) ?? null,
-        result: CUT_OFF_TOOL_RESULT,
-        isError: true,
-      });
+      events.push(...this.cutOffToolCall(id, CUT_OFF_TOOL_RESULT));
     }
     return stillRunning;
   }
@@ -4206,7 +4210,11 @@ export class AcpTurnDriver {
       }
       this.session.childSessions.set(spawn.childSessionId, launch);
       this.session.noteDelegateLaunch(launch);
-      return [];
+      return [
+        delegateDeclarationEvent(launch, {
+          subagentSessionId: spawn.childSessionId,
+        }),
+      ];
     }
     const end = readSubagentEnd(update);
     if (end === null) {

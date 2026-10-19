@@ -51,8 +51,10 @@ import type {
   FollowUpMessage,
   InstalledApprovalSupport,
   NO_PLAN_LIMITS,
+  RecoveredSubagentOutcome,
   SessionPullRequest,
   SessionPullRequestsInput,
+  SubagentRecoveryRef,
   TurnDriver,
   TurnImage,
 } from '../adapter.types';
@@ -214,6 +216,7 @@ import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
+import { recoverClaudeSubagent } from './utils/claude-subagent-recovery.utils';
 import {
   sweepStaleTurnSystemPrompts,
   writeTurnSystemPrompt,
@@ -1492,6 +1495,12 @@ export class ClaudeAdapter extends AgentAdapter {
       sessionId: input.sessionId,
       limit: input.limit,
     });
+  }
+
+  override recoverSubagent(
+    ref: SubagentRecoveryRef,
+  ): Promise<RecoveredSubagentOutcome | null> {
+    return recoverClaudeSubagent(this.profileDir(ref.configDir), ref);
   }
 
   /** The `pr-link` lines the session's transcript carries. */

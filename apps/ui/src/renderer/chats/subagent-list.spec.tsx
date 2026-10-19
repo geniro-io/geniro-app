@@ -77,6 +77,22 @@ describe('SubagentRows', () => {
     expect(el.textContent).toContain('No sub-agents yet');
   });
 
+  it('keeps untracked delegates visible outside the finished fold', () => {
+    const el = render(
+      <SubagentRows
+        threads={[
+          thread({ id: 'lost', label: 'Tracking lost', status: 'untracked' }),
+          thread({ id: 'done', label: 'Reported done', status: 'completed' }),
+        ]}
+      />,
+    );
+    expect(labels(el)).toEqual(['Tracking lost']);
+    expect(
+      el.querySelector('[data-subagent-status="untracked"]')?.textContent,
+    ).toContain('untracked');
+    expect(fold(el)?.textContent).toContain('1 finished');
+  });
+
   it('lists only what is still working, and COUNTS the rest behind a fold', () => {
     // REPORTED as "completed subagents should be collapsed", over a popover
     // holding six running and four finished. This list used to SORT the running

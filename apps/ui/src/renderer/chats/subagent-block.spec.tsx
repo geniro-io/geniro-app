@@ -172,6 +172,51 @@ describe('SubagentBlock', () => {
       .querySelector('button[aria-expanded]')
       ?.getAttribute('aria-expanded');
 
+  it('shows tracking loss and the possibility of continued work from the daemon outcome', () => {
+    const block = {
+      ...makeBlock({ withResult: false }),
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked' as const,
+      entries: [],
+    };
+    act(() => root.render(<TranscriptEntryView entry={block} />));
+    expect(badge()?.textContent).toBe('untracked');
+    // Shut, the card still says what the bare word means.
+    expect(badge()?.getAttribute('title')).toContain('may still be running');
+    expect(
+      container.querySelector('[data-slot="subagent-untracked-summary"]')
+        ?.textContent,
+    ).toBe('May still be running');
+    act(() => disclosure()?.click());
+    expect(
+      container.querySelector('[data-role="subagent-untracked"]')?.textContent,
+    ).toContain('may still be running');
+    expect(container.textContent).not.toContain('has not done anything yet');
+    expect(container.querySelector('[data-role="working-row"]')).toBeNull();
+  });
+
+  it('says a delegate whose process ended is over, not that it may still run', () => {
+    const block = {
+      ...makeBlock({ withResult: false }),
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked' as const,
+      processEnded: true,
+      entries: [],
+    };
+    act(() => root.render(<TranscriptEntryView entry={block} />));
+    expect(badge()?.getAttribute('title')).toContain('process ended');
+    expect(
+      container.querySelector('[data-slot="subagent-untracked-summary"]')
+        ?.textContent,
+    ).toBe('Ended without reporting an outcome');
+    act(() => disclosure()?.click());
+    const line = container.querySelector(
+      '[data-role="subagent-untracked"]',
+    )?.textContent;
+    expect(line).toContain('process ended');
+    expect(line).not.toContain('may still be running');
+  });
+
   it('OPENS a delegate that drew a findings card, with no press', () => {
     // Two things at once, and both are the point. The card is the ONLY copy of
     // what it says — the result the agent got back from that tool is a receipt
@@ -400,14 +445,7 @@ describe('SubagentBlock', () => {
     expect(container.textContent).toContain('completed');
   });
 
-  it('stops spinning once the run itself has stopped, not only once its turn ended', () => {
-    // `closed` alone cannot answer this. It asks whether a turn-ending row
-    // arrived AFTER the delegate's last row, and a cancelled run is exactly
-    // where that ordering breaks: the CLI's trailing sub-agent lines land after
-    // the `turn_cancelled` row, so nothing in the item stream is ever "after"
-    // them and the enclosure pulses on a run that has stopped for good. The
-    // tool rows nested inside it already take the run-settled signal
-    // (`ToolGroup`); the enclosure drawn around them does not read it at all.
+  it('keeps the child active until the daemon reports its state after the run settles', () => {
     const block = makeBlock({ withResult: false });
 
     act(() =>
@@ -427,8 +465,8 @@ describe('SubagentBlock', () => {
         </RunSettledContext.Provider>,
       ),
     );
-    expect(container.querySelector('svg.animate-spin')).toBeNull();
-    expect(container.textContent).not.toContain('running');
+    expect(container.querySelector('svg.animate-spin')).not.toBeNull();
+    expect(container.textContent).toContain('running');
   });
 
   it('keeps spinning for a delegate whose rows are NEWER than the settle', () => {
@@ -519,15 +557,13 @@ describe('SubagentBlock', () => {
     expect(container.textContent).not.toContain('running Agent');
   });
 
-  it('reports a delegate whose turn ended without it reporting back as stopped', () => {
-    // The `stopped` arm end-to-end: `subagentBlockStatus` → `shellStatusOf` →
-    // the badge. Dropping `case 'stopped'` falls through to `running` — the
-    // stale spinner `closed` exists to end. Read off the badge and the ABSENT
-    // spinner rather than a sentence in the body, which is where the status
-    // used to be stated a second time.
+  it('reports a daemon-confirmed stopped delegate as cancelled', () => {
     act(() =>
       root.render(
-        <TranscriptEntryView entry={makeBlock({ stopped: true })} soloAgent />,
+        <TranscriptEntryView
+          entry={{ ...makeBlock({ stopped: true }), daemonStatus: 'stopped' }}
+          soloAgent
+        />,
       ),
     );
 

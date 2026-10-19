@@ -96,6 +96,7 @@ import {
 } from './use-file-attach';
 import type { HostedChatState } from './use-hosted-chat';
 import { useMessageQueue } from './use-message-queue';
+import { useRunState } from './use-run-state';
 
 /** No workflow is ever a target here: a hosted chat is one agent's. */
 const NO_WORKFLOW_TARGETS = [] as const;
@@ -368,7 +369,14 @@ export function HostedChat({
   );
   // From here on the run is read through the chat screen's own functions, so
   // the transcript, the status and the ring cannot read the same rows two ways.
+  const { state: delegateState } = useRunState(
+    apis?.chats ?? null,
+    null,
+    runId,
+    settledTurns,
+  );
   const { foldItems, entries: durableEntries } = useDurableTranscript({
+    delegateState,
     items: chat.items,
     anchors: chat.anchors,
     runId,
@@ -403,13 +411,8 @@ export function HostedChat({
       ? settleMomentOf(run, chat.items)
       : null;
   const subagentRunning = useMemo(
-    () =>
-      anySubagentRunning(
-        durableEntries,
-        runStoppedAt,
-        run?.subagentsOut ?? null,
-      ),
-    [durableEntries, runStoppedAt, run?.subagentsOut],
+    () => anySubagentRunning(durableEntries, runStoppedAt),
+    [durableEntries, runStoppedAt],
   );
   const status =
     run === null
@@ -749,7 +752,6 @@ export function HostedChat({
       callChannel={null}
       artifactUrl={artifactUrl}
       runSettledAt={runSettledAt}
-      delegatesOut={run?.subagentsOut ?? null}
       transcript={{
         collapseToolSteps,
         runActivity: chat.activity,

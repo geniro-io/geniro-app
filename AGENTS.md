@@ -215,7 +215,7 @@ pnpm commit             # conventional commit via commitizen
 ## Testing conventions
 
 - Vitest, transformed by swc (`vitest.base.ts`); tests run from source.
-- `@geniro/daemon` and `@packages/mikroorm` run their suites under Electron, so `pnpm rebuild:native` must have run.
+- `@geniro/daemon`, `@packages/mikroorm` and `@geniro/ui` run their suites under Electron's Node (`ELECTRON_RUN_AS_NODE`), the runtime the code ships on. The daemon and mikroorm suites open better-sqlite3, so `pnpm rebuild:native` must have run; the UI suite needs Electron's Node APIs, which the system Node can lack (`net.Socket#setTypeOfService` is missing from Node 24.14).
 - Unit tests are co-located `*.spec.{ts,tsx}`. Run them through the package scripts, never `vitest` directly.
 - Specs are type-checked: `check-types` uses `tsconfig.json`, which includes specs and `__tests__/`. Never narrow it to the spec-excluding `tsconfig.build.json`.
 - React component tests put `// @vitest-environment jsdom` on line 1. Wrap module-scope spies used in a `vi.mock` factory in `vi.hoisted(() => ({ … }))`.

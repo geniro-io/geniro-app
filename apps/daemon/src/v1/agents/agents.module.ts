@@ -100,6 +100,7 @@ import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
+import { SubagentRecoveryService } from './services/subagent-recovery.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
 import { ThreadAnalysisService } from './services/thread-analysis.service';
 import { ThreadOverviewService } from './services/thread-overview.service';
@@ -397,6 +398,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunGroupsService,
     ShellOutputService,
     ItemSeqAllocator,
+    SubagentRecoveryService,
     ItemCallIndexService,
     WallWorkService,
     MessageSendService,

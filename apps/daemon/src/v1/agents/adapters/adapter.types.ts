@@ -467,6 +467,22 @@ export interface AgentSessionReadInput {
   sessionId: string | null;
 }
 
+/** Durable identity used only to read a lost delegate's existing CLI record. */
+export interface SubagentRecoveryRef {
+  agentKind: AgentKind;
+  sessionId: string;
+  cwd: string;
+  configDir: string | null;
+  toolCallId: string;
+  launchedAtMs: number;
+  childSessionId: string | null;
+}
+
+export type RecoveredSubagentOutcome = Exclude<
+  BackgroundUnitOutcome,
+  'untracked'
+>;
+
 /**
  * One rate-limit window an account's plan enforces — the thing that actually
  * stops a conversation, and the thing the app could not previously say anything
@@ -1329,6 +1345,10 @@ type AgentEventBody =
        * nothing here and keeps the old reading, where the tool result is the end.
        */
       backgroundOpen: boolean | null;
+      /** The child conversation identity, when this CLI exposes one. */
+      subagentSessionId?: string;
+      /** Internal recovery metadata; the renderer does not interpret it. */
+      recovery?: SubagentRecoveryRef | null;
     }
   | {
       /**
@@ -3376,6 +3396,8 @@ export interface AgentTurnInput {
  * is logged into. A process per turn tears that down on every message.
  */
 export interface AgentSession {
+  /** A live subordinate command still holds this delegate's terminal report. */
+  subagentRecoveryBlocked?(id: string): boolean;
   /**
    * Open a turn on this process. Null when this session cannot serve it: the
    * process is gone, a turn is already in flight, this CLI hosts one turn per

@@ -1812,6 +1812,14 @@ export class ItemDao extends BaseDao<Item> {
    * declarations, workflow announcements), which the `(runId, kind, seq)` index
    * serves without touching the transcript's text.
    */
+  async subagentRecoveryRunIds(txEm?: EntityManager): Promise<string[]> {
+    const rows = await this.getRepo(txEm).find(
+      { kind: 'subagent_info', payload: { $like: '%"recovery":%' } },
+      { fields: ['runId'], disableIdentityMap: true },
+    );
+    return [...new Set(rows.map((row) => row.runId))];
+  }
+
   async rowsOfKinds(
     runId: string,
     kinds: readonly ItemKind[],

@@ -92,6 +92,7 @@ In `utils/spawn-cli.ts` unless noted.
   - A resumed delegate appends to its old transcript; the claim moves to the newest brief.
   - A session close marks every delegate still out `untracked`; the boot sweep does the same for SIGKILLed daemons. The open set is folded from durable `subagent_info` rows, ranked like the renderer's `subagentBlockStatus` (twin).
   - codex sub-agents (`subAgentActivity`) close on whichever ending arrives first; no turn-settle closer.
+- `SubagentRecoveryService` retries durable untracked children every 30 s and rediscovers their references at boot. `AgentAdapter.recoverSubagent` reads only existing vendor records; missing records, nonterminal tails and legacy rows without a reference stay unknown. Recovery preserves node/call ownership, never starts work, defers to live subordinate-command holds and rechecks for racing live outcomes before appending a close. Resumed transcript claims belong only to their newest launch.
 - A bracketed delegate's off-turn steps are not the run working (`BackgroundWorkCounts.isDelegateOut`).
 - A workflow run's stranded delegates and shells are closed by the EXECUTOR (`closeStrandedWork`), ahead of its terminal row. Every close carries its open row's node AND call id (`ownerFields`).
 - `workflow_info` rows come only from roster-bearing `task_progress` lines; the anchor is emitted at `task_started` (the only line carrying the name).

@@ -179,6 +179,7 @@ export function subagentState(
     label?: string | null;
     prompt?: string | null;
     model?: string | null;
+    childSessionId?: string;
   },
 ): AgentEvent {
   return {
@@ -199,6 +200,9 @@ export function subagentState(
     stepsUnavailableReason: null,
     backgroundOutcome: facts.outcome ?? null,
     backgroundOpen: facts.open ?? null,
+    ...(facts.childSessionId === undefined
+      ? {}
+      : { subagentSessionId: facts.childSessionId }),
   };
 }
 

@@ -1686,14 +1686,17 @@ describe('a delegate whose own detached command outlives its turn', () => {
   }
 
   it('closes only once the last of its commands has ended', async () => {
-    const { child, last, launch, finish } = openDelegateSession();
+    const { session, child, last, launch, finish } = openDelegateSession();
     launch('b-1', 'b-2');
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(true);
     line(child, { work: 'a-delegate', phase: 'settled', outcome: 'completed' });
     line(child, { work: 'b-1', phase: 'settled' });
     expect(last()?.backgroundOpen).toBe(true);
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(true);
 
     line(child, { work: 'b-2', phase: 'settled' });
     expect(last()?.backgroundOpen).toBe(false);
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(false);
     await finish();
   });
 

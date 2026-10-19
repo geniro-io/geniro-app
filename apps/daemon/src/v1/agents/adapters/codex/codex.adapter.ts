@@ -42,6 +42,8 @@ import type {
   CarrySessionResult,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
+  RecoveredSubagentOutcome,
+  SubagentRecoveryRef,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
@@ -127,6 +129,7 @@ import {
 } from './utils/codex-plan-limits.utils';
 import { codexTurnPolicy } from './utils/codex-policy.utils';
 import { carryCodexSession } from './utils/codex-session-carry.utils';
+import { recoverCodexSubagent } from './utils/codex-subagent-recovery.utils';
 import {
   codexThreadHistory,
   readCodexThreads,
@@ -1219,6 +1222,19 @@ export class CodexAdapter extends AgentAdapter {
     _input: AgentSessionImportInput,
   ): Promise<void> {
     return Promise.resolve();
+  }
+
+  override recoverSubagent(
+    ref: SubagentRecoveryRef,
+  ): Promise<RecoveredSubagentOutcome | null> {
+    return recoverCodexSubagent(
+      ref,
+      ref.configDir ??
+        join(
+          this.codexOptions.homeDir ?? homedir(),
+          CODEX_DEFAULT_HOME_DIR_NAME,
+        ),
+    );
   }
 
   /** Bring the saved rollout along when the chat switches Codex homes. */

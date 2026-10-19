@@ -91,7 +91,7 @@ export function delegateCloseEvent(
   outcome: BackgroundUnitOutcome | null = 'untracked',
   /** How long it ran, when the closer measured it. */
   durationMs: number | null = null,
-): AgentEvent {
+): Extract<AgentEvent, { type: 'subagent_info' }> {
   return {
     type: 'subagent_info',
     id,

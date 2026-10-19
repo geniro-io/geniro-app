@@ -372,6 +372,7 @@ export interface SessionAsk<T> {
 }
 
 export interface CliSession {
+  subagentRecoveryBlocked?(id: string): boolean;
   /**
    * Ask the CLI something on its own stdin control channel, out of band of any
    * turn.
@@ -3735,6 +3736,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get pid() {
       return processGone || processExited ? null : (child.pid ?? null);
     },
+    subagentRecoveryBlocked: (id) =>
+      [...delegateCommands.values()].includes(id),
     get shellsRunning() {
       return runningShells.size + delegateCommands.size;
     },

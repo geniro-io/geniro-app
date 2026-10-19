@@ -826,6 +826,16 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return entry && entry.session.alive ? entry.session : null;
   }
 
+  subagentRecoveryBlocked(runId: string, id: string): boolean {
+    const prefix = runSessionKeyPrefix(runId);
+    return [...this.entries].some(
+      ([key, entry]) =>
+        (key === runId || key.startsWith(prefix)) &&
+        entry.session.alive &&
+        entry.session.subagentRecoveryBlocked?.(id) === true,
+    );
+  }
+
   /** The CLI the live session under `key` runs, or null when it holds none. */
   agentOf(key: string): string | null {
     const entry = this.entries.get(key);

@@ -21,6 +21,7 @@ import {
   qualifyOllamaEvent,
   validateOllamaModel,
 } from '../utils/ollama';
+import { delegateCloseEvent } from '../utils/open-delegates';
 import { listProcesses, type ProcessRow } from '../utils/process-descendants';
 import { repositoryRootOf } from '../utils/repository-root';
 import {
@@ -86,8 +87,10 @@ import type {
   HandoffResult,
   InstalledApprovalSupport,
   NO_PLAN_LIMITS,
+  RecoveredSubagentOutcome,
   SessionPullRequest,
   SessionPullRequestsInput,
+  SubagentRecoveryRef,
   TurnDriver,
 } from './adapter.types';
 import {
@@ -1210,6 +1213,13 @@ export abstract class AgentAdapter {
   readSessionHistory(
     _input: AgentSessionImportInput & { limit: number },
   ): Promise<AgentSessionHistory | null> {
+    return Promise.resolve(null);
+  }
+
+  /** Null means the CLI's record cannot establish a terminal outcome. */
+  recoverSubagent(
+    _ref: SubagentRecoveryRef,
+  ): Promise<RecoveredSubagentOutcome | null> {
     return Promise.resolve(null);
   }
 
@@ -2744,6 +2754,7 @@ export abstract class AgentAdapter {
     const spawnedCwd = directoryIdentity(input.cwd);
     let session: CliSession;
     let driver: TurnDriver;
+    let rememberRecovery = (events: AgentEvent[]): AgentEvent[] => events;
     try {
       // Resolved once, INSIDE the try: `command` re-reads the binary override
       // per access, and a `buildArgs` throw must still reach the disposer
@@ -2752,6 +2763,65 @@ export abstract class AgentAdapter {
       const local = this.modelConfiguration(input.model);
       const args = [...local.args, ...this.buildArgs(input)];
       driver = this.createTurnDriver(input);
+      let recoverySessionId = input.resumeSessionId ?? null;
+      const recoveryRefs = new Map<string, SubagentRecoveryRef>();
+      const recoveryDisabled = new Set<string>();
+      rememberRecovery = (events: AgentEvent[]): AgentEvent[] => {
+        const mapped: AgentEvent[] = [];
+        for (const event of events) {
+          if (event.type === 'session') {
+            recoverySessionId = event.sessionId;
+          }
+          if (event.type === 'subagent_info' && event.recovery === null) {
+            recoveryDisabled.add(event.id);
+          }
+          const id =
+            event.type === 'subagent_info'
+              ? event.id
+              : event.type === 'background_work' &&
+                  event.phase === 'started' &&
+                  event.unit === 'agent'
+                ? event.toolCallId
+                : null;
+          if (
+            id === null ||
+            recoverySessionId === null ||
+            recoveryDisabled.has(id)
+          ) {
+            mapped.push(event);
+            continue;
+          }
+          const previous = recoveryRefs.get(id);
+          const ref: SubagentRecoveryRef = {
+            agentKind: this.getConfig().kind,
+            sessionId: recoverySessionId,
+            cwd: input.cwd,
+            configDir: input.configDir ?? null,
+            toolCallId: id,
+            launchedAtMs:
+              event.type === 'background_work'
+                ? Date.now()
+                : (previous?.launchedAtMs ?? Date.now()),
+            childSessionId:
+              event.type === 'subagent_info'
+                ? (event.subagentSessionId ?? previous?.childSessionId ?? null)
+                : (previous?.childSessionId ?? null),
+          };
+          recoveryRefs.set(id, ref);
+          if (event.type === 'subagent_info') {
+            mapped.push({ ...event, recovery: ref });
+          } else {
+            // Foreground work can lose its stream before its launching call returns.
+            mapped.push(event, {
+              ...delegateCloseEvent(id),
+              backgroundOpen: null,
+              backgroundOutcome: null,
+              recovery: ref,
+            });
+          }
+        }
+        return mapped;
+      };
       session = runCliSession({
         command,
         args,
@@ -2768,7 +2838,7 @@ export abstract class AgentAdapter {
           : this.keepStdinOpen(input)
             ? 'turn'
             : 'payload',
-        mapper: (obj) => driver.onMessage(obj),
+        mapper: (obj) => rememberRecovery(driver.onMessage(obj)),
         spawn: this.options.spawn,
         logger: this.options.logger,
         questionToolName: this.getConfig().questionToolName,
@@ -2782,8 +2852,13 @@ export abstract class AgentAdapter {
         // live in the chat service and the graph executor.
         betweenTurnApproval: opts.betweenTurnApproval,
         onBetweenTurnEvent: opts.onBetweenTurnEvent
-          ? (event) =>
-              opts.onBetweenTurnEvent!(qualifyOllamaEvent(event, input.model))
+          ? (event) => {
+              for (const mapped of rememberRecovery([event])) {
+                opts.onBetweenTurnEvent!(
+                  qualifyOllamaEvent(mapped, input.model),
+                );
+              }
+            }
           : undefined,
         // Same passthrough and the same reason: whether a request the posture
         // will not decide can be put in front of the user depends on the owner
@@ -2987,7 +3062,9 @@ export abstract class AgentAdapter {
               });
               return;
             }
-            onEvent(qualifyOllamaEvent(event, turnInput.model));
+            for (const mapped of rememberRecovery([event])) {
+              onEvent(qualifyOllamaEvent(mapped, turnInput.model));
+            }
           },
         });
         if (handle) {
@@ -3032,6 +3109,8 @@ export abstract class AgentAdapter {
       get pid() {
         return session.pid;
       },
+      subagentRecoveryBlocked: (id) =>
+        session.subagentRecoveryBlocked?.(id) ?? false,
       get shellsRunning() {
         // Forwarded for the reapers too: the set of detached commands lives in
         // the process wrapper, and a wrapper that dropped it would read as none

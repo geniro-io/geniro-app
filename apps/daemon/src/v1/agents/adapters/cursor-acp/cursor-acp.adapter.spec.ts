@@ -1633,6 +1633,12 @@ describe('CursorAcpAdapter — background sub-agents', () => {
         ),
         backgroundOpen: null,
         backgroundOutcome: null,
+        recovery: expect.objectContaining({
+          agentKind: 'cursor-agent',
+          sessionId: 's',
+          toolCallId: 'toolu_018bc',
+          launchedAtMs: expect.any(Number),
+        }),
       },
     ]);
     // AFTER the tool call it anchors to, so a consumer replaying in seq order
@@ -1705,6 +1711,11 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       stepsUnavailableReason: expect.stringContaining('not the work inside it'),
       backgroundOpen: null,
       backgroundOutcome: null,
+      recovery: expect.objectContaining({
+        agentKind: 'cursor-agent',
+        sessionId: 's',
+        toolCallId: 'toolu_018bc',
+      }),
     });
     // Answered, not declined. The refusal is what this whole feature was lost
     // behind: the agent discards the outcome either way, so a `-32601` cost the

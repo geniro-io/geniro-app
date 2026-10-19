@@ -1,5 +1,6 @@
 import { awakeTimeout, type AwakeTimer } from '../../../../utils/sleep-watch';
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
+import { delegateCloseEvent } from '../../utils/open-delegates';
 import type {
   AgentEvent,
   AgentReportedCommand,
@@ -144,6 +145,8 @@ export interface AcpDelegateRef {
   cwd: string;
   /** The PARENT session's id, when it is known yet. */
   sessionId: string | null;
+  /** Recovery must not accept a previous execution's terminal record. */
+  notBeforeMs?: number;
 }
 
 /** What is known about a delegate that has no address yet. */
@@ -4203,7 +4206,14 @@ export class AcpTurnDriver {
       }
       this.session.childSessions.set(spawn.childSessionId, launch);
       this.session.noteDelegateLaunch(launch);
-      return [];
+      return [
+        {
+          ...delegateCloseEvent(launch),
+          backgroundOpen: null,
+          backgroundOutcome: null,
+          subagentSessionId: spawn.childSessionId,
+        },
+      ];
     }
     const end = readSubagentEnd(update);
     if (end === null) {

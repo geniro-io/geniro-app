@@ -725,10 +725,11 @@ function toTitle(text: string): string {
  * append (a session the CLI was writing when the machine slept) must not cost
  * the whole transcript.
  */
-async function eachJsonLine(
+export async function eachJsonLine(
   path: string,
   budgetBytes: number | null,
   onLine: (line: Record<string, unknown>) => boolean,
+  onMalformed?: () => void,
 ): Promise<boolean> {
   let handle;
   try {
@@ -762,7 +763,7 @@ async function eachJsonLine(
       while (cut >= 0) {
         const line = rest.slice(0, cut);
         rest = rest.slice(cut + 1);
-        if (line.trim() !== '' && !feed(line, onLine)) {
+        if (line.trim() !== '' && !feed(line, onLine, onMalformed)) {
           return true;
         }
         cut = rest.indexOf('\n');
@@ -779,7 +780,8 @@ async function eachJsonLine(
     rest += decoder.end();
     // The last line of a file the CLI is still appending to has no newline yet.
     if (rest.trim() !== '') {
-      feed(rest, onLine);
+      onMalformed?.();
+      feed(rest, onLine, onMalformed);
     }
     return true;
   } finally {
@@ -790,11 +792,13 @@ async function eachJsonLine(
 function feed(
   line: string,
   onLine: (line: Record<string, unknown>) => boolean,
+  onMalformed?: () => void,
 ): boolean {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
+    onMalformed?.();
     return true;
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {

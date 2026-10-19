@@ -74,12 +74,8 @@ const REQUEST_DEADLINE_MS: Partial<Record<PendingKind, number>> = {
 const DELEGATE_ENDING_POLL_MS = 5_000;
 
 /**
- * How many consecutive reads may find NO record before a delegate stops being
- * watched. The record is created when the delegate starts (measured: each
- * reviewer's transcript directory is stamped with its launch minute), so six
- * misses — thirty seconds — is a layout this reader does not know, not a record
- * still being created. Past it the delegate falls back to being closed with the
- * turn, which is what happened to every delegate before this reader existed.
+ * Consecutive missing records release the turn hold. The delegate becomes
+ * untracked; durable recovery can still resolve it from a later CLI record.
  */
 const DELEGATE_RECORD_MISS_LIMIT = 6;
 
@@ -894,7 +890,7 @@ export class AcpSession implements TurnDriver {
     id: string,
     outcome: BackgroundUnitOutcome | null,
     durationMs: number | null,
-  ): AgentEvent {
+  ): Extract<AgentEvent, { type: 'subagent_info' }> {
     this.closedDelegates.add(id);
     if (outcome === null || outcome === 'untracked') {
       this.untrackedDelegates.add(id);
@@ -945,10 +941,17 @@ export class AcpSession implements TurnDriver {
         !this.closedDelegates.has(other)
       ) {
         this.delegateConversations.delete(other);
-        this.emit(this.closeDelegate(other, 'untracked', null));
+        const closed = this.closeDelegate(other, 'untracked', null);
+        this.emit({ ...closed, recovery: null });
       }
     }
     this.delegateConversations.set(id, found);
+    this.emit({
+      ...delegateCloseEvent(id),
+      backgroundOpen: null,
+      backgroundOutcome: null,
+      subagentSessionId: found,
+    });
     return found;
   }
 
@@ -970,8 +973,7 @@ export class AcpSession implements TurnDriver {
    * Chained timeouts rather than an interval, so a slow disk cannot overlap
    * one sweep with the next — the timer stays set until its sweep finishes —
    * and `unref`'d, so a forgotten watch can never keep the daemon alive. It
-   * stops once the process is gone: the delegates died with it, and the
-   * process closer is the one that says so.
+   * stops once the process is gone; durable recovery owns later record reads.
    */
   private armDelegateWatch(): void {
     if (

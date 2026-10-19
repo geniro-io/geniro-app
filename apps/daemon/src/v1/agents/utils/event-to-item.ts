@@ -444,8 +444,9 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
 /**
  * Whether an OFF-TURN row means the run is working again.
  *
- * Asked at exactly one place — `ChatService.handleBetweenTurnEvent`, which only
- * ever sees events that produced a durable row — so the default is YES: a
+ * Asked by `ChatService.handleBetweenTurnEvent` and the graph executor's
+ * `onOffTurnEvent` (a workflow node's off-turn badge), both of which only ever
+ * see events that produced a durable row — so the default is YES: a
  * settled run whose CLI is writing rows again is the CLI carrying on by itself,
  * and its own continuation settles it a second time. What this names is the
  * exceptions, which are the rows the DAEMON writes about the run's plumbing
@@ -459,11 +460,15 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
  * A DELEGATE announcement has two directions meaning opposite things
  * (`spawn-cli`'s `announceDelegateWork`): starting is work beginning, finishing
  * is work ending, and reading a finish as a start would latch the spinner on
- * with nothing left to take it down. `backgroundOpen` is nullable and null is
- * NOT a close — an announcement carrying the delegate's FACTS (its label, its
- * prompt) claims nothing about its liveness, and reading that as "it has
- * stopped" would silence a run every time the CLI described a delegate it had
- * just launched.
+ * with nothing left to take it down. Only an announced START restates the run:
+ * `backgroundOpen` is nullable, and an announcement carrying the delegate's
+ * FACTS (its label, its prompt, the price claude reports with a continuation's
+ * `result`) claims nothing about liveness either way. Read as work, the price
+ * row — which can land after that continuation's own settle — put a finished
+ * run back to `running` with no terminal event left to end it. Work it
+ * describes is announced elsewhere: an off-turn launch by its main-thread
+ * `tool_call` or a `backgroundOpen: true` announcement, a delegate's own rows
+ * through the lease.
  *
  * BOTH SHELL ROWS are excluded, and that is the pair rather than one of them.
  * `shell_info` is a close and always was: a detached command routinely outlives
@@ -487,7 +492,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
  */
 export function restatesRunAsWorking(event: AgentEvent): boolean {
   return !(
-    (event.type === 'subagent_info' && event.backgroundOpen === false) ||
+    (event.type === 'subagent_info' && event.backgroundOpen !== true) ||
     event.type === 'shell_info' ||
     event.type === 'shell_open' ||
     event.type === 'notice'

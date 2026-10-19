@@ -10745,6 +10745,390 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(announce?.noTerminalItem).toBe(true);
   });
 
+  /**
+   * The daemon's global EntityManager keeps the first copy of a run it loaded,
+   * while status writes go through forks — so a read made WITHOUT an em sees
+   * the status as it was then. This fake does the same: from the moment it is
+   * installed, an em-less read returns the run as it stood then, and a read
+   * through an em the live row.
+   */
+  async function readWithoutEmIsStale(
+    runDao: FakeRunDao,
+    runId: string,
+  ): Promise<void> {
+    const live = runDao.getById.bind(runDao);
+    const row = await live(runId);
+    const snapshot = row === null ? null : { ...row };
+    runDao.getById = async (id: string, em?: unknown) =>
+      em === undefined && id === runId ? snapshot : live(id);
+  }
+
+  /** A claude chat whose first turn is in flight. */
+  async function chatInTurn(): Promise<
+    ReturnType<typeof setup> & { runId: string }
+  > {
+    const ctx = setup();
+    const run = await ctx.service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await ctx.service.sendMessage(run.id, 'go');
+    await drain();
+    return { ...ctx, runId: run.id };
+  }
+
+  async function endTurn(claude: ReturnType<typeof setup>['claude']) {
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+  }
+
+  it('restates an off-turn run once, however many off-turn rows arrive', async () => {
+    // Main-thread rows and a delegate's row each re-read the run before
+    // deciding; a read that still saw the settled status re-wrote `running`
+    // and announced it once per row.
+    const { claude, runDao, statuses, runId } = await chatInTurn();
+    await endTurn(claude);
+    await readWithoutEmIsStale(runDao, runId);
+    statuses.length = 0;
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    emit({
+      type: 'tool_call',
+      id: 'call-2',
+      name: 'Read',
+      input: {},
+      parentToolUseId: 'toolu_task_1',
+    });
+    await drain();
+    emit({ type: 'tool_call', id: 'call-3', name: 'Bash', input: {} });
+    await drain();
+
+    expect(statuses.filter((event) => event.status === 'running')).toHaveLength(
+      1,
+    );
+  });
+
+  it('restates a settled run on an off-turn signal even when the run was loaded while its turn ran', async () => {
+    const { claude, runDao, runId } = await chatInTurn();
+    await readWithoutEmIsStale(runDao, runId);
+    await endTurn(claude);
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+
+    claude.sessions[0]!.onBetweenTurnEvent!({
+      type: 'text_delta',
+      text: 'carrying on',
+    });
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('running');
+  });
+
+  /**
+   * Delays the answer of the next `count` run reads until the returned release
+   * is called — each answer is the row as it stood when it was READ, as a
+   * database round-trip resolving late would return it.
+   */
+  function holdNextReads(runDao: FakeRunDao, count = 1): () => void {
+    const live = runDao.getById.bind(runDao);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let left = count;
+    runDao.getById = async (id: string) => {
+      const row = await live(id);
+      if (left > 0) {
+        left -= 1;
+        const seen = row === null ? null : { ...row };
+        await gate;
+        return seen;
+      }
+      return row;
+    };
+    return () => release();
+  }
+
+  it('writes `running` once for two off-turn rows whose reads overlap', async () => {
+    const { claude, runDao, statuses, runId } = await chatInTurn();
+    await endTurn(claude);
+    statuses.length = 0;
+    const release = holdNextReads(runDao, 2);
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    emit({ type: 'tool_call', id: 'call-2', name: 'Bash', input: {} });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('running');
+    expect(statuses.filter((event) => event.status === 'running')).toHaveLength(
+      1,
+    );
+  });
+
+  it('leaves a run settled when its continuation ends while an off-turn row is still being read', async () => {
+    const { claude, runDao, runId } = await chatInTurn();
+    await endTurn(claude);
+    const release = holdNextReads(runDao);
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+  });
+
+  it('writes `running` once when a second off-turn row arrives while the first one’s write is in flight', async () => {
+    const { claude, runDao, statuses } = await chatInTurn();
+    await endTurn(claude);
+    statuses.length = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    runDao.beforeUpdate = (data) =>
+      data.status === 'running' ? gate : undefined;
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    emit({ type: 'tool_call', id: 'call-2', name: 'Bash', input: {} });
+    await drain();
+    runDao.beforeUpdate = null;
+    release();
+    await drain();
+
+    expect(statuses.filter((event) => event.status === 'running')).toHaveLength(
+      1,
+    );
+  });
+
+  it('lets a stopped process’s late terminal leave the live session’s off-turn restate alone', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    const old = claude.sessions[0]!;
+    await service.cancel(run.id);
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'continue');
+    await endTurn(claude);
+    const live = claude.sessions.at(-1)!;
+    expect(live).not.toBe(old);
+    const release = holdNextReads(runDao);
+
+    live.onBetweenTurnEvent!({
+      type: 'tool_call',
+      id: 'call-1',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    old.onBetweenTurnEvent!({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+  });
+
+  it('lets a stopped process’s late row leave the live session’s off-turn restate alone', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    const old = claude.sessions[0]!;
+    await service.cancel(run.id);
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'continue');
+    await endTurn(claude);
+    const live = claude.sessions.at(-1)!;
+    const release = holdNextReads(runDao);
+
+    live.onBetweenTurnEvent!({
+      type: 'tool_call',
+      id: 'call-1',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    old.onBetweenTurnEvent!({
+      type: 'tool_call',
+      id: 'late-main',
+      name: 'Read',
+      input: {},
+    });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+  });
+
+  it('retries the off-turn restate on the next row when the first `running` write failed', async () => {
+    const { claude, runDao, runId } = await chatInTurn();
+    await endTurn(claude);
+    runDao.beforeUpdate = (data) =>
+      data.status === 'running'
+        ? Promise.reject(new Error('write failed'))
+        : undefined;
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+    runDao.beforeUpdate = null;
+
+    emit({ type: 'tool_call', id: 'call-2', name: 'Bash', input: {} });
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('running');
+  });
+
+  it('leaves a run settled when its continuation ends while an off-turn signal is still being read', async () => {
+    const { claude, runDao, runId } = await chatInTurn();
+    await endTurn(claude);
+    const release = holdNextReads(runDao);
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'text_delta', text: 'carrying on' });
+    await drain();
+    emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+  });
+
+  it.each([
+    ['row', { type: 'tool_call', id: 'call-1', name: 'Bash', input: {} }],
+    ['signal', { type: 'text_delta', text: 'carrying on' }],
+  ] as const)(
+    'lets no trailing terminal settle a turn the user sent while an off-turn %s was being read',
+    async (_label, offTurn) => {
+      const { service, claude, runDao, runId } = await chatInTurn();
+      await endTurn(claude);
+      const release = holdNextReads(runDao);
+      const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+      emit(offTurn);
+      await drain();
+      await service.sendMessage(runId, 'next');
+      await drain();
+      release();
+      await drain();
+      emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      });
+      await drain();
+
+      expect(runDao.runs.get(runId)?.status).toBe('running');
+    },
+  );
+
+  it('keeps a continuation settled when the price of its delegate lands after the settle', async () => {
+    // claude prices a continuation's delegates on its `result` line; that row
+    // is handled concurrently with the continuation's `turn_complete` and can
+    // land after its settle.
+    const { claude, runDao, statuses, runId } = await chatInTurn();
+    await endTurn(claude);
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+    emit({ type: 'text_delta', text: 'carrying on' });
+    await drain();
+    emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    await drain();
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+    statuses.length = 0;
+
+    emit({
+      type: 'subagent_info',
+      id: 'toolu_a',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: 0.0016,
+      stepsUnavailableReason: null,
+      backgroundOpen: null,
+      backgroundOutcome: null,
+    });
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+    expect(statuses.filter((event) => event.status === 'running')).toEqual([]);
+  });
+
+  it('hands an off-turn badge back on session close even when the run was loaded before it flipped', async () => {
+    const { claude, runDao, sessions, runId } = await chatInTurn();
+    await endTurn(claude);
+    await readWithoutEmIsStale(runDao, runId);
+    claude.sessions[0]!.onBetweenTurnEvent!({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    expect(runDao.runs.get(runId)?.status).toBe('running');
+
+    sessions.close(runId, 'closed');
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+  });
+
   it('announces no restore over a turn that claimed the run during the read', async () => {
     // The flagged settle ends the working state in every window, so sent over
     // a turn that has just started it would drop Stop under that turn.

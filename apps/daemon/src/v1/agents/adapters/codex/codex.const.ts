@@ -38,11 +38,6 @@ export const CODEX_HOME_ENV = 'CODEX_HOME';
 /** That directory when no profile names another — codex's own default. */
 export const CODEX_DEFAULT_HOME_DIR_NAME = '.codex';
 
-export const CODEX_RECOVERY_STORES = ['sessions', 'archived_sessions'] as const;
-export const CODEX_RECOVERY_MAX_DEPTH = 3;
-export const CODEX_RECOVERY_MAX_ENTRIES = 20_000;
-export const CODEX_RECOVERY_MAX_BYTES = 8 * 1024 * 1024;
-
 // ── Context window ──────────────────────────────────────────────────────────
 
 /**

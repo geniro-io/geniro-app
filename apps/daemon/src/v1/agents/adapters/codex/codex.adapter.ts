@@ -129,7 +129,10 @@ import {
 } from './utils/codex-plan-limits.utils';
 import { codexTurnPolicy } from './utils/codex-policy.utils';
 import { carryCodexSession } from './utils/codex-session-carry.utils';
-import { recoverCodexSubagent } from './utils/codex-subagent-recovery.utils';
+import {
+  isCodexSubagentRecoveryRef,
+  recoverCodexSubagent,
+} from './utils/codex-subagent-recovery.utils';
 import {
   codexThreadHistory,
   readCodexThreads,
@@ -1224,17 +1227,26 @@ export class CodexAdapter extends AgentAdapter {
     return Promise.resolve();
   }
 
-  override recoverSubagent(
+  override async recoverSubagent(
     ref: SubagentRecoveryRef,
   ): Promise<RecoveredSubagentOutcome | null> {
-    return recoverCodexSubagent(
-      ref,
-      ref.configDir ??
-        join(
-          this.codexOptions.homeDir ?? homedir(),
-          CODEX_DEFAULT_HOME_DIR_NAME,
-        ),
-    );
+    if (!isCodexSubagentRecoveryRef(ref)) {
+      return null;
+    }
+    try {
+      const result = await this.oneshot(
+        CODEX_METHODS.threadRead,
+        { threadId: ref.childSessionId, includeTurns: true },
+        // Metadata reads must outlive task worktrees that have been collected.
+        {
+          configDir: ref.configDir,
+          cwd: this.codexOptions.homeDir ?? homedir(),
+        },
+      );
+      return recoverCodexSubagent(ref, result);
+    } catch {
+      return null;
+    }
   }
 
   /** Bring the saved rollout along when the chat switches Codex homes. */

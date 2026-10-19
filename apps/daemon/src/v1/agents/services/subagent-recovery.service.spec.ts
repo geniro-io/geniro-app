@@ -5,6 +5,7 @@ import {
 } from '@mikro-orm/sqlite';
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -63,6 +64,10 @@ describe('SubagentRecoveryService (SQLite)', () => {
   });
   afterAll(async () => {
     await orm.close(true);
+  });
+  afterEach(async () => {
+    await service.onApplicationShutdown();
+    vi.useRealTimers();
   });
   beforeEach(async () => {
     if (service) {
@@ -172,7 +177,7 @@ describe('SubagentRecoveryService (SQLite)', () => {
     await service.onApplicationBootstrap();
     await vi.advanceTimersByTimeAsync(0);
     await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(1));
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(async () => expect(await items.maxSeq('run')).toBe(3));
     await service.onApplicationShutdown();
     vi.useRealTimers();
@@ -190,6 +195,170 @@ describe('SubagentRecoveryService (SQLite)', () => {
     const rows = await items.rowsOfKinds('run', ['subagent_info']);
     expect(rows).toHaveLength(3);
     expect(JSON.parse(rows[2]!.payload).backgroundOutcome).toBe('failed');
+  });
+
+  it('stops after three attempts and a later open can reconcile again', async () => {
+    await lost();
+    const recover = vi
+      .spyOn(adapter, 'recoverSubagent')
+      .mockResolvedValue(null);
+    vi.useFakeTimers();
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(3));
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(recover).toHaveBeenCalledTimes(3);
+    expect(await items.maxSeq('run')).toBe(2);
+    recover.mockResolvedValue('completed');
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(async () => expect(await items.maxSeq('run')).toBe(3));
+    expect(recover).toHaveBeenCalledTimes(4);
+  });
+
+  it('coalesces duplicate subscriptions without renewing the retry budget', async () => {
+    await lost();
+    const recover = vi
+      .spyOn(adapter, 'recoverSubagent')
+      .mockResolvedValue(null);
+    vi.useFakeTimers();
+    service.schedule('run');
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(1));
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(2));
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(3));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(recover).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not start another episode from its own recovered terminal row', async () => {
+    await lost();
+    vi.spyOn(adapter, 'recoverSubagent').mockResolvedValue('completed');
+    const reconcile = vi.spyOn(service, 'reconcile');
+    vi.useFakeTimers();
+    service.onModuleInit();
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(async () => expect(await items.maxSeq('run')).toBe(3));
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores metadata-only announcements instead of renewing unknown-child reads', async () => {
+    await lost();
+    const row = await declare(3, {
+      recovery: ref,
+      backgroundOpen: null,
+      backgroundOutcome: null,
+    });
+    const reconcile = vi.spyOn(service, 'reconcile');
+    vi.useFakeTimers();
+    service.onModuleInit();
+    bus.publish({ runId: 'run', item: itemToWire(row) });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('gives new loss evidence a check when the previous final attempt is in flight', async () => {
+    await lost();
+    let release!: (unresolved: boolean) => void;
+    const last = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    const reconcile = vi
+      .spyOn(service, 'reconcile')
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockReturnValueOnce(last)
+      .mockResolvedValue(false);
+    vi.useFakeTimers();
+    service.onModuleInit();
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reconcile).toHaveBeenCalledTimes(3);
+    const row = (await items.rowsOfKinds('run', ['subagent_info']))[1]!;
+    bus.publish({ runId: 'run', item: itemToWire(row) });
+    release(false);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(reconcile).toHaveBeenCalledTimes(4));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcile).toHaveBeenCalledTimes(4);
+  });
+
+  it('bounds retries when an adapter read fails', async () => {
+    await lost();
+    const recover = vi
+      .spyOn(adapter, 'recoverSubagent')
+      .mockRejectedValue(new Error('record unavailable'));
+    vi.useFakeTimers();
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(3));
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(recover).toHaveBeenCalledTimes(3);
+    expect(await items.maxSeq('run')).toBe(2);
+  });
+
+  it('does not spend an extra read on queued work superseded behind another run', async () => {
+    await lost();
+    let release!: (unresolved: boolean) => void;
+    const waiting = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    const reconcile = vi
+      .spyOn(service, 'reconcile')
+      .mockImplementation((runId) =>
+        runId === 'slow-run' ? waiting : Promise.resolve(true),
+      );
+    vi.useFakeTimers();
+    service.onModuleInit();
+    service.schedule('slow-run');
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    const row = (await items.rowsOfKinds('run', ['subagent_info']))[1]!;
+    bus.publish({ runId: 'run', item: itemToWire(row) });
+    release(false);
+    await vi.advanceTimersByTimeAsync(100);
+    const reads = () =>
+      reconcile.mock.calls.filter(([runId]) => runId === 'run').length;
+    expect(reads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(reads()).toBe(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reads()).toBe(3);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads()).toBe(3);
+  });
+
+  it('clears pending retries on shutdown', async () => {
+    await lost();
+    const recover = vi
+      .spyOn(adapter, 'recoverSubagent')
+      .mockResolvedValue(null);
+    vi.useFakeTimers();
+    service.schedule('run');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(1));
+    await service.onApplicationShutdown();
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    service.schedule('run');
+    expect(recover).toHaveBeenCalledTimes(1);
   });
 
   it('defers while an earlier live row is still being persisted', async () => {

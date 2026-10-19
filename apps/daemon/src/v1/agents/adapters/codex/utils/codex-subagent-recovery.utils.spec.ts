@@ -1,222 +1,135 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { AgentKind } from '../../../../runs/runs.types';
 import type { SubagentRecoveryRef } from '../../adapter.types';
-import { CODEX_RECOVERY_MAX_BYTES } from '../codex.const';
 import { recoverCodexSubagent } from './codex-subagent-recovery.utils';
 
-const childId = '019e64c7-aaaa-7111-8999-123456789abc';
-const parentId = '019e64c7-bbbb-7111-8999-123456789abc';
-const launch = Date.parse('2026-10-19T10:00:00.000Z');
-
-function event(type: string, turnId = 'turn-1', seconds = 1, reason?: string) {
+const parentId = '019cf395-e26d-77b5-a3de-d7d48cdf7e57';
+const childId = '019cf395-e26d-77b5-a3de-d7d48cdf7e58';
+const ref: SubagentRecoveryRef = {
+  agentKind: AgentKind.Codex,
+  sessionId: parentId,
+  childSessionId: childId,
+  toolCallId: 'spawn-1',
+  launchedAtMs: 1_800_000_000_500,
+  configDir: '/profile',
+  cwd: '/repo',
+};
+const completed = {
+  status: 'completed',
+  startedAt: 1_800_000_000,
+  completedAt: 1_800_000_001,
+};
+function reply(thread: Record<string, unknown> = {}): unknown {
   return {
-    timestamp: new Date(launch + seconds * 1000).toISOString(),
-    type: 'event_msg',
-    payload: { type, turn_id: turnId, ...(reason ? { reason } : {}) },
-  };
-}
-
-function metadata(parent = parentId, id = childId) {
-  return {
-    type: 'session_meta',
-    payload: {
-      id,
-      source: { subagent: { thread_spawn: { parent_thread_id: parent } } },
+    thread: {
+      id: childId,
+      parentThreadId: parentId,
+      status: { type: 'notLoaded' },
+      turns: [completed],
+      ...thread,
     },
   };
 }
 
 describe('recoverCodexSubagent', () => {
-  let home: string;
-  let path: string;
-  let ref: SubagentRecoveryRef;
-
-  beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'codex-recovery-'));
-    path = join(
-      home,
-      'sessions',
-      '2026',
-      '10',
-      '19',
-      `rollout-${childId}.jsonl`,
-    );
-    ref = {
-      agentKind: AgentKind.Codex,
-      sessionId: parentId,
-      cwd: home,
-      configDir: home,
-      toolCallId: 'spawn-1',
-      launchedAtMs: launch,
-      childSessionId: childId,
-    };
-  });
-
-  afterEach(async () => {
-    await rm(home, { recursive: true, force: true });
-  });
-
-  async function write(rows: unknown[], suffix = '\n') {
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(
-      path,
-      rows.map((row) => JSON.stringify(row)).join('\n') + suffix,
-    );
-  }
-
-  it('recovers a completion for the latest started turn', async () => {
-    await write([
-      metadata(),
-      event('task_started'),
-      event('task_complete'),
-      event('task_started', 'turn-2', 2),
-      event('task_complete', 'turn-2', 3),
-    ]);
-    expect(await recoverCodexSubagent(ref, home)).toBe('completed');
-  });
-
-  it('withholds an older completion after a newer start', async () => {
-    await write([
-      metadata(),
-      event('task_started'),
-      event('task_complete'),
-      event('task_started', 'turn-2', 2),
-    ]);
-    expect(await recoverCodexSubagent(ref, home)).toBeNull();
-  });
-
-  it('requires the terminal record to name the latest turn', async () => {
-    await write([
-      metadata(),
-      event('task_started', 'turn-2'),
-      event('task_complete', 'turn-1'),
-    ]);
-    expect(await recoverCodexSubagent(ref, home)).toBeNull();
+  it.each([
+    ['completed', 'completed'],
+    ['failed', 'failed'],
+    ['errored', 'failed'],
+    ['interrupted', 'stopped'],
+    ['cancelled', 'stopped'],
+    ['shutdown', 'stopped'],
+  ])('maps the latest dated %s turn to %s', (status, outcome) => {
+    expect(
+      recoverCodexSubagent(ref, reply({ turns: [{ ...completed, status }] })),
+    ).toBe(outcome);
   });
 
   it.each([
-    metadata(childId),
-    metadata(parentId, parentId),
-    { type: 'session_meta', payload: { id: childId } },
-  ])(
-    'refuses a mismatched or missing parent/child identity: %j',
-    async (meta) => {
-      await write([meta, event('task_started'), event('task_complete')]);
-      expect(await recoverCodexSubagent(ref, home)).toBeNull();
+    { id: parentId },
+    { id: undefined },
+    { parentThreadId: childId },
+    { parentThreadId: undefined },
+    { parentThreadId: null },
+  ])('requires the native child and parent identity: %j', (identity) => {
+    expect(recoverCodexSubagent(ref, reply(identity))).toBeNull();
+  });
+
+  it.each([null, {}, { thread: null }, { thread: [] }])(
+    'leaves a malformed response unknown: %j',
+    (result) => {
+      expect(recoverCodexSubagent(ref, result)).toBeNull();
     },
   );
 
-  it('does not infer failure from an error row', async () => {
-    await write([metadata(), event('task_started'), event('error')]);
-    expect(await recoverCodexSubagent(ref, home)).toBeNull();
-  });
-
-  it('recovers an explicitly interrupted turn', async () => {
-    await write([
-      metadata(),
-      event('task_started'),
-      event('turn_aborted', 'turn-1', 2, 'interrupted'),
-    ]);
-    expect(await recoverCodexSubagent(ref, home)).toBe('stopped');
-  });
-
-  it('withholds an unrecognized abortion reason', async () => {
-    await write([
-      metadata(),
-      event('task_started'),
-      event('turn_aborted', 'turn-1', 2, 'unknown'),
-    ]);
-    expect(await recoverCodexSubagent(ref, home)).toBeNull();
-  });
-
-  it('withholds completions predating the launch', async () => {
-    await write([
-      metadata(),
-      event('task_started', 'turn-1', -2),
-      event('task_complete', 'turn-1', -1),
-    ]);
-    expect(await recoverCodexSubagent(ref, home)).toBeNull();
-  });
-
-  it('leaves a missing rollout unknown', async () => {
-    expect(await recoverCodexSubagent(ref, home)).toBeNull();
-  });
-
-  it.each(['', '\n{"type":"event_msg"', '\n{bad}\n'])(
-    'withholds a potentially truncated continuation: %j',
-    async (suffix) => {
-      await write(
-        [metadata(), event('task_started'), event('task_complete')],
-        suffix,
-      );
-      expect(await recoverCodexSubagent(ref, home)).toBeNull();
+  it.each([undefined, null, [], {}, [completed, null]])(
+    'requires a latest turn: %j',
+    (turns) => {
+      expect(recoverCodexSubagent(ref, reply({ turns }))).toBeNull();
     },
   );
 
-  it.each([null, '../escape', 'not-a-uuid'])(
-    'guards the child identifier %s',
-    async (id) => {
-      await write([metadata(), event('task_started'), event('task_complete')]);
+  it.each(['inProgress', 'pending', 'unknown', undefined, null])(
+    'withholds historical completion when the latest status is %s',
+    (status) => {
       expect(
-        await recoverCodexSubagent({ ...ref, childSessionId: id }, home),
+        recoverCodexSubagent(
+          ref,
+          reply({ turns: [completed, { ...completed, status }] }),
+        ),
       ).toBeNull();
     },
   );
 
-  it('guards the parent identifier', async () => {
+  it.each([
+    { startedAt: undefined },
+    { completedAt: undefined },
+    { startedAt: null },
+    { completedAt: null },
+    { startedAt: '1800000000' },
+    { completedAt: '1800000001' },
+    { startedAt: Number.NaN },
+    { completedAt: Number.NaN },
+    { startedAt: Number.POSITIVE_INFINITY },
+    { completedAt: Number.POSITIVE_INFINITY },
+    { startedAt: 0 },
+    { completedAt: 0 },
+    { startedAt: -1 },
+    { completedAt: -1 },
+    { startedAt: 1_800_000_002 },
+    { startedAt: 1_799_999_998, completedAt: 1_799_999_999 },
+    { completedAt: 1_800_000_000 },
+  ])('requires current, finite, ordered Unix-second dates: %j', (dates) => {
     expect(
-      await recoverCodexSubagent({ ...ref, sessionId: '../escape' }, home),
+      recoverCodexSubagent(ref, reply({ turns: [{ ...completed, ...dates }] })),
     ).toBeNull();
   });
 
-  it('reads archived rollouts', async () => {
-    path = join(home, 'archived_sessions', `rollout-${childId}.jsonl`);
-    await write([metadata(), event('task_started'), event('task_complete')]);
-    expect(await recoverCodexSubagent(ref, home)).toBe('completed');
+  it('accepts an ending exactly at the launch boundary', () => {
+    expect(
+      recoverCodexSubagent(
+        { ...ref, launchedAtMs: completed.completedAt * 1000 },
+        reply(),
+      ),
+    ).toBe('completed');
   });
 
-  it('refuses conflicting duplicate rollouts', async () => {
-    await write([metadata(), event('task_started'), event('task_complete')]);
-    path = join(home, 'archived_sessions', `rollout-${childId}.jsonl`);
-    await write([metadata(), event('task_started')]);
-    expect(await recoverCodexSubagent(ref, home)).toBeNull();
+  it.each([
+    { type: 'active', activeFlags: [] },
+    { type: 'active', activeFlags: ['waitingOnApproval'] },
+  ])('withholds history while the native runtime is active: %j', (status) => {
+    expect(recoverCodexSubagent(ref, reply({ status }))).toBeNull();
   });
 
-  it('does not follow a store symlink outside the selected home', async () => {
-    path = join(home, 'outside', `rollout-${childId}.jsonl`);
-    await write([metadata(), event('task_started'), event('task_complete')]);
-    const profile = join(home, 'profile');
-    await mkdir(profile);
-    await symlink(dirname(path), join(profile, 'sessions'));
-    expect(await recoverCodexSubagent(ref, profile)).toBeNull();
-  });
-
-  it('does not follow a rollout symlink', async () => {
-    path = join(home, 'outside', `rollout-${childId}.jsonl`);
-    await write([metadata(), event('task_started'), event('task_complete')]);
-    await mkdir(join(home, 'sessions'));
-    await symlink(path, join(home, 'sessions', `rollout-${childId}.jsonl`));
-    expect(await recoverCodexSubagent(ref, home)).toBeNull();
-  });
-
-  it('bounds the rollout read', async () => {
-    await write([
-      metadata(),
-      event('task_started'),
-      {
-        type: 'event_msg',
-        payload: {
-          type: 'noop',
-          padding: 'x'.repeat(CODEX_RECOVERY_MAX_BYTES),
-        },
-      },
-      event('task_complete'),
-    ]);
-    expect(await recoverCodexSubagent(ref, home)).toBeNull();
+  it.each([
+    { childSessionId: null },
+    { childSessionId: '../escape' },
+    { sessionId: 'not-a-uuid' },
+    { launchedAtMs: Number.NaN },
+    { launchedAtMs: Number.POSITIVE_INFINITY },
+    { launchedAtMs: -1 },
+  ])('rejects an invalid recovery reference: %j', (invalid) => {
+    expect(recoverCodexSubagent({ ...ref, ...invalid }, reply())).toBeNull();
   });
 });

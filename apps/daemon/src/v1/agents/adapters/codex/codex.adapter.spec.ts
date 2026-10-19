@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { clearSecrets, redactSecrets } from '../../../diagnostics/utils/redact';
+import { AgentKind } from '../../../runs/runs.types';
 import { MAX_ANSWER_LENGTH } from '../../chat.types';
 import type { AgentVersionService } from '../../services/agent-version.service';
 import type { ProcessRegistry } from '../../services/process-registry';
@@ -22,6 +23,7 @@ import type {
   AgentEvent,
   AgentSession,
   AgentTurnInput,
+  SubagentRecoveryRef,
   TurnDriver,
 } from '../adapter.types';
 import { CodexAdapter, type CodexAdapterOptions } from './codex.adapter';
@@ -1632,5 +1634,99 @@ describe('CodexAdapter.deleteSessionTranscript', () => {
       deleted: false,
       reason: `codex refused: no rollout found for thread id ${THREAD}`,
     });
+  });
+});
+
+describe('CodexAdapter.recoverSubagent', () => {
+  const ref: SubagentRecoveryRef = {
+    agentKind: AgentKind.Codex,
+    sessionId: THREAD,
+    childSessionId: '01a0e3aa-7dc4-7703-8a60-497958241fd2',
+    toolCallId: 'spawn-1',
+    launchedAtMs: 1_800_000_000_500,
+    configDir: '/selected-codex-profile',
+    cwd: '/selected-repo',
+  };
+  const result = {
+    thread: {
+      id: ref.childSessionId,
+      parentThreadId: ref.sessionId,
+      status: { type: 'notLoaded' },
+      turns: [
+        {
+          status: 'completed',
+          startedAt: 1_800_000_000,
+          completedAt: 1_800_000_001,
+        },
+      ],
+    },
+  };
+
+  it('only reads the child thread in its saved profile after the task directory was collected', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'codex-recovery-home-'));
+    onTestFinished(() => rmSync(home, { recursive: true, force: true }));
+    const collected = join(home, 'collected-task');
+    mkdirSync(collected);
+    rmSync(collected, { recursive: true });
+    const calls: { cwd?: string | URL; env?: NodeJS.ProcessEnv }[] = [];
+    const server = oneshotSpawn(answered(result));
+    const spawnFn = ((...args: Parameters<typeof spawn>) => {
+      calls.push(args[2] ?? {});
+      return server.groupSpawnFn(...args);
+    }) as typeof spawn;
+    const adapter = adapterWith({ groupSpawnFn: spawnFn, homeDir: home });
+    expect(await adapter.recoverSubagent({ ...ref, cwd: collected })).toBe(
+      'completed',
+    );
+    expect(server.calls).toHaveLength(1);
+    expect(sentMethods(server.calls[0]!.stdin)).toEqual([
+      'initialize',
+      'initialized',
+      'thread/read',
+    ]);
+    expect(paramsSentFor(server.calls[0]!.stdin, 'thread/read')).toEqual({
+      threadId: ref.childSessionId,
+      includeTurns: true,
+    });
+    expect(calls[0]?.cwd).toBe(home);
+    expect(calls[0]?.env?.CODEX_HOME).toBe(ref.configDir);
+  });
+
+  it.each([
+    '',
+    '{bad}\n',
+    '{"id":1,"result":{}}\n{"id":2,"error":{"code":-32600,"message":"unavailable"}}\n',
+    answered({ thread: null }),
+  ])('leaves unavailable or malformed reads unknown: %j', async (stdout) => {
+    const server = oneshotSpawn(stdout);
+    const adapter = adapterWith({ groupSpawnFn: server.groupSpawnFn });
+    expect(await adapter.recoverSubagent(ref)).toBeNull();
+    expect(server.calls).toHaveLength(1);
+  });
+
+  it('leaves a spawn failure unknown', async () => {
+    let spawns = 0;
+    const spawnFn = (() => {
+      spawns += 1;
+      throw new Error('codex unavailable');
+    }) as typeof spawn;
+    expect(
+      await adapterWith({ groupSpawnFn: spawnFn }).recoverSubagent(ref),
+    ).toBeNull();
+    expect(spawns).toBe(1);
+  });
+
+  it.each([
+    { childSessionId: null },
+    { childSessionId: 'not-a-uuid' },
+    { sessionId: '../escape' },
+    { launchedAtMs: Number.NaN },
+    { launchedAtMs: Number.POSITIVE_INFINITY },
+    { launchedAtMs: -1 },
+  ])('does not spawn for an invalid reference: %j', async (invalid) => {
+    const server = oneshotSpawn(answered(result));
+    const adapter = adapterWith({ groupSpawnFn: server.groupSpawnFn });
+    expect(await adapter.recoverSubagent({ ...ref, ...invalid })).toBeNull();
+    expect(server.calls).toHaveLength(0);
   });
 });

@@ -26,7 +26,7 @@ import { AgentSessionRegistry } from './agent-session.registry';
 import { ItemCallIndexService } from './item-call-index.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 
-const RETRY_MS = 30_000;
+const RECOVERY_DELAYS_MS = [0, 2_000, 10_000] as const;
 const RecoveryRefSchema = z.object({
   agentKind: AgentKindSchema,
   sessionId: z.string().min(1),
@@ -43,13 +43,18 @@ interface Candidate {
   version: number;
 }
 
+interface RecoveryAttempt {
+  attempt: number;
+  dueAt: number;
+}
+
 /** Re-read vendor records; every answer is appended through the normal durable stream. */
 @Injectable()
 export class SubagentRecoveryService
   implements OnModuleInit, OnApplicationBootstrap, OnApplicationShutdown
 {
   private readonly logger = new Logger(SubagentRecoveryService.name);
-  private readonly pending = new Map<string, number>();
+  private readonly pending = new Map<string, RecoveryAttempt>();
   private timer: NodeJS.Timeout | null = null;
   private flight: Promise<void> | null = null;
   private subscription: Subscription | null = null;
@@ -68,66 +73,92 @@ export class SubagentRecoveryService
 
   onModuleInit(): void {
     this.subscription = this.bus.all().subscribe(({ runId, item }) => {
+      const payload = asRecord(item.payload);
+      const lost =
+        item.kind === 'subagent_info' &&
+        (payload?.backgroundOutcome === 'untracked' ||
+          (payload?.backgroundOpen === false &&
+            payload.backgroundOutcome == null));
       if (
-        ['subagent_info', 'turn_complete', 'turn_cancelled', 'error'].includes(
-          item.kind,
-        )
+        lost ||
+        ['turn_complete', 'turn_cancelled', 'error'].includes(item.kind)
       ) {
-        this.schedule(runId);
+        this.schedule(runId, true);
       }
     });
   }
 
   async onApplicationBootstrap(): Promise<void> {
     for (const id of await this.items.subagentRecoveryRunIds(this.em.fork())) {
-      this.pending.set(id, 0);
+      this.schedule(id);
     }
-    this.arm(0);
   }
 
-  schedule(runId: string): void {
+  schedule(runId: string, newEvidence = false): void {
     if (this.stopped) {
       return;
     }
-    this.pending.set(runId, (this.pending.get(runId) ?? 0) + 1);
-    this.arm(0);
-  }
-
-  private arm(delay = RETRY_MS): void {
-    if (
-      this.stopped ||
-      this.timer !== null ||
-      this.flight !== null ||
-      this.pending.size === 0
-    ) {
+    const previous = this.pending.get(runId);
+    // Duplicate subscriptions join the current attempt budget. A new loss is
+    // fresh evidence and must not disappear behind an in-flight final attempt.
+    if (previous !== undefined && !newEvidence) {
       return;
     }
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.flight = this.sweep().finally(() => {
-        this.flight = null;
-        this.arm();
-      });
-    }, delay);
+    this.pending.set(runId, {
+      attempt: 0,
+      dueAt: Date.now(),
+    });
+    this.arm();
+  }
+
+  private arm(): void {
+    if (this.stopped || this.flight !== null || this.pending.size === 0) {
+      return;
+    }
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+    }
+    let dueAt = Number.POSITIVE_INFINITY;
+    for (const entry of this.pending.values()) {
+      dueAt = Math.min(dueAt, entry.dueAt);
+    }
+    this.timer = setTimeout(
+      () => {
+        this.timer = null;
+        this.flight = this.sweep().finally(() => {
+          this.flight = null;
+          this.arm();
+        });
+      },
+      Math.max(0, dueAt - Date.now()),
+    );
     this.timer.unref();
   }
 
   private async sweep(): Promise<void> {
-    for (const [runId, version] of [...this.pending]) {
+    for (const [runId, entry] of [...this.pending]) {
       if (this.stopped) {
         return;
       }
+      if (this.pending.get(runId) !== entry || entry.dueAt > Date.now()) {
+        continue;
+      }
+      let unresolved = true;
       try {
-        if (
-          !(await this.reconcile(runId)) &&
-          this.pending.get(runId) === version
-        ) {
-          this.pending.delete(runId);
-        }
+        unresolved = await this.reconcile(runId);
       } catch (error) {
         this.logger.warn(
           `Could not reconcile subagents for ${runId}: ${error instanceof Error ? error.message : String(error)}`,
         );
+      }
+      if (this.stopped || this.pending.get(runId) !== entry) {
+        continue;
+      }
+      entry.attempt += 1;
+      if (!unresolved || entry.attempt >= RECOVERY_DELAYS_MS.length) {
+        this.pending.delete(runId);
+      } else {
+        entry.dueAt = Date.now() + RECOVERY_DELAYS_MS[entry.attempt]!;
       }
     }
   }
@@ -296,6 +327,7 @@ export class SubagentRecoveryService
     if (this.timer !== null) {
       clearTimeout(this.timer);
     }
+    this.pending.clear();
     await this.flight;
   }
 }

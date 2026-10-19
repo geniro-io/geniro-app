@@ -55,6 +55,7 @@ describe('UsageEventDao (in-memory sqlite)', () => {
       cwd: '/work/project',
       workflowName: null,
       costUsd: 0.25,
+      estimatedCostUsd: null,
       inputTokens: 1_000,
       outputTokens: 200,
       cacheReadTokens: 50,
@@ -95,6 +96,13 @@ describe('UsageEventDao (in-memory sqlite)', () => {
       expect(rows[0]!.occurredAt.toISOString()).toBe(
         '2026-08-10T12:00:00.000Z',
       );
+    });
+
+    it('round-trips the part of the cost geniro priced itself', async () => {
+      await dao.recordOnce(input({ costUsd: 0.25, estimatedCostUsd: 0.25 }));
+
+      const [row] = await dao.getAll({});
+      expect(row!.estimatedCostUsd).toBe(0.25);
     });
 
     it('keeps a null figure null — never coerced to zero', async () => {

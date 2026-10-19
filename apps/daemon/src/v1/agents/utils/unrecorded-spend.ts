@@ -2,7 +2,9 @@ import { asNumber, asRecord } from './json-util';
 
 /**
  * The run row's outstanding spend (`Run.unrecordedSpend`): live-plane owner
- * key → dollars that owner's process has spent and no durable row records yet.
+ * key → dollars that owner's process has spent and no durable row records yet,
+ * or `{costUsd, estimatedCostUsd}` when part of them was priced by geniro — a
+ * bare number has no estimated part.
  *
  * Read back DEFENSIVELY — the column is TEXT this daemon wrote, but a row from
  * an older build or a hand edit must cost the entries it cannot read, never
@@ -10,6 +12,28 @@ import { asNumber, asRecord } from './json-util';
  * outstanding", which is the ABSENCE of an entry, so the two cannot disagree.
  */
 export function readUnrecordedSpend(json: string | null): Map<string, number> {
+  return readEntries(json, (value) =>
+    asNumber(asRecord(value)?.costUsd ?? value),
+  );
+}
+
+/**
+ * Of each owner's figure in {@link readUnrecordedSpend}, the part geniro priced
+ * itself — stored beside the dollars as `{costUsd, estimatedCostUsd}`, where a
+ * bare number is an entry with none.
+ */
+export function readUnrecordedEstimates(
+  json: string | null,
+): Map<string, number> {
+  return readEntries(json, (value) =>
+    asNumber(asRecord(value)?.estimatedCostUsd),
+  );
+}
+
+function readEntries(
+  json: string | null,
+  figureOf: (value: unknown) => number | null,
+): Map<string, number> {
   const spend = new Map<string, number>();
   if (json === null || json === '') {
     return spend;
@@ -21,7 +45,7 @@ export function readUnrecordedSpend(json: string | null): Map<string, number> {
     return spend;
   }
   for (const [ownerKey, value] of Object.entries(asRecord(parsed) ?? {})) {
-    const costUsd = asNumber(value);
+    const costUsd = figureOf(value);
     if (ownerKey !== '' && isOutstanding(costUsd)) {
       spend.set(ownerKey, costUsd);
     }
@@ -38,10 +62,20 @@ export function readUnrecordedSpend(json: string | null): Map<string, number> {
  */
 export function writeUnrecordedSpend(
   spend: ReadonlyMap<string, number>,
+  estimates: ReadonlyMap<string, number> = new Map(),
 ): string | null {
   const entries = [...spend]
     .filter(([, costUsd]) => isOutstanding(costUsd))
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([ownerKey, costUsd]) => {
+      const estimatedCostUsd = estimates.get(ownerKey) ?? null;
+      return [
+        ownerKey,
+        isOutstanding(estimatedCostUsd)
+          ? { costUsd, estimatedCostUsd }
+          : costUsd,
+      ] as const;
+    });
   return entries.length === 0
     ? null
     : JSON.stringify(Object.fromEntries(entries));

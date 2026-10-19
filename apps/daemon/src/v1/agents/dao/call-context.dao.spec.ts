@@ -62,7 +62,10 @@ describe('CallContextDao (in-memory sqlite)', () => {
   });
 
   it("creates the row on a call's first reading, there being no seed for one", async () => {
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 4200, 200000);
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+    });
 
     const rows = await dao.listByRun('run-1');
     expect(rows).toHaveLength(1);
@@ -75,9 +78,41 @@ describe('CallContextDao (in-memory sqlite)', () => {
     });
   });
 
+  it('marks a stand-in count until a stated one or a compaction clears it', async () => {
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+      contextEstimated: true,
+    });
+    expect((await dao.listByRun('run-1'))[0]?.contextEstimated).toBe(true);
+
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 5000,
+      contextWindowTokens: null,
+    });
+    expect((await dao.listByRun('run-1'))[0]?.contextEstimated).toBeNull();
+
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 6000,
+      contextWindowTokens: null,
+      contextEstimated: true,
+    });
+    await dao.forgetContext('run-1', 'call-1');
+    expect((await dao.listByRun('run-1'))[0]).toMatchObject({
+      contextTokens: null,
+      contextEstimated: null,
+    });
+  });
+
   it('keeps one row per CALL when a single node holds several at once', async () => {
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 4200, 200000);
-    await dao.rememberContext('run-1', 'call-2', 'node-a', 91000, 200000);
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+    });
+    await dao.rememberContext('run-1', 'call-2', 'node-a', {
+      contextTokens: 91000,
+      contextWindowTokens: 200000,
+    });
 
     const rows = await dao.listByRun('run-1');
     expect(rows).toHaveLength(2);
@@ -87,8 +122,14 @@ describe('CallContextDao (in-memory sqlite)', () => {
   });
 
   it('updates the existing row rather than adding a second for the same call', async () => {
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 4200, 200000);
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 9100, 200000);
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+    });
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 9100,
+      contextWindowTokens: 200000,
+    });
 
     const rows = await dao.listByRun('run-1');
     expect(rows).toHaveLength(1);
@@ -96,10 +137,16 @@ describe('CallContextDao (in-memory sqlite)', () => {
   });
 
   it('never clears a stored window with a reading that omits it', async () => {
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 4200, 200000);
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+    });
     // A `context_progress` carries a count and no window — the shape that would
     // erase the denominator if the absent half were written as null.
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 5300, null);
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 5300,
+      contextWindowTokens: null,
+    });
 
     const rows = await dao.listByRun('run-1');
     expect(rows[0]).toMatchObject({
@@ -109,8 +156,14 @@ describe('CallContextDao (in-memory sqlite)', () => {
   });
 
   it('never clears a stored count with a reading that omits it', async () => {
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 4200, null);
-    await dao.rememberContext('run-1', 'call-1', 'node-a', null, 200000);
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 4200,
+      contextWindowTokens: null,
+    });
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: null,
+      contextWindowTokens: 200000,
+    });
 
     const rows = await dao.listByRun('run-1');
     expect(rows[0]).toMatchObject({
@@ -120,13 +173,19 @@ describe('CallContextDao (in-memory sqlite)', () => {
   });
 
   it('stores no row at all for a reading whose every figure is non-positive', async () => {
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 0, 0);
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 0,
+      contextWindowTokens: 0,
+    });
 
     expect(await dao.listByRun('run-1')).toHaveLength(0);
   });
 
   it('rejects a zero figure while storing the positive one beside it', async () => {
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 0, 200000);
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 0,
+      contextWindowTokens: 200000,
+    });
 
     const rows = await dao.listByRun('run-1');
     expect(rows[0]).toMatchObject({
@@ -136,8 +195,14 @@ describe('CallContextDao (in-memory sqlite)', () => {
   });
 
   it('scopes the listing to one run', async () => {
-    await dao.rememberContext('run-1', 'call-1', 'node-a', 4200, 200000);
-    await dao.rememberContext('run-2', 'call-1', 'node-a', 7300, 200000);
+    await dao.rememberContext('run-1', 'call-1', 'node-a', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+    });
+    await dao.rememberContext('run-2', 'call-1', 'node-a', {
+      contextTokens: 7300,
+      contextWindowTokens: 200000,
+    });
 
     const rows = await dao.listByRun('run-1');
     expect(rows).toHaveLength(1);
@@ -149,13 +214,10 @@ describe('CallContextDao (in-memory sqlite)', () => {
     // contexts, so a reading arriving in that window would otherwise insert a
     // row that `getNodeStates` can never return — it maps over node states and
     // looks calls up beside them, so a call with no node is unreachable.
-    await dao.rememberContext(
-      'run-1',
-      'call-1',
-      'node-torn-down',
-      4200,
-      200000,
-    );
+    await dao.rememberContext('run-1', 'call-1', 'node-torn-down', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+    });
 
     expect(await dao.listByRun('run-1')).toHaveLength(0);
   });
@@ -164,7 +226,10 @@ describe('CallContextDao (in-memory sqlite)', () => {
     // The other side of the guard, so a refusal that swallowed everything could
     // not pass the test above.
     await seedNode('run-1', 'node-b');
-    await dao.rememberContext('run-1', 'call-1', 'node-b', 4200, 200000);
+    await dao.rememberContext('run-1', 'call-1', 'node-b', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+    });
 
     expect(await dao.listByRun('run-1')).toHaveLength(1);
   });

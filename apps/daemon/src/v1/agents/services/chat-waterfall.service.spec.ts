@@ -622,6 +622,36 @@ describe('ChatWaterfallService', () => {
       expect(eng?.costUsd).toBe(2);
     });
 
+    it('carries the part of a cost geniro priced itself, per turn and per lane', async () => {
+      const result = await build(
+        [
+          row(
+            0,
+            'turn_complete',
+            { usage: { durationMs: 1_000, costUsd: 2, estimatedCostUsd: 2 } },
+            5,
+            'eng',
+          ),
+          row(
+            1,
+            'turn_complete',
+            { usage: { durationMs: 1_000, costUsd: 1 } },
+            6,
+            'eng',
+          ),
+        ],
+        { nodeStates: [{ nodeId: 'eng', agentKind: 'codex' }] },
+      ).read('run-a');
+
+      expect(result.turns.map((turn) => turn.estimatedCostUsd)).toEqual([
+        2,
+        null,
+      ]);
+      const eng = result.lanes.find((lane) => lane.nodeId === 'eng');
+      expect(eng?.costUsd).toBe(3);
+      expect(eng?.estimatedCostUsd).toBe(2);
+    });
+
     it('answers null for a run nobody was ever asked to approve', async () => {
       // Null and 0 are different answers here: "the run never stopped for
       // anybody" against "every card came back instantly".

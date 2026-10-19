@@ -166,6 +166,8 @@ export interface TooltipRow {
   color?: string;
   /** True when the figure was never measured, so it reads as such. */
   unmeasured?: boolean;
+  /** A line under the row, for what the figure cannot say about itself. */
+  note?: string;
 }
 
 /**
@@ -192,7 +194,7 @@ export function ChartTooltip({
         {rows.map((row) => (
           <li
             key={row.label}
-            className="flex items-center gap-2 text-xs text-muted-foreground">
+            className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
             {row.color ? (
               <span
                 aria-hidden="true"
@@ -208,6 +210,9 @@ export function ChartTooltip({
               )}>
               {row.unmeasured ? NOT_MEASURED : row.value}
             </span>
+            {row.note && !row.unmeasured ? (
+              <span className="w-full">{row.note}</span>
+            ) : null}
           </li>
         ))}
       </ul>

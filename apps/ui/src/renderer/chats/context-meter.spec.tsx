@@ -267,6 +267,51 @@ describe('ContextMeter', () => {
     expect(container.textContent).not.toContain('cost');
   });
 
+  it('draws a stated reading and the CLI’s own spend plainly', () => {
+    render(
+      <ContextMeter
+        contextTokens={50_000}
+        contextWindowTokens={200_000}
+        spentUsd={1.5}
+      />,
+    );
+    expect(meterLabel()).toBe('Context 25% full — 50k of 200k, $1.50 spent');
+    openMeter();
+    expect(container.textContent).not.toContain('≈');
+    expect(container.textContent).not.toContain('estimate');
+  });
+
+  it('marks a context count geniro stood in for as an estimate', () => {
+    render(
+      <ContextMeter
+        contextTokens={50_000}
+        contextWindowTokens={200_000}
+        contextEstimated
+      />,
+    );
+    expect(meterLabel()).toBe('Context ≈25% full (estimate) — 50k of 200k');
+    openMeter();
+    expect(container.textContent).toContain('≈50k / 200k');
+    expect(container.textContent).toContain("geniro's estimate");
+  });
+
+  it('marks spend geniro priced itself, and says which part', () => {
+    render(
+      <ContextMeter
+        contextTokens={50_000}
+        contextWindowTokens={200_000}
+        spentUsd={1.5}
+        spentEstimatedUsd={0.5}
+      />,
+    );
+    expect(meterLabel()).toBe('Context 25% full — 50k of 200k, ≈$1.50 spent');
+    openMeter();
+    expect(container.textContent).toContain('≈$1.50 spent across this run');
+    expect(container.textContent).toContain(
+      'includes ≈$0.50 geniro estimated from token counts at list price',
+    );
+  });
+
   it('leaves the ring itself unlabelled, so the figure announces once', () => {
     render(
       <ContextMeter contextTokens={50_000} contextWindowTokens={200_000} />,
@@ -377,6 +422,7 @@ describe('the expanded readout the meter opens onto', () => {
     turns: 3,
     costedTurns: 3,
     costUsd: 0.42,
+    estimatedCostUsd: null,
     inputTokens: 24,
     outputTokens: 1_200,
     cacheReadTokens: 1_300_000,

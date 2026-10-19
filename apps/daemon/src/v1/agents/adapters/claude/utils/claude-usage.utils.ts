@@ -247,12 +247,19 @@ export class ClaudeSessionCostLedger {
     costUsd: number | null;
     apiMs: number | null;
     modelCosts: AgentModelCost[] | null;
+    /** The part of `costUsd` priced here rather than the CLI's own figure. */
+    estimatedCostUsd: number | null;
   } {
     if (sessionId === null) {
       // Nothing to key on. Reporting the running total would be the very bug
       // this class exists to stop, and no `result` line has been observed
       // without the field — so the honest answer is "not measured".
-      return { costUsd: null, apiMs: null, modelCosts: null };
+      return {
+        costUsd: null,
+        apiMs: null,
+        modelCosts: null,
+        estimatedCostUsd: null,
+      };
     }
     const previous = this.totals.get(sessionId);
     const unconfirmed = this.unconfirmedResumes.delete(sessionId);
@@ -285,6 +292,7 @@ export class ClaudeSessionCostLedger {
         costUsd,
         apiMs: step(previous.apiMs, cumulative.apiMs),
         modelCosts,
+        estimatedCostUsd: null,
       };
     }
     // With no base, or a total that went DOWN, a step far past what the turn's
@@ -309,12 +317,18 @@ export class ClaudeSessionCostLedger {
       costUsd > ownSpendUsd * RUNNING_TOTAL_TOLERANCE + RUNNING_TOTAL_SLACK_USD
     ) {
       // The CLI's per-model figures are the same untrustworthy history.
-      return { costUsd: ownSpendUsd, apiMs: null, modelCosts: null };
+      return {
+        costUsd: ownSpendUsd,
+        apiMs: null,
+        modelCosts: null,
+        estimatedCostUsd: ownSpendUsd,
+      };
     }
     return {
       costUsd,
       apiMs: step(previous?.apiMs ?? null, cumulative.apiMs),
       modelCosts,
+      estimatedCostUsd: null,
     };
   }
 
@@ -741,6 +755,10 @@ export function readClaudeUsage(
     // {@link ClaudeSessionCostLedger} for the probe and for what summing the
     // total instead did to the Stats page.
     costUsd: step.costUsd,
+    // Absent unless some of the cost was priced here.
+    ...(step.estimatedCostUsd === null
+      ? {}
+      : { estimatedCostUsd: step.estimatedCostUsd }),
     // What that spend ran on — the turn's own model and every model its
     // sub-agents and side calls used, which `usage` above does not count.
     modelCosts: step.modelCosts,

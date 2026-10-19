@@ -3708,6 +3708,8 @@ export class AcpTurnDriver {
   }
 
   private buildUsage(): AgentUsage {
+    const statedContext =
+      this.usage.contextUsed ?? this.contextReading?.usedTokens ?? null;
     return {
       inputTokens: this.usage.inputTokens,
       outputTokens: this.usage.outputTokens,
@@ -3728,10 +3730,12 @@ export class AcpTurnDriver {
       // prompt of a single request, which is a different quantity that merely
       // beats nothing. Putting the reading here is what keeps the ring drawn
       // between turns rather than only during one; see {@link contextReading}.
-      contextTokens:
-        this.usage.contextUsed ??
-        this.contextReading?.usedTokens ??
-        this.usage.inputTokens,
+      contextTokens: statedContext ?? this.usage.inputTokens,
+      // The plain input count is geniro's stand-in for an occupancy nobody
+      // stated, so the meter says so.
+      ...(statedContext === null && this.usage.inputTokens !== null
+        ? { contextEstimated: true }
+        : {}),
       // The denominator comes from the off-protocol reading because no shipped
       // ACP agent here has been observed SENDING a window, not because the
       // protocol has none: `usage_update` defines `size` as required beside

@@ -59,6 +59,25 @@ describe('chatContextFigures', () => {
     });
   });
 
+  it('carries the estimate mark of whichever source supplied the count', () => {
+    const run = {
+      contextTokens: 20,
+      contextWindowTokens: 300,
+      contextEstimated: true,
+    };
+    expect(chatContextFigures(sources({ run }))).toEqual({
+      tokens: 20,
+      window: 300,
+      estimated: true,
+    });
+    // A live count outranks the stand-in, and is the CLI's own.
+    const live = { contextTokens: 10, contextWindowTokens: 200 };
+    expect(chatContextFigures(sources({ live, run }))).toEqual({
+      tokens: 10,
+      window: 200,
+    });
+  });
+
   it('reads the window whether or not there is a count, so a compaction keeps the denominator', () => {
     // After a `/compact` every count is gone and the window — which belongs to
     // the model — is not. The empty ring needs that gauge.
@@ -68,6 +87,21 @@ describe('chatContextFigures', () => {
       tokens: null,
       window: 200000,
     });
+  });
+
+  it('recalls a remembered stand-in still marked as one', () => {
+    const recall = (): ContextReading => ({
+      tokens: 900,
+      window: 200_000,
+      estimated: true,
+    });
+    expect(chatContextFigures(sources({ itemsLoaded: false, recall }))).toEqual(
+      {
+        tokens: 900,
+        window: 200_000,
+        estimated: true,
+      },
+    );
   });
 
   it('does not recall over a loaded transcript that yields no reading', () => {

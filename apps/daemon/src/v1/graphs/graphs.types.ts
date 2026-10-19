@@ -741,6 +741,11 @@ export const NodeStateWireSchema = z.object({
    * has reported none.
    */
   contextTokens: z.number().nullable(),
+  contextEstimated: z
+    .boolean()
+    .describe(
+      "Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it",
+    ),
   contextWindowTokens: z.number().nullable(),
   /**
    * The model the node's newest turn reported running on (`usage.contextModel`
@@ -762,6 +767,11 @@ export const NodeStateWireSchema = z.object({
       .object({
         callId: z.string(),
         contextTokens: z.number().nullable(),
+        contextEstimated: z
+          .boolean()
+          .describe(
+            "Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it",
+          ),
         contextWindowTokens: z.number().nullable(),
         /** What this call's own turns spent, over the whole run. */
         totals: ChatTotalsWireSchema,

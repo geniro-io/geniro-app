@@ -1371,6 +1371,7 @@ describe('ChatMetricsService', () => {
       turns: 2,
       costedTurns: 2,
       costUsd: 0.5,
+      estimatedCostUsd: null,
       inputTokens: 5,
       outputTokens: 40,
       cacheReadTokens: 1000,

@@ -15,7 +15,8 @@ import type { NodeDurableReading } from './use-node-context';
 export type CalleeContext = Pick<
   CallContextReading,
   'contextTokens' | 'contextWindowTokens'
->;
+> &
+  Partial<Pick<CallContextReading, 'contextEstimated'>>;
 
 /**
  * What one conversation has SPENT — tokens in and out, and money — in the
@@ -24,6 +25,17 @@ export type CalleeContext = Pick<
 export interface CallSpend {
   tokens: number | null;
   costUsd: number | null;
+  /** Of {@link costUsd}, the part geniro priced itself; absent when none. */
+  estimatedCostUsd?: number | null;
+}
+
+/**
+ * Dollars a RUNNING turn has spent that no durable row carries yet, and the
+ * part of them geniro priced itself — the live plane's `spentCostUsd` pair.
+ */
+export interface LiveCost {
+  costUsd: number;
+  estimatedCostUsd: number | null;
 }
 
 /** A call conversation's reading: its window, plus its whole-run spend. */
@@ -35,7 +47,7 @@ export type CalleeReading = CalleeContext & {
    * not include yet — added on top of whichever of spend or fold is drawn
    * ({@link withLiveCost}). Null when nothing running has reported one.
    */
-  liveCostUsd?: number | null;
+  liveCost?: LiveCost | null;
   /**
    * How many tools this AGENT has run in the whole workflow — the daemon's own
    * running count (`node_state.tool_calls`), not a fold of what is on screen.
@@ -82,7 +94,21 @@ export function spendOfTotals(
     totals.inputTokens === null && totals.outputTokens === null
       ? null
       : (totals.inputTokens ?? 0) + (totals.outputTokens ?? 0);
-  return { tokens, costUsd: totals.costUsd };
+  return withEstimate(
+    { tokens, costUsd: totals.costUsd },
+    totals.estimatedCostUsd,
+  );
+}
+
+/** A spend carrying its estimated part only when it has one. */
+function withEstimate<T extends CallSpend>(
+  spend: T,
+  estimatedCostUsd: number | null | undefined,
+): T {
+  const { estimatedCostUsd: _previous, ...rest } = spend;
+  return estimatedCostUsd === null || estimatedCostUsd === undefined
+    ? (rest as T)
+    : ({ ...rest, estimatedCostUsd } as T);
 }
 
 /**
@@ -102,6 +128,7 @@ export function resolveConversationSpend(
 ): CallSpend | null {
   const calls = nodeReadings.get(calleeNodeId)?.calls ?? [];
   const found: CallSpend = { tokens: null, costUsd: null };
+  let estimated: number | null = null;
   let measured = false;
   for (const callId of callIds) {
     const spend = spendOfTotals(
@@ -113,8 +140,9 @@ export function resolveConversationSpend(
     measured = true;
     found.tokens = addFigure(found.tokens, spend.tokens);
     found.costUsd = addFigure(found.costUsd, spend.costUsd);
+    estimated = addFigure(estimated, spend.estimatedCostUsd ?? null);
   }
-  return measured ? found : null;
+  return measured ? withEstimate(found, estimated) : null;
 }
 
 function addFigure(a: number | null, b: number | null): number | null {
@@ -135,13 +163,10 @@ export function liveConversationCost(
   liveText: ReadonlyMap<string, LiveState>,
   calleeNodeId: string,
   callIds: readonly string[],
-): number | null {
-  let total: number | null = null;
+): LiveCost | null {
+  let total: LiveCost | null = null;
   for (const callId of callIds) {
-    total = addLive(
-      total,
-      liveText.get(partialOwnerKey(calleeNodeId, callId))?.spentCostUsd,
-    );
+    total = addLive(total, liveText.get(partialOwnerKey(calleeNodeId, callId)));
   }
   return total;
 }
@@ -153,11 +178,11 @@ export function liveConversationCost(
 export function liveNodeCost(
   liveText: ReadonlyMap<string, LiveState>,
   nodeId: string,
-): number | null {
-  let total: number | null = null;
+): LiveCost | null {
+  let total: LiveCost | null = null;
   for (const [key, state] of liveText) {
     if (ownerOfKey(key) === nodeId) {
-      total = addLive(total, state.spentCostUsd);
+      total = addLive(total, state);
     }
   }
   return total;
@@ -169,12 +194,28 @@ export function liveNodeCost(
  */
 export function liveRunCost(
   liveText: ReadonlyMap<string, LiveState>,
-): number | null {
-  let total: number | null = null;
+): LiveCost | null {
+  let total: LiveCost | null = null;
   for (const state of liveText.values()) {
-    total = addLive(total, state.spentCostUsd);
+    total = addLive(total, state);
   }
   return total;
+}
+
+/** A spend as the agents panel's two money fields. */
+export function spentOf(spend: CallSpend | null): {
+  spentUsd: number | null;
+  spentEstimatedUsd: number | null;
+} {
+  return {
+    spentUsd: spend?.costUsd ?? null,
+    spentEstimatedUsd: spend?.estimatedCostUsd ?? null,
+  };
+}
+
+/** One live state's running spend, or null when it has reported none. */
+export function liveCostOf(state: LiveState | undefined): LiveCost | null {
+  return addLive(null, state);
 }
 
 /**
@@ -184,30 +225,46 @@ export function liveRunCost(
  */
 export function withLiveCost<T extends CallSpend>(
   spend: T,
-  liveUsd: number | null,
+  live: LiveCost | null,
 ): T;
 export function withLiveCost<T extends CallSpend>(
   spend: T | null,
-  liveUsd: number | null,
+  live: LiveCost | null,
 ): T | CallSpend | null;
 export function withLiveCost<T extends CallSpend>(
   spend: T | null,
-  liveUsd: number | null,
+  live: LiveCost | null,
 ): T | CallSpend | null {
-  if (liveUsd === null || liveUsd <= 0) {
+  if (live === null || live.costUsd <= 0) {
     return spend;
   }
   if (spend === null) {
-    return { tokens: null, costUsd: liveUsd };
+    return withEstimate(
+      { tokens: null, costUsd: live.costUsd },
+      live.estimatedCostUsd,
+    );
   }
-  return { ...spend, costUsd: (spend.costUsd ?? 0) + liveUsd };
+  return withEstimate(
+    { ...spend, costUsd: (spend.costUsd ?? 0) + live.costUsd },
+    addFigure(spend.estimatedCostUsd ?? null, live.estimatedCostUsd),
+  );
 }
 
 function addLive(
-  total: number | null,
-  part: number | null | undefined,
-): number | null {
-  return part === null || part === undefined ? total : (total ?? 0) + part;
+  total: LiveCost | null,
+  state: LiveState | undefined,
+): LiveCost | null {
+  const part = state?.spentCostUsd;
+  if (part === null || part === undefined) {
+    return total;
+  }
+  return {
+    costUsd: (total?.costUsd ?? 0) + part,
+    estimatedCostUsd: addFigure(
+      total?.estimatedCostUsd ?? null,
+      state?.spentEstimatedCostUsd ?? null,
+    ),
+  };
 }
 
 /**
@@ -248,10 +305,14 @@ export function resolveCalleeContext(
   const row = nodeReadings
     .get(calleeNodeId)
     ?.calls.find((call) => call.callId === callId);
+  // A live count is the CLI's own; only the durable row can be a stand-in.
+  const estimated =
+    live?.contextTokens == null && row?.contextEstimated === true;
   return {
     contextTokens: live?.contextTokens ?? row?.contextTokens ?? null,
     contextWindowTokens:
       live?.contextWindowTokens ?? row?.contextWindowTokens ?? null,
+    ...(estimated ? { contextEstimated: true } : {}),
   };
 }
 
@@ -282,7 +343,12 @@ export function resolveConversationContext(
       calleeNodeId,
       callIds[i]!,
     );
-    found.contextTokens ??= reading.contextTokens;
+    if (found.contextTokens === null && reading.contextTokens !== null) {
+      found.contextTokens = reading.contextTokens;
+      if (reading.contextEstimated === true) {
+        found.contextEstimated = true;
+      }
+    }
     found.contextWindowTokens ??= reading.contextWindowTokens;
   }
   return found;

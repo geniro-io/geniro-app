@@ -32,7 +32,8 @@ export type NodeDurableReading = Pick<
   | 'model'
   // When the node's own conversation's prompt cache lapses.
   | 'promptCacheExpiresAt'
->;
+> &
+  Partial<Pick<NodeStateDto, 'contextEstimated'>>;
 
 const EMPTY: ReadonlyMap<string, NodeDurableReading> = new Map();
 
@@ -136,6 +137,7 @@ export function useNodeDurableReadings(
               node.nodeId,
               {
                 contextTokens: node.contextTokens,
+                ...(node.contextEstimated ? { contextEstimated: true } : {}),
                 contextWindowTokens: node.contextWindowTokens,
                 calls: node.calls,
                 workedMs: node.workedMs,

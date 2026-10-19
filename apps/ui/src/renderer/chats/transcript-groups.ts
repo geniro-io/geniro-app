@@ -1619,6 +1619,8 @@ export interface CallBlockUsage {
   /** Input + output, on the agent card's own rule — never the cache reads. */
   tokens: number | null;
   costUsd: number | null;
+  /** Of {@link costUsd}, the part geniro priced itself; absent when none. */
+  estimatedCostUsd?: number | null;
 }
 
 /**
@@ -1667,6 +1669,13 @@ function addCallUsage(
       );
       into.tokens = tokens;
       into.costUsd = addFigure(into.costUsd, usage.costUsd);
+      // A zero priced part is none at all.
+      if ((measured(usage.estimatedCostUsd) ?? 0) > 0) {
+        into.estimatedCostUsd = addFigure(
+          into.estimatedCostUsd ?? null,
+          usage.estimatedCostUsd,
+        );
+      }
       continue;
     }
     if (entry.type === 'tools' || isCardEntry(entry)) {
@@ -1680,6 +1689,8 @@ function addCallUsage(
 export interface CallBlockContext {
   contextTokens: number | null;
   contextWindowTokens: number | null;
+  /** Whether {@link contextTokens} is geniro's stand-in for a reading. */
+  contextEstimated?: boolean;
 }
 
 /**
@@ -1728,6 +1739,11 @@ function readCallContext(
       const window = measured(usage.contextWindowTokens);
       if (tokens !== null) {
         into.contextTokens = tokens;
+        if (usage.contextEstimated === true) {
+          into.contextEstimated = true;
+        } else {
+          delete into.contextEstimated;
+        }
       }
       if (window !== null) {
         into.contextWindowTokens = window;

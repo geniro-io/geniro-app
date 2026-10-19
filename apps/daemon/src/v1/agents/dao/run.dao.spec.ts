@@ -584,6 +584,34 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('rememberContext', () => {
+    const readBack = async (id: string) =>
+      new RunDao(orm.em.fork()).getById(id);
+
+    it('marks a stand-in count until a stated one or a compaction clears it', async () => {
+      const run = await dao.create({});
+
+      await dao.rememberContext(run.id, {
+        contextTokens: 900,
+        contextEstimated: true,
+      });
+      expect((await readBack(run.id))?.contextEstimated).toBe(true);
+
+      await dao.rememberContext(run.id, { contextTokens: 1_200 });
+      expect((await readBack(run.id))?.contextEstimated).toBeNull();
+
+      await dao.rememberContext(run.id, {
+        contextTokens: 1_500,
+        contextEstimated: true,
+      });
+      await dao.forgetContext(run.id);
+      expect(await readBack(run.id)).toMatchObject({
+        contextTokens: null,
+        contextEstimated: null,
+      });
+    });
+  });
+
   describe('rememberWork', () => {
     const readBack = async (id: string) =>
       new RunDao(orm.em.fork()).getById(id);

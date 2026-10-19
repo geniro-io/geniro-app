@@ -44,6 +44,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     taken?: string;
     /** What a `done` line's segment cost, for the cases that fold two. */
     cost?: number;
+    /** Of {@link cost}, the part geniro priced itself. */
+    estimated?: number;
     /** Whose thread it came from: absent is the main one, a value a delegate's. */
     parent?: string;
     /** How the settling unit ended, when the fake line states it. */
@@ -60,6 +62,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     owned?: boolean;
     /** The CLI's running cost since its last `result` (claude's `get_usage`). */
     live?: number;
+    /** Of {@link live}, the part geniro priced itself (codex's list price). */
+    liveEstimated?: number;
     /** A tool call with this id — a delegate's own when `parent` is set. */
     run?: string;
     /** The command line that `run` call ran. */
@@ -77,7 +81,15 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     ];
   }
   if (typeof row.live === 'number') {
-    return [{ type: 'cost_progress', costUsd: row.live }];
+    return [
+      {
+        type: 'cost_progress',
+        costUsd: row.live,
+        ...(row.liveEstimated === undefined
+          ? {}
+          : { estimatedCostUsd: row.liveEstimated }),
+      },
+    ];
   }
   if (row.state !== undefined) {
     return [{ type: 'session_state', idle: row.state === 'idle' }];
@@ -127,6 +139,9 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
           contextWindowTokens: null,
           contextModel: null,
           costUsd: row.cost,
+          ...(row.estimated === undefined
+            ? {}
+            : { estimatedCostUsd: row.estimated }),
           durationMs: null,
           apiMs: null,
           ttftMs: null,
@@ -1728,14 +1743,17 @@ describe('a delegate whose own detached command outlives its turn', () => {
   }
 
   it('closes only once the last of its commands has ended', async () => {
-    const { child, last, launch, finish } = openDelegateSession();
+    const { session, child, last, launch, finish } = openDelegateSession();
     launch('b-1', 'b-2');
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(true);
     line(child, { work: 'a-delegate', phase: 'settled', outcome: 'completed' });
     line(child, { work: 'b-1', phase: 'settled' });
     expect(last()?.backgroundOpen).toBe(true);
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(true);
 
     line(child, { work: 'b-2', phase: 'settled' });
     expect(last()?.backgroundOpen).toBe(false);
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(false);
     await finish();
   });
 
@@ -1858,7 +1876,7 @@ describe('a delegate whose own detached command outlives its turn', () => {
     await finish();
   });
 
-  it('announces the held settle as STOPPED, figures kept, when the process ends under its command', () => {
+  it('announces the held settle as stopped, figures kept, when the process ends under its command', () => {
     const { child, last, launch } = openDelegateSession();
     launch('b-1');
     line(child, {
@@ -1874,6 +1892,57 @@ describe('a delegate whose own detached command outlives its turn', () => {
       backgroundOpen: false,
       backgroundOutcome: 'stopped',
       tokens: 1234,
+    });
+    expect(last()).not.toHaveProperty('trackingLost');
+  });
+
+  it('closes a delegate still out when the process ends as untracked, saying the process ended', () => {
+    const { child, last, launch } = openDelegateSession();
+    launch();
+    expect(last()?.backgroundOpen).toBe(true);
+
+    child.emit('close', 0, null);
+    expect(last()).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked',
+      trackingLost: 'process-ended',
+    });
+  });
+
+  it('closes a delegate still out as stopped when the user’s Stop closed the process', () => {
+    const { session, child, last, launch } = openDelegateSession();
+    launch();
+
+    session.close('user-stop');
+    child.emit('close', null, 'SIGTERM');
+    expect(last()).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'stopped',
+    });
+    expect(last()).not.toHaveProperty('trackingLost');
+  });
+
+  it('closes them as stopped when a recorded Stop ends the process by any other way', () => {
+    // A workflow Stop is recorded ahead of the cancel; the process can then
+    // end from its own kill after a refused interrupt, with no close() at all.
+    const { session, child, last, launch } = openDelegateSession();
+    launch();
+
+    session.noteCloseCause?.('user-stop');
+    child.emit('close', null, 'SIGKILL');
+    expect(last()).toMatchObject({ backgroundOutcome: 'stopped' });
+  });
+
+  it('forgets a recorded Stop once it is withdrawn', () => {
+    const { session, child, last, launch } = openDelegateSession();
+    launch();
+
+    session.noteCloseCause?.('user-stop');
+    session.noteCloseCause?.(null);
+    child.emit('close', 0, null);
+    expect(last()).toMatchObject({
+      backgroundOutcome: 'untracked',
+      trackingLost: 'process-ended',
     });
   });
 
@@ -2221,6 +2290,39 @@ describe('a turn whose background work outlives its result', () => {
     expect(zeroAt).toBeGreaterThan(-1);
     expect(zeroAt).toBeLessThan(endAt);
     expect(events[endAt]).toMatchObject({ usage: { costUsd: 1.75 } });
+  });
+
+  it('carries the part of a held segment’s cost geniro priced onto the LIVE plane', async () => {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    const live = ():
+      Extract<AgentEvent, { type: 'cost_progress' }> | undefined =>
+      events.findLast(
+        (e): e is Extract<AgentEvent, { type: 'cost_progress' }> =>
+          e.type === 'cost_progress',
+      );
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, cost: 1.25, estimated: 1.25 });
+    // The held segment was list-priced; the continuation's running figure is
+    // the CLI's own, so only the held part is an estimate.
+    line(child, { says: 'back to work' });
+    line(child, { live: 0.4 });
+    expect(live()).toMatchObject({ costUsd: 1.65, estimatedCostUsd: 1.25 });
+    line(child, { live: 0.5, liveEstimated: 0.5 });
+    expect(live()?.estimatedCostUsd).toBeCloseTo(1.75);
+
+    await reportAndGoIdle(child, 'task-1');
+    line(child, { live: 0 });
+    line(child, { done: true, cost: 0.5 });
+    await handle?.done;
+
+    // The zero that takes the figure down carries no estimate of its own.
+    expect(live()).toEqual({ type: 'cost_progress', costUsd: 0 });
+    expect(events.find((e) => e.type === 'turn_complete')).toMatchObject({
+      usage: { costUsd: 1.75, estimatedCostUsd: 1.25 },
+    });
   });
 
   it('keeps what the superseded result cost when the resumed turn then FAILS', async () => {
@@ -2880,6 +2982,51 @@ describe('a turn whose background work outlives its result', () => {
     expect(session.alive).toBe(false);
   });
 
+  it.each(['idle', 'silence'] as const)(
+    'marks missing delegate reports untracked on %s and accepts a late completion',
+    async (ending) => {
+      vi.useFakeTimers();
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (event) =>
+        events.push(event),
+      );
+      const handle = session.startTurn({
+        onEvent: (event) => events.push(event),
+      });
+      line(child, {
+        work: 'task-1',
+        phase: 'started',
+        unit: 'agent',
+        call: 'toolu_a',
+      });
+      line(child, { done: true });
+      if (ending === 'idle') {
+        line(child, { state: 'idle' });
+      } else {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      }
+      await handle?.done;
+      expect(
+        events.filter((event) => event.type === 'subagent_info').at(-1),
+      ).toMatchObject({
+        id: 'toolu_a',
+        backgroundOpen: false,
+        backgroundOutcome: 'untracked',
+      });
+      // The process still runs, so the delegate may too.
+      expect(
+        events.filter((event) => event.type === 'subagent_info').at(-1),
+      ).not.toHaveProperty('trackingLost');
+      expect(events.at(-1)?.type).toBe('turn_complete');
+      line(child, { work: 'task-1', phase: 'settled', outcome: 'completed' });
+      expect(events.at(-1)).toMatchObject({
+        type: 'subagent_info',
+        id: 'toolu_a',
+        backgroundOutcome: 'completed',
+      });
+    },
+  );
+
   it('releases the held result when the work goes silent too', async () => {
     // The bound, and it is the turn's existing silence deadline rather than a
     // second timer. Its own sentence ("produced nothing… giving up") would be
@@ -3036,11 +3183,31 @@ describe('a turn whose background work outlives its result', () => {
     const logger = { warn: vi.fn(), debug: vi.fn() };
     const { child } = openSession(undefined, logger, (e) => between.push(e));
 
-    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
     line(child, { done: true });
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
 
-    expect(between).toEqual([COMPLETE]);
+    expect(between.map((event) => event.type)).toEqual([
+      'subagent_info',
+      'subagent_info',
+      'turn_complete',
+    ]);
+    expect(between.at(-2)).toMatchObject({
+      id: 'toolu_a',
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked',
+    });
+    line(child, { work: 'task-1', phase: 'settled', outcome: 'completed' });
+    expect(between.at(-1)).toMatchObject({
+      type: 'subagent_info',
+      id: 'toolu_a',
+      backgroundOutcome: 'completed',
+    });
     expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
       'never reported',
     );

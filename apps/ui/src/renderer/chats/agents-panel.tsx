@@ -40,8 +40,12 @@ import {
   type AgentThread,
   type AgentWork,
   CHAT_AGENT_KEY,
+  costEstimateNote,
+  costEstimateTitle,
   formatTokens,
   formatUsd,
+  markEstimate,
+  subagentMayStillRun,
 } from './agent-activity';
 import {
   type AgentInstance,
@@ -65,7 +69,13 @@ import { PromptCacheBadge } from './prompt-cache-badge';
 import type { PublishedArtifact } from './published-artifact';
 import { ThreadPullRequestRow } from './pull-request-row';
 import { RunProcesses } from './run-processes';
-import { RUN_STATUS_META, RunStatusIcon, RunStatusLabel } from './run-status';
+import {
+  isSettledRunStatus,
+  RUN_STATUS_META,
+  RunStatusIcon,
+  RunStatusLabel,
+  untrackedExplanation,
+} from './run-status';
 import { RunWaterfall } from './run-waterfall';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
@@ -512,7 +522,16 @@ function ThreadRow({
   const cells = (
     <>
       {leading}
-      <RunStatusIcon status={thread.status} />
+      {thread.status === 'untracked' ? (
+        <span
+          data-slot="untracked-status"
+          className="flex shrink-0"
+          title={untrackedExplanation(thread.processEnded === true)}>
+          <RunStatusIcon status={thread.status} />
+        </span>
+      ) : (
+        <RunStatusIcon status={thread.status} />
+      )}
       {openSubagent ? (
         <button
           type="button"
@@ -553,6 +572,7 @@ function ThreadRow({
         runId={null}
         contextTokens={thread.contextTokens ?? null}
         contextWindowTokens={thread.contextWindowTokens ?? null}
+        contextEstimated={thread.contextEstimated === true}
         spentUsd={null}
         live={thread.status === 'running'}
         className="size-5 shrink-0 justify-center"
@@ -617,8 +637,10 @@ function SubagentRows({
    */
   foldSettled?: boolean;
 }): React.JSX.Element {
-  const live = subagents.filter((thread) => thread.status === 'running');
-  const settled = subagents.filter((thread) => thread.status !== 'running');
+  const live = subagents.filter((thread) => !isSettledRunStatus(thread.status));
+  const settled = subagents.filter((thread) =>
+    isSettledRunStatus(thread.status),
+  );
   if (!foldSettled) {
     return (
       <ul className="m-0 flex list-none flex-col gap-0.5">
@@ -899,10 +921,15 @@ function ConversationSections({
   const running = subagents.filter(
     (thread) => thread.status === 'running',
   ).length;
+  // Only the ones that may still be running: a delegate whose process ended
+  // is finished work whose outcome is unknown.
+  const untracked = subagents.filter(
+    (thread) => thread.status === 'untracked' && subagentMayStillRun(thread),
+  ).length;
   const progress = taskProgress(tasks);
   const toggle = (kind: ConversationSectionKind, wasOpen: boolean): void =>
     setPressed((prev) => ({ ...prev, [kind]: !wasOpen }));
-  const subagentsOpen = pressed.subagents ?? running > 0;
+  const subagentsOpen = pressed.subagents ?? (running > 0 || untracked > 0);
   const shellsOpen = pressed.shells ?? true;
   const tasksOpen = pressed.tasks ?? progress.done < progress.total;
   return (
@@ -915,11 +942,13 @@ function ConversationSections({
           icon={<SubagentIcon aria-hidden="true" className="size-3" />}
           label="Sub-agents"
           summary={
-            running === 0
-              ? `${subagents.length} finished`
-              : running === subagents.length
-                ? `${running} running`
-                : `${running} of ${subagents.length} running`
+            untracked > 0
+              ? `${untracked} untracked${running > 0 ? ` · ${running} running` : ''}`
+              : running === 0
+                ? `${subagents.length} finished`
+                : running === subagents.length
+                  ? `${running} running`
+                  : `${running} of ${subagents.length} running`
           }
           open={subagentsOpen}
           onToggle={() => toggle('subagents', subagentsOpen)}>
@@ -932,7 +961,7 @@ function ConversationSections({
             onOpenThread={onOpenThread}
             onOpenSubagent={onOpenSubagent}
             onResolveHandoff={onResolveHandoff}
-            foldSettled={running > 0}
+            foldSettled={running > 0 || untracked > 0}
           />
         </ConversationSection>
       ) : null}
@@ -1102,7 +1131,11 @@ function InstanceSummary({
       </span>
       {open ? null : <InstanceCounts instance={instance} />}
       {usd === null ? null : (
-        <span className="shrink-0 tabular-nums">{formatUsd(usd)}</span>
+        <span
+          className="shrink-0 tabular-nums"
+          title={costEstimateTitle(usd, thread.spentEstimatedUsd)}>
+          {markEstimate(formatUsd(usd), thread.spentEstimatedUsd)}
+        </span>
       )}
     </p>
   );
@@ -1474,9 +1507,14 @@ function AgentSpend({
       {agent.spentUsd === null ? null : (
         <span
           data-slot="agent-spend"
-          title={breakdown.join(' \u00b7 ')}
+          title={[
+            breakdown.join(' \u00b7 '),
+            costEstimateNote(agent.spentUsd, agent.spentEstimatedUsd),
+          ]
+            .filter((part) => part !== null && part !== '')
+            .join('. ')}
           className="truncate text-[11px] tabular-nums text-muted-foreground">
-          {formatUsd(agent.spentUsd)}
+          {markEstimate(formatUsd(agent.spentUsd), agent.spentEstimatedUsd)}
         </span>
       )}
       {/* Its own line under the spend rather than more of it: one answers what
@@ -2535,7 +2573,9 @@ export function AgentsPanel({
                           nodeId={metricsByNode ? agent.id : null}
                           contextTokens={agent.contextTokens}
                           contextWindowTokens={agent.contextWindowTokens}
+                          contextEstimated={agent.contextEstimated === true}
                           spentUsd={agent.spentUsd}
+                          spentEstimatedUsd={agent.spentEstimatedUsd ?? null}
                           // This card's OWN status, not the run's: the panel lists
                           // several agents and only the working one's readout has
                           // anything to keep current.

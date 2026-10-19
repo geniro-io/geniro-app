@@ -96,6 +96,8 @@ export function polledSpendRows(
     ...usageDimensions(run, null, entry.model ?? reportedModel),
     agentKind,
     costUsd: entry.cents / 100,
+    // The vendor's own charge, never priced here.
+    estimatedCostUsd: null,
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,

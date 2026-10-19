@@ -1140,6 +1140,7 @@ describe('CallBlock', () => {
         turns: 1,
         costedTurns: 0,
         costUsd: null,
+        estimatedCostUsd: null,
         inputTokens: null,
         outputTokens: null,
         cacheReadTokens: null,
@@ -1647,7 +1648,7 @@ describe('CallBlock', () => {
               contextTokens: null,
               contextWindowTokens: null,
               spend: { tokens: 3_000, costUsd: 1.25 },
-              liveCostUsd: 3,
+              liveCost: { costUsd: 3, estimatedCostUsd: null },
             })}>
             <CallBlock block={makeBlock()} nodes={NODES} />
           </CalleeContextResolverContext.Provider>,
@@ -1656,6 +1657,28 @@ describe('CallBlock', () => {
 
       expect(container.textContent).toContain('$4.25');
       expect(container.textContent).not.toContain('$1.25');
+    });
+
+    it('marks the call’s spend and context geniro computed itself as estimates', () => {
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider
+            value={() => ({
+              contextTokens: 900,
+              contextWindowTokens: 200_000,
+              contextEstimated: true,
+              spend: { tokens: 3_000, costUsd: 1.25, estimatedCostUsd: 1.25 },
+            })}>
+            <CallBlock block={makeBlock()} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+
+      const cost = container.querySelector('[data-slot$="-cost"]');
+      expect(cost?.textContent).toBe('≈$1.25');
+      expect(cost?.getAttribute('title')).toContain("geniro's estimate");
+      const tokens = container.querySelector('[data-slot$="-tokens"]');
+      expect(tokens?.textContent).toBe('≈900 / 200k');
     });
 
     it('counts every tool the AGENT ran, not the ones in this call’s rows', () => {

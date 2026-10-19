@@ -512,6 +512,7 @@ export interface ChatRunState {
     runId: string,
     tokens: number | null,
     window: number | null,
+    estimated?: boolean,
   ) => void;
   refreshRuns: () => void;
   /** A paged listing (anything but the desk) has rows below the ones on show. */
@@ -907,7 +908,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       if (live && discardsContextReading(item)) {
         setRuns((prev) =>
           prev.map((run) =>
-            run.id === item.runId ? { ...run, contextTokens: null } : run,
+            run.id === item.runId
+              ? { ...run, contextTokens: null, contextEstimated: false }
+              : run,
           ),
         );
       }
@@ -1330,7 +1333,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * every delta to store a number that had not moved.
    */
   const rememberRunContext = useCallback(
-    (runId: string, tokens: number | null, window: number | null): void => {
+    (
+      runId: string,
+      tokens: number | null,
+      window: number | null,
+      estimated = false,
+    ): void => {
       // A non-positive count is not a measurement — the same rule the live
       // plane and the transcript fold already apply, so a turn that reports
       // nothing cannot erase a real figure.
@@ -1343,6 +1351,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         if (
           run === undefined ||
           (run.contextTokens === tokens &&
+            run.contextEstimated === estimated &&
             (nextWindow === null || run.contextWindowTokens === nextWindow))
         ) {
           return prev;
@@ -1352,6 +1361,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
             ? {
                 ...candidate,
                 contextTokens: tokens,
+                contextEstimated: estimated,
                 // A turn that reports no window has said nothing about one;
                 // overwriting with its silence is what leaves a bare count
                 // where the ring was.
@@ -2668,6 +2678,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           event.runId,
           event.contextTokens,
           event.contextWindowTokens ?? null,
+          event.contextEstimated === true,
         );
       }
       // The hold BEGINNING releases the queue, and it is the second half of a

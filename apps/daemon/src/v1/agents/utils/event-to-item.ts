@@ -229,6 +229,10 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           costUsd: event.costUsd,
           stepsUnavailableReason: event.stepsUnavailableReason,
           backgroundOpen: event.backgroundOpen,
+          ...(event.recovery === undefined ? {} : { recovery: event.recovery }),
+          ...(event.trackingLost === undefined
+            ? {}
+            : { trackingLost: event.trackingLost }),
           backgroundOutcome: event.backgroundOutcome,
         },
       };

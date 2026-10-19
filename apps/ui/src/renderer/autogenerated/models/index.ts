@@ -1600,6 +1600,12 @@ export interface CallContextReading {
      */
     contextTokens: number | null;
     /**
+     * Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it
+     * @type {boolean}
+     * @memberof CallContextReading
+     */
+    contextEstimated: boolean;
+    /**
      * 
      * @type {number}
      * @memberof CallContextReading
@@ -2338,6 +2344,12 @@ export interface ChatTotals {
      * @memberof ChatTotals
      */
     costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    estimatedCostUsd: number | null;
     /**
      * 
      * @type {number}
@@ -4126,6 +4138,12 @@ export interface NodeStateDto {
      */
     contextTokens: number | null;
     /**
+     * Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it
+     * @type {boolean}
+     * @memberof NodeStateDto
+     */
+    contextEstimated: boolean;
+    /**
      * 
      * @type {number}
      * @memberof NodeStateDto
@@ -5029,10 +5047,16 @@ export interface RunDelegateState {
     kind: string | null;
     /**
      * 
-     * @type {RunWorkStatus}
+     * @type {RunDelegateStatus}
      * @memberof RunDelegateState
      */
-    status: RunWorkStatus;
+    status: RunDelegateStatus;
+    /**
+     * an untracked delegate whose hosting process is gone: its work is over, only its outcome is unknown
+     * @type {boolean}
+     * @memberof RunDelegateState
+     */
+    processEnded: boolean;
     /**
      * 
      * @type {number}
@@ -5047,6 +5071,20 @@ export interface RunDelegateState {
     startedAt: string;
 }
 
+
+
+/**
+ * 
+ * @export
+ */
+export const RunDelegateStatus = {
+    Running: 'running',
+    Completed: 'completed',
+    Failed: 'failed',
+    Cancelled: 'cancelled',
+    Untracked: 'untracked'
+} as const;
+export type RunDelegateStatus = typeof RunDelegateStatus[keyof typeof RunDelegateStatus];
 
 /**
  * 
@@ -5180,6 +5218,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     contextTokens: number | null;
+    /**
+     * Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it
+     * @type {boolean}
+     * @memberof RunDto
+     */
+    contextEstimated: boolean;
     /**
      * 
      * @type {number}
@@ -6086,6 +6130,12 @@ export interface RunWaterfallLane {
      */
     costUsd: number | null;
     /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallLane
+     */
+    estimatedCostUsd: number | null;
+    /**
      * how many turns this lane TOOK — the larger of its `turn_complete` rows and the status rows recording a turn opening, never the spans the card can draw. Each of the three is short in a different case: a CLI reporting no timing draws no span, a cancelled turn writes no completion, and a chat writes no status row at all
      * @type {number}
      * @memberof RunWaterfallLane
@@ -6246,6 +6296,12 @@ export interface RunWaterfallTurn {
      * @memberof RunWaterfallTurn
      */
     costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    estimatedCostUsd: number | null;
     /**
      * 
      * @type {Array<RunWaterfallModelCost>}
@@ -7765,6 +7821,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     contextTokens: number | null;
+    /**
+     * Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it
+     * @type {boolean}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    contextEstimated: boolean;
     /**
      * 
      * @type {number}

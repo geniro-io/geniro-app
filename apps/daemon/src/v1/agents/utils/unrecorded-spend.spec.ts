@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isOutstanding,
+  readUnrecordedEstimates,
   readUnrecordedSpend,
   writeUnrecordedSpend,
 } from './unrecorded-spend';
@@ -14,6 +15,28 @@ describe('Run.unrecordedSpend — the column codec', () => {
     ]);
 
     expect(readUnrecordedSpend(writeUnrecordedSpend(spend))).toEqual(spend);
+  });
+
+  it('round-trips the part geniro priced, and reads a bare figure as none', () => {
+    const json = writeUnrecordedSpend(
+      new Map([
+        ['codex', 1.5],
+        ['claude', 0.25],
+      ]),
+      new Map([['codex', 1.5]]),
+    );
+
+    expect(readUnrecordedSpend(json)).toEqual(
+      new Map([
+        ['claude', 0.25],
+        ['codex', 1.5],
+      ]),
+    );
+    expect(readUnrecordedEstimates(json)).toEqual(new Map([['codex', 1.5]]));
+    // A row written before the estimate was kept: dollars, and no estimate.
+    expect(readUnrecordedEstimates(JSON.stringify({ codex: 1.5 }))).toEqual(
+      new Map(),
+    );
   });
 
   it('writes NULL, not an empty object, when nothing is owed', () => {

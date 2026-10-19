@@ -4,6 +4,7 @@ import { BaseDao } from '@packages/mikroorm';
 
 import { NodeState } from '../../runs/entity/node-state.entity';
 import type { AgentKind, NodeStatus } from '../../runs/runs.types';
+import type { ContextLevel } from '../chat.types';
 import { readNodeSessions, withNodeSession } from '../utils/node-sessions';
 import { positive } from '../utils/positive-figure';
 
@@ -287,13 +288,14 @@ export class NodeStateDao extends BaseDao<NodeState> {
   async rememberContext(
     runId: string,
     nodeId: string,
-    contextTokens: number | null,
-    contextWindowTokens: number | null,
+    reading: ContextLevel,
     txEm?: EntityManager,
   ): Promise<void> {
+    const { contextTokens, contextWindowTokens, contextEstimated } = reading;
     const data: Partial<NodeState> = {};
     if (positive(contextTokens)) {
       data.contextTokens = contextTokens;
+      data.contextEstimated = contextEstimated === true ? true : null;
     }
     if (positive(contextWindowTokens)) {
       data.contextWindowTokens = contextWindowTokens;
@@ -483,7 +485,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
       { runId, nodeId },
-      { contextTokens: null },
+      { contextTokens: null, contextEstimated: null },
     );
   }
 
@@ -519,6 +521,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
       {
         agentSessionId: null,
         contextTokens: null,
+        contextEstimated: null,
         contextWindowTokens: null,
         lastMetricsReading: null,
       },

@@ -86,6 +86,7 @@ function doc(items: ItemDto[]): ChatExportDto {
       turns: 2,
       costedTurns: 1,
       costUsd: 0.42,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,
@@ -120,6 +121,29 @@ describe('chatToMarkdown', () => {
     expect(out).toContain('An unrelated notice');
     expect(out).not.toContain('Delivery receipts for your earlier');
     expect(out).not.toContain(` · seq ${acknowledgement.seq} · `);
+  });
+
+  it('marks the cost geniro priced itself on the total, each turn and the spend table', () => {
+    const exported = doc([
+      row(ItemKind.TurnComplete, {
+        usage: { costUsd: 0.42, estimatedCostUsd: 0.42 },
+      }),
+      row(ItemKind.TurnComplete, { usage: { costUsd: 0.1 } }),
+    ]);
+    exported.totals = {
+      ...exported.totals,
+      costUsd: 0.52,
+      estimatedCostUsd: 0.42,
+    };
+    const out = chatToMarkdown(exported);
+
+    expect(out).toContain(
+      '**Cost:** $0.5200 (includes ≈$0.42 geniro estimated',
+    );
+    expect(out).toContain('≈$0.4200');
+    // The CLI's own bill stays plain.
+    expect(out).toContain('— $0.1000');
+    expect(out).toMatch(/\| claude \| 2 \| ≈\$0\.52 \|/);
   });
 
   it('gives EVERY kind a section, including the ones with no prose form', () => {

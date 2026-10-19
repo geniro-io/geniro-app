@@ -68,6 +68,8 @@ import type {
   AgentTurnInput,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
+  RecoveredSubagentOutcome,
+  SubagentRecoveryRef,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
@@ -3108,6 +3110,34 @@ export class CursorAcpAdapter extends AgentAdapter {
   /** The CLI's own home directory — `~/.cursor`, under the home seam. */
   private cursorHome(): string {
     return join(this.cursorOptions.homeDir ?? homedir(), CURSOR_HOME_DIR_NAME);
+  }
+
+  override async recoverSubagent(
+    ref: SubagentRecoveryRef,
+  ): Promise<RecoveredSubagentOutcome | null> {
+    if (
+      !isPlainSessionId(ref.sessionId) ||
+      !isPlainSessionId(ref.toolCallId) ||
+      (ref.childSessionId !== null && !isPlainSessionId(ref.childSessionId))
+    ) {
+      return null;
+    }
+    // A brief alone can identify several simultaneous or resumed delegates.
+    if (ref.childSessionId === null) {
+      return null;
+    }
+    const ending = await readCursorDelegateEnding(
+      {
+        conversationId: ref.childSessionId,
+        cwd: ref.cwd,
+        sessionId: ref.sessionId,
+        notBeforeMs: ref.launchedAtMs,
+      },
+      this.cursorHome(),
+    );
+    return ending?.state === 'ended' && ending.outcome !== 'untracked'
+      ? ending.outcome
+      : null;
   }
 
   protected override createTurnDriver(input: AgentTurnInput): TurnDriver {

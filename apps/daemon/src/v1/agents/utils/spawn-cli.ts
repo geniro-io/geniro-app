@@ -6,6 +6,8 @@ import type {
   AgentEvent,
   AgentTurnHandle,
   FollowUpMessage,
+  SessionCloseCause,
+  SubagentTrackingLost,
   TurnIo,
 } from '../adapters/adapter.types';
 import { isUserQuestion } from './approval-answer';
@@ -380,6 +382,7 @@ export interface SessionAsk<T> {
 }
 
 export interface CliSession {
+  subagentRecoveryBlocked?(id: string): boolean;
   /**
    * Ask the CLI something on its own stdin control channel, out of band of any
    * turn.
@@ -465,8 +468,19 @@ export interface CliSession {
    * reads what it took from here.
    */
   readonly endedRunning: StoppedCommands | null;
-  /** Terminate the process group (the CLI plus every grandchild). */
-  close(): void;
+  /**
+   * Terminate the process group (the CLI plus every grandchild). On a
+   * `user-stop` the delegates still out are closed `stopped`, not `untracked`.
+   */
+  close(cause?: SessionCloseCause): void;
+  /**
+   * Record why the process will be closed, ahead of whatever ends it — a
+   * later close, its own kill after a refused interrupt, or its exit. Null
+   * withdraws it; the next turn withdraws it too.
+   */
+  noteCloseCause?(cause: SessionCloseCause | null): void;
+  /** The cause recorded by {@link noteCloseCause} or `close`, or null. */
+  readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
 }
@@ -864,6 +878,8 @@ interface TurnState {
    * last `result` line — kept so {@link heldCostOf} can be added to it.
    */
   liveCostUsd: number;
+  /** Of {@link liveCostUsd}, the part geniro priced itself. */
+  liveEstimatedCostUsd: number;
   /**
    * Whether a non-zero `cost_progress` has been published for this turn, so
    * its ending owes the live plane a zero ahead of the terminal that records
@@ -884,8 +900,11 @@ interface TurnState {
  * only what it spent after the latest continuation (run `07d68eea`, call-15,
  * whose session files price at ~$15).
  */
-function heldCostOf(turn: TurnState): number {
-  let total = 0;
+function heldCostOf(turn: TurnState): {
+  costUsd: number;
+  estimatedCostUsd: number;
+} {
+  const total = { costUsd: 0, estimatedCostUsd: 0 };
   const held = [
     turn.deferredTerminal,
     turn.supersededTerminal,
@@ -895,12 +914,16 @@ function heldCostOf(turn: TurnState): number {
     if (segment?.type !== 'turn_complete') {
       continue;
     }
-    const cost = segment.usage?.costUsd;
-    if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) {
-      total += cost;
-    }
+    total.costUsd += positiveOrZero(segment.usage?.costUsd);
+    total.estimatedCostUsd += positiveOrZero(segment.usage?.estimatedCostUsd);
   }
   return total;
+}
+
+function positiveOrZero(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
 }
 
 /**
@@ -1246,6 +1269,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * the ratio that turned out to be the diagnosis.
    */
   const approvalSeenAt = new Map<string, number>();
+  /** Why the process was closed, when a close said — see `CliSession.close`. */
+  let closeCause: SessionCloseCause | null = null;
   let processGone = false;
   /**
    * The child's `exit` has fired — set SYNCHRONOUSLY, ahead of the settle.
@@ -1278,10 +1303,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * (`error_during_execution`, `terminal_reason: aborted_streaming`) — and
    * NOTHING after it for five seconds, while a second message on the same
    * process ran to its own `result`. That `result` line is what settles the
-   * turn, so no tail is left to mistake for the next turn's output. It used to
-   * be set for every Stop, REPORTED as "я его остановил. У него был открыт
-   * браузер Playwright. Потом он написал новое сообщение, и Playwright сразу
-   * закрылся" — the respawn taking the browser with the old process.
+   * turn, so no tail is left to mistake for the next turn's output. (codex does
+   * leave one, fenced by turn id in its own driver — `CodexSession.endedTurns`.)
+   *
+   * It used to be set for every Stop, REPORTED as "я его остановил. У него был
+   * открыт браузер Playwright. Потом он написал новое сообщение, и Playwright
+   * сразу закрылся" — the respawn taking the browser with the old process.
    *
    * The defect retiring guards against, for the record: after a Stop, a
    * cancelled turn's trailing `result` line settled the NEXT turn the moment it
@@ -1343,8 +1370,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     void sweepDetachedShells();
     // Asked to stop AND ended some other way than on the CLI's own terminal
     // line — see {@link cancelledTurnMayStillEmit}. A stopped turn the CLI ended
-    // ITSELF leaves nothing to trail, so the process goes on serving turns and
-    // the user's MCP servers — a browser among them — survive the Stop.
+    // ITSELF leaves nothing here to trail (codex's tail is fenced in its own
+    // driver), so the process goes on serving turns and the user's MCP servers
+    // — a browser among them — survive the Stop.
     //
     // Keyed on the cancel, NOT on the broader "did not end by itself". The
     // silence deadline settles a turn the same way, but the deadline path
@@ -1467,8 +1495,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // Given up on, so they must not hold the NEXT turn either — the set is
         // session-scoped now, and a unit this deadline has already written off
         // would otherwise hold every turn after it for as long as the session
-        // lives. `delegateWork` is deliberately left alone: a late report is
-        // still what closes that delegate's block.
+        // lives. `delegateWork` is deliberately left alone so a late report
+        // can resolve its outcome.
+        closeOpenDelegates();
         openWork.clear();
         finishTurn(turn, held);
         return;
@@ -1750,12 +1779,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * figure that was up.
    */
   const publishLiveCost = (turn: TurnState): void => {
-    const costUsd = turn.liveCostUsd + heldCostOf(turn);
+    const held = heldCostOf(turn);
+    const costUsd = turn.liveCostUsd + held.costUsd;
     if (costUsd <= 0 && !turn.costPublished) {
       return;
     }
     turn.costPublished = costUsd > 0;
-    turn.options.onEvent({ type: 'cost_progress', costUsd });
+    const estimatedCostUsd = turn.liveEstimatedCostUsd + held.estimatedCostUsd;
+    turn.options.onEvent({
+      type: 'cost_progress',
+      costUsd,
+      ...(estimatedCostUsd > 0 ? { estimatedCostUsd } : {}),
+    });
   };
 
   const finishTurn = (turn: TurnState, ending: AgentEvent): void => {
@@ -1770,6 +1805,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // The terminal records every held segment, so the live figure comes down
     // AHEAD of it — a reader adding the two never counts that money twice.
     turn.liveCostUsd = 0;
+    turn.liveEstimatedCostUsd = 0;
     publishLiveCost(turn);
     if (opts.stdinLifetime === 'turn') {
       endStdin();
@@ -1802,6 +1838,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const announceDelegateWork = (
     event: Extract<AgentEvent, { type: 'background_work' }>,
+    trackingLost?: SubagentTrackingLost,
   ): void => {
     const toolCallId =
       event.phase === 'started'
@@ -1908,11 +1945,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // A foreground `started` returned above, so both other arms here open it.
       backgroundOpen: event.phase !== 'settled',
       // What the settle SAID, not merely that it happened. Null on a `started`
-      // and on a settle whose CLI names no outcome, on the same terms as every
-      // other field here: absent claims nothing, so a CLI with no such
-      // vocabulary leaves the block reading exactly as it did before.
+      // and on a settle whose CLI names no outcome: absent claims no outcome,
+      // so a recoverable delegate's block reads untracked until its record
+      // is read (`foldRunDelegates`).
       backgroundOutcome:
         event.phase === 'settled' ? (event.outcome ?? null) : null,
+      ...(trackingLost === undefined ? {} : { trackingLost }),
     };
     // To whoever can carry it. A delegate launched between turns is the whole
     // reason this is not simply `turn.options.onEvent`: that path had no turn,
@@ -1923,6 +1961,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return;
     }
     opts.onBetweenTurnEvent?.(announcement);
+  };
+
+  const closeOpenDelegates = (
+    outcome: 'untracked' | 'stopped' = 'untracked',
+    trackingLost?: SubagentTrackingLost,
+  ): void => {
+    for (const id of openWork) {
+      if (delegateWork.has(id)) {
+        announceDelegateWork(
+          {
+            type: 'background_work',
+            id,
+            phase: 'settled',
+            unit: 'agent',
+            toolCallId: null,
+            outcome,
+          },
+          trackingLost,
+        );
+      }
+    }
   };
 
   /**
@@ -1949,6 +2008,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       );
       // Written off exactly as the turn's deadline writes its own units off,
       // and for the same reason: they must not hold anything after this.
+      closeOpenDelegates();
       openWork.clear();
       releaseOffTurnHold();
     }, TURN_SILENCE_DEADLINE_MS);
@@ -1992,6 +2052,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         opts.logger?.warn(
           `${opts.command}: the CLI went idle with ${openWork.size} unit(s) of background work never reported — settling the held '${held.type}'`,
         );
+        closeOpenDelegates();
         openWork.clear();
       } else {
         opts.logger?.debug?.(
@@ -2756,6 +2817,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // forgets every segment this turn is still holding — see `heldCostOf`.
     if (normalized.type === 'cost_progress') {
       turn.liveCostUsd = normalized.costUsd > 0 ? normalized.costUsd : 0;
+      turn.liveEstimatedCostUsd = positiveOrZero(normalized.estimatedCostUsd);
       armSilenceDeadline(turn);
       publishLiveCost(turn);
       return;
@@ -2940,9 +3002,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     osDetachedShells.clear();
     executeCalls.clear();
     // A delegate's own commands die with the group as well, so a settle held
-    // for them is owed now — as `stopped`, figures kept: its work was cut off,
-    // and it is the outcome the session-close sweep writes for a delegate it
-    // finds still open, so the two writers cannot disagree.
+    // for them is owed now as stopped, figures kept: its CLI reported it done
+    // while those commands ran, and ending the group is what stopped them.
     delegateCommands.clear();
     delegateCommandCalls.clear();
     unownedDelegateCommands.clear();
@@ -2972,6 +3033,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // so the loop above did not settle it — but it died with the group too.
     runningShells.clear();
     callCommands.clear();
+    // The user's Stop is what ended them; any other end of the process says
+    // only that their work is over.
+    if (closeCause === 'user-stop') {
+      closeOpenDelegates('stopped');
+    } else {
+      closeOpenDelegates('untracked', 'process-ended');
+    }
     openWork.clear();
     releaseOffTurnHold();
     if (current) {
@@ -3286,6 +3354,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     ) {
       return null;
     }
+    // Asked to work again: whatever closes it next is not the Stop's.
+    closeCause = null;
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
@@ -3310,6 +3380,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       supersededTerminal: null,
       continuedSegment: null,
       liveCostUsd: 0,
+      liveEstimatedCostUsd: 0,
       costPublished: false,
     };
     current = turn;
@@ -3739,6 +3810,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get pid() {
       return processGone || processExited ? null : (child.pid ?? null);
     },
+    subagentRecoveryBlocked: (id) =>
+      [...delegateCommands.values()].includes(id),
     get shellsRunning() {
       return runningShells.size + delegateCommands.size;
     },
@@ -3748,14 +3821,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get endedRunning() {
       return endedRunning;
     },
-    close: () => {
+    close: (cause) => {
       if (processGone) {
         return;
       }
+      closeCause ??= cause ?? null;
       if (current) {
         current.cancelRequested = true;
       }
       killGroup();
+    },
+    noteCloseCause: (cause) => {
+      if (!processGone) {
+        closeCause = cause;
+      }
+    },
+    get closeCause() {
+      return closeCause;
     },
     closed,
   };

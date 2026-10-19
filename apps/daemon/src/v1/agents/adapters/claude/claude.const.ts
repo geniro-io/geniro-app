@@ -1520,6 +1520,16 @@ export const CLAUDE_TASK_UPDATED_SUBTYPE = 'task_updated';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */
 export const CLAUDE_TASK_NOTIFICATION_SUBTYPE = 'task_notification';
 
+/** Persisted session-task provenance, measured on Claude Code 2.1.295. */
+export const CLAUDE_PERSISTED_TASK_ORIGIN_KIND = 'task-notification';
+export const CLAUDE_PERSISTED_TASK_PRODUCER = 'session-task';
+export const CLAUDE_PERSISTED_TASK_PROMPT_SOURCE = 'system';
+export const CLAUDE_PERSISTED_TASK_TOOL_ID =
+  /<tool-use-id>([^<>]+)<\/tool-use-id>/g;
+export const CLAUDE_PERSISTED_TASK_ID = /<task-id>([^<>]+)<\/task-id>/g;
+export const CLAUDE_PERSISTED_TASK_STATUS = /<status>([^<>]+)<\/status>/g;
+export const CLAUDE_PERSISTED_DELEGATE_COMPLETED = 'completed';
+
 /**
  * `system/session_state_changed` — `state: 'idle' | 'running' |
  * 'requires_action'`. The bundle's own schema describes `idle` as firing "after

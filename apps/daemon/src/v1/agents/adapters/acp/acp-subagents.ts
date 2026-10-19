@@ -91,7 +91,7 @@ export function readSubagentEnd(
 /**
  * How a child that reached `state` ended, in the transcript's vocabulary.
  *
- * `disconnected` claims NOTHING: the agent lost track of the child (its cancel
+ * `disconnected` means the agent lost track of the child (its cancel
  * cascade timed out, or a replay found no record), so neither "finished" nor
  * "stopped" was observed.
  */
@@ -106,7 +106,7 @@ export function subagentOutcome(
     case 'cancelled':
       return 'stopped';
     case 'disconnected':
-      return null;
+      return 'untracked';
   }
 }
 

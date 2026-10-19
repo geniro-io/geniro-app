@@ -24,6 +24,7 @@ function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
     nodeId: 'engineer',
     agentKind: 'claude',
     costUsd: 12.5,
+    estimatedCostUsd: null,
     turns: 2,
     toolCalls: 40,
     delegateToolCalls: 0,
@@ -47,6 +48,7 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
     timeToRequestMs: null,
     numTurns: null,
     costUsd: 1,
+    estimatedCostUsd: null,
     modelCosts: null,
     model: 'opus-5',
     inputTokens: null,
@@ -86,6 +88,7 @@ function dto(over: Partial<RunWaterfallDto> = {}): RunWaterfallDto {
       turns: 2,
       costedTurns: 2,
       costUsd: 12.5,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,
@@ -141,6 +144,40 @@ describe('RunWaterfall', () => {
 
     expect(view.querySelector('li')?.textContent).toContain('—');
     expect(view.textContent).not.toContain('$0.00');
+  });
+
+  it('marks a lane’s cost as geniro’s estimate, with the note on hover', () => {
+    const view = show(
+      dto({
+        lanes: [
+          lane({ nodeId: 'codex', costUsd: 4, estimatedCostUsd: 4 }),
+          lane({ nodeId: 'claude', costUsd: 2 }),
+        ],
+      }),
+    );
+
+    const figures = [...view.querySelectorAll('li')].map((item) =>
+      item.querySelector<HTMLElement>('[data-slot="waterfall-lane-cost"]'),
+    );
+    expect(figures[0]?.textContent).toBe('≈$4.00');
+    expect(figures[0]?.title).toContain("geniro's estimate");
+    expect(figures[1]?.textContent).toBe('$2.00');
+    expect(figures[1]?.title).toBe('');
+  });
+
+  it('marks the run’s spent tile when part of it was geniro’s estimate', () => {
+    const estimated = show(
+      dto({
+        totals: { ...dto().totals, costUsd: 12.5, estimatedCostUsd: 5 },
+      }),
+    );
+    expect(estimated.querySelector('dl')?.textContent).toContain('≈$12.50');
+    act(() => root?.unmount());
+    host?.remove();
+
+    const billed = show(dto());
+    expect(billed.querySelector('dl')?.textContent).toContain('$12.50');
+    expect(billed.querySelector('dl')?.textContent).not.toContain('≈');
   });
 
   it("places a turn span on the run's own clock, not on its own length", () => {

@@ -39,6 +39,7 @@ function totals(overrides: Partial<ChatTotals> = {}): ChatTotals {
     turns: 1,
     costedTurns: 0,
     costUsd: null,
+    estimatedCostUsd: null,
     inputTokens: 1_000,
     outputTokens: 200,
     cacheReadTokens: null,
@@ -268,6 +269,25 @@ describe('BreakdownColumn', () => {
     expect(bars[0]!.className).not.toContain('bg-primary/');
     expect(bars[1]!.className).toContain('bg-primary/75');
     expect(bars[2]!.className).toContain('bg-primary/60');
+  });
+
+  it('marks a row’s cost as an estimate, with the note on hover, only for a group geniro priced', () => {
+    const el = card([
+      {
+        key: 'codex',
+        totals: totals({ costUsd: 4, estimatedCostUsd: 4, turns: 5 }),
+      },
+      { key: 'claude', totals: totals({ costUsd: 2, turns: 3 }) },
+    ]);
+
+    const figures = [...el.querySelectorAll('li')].map((row) =>
+      row.querySelector<HTMLElement>('[data-slot="breakdown-row-figure"]')!,
+    );
+    expect(figures[0]!.textContent).toContain('≈$4.00');
+    expect(figures[0]!.title).toContain('geniro');
+    expect(figures[1]!.textContent).toContain('$2.00');
+    expect(figures[1]!.textContent).not.toContain('≈');
+    expect(figures[1]!.title).toBe('');
   });
 
   it('says so when the period holds nothing', () => {

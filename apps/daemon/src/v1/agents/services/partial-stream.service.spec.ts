@@ -446,12 +446,25 @@ describe('PartialStreamService — a settled turn stops claiming to be live', ()
   });
 
   it('withdraws the live spend when the run is cleared', () => {
-    service.cost(RUN, OWNER, null, 0.5);
+    service.cost(RUN, OWNER, null, 0.5, 0.5);
     expect(last().spentCostUsd).toBe(0.5);
 
     service.clearRun(RUN);
 
     expect(last().spentCostUsd).toBeNull();
+    expect(last().spentEstimatedCostUsd).toBeNull();
+  });
+
+  it('publishes which part of the live spend geniro priced itself', () => {
+    service.cost(RUN, OWNER, null, 0.5, 0.2);
+    expect(last()).toMatchObject({
+      spentCostUsd: 0.5,
+      spentEstimatedCostUsd: 0.2,
+    });
+
+    // Same dollars, now all the CLI's own: still news, so it is published.
+    service.cost(RUN, OWNER, null, 0.5);
+    expect(last().spentEstimatedCostUsd).toBeNull();
   });
 
   it('withdraws the live spend with the tail a finalizer takes', () => {
@@ -570,6 +583,25 @@ describe('PartialStreamService — unrecorded spend is DURABLE', () => {
       ['engineer::call-1', 'engineer', 38.5],
       [OWNER, null, 0.25],
     ]);
+  });
+
+  it('keeps the part of a persisted figure geniro priced itself across the restart', async () => {
+    service.cost(RUN, OWNER, null, 2, 2);
+    expect(spendStore.estimates.get(RUN)?.get(OWNER)).toBe(2);
+
+    const restored = new PartialStreamService(
+      {
+        publishDelta: (event: RunDeltaEvent) => published.push(event),
+      } as unknown as AgentEventBus,
+      new FakeContextWindowStore().asStore(),
+      spendStore.asStore(),
+    );
+    await restored.rehydrateUnrecordedSpend();
+
+    expect(restored.snapshot(RUN)[0]).toMatchObject({
+      spentCostUsd: 2,
+      spentEstimatedCostUsd: 2,
+    });
   });
 });
 

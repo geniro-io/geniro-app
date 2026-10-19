@@ -106,6 +106,7 @@ Smaller rules:
 - `host-guard.ts` admits a `*.suffix` only while a tunnel is open. The match is at a label boundary. A bare `*` and one-label suffixes are refused.
 - The tunnel mask is derived from the URL the client printed, never stored per provider.
 - `tunnel.ts` providers are a table in preference order (cloudflared, then ngrok). The client is spawned with only `PATH` and `HOME`.
+- An open tunnel is watched after its address is shown: an exit nobody asked for, or cloudflared's loopback `/ready` failing for `TUNNEL_EXPIRED_AFTER_MS` on the wall clock (a quick tunnel is deleted ~13 min after it disconnects, e.g. through sleep), ends it as `status: 'error'` and reaps the client. A connection counts only when two answers in a row report it (the client reports its pre-sleep connection for seconds after wake), and expiry needs `TUNNEL_EXPIRY_CONFIRM_MS` of failures without a break. It is never reopened unasked, and the public URL is never probed.
 - `pairing.ts` is a constant-time compare, bounded per address and globally. The global trip rotates the code.
 - `device-registry.ts` stores only a token hash, written atomically with mode 0600.
 - Revoking a device, or stopping the gateway, destroys that device's upgraded sockets.
@@ -188,7 +189,7 @@ Anchors and run state:
 - Whatever replaces anchors calls `forget`. A page landing after a live answer merges.
 - Rows refused by `addItem`'s away-from-tail guard bring no anchors.
 - Never rebuild a call heuristically from its later rows: it draws ghost cards.
-- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window supplies details; the daemon decides what has ENDED: a shell, delegate or call the page reads as running that began at or before the read's `throughSeq` and that the read says is over, is over (`withoutDaemonEndedShells`, `withDaemonDelegateEndings`, `callEndedPerDaemon`). The open turns' unanswered calls (`openToolCalls`) are folded in with the page, so a foreground command shows while the reader is elsewhere. Open requests off the tail are the daemon's too.
+- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window supplies details; the daemon decides what has ENDED: a shell, delegate or call the page reads as running that began at or before the read's `throughSeq` and that the read says is over, is over (`withoutDaemonEndedShells`, `applyDaemonReadings` in `durable-transcript.ts`, `callEndedPerDaemon`). The open turns' unanswered calls (`openToolCalls`) are folded in with the page, so a foreground command shows while the reader is elsewhere. Open requests off the tail are the daemon's too.
 
 Jumps (search, global search, timeline, the Agents chip) — `chats/use-transcript-jump.ts`, DOM contract in `chats/jump-target.ts`:
 
@@ -233,7 +234,7 @@ One home for each concern:
 - `settled-status.ts`: only a live terminal item mirrors its status onto the run row. A replay takes one reading from its last item (`reconcileFromTail`).
 - A `turn_complete` stamped `insideTurn` is not terminal. Never mirror it.
 - `RunStatusEvent.noTerminalItem` lets `use-chat-run.ts` end `streaming` and drain the queue.
-- A run settling is a moment, not a flag. `settleMomentOf` reads the last terminal item first and the row's `updatedAt` only as a fallback. `subagentBlockStatus` and `taskCardIsLive` use that moment.
+- A run settling is a moment, not a flag. `settleMomentOf` reads the last terminal item first and the row's `updatedAt` only as a fallback. `subagentSpokeSince` and `taskCardIsLive` use that moment. A sub-agent's own status (`subagentBlockStatus`) reads no run state at all: its rows, else the daemon's whole-conversation reading (`daemonSubagentReadings` + `applyDaemonReadings` in `durable-transcript.ts`), which is the only place a missing ending is resolved.
 - A null activity means "working, nothing named". Both live rows fall back to the one `STANDING_ACTIVITY`. `WORKING_WORDS[0]` is its twin.
 - Live clocks count from durable-row timestamps, never from their own mount.
 - The chat live-plane key is `CHAT_LIVE_KEY` (`liveTextKey`), never the daemon's owner key `agent`. Node id is the discriminator.

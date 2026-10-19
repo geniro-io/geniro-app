@@ -193,6 +193,26 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     );
   });
 
+  it('tells the analysis which part of the cost geniro priced itself', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(
+      1,
+      'turn_complete',
+      { usage: { durationMs: 1_000, costUsd: 0.5, estimatedCostUsd: 0.5 } },
+      1,
+    );
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 1, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(answer.timing).toMatchObject({
+      costUsd: 0.5,
+      estimatedCostUsd: 0.5,
+    });
+  });
+
   it('leaves usage it never measured null, not zero', async () => {
     await insert(0, 'message', { text: 'go' }, 0);
     await insert(1, 'turn_complete', { usage: { durationMs: 1_000 } }, 1);

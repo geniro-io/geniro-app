@@ -316,6 +316,7 @@ class FakeRunDao {
     reading: {
       contextTokens?: number | null;
       contextWindowTokens?: number | null;
+      contextEstimated?: boolean;
     },
   ): Promise<void> {
     const run = this.runs.get(id);
@@ -327,6 +328,7 @@ class FakeRunDao {
       reading.contextTokens > 0
     ) {
       run.contextTokens = reading.contextTokens;
+      run.contextEstimated = reading.contextEstimated === true ? true : null;
     }
     if (
       typeof reading.contextWindowTokens === 'number' &&
@@ -4026,6 +4028,44 @@ describe('ChatService', () => {
       await turn(cursor, 'ok');
     });
 
+    it('files a settled stand-in count as an estimate on the row and the registry', async () => {
+      const { service, cursor, runDao, contexts } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hi');
+      cursor.emit({ type: 'session', sessionId: 'sess-1' });
+      cursor.emit({
+        type: 'turn_complete',
+        usage: {
+          inputTokens: 900,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
+          contextTokens: 900,
+          contextEstimated: true,
+          contextWindowTokens: null,
+          contextModel: null,
+          costUsd: null,
+          durationMs: null,
+          apiMs: null,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
+        },
+        stopReason: 'end_turn',
+        finalText: 'done',
+      });
+      cursor.finish();
+      await drain();
+      await drain();
+
+      expect(runDao.runs.get(run.id)?.contextEstimated).toBe(true);
+      expect(contexts.read(run.id)?.estimated).toBe(true);
+    });
+
     it('forgets the count the registry holds, not only the stored one, when a summary is carried', async () => {
       // The stored column was already cleared on this path, so the test above
       // passed while the registry kept the pre-compaction count — and the status
@@ -7073,7 +7113,7 @@ describe('ChatService', () => {
     const close = (await itemDao.getByRun(run.id)).find(
       (i) =>
         i.kind === 'subagent_info' &&
-        JSON.parse(i.payload).backgroundOutcome === 'stopped',
+        JSON.parse(i.payload).backgroundOutcome === 'untracked',
     );
     expect(JSON.parse(close!.payload)).toMatchObject({
       id: 'toolu_review',
@@ -10868,18 +10908,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(notes[0]?.payload).not.toContain('geniro closed its process');
   });
 
-  it('states the ending for a delegate the CLI left declared out', async () => {
-    // The one thing geniro can honestly say about a background sub-agent whose
-    // CLI never announces an ending. Re-measured on cursor-agent
-    // 2026.08.31-4057e58: nine reviewers declared out, no close on any channel
-    // across the twelve minutes its process went on living. But such a delegate
-    // runs INSIDE that process, so a session closing is not a guess about the
-    // work — it is the work being over.
-    //
-    // Without this row nothing downstream can ever end the delegate: the
-    // renderer deliberately no longer reads the turn's own ending as the
-    // delegate's, so it would report a fan-out as working for the life of the
-    // transcript.
+  it('marks a delegate untracked when its session closes without a reported ending', async () => {
     const { service, claude, itemDao, sessions, statuses } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -10925,15 +10954,65 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     const closes = itemDao.items.filter(
       (item) =>
         item.kind === 'subagent_info' &&
-        item.payload.includes('"backgroundOutcome":"stopped"'),
+        item.payload.includes('"backgroundOutcome":"untracked"'),
     );
     expect(closes).toHaveLength(1);
     expect(closes[0]?.payload).toContain('"id":"task-a"');
-    // `stopped` and not `completed`: the delegate never reported, so claiming
-    // it finished its work would be an outcome nothing measured.
+    // The delegate never reported its ending, so its outcome remains unknown;
+    // its work is over with the process that hosted it.
     expect(closes[0]?.payload).toContain('"backgroundOpen":false');
+    expect(closes[0]?.payload).toContain('"trackingLost":"process-ended"');
     // And the count every row reads goes with it, in the same breath.
     expect(statuses.at(-1)?.subagentsOut).toBe(0);
+  });
+
+  it('closes a delegate the user’s Stop cut off as stopped', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'subagent_info',
+      id: 'task-a',
+      label: 'Review: bugs dimension',
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: true,
+      backgroundOutcome: null,
+    });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    await service.cancel(run.id);
+    await drain();
+
+    const closes = itemDao.items.filter(
+      (item) =>
+        item.kind === 'subagent_info' &&
+        item.payload.includes('"backgroundOpen":false'),
+    );
+    expect(closes).toHaveLength(1);
+    expect(closes[0]?.payload).toContain('"backgroundOutcome":"stopped"');
+    expect(closes[0]?.payload).not.toContain('trackingLost');
   });
 
   it('leaves a delegate the CLI already closed alone', async () => {
@@ -10985,7 +11064,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       itemDao.items.some(
         (item) =>
           item.kind === 'subagent_info' &&
-          item.payload.includes('"backgroundOutcome":"stopped"'),
+          item.payload.includes('"backgroundOutcome":"untracked"'),
       ),
     ).toBe(false);
   });

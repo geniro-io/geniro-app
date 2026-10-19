@@ -158,6 +158,7 @@ describe('useRunState', () => {
           label: null,
           kind: null,
           status: 'running',
+          processEnded: false,
           launchSeq: 1,
           startedAt: 'now',
         },
@@ -265,6 +266,7 @@ describe('useRunState', () => {
       label: null,
       kind: null,
       status: 'completed' as const,
+      processEnded: false,
       launchSeq: 1,
       startedAt: 'now',
     };
@@ -303,6 +305,7 @@ describe('useRunState', () => {
             label: null,
             kind: null,
             status: 'running',
+            processEnded: false,
             launchSeq: 1,
             startedAt: 'now',
           },

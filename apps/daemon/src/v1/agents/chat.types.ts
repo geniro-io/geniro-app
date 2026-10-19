@@ -1926,6 +1926,12 @@ export const ChatTotalsWireSchema = z
         'of those, how many reported a COST — the denominator for an average spend, since a turn on a CLI that reports no cost would otherwise dilute it',
       ),
     costUsd: z.number().nullable(),
+    estimatedCostUsd: z
+      .number()
+      .nullable()
+      .describe(
+        "of `costUsd`, the part geniro priced itself from token counts at list price rather than a CLI's own bill — equal to it when all of it was, null when none of it was",
+      ),
     inputTokens: z.number().nullable(),
     outputTokens: z.number().nullable(),
     cacheReadTokens: z.number().nullable(),
@@ -1940,6 +1946,17 @@ export const ChatTotalsWireSchema = z
   })
   .meta({ id: 'ChatTotals' });
 export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
+
+/**
+ * One context reading as the run, node and call rows file it. Each half may be
+ * absent — a reading that omits one says nothing about it — and
+ * `contextEstimated` travels with the count (`AgentUsage.contextEstimated`).
+ */
+export interface ContextLevel {
+  contextTokens?: number | null;
+  contextWindowTokens?: number | null;
+  contextEstimated?: boolean;
+}
 
 /**
  * One wall-clock stretch in which some agent of a run was working, in epoch
@@ -2374,6 +2391,12 @@ export const RunWaterfallTurnSchema = z
       .nullable()
       .describe('model round-trips inside this one turn'),
     costUsd: z.number().nullable(),
+    estimatedCostUsd: z
+      .number()
+      .nullable()
+      .describe(
+        "of costUsd, the part geniro priced itself from token counts at list price rather than the CLI's own bill; null when none of it was",
+      ),
     modelCosts: z
       .array(RunWaterfallModelCostSchema)
       .nullable()
@@ -2476,6 +2499,12 @@ export const RunWaterfallLaneSchema = z
     nodeId: z.string().nullable(),
     agentKind: AgentKindSchema.nullable(),
     costUsd: z.number().nullable(),
+    estimatedCostUsd: z
+      .number()
+      .nullable()
+      .describe(
+        "of costUsd, the part of its turns' cost geniro priced itself; null when none of it was",
+      ),
     turns: z
       .number()
       .int()
@@ -2876,7 +2905,12 @@ export const RunCallStateSchema = z
   .meta({ id: 'RunCallState' });
 export type RunCallState = z.infer<typeof RunCallStateSchema>;
 
-/** One delegate (sub-agent) a run launched or declared, over the whole conversation. */
+/** Tracking loss is distinct from any observed terminal outcome. */
+export const RunDelegateStatusSchema = z
+  .enum([...RunWorkStatusSchema.options, 'untracked'])
+  .meta({ id: 'RunDelegateStatus' });
+
+/** One delegate (sub-agent) over the whole conversation. */
 export const RunDelegateStateSchema = z
   .object({
     id: z.string().describe('the launching tool call — the block id'),
@@ -2887,7 +2921,12 @@ export const RunDelegateStateSchema = z
       .describe('the call it was launched in; null for its node’s own'),
     label: z.string().nullable(),
     kind: z.string().nullable(),
-    status: RunWorkStatusSchema,
+    status: RunDelegateStatusSchema,
+    processEnded: z
+      .boolean()
+      .describe(
+        'an untracked delegate whose hosting process is gone: its work is over, only its outcome is unknown',
+      ),
     launchSeq: z.number().int(),
     startedAt: z.string(),
   })
@@ -4092,6 +4131,8 @@ export interface RunStatusEvent {
    * against a window from before a model change.
    */
   contextTokens?: number | null;
+  /** Whether `contextTokens` is geniro's stand-in — travels with the count. */
+  contextEstimated?: boolean;
   contextWindowTokens?: number | null;
   title?: string;
   /**
@@ -4361,7 +4402,7 @@ export interface RunDeltaEvent {
    * the input side of any resumed conversation — folded in, the figure would
    * say a cheap turn was an expensive one.
    *
-   * CLAUDE ONLY today, and null everywhere else. Cursor exposes no token
+   * claude and codex, and null everywhere else. Cursor exposes no token
    * accounting a client can reach: measured 2026-09-06 on 2026.08.31-4057e58 —
    * its ACP wire declares `usage_update` in the schema union and emits it
    * nowhere, its session store holds the context breakdown and nothing else,
@@ -4382,10 +4423,15 @@ export interface RunDeltaEvent {
    * the two, and that sum is what a running call has cost so far. It is not
    * derived from the token fields above: those are counts, and a model with no
    * price-table row (the model the report was about) has no price to multiply
-   * them by. CLAUDE ONLY today, and null everywhere else — see the
-   * `cost_progress` agent event.
+   * them by. claude and codex (list-priced, so {@link spentEstimatedCostUsd}),
+   * null everywhere else — see the `cost_progress` agent event.
    */
   spentCostUsd: number | null;
+  /**
+   * Of {@link spentCostUsd}, the part geniro priced itself from token counts
+   * rather than the CLI's own ledger; null when none of it was.
+   */
+  spentEstimatedCostUsd: number | null;
 }
 
 /**
@@ -4788,6 +4834,11 @@ export const RunWireSchema = z.object({
     .describe(
       "How full the conversation's context window was when the CLI last reported — updated DURING a turn, so a client with no live reading draws the ring from this rather than from the last settled turn; null = never reported",
     ),
+  contextEstimated: z
+    .boolean()
+    .describe(
+      "Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it",
+    ),
   contextWindowTokens: z
     .number()
     .nullable()
@@ -5120,6 +5171,8 @@ export interface TurnEnding {
   seq: number;
   nodeId: string | null;
   callId: string | null;
+  /** The turn was stopped (`turn_cancelled`) rather than finished or failed. */
+  cancelled: boolean;
 }
 
 /**

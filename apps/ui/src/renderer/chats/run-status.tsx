@@ -3,6 +3,7 @@ import {
   CircleCheck,
   CircleX,
   Clock,
+  EyeOff,
   Hourglass,
   Loader2,
   MessageCircleQuestion,
@@ -15,7 +16,7 @@ import { cn } from '../components/ui/utils';
 /**
  * Everything a run or a node can be, display-wise: the run statuses, the
  * node-only `skipped`, and the three no daemon row ever carries —
- * `needs-input`, `held` and the sub-agent-only `unknown`. See
+ * `needs-input`, `held` and the sub-agent-only `untracked`. See
  * {@link displayRunStatus}.
  *
  * There is no `idle`. It was a NINTH member meaning "has not started yet",
@@ -39,7 +40,8 @@ export type RunStatusKind =
   | 'completed'
   | 'failed'
   | 'cancelled'
-  | 'skipped';
+  | 'skipped'
+  | 'untracked';
 
 /**
  * The one status → icon/tone/label mapping, so a run's or agent's state reads
@@ -97,6 +99,14 @@ export const RUN_STATUS_META: Record<
     icon: Ban,
     className: 'text-muted-foreground',
     label: 'cancelled',
+  },
+  // Amber like `needs-input`, but not a question mark: nothing here waits on
+  // the user, and at 12px two question glyphs side by side in one panel read
+  // as the same state. `CircleDashed` is a pending task's glyph, so not that.
+  untracked: {
+    icon: EyeOff,
+    className: 'text-warning',
+    label: 'untracked',
   },
   skipped: {
     icon: MinusCircle,
@@ -380,6 +390,24 @@ export function isSettledRunStatus(status: RunStatusKind): boolean {
     status === 'cancelled' ||
     status === 'skipped'
   );
+}
+
+/**
+ * What `untracked` means for one sub-agent, in the words every surface that
+ * shows the bare word explains it with: the block's pill and body, and the
+ * panel's row glyph.
+ */
+export function untrackedExplanation(processEnded: boolean): string {
+  return processEnded
+    ? 'Its process ended before it reported how it finished.'
+    : 'Tracking was lost. This sub-agent may still be running.';
+}
+
+/** {@link untrackedExplanation} in a few words, for a shut card's summary. */
+export function untrackedSummary(processEnded: boolean): string {
+  return processEnded
+    ? 'Ended without reporting an outcome'
+    : 'May still be running';
 }
 
 /**

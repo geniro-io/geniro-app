@@ -1672,6 +1672,12 @@ describe('CursorAcpAdapter — background sub-agents', () => {
         ),
         backgroundOpen: null,
         backgroundOutcome: null,
+        recovery: expect.objectContaining({
+          agentKind: 'cursor-agent',
+          sessionId: 's',
+          toolCallId: 'toolu_018bc',
+          launchedAtMs: expect.any(Number),
+        }),
       },
     ]);
     // AFTER the tool call it anchors to, so a consumer replaying in seq order
@@ -1744,6 +1750,11 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       stepsUnavailableReason: expect.stringContaining('not the work inside it'),
       backgroundOpen: null,
       backgroundOutcome: null,
+      recovery: expect.objectContaining({
+        agentKind: 'cursor-agent',
+        sessionId: 's',
+        toolCallId: 'toolu_018bc',
+      }),
     });
     // Answered, not declined. The refusal is what this whole feature was lost
     // behind: the agent discards the outcome either way, so a `-32601` cost the
@@ -2146,7 +2157,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       ).toBe(false);
     });
 
-    it('hands a transcript to the delegate RESUMING it, and closes the cut-off one as stopped', async () => {
+    it('hands a transcript to the delegate RESUMING it, and closes the cut-off one as stopped with recovery off', async () => {
       // Run `bd1e43ae`: a reviewer cut off by a dropped stream never wrote
       // `turn_ended`, and its relaunch appended a new brief to its transcript.
       const { child, events } = launchInBackground();
@@ -2186,6 +2197,7 @@ ${RESUMED}
       expect(closes(events)[0]).toMatchObject({
         id: 'toolu_018bc',
         backgroundOutcome: 'stopped',
+        recovery: null,
       });
 
       // And the transcript's ending is now the continuation's.
@@ -2338,7 +2350,7 @@ ${RESUMED}
       ).toBeGreaterThanOrEqual(10_000);
     });
 
-    it('closes a delegate with nothing to find it by with the turn, claiming no outcome', () => {
+    it('marks a delegate with nothing to find it by untracked when its turn ends', () => {
       // No id and no brief: nothing can watch it, so the turn completing is the
       // last moment anything can be said — the behaviour every delegate had
       // before the reader.
@@ -2348,7 +2360,7 @@ ${RESUMED}
       expect(closes(events)).toEqual([
         expect.objectContaining({
           id: 'toolu_018bc',
-          backgroundOutcome: null,
+          backgroundOutcome: 'untracked',
         }),
       ]);
       const kinds = events.map((event) => event.type);
@@ -2370,7 +2382,7 @@ ${RESUMED}
 
       endTurn(child);
       expect(closes(events)).toEqual([
-        expect.objectContaining({ backgroundOutcome: null }),
+        expect.objectContaining({ backgroundOutcome: 'untracked' }),
       ]);
     });
 
@@ -2838,6 +2850,26 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
     );
   });
 
+  it('names the native child session on the recovery reference of its delegate', () => {
+    const { child, events } = start();
+    launch(child, false);
+
+    const info = events.filter(
+      (event) => event.type === 'subagent_info' && event.id === 'tool_A',
+    );
+    expect(info.length).toBeGreaterThan(0);
+    for (const event of info) {
+      expect(event).toMatchObject({
+        recovery: {
+          agentKind: 'cursor-agent',
+          sessionId: 's',
+          toolCallId: 'tool_A',
+          childSessionId: 'agent-1',
+        },
+      });
+    }
+  });
+
   it('drops the steps of a sub-agent it cannot place, rather than reading them as the parent’s', () => {
     const { child, events } = start();
     // Announced, but with no launching call to draw its steps under.
@@ -2950,6 +2982,83 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
     expect(framesOn(child).map((frame) => frame.method)).toContain(
       'session/cancel',
     );
+  });
+
+  it('accepts a late foreground ending when disconnection preceded a parent failure', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { child, events } = start();
+    launch(child, false);
+    ends(child, 'disconnected');
+    parentSays(
+      child,
+      '\n\nError: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)',
+    );
+    endTurn(child);
+    const closes = () =>
+      events.filter(
+        (event) =>
+          event.type === 'subagent_info' && event.backgroundOpen === false,
+      );
+    expect(closes().at(-1)).toMatchObject({
+      id: 'tool_A',
+      backgroundOutcome: 'untracked',
+    });
+    ends(child, 'completed');
+    expect(
+      closes().map((event) =>
+        event.type === 'subagent_info' ? event.backgroundOutcome : null,
+      ),
+    ).toEqual(['untracked', 'completed']);
+  });
+
+  it('accepts a late foreground child ending after its parent was interrupted', () => {
+    const { child, events, handle } = start();
+    launch(child, false);
+    expect(handle?.sendUserMessage({ text: 'work on the other task' })).toBe(
+      true,
+    );
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 3,
+        result: { stopReason: 'cancelled' },
+      }),
+    );
+    const closes = () =>
+      events.filter(
+        (event) =>
+          event.type === 'subagent_info' && event.backgroundOpen === false,
+      );
+    expect(closes().at(-1)).toMatchObject({
+      id: 'tool_A',
+      backgroundOutcome: 'untracked',
+    });
+    ends(child, 'completed');
+    expect(
+      closes().map((event) =>
+        event.type === 'subagent_info' ? event.backgroundOutcome : null,
+      ),
+    ).toEqual(['untracked', 'completed']);
+  });
+
+  it('reports disconnection as untracked and replaces it when a completion arrives later', () => {
+    const { child, events } = start();
+    launch(child, true);
+    ends(child, 'disconnected');
+    const closes = () =>
+      events.filter(
+        (event) =>
+          event.type === 'subagent_info' && event.backgroundOpen === false,
+      );
+    expect(closes().at(-1)).toMatchObject({
+      id: 'tool_A',
+      backgroundOutcome: 'untracked',
+    });
+    ends(child, 'completed');
+    expect(closes().at(-1)).toMatchObject({
+      id: 'tool_A',
+      backgroundOutcome: 'completed',
+    });
   });
 
   it('closes a sub-agent’s open steps when the agent says it was cancelled', () => {

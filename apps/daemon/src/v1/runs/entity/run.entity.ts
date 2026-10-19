@@ -165,6 +165,14 @@ export class Run extends TimestampsEntity {
   contextTokens: number | null = null;
 
   /**
+   * Whether {@link contextTokens} is geniro's stand-in rather than an
+   * occupancy the CLI stated (`AgentUsage.contextEstimated`). Written with
+   * every count and cleared with it; null reads as stated.
+   */
+  @Property({ type: 'boolean', nullable: true })
+  contextEstimated: boolean | null = null;
+
+  /**
    * The last reading taken from this run's own agent process before it was
    * closed — the context breakdown and the plan limits, as JSON, with the
    * moment and the transcript position they were taken at.
@@ -754,7 +762,8 @@ export class Run extends TimestampsEntity {
 
   /**
    * What this run's agents have SPENT that no durable row records yet — JSON,
-   * live-plane owner key → dollars (`agents/utils/unrecorded-spend.ts`), null
+   * live-plane owner key → dollars, or `{costUsd, estimatedCostUsd}` when part
+   * of them was priced by geniro (`agents/utils/unrecorded-spend.ts`), null
    * when nothing is outstanding.
    *
    * A turn's cost reaches `items` only with its `turn_complete`, so a callee

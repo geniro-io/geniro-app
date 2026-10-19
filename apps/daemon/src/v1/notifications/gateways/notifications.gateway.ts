@@ -18,6 +18,7 @@ import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
+import { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
 import {
   extractBooleanField,
   extractStringField,
@@ -145,6 +146,7 @@ export class NotificationsGateway
     private readonly usage: UsageEventBus,
     private readonly tasks: TaskEventBus,
     private readonly partials: PartialStreamService,
+    private readonly subagents: SubagentRecoveryService,
   ) {}
 
   afterInit(server: Server): void {
@@ -387,6 +389,7 @@ export class NotificationsGateway
     const runId = extractRunId(data);
     if (runId) {
       await client.join(runRoom(runId));
+      this.subagents.schedule(runId);
       // The live plane as it stands, to this socket alone. A delta is
       // published only when its figure changes and the room kept nothing for
       // a client that was not in it, so a thread reopened mid-turn started on

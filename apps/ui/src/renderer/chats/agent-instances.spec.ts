@@ -168,6 +168,29 @@ describe('agentInstances', () => {
     expect(instances).toHaveLength(1);
     expect(instances[0]!.thread.status).toBe('running');
   });
+
+  it('settles an inferred call once its delegate’s process ended, and agrees with isInstanceLive', () => {
+    // The call's own opening is outside the window, so its delegates are the
+    // only thing that could ever settle it.
+    const ended = {
+      ...delegate('d1', 'call-3', 'untracked'),
+      processEnded: true,
+    };
+    const [instance] = agentInstances(engineer([ended]));
+    expect(instance!.thread).toMatchObject({
+      kind: 'call',
+      status: 'completed',
+      openCallIds: [],
+    });
+    expect(isInstanceLive(instance!)).toBe(false);
+
+    // Untracked while its process lives: it may still be running.
+    const [mayRun] = agentInstances(
+      engineer([delegate('d1', 'call-3', 'untracked')]),
+    );
+    expect(mayRun!.thread.status).toBe('running');
+    expect(isInstanceLive(mayRun!)).toBe(true);
+  });
 });
 
 describe('conversationTaskLists', () => {
@@ -265,5 +288,16 @@ describe('isInstanceLive', () => {
       ]),
     );
     expect(isInstanceLive(instance!)).toBe(false);
+  });
+
+  it('keeps a call live for a delegate that may still be running, not for one whose process ended', () => {
+    const settled = call('call-1', 'completed');
+    const lost = delegate('d1', 'call-1', 'untracked');
+    const [mayRun] = agentInstances(engineer([settled, lost]));
+    expect(isInstanceLive(mayRun!)).toBe(true);
+    const [ended] = agentInstances(
+      engineer([settled, { ...lost, processEnded: true }]),
+    );
+    expect(isInstanceLive(ended!)).toBe(false);
   });
 });

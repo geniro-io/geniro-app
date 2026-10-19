@@ -22,6 +22,7 @@ import type {
   SpawnFn,
   StoppedCommands,
 } from '../utils/spawn-cli';
+import type { SubagentRecoveryRefSchema } from '../utils/subagent-recovery-ref';
 
 // ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
 // The two names that identify OUR server and OUR tools inside a CLI's config
@@ -70,7 +71,8 @@ export const GENIRO_MCP_CALL_TOOLS = [
  * which is why translating at the read site is the only place it can be done
  * once.
  */
-export type BackgroundUnitOutcome = 'completed' | 'failed' | 'stopped';
+export type BackgroundUnitOutcome =
+  'completed' | 'failed' | 'stopped' | 'untracked';
 
 export interface BackgroundUnitUsage {
   /** Every token the unit spent, prompt and completion together. */
@@ -178,7 +180,22 @@ export interface AgentUsage {
    * fallback model's window under the requested one.
    */
   contextModel: string | null;
+  /**
+   * Whether {@link contextTokens} is geniro's stand-in rather than an
+   * occupancy the CLI stated — a different figure put on the meter because no
+   * occupancy was reported. Travels with the reading it describes. Optional and
+   * false alike mean the CLI stated it.
+   */
+  contextEstimated?: boolean;
   costUsd: number | null;
+  /**
+   * Of {@link costUsd}, the part geniro PRICED itself — token counts at the
+   * public list price (`ModelPriceCatalog`) — rather than read off the CLI's
+   * own bill. Equal to `costUsd` when all of it was priced here, and a part of
+   * it once segments fold. Optional and null alike mean none of it was: the
+   * cost is the CLI's, or there is no cost at all.
+   */
+  estimatedCostUsd?: number | null;
   /**
    * How long the turn took, as the CLI ITSELF measured it.
    *
@@ -465,6 +482,23 @@ export interface AgentSessionReadInput {
   /** That conversation's CLI session id, or null before the CLI names one. */
   sessionId: string | null;
 }
+
+/** Durable identity used only to read a lost delegate's existing CLI record. */
+export type SubagentRecoveryRef = z.infer<typeof SubagentRecoveryRefSchema>;
+
+export type SubagentTrackingLost = 'process-ended';
+
+/**
+ * Why a session is closed, when it decides how the work still out ended:
+ * `user-stop` — the user's Stop, so every delegate it cuts off is `stopped`.
+ * Any other close leaves them `untracked`, its process having ended.
+ */
+export type SessionCloseCause = 'user-stop';
+
+export type RecoveredSubagentOutcome = Exclude<
+  BackgroundUnitOutcome,
+  'untracked'
+>;
 
 /**
  * One rate-limit window an account's plan enforces — the thing that actually
@@ -964,18 +998,21 @@ type AgentEventBody =
        * turns that have FINISHED, as if that were the whole bill — a small
        * fraction of a call hours into its turn. The tokens are already live
        * (`usage_progress`), but pricing them here is not possible for a model
-       * the price table has no row for. The CLI prices its own requests, so
-       * the figure is ASKED of it.
+       * the price table has no row for — so where the CLI prices its own
+       * requests, the figure is ASKED of it.
        *
-       * CLAUDE ONLY today — read over the `get_usage` control request (see
-       * `CLAUDE_LIVE_COST_ASK_INTERVAL_MS` in `claude.const.ts`). A CLI with no
-       * such channel never emits it, and its running figure stays what the
-       * finished turns add up to.
+       * claude answers over the `get_usage` control request (see
+       * `CLAUDE_LIVE_COST_ASK_INTERVAL_MS` in `claude.const.ts`); codex states
+       * no price, so its figure is its tokens at list price and all of it is
+       * `estimatedCostUsd`. A CLI with neither never emits it, and its running
+       * figure stays what the finished turns add up to.
        *
        * EPHEMERAL like its siblings: never persisted, never replayed.
        */
       type: 'cost_progress';
       costUsd: number;
+      /** Of `costUsd`, the part geniro priced itself — see `AgentUsage`. */
+      estimatedCostUsd?: number;
     }
   | { type: 'reasoning'; text: string }
   | {
@@ -1343,6 +1380,16 @@ type AgentEventBody =
        * nothing here and keeps the old reading, where the tool result is the end.
        */
       backgroundOpen: boolean | null;
+      /** The child conversation identity, when this CLI exposes one. */
+      subagentSessionId?: string;
+      /** Internal recovery metadata; the renderer does not interpret it. */
+      recovery?: SubagentRecoveryRef | null;
+      /**
+       * On an `untracked` close the daemon wrote: `process-ended` when the
+       * process hosting the delegate is gone, so its work is over and only its
+       * outcome is unknown. Absent when tracking was lost while it may still run.
+       */
+      trackingLost?: SubagentTrackingLost;
     }
   | {
       /**
@@ -3397,6 +3444,8 @@ export interface AgentTurnInput {
  * is logged into. A process per turn tears that down on every message.
  */
 export interface AgentSession {
+  /** A live subordinate command still holds this delegate's terminal report. */
+  subagentRecoveryBlocked?(id: string): boolean;
   /**
    * Open a turn on this process. Null when this session cannot serve it: the
    * process is gone, a turn is already in flight, this CLI hosts one turn per
@@ -3468,8 +3517,14 @@ export interface AgentSession {
    *
    * This is the ONLY thing that stops a run-scoped process, so whoever holds
    * the session owns that obligation: nothing else will reap it.
+   *
+   * `cause` says why, when that decides how the work still out ended — see
+   * {@link SessionCloseCause}.
    */
-  close(): void;
+  close(cause?: SessionCloseCause): void;
+  /** See `CliSession.noteCloseCause` — the one place a close's cause is kept. */
+  noteCloseCause?(cause: SessionCloseCause | null): void;
+  readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
 }

@@ -440,6 +440,19 @@ describe('AgentsPanel', () => {
     expect(reviewer.querySelector('[data-slot="agent-spend"]')).toBeNull();
   });
 
+  it('marks an agent’s spend geniro priced itself, and says so on hover', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[{ ...agents[0]!, spentUsd: 2, spentEstimatedUsd: 2 }]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const spend = el.querySelector('[data-slot="agent-spend"]')!;
+    expect(spend.textContent).toBe('≈$2.00');
+    expect(spend.getAttribute('title')).toContain("geniro's estimate");
+  });
+
   it('draws NO spend figure for a CLI that reports no cost', () => {
     // cursor-agent sends no cost at all (probed). Its tokens used to stand in
     // for the price here; with the money the one figure this line carries, a
@@ -964,6 +977,7 @@ describe('AgentsPanel', () => {
                   turns: 1,
                   costedTurns: 0,
                   costUsd: null,
+                  estimatedCostUsd: null,
                   inputTokens: null,
                   outputTokens: null,
                   cacheReadTokens: null,
@@ -2214,6 +2228,44 @@ describe('AgentsPanel — sub-agent threads', () => {
     // would shut the very rows these cases read.
     return el;
   }
+
+  it('shows untracked delegates without calling them finished or hiding their rows', () => {
+    const el = render(
+      <AgentsPanel
+        agents={[
+          { ...delegator, threads: [{ ...subagent, status: 'untracked' }] },
+        ]}
+        terminalReasons={TERMINALS}
+        onOpenThread={() => undefined}
+      />,
+    );
+    const section = el.querySelector('[data-slot="agent-subagent-section"]');
+    expect(section?.querySelector(':scope > button')?.textContent).toBe(
+      'Sub-agents1 untracked',
+    );
+    expect(section?.textContent).toContain('Review the diff');
+    expect(section?.textContent).not.toContain('finished');
+  });
+
+  it('counts an untracked delegate whose process ended as finished, and keeps its section shut', () => {
+    const el = render(
+      <AgentsPanel
+        agents={[
+          {
+            ...delegator,
+            threads: [{ ...subagent, status: 'untracked', processEnded: true }],
+          },
+        ]}
+        terminalReasons={TERMINALS}
+        onOpenThread={() => undefined}
+      />,
+    );
+    const section = el.querySelector('[data-slot="agent-subagent-section"]');
+    expect(section?.querySelector(':scope > button')?.textContent).toBe(
+      'Sub-agents1 finished',
+    );
+    expect(section?.textContent).not.toContain('Review the diff');
+  });
 
   it('lists a sub-agent as a thread of the agent that launched it', () => {
     const el = renderWithSubagent();

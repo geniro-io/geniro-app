@@ -39,6 +39,36 @@ export class UiFixturesSeeder extends Seeder {
     const cwd = process.env.GENIRO_SEED_CWD ?? process.cwd();
     await clearPreviousFixtures(em);
 
+    this.chat(em, {
+      id: 'untracked-subagents',
+      title: 'Sub-agents — tracking lost',
+      minutesAgo: 1,
+      cwd,
+      items: [
+        say('Review the changes and check the tests.'),
+        ...delegate(
+          'lost-session',
+          'Review changes',
+          'Check the changes for bugs.',
+        ),
+        {
+          kind: 'subagent_info',
+          payload: {
+            id: 'lost-session',
+            backgroundOpen: false,
+            backgroundOutcome: 'untracked',
+          },
+        },
+        ...delegate(
+          'missing-end',
+          'Check tests',
+          'Check the tests for coverage gaps.',
+        ),
+        reply('The child sessions did not report their endings.'),
+        turnComplete(),
+      ],
+    });
+
     // THREE chips, each narrower than a lone one, plus `All 6`.
     this.chat(em, {
       id: 'shelf-three-open',

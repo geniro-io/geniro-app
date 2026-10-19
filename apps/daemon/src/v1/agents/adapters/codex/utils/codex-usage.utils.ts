@@ -335,6 +335,8 @@ export function turnUsageOf(options: {
     contextWindowTokens: window,
     contextModel: window !== null ? options.model : null,
     costUsd: spend?.costUsd ?? null,
+    // Every dollar here is the list price above — codex states none.
+    ...(spend?.costUsd == null ? {} : { estimatedCostUsd: spend.costUsd }),
     durationMs: options.durationMs,
     apiMs: null,
     ttftMs: null,

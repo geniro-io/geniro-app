@@ -35,7 +35,8 @@ pnpm build
 pnpm rebuild better-sqlite3
 #    This is the opposite ABI to the unit tests': before any `pnpm test:unit` /
 #    `pnpm full-check`, run `pnpm rebuild:native` again — the daemon and
-#    mikroorm suites run under Electron and segfault on a host-ABI tree.
+#    mikroorm suites run under Electron and segfault on a host-ABI tree (the
+#    UI suite runs under Electron too, for its Node APIs, but loads no sqlite).
 
 # 3. playwright-core — install it OUTSIDE the repo. Do NOT `npm install` inside
 #    this pnpm workspace: npm prunes pnpm's hoisted deps (reflect-metadata, …)

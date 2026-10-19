@@ -36,11 +36,15 @@ export interface BreakdownRow {
   workedMs: number;
   /** What its own turns cost; null when none of them priced anything. */
   costUsd: number | null;
+  /** Of `costUsd`, the part geniro priced itself from token counts; null when none. */
+  estimatedCostUsd: number | null;
   /**
    * Its own cost plus what the agents it CALLED priced while answering it —
    * agent rows on a run with calls only, null otherwise.
    */
   withCalleesUsd: number | null;
+  /** Of `withCalleesUsd`, the part geniro priced itself; null when none. */
+  withCalleesEstimatedUsd: number | null;
   /** Share of prompt tokens served from cache, as a percentage. */
   cacheShare: number | null;
   /** The fullest context reading among its turns, 0 to 1. */
@@ -65,6 +69,20 @@ function sumPriced(turns: readonly RunWaterfallTurn[]): number | null {
   return priced.length === 0
     ? null
     : priced.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
+}
+
+/** The part of these turns' cost geniro priced itself; null when none of it. */
+function sumEstimated(turns: readonly RunWaterfallTurn[]): number | null {
+  const sum = turns.reduce(
+    (acc, turn) => acc + (turn.estimatedCostUsd ?? 0),
+    0,
+  );
+  return sum > 0 ? sum : null;
+}
+
+function sumOf(a: number | null, b: number | null): number | null {
+  const sum = (a ?? 0) + (b ?? 0);
+  return sum > 0 ? sum : null;
 }
 
 function cacheShareOf(turns: readonly RunWaterfallTurn[]): number | null {
@@ -104,7 +122,7 @@ function calleeCost(
   data: RunWaterfallDto,
   nodeId: string | null,
   window: ClockWindow,
-): number | null {
+): { costUsd: number | null; estimatedCostUsd: number | null } {
   const calls = data.calls.filter((call) => call.callerNodeId === nodeId);
   const answered = new Set<RunWaterfallTurn>();
   for (const call of calls) {
@@ -123,7 +141,10 @@ function calleeCost(
       }
     }
   }
-  return sumPriced([...answered]);
+  return {
+    costUsd: sumPriced([...answered]),
+    estimatedCostUsd: sumEstimated([...answered]),
+  };
 }
 
 export function breakdownRows(
@@ -160,6 +181,9 @@ export function breakdownRows(
         const turns = groups.get(laneKey(lane.nodeId)) ?? [];
         const priced = turns.filter((turn) => endsIn(turn, window));
         const own = whole ? lane.costUsd : sumPriced(priced);
+        const ownEstimated = whole
+          ? lane.estimatedCostUsd
+          : sumEstimated(priced);
         const callees =
           data.calls.length === 0
             ? null
@@ -176,12 +200,17 @@ export function breakdownRows(
             0,
           ),
           costUsd: own,
+          estimatedCostUsd: ownEstimated,
           withCalleesUsd:
-            data.calls.length === 0
+            callees === null
               ? null
-              : own === null && callees === null
+              : own === null && callees.costUsd === null
                 ? null
-                : (own ?? 0) + (callees ?? 0),
+                : (own ?? 0) + (callees.costUsd ?? 0),
+          withCalleesEstimatedUsd:
+            callees === null
+              ? null
+              : sumOf(ownEstimated, callees.estimatedCostUsd),
           cacheShare: cacheShareOf(turns),
           peakContext: peakOf(turns),
           failed: turns.filter((turn) => turn.outcome === 'failed').length,
@@ -198,7 +227,11 @@ export function breakdownRows(
       0,
     ),
     costUsd: sumPriced(turns.filter((turn) => endsIn(turn, window))),
+    estimatedCostUsd: sumEstimated(
+      turns.filter((turn) => endsIn(turn, window)),
+    ),
     withCalleesUsd: null,
+    withCalleesEstimatedUsd: null,
     cacheShare: cacheShareOf(turns),
     peakContext: peakOf(turns),
     failed: turns.filter((turn) => turn.outcome === 'failed').length,

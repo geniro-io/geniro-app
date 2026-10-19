@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Logger, Module } from '@nestjs/common';
 
+import { DesktopOnlyGuard } from '../../auth/desktop-only.guard';
 import { environment } from '../../environments';
 import { DAEMON_VERSION } from '../../utils/daemon-version';
 import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
@@ -14,6 +15,7 @@ import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
 import { ArtifactsController } from './controllers/artifacts.controller';
 import { ChatController } from './controllers/chat.controller';
 import { ChatSearchController } from './controllers/chat-search.controller';
+import { KeptSessionsController } from './controllers/kept-sessions.controller';
 import { McpController } from './controllers/mcp.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
@@ -130,11 +132,13 @@ import { defaultSpawn } from './utils/spawn-cli';
     ArtifactsController,
     ChatController,
     ChatSearchController,
+    KeptSessionsController,
     McpController,
     RunGroupsController,
     SkillsController,
   ],
   providers: [
+    DesktopOnlyGuard,
     ChatShellsService,
     ChatHistoryService,
     RunStateService,

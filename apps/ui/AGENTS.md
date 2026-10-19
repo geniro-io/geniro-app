@@ -442,7 +442,8 @@ One home for each concern:
 - `customInstructions`: see below.
 - `theme`: read by main before any window exists, and enumerated in `settingsPatchSchema`. An unknown value falls back to `'system'`.
 - `historyPageSize`, `checkForUpdates`, `remoteAccessEnabled`, `daemonInspect`, `cliPaths`.
-- `sharing`: `{destinations, defaultDestinationId, agentsMayShare}` — where pages are shared to and whether agents may share (off by default). Salvaged destination by destination (`salvageSharing`); the shape is a twin of the daemon's `ShareDestinationSchema` (`ipc-schemas.ts` restates its limits). Every write that changes it is pushed to the daemon (`share-config-push.ts`, through `onSettingsWritten`), as is every daemon start. Desktop only.
+- `keptSessionIdleMinutes`: how long a run's CLI and its MCP servers are kept after the last turn, 5–180, default 60 (a subscription's prompt-cache TTL), the same for chats and cards. The bounds are twins of the daemon's (`chat.types.ts`). Every write that changes it is pushed to the daemon (`kept-session-config-push.ts`, through `onSettingsWritten`), as is every daemon start; the daemon holds it in memory.
+- `sharing`: `{destinations, defaultDestinationId, agentsMayShare}` — where pages are shared to and whether agents may share (off by default). Salvaged destination by destination (`salvageSharing`); the shape is a twin of the daemon's `ShareDestinationSchema` (`ipc-schemas.ts` restates its limits). Every write that changes it is pushed to the daemon (`share-config-push.ts` over `daemon-config-push.ts`, through `onSettingsWritten`), as is every daemon start. Desktop only.
 
 Data-loss rules:
 

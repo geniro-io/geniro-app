@@ -17,10 +17,13 @@ import {
   type ConfigProfile,
   DAEMON_INSPECT_PORT,
   DEFAULT_HISTORY_PAGE_SIZE,
+  DEFAULT_KEPT_SESSION_IDLE_MINUTES,
   type FastAction,
   hasControlCharacters,
   HISTORY_PAGE_SIZES,
   type HistoryPageSize,
+  MAX_KEPT_SESSION_IDLE_MINUTES,
+  MIN_KEPT_SESSION_IDLE_MINUTES,
   resolveDaemonInspect,
   type RunConfig,
   type Settings as SettingsShape,
@@ -50,6 +53,7 @@ import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
 import { ProgressBar } from '../components/ui/progress-bar';
 import { Select, type SelectGroup } from '../components/ui/select';
+import { Stepper } from '../components/ui/stepper';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { useDebouncedPersist } from '../components/use-debounced-persist';
@@ -345,6 +349,9 @@ export function Settings({
   const [historyPageSize, setHistoryPageSize] = useState<HistoryPageSize>(
     DEFAULT_HISTORY_PAGE_SIZE,
   );
+  const [keptSessionIdleMinutes, setKeptSessionIdleMinutes] = useState(
+    DEFAULT_KEPT_SESSION_IDLE_MINUTES,
+  );
   const [theme, setTheme] = useState<ThemePreference>(DEFAULT_THEME_PREFERENCE);
   const [forgetting, setForgetting] = useState(false);
   /** What the last purge reached, in words — `null` until one has run. */
@@ -377,6 +384,7 @@ export function Settings({
   const notificationsDirtyRef = useRef(false);
   const archiveRetentionDirtyRef = useRef(false);
   const historyPageDirtyRef = useRef(false);
+  const keptSessionIdleDirtyRef = useRef(false);
   const daemonInspectDirtyRef = useRef(false);
   const persistGenerationRef = useRef({
     cliPaths: 0,
@@ -530,6 +538,9 @@ export function Settings({
       }
       if (!historyPageDirtyRef.current) {
         setHistoryPageSize(s.historyPageSize);
+      }
+      if (!keptSessionIdleDirtyRef.current) {
+        setKeptSessionIdleMinutes(s.keptSessionIdleMinutes);
       }
       if (!daemonInspectDirtyRef.current) {
         setStoredInspect(s.daemonInspect);
@@ -1108,6 +1119,15 @@ export function Settings({
     [persist],
   );
 
+  const onKeptSessionIdleChange = useCallback(
+    (minutes: number): void => {
+      keptSessionIdleDirtyRef.current = true;
+      setKeptSessionIdleMinutes(minutes);
+      void persist({ keptSessionIdleMinutes: minutes });
+    },
+    [persist],
+  );
+
   const onThemeChange = useCallback(
     (next: ThemePreference): void => {
       const previous = theme;
@@ -1524,6 +1544,23 @@ export function Settings({
                       : null
                   }
                 />
+                {/* Beside the cards rather than in one: the window is the same
+                    for every CLI, and for a card's run as for a chat. */}
+                <SettingsPanel>
+                  <SettingsPanelRow
+                    label="Keep an idle agent running for"
+                    description="Closing an agent sooner frees its memory, but the next message then starts it and its MCP servers cold, without its prompt cache.">
+                    <Stepper
+                      value={keptSessionIdleMinutes}
+                      min={MIN_KEPT_SESSION_IDLE_MINUTES}
+                      max={MAX_KEPT_SESSION_IDLE_MINUTES}
+                      step={5}
+                      onChange={onKeptSessionIdleChange}
+                      aria-label="Minutes to keep an idle agent running"
+                    />
+                    <span className="text-sm text-muted-foreground">min</span>
+                  </SettingsPanelRow>
+                </SettingsPanel>
               </section>
 
               <section className="flex flex-col gap-3">

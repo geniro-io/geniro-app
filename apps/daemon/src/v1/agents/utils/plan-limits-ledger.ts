@@ -30,18 +30,25 @@ export class PlanLimitsLedger {
    *
    * Null `offered` only asks. Null `key` (a run naming no agent) has no
    * account to share with, so the offer is answered alone.
+   *
+   * `preferOffered` is the readout's refresh press: the offered reading is
+   * the agent's answer from just now, and it stands even where a real reading
+   * under {@link REAL_READING_PREFERRED_MS} would otherwise outrank it. The
+   * panel says when what it shows is an estimate.
    */
   settle(
     key: string | null,
     offered: PlanReading | null,
     now: number,
+    preferOffered = false,
   ): PlanReading | null {
     if (key === null) {
       return offered;
     }
     const held = this.entries.get(key);
     const live = held && now - held.takenAt <= LEDGER_MAX_AGE_MS ? held : null;
-    const best = pickBetter(live, offered);
+    const best =
+      preferOffered && offered !== null ? offered : pickBetter(live, offered);
     if (best === null) {
       this.entries.delete(key);
     } else {

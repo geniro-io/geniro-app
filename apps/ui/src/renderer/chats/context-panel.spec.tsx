@@ -174,6 +174,62 @@ describe('the plan limits', () => {
     ).toBeNull();
   });
 
+  it('adds no row while a re-read is in flight, so the popover does not jump', () => {
+    // REPORTED as "окошко прыгает всё время и мгновенно меняет размер" on a
+    // refresh press. The readout opens UPWARD from the composer, anchored at
+    // its bottom edge, so a row that appears for the length of the request
+    // moves the panel's top edge up and back — on every refresh, and every ten
+    // seconds while the agent works (the live re-read). jsdom computes no
+    // layout, so the fact pinned is the one that decides it: the panel's rows
+    // and their text are the same in flight as at rest.
+    const reading = { ...metrics(), plan: PLAN, planTakenAt: null };
+    render(<ContextPanel metrics={reading} loading={false} error={null} />);
+    const panel = container.firstElementChild;
+    const atRest = Array.from(panel?.children ?? [], (row) => row.textContent);
+
+    render(<ContextPanel metrics={reading} loading={true} error={null} />);
+    const inFlight = Array.from(
+      container.firstElementChild?.children ?? [],
+      (row) => row.textContent,
+    );
+
+    expect(inFlight).toEqual(atRest);
+    // Still said, just not by a row of its own: inside the breakdown's header.
+    const breakdown = container.querySelector(
+      '[data-slot="context-breakdown"]',
+    );
+    expect(breakdown?.getAttribute('aria-busy')).toBe('true');
+    expect(breakdown?.firstElementChild?.querySelector('svg')).not.toBeNull();
+  });
+
+  it('keeps the sentence saying why there are no limits on screen during a re-read', () => {
+    // The same jump through the other branch: an account with no allowance
+    // swapped its sentence for the first-load placeholder on every re-read.
+    const reading = {
+      ...metrics(),
+      plan: null,
+      planReason: 'This account reports no plan limits.',
+    };
+    render(<ContextPanel metrics={reading} loading={false} error={null} />);
+    const atRest = Array.from(
+      container.firstElementChild?.children ?? [],
+      (row) => row.textContent,
+    );
+
+    render(<ContextPanel metrics={reading} loading={true} error={null} />);
+    const inFlight = Array.from(
+      container.firstElementChild?.children ?? [],
+      (row) => row.textContent,
+    );
+
+    expect(inFlight).toEqual(atRest);
+    expect(
+      container
+        .querySelector('[data-slot="plan-limits-reason"]')
+        ?.getAttribute('aria-busy'),
+    ).toBe('true');
+  });
+
   it('dates a reading another chat took minutes ago, and not one taken now', () => {
     const old = new Date(Date.now() - 5 * 60_000).toISOString();
     render(

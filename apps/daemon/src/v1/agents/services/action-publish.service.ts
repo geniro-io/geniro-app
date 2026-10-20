@@ -1,11 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import {
+  ACTION_COMMAND_MAX,
+  ACTION_COMMAND_TIMEOUT_DEFAULT_MINUTES,
+  ACTION_COMMAND_TIMEOUT_MAX_MINUTES,
   ACTION_DESCRIPTION_MAX,
   ACTION_ID_MAX,
   ACTION_LABEL_MAX,
   ACTION_LIVE_MAX,
   ACTION_MESSAGE_MAX,
+  type ActionCommandInput,
   type ActionPublisher,
   type ActionPublishInput,
   type ActionSpec,
@@ -14,6 +18,7 @@ import {
   type LiveAction,
 } from '../chat.types';
 import { actionKey } from '../utils/action-fold';
+import { ActionCommandService } from './action-command.service';
 import { ActionStopService } from './action-stop.service';
 import { ChatActionsService } from './chat-actions.service';
 
@@ -90,6 +95,7 @@ export class ActionPublishService {
   constructor(
     private readonly actions: ChatActionsService,
     private readonly stops: ActionStopService,
+    private readonly commands: ActionCommandService,
   ) {}
 
   async publish(
@@ -114,6 +120,23 @@ export class ActionPublishService {
         return { status: 'refused', reason: resolved.reason };
       }
       spec = { kind: 'stop', ...resolved };
+    } else if ('command' in checked) {
+      const resolved = await this.commands.resolveCwd(
+        ctx.runId,
+        checked.command.cwd,
+      );
+      if ('reason' in resolved) {
+        return { status: 'refused', reason: resolved.reason };
+      }
+      spec = {
+        kind: 'command',
+        argv: checked.command.argv,
+        cwd: resolved.cwd,
+        timeoutMs:
+          (checked.command.timeoutMinutes ??
+            ACTION_COMMAND_TIMEOUT_DEFAULT_MINUTES) * 60_000,
+        notifyAgent: checked.command.notifyAgent ?? false,
+      };
     } else {
       spec = checked.spec;
     }
@@ -212,10 +235,17 @@ type CheckedInput = {
   label: string;
   description: string | undefined;
   actionId: string;
-} & ({ spec: ActionSpec } | { stop: ActionStopInput });
+} & (
+  | { spec: ActionSpec }
+  | { stop: ActionStopInput }
+  | { command: ActionCommandInput }
+);
 
-/** The kind and, for a stop, what it will stop — for the agent's receipt. */
+/** The kind and what a press will stop or run — for the agent's receipt. */
 function describeSpec(spec: ActionSpec): string {
+  if (spec.kind === 'command') {
+    return `command · ${spec.argv?.[0] ?? ''} in ${spec.cwd ?? ''}`;
+  }
   if (spec.kind !== 'stop') {
     return spec.kind;
   }
@@ -282,13 +312,14 @@ function checkInput(
     }
     return { label, description, actionId, stop: input.stop };
   }
-  if (input.message === undefined) {
-    return {
-      reason:
-        'command actions are not available yet; publish a message or stop action instead',
-    };
+  if (input.command !== undefined) {
+    const command = checkCommand(input.command);
+    return 'reason' in command
+      ? command
+      : { label, description, actionId, command };
   }
-  const text = input.message.trim();
+  // `kinds` above leaves the message as the one kind given.
+  const text = (input.message ?? '').trim();
   if (text.length === 0 || text.length > ACTION_MESSAGE_MAX) {
     return { reason: `message must be 1–${ACTION_MESSAGE_MAX} characters` };
   }
@@ -299,6 +330,47 @@ function checkInput(
     };
   }
   return { label, description, actionId, spec: { kind: 'message', text } };
+}
+
+function checkCommand(
+  command: ActionCommandInput,
+): ActionCommandInput | { reason: string } {
+  const { argv } = command;
+  if (argv.length === 0 || argv.some((token) => token === '')) {
+    return {
+      reason:
+        'command.argv must be a non-empty list of non-empty strings — the program first, then each argument',
+    };
+  }
+  if (argv.join(' ').length > ACTION_COMMAND_MAX) {
+    return {
+      reason: `command.argv must be at most ${ACTION_COMMAND_MAX} characters in all`,
+    };
+  }
+  // The confirm dialog shows these tokens as they are; one that draws as
+  // something else would have the user run what they did not read.
+  if (argv.some((token) => hasHiddenText(token, false))) {
+    return {
+      reason:
+        'command.argv must not contain control, invisible or bidirectional characters (newlines included)',
+    };
+  }
+  if (command.cwd !== undefined && hasHiddenText(command.cwd, false)) {
+    return {
+      reason:
+        'command.cwd must not contain control, invisible or bidirectional characters',
+    };
+  }
+  const minutes = command.timeoutMinutes;
+  if (
+    minutes !== undefined &&
+    (minutes < 1 || minutes > ACTION_COMMAND_TIMEOUT_MAX_MINUTES)
+  ) {
+    return {
+      reason: `command.timeout_minutes must be 1–${ACTION_COMMAND_TIMEOUT_MAX_MINUTES}`,
+    };
+  }
+  return command;
 }
 
 /**

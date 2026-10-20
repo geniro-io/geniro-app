@@ -21,6 +21,7 @@ export function ConfirmDialog({
   confirmLabel,
   confirmVariant = 'destructive',
   busyLabel,
+  confirmDisabled = false,
   onCancel,
   onConfirm,
   children,
@@ -40,6 +41,8 @@ export function ConfirmDialog({
   confirmVariant?: 'destructive' | 'default';
   /** Replaces `confirmLabel` while busy (e.g. "Deleting…"). */
   busyLabel: string;
+  /** Disables the confirm button alone; Cancel stays usable. */
+  confirmDisabled?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
   /** What is about to happen, and anything the user can't undo. */
@@ -64,7 +67,7 @@ export function ConfirmDialog({
           <Button
             type="button"
             variant={confirmVariant}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
             onClick={onConfirm}>
             {busy ? busyLabel : confirmLabel}
           </Button>

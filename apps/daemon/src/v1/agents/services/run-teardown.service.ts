@@ -7,6 +7,7 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
+import { ActionCommandRegistry } from './action-command.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ArtifactStoreService } from './artifact-store.service';
@@ -25,6 +26,9 @@ import { SessionTranscriptsService } from './session-transcripts.service';
  * SIGTERM→SIGKILL well inside this window.
  */
 export const DELETE_SETTLE_TIMEOUT_MS = 5_000;
+
+/** How long a delete waits for the command actions it ended to write their last row. */
+const COMMAND_SETTLE_MS = 15_000;
 
 /**
  * The teardown behind EVERY run delete — a single-agent chat
@@ -74,6 +78,7 @@ export class RunTeardownService {
     private readonly uploads: ChatUploadStoreService,
     private readonly reaper: RunProcessReaper,
     private readonly wallTurns: WallTurnDao,
+    private readonly commands: ActionCommandRegistry,
   ) {}
 
   /**
@@ -83,11 +88,18 @@ export class RunTeardownService {
    * under `<runId>::…`, and they outlive each of its passes — and then what its
    * agents started to outlive a turn: a detached dev server, a watcher, a
    * browser, which closing the CLI does not reach. The second half runs in the
-   * background, so the caller's route never waits out its grace period.
+   * background, so the caller's route never waits out its grace period. The
+   * command actions the user ran in it are ended here too.
    */
   endProcesses(runId: string): void {
+    this.commands.abortRun(runId);
     this.sessions.closeRun(runId);
     this.reaper.reapInBackground(runId);
+  }
+
+  /** A run back from the archive: command actions pressed in it run again. */
+  resumeProcesses(runId: string): void {
+    this.commands.allowRun(runId);
   }
 
   /**
@@ -118,6 +130,9 @@ export class RunTeardownService {
     // this would strand a CLI, and every MCP server it started, belonging to a
     // run that no longer exists and that nothing can ever reach again.
     this.endProcesses(runId);
+    // A command action ended above still writes its closing row; one landing
+    // after the rows below are gone would belong to no run.
+    await this.commands.settled(runId, COMMAND_SETTLE_MS);
 
     // The in-memory planes. Cleared next — pure bookkeeping, and a failure
     // here must not leave the durable rows half-deleted.

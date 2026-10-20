@@ -15,6 +15,7 @@ import { Button } from '../components/ui/button';
 import { Menu } from '../components/ui/menu';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
+import { quotedArgv } from './command-confirm-dialog';
 import {
   SHELF_CHIP_CLASS,
   SHELF_CHIP_TRIGGER_CLASS,
@@ -68,6 +69,12 @@ function tooltipOf(
       ? `Stops: ${action.spec.targets
           .map((target) => `${target.command} (pid ${target.pid})`)
           .join('; ')}, with what these start`
+      : null,
+    action.spec.kind === 'command' && action.spec.argv?.length
+      ? `Runs: ${quotedArgv(action.spec.argv).join(' ')}`
+      : null,
+    action.spec.kind === 'command' && action.spec.cwd
+      ? `in ${action.spec.cwd}`
       : null,
     phase?.kind === 'waiting'
       ? 'Waits for the agent to finish its turn, then sends.'

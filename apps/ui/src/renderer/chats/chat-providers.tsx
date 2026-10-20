@@ -17,6 +17,7 @@ import {
   ChatMetricsLoaderContext,
 } from './chat-metrics';
 import { CliLoginContext, type SignInResolver } from './cli-login-context';
+import { CommandConfirmDialog } from './command-confirm-dialog';
 import { RunActivityContext, RunSettledContext } from './live-row';
 import {
   type LocalImageLoader,
@@ -209,6 +210,20 @@ export function ChatProviders({
                                   <SurfaceContexts {...transcript}>
                                     {children}
                                   </SurfaceContexts>
+                                )}
+                                {chatActions === null ? null : (
+                                  <CommandConfirmDialog
+                                    action={chatActions.confirming}
+                                    changed={
+                                      chatActions.confirming !== null &&
+                                      !chatActions.actions.some(
+                                        (a) =>
+                                          a.seq === chatActions.confirming?.seq,
+                                      )
+                                    }
+                                    onCancel={chatActions.cancelCommand}
+                                    onConfirm={chatActions.confirmCommand}
+                                  />
                                 )}
                               </ChatActionsContext.Provider>
                             </NotSentMessagesContext.Provider>

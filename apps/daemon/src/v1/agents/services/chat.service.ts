@@ -2866,6 +2866,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     await this.runDao.updateWithoutActivity(runId, { archivedAt: null }, em);
     run.archivedAt = null;
+    this.teardown.resumeProcesses(runId);
     const previews = await this.wireReads([runId], em);
     return this.announceRefiled(this.toRunWire(run, previews.of(runId)));
   }

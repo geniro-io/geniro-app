@@ -54,11 +54,35 @@ describe('readPublishAction', () => {
     }
   });
 
-  it('passes command through whatever its shape', () => {
-    expect(readPublishAction({ label: 'x', command: 'ls' })).toEqual({
+  it('reads a command, its snake_case names mapped', () => {
+    expect(
+      readPublishAction({
+        label: 'x',
+        command: {
+          argv: ['git', 'status'],
+          cwd: '/repo',
+          timeout_minutes: 5,
+          notify_agent: true,
+        },
+      }),
+    ).toEqual({
       label: 'x',
-      command: 'ls',
+      command: {
+        argv: ['git', 'status'],
+        cwd: '/repo',
+        timeoutMinutes: 5,
+        notifyAgent: true,
+      },
     });
+  });
+
+  it('refuses a command given as a shell line or with a misspelt name', () => {
+    expect(readPublishAction({ label: 'x', command: 'ls -la' })).toEqual({
+      error: expect.stringContaining('command') as string,
+    });
+    expect(
+      readPublishAction({ label: 'x', command: { argv: ['ls'], timeout: 5 } }),
+    ).toEqual({ error: expect.stringContaining('timeout') as string });
   });
 
   it('refuses an unknown argument and a missing label', () => {

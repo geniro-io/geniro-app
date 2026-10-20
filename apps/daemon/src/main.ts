@@ -29,6 +29,7 @@ import { closeInterruptedRuns } from './utils/interrupted-runs';
 import { writeCrashMark, writePidfile } from './utils/pidfile';
 import { consumeStopCause } from './utils/stop-cause';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
+import { ActionOutcomeSweep } from './v1/agents/services/action-outcome-sweep.service';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
@@ -241,6 +242,9 @@ bootstrapper.addExtension(
       // The same for detached commands: their close is announced by the CLI
       // process's own exit, which a SIGKILLed daemon never heard.
       await app.get(ChatService).reconcileStrandedShells();
+      // And the command actions a prior daemon was running: their finish row
+      // is written in-process, and their child died with it.
+      await app.get(ActionOutcomeSweep).sweep();
 
       // Put every STANDING question card back in the approval registry. Unlike
       // the reconciles above this restores something rather than closing it:

@@ -15,9 +15,11 @@ import {
 } from 'vitest';
 
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
+import { NO_COMMANDS } from '../../agents/__tests__/no-commands';
 import { NO_STOPS } from '../../agents/__tests__/no-stops';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { ActionCommandRegistry } from '../../agents/services/action-command.registry';
 import { ActionPressService } from '../../agents/services/action-press.service';
 import {
   type ActionPublishContext,
@@ -91,7 +93,7 @@ describe('WorkflowActionsService (in-memory sqlite)', () => {
       NO_CALL_INDEX,
       new ItemSeqAllocator(orm.em, items),
     );
-    publisher = new ActionPublishService(actions, NO_STOPS);
+    publisher = new ActionPublishService(actions, NO_STOPS, NO_COMMANDS);
     sendMessage = vi.fn(() => Promise.resolve({ seq: 99 }));
     chatSend = vi.fn();
     service = new WorkflowActionsService(
@@ -101,6 +103,8 @@ describe('WorkflowActionsService (in-memory sqlite)', () => {
         actions,
         { sendMessage: chatSend } as unknown as ChatService,
         NO_STOPS,
+        NO_COMMANDS,
+        new ActionCommandRegistry(),
       ),
       { sendMessage } as unknown as GraphExecutorService,
     );

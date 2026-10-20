@@ -13,6 +13,7 @@ Every daemon query goes through MikroORM's QueryBuilder or its typed Kysely buil
 - Pass dynamic values as builder parameters; never interpolate input into table names, column names or query text.
 - Inside a transaction, build every read and write from that transaction's `EntityManager`.
 - When a builder bypasses MikroORM's entity filters, add the soft-delete and scope filters explicitly.
+- Read a row other code writes through a fork (`this.em.fork()`) or the caller's `EntityManager`, never the DAO's default. With `allowGlobalContext: true` that default is the global `EntityManager`, whose identity map keeps the first copy it loaded, so a later read returns stale fields — `BaseDao.getById(id)` without an `em` included.
 
 ## The one exception: `db/chat-text-index.ddl.ts`
 

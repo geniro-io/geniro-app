@@ -217,7 +217,12 @@ export class CodexSession implements TurnDriver {
         const entry = this.pending.take(message.id, this.turn, outlivesItsTurn);
         return entry === null
           ? []
-          : entry.turn.onReply(entry.kind, message.result, entry.detail);
+          : entry.turn.onReply(
+              entry.kind,
+              message.result,
+              entry.detail,
+              entry.deliveryId,
+            );
       }
       case 'error': {
         const entry = this.pending.take(
@@ -261,6 +266,14 @@ export class CodexSession implements TurnDriver {
 
   withdrawHeldPrompt(): boolean {
     return this.turn.withdrawHeldPrompt();
+  }
+
+  onProcessEnded(): AgentEvent[] {
+    return this.turn.onProcessEnded();
+  }
+
+  closeGraceMs(): number {
+    return this.turn.closeGraceMs();
   }
 
   /** Whether `turn` is the one this session is serving now. */

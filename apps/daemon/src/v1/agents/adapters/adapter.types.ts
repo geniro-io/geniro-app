@@ -3667,6 +3667,13 @@ export interface TurnDriver {
    * of the terminal `spawn-cli` writes. Undefined = nothing to report.
    */
   onProcessEnded?(): AgentEvent[];
+  /**
+   * How long closing the session should let a STOPPED turn finish before the
+   * process is signalled — for a driver that will only learn a delivered
+   * message's fate from the turn's own end (codex's steer). 0 or undefined =
+   * signal at once.
+   */
+  closeGraceMs?(): number;
   /** Map one parsed stdout line to zero or more normalized events. */
   onMessage(obj: unknown): AgentEvent[];
   /**

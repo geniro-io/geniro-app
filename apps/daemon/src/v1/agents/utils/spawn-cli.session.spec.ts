@@ -1350,6 +1350,153 @@ describe('cancelling a session turn', () => {
     ]);
   });
 
+  describe('closing a session whose turn asks for a grace', () => {
+    it('lets the stopped turn end on its own, then signals the group', async () => {
+      vi.useFakeTimers();
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn({
+        onEvent: (event) => events.push(event),
+        buildInterruptPayload: () => 'INTERRUPT\n',
+        closeGraceMs: () => 1000,
+      });
+
+      handle?.cancel();
+      session.close();
+      expect(child.kills).toBe(0);
+      line(child, { failed: true });
+      await handle?.done;
+      await Promise.resolve();
+
+      expect(events.map((event) => event.type)).toEqual(['turn_cancelled']);
+      expect(child.kills).toBe(1);
+    });
+
+    it('signals the group at the deadline when the turn never ends', () => {
+      vi.useFakeTimers();
+      const { session, child } = openSession();
+      const handle = session.startTurn({
+        onEvent: () => {},
+        buildInterruptPayload: () => 'INTERRUPT\n',
+        closeGraceMs: () => 1000,
+      });
+
+      handle?.cancel();
+      session.close();
+      vi.advanceTimersByTime(999);
+      expect(child.kills).toBe(0);
+      vi.advanceTimersByTime(1);
+
+      expect(child.kills).toBe(1);
+    });
+
+    it('signals at once when the turn asks for no grace', () => {
+      const { session, child } = openSession();
+      const handle = session.startTurn({
+        onEvent: () => {},
+        buildInterruptPayload: () => 'INTERRUPT\n',
+        closeGraceMs: () => 0,
+      });
+
+      handle?.cancel();
+      session.close();
+
+      expect(child.kills).toBe(1);
+    });
+  });
+
+  describe('a follow-up written into the CLI and not yet taken when the process ends', () => {
+    // PROBED on claude 2.1.295 in the app: a message written just before Stop
+    // was logged `enqueue` by the CLI, then the chat closed the session and
+    // the message died queued — its row still read as sent.
+    const consuming = (events: AgentEvent[]) => ({
+      onEvent: (event: AgentEvent) => events.push(event),
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      buildFollowUpPayload: (message: { text: string }) => `${message.text}\n`,
+      followUpConsumptionReported: true,
+    });
+
+    it('is reported dropped ahead of the cancel', () => {
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn(consuming(events));
+      expect(
+        handle?.sendUserMessage({
+          text: 'also the docs',
+          images: undefined,
+          deliveryId: 'delivery-1',
+        }),
+      ).toBe(true);
+
+      handle?.cancel();
+      child.emit('close', null, 'SIGTERM');
+
+      expect(events).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+        { type: 'turn_cancelled' },
+      ]);
+    });
+
+    it('is reported ahead of the CLI’s own cancel result when the process was already told to go', () => {
+      // The order measured in the app: Stop interrupts AND closes the session
+      // in one tick, and claude prints its cancel result before it exits.
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn(consuming(events));
+      handle?.sendUserMessage({
+        text: 'also the docs',
+        images: undefined,
+        deliveryId: 'delivery-1',
+      });
+
+      handle?.cancel();
+      session.close();
+      line(child, { failed: true });
+
+      expect(events.slice(0, 2)).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+        expect.objectContaining({ type: 'turn_cancelled' }),
+      ]);
+    });
+
+    it('is not reported for a turn the CLI cancels while its process lives on', () => {
+      // claude keeps a queued message across an interrupt and runs it as a
+      // turn of its own (probed on 2.1.295) — nothing is lost while it lives.
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn(consuming(events));
+      handle?.sendUserMessage({
+        text: 'also the docs',
+        images: undefined,
+        deliveryId: 'delivery-1',
+      });
+
+      handle?.cancel();
+      line(child, { failed: true });
+
+      expect(events.some((event) => event.type === 'follow_up_dropped')).toBe(
+        false,
+      );
+    });
+
+    it('is not reported once the CLI echoed it as taken', () => {
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn(consuming(events));
+      handle?.sendUserMessage({
+        text: 'also the docs',
+        images: undefined,
+        deliveryId: 'delivery-1',
+      });
+      line(child, { taken: 'also the docs' });
+
+      handle?.cancel();
+      child.emit('close', null, 'SIGTERM');
+
+      expect(events).toEqual([{ type: 'turn_cancelled' }]);
+    });
+  });
+
   it('emits what the driver still held ahead of the error when the process errors under the turn', () => {
     const { session, child } = openSession();
     const events: AgentEvent[] = [];

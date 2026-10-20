@@ -210,6 +210,13 @@ export interface CliTurnOptions {
    */
   onProcessEnded?: () => AgentEvent[];
   /**
+   * Asked when the session is CLOSED under this live turn: how long to let the
+   * turn end on its own before the group is signalled
+   * (`TurnDriver.closeGraceMs`). The process still goes — at the turn's settle
+   * or the deadline, whichever comes first.
+   */
+  closeGraceMs?: () => number;
+  /**
    * Awaited BEFORE this turn's opening payload is written, for a CLI that can
    * accept a prompt before it is ready to serve one (claude's MCP servers are
    * still dialling for the first seconds of a process — see
@@ -713,6 +720,8 @@ interface TurnState {
    */
   stoppedBeforePrompt: boolean;
   resolveDone: () => void;
+  /** Resolves when the turn settles — what a graceful close waits on. */
+  done: Promise<void>;
   options: CliTurnOptions;
   /** Fallback deadline armed when an in-protocol interrupt was delivered. */
   interruptTimer: ReturnType<typeof setTimeout> | null;
@@ -853,8 +862,14 @@ interface TurnState {
    *
    * Only filled for a CLI whose options set `followUpConsumptionReported` —
    * without an acknowledgement nothing could ever empty it.
+   *
+   * Each keeps the `deliveryId` it was written with: one still here when the
+   * process ends died queued inside the CLI — PROBED on claude 2.1.295, which
+   * logs it `enqueue` and runs it as a turn of its own after an interrupt, but
+   * only while the process lives, and a chat's Stop closes the session — so
+   * {@link emitProcessEnded} reports it `follow_up_dropped`.
    */
-  unconsumedFollowUps: string[];
+  unconsumedFollowUps: { text: string; deliveryId: string | null }[];
   /**
    * The `turn_complete` held back because a follow-up was still unconsumed,
    * folded into the one the turn finally settles on ({@link foldTurnComplete})
@@ -1807,6 +1822,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     turn.liveCostUsd = 0;
     turn.liveEstimatedCostUsd = 0;
     publishLiveCost(turn);
+    // Ending with its process already told to go (a chat's Stop closes the
+    // session): what the CLI still holds queued goes with it, so it is said
+    // ahead of the terminal, where every owner matches it.
+    if (groupKilled) {
+      emitUntakenFollowUps(turn);
+    }
     if (opts.stdinLifetime === 'turn') {
       endStdin();
       // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
@@ -2652,7 +2673,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         turn.promptTaken = true;
         return;
       }
-      const index = turn.unconsumedFollowUps.indexOf(event.text);
+      const index = turn.unconsumedFollowUps.findIndex(
+        (followUp) => followUp.text === event.text,
+      );
       if (index !== -1) {
         turn.unconsumedFollowUps.splice(index, 1);
         armSilenceDeadline(turn);
@@ -2868,13 +2891,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   /**
    * What the driver still holds that only it can report, for a turn whose
    * process ended or broke under it — emitted ahead of the terminal this
-   * module writes (`CliTurnOptions.onProcessEnded`).
+   * module writes (`CliTurnOptions.onProcessEnded`). Then the follow-ups this
+   * module wrote into the CLI's stdin that it never took: they died with it
+   * (see {@link TurnState.unconsumedFollowUps}).
    */
   const emitProcessEnded = (turn: TurnState): void => {
     for (const event of turn.options.onProcessEnded?.() ?? []) {
       emit(event);
     }
+    emitUntakenFollowUps(turn);
   };
+
+  /** Report the follow-ups `turn` wrote that the CLI never took, once. */
+  function emitUntakenFollowUps(turn: TurnState): void {
+    const dropped = turn.unconsumedFollowUps.flatMap((followUp) =>
+      followUp.deliveryId === null ? [] : [followUp.deliveryId],
+    );
+    turn.unconsumedFollowUps = [];
+    if (dropped.length > 0) {
+      turn.options.onEvent({ type: 'follow_up_dropped', deliveryIds: dropped });
+    }
+  }
 
   let child: SpawnedProcess;
   try {
@@ -3331,7 +3368,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     });
   }
 
-  const killGroup = (): void => terminator.terminate();
+  /**
+   * The group has been told to go — set before the signal, so a terminal the
+   * CLI still prints on its way out (claude answers an interrupt in ~25 ms,
+   * inside the SIGTERM's window) knows the follow-ups it never took die with it
+   * ({@link emitUntakenFollowUps}).
+   */
+  let groupKilled = false;
+  const killGroup = (): void => {
+    groupKilled = true;
+    terminator.terminate();
+  };
 
   /**
    * End a session whose child may still be running: signal the group with an
@@ -3367,6 +3414,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       cancelRequested: false,
       stoppedBeforePrompt: false,
       resolveDone: () => resolveDone(),
+      done,
       options: turnOptions,
       interruptTimer: null,
       silenceTimer: null,
@@ -3649,7 +3697,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             !turnOptions.sendFollowUp &&
             turnOptions.followUpConsumptionReported
           ) {
-            turn.unconsumedFollowUps.push(message.text);
+            turn.unconsumedFollowUps.push({
+              text: message.text,
+              deliveryId: message.deliveryId ?? null,
+            });
           }
         }
         // A message delivered into a HELD turn ends the hold at the write,
@@ -3826,8 +3877,24 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         return;
       }
       closeCause ??= cause ?? null;
-      if (current) {
-        current.cancelRequested = true;
+      const turn = current;
+      if (turn) {
+        turn.cancelRequested = true;
+      }
+      // A driver that learns a delivered message's fate only from the turn's
+      // own end gets that end before the signal — bounded, and the process
+      // goes either way.
+      const grace =
+        turn && !turn.terminalEmitted
+          ? (turn.options.closeGraceMs?.() ?? 0)
+          : 0;
+      if (turn && grace > 0) {
+        const deadline = setTimeout(killGroup, grace);
+        void turn.done.then(() => {
+          clearTimeout(deadline);
+          killGroup();
+        });
+        return;
       }
       killGroup();
     },

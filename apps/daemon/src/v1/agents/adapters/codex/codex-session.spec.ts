@@ -7,6 +7,7 @@ import {
   CODEX_ACTIVE_WRITER_RETRY_MS,
   CODEX_FAILED_TOOL_RESULT,
   CODEX_STEER_ANSWER_GRACE_MS,
+  CODEX_STOP_CLOSE_GRACE_MS,
   CODEX_STOPPED_TOOL_RESULT,
 } from './codex.const';
 import { CodexSession } from './codex-session';
@@ -1026,6 +1027,25 @@ describe('mid-turn', () => {
       method: 'turn/completed',
       params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
     };
+    const INTERRUPTED = {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'interrupted' } },
+    };
+    /** codex taking the steer into the turn, as it shows it. */
+    const TAKEN = {
+      method: 'item/started',
+      params: {
+        threadId: THREAD,
+        turnId: TURN,
+        item: {
+          type: 'userMessage',
+          id: 'steer-item',
+          content: [
+            { type: 'text', text: 'also update the docs', text_elements: [] },
+          ],
+        },
+      },
+    };
     function steered(): { session: CodexSession; steerId: unknown } {
       const session = openSession();
       acceptTurnStart(session);
@@ -1049,6 +1069,81 @@ describe('mid-turn', () => {
         'follow_up_dropped',
         'turn_complete',
       ]);
+    });
+
+    it('reports a steer codex never answered as dropped when the process ends', () => {
+      // Measured in the app: a chat's Stop closes the session in the same
+      // tick as the steer, and codex's rollout records the turn aborted with
+      // no trace of the message.
+      const { session } = steered();
+
+      expect(session.onProcessEnded()).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ]);
+      // Once: the process-end path writes the terminal, not a held ending.
+      expect(session.onProcessEnded()).toEqual([]);
+    });
+
+    it('reports nothing on process end for a steer codex took', () => {
+      const { session, steerId } = steered();
+      feed(session, { id: steerId, result: {} });
+      feed(session, TAKEN);
+
+      expect(session.onProcessEnded()).toEqual([]);
+    });
+
+    it('reports a steer codex accepted but never took as dropped when the process ends', () => {
+      const { session, steerId } = steered();
+      feed(session, { id: steerId, result: {} });
+
+      expect(session.onProcessEnded()).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ]);
+    });
+
+    it('reports an accepted steer the stop discarded ahead of the cancel', () => {
+      // PROBED on codex 0.162.0, three of three: a steer accepted just before
+      // the interrupt gets no `userMessage` item and is not in the thread.
+      const { session, steerId } = steered();
+      feed(session, { id: steerId, result: {} });
+
+      const events = feed(session, INTERRUPTED);
+
+      expect(
+        events.filter((event) => event.type === 'follow_up_dropped'),
+      ).toEqual([{ type: 'follow_up_dropped', deliveryIds: ['delivery-1'] }]);
+      expect(events.map((event) => event.type).slice(-2)).toEqual([
+        'follow_up_dropped',
+        'turn_cancelled',
+      ]);
+    });
+
+    it('reports nothing for a steer codex took before the stop, its item ahead of its reply or after', () => {
+      const after = steered();
+      feed(after.session, { id: after.steerId, result: {} });
+      feed(after.session, TAKEN);
+      const before = steered();
+      feed(before.session, TAKEN);
+      feed(before.session, { id: before.steerId, result: {} });
+
+      for (const { session } of [after, before]) {
+        expect(
+          feed(session, INTERRUPTED).some(
+            (event) => event.type === 'follow_up_dropped',
+          ),
+        ).toBe(false);
+      }
+    });
+
+    it('asks a closing session to wait only while a steer is still unconfirmed', () => {
+      const { session, steerId } = steered();
+      expect(session.closeGraceMs()).toBe(CODEX_STOP_CLOSE_GRACE_MS);
+      feed(session, { id: steerId, result: {} });
+      expect(session.closeGraceMs()).toBe(CODEX_STOP_CLOSE_GRACE_MS);
+
+      feed(session, TAKEN);
+
+      expect(session.closeGraceMs()).toBe(0);
     });
 
     it('releases its ending when codex takes the steer', () => {

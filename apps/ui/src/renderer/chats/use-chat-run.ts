@@ -70,6 +70,7 @@ import {
   replayTail,
   settledRunStatus,
 } from './settled-status';
+import { unsentMessageIds } from './system-payload';
 import { laterInstant } from './unread';
 import { EMPTY_LIVE_TEXT, useRunStream } from './use-run-stream';
 
@@ -270,6 +271,14 @@ export interface ChatRunScope {
    * item, but the drain itself needs the current chatApi closure.
    */
   drainQueueRef: RefObject<(runId: string) => void>;
+  /**
+   * Told when a "not sent" row arrives LIVE — the turn just ended before taking
+   * messages the user sent into it — with the delivery ids it names. Never for a
+   * replayed one: reopening a thread must not refill the composer.
+   */
+  onLiveUnsentRef?: RefObject<
+    (runId: string, deliveryIds: string[], rowId: string) => void
+  >;
   /**
    * How many items one fetch brings back (`Settings.historyPageSize`); absent
    * means {@link HISTORY_PAGE}. Only the transcript's own rows depend on it —
@@ -559,6 +568,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     resetSteerStatus,
     hasQueuedMessages,
     drainQueueRef,
+    onLiveUnsentRef,
     historyPageSize = HISTORY_PAGE,
   } = scope;
   // Read at REQUEST time by the stable pagers below, and captured once per
@@ -871,6 +881,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     pageSizeRef,
     atTail: () => !awayFromTailRef.current,
     onRow: (item, live) => {
+      if (live && item.kind === 'system') {
+        const unsent = unsentMessageIds(item.payload);
+        if (unsent.length > 0) {
+          onLiveUnsentRef?.current(item.runId, unsent, item.id);
+        }
+      }
       // Mirror a streamed message into the sidebar row's preview line, so the
       // list stays live without a refetch.
       //

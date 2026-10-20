@@ -80,6 +80,7 @@ const APIS = {
 
 function chatState(overrides: Partial<WorkflowChatState>): WorkflowChatState {
   return {
+    liveUnsent: [],
     run: { id: 'run-1', status: 'pending' } as WorkflowChatState['run'],
     items: [],
     anchors: [],

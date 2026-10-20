@@ -7387,6 +7387,95 @@ describe('Chats queued messages', () => {
   const pngFile = (name: string): File =>
     new File([PNG_BYTES], name, { type: 'image/png' });
 
+  /** A user message the daemon delivered into the running turn as `d-1`. */
+  const sentIntoTurn = (seq: number): ChatItem => ({
+    ...msg(seq, 'user', 'do X instead'),
+    payload: { text: 'do X instead', deliveryId: 'd-1' },
+  });
+  /** The daemon saying that message never reached the agent. */
+  const notSentMarker = (seq: number): ChatItem => ({
+    ...msg(seq, 'assistant', ''),
+    kind: 'system',
+    role: null,
+    payload: {
+      message:
+        'Your message was not sent — the turn ended before the agent took it.',
+      severity: 'warning',
+      caption: 'Not sent',
+      unsentMessages: ['d-1'],
+    },
+  });
+  const composer = (container: HTMLElement): string =>
+    container.querySelector('textarea')!.value;
+
+  it('puts a message a Stop dropped back into an empty composer, and marks it not sent', async () => {
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitItem(sentIntoTurn(6));
+      emitItem(notSentMarker(7));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(composer(container)).toBe('do X instead');
+    expect(
+      container.querySelector('[data-slot="not-sent-notice"]'),
+    ).not.toBeNull();
+  });
+
+  it('never puts a dropped message over what the user has typed since', async () => {
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await type(container, 'my newer thought');
+
+    await act(async () => {
+      emitItem(sentIntoTurn(6));
+      emitItem(notSentMarker(7));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(composer(container)).toBe('my newer thought');
+  });
+
+  it('queues a Resend behind the turn the agent is working on, and sends it when that turn ends', async () => {
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'do X instead'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(sentIntoTurn(6));
+      emitItem(notSentMarker(7));
+    });
+
+    const resend = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Resend',
+    );
+    await act(async () => {
+      resend!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      emitItem(terminal(8));
+    });
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: expect.objectContaining({ text: 'do X instead' }),
+    });
+  });
+
   it('starts a workflow run with the pasted image instead of refusing it', async () => {
     workflowApi.listWorkflows.mockResolvedValue([
       {

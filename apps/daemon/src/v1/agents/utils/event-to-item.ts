@@ -81,6 +81,26 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // retire the card it drew for the request — which is the owner's registry
       // and an `unanswerable` row of its own, not a row of this event's.
       return null;
+    case 'follow_up_dropped':
+      // Mapped HERE rather than by each owner, so a chat and a workflow node
+      // write the same row through the path every other row takes.
+      //
+      // TWIN PARSER: `apps/ui/src/renderer/chats/system-payload.ts` reads
+      // `unsentMessages` back and pairs each id with the user row whose payload
+      // carries that `deliveryId`, which then draws as not sent — with the
+      // CLI's words from `unsentReason` when it refused them. Rename a key here
+      // and that file must change too.
+      return {
+        kind: 'system',
+        role: null,
+        payload: {
+          message: unsentMessage(event.deliveryIds.length, event.reason),
+          severity: 'warning',
+          caption: 'Not sent',
+          unsentMessages: event.deliveryIds,
+          ...(event.reason !== undefined ? { unsentReason: event.reason } : {}),
+        },
+      };
     case 'user_message_consumed':
       // Turn plumbing too, and for the same reason: `runCliSession` reads it to
       // decide whether the turn is over and never forwards it. The message it
@@ -495,8 +515,23 @@ export function restatesRunAsWorking(event: AgentEvent): boolean {
     (event.type === 'subagent_info' && event.backgroundOpen !== true) ||
     event.type === 'shell_info' ||
     event.type === 'shell_open' ||
-    event.type === 'notice'
+    event.type === 'notice' ||
+    // A record of a message that never reached the agent — a codex steer is
+    // refused after its turn ended — not the agent doing anything.
+    event.type === 'follow_up_dropped'
   );
+}
+
+/** The "not sent" row's sentence: why `count` messages never reached the agent. */
+function unsentMessage(count: number, reason: string | undefined): string {
+  const them = count === 1 ? 'it' : 'them';
+  const why =
+    reason === undefined
+      ? `the turn ended before the agent took ${them}`
+      : `the agent refused ${them} (${reason})`;
+  return count === 1
+    ? `Your message was not sent — ${why}.`
+    : `${count} messages were not sent — ${why}.`;
 }
 
 /** The run status a terminal event implies, or null for a mid-turn event. */

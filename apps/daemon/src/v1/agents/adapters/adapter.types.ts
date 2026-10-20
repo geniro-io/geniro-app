@@ -1138,6 +1138,21 @@ type AgentEventBody =
       id: string;
     }
   | {
+      /**
+       * Follow-ups the driver accepted (`sendFollowUp` answered true, so the
+       * owner already wrote their rows) that will now never reach the agent —
+       * the turn they were addressed to ended first, typically by a Stop.
+       * Carries the `FollowUpMessage.deliveryId`s it was given, oldest first.
+       */
+      type: 'follow_up_dropped';
+      deliveryIds: string[];
+      /**
+       * What the CLI said when it REFUSED the messages (a codex `turn/steer`
+       * error), quoted to the user. Absent when the turn simply ended first.
+       */
+      reason?: string;
+    }
+  | {
       type: 'error';
       message: string;
       recovery?: AgentErrorRecovery;
@@ -1896,6 +1911,13 @@ export interface TurnImage {
 export interface FollowUpMessage {
   text: string;
   images?: TurnImage[];
+  /**
+   * The owner's id for the row it wrote for this message, echoed back in
+   * `follow_up_dropped` when the message never reaches the agent: an ACP turn
+   * that ends before it went out, or a codex `turn/steer` codex refused. Not
+   * `MessageDeliveryFailure.deliveryId`, which names a broker failure record.
+   */
+  deliveryId?: string;
 }
 
 /**
@@ -3639,6 +3661,19 @@ export interface TurnDriver {
    * behind.
    */
   withdrawHeldPrompt?(): boolean;
+  /**
+   * The process ended under this turn before the turn's own reply — answered
+   * with what the driver held that will now never be delivered, emitted ahead
+   * of the terminal `spawn-cli` writes. Undefined = nothing to report.
+   */
+  onProcessEnded?(): AgentEvent[];
+  /**
+   * How long closing the session should let a STOPPED turn finish before the
+   * process is signalled — for a driver that will only learn a delivered
+   * message's fate from the turn's own end (codex's steer). 0 or undefined =
+   * signal at once.
+   */
+  closeGraceMs?(): number;
   /** Map one parsed stdout line to zero or more normalized events. */
   onMessage(obj: unknown): AgentEvent[];
   /**

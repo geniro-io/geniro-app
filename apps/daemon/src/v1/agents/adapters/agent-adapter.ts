@@ -3019,6 +3019,12 @@ export abstract class AgentAdapter {
           withdrawPrompt: driver.withdrawHeldPrompt
             ? () => driver.withdrawHeldPrompt!()
             : undefined,
+          onProcessEnded: driver.onProcessEnded
+            ? () => driver.onProcessEnded!()
+            : undefined,
+          closeGraceMs: driver.closeGraceMs
+            ? () => driver.closeGraceMs!()
+            : undefined,
           // Both are FIRST-turn only, and for the same reason: a handshake and
           // a readiness wait belong to the PROCESS, not to each prompt. By the
           // second turn the CLI has been up for a whole turn's worth of time,

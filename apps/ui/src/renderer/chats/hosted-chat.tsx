@@ -57,6 +57,13 @@ import { MessageComposer } from './message-composer';
 import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import {
+  notSentDeliveryIds,
+  restoreIntoEmpty,
+  stagedFrom,
+  unsentMessageContent,
+  userDeliveryId,
+} from './not-sent-messages';
+import {
   type ArtifactUrlBuilder,
   artifactUrlBuilder,
 } from './published-artifact';
@@ -514,6 +521,84 @@ export function HostedChat({
     subagentsOut: (run?.subagentsOut ?? 0) > 0,
     shellsOut: (run?.shellsOpen ?? 0) > 0,
   };
+  // Messages a turn dropped because it ended first — see `Chats.tsx`.
+  const notSentIds = useMemo(
+    () => notSentDeliveryIds(chat.items),
+    [chat.items],
+  );
+  const deliveryFactsRef = useRef(deliveryFacts);
+  deliveryFactsRef.current = deliveryFacts;
+  const notSent = useMemo(
+    () => ({
+      unsent: notSentIds,
+      resend: (item: ChatItem): void => {
+        void unsentMessageContent(item, loadAttachment)
+          .then(({ text, images }) => {
+            // Queued, then kicked by the composer's own rule.
+            messageQueue.enqueue(item.runId, { text, images });
+            const decision = followUpDelivery({
+              ...deliveryFactsRef.current,
+              queued: true,
+            });
+            if (decision.action !== 'queue' || decision.kickDrain) {
+              void messageQueue.drain(item.runId);
+            }
+          })
+          .catch((err: unknown) => {
+            setComposeError(describeDaemonError(err));
+          });
+      },
+    }),
+    [notSentIds, loadAttachment, messageQueue],
+  );
+  // A live drop puts the words back in an EMPTY composer, by the chat
+  // screen's rule (`restoreIntoEmpty`). Each marker waits for the rows it
+  // names — it can land before them — and is restored once.
+  const { liveUnsent } = chat;
+  const restoredMarkersRef = useRef(new Set<string>());
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  useEffect(() => {
+    for (const marker of liveUnsent) {
+      if (restoredMarkersRef.current.has(marker.rowId)) {
+        continue;
+      }
+      const dropped = chat.items.filter((row) => {
+        const id = userDeliveryId(row);
+        return id !== null && marker.deliveryIds.includes(id);
+      });
+      if (dropped.length === 0) {
+        continue;
+      }
+      restoredMarkersRef.current.add(marker.rowId);
+      void Promise.all(
+        dropped.map((row) => unsentMessageContent(row, loadAttachment)),
+      )
+        .then((contents) => {
+          const next = restoreIntoEmpty(
+            {
+              text: draftRef.current,
+              staged: attachmentsRef.current.attachments,
+            },
+            {
+              text: contents.map((content) => content.text).join('\n\n'),
+              staged: contents.flatMap((content) =>
+                content.images.map((image) => stagedFrom(image, null)),
+              ),
+            },
+          );
+          setDraft(next.text);
+          if (attachmentsRef.current.attachments.length === 0) {
+            attachmentsRef.current.restore([...next.staged]);
+          }
+        })
+        .catch((err: unknown) => {
+          setComposeError(describeDaemonError(err));
+        });
+    }
+  }, [liveUnsent, chat.items, loadAttachment]);
   const paused = runId !== null && messageQueue.pausedQueues.has(runId);
   const composerButton = followUpButton(
     followUpDelivery(deliveryFacts),
@@ -764,7 +849,8 @@ export function HostedChat({
         loadMetrics,
       }}
       loadAttachment={loadAttachment}
-      applyRecommendations={applyRecommendations}>
+      applyRecommendations={applyRecommendations}
+      notSent={notSent}>
       {header({ run, status })}
 
       <div

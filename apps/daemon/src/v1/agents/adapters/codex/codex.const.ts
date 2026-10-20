@@ -205,6 +205,25 @@ export const CODEX_TERMINAL_LIST_MAX_PAGES = 20;
 export const CODEX_STEER_PREVIEW_MAX_CHARS = 60;
 
 /**
+ * How long a finished turn's ending is held for steers codex has not answered
+ * yet, so a refusal is reported as its message dropped while the turn it was
+ * sent into is still open. Past it the turn ends, and a later refusal is a
+ * notice quoting the message.
+ */
+export const CODEX_STEER_ANSWER_GRACE_MS = 5000;
+
+/**
+ * How long closing a session waits for a STOPPED turn to finish before the
+ * process is signalled, while a steer's fate is still unknown (see
+ * `CodexTurnDriver.closeGraceMs`). PROBED on codex 0.162.0: allowed to finish,
+ * codex answers the interrupt and sends `turn/completed` within ~15 ms, and a
+ * steer it had not yet taken never appears as a `userMessage` item — while a
+ * process signalled at once kept such a steer in 3 of 4 runs and lost it in 1,
+ * with nothing geniro could read to tell which.
+ */
+export const CODEX_STOP_CLOSE_GRACE_MS = 1000;
+
+/**
  * The words codex refuses a `thread/resume` with while ANOTHER codex process
  * holds the thread — it allows one writer per thread. Measured on 0.157.1:
  * `thread <id> already has an active writer`, as JSON-RPC -32600, the code

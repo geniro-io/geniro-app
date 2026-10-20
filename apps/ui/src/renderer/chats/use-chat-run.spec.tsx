@@ -229,6 +229,8 @@ interface Harness {
   swapDraft: ReturnType<typeof vi.fn>;
   resetSteerStatus: ReturnType<typeof vi.fn>;
   drain: ReturnType<typeof vi.fn>;
+  /** What the hook reported of "not sent" rows arriving live. */
+  liveUnsent: ReturnType<typeof vi.fn>;
   /** Which runs the composer is holding follow-ups for. */
   queued: Set<string>;
   unmount: () => void;
@@ -245,6 +247,8 @@ async function mount(
   const drain = vi.fn();
   const queued = new Set<string>();
   const drainQueueRef = { current: drain };
+  const liveUnsent = vi.fn();
+  const onLiveUnsentRef = { current: liveUnsent };
   function Probe(): null {
     latest = useChatRun({
       client,
@@ -254,6 +258,7 @@ async function mount(
       resetSteerStatus,
       hasQueuedMessages: (runId) => queued.has(runId),
       drainQueueRef,
+      onLiveUnsentRef,
       historyPageSize,
     });
     return null;
@@ -274,6 +279,7 @@ async function mount(
     swapDraft,
     resetSteerStatus,
     drain,
+    liveUnsent,
     queued,
     unmount: () => {
       act(() => {
@@ -1222,6 +1228,27 @@ describe('useChatRun', () => {
     harness.swapDraft.mockClear();
     await open(harness, 'r2');
     expect(harness.swapDraft).not.toHaveBeenCalled();
+  });
+
+  it('reports a "not sent" row that arrives live, and never one replayed on open', async () => {
+    const marker = (seq: number): ChatItem => ({
+      ...msg('r1', seq, 'assistant', ''),
+      kind: 'system',
+      role: null,
+      payload: { message: 'not sent', unsentMessages: [`d-${seq}`] },
+    });
+    chatApi.listRunItems.mockResolvedValue([marker(0)]);
+    const { client, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    expect(harness.liveUnsent).not.toHaveBeenCalled();
+
+    await act(async () => {
+      emitItem(marker(1));
+    });
+
+    expect(harness.liveUnsent).toHaveBeenCalledTimes(1);
+    expect(harness.liveUnsent).toHaveBeenCalledWith('r1', ['d-1'], 'r1-i1');
   });
 
   it('renders a live item for the open run and drops one for another', async () => {

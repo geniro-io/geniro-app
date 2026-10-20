@@ -18,6 +18,7 @@ import {
   replayTail,
   settledRunStatus,
 } from './settled-status';
+import { unsentMessageIds } from './system-payload';
 import { EMPTY_LIVE_TEXT, useRunStream } from './use-run-stream';
 
 /**
@@ -75,6 +76,11 @@ function isTurnRunning(status: RunDto['status']): boolean {
 export interface HostedChatState {
   /** The conversation, or null while it is being opened / the surface is shut. */
   run: RunDto | null;
+  /**
+   * The "not sent" rows that arrived LIVE — the turn just ended before taking
+   * messages the user sent into it — oldest first. Never one replayed on open.
+   */
+  liveUnsent: readonly { rowId: string; deliveryIds: string[] }[];
   items: ChatItem[];
   /**
    * Rows outside {@link items} that rows inside it belong to — see
@@ -200,6 +206,9 @@ export function useHostedChat({
   const [working, setWorking] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
   const [settledTurns, setSettledTurns] = useState(0);
+  const [liveUnsent, setLiveUnsent] = useState<HostedChatState['liveUnsent']>(
+    [],
+  );
   // Bumped by `discard`, which is the one thing that ends a conversation
   // without the surface closing — the subject has not changed, so nothing
   // else would re-run the open effect and the surface would sit empty until
@@ -359,6 +368,16 @@ export function useHostedChat({
       // happened may end a turn or clear the ring the surface's readout shows.
       if (!live) {
         return;
+      }
+      if (item.kind === 'system') {
+        const deliveryIds = unsentMessageIds(item.payload);
+        if (deliveryIds.length > 0) {
+          setLiveUnsent((pending) =>
+            pending.some((entry) => entry.rowId === item.id)
+              ? pending
+              : [...pending, { rowId: item.id, deliveryIds }],
+          );
+        }
       }
       if (discardsContextReading(item)) {
         setRun((current) =>
@@ -721,6 +740,7 @@ export function useHostedChat({
     working,
     activity,
     settledTurns,
+    liveUnsent,
     send,
     post,
     patchSettings,

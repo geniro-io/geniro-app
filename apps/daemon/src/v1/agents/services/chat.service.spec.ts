@@ -5324,6 +5324,33 @@ describe('ChatService', () => {
     await drain();
   });
 
+  it('marks a mid-turn message unsent when its turn reports dropping it', async () => {
+    // The row is written as soon as the turn ACCEPTS the message; a Stop
+    // landing before the agent takes it is reported afterwards, by the id the
+    // row carries.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'first');
+
+    const followUp = await service.sendMessage(run.id, 'do X instead');
+    const sent = vi.mocked(claude.handles[0]!.sendUserMessage).mock
+      .calls[0]![0];
+    claude.emit({
+      type: 'follow_up_dropped',
+      deliveryIds: [sent.deliveryId!],
+    });
+    claude.emit({ type: 'turn_cancelled' });
+    await drain();
+
+    expect(followUp.payload).toMatchObject({ deliveryId: sent.deliveryId });
+    const marker = (await itemDao.getByRun(run.id)).find(
+      (row) => row.kind === 'system',
+    );
+    expect(JSON.parse(marker!.payload)).toMatchObject({
+      unsentMessages: [sent.deliveryId],
+    });
+  });
+
   it('gives a mid-turn message a seq the running turn has not already reserved', async () => {
     // THE duplicate-seq defect, reproduced on a real transcript: a user item
     // and the assistant's reply both landed on seq 5927, and the renderer —

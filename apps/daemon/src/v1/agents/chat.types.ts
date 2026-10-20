@@ -5323,7 +5323,17 @@ export interface RunCallSeed {
   messageFailures?: MessageDeliveryFailure[];
 }
 
+/**
+ * A `message_agent` message that never reached its callee, kept until the
+ * caller has been told (a `messageDeliveryNotices` row acknowledges it).
+ */
 export interface MessageDeliveryFailure {
+  /**
+   * The FAILURE's own id, minted by the broker — not a
+   * `FollowUpMessage.deliveryId`, the id a message rides into a running turn
+   * with and a user row carries. Persisted on `call_answer` rows, so renaming
+   * it would leave earlier transcripts unread.
+   */
   deliveryId: string;
   callId: string;
   callerNodeId: string;

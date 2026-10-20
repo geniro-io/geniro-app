@@ -2375,7 +2375,13 @@ export class CallBroker implements OnModuleInit {
         },
       };
     }
-    this.recordDeliveredMessage(state, args.call_id, call, args.message);
+    this.recordDeliveredMessage(
+      state,
+      args.call_id,
+      call,
+      args.message,
+      outcome.deliveryId,
+    );
     return {
       status: 'ok',
       result: {
@@ -2389,12 +2395,17 @@ export class CallBroker implements OnModuleInit {
     };
   }
 
-  /** A message_agent message that reached the callee: row, and a fresh silence window. */
+  /**
+   * A message_agent message that reached the callee: row, and a fresh silence
+   * window. `followUpId` is the id it rode into the turn with, kept on the row
+   * so a drop's "not delivered" row can retract it (`markMessageDropped`).
+   */
   private recordDeliveredMessage(
     state: RunCallState,
     callId: string,
     call: ActiveCall,
     message: string,
+    followUpId?: string,
   ): void {
     this.noteCalleeActivity(state.runId, callId);
     state.capability.persistItem(
@@ -2410,6 +2421,10 @@ export class CallBroker implements OnModuleInit {
         calleeNodeId: call.calleeId,
         message,
         outcome: 'message',
+        // TWIN PARSER: `apps/ui/src/renderer/chats/not-sent-messages.ts`
+        // pairs this with the `followUpId` of a later "not delivered" row and
+        // draws only that one. Rename it there too.
+        ...(followUpId !== undefined ? { followUpId } : {}),
       },
     );
   }
@@ -2430,6 +2445,36 @@ export class CallBroker implements OnModuleInit {
     }
   }
 
+  /**
+   * A `message_agent` message the callee's turn accepted (recorded delivered)
+   * but dropped because the turn ended before its agent took it. Recorded
+   * undelivered so the caller is told at its next turn, the same as one the
+   * call ended before. Its row carries `followUpId`, the id the "delivered"
+   * row was written with, so the transcript shows the message once, as not
+   * delivered.
+   */
+  markMessageDropped(
+    runId: string,
+    callId: string,
+    message: string,
+    followUpId: string,
+  ): void {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    if (!state || !call) {
+      return;
+    }
+    this.recordUndeliveredMessage(
+      state,
+      callId,
+      call.owner,
+      call.calleeId,
+      message,
+      "The callee's turn ended before it took the message.",
+      followUpId,
+    );
+  }
+
   private recordUndeliveredMessage(
     state: RunCallState,
     callId: string,
@@ -2437,6 +2482,7 @@ export class CallBroker implements OnModuleInit {
     calleeNodeId: string,
     message: string,
     reason: string,
+    followUpId?: string,
   ): void {
     const conversation = callerConversationOf(caller);
     const failure: MessageDeliveryFailure = {
@@ -2451,6 +2497,7 @@ export class CallBroker implements OnModuleInit {
     state.capability.persistItem(failure.callerNodeId, 'call_answer', null, {
       ...failure,
       outcome: 'undelivered',
+      ...(followUpId !== undefined ? { followUpId } : {}),
     });
     state.messageFailures.set(failure.deliveryId, failure);
   }
@@ -2561,11 +2608,18 @@ export class CallBroker implements OnModuleInit {
       if (message === undefined || call.parked !== null) {
         break;
       }
-      if (!state.capability.messageCallee(callId, message).delivered) {
+      const outcome = state.capability.messageCallee(callId, message);
+      if (!outcome.delivered) {
         break;
       }
       call.pendingMessages.shift();
-      this.recordDeliveredMessage(state, callId, call, message);
+      this.recordDeliveredMessage(
+        state,
+        callId,
+        call,
+        message,
+        outcome.deliveryId,
+      );
     }
     if (call.pendingMessages.length > 0) {
       this.scheduleMessageRetry(runId, callId, call);
@@ -3335,7 +3389,11 @@ export class CallBroker implements OnModuleInit {
     } else {
       const live = state.capability.isNodeLive(owner);
       if (live) {
-        told = state.capability.tellLiveNode(owner, prompt);
+        // A turn that ends before taking it was told nothing: the reset is
+        // delivered afresh once that turn has ended.
+        told = state.capability.tellLiveNode(owner, prompt, () =>
+          this.deliverResetWake(runId, owner, calls, resetsAt, instant),
+        );
       }
       // A live conversation that could not be told is one whose turn is
       // ending with its call not held yet — waited for like a queued call.

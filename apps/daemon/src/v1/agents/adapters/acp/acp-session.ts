@@ -472,6 +472,10 @@ export class AcpSession implements TurnDriver {
     return this.turn.withdrawHeldPrompt();
   }
 
+  onProcessEnded(): AgentEvent[] {
+    return this.turn.onProcessEnded();
+  }
+
   /**
    * Whether this process can serve ANOTHER turn — `TurnDriver.canOpenTurn`.
    *

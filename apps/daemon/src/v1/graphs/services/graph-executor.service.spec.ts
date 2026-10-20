@@ -1736,6 +1736,7 @@ describe('GraphExecutorService', () => {
     expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledWith({
       text: 'a question',
       images: [],
+      deliveryId: expect.any(String),
     });
     // A node with no live turn has nothing to join.
     expect(claudeCaller.tellLiveNode('callee', 'a question')).toBe(false);
@@ -1752,6 +1753,110 @@ describe('GraphExecutorService', () => {
     expect(cursor.getConfig().followUp.interrupts).toBe(true);
     expect(cursorCaller.tellLiveNode('a', 'a question')).toBe(false);
     expect(cursor.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('delivers a tell again once the turn that dropped it has ended, and writes no unsent row', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const capability = register.mock.calls.at(-1)![1];
+    const turn = claude.starts[0]!;
+    const redeliver = vi.fn();
+    expect(capability.tellLiveNode('a', 'the limit reset', redeliver)).toBe(
+      true,
+    );
+    expect(capability.tellLiveNode('a', 'a question')).toBe(true);
+    const ids = turn.sendUserMessage.mock.calls.map(
+      ([message]) => message.deliveryId!,
+    );
+
+    turn.emit({ type: 'follow_up_dropped', deliveryIds: ids });
+    await drain();
+    // Not while the turn that dropped it is still ending.
+    expect(redeliver).not.toHaveBeenCalled();
+    completeTurn(turn, 'done');
+    await drain();
+
+    expect(redeliver).toHaveBeenCalledTimes(1);
+    // A tell is not the user's message: nothing reads "not sent".
+    const unsent = itemDao.items
+      .filter((row) => row.runId === run.id && row.kind === 'system')
+      .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
+      .filter((payload) => 'unsentMessages' in payload);
+    expect(unsent).toEqual([]);
+  });
+
+  it('wakes a conversation again for a wake its working turn dropped', async () => {
+    const { service, claude, callBroker } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    await service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const capability = register.mock.calls.at(-1)![1];
+    const turn = claude.starts[0]!;
+    expect(capability.wakeNode('a', 'the callee result is ready')).toBe(true);
+    await drain();
+    // The conversation was working: the wake joined its turn.
+    expect(claude.starts).toHaveLength(1);
+    const [{ deliveryId }] = turn.sendUserMessage.mock.calls[0]!;
+
+    turn.emit({ type: 'follow_up_dropped', deliveryIds: [deliveryId!] });
+    completeTurn(turn, 'done');
+    await drain();
+
+    expect(claude.starts).toHaveLength(2);
+    expect(claude.starts[1]!.input.prompt).toBe('the callee result is ready');
+  });
+
+  it('forgets a tell the turn took, so its end delivers nothing again', async () => {
+    const { service, claude, callBroker } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    await service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const capability = register.mock.calls.at(-1)![1];
+    const redeliver = vi.fn();
+    capability.tellLiveNode('a', 'the limit reset', redeliver);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    expect(redeliver).not.toHaveBeenCalled();
   });
 
   it('hands nothing to a caller whose run is being cancelled', async () => {
@@ -3885,6 +3990,7 @@ describe('GraphExecutorService — follow-up messages', () => {
     expect(b.sendUserMessage).toHaveBeenCalledWith({
       text: 'one more thing',
       images: [],
+      deliveryId: expect.any(String),
     });
     const again = turnsOf(claude, 'role-a');
     expect(again).toHaveLength(2);
@@ -3923,6 +4029,101 @@ describe('GraphExecutorService — follow-up messages', () => {
     expect(userTexts(itemDao, run.id)).toEqual(['go']);
     // Nor was the idle agent handed a message the other never received.
     expect(turnsOf(claude, 'role-a')).toHaveLength(1);
+  });
+
+  it('notes which agent missed a follow-up the others took, without marking it unsent', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A1');
+    await drain();
+    const working = turnsOf(claude, 'role-b')[0]!;
+
+    await service.sendMessage(run.id, 'do X instead');
+    const { deliveryId } = working.sendUserMessage.mock.calls[0]![0];
+    working.emit({ type: 'follow_up_dropped', deliveryIds: [deliveryId!] });
+    await drain();
+
+    const systems = itemDao.items
+      .filter((row) => row.runId === run.id && row.kind === 'system')
+      .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+    expect(systems).toHaveLength(1);
+    expect(systems[0]).not.toHaveProperty('unsentMessages');
+    expect(systems[0]!.message).toContain('Not sent to');
+  });
+
+  it('marks a follow-up unsent once every agent it went to dropped it', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    const b = turnsOf(claude, 'role-b')[0]!;
+
+    const followUp = await service.sendMessage(run.id, 'do X instead');
+    const rowId = (followUp.payload as { deliveryId: string }).deliveryId;
+    const idOf = (turn: typeof a): string =>
+      turn.sendUserMessage.mock.calls[0]![0].deliveryId!;
+    expect(idOf(a)).not.toBe(idOf(b));
+    a.emit({ type: 'follow_up_dropped', deliveryIds: [idOf(a)] });
+    b.emit({ type: 'follow_up_dropped', deliveryIds: [idOf(b)] });
+    await drain();
+
+    const systems = itemDao.items.filter(
+      (row) => row.runId === run.id && row.kind === 'system',
+    );
+    expect(
+      systems.map((row) => JSON.parse(row.payload) as Record<string, unknown>),
+    ).toEqual([expect.objectContaining({ unsentMessages: [rowId] })]);
+    // At run level, where the message's own row is: under the root that
+    // answered last it opened an empty node block in the transcript.
+    expect(systems[0]!.nodeId).toBeNull();
+    expect(JSON.parse(systems[0]!.payload)).not.toHaveProperty('nodeId');
+  });
+
+  it('waits for every agent before naming the one that missed a follow-up', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    const b = turnsOf(claude, 'role-b')[0]!;
+    await service.sendMessage(run.id, 'do X instead');
+    const systems = (): Record<string, unknown>[] =>
+      itemDao.items
+        .filter((row) => row.runId === run.id && row.kind === 'system')
+        .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+
+    a.emit({
+      type: 'follow_up_dropped',
+      deliveryIds: [a.sendUserMessage.mock.calls[0]![0].deliveryId!],
+    });
+    await drain();
+    expect(systems()).toEqual([]);
+
+    completeTurn(b, 'B1');
+    await drain();
+
+    expect(systems()).toEqual([
+      expect.objectContaining({
+        caption: 'Not sent',
+        message: expect.stringContaining('Not sent to'),
+      }),
+    ]);
+    expect(systems()[0]).not.toHaveProperty('unsentMessages');
   });
 
   it('rolls a live run up as FAILED when the follow-up turn it opened fails', async () => {
@@ -3978,6 +4179,7 @@ describe('GraphExecutorService — follow-up messages', () => {
     expect(JSON.parse(row.payload)).toEqual({
       text: 'see this',
       images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
+      deliveryId: expect.any(String),
     });
   });
 
@@ -4289,6 +4491,7 @@ describe('GraphExecutorService — agent calls', () => {
     expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledWith({
       text: 'also check the flag control',
       images: [],
+      deliveryId: expect.any(String),
     });
     expect(await envelope).toMatchObject({
       status: 'pending',
@@ -4433,6 +4636,60 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
+  it('splits one drop between the caller’s message_agent and the user’s call message', async () => {
+    const { service, claude, itemDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'help me',
+      mode: 'async',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    const userRow = await service.sendCallMessage(
+      run.id,
+      'helper',
+      'call-1',
+      'use v2',
+      [],
+      'phone-call',
+    );
+    callBroker.messageAgent(run.id, 'orch', {
+      call_id: 'call-1',
+      message: 'and keep the labels',
+    });
+    await drain();
+    const ids = callee.sendUserMessage.mock.calls.map(
+      ([message]) => message.deliveryId!,
+    );
+
+    callee.emit({ type: 'follow_up_dropped', deliveryIds: ids });
+    await drain();
+
+    const rows = itemDao.items.filter((row) => row.runId === run.id);
+    const payload = (row: (typeof rows)[number]): Record<string, unknown> =>
+      JSON.parse(row.payload) as Record<string, unknown>;
+    expect(
+      rows.find(
+        (row) =>
+          row.kind === 'call_answer' && payload(row).outcome === 'undelivered',
+      ),
+    ).toBeDefined();
+    const markers = rows.filter((row) => row.kind === 'system');
+    expect(markers).toHaveLength(1);
+    expect(payload(markers[0]!)).toMatchObject({
+      unsentMessages: [(userRow.payload as { deliveryId: string }).deliveryId],
+      callId: 'call-1',
+    });
+  });
+
   it('hands a message addressed to a RUNNING call to that callee’s turn, filed under the call', async () => {
     const { service, claude, itemDao, callBroker } = setup();
     const run = await service.startRun({
@@ -4485,6 +4742,7 @@ describe('GraphExecutorService — agent calls', () => {
     expect(callee.sendUserMessage).toHaveBeenCalledWith({
       text: 'use v2',
       images: [],
+      deliveryId: expect.any(String),
     });
     // Past the caller: the trigger's agent is not told.
     expect(caller.sendUserMessage).not.toHaveBeenCalled();
@@ -4604,6 +4862,7 @@ describe('GraphExecutorService — agent calls', () => {
           mediaType: 'image/png',
         },
       ],
+      deliveryId: expect.any(String),
     });
     const row = itemDao.items.find(
       (item) =>
@@ -4614,6 +4873,7 @@ describe('GraphExecutorService — agent calls', () => {
       images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
       nodeId: 'helper',
       callId: 'call-1',
+      deliveryId: expect.any(String),
     });
   });
 
@@ -12060,12 +12320,58 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     expect(callee.sendUserMessage).toHaveBeenCalledWith({
       text: 'the user says: keep the old labels',
       images: [],
+      deliveryId: expect.any(String),
     });
     const row = rowsOf(itemDao, run.id).find(
       (i) => i.kind === 'call_answer' && payloadOf(i).outcome === 'message',
     );
     expect(row?.nodeId).toBe('a');
     expect(payloadOf(row!)).toMatchObject({ callId: 'call-1' });
+  });
+
+  it('records a message_agent message undelivered, not as a user row, when the callee’s turn drops it', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callBroker.messageAgent(run.id, 'a', {
+      call_id: 'call-1',
+      message: 'keep the old labels',
+    });
+    await drain();
+
+    const { deliveryId } = callee.sendUserMessage.mock.calls[0]![0];
+    callee.emit({ type: 'follow_up_dropped', deliveryIds: [deliveryId!] });
+    await drain();
+
+    const undelivered = rowsOf(itemDao, run.id).find(
+      (i) => i.kind === 'call_answer' && payloadOf(i).outcome === 'undelivered',
+    );
+    expect(payloadOf(undelivered!)).toMatchObject({
+      callId: 'call-1',
+      message: 'keep the old labels',
+      followUpId: deliveryId,
+    });
+    // The "delivered" row it retracts carries the same id.
+    const delivered = rowsOf(itemDao, run.id).find(
+      (i) => i.kind === 'call_answer' && payloadOf(i).outcome === 'message',
+    );
+    expect(payloadOf(delivered!).followUpId).toBe(deliveryId);
+    expect(rowsOf(itemDao, run.id).some((i) => i.kind === 'system')).toBe(
+      false,
+    );
   });
 
   it('refuses the executor message channel once its callee is marked cancelled', async () => {
@@ -12694,7 +13000,11 @@ describe('GraphExecutorService — Ollama launch validation', () => {
       await drain();
       expect(claude.starts).toHaveLength(3);
       expect(claude.starts[2]!.sendUserMessage).toHaveBeenCalledExactlyOnceWith(
-        { text: 'the callee result is ready', images: [] },
+        {
+          text: 'the callee result is ready',
+          images: [],
+          deliveryId: expect.any(String),
+        },
       );
     } finally {
       release(metadata());
@@ -12785,7 +13095,11 @@ describe('GraphExecutorService — Ollama launch validation', () => {
       expect(claude.starts).toHaveLength(3);
       expect(claude.starts[2]!.input.prompt).toBe('first follow-up');
       expect(claude.starts[2]!.sendUserMessage).toHaveBeenCalledExactlyOnceWith(
-        { text: 'the callee result is ready', images: [] },
+        {
+          text: 'the callee result is ready',
+          images: [],
+          deliveryId: expect.any(String),
+        },
       );
     } finally {
       releaseWrite();
@@ -13079,6 +13393,7 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(b.sendUserMessage).toHaveBeenCalledWith({
       text: 'one more thing',
       images: [],
+      deliveryId: expect.any(String),
     });
     expect(turnsOf(claude, 'role-a')[2]!.input.prompt).toBe('one more thing');
   });

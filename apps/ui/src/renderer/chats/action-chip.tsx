@@ -64,6 +64,11 @@ function tooltipOf(
     action.spec.kind === 'message' && action.spec.text
       ? `Sends: ${action.spec.text}`
       : null,
+    action.spec.kind === 'stop' && action.spec.targets?.length
+      ? `Stops: ${action.spec.targets
+          .map((target) => `${target.command} (pid ${target.pid})`)
+          .join('; ')}, with what these start`
+      : null,
     phase?.kind === 'waiting'
       ? 'Waits for the agent to finish its turn, then sends.'
       : null,

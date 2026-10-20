@@ -34,6 +34,7 @@ import { AgentKind } from '../../runs/runs.types';
 import { fakeSpawn } from '../__tests__/fake-child';
 import { FakeWallTurnDao } from '../__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../__tests__/no-call-index';
+import { NO_STOPS } from '../__tests__/no-stops';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AgentApprovalMode,
@@ -1246,6 +1247,7 @@ function setup(
         NO_CALL_INDEX,
         seqs,
       ),
+      NO_STOPS,
     ),
     artifactStore,
     notices,

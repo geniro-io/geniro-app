@@ -149,6 +149,21 @@ describe('commandNeedles', () => {
     expect(needles.some((needle) => isCommandRunning(exec, needle))).toBe(true);
   });
 
+  it("reaches what `nohup` exec'd, which the table lists without it", () => {
+    const needles = commandNeedles(
+      'nohup python3 -m http.server 8765 > /tmp/p.log 2>&1 & echo $!',
+    );
+    expect(needles).toContain('python3 -m http.server 8765');
+    expect(
+      needles.some((needle) =>
+        isCommandRunning(
+          [{ pid: 7, ppid: 1, args: 'python3 -m http.server 8765' }],
+          needle,
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it('splits a chain and drops the builtins that leave no process', () => {
     expect(commandNeedles('cd apps/ui && PORT=3000 pnpm start')).toEqual([
       'cd apps/ui && PORT=3000 pnpm start',

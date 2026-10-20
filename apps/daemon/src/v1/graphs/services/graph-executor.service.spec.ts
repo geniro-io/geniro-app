@@ -25,6 +25,7 @@ import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { type FakeChild, fakeSpawn } from '../../agents/__tests__/fake-child';
 import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
+import { NO_STOPS } from '../../agents/__tests__/no-stops';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
@@ -1412,7 +1413,7 @@ function setup(
     4,
     opts.agentMcp as AgentMcpService | undefined,
     actions,
-    new ActionPublishService(chatActions),
+    new ActionPublishService(chatActions, NO_STOPS),
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();

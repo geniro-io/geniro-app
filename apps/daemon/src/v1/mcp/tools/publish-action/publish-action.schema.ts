@@ -30,9 +30,28 @@ export function publishActionSchema(): Record<string, unknown> {
       },
       message: {
         type: 'string',
-        description: `What a press sends into this chat, at most ${ACTION_MESSAGE_MAX} characters.`,
+        description: `What a press sends into this chat, at most ${ACTION_MESSAGE_MAX} characters. Give this or \`stop\`.`,
+      },
+      stop: {
+        type: 'object',
+        description:
+          'Makes a press stop a process this chat started, instead of sending a message. Give exactly one ' +
+          'of `shell` or `pid`. Always one-shot.',
+        properties: {
+          shell: {
+            type: 'string',
+            description:
+              'The id your shell tool gave a command it runs in the background.',
+          },
+          pid: {
+            type: 'integer',
+            description:
+              'The pid of a process you started detached, e.g. the one `echo $!` printed.',
+          },
+        },
+        additionalProperties: false,
       },
     },
-    required: ['label', 'message'],
+    required: ['label'],
   };
 }

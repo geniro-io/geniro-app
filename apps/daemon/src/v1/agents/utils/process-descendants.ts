@@ -200,6 +200,37 @@ export function commandNeedles(command: string): string[] {
   );
 }
 
+/**
+ * Which of a run's processes ARE this command: the matches of the most specific
+ * needle that matches anything, each kept only when no ancestor of it matched
+ * too — the wrapper and what it wraps are one command, stopped through the top.
+ */
+export function commandTargets(
+  owned: readonly ProcessRow[],
+  command: string,
+): number[] {
+  for (const needle of commandNeedles(command)) {
+    const matched = new Set(pidsRunningCommand(owned, needle));
+    if (matched.size === 0) {
+      continue;
+    }
+    const parentOf = new Map(owned.map((row) => [row.pid, row.ppid]));
+    return [...matched].filter((pid) => {
+      const seen = new Set<number>([pid]);
+      let parent = parentOf.get(pid);
+      while (parent !== undefined && !seen.has(parent)) {
+        if (matched.has(parent)) {
+          return false;
+        }
+        seen.add(parent);
+        parent = parentOf.get(parent);
+      }
+      return true;
+    });
+  }
+  return [];
+}
+
 /** Shorter than this, a needle matches too much of any process tree. */
 const MIN_NEEDLE_CHARS = 6;
 
@@ -240,12 +271,16 @@ function unwrapShell(command: string): string | null {
 }
 
 /**
- * What a segment leaves running once `env` and the shell have exec'd away: the
- * leading `env [-i] [-u NAME]…` and `NAME=value` assignments dropped, and
- * everything from the first redirection on cut, since `ps` never shows one.
+ * What a segment leaves running once `nohup`, `env` and the shell have exec'd
+ * away: a leading `nohup`, the `env [-i] [-u NAME]…` and `NAME=value`
+ * assignments dropped, and everything from the first redirection on cut, since
+ * `ps` never shows one.
  */
 function commandCore(segment: string): string | null {
   const words = segment.trim().split(' ');
+  if (words[0] === 'nohup') {
+    words.shift();
+  }
   if (words[0] === 'env') {
     words.shift();
     while (words[0]?.startsWith('-')) {

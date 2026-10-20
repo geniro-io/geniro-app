@@ -2014,6 +2014,36 @@ describe('McpServerService', () => {
     expect(kind.enum).toEqual(['line', 'bar', 'area']);
   });
 
+  it('lists publish_action with message optional and a stop by shell or pid', async () => {
+    const actions = new ActionBroker();
+    actions.register('run-1', 'agent', {
+      publish: async () => ({ status: 'refused', reason: 'unused' }),
+      remove: async () => ({ status: 'refused', reason: 'unused' }),
+    });
+    const { json } = await post(
+      actionService(actions),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const schema = (
+      json().result as {
+        tools: {
+          name: string;
+          inputSchema: {
+            required: string[];
+            properties: { stop: { properties: Record<string, unknown> } };
+          };
+        }[];
+      }
+    ).tools.find((t) => t.name === HOST_PUBLISH_ACTION_TOOL)!.inputSchema;
+    expect(schema.required).toEqual(['label']);
+    expect(Object.keys(schema.properties.stop.properties)).toEqual([
+      'shell',
+      'pid',
+    ]);
+  });
+
   it('tools/call publish_action hands the button and its calling conversation over and answers with its receipt', async () => {
     const actions = new ActionBroker();
     const published: unknown[] = [];

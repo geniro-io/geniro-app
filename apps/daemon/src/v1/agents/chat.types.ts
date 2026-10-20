@@ -2958,8 +2958,17 @@ export interface ActionPublishInput {
   actionId?: string;
   once?: boolean;
   message?: string;
-  stop?: unknown;
+  stop?: ActionStopInput;
   command?: unknown;
+}
+
+/**
+ * What a stop action names when it is published: a background command by the
+ * id its shell tool gave it, or a pid. Exactly one, which the service checks.
+ */
+export interface ActionStopInput {
+  shell?: string;
+  pid?: number;
 }
 
 /** What either action tool answers; `text` is the receipt the agent reads. */
@@ -3007,6 +3016,9 @@ export const ActionSpecSchema = z
   })
   .meta({ id: 'ActionSpec' });
 export type ActionSpec = z.infer<typeof ActionSpecSchema>;
+
+/** What a stop action records about the processes it will stop. */
+export type ActionStopSpec = Pick<ActionSpec, 'shellId' | 'targets'>;
 
 /** Who published an action — which conversation its id is scoped to. */
 export const ActionPublisherSchema = z
@@ -3072,9 +3084,21 @@ export const ActionOutcomePayloadSchema = z
     exitCode: z.number().int().nullable().optional(),
     outputTail: z.string().optional(),
     error: z.string().optional(),
+    alreadyStopped: z
+      .boolean()
+      .optional()
+      .describe(
+        'stop: every process it named had exited before the press reached it',
+      ),
   })
   .meta({ id: 'ActionOutcomePayload' });
 export type ActionOutcomePayload = z.infer<typeof ActionOutcomePayloadSchema>;
+
+/** What a press decided, for its `action_outcome` row. */
+export type ActionPressResult = Pick<
+  ActionOutcomePayload,
+  'state' | 'alreadyStopped' | 'error'
+>;
 
 /** One button still pressable, as `ChatActionsService` folds it. */
 export const LiveActionSchema = z

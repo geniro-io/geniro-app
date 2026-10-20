@@ -297,6 +297,44 @@ describe('ChatActionChips', () => {
   });
 });
 
+describe('ActionChip stop', () => {
+  it('names the processes a stop press ends before it is pressed', async () => {
+    const stop: LiveAction = {
+      ...action(3, 'Stop preview'),
+      spec: {
+        kind: 'stop',
+        targets: [
+          {
+            pid: 48211,
+            startedAt: '2026-10-20T10:00:00.000Z',
+            command: 'python3 -m http.server 8765',
+          },
+        ],
+      },
+    };
+    const container = document.createElement('div');
+    root = createRoot(container);
+    await act(async () =>
+      root!.render(
+        <ChatActionChips
+          actions={[stop]}
+          phases={new Map()}
+          onPress={() => {}}
+          onDismiss={() => {}}
+        />,
+      ),
+    );
+
+    const chip = container.querySelector('[data-slot="action-chip"]');
+    expect(chip?.getAttribute('aria-label')).toBe(
+      'Stop preview, stops a process',
+    );
+    expect(chip?.getAttribute('title')).toBe(
+      'Stop preview\nStops: python3 -m http.server 8765 (pid 48211), with what these start',
+    );
+  });
+});
+
 describe('ActionChip attribution', () => {
   it('says which agent published a button that is not the run’s own', async () => {
     const callee: LiveAction = {

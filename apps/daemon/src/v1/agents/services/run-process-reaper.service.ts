@@ -9,12 +9,17 @@ import {
   parseStartTimes,
 } from '../../../utils/process-identity';
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
+import { descendantsOf } from '../utils/process-descendants';
 import {
   listProcessUsage,
   processTreeOf,
   type ProcessUsageRow,
 } from '../utils/process-usage';
-import { capSelection, type ScannedProcess } from '../utils/run-process-scan';
+import {
+  capSelection,
+  type ScannedProcess,
+  type StopCandidate,
+} from '../utils/run-process-scan';
 import { runPs } from '../utils/run-ps';
 import type { RunProcessAttribution } from './run-process-attribution.service';
 
@@ -212,32 +217,7 @@ export class RunProcessReaper {
     runId: string,
     pids: readonly number[],
   ): Promise<number[]> {
-    const [reading, usage] = await Promise.all([
-      this.attribution.attribute('fresh'),
-      this.listUsage(),
-    ]);
-    if (reading === null || usage === null) {
-      throw new BadRequestException(
-        'PROCESS_TABLE_UNREADABLE',
-        'could not safely read the process table; try again',
-      );
-    }
-    const { targets, overCap } = capSelection(reading.get(runId) ?? []);
-    if (overCap !== null) {
-      throw new BadRequestException(
-        'RUN_PROCESS_CAP',
-        'too many processes belong to this thread; stopped none',
-      );
-    }
-    // The registry is read after both tables: a newly held CLI must never be
-    // mistaken for a stand, including orphaned members of its process group.
-    const roots = this.processRoots();
-    if (roots.some((pid) => !usage.some((row) => row.pid === pid))) {
-      throw new BadRequestException(
-        'PROCESS_TABLE_CHANGED',
-        'an agent process changed while reading; try again',
-      );
-    }
+    const { targets, usage, roots } = await this.freshReading(runId);
     const held = new Set(
       roots.flatMap((pid) => processTreeOf(usage, pid).map((row) => row.pid)),
     );
@@ -274,6 +254,135 @@ export class RunProcessReaper {
     );
   }
 
+  /**
+   * The processes of `runId` an agent's stop action may name, from a fresh
+   * reading: the run's own, less every live CLI and every member of a CLI's
+   * own process group — its MCP servers and helpers. A command the agent
+   * backgrounded runs in a group of its own, so it stays stoppable while the
+   * agent that started it is alive, which {@link stopDetached}'s whole-tree
+   * exclusion would not allow.
+   */
+  async stopCandidates(runId: string): Promise<StopCandidate[]> {
+    const reading = await this.freshReading(runId);
+    const { targets, usage } = reading;
+    const roots = new Set(reading.roots);
+    // A root that leads no group shares its spawner's, the daemon's; its pid
+    // then names no group, so `roots.has(pgid)` only matches a CLI's own.
+    const groupOf = new Map(usage.map((row) => [row.pid, row.pgid]));
+    return targets.filter((row): row is StopCandidate => {
+      const pgid = groupOf.get(row.pid);
+      return (
+        pgid !== undefined &&
+        !roots.has(row.pid) &&
+        !roots.has(pgid) &&
+        !isUnsignallable(row.pid, this.selfPid) &&
+        row.startedAt !== null
+      );
+    });
+  }
+
+  /**
+   * Stop the processes a stop action recorded at publish, and whatever they
+   * have started since that is still a candidate — a dev server's workers
+   * hold its port. A target that has exited — its pid gone, or held by a
+   * process that started later — is `gone` and never signalled. A target
+   * still alive as the process recorded but no longer among
+   * {@link stopCandidates} refuses the whole press: it left the run, or
+   * became an agent's own, since it was published.
+   */
+  async stopRecorded(
+    runId: string,
+    targets: readonly { pid: number; startedAt: number }[],
+  ): Promise<{ stopped: number[]; gone: number[] }> {
+    const candidates = new Map(
+      (await this.stopCandidates(runId)).map((row) => [row.pid, row]),
+    );
+    const alive = await this.startTimes(targets.map((target) => target.pid));
+    if (alive === null) {
+      throw new BadRequestException(
+        'PROCESS_IDENTITY_UNREADABLE',
+        'could not confirm process identities; try again',
+      );
+    }
+    const live: Target[] = [];
+    for (const target of targets) {
+      if (!isSameProcess(target.pid, target.startedAt, alive)) {
+        continue;
+      }
+      const row = candidates.get(target.pid);
+      if (
+        row === undefined ||
+        !isSameProcess(
+          target.pid,
+          target.startedAt,
+          new Map([[row.pid, row.startedAt]]),
+        )
+      ) {
+        throw new BadRequestException(
+          'PROCESS_CHANGED',
+          `pid ${target.pid} is no longer a process this thread may stop; stopped none`,
+        );
+      }
+      live.push({ row, runId });
+    }
+    const chosen = new Set(live.map(({ row }) => row.pid));
+    for (const { row } of [...live]) {
+      for (const child of descendantsOf([...candidates.values()], row.pid)) {
+        const candidate = candidates.get(child.pid);
+        if (candidate !== undefined && !chosen.has(child.pid)) {
+          chosen.add(child.pid);
+          live.push({ row: candidate, runId });
+        }
+      }
+    }
+    const stopped = await this.stopTargets(live, [runId], true);
+    return {
+      stopped,
+      gone: targets
+        .map((target) => target.pid)
+        .filter((pid) => !stopped.includes(pid)),
+    };
+  }
+
+  /**
+   * The run's processes, the usage table and the live CLI roots, all read
+   * fresh — refused rather than guessed at when either table is unreadable,
+   * the run is over the cap, or a root is missing from the usage table.
+   */
+  private async freshReading(runId: string): Promise<{
+    targets: ScannedProcess[];
+    usage: ProcessUsageRow[];
+    roots: readonly number[];
+  }> {
+    const [reading, usage] = await Promise.all([
+      this.attribution.attribute('fresh'),
+      this.listUsage(),
+    ]);
+    if (reading === null || usage === null) {
+      throw new BadRequestException(
+        'PROCESS_TABLE_UNREADABLE',
+        'could not safely read the process table; try again',
+      );
+    }
+    const { targets, overCap } = capSelection(reading.get(runId) ?? []);
+    if (overCap !== null) {
+      throw new BadRequestException(
+        'RUN_PROCESS_CAP',
+        'too many processes belong to this thread; stopped none',
+      );
+    }
+    // The registry is read after both tables: a newly held CLI must never be
+    // mistaken for a stand, including orphaned members of its process group.
+    const roots = this.processRoots();
+    if (roots.some((pid) => !usage.some((row) => row.pid === pid))) {
+      throw new BadRequestException(
+        'PROCESS_TABLE_CHANGED',
+        'an agent process changed while reading; try again',
+      );
+    }
+    return { targets, usage, roots };
+  }
+
   private async stopTargets(
     targets: readonly Target[],
     wanted: readonly string[],
@@ -288,11 +397,20 @@ export class RunProcessReaper {
       return [];
     }
     await this.wait(GROUP_KILL_GRACE_MS);
-    const killed = await this.signalConfirmed(
-      terminated,
-      'SIGKILL',
-      reportFailure,
-    );
+    let killed: Target[];
+    try {
+      killed = await this.signalConfirmed(terminated, 'SIGKILL', reportFailure);
+    } catch (err) {
+      // The refusal must not read as "nothing happened": these already have
+      // their SIGTERM.
+      if (err instanceof BadRequestException) {
+        throw new BadRequestException(
+          err.errorCode,
+          `sent SIGTERM to ${terminated.length} process(es), then ${err.message}`,
+        );
+      }
+      throw err;
+    }
     this.logger.log(
       `stopped ${terminated.length} process(es) of run(s) ${wanted.join(', ')}; ${killed.length} needed SIGKILL`,
     );

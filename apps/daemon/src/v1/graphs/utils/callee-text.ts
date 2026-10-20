@@ -35,7 +35,7 @@ export const ANSWERING_WITH_CALLS_OUT =
 /**
  * What a caller is told about the pages its callees publish — said in both
  * `call_agent`'s and `await_agent`'s descriptions, since either returns the
- * finished envelope. The broker's `withPublishedPages` is what keeps it true.
+ * finished envelope. The broker's `withPublished` is what keeps it true.
  */
 export const CALL_RESULT_PAGES =
   'A finished call\'s envelope — its result, or the envelope itself when the call failed — lists under "artifacts" every page the callee — or an agent it called — published with show_artifact during the call, by artifact_id, title and version. Those pages are already in the user\'s chat: point the user at them by title, and never publish them again or restate their content.';
@@ -44,6 +44,18 @@ export const CALL_RESULT_PAGES =
 export const PUBLISHED_PAGES_NOTE =
   'The pages in "artifacts" are already in the user\'s chat — they were shown there as they were published. ' +
   'Point the user at a page by its title instead of publishing it again or restating what it shows.';
+
+/**
+ * What a caller is told about the buttons its callees publish — said beside
+ * {@link CALL_RESULT_PAGES}, and kept true by the broker's `withPublished`.
+ */
+export const CALL_RESULT_ACTIONS =
+  'It also lists under "actions" every button the callee — or an agent it called — published with publish_action during the call and has not removed, by action_id, label and kind. Those buttons were put in the user\'s chat for the user to press (the user may have pressed or dismissed one since); a press of a message button is delivered to the agent the user\'s messages go to, naming who published it. Mention one by its label when the user needs it; never publish it again.';
+
+/** The same promise, as the `note` of an envelope that carries `actions`. */
+export const PUBLISHED_ACTIONS_NOTE =
+  'The buttons in "actions" were put in the user\'s chat for the user to press, and may have been pressed or dismissed since. ' +
+  'Mention one by its label when the user needs it instead of publishing it again.';
 
 /**
  * How much of each command a call left running its caller is shown — enough

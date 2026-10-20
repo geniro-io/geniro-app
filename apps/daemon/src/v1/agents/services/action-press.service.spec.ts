@@ -178,7 +178,7 @@ describe('ActionPressService (in-memory sqlite)', () => {
     await publisher.publish(ctx, { label: 'Go', message: 'go', once: false });
     const seq = await publishedSeq('go');
 
-    const result = await presses.dismiss('run-a', seq, 'desktop');
+    const result = await presses.dismissChat('run-a', seq, 'desktop');
 
     expect(result.outcome).toMatchObject({
       state: 'dismissed',
@@ -271,9 +271,27 @@ describe('ActionPressService (in-memory sqlite)', () => {
     const seq = (await actions.live('run-b'))[0]!.seq;
 
     await expect(
-      presses.dismiss('run-b', seq, 'desktop'),
+      presses.dismissChat('run-b', seq, 'desktop'),
     ).rejects.toMatchObject({ errorCode: 'RUN_ARCHIVED' });
     expect(await actions.live('run-b')).toHaveLength(1);
+  });
+
+  it('refuses a workflow run on the chat routes, which has routes of its own', async () => {
+    await runs.create({ id: 'run-w', status: 'running', workflowId: 'team' });
+    await publisher.publish(
+      { ...ctx, runId: 'run-w' },
+      { label: 'Go', message: 'go' },
+    );
+    const seq = (await actions.live('run-w'))[0]!.seq;
+
+    await expect(
+      presses.pressChat('run-w', seq, 'c1', 'desktop'),
+    ).rejects.toMatchObject({ errorCode: 'NOT_A_CHAT_RUN' });
+    await expect(
+      presses.dismissChat('run-w', seq, 'desktop'),
+    ).rejects.toMatchObject({ errorCode: 'NOT_A_CHAT_RUN' });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(await actions.live('run-w')).toHaveLength(1);
   });
 
   it('refuses an unknown run', async () => {

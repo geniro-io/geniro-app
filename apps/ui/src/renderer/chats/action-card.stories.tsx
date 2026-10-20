@@ -10,6 +10,7 @@ function entry(
   label: string,
   outcome: ActionEntry['outcome'] = null,
   description: string | null = 'Tell the agent the pull request landed',
+  agentLabel: string | null = null,
 ): ActionEntry {
   return {
     type: 'action',
@@ -27,12 +28,14 @@ function entry(
       once: true,
       nodeId: 'agent',
       conversationId: '',
+      agentLabel,
+      callId: agentLabel === null ? null : 'call-1',
     },
     outcome,
   };
 }
 
-function live(seq: number, label: string): LiveAction {
+function live(seq: number, label: string, agentLabel?: string): LiveAction {
   return {
     seq,
     actionId: label.toLowerCase(),
@@ -41,17 +44,22 @@ function live(seq: number, label: string): LiveAction {
     label,
     once: true,
     spec: { kind: 'message', text: 'continue' },
-    publisher: { nodeId: 'agent', conversationId: '' },
+    publisher: {
+      nodeId: 'agent',
+      conversationId: '',
+      ...(agentLabel === undefined ? {} : { callId: 'call-1', agentLabel }),
+    },
     pending: false,
   };
 }
 
 const chat: ChatActions = {
-  actions: [live(10, 'PR merged')],
+  actions: [live(10, 'PR merged'), live(11, 'Stop preview', 'Engineer')],
   throughSeq: 50,
   phases: new Map(),
   press: () => undefined,
   dismiss: () => undefined,
+  openCall: () => undefined,
 };
 
 function Cards(): React.JSX.Element {
@@ -59,6 +67,7 @@ function Cards(): React.JSX.Element {
     <ChatActionsContext.Provider value={chat}>
       <div className="flex w-[28rem] flex-col gap-3">
         <ActionCard entry={entry(10, 'PR merged')} />
+        <ActionCard entry={entry(11, 'Stop preview', null, null, 'Engineer')} />
         <ActionCard
           entry={entry(4, 'Deploy approved', {
             actionSeq: 4,
@@ -98,5 +107,8 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Live (with its button and Dismiss), pressed, removed by the agent, gone. */
+/**
+ * Live (with its button and Dismiss), a workflow callee's (from its agent,
+ * linking to its call), pressed, removed by the agent, gone.
+ */
 export const States: Story = {};

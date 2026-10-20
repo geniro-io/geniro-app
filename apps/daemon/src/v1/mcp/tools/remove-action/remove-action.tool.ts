@@ -35,13 +35,13 @@ export class RemoveActionTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId }: McpCallContext,
+    { runId, nodeId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const actionId = readRemoveAction(args);
     if (typeof actionId !== 'string') {
       return this.invalidArgs(actionId.error);
     }
-    const outcome = await this.actions.remove(runId, nodeId, actionId);
+    const outcome = await this.actions.remove(runId, nodeId, actionId, caller);
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
       : this.text(removeActionResultText(outcome));

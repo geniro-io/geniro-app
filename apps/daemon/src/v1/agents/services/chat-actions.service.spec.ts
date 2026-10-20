@@ -12,6 +12,7 @@ import { NO_CALL_INDEX } from '../__tests__/no-call-index';
 import { ACTION_LIVE_MAX, SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { actionKey } from '../utils/action-fold';
 import {
   type ActionPublishContext,
   ActionPublishService,
@@ -321,6 +322,65 @@ describe('ChatActionsService (in-memory sqlite)', () => {
     expect((await actions.live('run-a')).map((a) => a.actionId)).toEqual([
       'keep',
     ]);
+  });
+
+  it('tells the publisher’s notes about a publish only once it is allowed, and takes it back when the write fails', async () => {
+    const log: string[] = [];
+    const notes = {
+      published: (
+        key: string,
+        action: { actionId: string; label: string; kind: string },
+      ) => {
+        log.push(`note ${key} ${action.label} ${action.kind}`);
+        return () => log.push(`undo ${key}`);
+      },
+      removed: (key: string) => log.push(`removed ${key}`),
+    };
+    const noted: ActionPublishContext = { ...ctx, notes };
+    const key = (actionId: string) =>
+      actionKey(SINGLE_AGENT_NODE, '', actionId);
+
+    await publisher.publish(noted, { label: 'PR merged', message: 'go' });
+    await publisher.publish(noted, { label: 'x' });
+    await publisher.remove(noted, 'pr-merged');
+    // A removal refused (nothing live by that id) tells nobody.
+    await publisher.remove(noted, 'unknown');
+    const failing = new ActionPublishService({
+      serialize: actions.serialize.bind(actions),
+      fold: actions.fold.bind(actions),
+      appendAction: () => Promise.reject(new Error('SQLITE_IOERR')),
+    } as unknown as ChatActionsService);
+    await failing.publish(noted, { label: 'Lost', message: 'go' });
+
+    expect(log).toEqual([
+      `note ${key('pr-merged')} PR merged message`,
+      `removed ${key('pr-merged')}`,
+      `note ${key('lost')} Lost message`,
+      `undo ${key('lost')}`,
+    ]);
+  });
+
+  it('tells the notes nothing about a publish the live cap refuses', async () => {
+    for (let i = 0; i < ACTION_LIVE_MAX; i++) {
+      await publisher.publish(ctx, { label: `a${i}`, message: 'x' });
+    }
+    const log: string[] = [];
+    const outcome = await publisher.publish(
+      {
+        ...ctx,
+        notes: {
+          published: () => {
+            log.push('noted');
+            return () => {};
+          },
+          removed: () => {},
+        },
+      },
+      { label: 'One more', message: 'x' },
+    );
+
+    expect(outcome.status).toBe('refused');
+    expect(log).toEqual([]);
   });
 
   it('answers stop and command as not available yet', async () => {

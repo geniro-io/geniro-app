@@ -1,10 +1,6 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
-import {
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-} from '@packages/common';
+import { BadRequestException, ConflictException } from '@packages/common';
 
 import type {
   ActionOutcomePayload,
@@ -14,16 +10,29 @@ import type {
   LiveAction,
 } from '../chat.types';
 import { RunDao } from '../dao/run.dao';
+import { assertChatRun, assertWorkflowRun } from '../utils/run-kind';
 import { ChatService } from './chat.service';
 import { ChatActionsService } from './chat-actions.service';
 
-/** Sends a press's prepared message into the conversation the run talks to. */
+/**
+ * Sends a press's prepared message into the conversation the run talks to.
+ * `action` is the button pressed, for a run whose delivery says who published
+ * it.
+ */
 export type DeliverMessage = (
   text: string,
   clientMessageId: string,
+  action: LiveAction,
 ) => Promise<unknown>;
 
+/**
+ * Which route a press or dismissal came in on: each refuses the other kind of
+ * run, whose delivery it does not know.
+ */
+export type ActionRunKind = 'chat' | 'workflow';
+
 export interface ActionPressInput {
+  run: ActionRunKind;
   /** The id a re-press after `RUN_BUSY` repeats, so the message is sent once. */
   clientMessageId: string;
   via: ActionVia;
@@ -41,7 +50,11 @@ const EXECUTORS: Partial<Record<ActionSpec['kind'], ActionExecutor>> = {
     // A busy chat either takes the text into its running turn or answers
     // RUN_BUSY; the latter propagates with nothing written, so the client
     // presses the same seq again once the turn settles.
-    await input.deliverMessage(action.spec.text ?? '', input.clientMessageId);
+    await input.deliverMessage(
+      action.spec.text ?? '',
+      input.clientMessageId,
+      action,
+    );
     return { state: 'succeeded' };
   },
 };
@@ -70,6 +83,7 @@ export class ActionPressService {
     via: ActionVia,
   ): Promise<ActionPressWire> {
     return this.press(runId, seq, {
+      run: 'chat',
       clientMessageId,
       via,
       deliverMessage: (text, id) =>
@@ -82,7 +96,7 @@ export class ActionPressService {
     seq: number,
     input: ActionPressInput,
   ): Promise<ActionPressWire> {
-    await this.assertPressable(runId);
+    await this.assertPressable(runId, input.run);
     return this.actions.serialize(runId, async () => {
       const action = await this.liveAt(runId, seq);
       const execute = EXECUTORS[action.spec.kind];
@@ -97,29 +111,46 @@ export class ActionPressService {
     });
   }
 
+  /** {@link dismiss} on the chat route, which a workflow run has its own of. */
+  async dismissChat(
+    runId: string,
+    seq: number,
+    via: ActionVia,
+  ): Promise<ActionPressWire> {
+    return this.dismiss(runId, seq, via, 'chat');
+  }
+
   /** Takes a button off the chat without running it; the agent is not told. */
   async dismiss(
     runId: string,
     seq: number,
     via: ActionVia,
+    run: ActionRunKind,
   ): Promise<ActionPressWire> {
-    await this.assertPressable(runId);
+    await this.assertPressable(runId, run);
     return this.actions.serialize(runId, async () => {
       const action = await this.liveAt(runId, seq);
       return { outcome: await this.record(runId, action, 'dismissed', via) };
     });
   }
 
-  /** An archived chat is inert: its buttons are neither pressed nor dismissed. */
-  private async assertPressable(runId: string): Promise<void> {
-    const run = await this.runDao.getById(runId, this.em.fork());
-    if (run === null) {
-      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
-    }
+  /**
+   * The run is of the kind its route serves, and not archived — an archived
+   * chat is inert: its buttons are neither pressed nor dismissed.
+   */
+  private async assertPressable(
+    runId: string,
+    kind: ActionRunKind,
+  ): Promise<void> {
+    const found = await this.runDao.getById(runId, this.em.fork());
+    const run =
+      kind === 'chat'
+        ? assertChatRun(found, runId)
+        : assertWorkflowRun(found, runId);
     if (run.archivedAt !== null) {
       throw new ConflictException(
         'RUN_ARCHIVED',
-        'this chat is archived — unarchive it to use its actions',
+        `this ${kind === 'chat' ? 'chat' : 'run'} is archived — unarchive it to use its actions`,
       );
     }
   }

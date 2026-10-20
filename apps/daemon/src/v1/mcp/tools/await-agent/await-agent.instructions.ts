@@ -1,4 +1,7 @@
-import { CALL_RESULT_PAGES } from '../../../graphs/utils/callee-text';
+import {
+  CALL_RESULT_ACTIONS,
+  CALL_RESULT_PAGES,
+} from '../../../graphs/utils/callee-text';
 
 /** What a model reads about `await_agent`. */
 export function awaitAgentInstructions(): string {
@@ -14,6 +17,7 @@ export function awaitAgentInstructions(): string {
     'OMIT call_id after fanning out several calls: it waits on ALL of them and returns the FIRST thing any produces — a question or a finished result — ' +
     'with its call_id, leaving the rest collectable; call it again to get the next one. Prefer this over waiting on one call while others run. ' +
     `${CALL_RESULT_PAGES} ` +
+    `${CALL_RESULT_ACTIONS} ` +
     'Do not sit in await_agent while you have other work to do: an open call notifies you by starting a new turn when it finishes or asks, so it is fine to end your turn and collect then.'
   );
 }

@@ -12,6 +12,9 @@ export function publishActionInstructions(): string {
     'button the user would press right away. ' +
     'Write `message` as the instruction you want to receive, e.g. "The PR is merged — clean up the ' +
     'branch and close the card." ' +
+    "In a workflow the press goes to the agent the user's messages go to — not back to you unless you " +
+    'are that agent — prefixed with your name, and a call you are answering lists the button in its ' +
+    'result; so word `message` for whoever reads it next. ' +
     'A button lasts until it is pressed (when `once`, the default), until you remove it with ' +
     'remove_action, or until the user dismisses it. Re-publishing the same `action_id` replaces it in ' +
     `place. A chat holds at most ${ACTION_LIVE_MAX} live actions. ` +

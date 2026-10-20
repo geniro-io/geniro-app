@@ -5,6 +5,7 @@ import {
   type AgentFailureClass,
 } from '../agents/adapters/adapter.types';
 import {
+  type ActionSpec,
   AgentApprovalProbeSchema,
   AgentOptionSpecSchema,
   AutoCompactPercentSchema,
@@ -1082,6 +1083,17 @@ export interface CallPublishedPage {
   version: number;
 }
 
+/**
+ * One button (`publish_action`) published inside a call — by its callee, or
+ * by any call made inside it — as the caller's envelope names it: its newest
+ * publish, and only while it is still live.
+ */
+export interface CallPublishedAction {
+  action_id: string;
+  label: string;
+  kind: ActionSpec['kind'];
+}
+
 /** The `result` of a COMPLETED call's ok envelope. */
 export interface CallSettledResult {
   call_id: string;
@@ -1099,6 +1111,7 @@ export interface CallSettledResult {
   /** What the text alone would leave the caller to misread. */
   note?: string;
   artifacts?: CallPublishedPage[];
+  actions?: CallPublishedAction[];
 }
 
 /**
@@ -1131,6 +1144,8 @@ export type CallEnvelope =
       call_id?: string;
       /** Pages the call published before it failed — they stay in the user's chat. */
       artifacts?: CallPublishedPage[];
+      /** Buttons the call published before it failed — they stay in the user's chat. */
+      actions?: CallPublishedAction[];
       /** The callee pool member the failure came from; absent without a pool. */
       member?: number;
       /** Pool members the call was handed past before failing. */

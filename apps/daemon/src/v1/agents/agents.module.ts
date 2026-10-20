@@ -482,6 +482,11 @@ import { defaultSpawn } from './utils/spawn-cli';
     GalleryBroker,
     ArtifactBroker,
     ActionBroker,
+    // What a workflow node's button tools and the workflow press route reuse:
+    // the publish (over `ChatActionsService`, the rows' one writer) and the
+    // press beside it.
+    ActionPublishService,
+    ActionPressService,
     // And the store behind it: a WORKFLOW node publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,

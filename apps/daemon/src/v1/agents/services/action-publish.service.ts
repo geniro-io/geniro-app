@@ -15,12 +15,35 @@ import {
 import { actionKey } from '../utils/action-fold';
 import { ChatActionsService } from './chat-actions.service';
 
+/** What a call's envelope says about one button published inside it. */
+export interface PublishedActionNote {
+  actionId: string;
+  label: string;
+  kind: ActionSpec['kind'];
+}
+
+/**
+ * Who else is told about a publisher's buttons besides the run — a workflow
+ * callee's running calls, whose envelopes list them.
+ */
+export interface ActionPublishNotes {
+  /**
+   * A publish passed every check and its row is about to be written. Told
+   * before the write, so a call settling meanwhile still names it; the undo
+   * runs when the write then fails. `key` is the button's `actionKey`.
+   */
+  published(key: string, action: PublishedActionNote): () => void;
+  /** The button at `key` was removed by its publisher. */
+  removed(key: string): void;
+}
+
 /** Who is publishing, bound in by the turn that registered the sink. */
 export interface ActionPublishContext {
   runId: string;
   /** The row's `nodeId`: null for a chat's own rows. */
   rowNodeId: string | null;
   publisher: ActionPublisher;
+  notes?: ActionPublishNotes;
 }
 
 const ACTION_ID_PATTERN = new RegExp(
@@ -88,6 +111,9 @@ export class ActionPublishService {
           reason: `This chat already has ${ACTION_LIVE_MAX} live actions (${others.map((action) => action.actionId).join(', ')}). Remove one with remove_action, or re-publish one of yours by its action_id, before adding another.`,
         };
       }
+      const unnote =
+        ctx.notes?.published(key, { actionId, label, kind: spec.kind }) ??
+        (() => {});
       try {
         await this.actions.appendAction(ctx.runId, ctx.rowNodeId, {
           actionId,
@@ -98,6 +124,7 @@ export class ActionPublishService {
           publisher: ctx.publisher,
         });
       } catch (err) {
+        unnote();
         // Kept out of the answer: a persist error names the database's path,
         // and the answer goes to a model whose provider is off this machine.
         this.logger.error(
@@ -150,6 +177,7 @@ export class ActionPublishService {
           reason: 'the transcript row could not be written',
         };
       }
+      ctx.notes?.removed(keyOf(target));
       return { status: 'removed', text: `Removed action "${actionId}".` };
     });
   }

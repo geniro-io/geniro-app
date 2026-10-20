@@ -14,6 +14,7 @@ import type {
 } from '../graphs.types';
 import {
   LEFT_RUNNING_COMMAND_MAX,
+  PUBLISHED_ACTIONS_NOTE,
   PUBLISHED_PAGES_NOTE,
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
@@ -7194,6 +7195,165 @@ describe('CallBroker — pages published inside a call', () => {
     expect(await pending).toMatchObject({
       status: 'error',
       artifacts: [{ artifact_id: 'plan', title: 'Plan', version: 1 }],
+    });
+  });
+});
+
+describe('CallBroker — buttons published inside a call', () => {
+  const completed = (finalText: string): CalleeTurnOutcome => ({
+    status: 'completed',
+    finalText,
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: 'sess-call-1',
+  });
+  const node = (id: string): WorkflowAgentNode => ({
+    id,
+    kind: 'agent',
+    agent: 'claude',
+    approval: 'auto',
+  });
+  const merged = {
+    action_id: 'pr-merged',
+    label: 'PR merged',
+    kind: 'message',
+  } as const;
+
+  it('names each live button a callee published, at its newest publish, in its envelope and its call_result row', async () => {
+    const { broker, deferred, items } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'open the PR',
+    });
+    expect(broker.callAnsweredBy('run-1', callerKey('helper', 'call-1'))).toBe(
+      'call-1',
+    );
+    broker.notePublishedAction('run-1', 'call-1', 'helper|call-1|pr-merged', {
+      ...merged,
+      label: 'Merged?',
+    });
+    broker.notePublishedAction(
+      'run-1',
+      'call-1',
+      'helper|call-1|pr-merged',
+      merged,
+    );
+    broker.notePublishedAction('run-1', 'call-1', 'helper|call-1|stop', {
+      action_id: 'stop',
+      label: 'Stop preview',
+      kind: 'message',
+    });
+    broker.forgetPublishedAction('run-1', 'helper|call-1|stop');
+    deferred[0]!.resolve(completed('opened'));
+    const envelope = await pending;
+    expect(envelope).toEqual({
+      status: 'ok',
+      result: {
+        call_id: 'call-1',
+        agent: 'helper',
+        text: 'opened',
+        // The newest publish of a key; a removed button is not named.
+        actions: [merged],
+        note: PUBLISHED_ACTIONS_NOTE,
+      },
+    });
+    const result = items.find((i) => i.kind === 'call_result')!;
+    expect(result.payload.result).toEqual(
+      (envelope as { result: unknown }).result,
+    );
+  });
+
+  it('names a button published deep in a chain on every call above it, beside the pages', async () => {
+    const { broker, deferred } = harness({
+      launch: 'defer',
+      calleesOf: new Map([
+        ['a', [node('b')]],
+        ['b', [node('c')]],
+      ]),
+    });
+    const outer = broker.callAgent('run-1', 'a', {
+      title: 'why',
+      agent: 'b',
+      message: 'm',
+    });
+    const inner = broker.callAgent('run-1', callerKey('b', 'call-1'), {
+      title: 'why',
+      agent: 'c',
+      message: 'm',
+    });
+    broker.notePublishedAction('run-1', 'call-2', 'c|call-2|pr-merged', merged);
+    broker.notePublishedArtifact('run-1', 'call-2', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 1,
+    });
+    deferred[1]!.resolve(completed('c done'));
+    deferred[0]!.resolve(completed('b done'));
+    expect(await inner).toMatchObject({ result: { actions: [merged] } });
+    const { result } = (await outer) as {
+      result: { actions: unknown; note: string };
+    };
+    expect(result.actions).toEqual([merged]);
+    expect(result.note).toBe(
+      `${PUBLISHED_PAGES_NOTE} ${PUBLISHED_ACTIONS_NOTE}`,
+    );
+  });
+
+  it('an undone note drops a button whose row failed, and leaves a newer publish alone', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    broker.notePublishedAction('run-1', 'call-1', 'k|lost', {
+      ...merged,
+      action_id: 'lost',
+    })();
+    const undo = broker.notePublishedAction('run-1', 'call-1', 'k|pr', {
+      ...merged,
+      label: 'old',
+    });
+    broker.notePublishedAction('run-1', 'call-1', 'k|pr', merged);
+    undo();
+    deferred[0]!.resolve(completed('done'));
+    expect(await pending).toMatchObject({ result: { actions: [merged] } });
+  });
+
+  it('a failed call still names the buttons it left in the user’s chat', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    broker.notePublishedAction('run-1', 'call-1', 'k|pr', merged);
+    deferred[0]!.resolve({
+      status: 'failed',
+      finalText: null,
+      error: 'exit 1',
+      failureClass: 'crashed',
+      resetsAt: null,
+      sessionId: null,
+    });
+    const envelope = await pending;
+    expect(envelope).toMatchObject({ status: 'error', actions: [merged] });
+    expect(envelope).not.toHaveProperty('artifacts');
+  });
+
+  it('names no button in the envelope of a call that published none', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    deferred[0]!.resolve(completed('done'));
+    expect(await pending).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'done' },
     });
   });
 });

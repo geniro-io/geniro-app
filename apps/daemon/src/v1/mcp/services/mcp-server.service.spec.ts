@@ -2014,12 +2014,14 @@ describe('McpServerService', () => {
     expect(kind.enum).toEqual(['line', 'bar', 'area']);
   });
 
-  it('tools/call publish_action hands the button over and answers with its receipt', async () => {
+  it('tools/call publish_action hands the button and its calling conversation over and answers with its receipt', async () => {
     const actions = new ActionBroker();
     const published: unknown[] = [];
+    const callers: string[] = [];
     actions.register('run-1', 'agent', {
-      publish: async (input) => {
+      publish: async (input, caller) => {
         published.push(input);
+        callers.push(caller);
         return { status: 'published', text: 'Published action "pr-merged".' };
       },
       remove: async () => ({ status: 'refused', reason: 'unused' }),
@@ -2030,6 +2032,7 @@ describe('McpServerService', () => {
         'run-1',
         'agent',
         rpc('tools/call', { name: HOST_PUBLISH_ACTION_TOOL, arguments: args }),
+        'call-3',
       );
       return json().result as { content: { text: string }[]; isError: boolean };
     };
@@ -2043,6 +2046,8 @@ describe('McpServerService', () => {
     expect(published).toEqual([
       { label: 'PR merged', message: 'PR merged — continue' },
     ]);
+    // The sink, not the model, learns which conversation published it.
+    expect(callers).toEqual([callerKey('agent', 'call-3')]);
     expect(result).toEqual({
       content: [{ type: 'text', text: 'Published action "pr-merged".' }],
       isError: false,
@@ -2062,8 +2067,8 @@ describe('McpServerService', () => {
         status: 'refused',
         reason: 'give exactly one of message, stop or command',
       }),
-      remove: async (actionId) => {
-        removed.push(actionId);
+      remove: async (actionId, caller) => {
+        removed.push(`${actionId} by ${caller}`);
         return { status: 'removed', text: `Removed action "${actionId}".` };
       },
     });
@@ -2092,7 +2097,7 @@ describe('McpServerService', () => {
       content: [{ type: 'text', text: 'Removed action "pr-merged".' }],
       isError: false,
     });
-    expect(removed).toEqual(['pr-merged']);
+    expect(removed).toEqual(['pr-merged by agent']);
   });
 
   it('tools/call show_chart hands the chart over and answers with a receipt', async () => {

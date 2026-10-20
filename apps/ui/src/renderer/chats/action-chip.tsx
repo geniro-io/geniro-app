@@ -43,7 +43,8 @@ export function actionAccessibleName(
   action: LiveAction,
   phase: ActionPressPhase | undefined,
 ): string {
-  const base = `${action.label}, ${ACTION_KIND_NAME[action.spec.kind]}`;
+  const agent = action.publisher.agentLabel;
+  const base = `${action.label}${agent === undefined ? '' : `, from ${agent}`}, ${ACTION_KIND_NAME[action.spec.kind]}`;
   if (phase?.kind === 'error') {
     return `${base} — failed: ${phase.message}`;
   }
@@ -56,6 +57,9 @@ function tooltipOf(
 ): string {
   return [
     action.label,
+    action.publisher.agentLabel === undefined
+      ? null
+      : `From ${action.publisher.agentLabel}`,
     action.description,
     action.spec.kind === 'message' && action.spec.text
       ? `Sends: ${action.spec.text}`
@@ -130,6 +134,13 @@ export function ActionChip({
       }}>
       <ActionGlyph action={action} phase={phase} />
       <span className="max-w-40 truncate font-medium">{action.label}</span>
+      {action.publisher.agentLabel === undefined ? null : (
+        <span
+          data-slot="action-agent"
+          className="max-w-24 truncate text-muted-foreground">
+          · {action.publisher.agentLabel}
+        </span>
+      )}
     </button>
   );
 }
@@ -220,6 +231,11 @@ export function ActionRow({
         <ActionGlyph action={action} phase={phase} />
         <span className="flex min-w-0 flex-col">
           <span className="truncate font-medium">{action.label}</span>
+          {action.publisher.agentLabel === undefined ? null : (
+            <span className="truncate text-muted-foreground">
+              From {action.publisher.agentLabel}
+            </span>
+          )}
           {action.description ? (
             <span className="truncate text-muted-foreground">
               {action.description}

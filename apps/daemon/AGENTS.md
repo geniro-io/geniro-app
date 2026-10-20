@@ -114,7 +114,7 @@ In `utils/spawn-cli.ts` unless noted.
 
 geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`, `show_comparison`, `show_gallery`, `show_artifact`, `propose_patch`, `propose_plan`, `notify_user`, `publish_action`, `remove_action`). Layout and wiring: `mcp-tools.md`. Brokers live in `v1/agents/services/` over `HostSinkBroker`.
 
-- `HostSinkBroker`: the disposer is identity-checked and `deliver` never throws. Keep both in the base only.
+- `HostSinkBroker`: the disposer is identity-checked (per entry) and `deliver` never throws. Keep both in the base only. Per-sink facts go in `register`'s options (`answersAtOnce`) and leave with the sink; never keep a side set beside it.
 - The tool result is a receipt; the row is the only copy of the payload.
 - A card is attributed to a delegate only when the turn is held, exactly one delegate is open, and its launching call is known (`attributableDelegate`). Otherwise null; never guess.
 - Positional payloads (`show_chart` series vs `labels`, `show_comparison` cells vs `options`): blank an unreadable entry, never drop it, and re-align on both sides (renderer twin). A gallery is a set; drop unreadable entries.
@@ -160,7 +160,8 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - For a CLI whose client will not hold a call open (`AdapterConfig.hostQuestionDeferredReason`, cursor): the tool answers `posted` at once and the answer arrives as the next message. Do not reintroduce polling.
   - The card outlives the turn (`sweepNode` skips `deferred`) and is retired by a new turn (`sweepDeferred` → `unanswerable`).
   - Write the verdict row and clear `Run.pendingQuestion` BEFORE the answer message goes out.
-  - One per run, rehydrated at boot (`rehydrateDeferredQuestions`); a different second question is refused.
+  - One per run, rehydrated at boot (`rehydrateDeferredQuestions`); a different second question is refused. Every row names its `kind` (`question`, `plan`, `patch`); a row that names none is unreadable and cleared at boot. No compatibility readers.
+  - `propose_plan` and `propose_patch` take the same deferral, column and one-card rule (`PendingCardSnapshot`). Approve or Reject starts a turn whose message is the verdict, a plan's note included. Apply runs `applyHostPatch` from `resolveValidCwd(run.cwd)` when that message is sent, after a restart too. A missing folder, or an `old_string` no longer in the file, comes back `stale` and nothing is written; a whole-file patch has no staleness check. Every failure after Apply is `stale`, never `unavailable` (the user did see the card). Their listing says the call returns at once (`register(…, { answersAtOnce })`, read by `PlanBroker` / `PatchBroker.answersAtOnce`).
 - cursor's own `cursor/ask_question` is not used for `ask_user_question` (option ids only).
 
 ### Pull requests and task lists

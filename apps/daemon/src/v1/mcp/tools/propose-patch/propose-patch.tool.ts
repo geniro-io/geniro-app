@@ -22,8 +22,8 @@ export class ProposePatchTool extends BaseMcpTool {
     return this.patches.canPropose(runId, nodeId);
   }
 
-  protected instructions(): string {
-    return proposePatchInstructions();
+  protected instructions({ runId, nodeId }: McpListContext): string {
+    return proposePatchInstructions(this.patches.answersAtOnce(runId, nodeId));
   }
 
   protected inputSchema(): Record<string, unknown> {
@@ -41,8 +41,10 @@ export class ProposePatchTool extends BaseMcpTool {
     if (!read.ok) {
       return this.invalidArgs(read.reason);
     }
-    // This one BLOCKS until the user answers the card — the only tool on
-    // this endpoint besides `ask_user_question` that does.
+    // This one BLOCKS until the user answers the card, as `propose_plan` and
+    // `ask_user_question` do — unless this CLI will not hold the call open,
+    // when the sink answers `posted` at once and the verdict arrives as the
+    // run's next message.
     const outcome = await context.whileCancellable((signal) =>
       this.patches.propose(runId, nodeId, read.patch, signal),
     );

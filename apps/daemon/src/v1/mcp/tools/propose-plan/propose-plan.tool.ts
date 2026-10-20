@@ -22,8 +22,8 @@ export class ProposePlanTool extends BaseMcpTool {
     return this.plans.canPropose(runId, nodeId);
   }
 
-  protected instructions(): string {
-    return proposePlanInstructions();
+  protected instructions({ runId, nodeId }: McpListContext): string {
+    return proposePlanInstructions(this.plans.answersAtOnce(runId, nodeId));
   }
 
   protected inputSchema(): Record<string, unknown> {
@@ -42,7 +42,9 @@ export class ProposePlanTool extends BaseMcpTool {
       return this.invalidArgs(read.reason);
     }
     // BLOCKS until the user answers the card, like `propose_patch` and
-    // `ask_user_question` and unlike the two drawing tools.
+    // `ask_user_question` and unlike the two drawing tools — unless this CLI
+    // will not hold the call open, when the sink answers `posted` at once and
+    // the verdict arrives as the run's next message.
     const outcome = await context.whileCancellable((signal) =>
       this.plans.propose(runId, nodeId, read.plan, signal),
     );

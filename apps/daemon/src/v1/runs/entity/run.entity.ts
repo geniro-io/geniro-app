@@ -331,8 +331,10 @@ export class Run extends TimestampsEntity {
   taskInstructions: string | null = null;
 
   /**
-   * The DEFERRED question card this run is parked on, as JSON
-   * (`PendingQuestionSnapshot`), or null when it is parked on none.
+   * The DEFERRED card this run is parked on, as JSON
+   * (`PendingCardSnapshot` — a question, a plan or a patch), or null when it
+   * is parked on none. Every row names its `kind`; one that does not is
+   * cleared at boot.
    *
    * It is the one card that OUTLIVES its turn — put up for a CLI whose MCP
    * client will not hold a call open for a person, answered by starting a new

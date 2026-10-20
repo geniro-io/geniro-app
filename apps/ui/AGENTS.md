@@ -234,6 +234,7 @@ One home for each concern:
 - `settled-status.ts`: only a live terminal item mirrors its status onto the run row. A replay takes one reading from its last item (`reconcileFromTail`).
 - A `turn_complete` stamped `insideTurn` is not terminal. Never mirror it.
 - `RunStatusEvent.noTerminalItem` lets `use-chat-run.ts` end `streaming` and drain the queue.
+- A settle arriving after the open run's live terminal row ends `streaming` too, without a second drain (`liveTurnEndedRef`; `use-hosted-chat.ts` mirrors it): a stray `running` can land between the two. After-turn bookkeeping rows (`isAfterTurnBookkeeping`) do not count as the run resuming.
 - A run settling is a moment, not a flag. `settleMomentOf` reads the last terminal item first and the row's `updatedAt` only as a fallback. `subagentSpokeSince` and `taskCardIsLive` use that moment. A sub-agent's own status (`subagentBlockStatus`) reads no run state at all: its rows, else the daemon's whole-conversation reading (`daemonSubagentReadings` + `applyDaemonReadings` in `durable-transcript.ts`), which is the only place a missing ending is resolved.
 - A null activity means "working, nothing named". Both live rows fall back to the one `STANDING_ACTIVITY`. `WORKING_WORDS[0]` is its twin.
 - Live clocks count from durable-row timestamps, never from their own mount.

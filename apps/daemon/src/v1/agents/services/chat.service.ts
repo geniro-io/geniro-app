@@ -512,6 +512,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   private readonly offTurnSignalClaims = new Map<string, symbol>();
 
   /**
+   * Runs whose off-turn ROW restate is in flight — the same token claim, for
+   * {@link restatusAfterOffTurnEvent}. A later row takes the claim over, so of
+   * two rows read close together only the last writes `running`; a terminal
+   * event drops it, so a row read before the run settled writes nothing.
+   */
+  private readonly offTurnEventClaims = new Map<string, symbol>();
+
+  /**
    * Per run, the delegates the CLI has told us are FINISHED — by launching
    * tool-call id, the same key their block is drawn under.
    *
@@ -3224,16 +3232,21 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     event: AgentEvent,
     session: AgentSession | null,
   ): Promise<void> {
-    const run = await this.runDao.getById(runId);
-    if (
-      !this.ownsSession(runId, session) ||
-      !run ||
-      run.status === 'cancelled'
-    ) {
-      return;
-    }
     const settled = terminalStatus(event);
     if (settled) {
+      // A restate read before this ending must not write `running` after it.
+      if (this.ownsSession(runId, session)) {
+        this.offTurnEventClaims.delete(runId);
+        this.offTurnSignalClaims.delete(runId);
+      }
+      const run = await this.runDao.getById(runId, em);
+      if (
+        !this.ownsSession(runId, session) ||
+        !run ||
+        run.status === 'cancelled'
+      ) {
+        return;
+      }
       // The continuation has finished, so nothing is owed to a delegate whose
       // rows opened this stretch — its lease has just been answered by the very
       // terminal event it existed for want of.
@@ -3248,16 +3261,50 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       }
       return;
     }
-    if (run.status === 'running') {
-      // Either a real turn owns it, or this method already moved it — the
-      // phrase is worth repeating either way, the write is not.
-      this.announceActivity(runId, offTurnActivity(event));
+    // Before the claim: a stopped process's flushed row must not take it over
+    // from the live session's.
+    if (!this.ownsSession(runId, session)) {
       return;
     }
-    this.offTurnRuns.set(runId, run.status);
-    await this.setRunStatus(em, runId, 'running', {
-      activity: offTurnActivity(event),
-    });
+    const claim = Symbol('off-turn-event');
+    this.offTurnEventClaims.set(runId, claim);
+    try {
+      const run = await this.runDao.getById(runId, em);
+      // A turn the user sent may have claimed the run during the read: it owns
+      // the badge now, and `offTurnRuns` set under it would let a trailing
+      // terminal settle that turn.
+      if (
+        this.offTurnEventClaims.get(runId) !== claim ||
+        !this.ownsSession(runId, session) ||
+        !run ||
+        run.status === 'cancelled' ||
+        this.registry.has(runId)
+      ) {
+        return;
+      }
+      if (run.status === 'running' || this.offTurnRuns.has(runId)) {
+        // Either a real turn owns it, or this method already moved it — the
+        // phrase is worth repeating either way, the write is not.
+        this.announceActivity(runId, offTurnActivity(event));
+        return;
+      }
+      this.offTurnRuns.set(runId, run.status);
+      try {
+        await this.setRunStatus(em, runId, 'running', {
+          activity: offTurnActivity(event),
+        });
+      } catch (err: unknown) {
+        // Unwritten, so not flipped: the next row must try again.
+        if (this.offTurnRuns.get(runId) === run.status) {
+          this.offTurnRuns.delete(runId);
+        }
+        throw err;
+      }
+    } finally {
+      if (this.offTurnEventClaims.get(runId) === claim) {
+        this.offTurnEventClaims.delete(runId);
+      }
+    }
   }
 
   /**
@@ -3452,20 +3499,23 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const claim = Symbol('off-turn-signal');
     this.offTurnSignalClaims.set(runId, claim);
     try {
-      const run = await this.runDao.getById(runId);
+      const em = this.em.fork();
+      const run = await this.runDao.getById(runId, em);
       // A cancelled run stays cancelled — Stop is final, exactly as it is for an
-      // off-turn row — and a `running` one is somebody else's to describe.
+      // off-turn row — and a `running` one, or one a sent turn has claimed
+      // during the read, is somebody else's to describe.
       if (
         this.offTurnSignalClaims.get(runId) !== claim ||
         !this.ownsSession(runId, session) ||
         !run ||
         run.status === 'cancelled' ||
-        run.status === 'running'
+        run.status === 'running' ||
+        this.registry.has(runId)
       ) {
         return;
       }
       this.offTurnRuns.set(runId, run.status);
-      await this.setRunStatus(this.em.fork(), runId, 'running', {
+      await this.setRunStatus(em, runId, 'running', {
         activity: offTurnActivity(event),
       });
     } finally {
@@ -3540,7 +3590,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const claim = Symbol('delegate-lease');
     this.leaseClaims.set(runId, claim);
     try {
-      const run = await this.runDao.getById(runId);
+      const em = this.em.fork();
+      const run = await this.runDao.getById(runId, em);
       // Same two exemptions as every other off-turn restate: Stop is final, and
       // a `running` run is somebody else's to describe — either a real turn owns
       // it, or the main thread's own continuation already flipped it, and that
@@ -3566,7 +3617,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       timer.unref?.();
       this.delegateLeases.set(runId, { timer });
       this.offTurnRuns.set(runId, run.status);
-      await this.setRunStatus(this.em.fork(), runId, 'running', {
+      await this.setRunStatus(em, runId, 'running', {
         activity: 'still working',
       });
     } finally {
@@ -3967,13 +4018,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     restoreTo: RunStatus,
   ): Promise<void> {
-    const run = await this.runDao.getById(runId);
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
     // Asked again after the read: a send can claim the run inside it, and a
     // flagged settle announced then would end that new turn in every window.
     if (run?.status !== 'running' || this.registry.has(runId)) {
       return;
     }
-    await this.setRunStatus(this.em.fork(), runId, restoreTo, {
+    await this.setRunStatus(em, runId, restoreTo, {
       restored: true,
       noTerminalItem: true,
     });

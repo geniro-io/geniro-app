@@ -43,6 +43,25 @@ describe('PlanLimitsLedger', () => {
     expect(best?.plan.estimated).toBe(false);
   });
 
+  it('lets a refresh press take the newer estimate over a real reading, and only the offered one', () => {
+    const ledger = new PlanLimitsLedger();
+    ledger.settle(KEY, { plan: plan(96, false), takenAt: 1_000 }, 1_000);
+
+    const pressed = ledger.settle(
+      KEY,
+      { plan: plan(45, true), takenAt: 61_000 },
+      61_000,
+      true,
+    );
+    expect(pressed?.plan.windows[0]?.percent).toBe(45);
+    // It is now what every chat on the account is served.
+    expect(ledger.settle(KEY, null, 62_000)?.plan.windows[0]?.percent).toBe(45);
+    // A press with nothing to offer only asks.
+    expect(
+      ledger.settle(KEY, null, 63_000, true)?.plan.windows[0]?.percent,
+    ).toBe(45);
+  });
+
   it('lets an estimate win once the real reading is old enough to be the worse answer', () => {
     const real = { plan: plan(96, false), takenAt: 0 };
     const estimate = {

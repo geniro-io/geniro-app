@@ -65,7 +65,11 @@ import {
 } from './run-list-pages';
 import { activityAfterAnnounce, isSettledRunStatus } from './run-status';
 import { runStatusRowFields } from './run-status-row';
-import { replayTail, settledRunStatus } from './settled-status';
+import {
+  isAfterTurnBookkeeping,
+  replayTail,
+  settledRunStatus,
+} from './settled-status';
 import { unsentMessageIds } from './system-payload';
 import { laterInstant } from './unread';
 import { EMPTY_LIVE_TEXT, useRunStream } from './use-run-stream';
@@ -709,6 +713,17 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    */
   const sawLiveTerminalRef = useRef(false);
   /**
+   * Whether the newest LIVE row of the open run ended its turn — set by a
+   * terminal row, cleared by any later row that is not after-turn bookkeeping.
+   *
+   * Unlike {@link sawLiveTerminalRef}, it answers "is the turn over NOW". A
+   * `running` announce can land between a turn's terminal row and its settle,
+   * raising the working state with no row of its own; the settle that follows
+   * carries no `noTerminalItem` (its row already landed), so this is what lets
+   * it lower that state again.
+   */
+  const liveTurnEndedRef = useRef(false);
+  /**
    * The thread opened while its row was not yet listed, so activation could
    * not tell whether it is working — answered when the listing lands.
    */
@@ -918,6 +933,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // per-node turn_complete/error (nodeId set) must not re-enable the composer
       // while sibling branches are still running.
       const settledStatus = settledRunStatus(item);
+      if (live) {
+        if (settledStatus !== null) {
+          liveTurnEndedRef.current = true;
+        } else if (!isAfterTurnBookkeeping(item)) {
+          liveTurnEndedRef.current = false;
+        }
+      }
       if (settledStatus !== null) {
         sawTerminalRef.current = true;
         if (live) {
@@ -1005,6 +1027,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // queue is drained only when the run's own status says it is owed one.
       reconcileFromTail(runId, rows);
       const last = replayTail(rows);
+      // What the replay ended on stands in for the live rows it replaced.
+      if (activeRunIdRef.current === runId && last !== undefined) {
+        liveTurnEndedRef.current = settledRunStatus(last) !== null;
+      }
       if (
         activeRunIdRef.current === runId &&
         last !== undefined &&
@@ -2003,6 +2029,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       reconnectAfterSeqRef.current = -1;
       sawTerminalRef.current = false;
       sawLiveTerminalRef.current = false;
+      liveTurnEndedRef.current = false;
       pendingScrollRef.current = true;
       setActiveRunId(runId);
       commitItems([]);
@@ -2489,10 +2516,23 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // this window did not send — Retry, the CLI carrying on by itself,
       // another window's message — ran with no Stop and a Send that went
       // straight into it instead of queueing. Only the start: the ENDING stays
-      // the terminal item's to say, since a settled announce can race ahead of
-      // it and the turn is not over until its last row has landed.
+      // the terminal item's to say — or a settle arriving after it, below —
+      // since a settled announce can race ahead of it and the turn is not over
+      // until its last row has landed.
       if (event.runId === activeRunIdRef.current && status === 'running') {
         setStreaming(true);
+      }
+      // A settle behind a turn whose terminal row already landed ends the
+      // working state even without `noTerminalItem` — a stray `running` may
+      // have raised it again in between. Not the drain below: that row
+      // already released the queue.
+      if (
+        event.runId === activeRunIdRef.current &&
+        liveTurnEndedRef.current &&
+        status !== null &&
+        isSettledRunStatus(status)
+      ) {
+        setStreaming(false);
       }
       // A settle the daemon says no terminal ITEM stands behind — an off-turn
       // stretch handing its badge back, a session closing under one, a

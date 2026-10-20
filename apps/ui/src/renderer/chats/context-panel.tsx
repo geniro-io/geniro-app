@@ -91,7 +91,11 @@ export function ContextPanel({
     // stop the conversation.
     <div className="flex flex-col gap-2 text-xs">
       {metrics?.context ? (
-        <Breakdown context={metrics.context} takenAt={metrics.takenAt} />
+        <Breakdown
+          context={metrics.context}
+          takenAt={metrics.takenAt}
+          refreshing={loading}
+        />
       ) : null}
       {/* Nothing to keep on screen yet, so the wait is said where the window
           will be drawn — at the TOP, not under a plan-limits placeholder. */}
@@ -114,11 +118,12 @@ export function ContextPanel({
           refreshed={refreshed}
           onRefresh={onRefresh}
         />
-      ) : loading ? (
+      ) : loading && !metrics ? (
         // REPORTED as "if they are not loaded yet, there should be some
         // loader". The section always ends up on screen in SOME form — the
         // limits, or the sentence saying why there are none — so holding its
         // place while the answer is on its way promises nothing it cannot keep.
+        // The FIRST answer only: a re-read keeps the sentence below on screen.
         <div
           data-slot="plan-limits-loading"
           aria-busy="true"
@@ -133,8 +138,11 @@ export function ContextPanel({
       {/* The reason is shown only where the limits would have been: a workflow
           run and a CLI with no such channel both get a sentence rather than a
           missing section, which is the rule the breakdown above follows. */}
-      {metrics && !metrics.plan && metrics.planReason && !loading ? (
-        <div className="flex flex-col gap-0.5 border-t border-border pt-2">
+      {metrics && !metrics.plan && metrics.planReason ? (
+        <div
+          data-slot="plan-limits-reason"
+          aria-busy={loading}
+          className="flex flex-col gap-0.5 border-t border-border pt-2">
           <div className="flex items-center gap-1.5">
             <span className="font-medium text-foreground">Plan limits</span>
             {onRefresh ? (
@@ -146,15 +154,6 @@ export function ContextPanel({
       ) : null}
       {metrics ? <Totals totals={metrics.totals} live={live} /> : null}
       {metrics?.context ? <ContextDetail context={metrics.context} /> : null}
-      {/* A re-read keeps the figures already on screen (a refetch on a panel
-          the user is reading must not blank what they are mid-sentence about)
-          and says so BELOW them. */}
-      {loading && metrics?.context ? (
-        <p className="flex items-center gap-1.5 text-muted-foreground">
-          <Spinner />
-          Updating…
-        </p>
-      ) : null}
       {/* `ErrorText`, not a hand-rolled `<p>`: it carries `role="alert"`, and
           this error is set ASYNCHRONOUSLY on a panel the user already has open.
           The only role anywhere above it is the popover's own `dialog`, so
@@ -169,6 +168,7 @@ export function ContextPanel({
 function Breakdown({
   context,
   takenAt,
+  refreshing,
 }: {
   context: ContextBreakdown;
   /**
@@ -176,6 +176,13 @@ function Breakdown({
    * whose process has since been closed — null when they are live.
    */
   takenAt: string | null;
+  /**
+   * A newer reading is on its way; these figures stay until it lands. Said by
+   * a spinner inside the header row, never by a row of its own: the readout
+   * opens upward, so a row that comes and goes with each request moves the
+   * panel's top edge.
+   */
+  refreshing: boolean;
 }): React.JSX.Element {
   // Deferred rows are OUTSIDE the CLI's own total (its tool surface is
   // available, not loaded), so they are drawn in their own section rather than
@@ -209,7 +216,10 @@ function Breakdown({
       ? loaded
       : [{ name: 'In the window', tokens: used, deferred: false }];
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      data-slot="context-breakdown"
+      aria-busy={refreshing}
+      className="flex flex-col gap-2">
       <div className="flex items-baseline gap-1.5">
         <span className="text-sm font-medium text-foreground">
           {formatTokens(used)}
@@ -220,6 +230,7 @@ function Breakdown({
             {percent === null ? null : ` · ${percent}%`}
           </span>
         )}
+        {refreshing ? <Spinner className="self-center" /> : null}
         {context.model ? (
           <span className="ml-auto truncate text-muted-foreground">
             {context.model}

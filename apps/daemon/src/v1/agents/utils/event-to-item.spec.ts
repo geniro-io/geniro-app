@@ -786,7 +786,10 @@ describe('terminalStatus', () => {
 
 describe('restatesRunAsWorking', () => {
   /** The announcement `spawn-cli` makes about one delegate's liveness. */
-  const announce = (backgroundOpen: boolean | null): AgentEvent => ({
+  const announce = (
+    backgroundOpen: boolean | null,
+    costUsd: number | null = null,
+  ): AgentEvent => ({
     type: 'subagent_info',
     id: 'toolu_a',
     label: null,
@@ -800,22 +803,22 @@ describe('restatesRunAsWorking', () => {
     outputTokens: null,
     cacheReadTokens: null,
     cacheCreationTokens: null,
-    costUsd: null,
+    costUsd,
     stepsUnavailableReason: null,
     backgroundOpen,
     backgroundOutcome: null,
   });
 
-  it('is false only for the announcement that a delegate has STOPPED', () => {
-    expect(restatesRunAsWorking(announce(false))).toBe(false);
+  it('is true only for the announcement that a delegate has STARTED', () => {
     expect(restatesRunAsWorking(announce(true))).toBe(true);
+    expect(restatesRunAsWorking(announce(false))).toBe(false);
   });
 
-  it('reads an announcement that claims nothing about liveness as no close', () => {
-    // A `subagent_info` carrying a delegate's FACTS says nothing about whether
-    // it is running; reading null as a close would silence the run every time
-    // the CLI described the delegate it had just launched.
-    expect(restatesRunAsWorking(announce(null))).toBe(true);
+  it('reads an announcement that claims nothing about liveness as no work', () => {
+    // A `subagent_info` carrying a delegate's FACTS — the price claude reports
+    // with a continuation's `result` among them — says nothing about whether
+    // it is running, and can land after that continuation has settled.
+    expect(restatesRunAsWorking(announce(null, 0.0016))).toBe(false);
   });
 
   it('is false for a notice, which describes the CLI rather than the agent working', () => {

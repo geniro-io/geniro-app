@@ -13,7 +13,11 @@ import { discardsContextReading } from './compaction-payload';
 import type { LiveState } from './live-text';
 import { activityAfterAnnounce, isSettledRunStatus } from './run-status';
 import { runStatusRowFields } from './run-status-row';
-import { replayTail, settledRunStatus } from './settled-status';
+import {
+  isAfterTurnBookkeeping,
+  replayTail,
+  settledRunStatus,
+} from './settled-status';
 import { unsentMessageIds } from './system-payload';
 import { EMPTY_LIVE_TEXT, useRunStream } from './use-run-stream';
 
@@ -237,6 +241,12 @@ export function useHostedChat({
    * the builder's canvas for a turn that ended once.
    */
   const countedEndsRef = useRef(new Set<string>());
+  /**
+   * Whether the newest live row ended the turn — see `liveTurnEndedRef` in
+   * use-chat-run.ts, which this mirrors: a settle arriving after the turn's
+   * terminal row lowers a `working` that a stray `running` raised in between.
+   */
+  const liveTurnEndedRef = useRef(false);
   const countTurnEnd = useCallback((row: ChatItem): void => {
     if (countedEndsRef.current.has(row.id)) {
       return;
@@ -375,7 +385,10 @@ export function useHostedChat({
         );
       }
       if (settledRunStatus(item) !== null) {
+        liveTurnEndedRef.current = true;
         countTurnEnd(item);
+      } else if (!isAfterTurnBookkeeping(item)) {
+        liveTurnEndedRef.current = false;
       }
     },
     onLiveEvent: (event) => {
@@ -388,6 +401,10 @@ export function useHostedChat({
     onMissed: (replayedRunId, rows) => {
       const last = replayTail(rows);
       const ended = last !== undefined && settledRunStatus(last) !== null;
+      // What the replay ended on stands in for the live rows it replaced.
+      if (last !== undefined && isCurrent(replayedRunId)) {
+        liveTurnEndedRef.current = ended;
+      }
       if (last !== undefined && ended) {
         countTurnEnd(last);
       }
@@ -431,6 +448,7 @@ export function useHostedChat({
     reconnectAfterSeqRef.current = -1;
     setActivity(null);
     forgetAnchorAsks();
+    liveTurnEndedRef.current = false;
     setWorking(false);
     setError(null);
   }, [
@@ -481,6 +499,7 @@ export function useHostedChat({
         // this one never had.
         lastSeqRef.current = -1;
         reconnectAfterSeqRef.current = -1;
+        liveTurnEndedRef.current = false;
         for (const row of history.items) {
           ingest(row, false);
         }
@@ -556,6 +575,15 @@ export function useHostedChat({
       // while the rows that ended it are still being written.
       if (status !== null && isTurnRunning(status)) {
         setWorking(true);
+      }
+      // A settle after the turn's terminal row already landed — that row
+      // counted the turn end, so only `working` comes down here.
+      if (
+        liveTurnEndedRef.current &&
+        status !== null &&
+        isSettledRunStatus(status)
+      ) {
+        setWorking(false);
       }
       // Except a settle no terminal row stands behind — a lease running out,
       // the CLI session closing under an off-turn run. Nothing else will ever

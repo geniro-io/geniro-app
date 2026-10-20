@@ -75,8 +75,9 @@ export function stoppedCommandsNote(
 
 /**
  * The process ended on its own while `running` detached commands ran in it.
- * Nothing signals its group then, so they may well have outlived it — and an
- * agent told to start a live dev server again starts a second one.
+ * What was recorded of them is stopped (`RunProcessReaper.stopLeftGroups`), but
+ * one never recorded may have outlived it — and an agent told to start a live
+ * dev server again starts a second one.
  */
 export function endedCommandsNote(
   commands: readonly string[],

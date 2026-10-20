@@ -7,8 +7,10 @@ import { asRecord, asString, parseJsonColumn } from './json-util';
  * `open-delegates.ts` for the other kind of background unit.
  *
  * A shell's end is ordinarily written by `spawn-cli` itself: when the CLI
- * process dies, every command it still had out dies with its group, and the
- * exit announces a close for each. That announcement reaches the transcript
+ * process ends, every command it still had out ends with it — its own
+ * shutdown stops them, and what a CLI that died without one left is stopped
+ * from the groups its session recorded — and the exit announces a close for
+ * each. That announcement reaches the transcript
  * only through the owner's between-turn sink, and two owners are not listening
  * when it comes — a workflow run that has FINISHED, whose sink stops at
  * `runFinished` one step before its teardown kills the processes, and a daemon

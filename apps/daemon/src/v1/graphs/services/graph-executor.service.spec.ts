@@ -831,7 +831,9 @@ class FakeAdapter {
       retired: false,
       parked: false,
       shellsRunning: 0,
+      detachedRunning: 0,
       runningCommands: [],
+      recordedGroupsOf: () => [],
       endedRunning: null,
       pid: null,
       noteCloseCause: (cause: SessionCloseCause | null) => {

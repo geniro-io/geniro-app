@@ -42,6 +42,7 @@ const UID = 501;
 const tagged = (pid: number, runId: string, ppid = 1): ScannedProcess => ({
   pid,
   ppid,
+  pgid: pid,
   uid: UID,
   tty: null,
   startedAt: 1_000,

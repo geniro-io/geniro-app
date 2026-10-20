@@ -265,15 +265,15 @@ export interface OwnedProcess extends ProcessUsageRow {
  * not shares its group with whoever spawned it, and matching on that group
  * would claim the daemon and everything beside it.
  */
-export function processTreeOf(
-  rows: readonly ProcessUsageRow[],
+export function processTreeOf<T extends ProcessRow & { pgid: number }>(
+  rows: readonly T[],
   rootPid: number,
-): OwnedProcess[] {
+): (T & Pick<OwnedProcess, 'depth' | 'link'>)[] {
   const root = rows.find((row) => row.pid === rootPid);
   if (root === undefined) {
     return [];
   }
-  const byParent = new Map<number, ProcessUsageRow[]>();
+  const byParent = new Map<number, T[]>();
   for (const row of rows) {
     const siblings = byParent.get(row.ppid);
     if (siblings) {
@@ -286,17 +286,13 @@ export function processTreeOf(
     siblings.sort((a, b) => a.pid - b.pid);
   }
 
-  const out: OwnedProcess[] = [];
+  const out: (T & Pick<OwnedProcess, 'depth' | 'link'>)[] = [];
   // `seen` guards against the cycles a non-atomic `ps` snapshot can contain —
   // see `descendantsOf`.
   const seen = new Set<number>();
-  const visit = (
-    start: ProcessUsageRow,
-    depth: number,
-    link: OwnedProcess['link'],
-  ): void => {
+  const visit = (start: T, depth: number, link: OwnedProcess['link']): void => {
     const stack: {
-      row: ProcessUsageRow;
+      row: T;
       depth: number;
       link: OwnedProcess['link'];
     }[] = [{ row: start, depth, link }];
@@ -310,7 +306,7 @@ export function processTreeOf(
       const children = byParent.get(next.row.pid) ?? [];
       // Pushed in reverse so they pop — and are listed — in pid order.
       for (let i = children.length - 1; i >= 0; i -= 1) {
-        const child = children[i] as ProcessUsageRow;
+        const child = children[i] as T;
         stack.push({ row: child, depth: next.depth + 1, link: 'child' });
       }
     }

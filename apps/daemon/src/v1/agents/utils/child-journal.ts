@@ -301,7 +301,9 @@ export function trackDetachedChild(
   journal.record(pid, command);
   // `exit` (not `close`): the leader is gone by then, and the leader is the
   // only thing whose identity the reaper can verify. A grandchild that
-  // outlives it is already beyond what a pid-keyed journal can describe — the
-  // group kill at cancel/shutdown is what covers those.
+  // outlives it is beyond what a pid-keyed journal can describe: one left in
+  // the leader's group is reached by the group kill at cancel and shutdown, and
+  // a detached command — in a session of its own — by the stop of the groups
+  // its session recorded (`RunProcessReaper.stopLeftGroups`).
   child.once('exit', () => journal.forget(pid));
 }

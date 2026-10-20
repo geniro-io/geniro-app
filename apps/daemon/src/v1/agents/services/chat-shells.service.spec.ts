@@ -83,6 +83,11 @@ function service(
     answered?: string[];
     /** The pids of this run's live CLI processes. */
     roots?: number[];
+    /**
+     * The pids the session recorded running each call's command; a call
+     * absent here is one no live process reports running.
+     */
+    recorded?: Record<string, number[]>;
   } = {},
 ): {
   service: ChatShellsService;
@@ -186,6 +191,11 @@ function service(
             cwd: '/work',
             pid,
           })),
+        recordedGroupsOf: (_runId: string, callId: string) =>
+          live.recorded?.[callId]?.map((pid) => ({
+            pgid: pid,
+            members: [{ pid, startedAt: 0 }],
+          })) ?? null,
       } as unknown as AgentSessionRegistry,
       NO_CALL_INDEX,
     ),
@@ -328,6 +338,9 @@ describe('ChatShellsService', () => {
 });
 
 describe('ChatShellsService.kill', () => {
+  /** A detached command's launch, answered at once — claude's and cursor's. */
+  const LAUNCH_ANSWERED = { answered: ['call-1'] };
+
   it('SIGTERMs every process running that command, then SIGKILLs', async () => {
     // The GROUP and not the pid, and every match rather than the first: a CLI
     // wraps what it runs, so one command is routinely two rows — here the zsh
@@ -342,6 +355,7 @@ describe('ChatShellsService.kill', () => {
     const { service: svc } = service(
       [lifecycle(1, 'shell_open', 'call-1')],
       [{ id: 'call-1', command: 'pnpm dev' }],
+      LAUNCH_ANSWERED,
     );
 
     const answer = await svc.kill('run-1', 'call-1');
@@ -360,6 +374,37 @@ describe('ChatShellsService.kill', () => {
     ]);
   });
 
+  it('stops only the background command pressed, not one written alike that its session did not record', async () => {
+    // Two `pnpm dev` the agent detached in different folders read the same in
+    // the table; the live session recorded which processes each one runs in.
+    machine.processes = [
+      { pid: 41, ppid: 1, args: '/bin/zsh -c pnpm dev' },
+      { pid: 42, ppid: 41, args: 'pnpm dev' },
+      { pid: 51, ppid: 1, args: '/bin/zsh -c pnpm dev' },
+      { pid: 52, ppid: 51, args: 'pnpm dev' },
+    ];
+    const { service: svc } = service(
+      [
+        lifecycle(1, 'shell_open', 'call-1'),
+        lifecycle(2, 'shell_open', 'call-2'),
+      ],
+      [
+        { id: 'call-1', command: 'pnpm dev' },
+        { id: 'call-2', command: 'pnpm dev' },
+      ],
+      { answered: ['call-1', 'call-2'], recorded: { 'call-2': [51] } },
+    );
+
+    expect(await svc.kill('run-1', 'call-2')).toEqual({
+      killed: true,
+      reason: null,
+    });
+    expect(machine.signals).toEqual([
+      { pid: 51, signal: 'SIGTERM' },
+      { pid: 52, signal: 'SIGTERM' },
+    ]);
+  });
+
   it('writes the close itself, since nothing else will', async () => {
     // The row that would have announced the ending is the CLI's own bracket,
     // and the CLI is gone. Without this the command would go on being listed
@@ -373,6 +418,7 @@ describe('ChatShellsService.kill', () => {
     } = service(
       [lifecycle(1, 'shell_open', 'call-1', 'qa')],
       [{ id: 'call-1', command: 'pnpm dev' }],
+      LAUNCH_ANSWERED,
     );
 
     await svc.kill('run-1', 'call-1');
@@ -417,6 +463,7 @@ describe('ChatShellsService.kill', () => {
     const { service: svc, written } = service(
       [lifecycle(1, 'shell_open', 'call-1')],
       [{ id: 'call-1', command: 'pnpm dev' }],
+      LAUNCH_ANSWERED,
     );
 
     const answer = await svc.kill('run-1', 'call-1');
@@ -469,6 +516,136 @@ describe('ChatShellsService.kill', () => {
     // And the row STAYS: it is still running, so writing its close would take
     // it off a list it belongs on.
     expect(written).toEqual([]);
+  });
+
+  it('stops a shell whose call is still unanswered inside the run, as a foreground one', async () => {
+    // codex keeps a background terminal's call open until the command exits,
+    // and its written `/bin/zsh -lc '…'` is exec'd away: matched as a detached
+    // command across the table it found nothing and said "already stopped"
+    // over a server that ran on.
+    vi.useFakeTimers();
+    machine.processes = [
+      { pid: 100, ppid: 1, args: 'codex app-server' },
+      { pid: 102, ppid: 100, args: 'node /opt/homebrew/bin/pnpm dev' },
+      { pid: 200, ppid: 1, args: 'node /opt/homebrew/bin/pnpm dev' },
+    ];
+    const { service: svc, written } = service(
+      [lifecycle(1, 'shell_open', 'exec-1')],
+      [{ id: 'exec-1', command: "/bin/zsh -lc 'pnpm dev'" }],
+      { roots: [100] },
+    );
+
+    const answer = await svc.kill('run-1', 'exec-1');
+
+    expect(answer).toEqual({ killed: true, reason: null });
+    expect(machine.signals).toEqual([{ pid: 102, signal: 'SIGTERM' }]);
+    // codex completes the item once its command exits, which closes the row.
+    expect(written).toEqual([]);
+  });
+
+  it('stops only the codex shell pressed, not a sibling started alike in another folder', async () => {
+    // Both read `/bin/zsh -lc 'pnpm dev'` — codex passes the folder apart —
+    // and zsh exec'd both into `node …/pnpm dev`.
+    machine.processes = [
+      { pid: 100, ppid: 1, args: 'codex app-server' },
+      { pid: 102, ppid: 100, args: 'node /opt/homebrew/bin/pnpm dev' },
+      { pid: 103, ppid: 102, args: 'node vite' },
+      { pid: 202, ppid: 100, args: 'node /opt/homebrew/bin/pnpm dev' },
+    ];
+    const { service: svc } = service(
+      [
+        lifecycle(1, 'shell_open', 'exec-1'),
+        lifecycle(2, 'shell_open', 'exec-2'),
+      ],
+      [
+        { id: 'exec-1', command: "/bin/zsh -lc 'pnpm dev'" },
+        { id: 'exec-2', command: "/bin/zsh -lc 'pnpm dev'" },
+      ],
+      { roots: [100], recorded: { 'exec-1': [102], 'exec-2': [202] } },
+    );
+
+    expect(await svc.kill('run-1', 'exec-2')).toEqual({
+      killed: true,
+      reason: null,
+    });
+    expect(machine.signals).toEqual([{ pid: 202, signal: 'SIGTERM' }]);
+  });
+
+  it('never stops a sibling written alike while the pressed shell’s recorded process runs outside the agent’s tree', async () => {
+    // exec-2's own process left codex's tree; the `pnpm dev` still under codex
+    // is exec-1's, whatever its text.
+    machine.processes = [
+      { pid: 100, ppid: 1, args: 'codex app-server' },
+      { pid: 102, ppid: 100, args: 'node /opt/homebrew/bin/pnpm dev' },
+      { pid: 300, ppid: 1, args: 'node /opt/homebrew/bin/pnpm dev' },
+    ];
+    const { service: svc } = service(
+      [
+        lifecycle(1, 'shell_open', 'exec-1'),
+        lifecycle(2, 'shell_open', 'exec-2'),
+      ],
+      [
+        { id: 'exec-1', command: "/bin/zsh -lc 'pnpm dev'" },
+        { id: 'exec-2', command: "/bin/zsh -lc 'pnpm dev'" },
+      ],
+      { roots: [100], recorded: { 'exec-2': [300] } },
+    );
+
+    await svc.kill('run-1', 'exec-2');
+
+    expect(machine.signals).toEqual([]);
+  });
+
+  it('keeps a codex shell listed while codex reports it running, though no process reads as it', async () => {
+    // zsh and python3's framework launcher both exec: what runs reads
+    // `…/Python.app/Contents/MacOS/Python -m http.server 8000`, matching no
+    // needle of what the agent wrote.
+    machine.processes = [
+      { pid: 100, ppid: 1, args: 'codex app-server' },
+      {
+        pid: 102,
+        ppid: 100,
+        args: '/opt/homebrew/Cellar/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m http.server 8000',
+      },
+    ];
+    const { service: svc, written } = service(
+      [lifecycle(1, 'shell_open', 'exec-1')],
+      [{ id: 'exec-1', command: "/bin/zsh -lc 'python3 -m http.server 8000'" }],
+      { roots: [100], recorded: { 'exec-1': [] } },
+    );
+
+    const answer = await svc.kill('run-1', 'exec-1');
+
+    expect(answer).toEqual({
+      killed: false,
+      reason:
+        'geniro could not tell which of the agent’s processes runs this command — ask the agent to stop it',
+    });
+    expect(machine.signals).toEqual([]);
+    expect(written).toEqual([]);
+  });
+
+  it('takes a codex shell off the list when nothing of it runs any more', async () => {
+    machine.processes = [{ pid: 100, ppid: 1, args: 'codex app-server' }];
+    const { service: svc, written } = service(
+      [lifecycle(1, 'shell_open', 'exec-1')],
+      [{ id: 'exec-1', command: "/bin/zsh -lc 'pnpm dev'" }],
+      { roots: [100] },
+    );
+
+    const answer = await svc.kill('run-1', 'exec-1');
+
+    expect(answer).toEqual({
+      killed: false,
+      reason: 'that command had already stopped — the list is now up to date',
+    });
+    expect(machine.signals).toEqual([]);
+    expect(written).toEqual([
+      expect.objectContaining({
+        kind: 'shell_info',
+        payload: expect.objectContaining({ id: 'exec-1', killedByUser: true }),
+      }),
+    ]);
   });
 
   describe('a FOREGROUND command — one the agent is still waiting on', () => {

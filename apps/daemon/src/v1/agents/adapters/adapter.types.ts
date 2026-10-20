@@ -16,6 +16,7 @@ import type {
   ModelPriceLookup,
   ModelPriceProvider,
 } from '../utils/model-prices';
+import type { RecordedGroup } from '../utils/process-descendants';
 import type {
   SessionAsk,
   SessionLogger,
@@ -1054,6 +1055,14 @@ type AgentEventBody =
       name: string | null;
       result: unknown;
       isError: boolean;
+      /**
+       * This result reports the END of a command that ran on in the background
+       * after its turn ended — codex completes such a command's item whenever
+       * the command exits, usually with no turn open. Set by the adapter that
+       * knows it. A command ending is no agent working again, so it never
+       * restates a settled run (`restatesRunAsWorking`). Absent otherwise.
+       */
+      endsBackgroundWork?: true;
     }
   | {
       type: 'turn_complete';
@@ -1642,11 +1651,11 @@ type AgentEventBody =
       /**
        * The unit was started BY a delegate rather than by the agent itself —
        * claude's `owned_by_subagent`, the only owner fact its `task_started`
-       * line carries (read out of the 2.1.270 bundle: no parent id). A
-       * delegate's own background command belongs to that delegate's block,
-       * not to the main thread's terminals, so `runCliSession` announces
-       * nothing for it — but while it runs, it keeps that delegate's
-       * `completed` settle from being announced.
+       * line carries (read out of the 2.1.270 bundle: no parent id), or a
+       * command a codex sub-agent runs. A delegate's own command belongs to
+       * that delegate's block, not to the main thread's terminals, so
+       * `runCliSession` announces nothing for it — but while it runs, it keeps
+       * a bracketed delegate's `completed` settle from being announced.
        */
       ownedByDelegate?: true;
       /**
@@ -3480,12 +3489,17 @@ export interface AgentSession {
    */
   readonly retired: boolean;
   /**
-   * How many detached commands this process has started and not yet ended —
-   * see `CliSession.shellsRunning`. A holder must not reap a process holding
+   * How many commands this process has started and not yet ended that no turn
+   * waits on, a delegate's included — see `CliSession.shellsRunning`. A holder
+   * must not reap a process holding
    * them for going quiet, or evict it to make room: a dev server writes nothing
    * for as long as it works, and it dies with this process.
    */
   readonly shellsRunning: number;
+  /** Of {@link shellsRunning}, the detached ones — see `CliSession.detachedRunning`. */
+  readonly detachedRunning: number;
+  /** Where a call's command runs, as recorded — see `CliSession.recordedGroupsOf`. */
+  recordedGroupsOf(callId: string): readonly RecordedGroup[] | null;
   /**
    * The command lines of those detached commands — see
    * `CliSession.runningCommands`. Read by a holder that is about to close the

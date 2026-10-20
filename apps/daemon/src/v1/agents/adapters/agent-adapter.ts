@@ -24,6 +24,7 @@ import {
 import { delegateDeclarationEvent } from '../utils/open-delegates';
 import { listProcesses, type ProcessRow } from '../utils/process-descendants';
 import { repositoryRootOf } from '../utils/repository-root';
+import type { PlainProcess } from '../utils/run-process-scan';
 import {
   type BetweenTurnApproval,
   type CliSession,
@@ -211,6 +212,11 @@ export interface AgentAdapterOptions {
    * `script` put in a session of its own.
    */
   listProcessesFn?: () => Promise<ProcessRow[]>;
+  /**
+   * Replacement for the plain process-table reading a session records its
+   * running commands' groups from; defaults to `ps`. A test seam.
+   */
+  listProcessGroupsFn?: () => Promise<PlainProcess[] | null>;
   /**
    * The public model price catalog {@link AgentAdapter.listPriceOf} reads.
    * Absent in standalone and spec use, where every model is unpriced — which
@@ -2841,6 +2847,7 @@ export abstract class AgentAdapter {
         // CLI it is talking to — the rule every field beside it follows.
         detectDetachedShells:
           this.getConfig().shells.unreportedDetachReason !== null,
+        listProcessGroups: this.options.listProcessGroupsFn,
         // Passed straight through: what to answer between turns depends on the
         // run's approval posture, which the CALLER holds — an adapter deciding
         // it here would be a third copy of approval semantics that already
@@ -3118,6 +3125,10 @@ export abstract class AgentAdapter {
         // — reaping the process that serves a dev server.
         return session.shellsRunning;
       },
+      get detachedRunning() {
+        return session.detachedRunning;
+      },
+      recordedGroupsOf: (callId) => session.recordedGroupsOf(callId),
       get runningCommands() {
         return session.runningCommands;
       },

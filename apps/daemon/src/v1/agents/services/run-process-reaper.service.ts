@@ -10,15 +10,30 @@ import {
 } from '../../../utils/process-identity';
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
 import {
+  isGroupAnchored,
+  type RecordedGroup,
+} from '../utils/process-descendants';
+import {
   listProcessUsage,
   processTreeOf,
   type ProcessUsageRow,
 } from '../utils/process-usage';
-import { capSelection, type ScannedProcess } from '../utils/run-process-scan';
+import {
+  capSelection,
+  daemonChain,
+  fencedPids,
+  type PlainProcess,
+  type ScannedProcess,
+  scanPlainTable,
+} from '../utils/run-process-scan';
 import { runPs } from '../utils/run-ps';
+import type { AgentSessionRegistry } from './agent-session.registry';
 import type { RunProcessAttribution } from './run-process-attribution.service';
 
-/** Seams — the production factory passes `held`; specs pass the rest. */
+/**
+ * Seams — `createRunProcessReaper` passes `held` and `processRoots`, the module
+ * adds `stillGone`; specs pass the rest.
+ */
 export interface RunProcessReaperOptions {
   /**
    * Whether the registry holds a live agent process under the run right now.
@@ -28,6 +43,10 @@ export interface RunProcessReaperOptions {
   held?: (runId: string) => boolean;
   processRoots?: () => readonly number[];
   listUsage?: () => Promise<ProcessUsageRow[] | null>;
+  /** The table {@link RunProcessReaper.stopLeftGroups} reads. */
+  listGroups?: () => Promise<PlainProcess[] | null>;
+  /** The user the daemon runs as; null when the platform cannot say, and then nothing is stopped. */
+  uid?: number | null;
   /**
    * Which of these runs are still deleted or archived. Asked after the scan
    * for a reap the SWEEP queued, whose verdict may be minutes old — never for
@@ -87,6 +106,8 @@ export class RunProcessReaper {
   private readonly selfPid: number;
   private readonly processRoots: () => readonly number[];
   private readonly listUsage: () => Promise<ProcessUsageRow[] | null>;
+  private readonly listGroups: () => Promise<PlainProcess[] | null>;
+  private readonly uid: number | null;
   /**
    * Runs waiting for the next reap, each with whether it is reaped only if
    * still gone; one reap runs at a time, over one scan.
@@ -108,6 +129,9 @@ export class RunProcessReaper {
     this.selfPid = options.selfPid ?? process.pid;
     this.processRoots = options.processRoots ?? (() => []);
     this.listUsage = options.listUsage ?? listProcessUsage;
+    this.listGroups = options.listGroups ?? scanPlainTable;
+    this.uid =
+      options.uid !== undefined ? options.uid : (process.getuid?.() ?? null);
   }
 
   /**
@@ -274,6 +298,97 @@ export class RunProcessReaper {
     );
   }
 
+  /**
+   * Stop what a run's agent CLI left running when it ended without stopping it
+   * itself — a crash, an OOM kill, a Force Quit, or a close whose escalation
+   * cut its shutdown short. A CLI starts each background command in a session
+   * of its own and stops them only from its own shutdown, so once it is gone
+   * nothing points at them but the groups its session recorded while it lived.
+   *
+   * A group is acted on only while a recorded member is still alive in it, so
+   * its id cannot have been reused, and never the daemon's own group. Its
+   * current members are then stopped as explicit pids, minus what no run may
+   * own and every tree the registry holds — but not for being on a terminal:
+   * the groups were the agent's by structure when recorded, and codex runs its
+   * commands on a pseudo-terminal of its own.
+   *
+   * Never throws.
+   */
+  async stopLeftGroups(
+    runId: string,
+    groups: readonly RecordedGroup[],
+  ): Promise<number[]> {
+    if (groups.length === 0) {
+      return [];
+    }
+    try {
+      // A CLI ending on its own terms may still be stopping its commands as
+      // it goes: what outlives the grace a kill gives is what it left.
+      await this.wait(GROUP_KILL_GRACE_MS);
+      if (this.uid === null) {
+        this.logger.warn(
+          `could not tell which user the daemon runs as — left what run ${runId}'s agent left running alone`,
+        );
+        return [];
+      }
+      const rows = await this.listGroups();
+      if (rows === null) {
+        this.logger.warn(
+          `could not read the process table — left what run ${runId}'s agent left running alone`,
+        );
+        return [];
+      }
+      const chain = daemonChain(rows, this.selfPid);
+      const daemonGroup = rows.find((row) => row.pid === this.selfPid)?.pgid;
+      const anchored = new Set(
+        groups
+          .filter(
+            (group) =>
+              group.pgid > 1 &&
+              group.pgid !== daemonGroup &&
+              isGroupAnchored(group, rows),
+          )
+          .map((group) => group.pgid),
+      );
+      const spared = new Set([
+        ...chain,
+        ...fencedPids(rows, this.uid, chain, false),
+      ]);
+      for (const root of this.processRoots()) {
+        for (const row of processTreeOf(rows, root)) {
+          spared.add(row.pid);
+        }
+      }
+      const { targets, overCap } = capSelection(
+        rows
+          .filter(
+            (row) =>
+              anchored.has(row.pgid) && row.pid > 1 && !spared.has(row.pid),
+          )
+          .map((row) => ({ ...row, env: null })),
+      );
+      if (overCap !== null) {
+        this.logger.warn(
+          `run ${runId}'s agent left ${overCap.count} processes, more than a run can own — killed none. First of them: ${overCap.sample
+            .map((row) => `${row.pid} (${nameOf(row)})`)
+            .join(', ')}`,
+        );
+        return [];
+      }
+      return await this.stopTargets(
+        targets.map((row) => ({ row, runId })),
+        [runId],
+      );
+    } catch (err: unknown) {
+      this.logger.warn(
+        `could not stop what run ${runId}'s agent left running: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return [];
+    }
+  }
+
   private async stopTargets(
     targets: readonly Target[],
     wanted: readonly string[],
@@ -377,4 +492,25 @@ async function readStartTimes(
   }
   const wanted = new Set(pids);
   return new Map([...parseStartTimes(out)].filter(([pid]) => wanted.has(pid)));
+}
+
+/**
+ * The reaper as the agents module provides it: it asks the registry which
+ * processes are a live agent's, and is handed what a run's CLI left running
+ * whenever a process ends ({@link AgentSessionRegistry.onLeftCommands}).
+ */
+export function createRunProcessReaper(
+  attribution: RunProcessAttribution,
+  sessions: AgentSessionRegistry,
+  options: RunProcessReaperOptions = {},
+): RunProcessReaper {
+  const reaper = new RunProcessReaper(attribution, {
+    held: (runId) => sessions.processRoots(runId).length > 0,
+    processRoots: () => sessions.processRoots().map((root) => root.pid),
+    ...options,
+  });
+  sessions.onLeftCommands((runId, left) => {
+    void reaper.stopLeftGroups(runId, left.groups);
+  });
+  return reaper;
 }

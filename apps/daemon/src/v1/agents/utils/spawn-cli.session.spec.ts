@@ -3,7 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent, TurnIo } from '../adapters/adapter.types';
-import { runCliSession, runHeadlessCli, type SessionLogger } from './spawn-cli';
+import type { PlainProcess } from './run-process-scan';
+import {
+  COMMAND_GROUP_READ_DELAY_MS,
+  COMMAND_GROUP_REFRESH_MS,
+  CUT_OFF_COMMAND_RESULT,
+  runCliSession,
+  runHeadlessCli,
+  type SessionLogger,
+} from './spawn-cli';
 
 const noopMapper = (): AgentEvent[] => [];
 
@@ -219,6 +227,8 @@ function openSession(
     spawn,
     logger,
     onBetweenTurnEvent,
+    // Never the machine's real table: a fake pid may name a real process.
+    listProcessGroups: () => Promise.resolve(null),
   });
   return { session, child: c, captured };
 }
@@ -891,6 +901,91 @@ describe('cancelling a session turn', () => {
     ]);
   });
 
+  it('counts a delegate’s command as detached only once it is moved to the background', () => {
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    line(child, { run: 't9', cmd: 'cargo test', parent: 'agent-1' });
+    line(child, {
+      work: 'b9',
+      phase: 'started',
+      unit: 'other',
+      call: 't9',
+      owned: true,
+      fore: true,
+    });
+
+    // Still waited on: it keeps the process from being reaped, but a close
+    // stops no command the agent left running.
+    expect(session.shellsRunning).toBe(1);
+    expect(session.detachedRunning).toBe(0);
+    expect(session.runningCommands).toEqual([]);
+
+    line(child, { work: 'b9', phase: 'backgrounded', unit: 'other' });
+
+    expect(session.detachedRunning).toBe(1);
+    expect(session.runningCommands).toEqual(['cargo test']);
+  });
+
+  describe('a command the CLI never answered when its process died', () => {
+    it('is answered as cut off ahead of the turn’s ending, under its delegate', async () => {
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession();
+      const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+      line(child, { run: 't1', cmd: 'pnpm test' });
+      line(child, { run: 't2', cmd: 'ls' });
+      line(child, { tool: 't2' });
+      line(child, { run: 't3', cmd: 'cargo build', parent: 'agent-1' });
+
+      // An OOM kill: nobody asked for it.
+      child.emit('close', null, 'SIGKILL');
+      await handle?.done;
+
+      const cut = events.filter(
+        (e) => e.type === 'tool_result' && e.result === CUT_OFF_COMMAND_RESULT,
+      );
+      expect(cut).toEqual([
+        {
+          type: 'tool_result',
+          id: 't1',
+          name: 'Bash',
+          result: CUT_OFF_COMMAND_RESULT,
+          isError: true,
+        },
+        {
+          type: 'tool_result',
+          id: 't3',
+          name: 'Bash',
+          result: CUT_OFF_COMMAND_RESULT,
+          isError: true,
+          parentToolUseId: 'agent-1',
+        },
+      ]);
+      expect(events.indexOf(cut[1]!)).toBeLessThan(
+        events.findIndex((e) => e.type === 'error'),
+      );
+    });
+
+    it('is left alone on a Stop, which the transcript already reads as one', async () => {
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession();
+      const handle = session.startTurn({
+        onEvent: (e) => events.push(e),
+        buildInterruptPayload: () => 'INTERRUPT\n',
+      });
+      line(child, { run: 't1', cmd: 'pnpm test' });
+      handle?.cancel();
+      child.emit('close', null, 'SIGTERM');
+      await handle?.done;
+
+      expect(
+        events.filter(
+          (e) =>
+            e.type === 'tool_result' && e.result === CUT_OFF_COMMAND_RESULT,
+        ),
+      ).toEqual([]);
+    });
+  });
+
   it('remembers what was running when the process ended', () => {
     // Read by a holder told of the end through `closed`, by which time the
     // live readings are empty.
@@ -907,6 +1002,7 @@ describe('cancelling a session turn', () => {
     expect(session.endedRunning).toEqual({
       running: 2,
       commands: ['pnpm dev'],
+      groups: [],
     });
   });
 
@@ -2936,22 +3032,45 @@ describe('a turn whose background work outlives its result', () => {
     ]);
   });
 
-  it('announces a shell settle the started of which was never seen', async () => {
-    // A session that resumed after the launch, or a channel that omitted the
-    // pairing. The work id alone still names the command, which is the whole
-    // reason both ride every announcement.
+  it('announces no shell settle the started of which this process never saw', async () => {
+    // A session resumed after the launch: the process that opened the shell
+    // closed it as it ended, and claude, resumed after a crash, reports such a
+    // task `stopped` once more (measured on 2.1.295). A second close would be
+    // a durable duplicate.
     const events: AgentEvent[] = [];
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
+    line(child, { work: 'bash_9', phase: 'settled', call: 't-old' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events).toEqual([COMPLETE]);
+  });
+
+  it('announces the settle of a shell whose settle channel names no call', async () => {
+    // The work id alone still names the command, which is the whole reason
+    // both ride every announcement.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { run: 't1', cmd: 'sleep 9' });
+    line(child, {
+      work: 'bash_9',
+      phase: 'started',
+      unit: 'other',
+      call: 't1',
+    });
     line(child, { work: 'bash_9', phase: 'settled' });
     line(child, { done: true });
     await handle?.done;
 
-    expect(events).toEqual([
-      { type: 'shell_info', toolCallId: null, workId: 'bash_9' },
-      COMPLETE,
-    ]);
+    expect(events).toContainEqual({
+      type: 'shell_info',
+      toolCallId: 't1',
+      workId: 'bash_9',
+    });
   });
 
   it('never announces a DELEGATE as a shell', async () => {
@@ -3101,10 +3220,7 @@ describe('a turn whose background work outlives its result', () => {
     await handle?.done;
 
     expect(events.filter((e) => e.type === 'background_work')).toEqual([]);
-    expect(events).toEqual([
-      { type: 'shell_info', toolCallId: null, workId: 'task-1' },
-      COMPLETE,
-    ]);
+    expect(events).toEqual([COMPLETE]);
   });
 
   it('does NOT hold a cancel or a failure back', async () => {
@@ -4745,6 +4861,7 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
       spawn,
       detectDetachedShells: true,
       listProcesses: processes,
+      listProcessGroups: () => Promise.resolve(null),
       onBetweenTurnEvent: (event) => offTurn.push(event),
     });
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
@@ -5296,5 +5413,644 @@ describe('a stdin that breaks under a turn in flight', () => {
     vi.advanceTimersByTime(5000);
 
     expect(child.kills).toBe(1);
+  });
+});
+
+describe('where a session’s detached commands run', () => {
+  const row = (
+    pid: number,
+    ppid: number,
+    pgid: number,
+    args: string,
+    startedAt = 1_000_000,
+  ): PlainProcess => ({
+    pid,
+    ppid,
+    pgid,
+    uid: 501,
+    tty: null,
+    startedAt,
+    args,
+  });
+
+  /** The CLI (pid 100, its own group) and an MCP server in that group. */
+  const CLI_AND_MCP = [
+    row(100, 1, 100, 'claude'),
+    row(101, 100, 100, 'node mcp.js'),
+  ];
+
+  function openRecordingSession(
+    table: () => PlainProcess[],
+    logger?: SessionLogger,
+  ) {
+    let reads = 0;
+    const { spawn, child } = fakeSpawn(new FakeChild(100));
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: resultOnDone,
+      spawn,
+      logger,
+      commandGroupReadDelayMs: 0,
+      listProcessGroups: () => {
+        reads += 1;
+        return Promise.resolve().then(table);
+      },
+    });
+    session.startTurn({ onEvent: () => {} });
+    return { session, child, reads: () => reads };
+  }
+
+  function background(
+    child: FakeChild,
+    work: string,
+    call: string,
+    cmd: string,
+  ): void {
+    line(child, { run: call, cmd });
+    line(child, { work, phase: 'started', unit: 'other', call });
+  }
+
+  /** Until the session has read the table `n` times and filed what it read. */
+  async function afterReading(reads: () => number, n: number): Promise<void> {
+    await vi.waitFor(() => expect(reads()).toBeGreaterThanOrEqual(n));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  /** The groups the session hands over when its process dies right now. */
+  function groupsAtDeath(
+    session: ReturnType<typeof runCliSession>,
+    child: FakeChild,
+  ) {
+    child.emit('close', null, 'SIGKILL');
+    return session.endedRunning?.groups;
+  }
+
+  it('records the group a background command runs in, with every member of it', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, "/bin/zsh -c eval 'pnpm dev'"),
+      row(201, 200, 200, 'node /opt/homebrew/bin/pnpm dev', 2_000_000),
+    ]);
+    background(child, 'b1', 't1', 'pnpm dev');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      {
+        pgid: 200,
+        members: [
+          { pid: 200, startedAt: 1_000_000 },
+          { pid: 201, startedAt: 2_000_000 },
+        ],
+      },
+    ]);
+  });
+
+  it('answers where the command a call launched runs — nothing before a reading, null for a call running none', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c pnpm dev'),
+    ]);
+    background(child, 'b1', 't1', 'pnpm dev');
+    expect(session.recordedGroupsOf('t1')).toEqual([]);
+    await afterReading(reads, 1);
+
+    expect(session.recordedGroupsOf('t1')).toEqual([
+      { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+    ]);
+    expect(session.recordedGroupsOf('t-other')).toBeNull();
+  });
+
+  it('never records the CLI’s own group, where its MCP servers run', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 100, "/bin/zsh -c eval 'pnpm dev'"),
+    ]);
+    background(child, 'b1', 't1', 'pnpm dev');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('hands over the groups of the commands still running when the process ends', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c sleep 600'),
+      row(300, 100, 300, '/bin/sh -c tail -f build.log'),
+    ]);
+    background(child, 'b1', 't1', 'sleep 600');
+    background(child, 'b2', 't2', 'tail -f build.log');
+    await afterReading(reads, 1);
+
+    line(child, { work: 'b2', phase: 'settled', unit: 'other' });
+
+    expect(groupsAtDeath(session, child)?.map((group) => group.pgid)).toEqual([
+      200,
+    ]);
+  });
+
+  it('keeps a recorded group whose wrapper has exited, with what has joined it since', async () => {
+    let table = [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c sleep 600; :'),
+      row(201, 200, 200, 'sleep 600', 1_500_000),
+    ];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'sleep 600; :');
+    await afterReading(reads, 1);
+
+    // The wrapper is gone: its command now hangs off launchd, outside the
+    // CLI's tree, and has started a helper in its own group.
+    table = [
+      ...CLI_AND_MCP,
+      row(201, 1, 200, 'sleep 600', 1_500_000),
+      row(202, 201, 200, 'sleep-helper', 1_600_000),
+    ];
+    background(child, 'b2', 't2', 'echo unrelated work');
+    await afterReading(reads, 2);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      {
+        pgid: 200,
+        members: [
+          { pid: 201, startedAt: 1_500_000 },
+          { pid: 202, startedAt: 1_600_000 },
+        ],
+      },
+    ]);
+  });
+
+  /** A session reading the table after the real {@link COMMAND_GROUP_READ_DELAY_MS}. */
+  function openDelayedSession() {
+    let reads = 0;
+    const { spawn, child } = fakeSpawn(new FakeChild(100));
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: resultOnDone,
+      spawn,
+      listProcessGroups: () => {
+        reads += 1;
+        return Promise.resolve([
+          ...CLI_AND_MCP,
+          row(200, 100, 200, '/bin/sh -c sleep 600'),
+        ]);
+      },
+    });
+    session.startTurn({ onEvent: () => {} });
+    return { child, reads: () => reads };
+  }
+
+  it('reads the table once for a burst, a moment after its first command', async () => {
+    vi.useFakeTimers();
+    const { child, reads } = openDelayedSession();
+    background(child, 'b1', 't1', 'sleep 600');
+    background(child, 'b2', 't2', 'tail -f build.log');
+
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS - 1);
+    expect(reads()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+    expect(reads()).toBe(1);
+  });
+
+  it('reads once more, a full delay later, for a command reported after the burst’s reading was armed', async () => {
+    // That reading can come before the later command has spawned.
+    vi.useFakeTimers();
+    const { child, reads } = openDelayedSession();
+    background(child, 'b1', 't1', 'sleep 600');
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS - 100);
+    background(child, 'b2', 't2', 'tail -f build.log');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reads()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS - 1);
+    expect(reads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads()).toBe(2);
+  });
+
+  it.each([
+    ['the user', 'held'],
+    ['the run’s standing posture', 'posture'],
+  ] as const)(
+    'reads the table again once %s allows a request between turns',
+    async (_who, path) => {
+      // The command it asked about runs only once allowed.
+      vi.useFakeTimers();
+      let reads = 0;
+      let answer: ((allow: boolean) => boolean) | null = null;
+      const { spawn, child } = fakeSpawn(new FakeChild(100));
+      const session = runCliSession({
+        command: 'claude',
+        args: [],
+        cwd: '/proj',
+        stdinLifetime: 'session',
+        mapper: resultOnDone,
+        spawn,
+        betweenTurnApproval: () => (path === 'posture' ? true : null),
+        onHeldApproval: (_event, respond) => {
+          answer = respond;
+          return true;
+        },
+        listProcessGroups: () => {
+          reads += 1;
+          return Promise.resolve([...CLI_AND_MCP]);
+        },
+      });
+      const turn = session.startTurn({
+        onEvent: () => {},
+        buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+      });
+      background(child, 'b1', 't1', 'pnpm dev');
+      line(child, { done: true });
+      await turn?.done;
+      await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+      expect(reads).toBe(1);
+
+      line(child, { ask: 'card-1' });
+      if (path === 'held') {
+        expect(answer!(true)).toBe(true);
+      }
+      await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it('reads the table again while a command runs, and not once none does', async () => {
+    vi.useFakeTimers();
+    let table = [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c sleep 600; :')];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'sleep 600; :');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toBe(1);
+
+    // Forked into the group after the first reading.
+    table = [...table, row(201, 200, 200, 'sleep-helper', 2_000_000)];
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_REFRESH_MS);
+    expect(reads()).toBe(2);
+    background(child, 'b2', 't2', 'tail -f build.log');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toBe(3);
+
+    line(child, { work: 'b1', phase: 'settled', unit: 'other' });
+    line(child, { work: 'b2', phase: 'settled', unit: 'other' });
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_REFRESH_MS * 4);
+    expect(reads()).toBe(3);
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('files what a refresh found joined the group since the first reading', async () => {
+    vi.useFakeTimers();
+    let table = [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c sleep 600; :')];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'sleep 600; :');
+    await vi.advanceTimersByTimeAsync(0);
+
+    table = [...table, row(201, 200, 200, 'sleep-helper', 2_000_000)];
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_REFRESH_MS);
+    expect(reads()).toBe(2);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      {
+        pgid: 200,
+        members: [
+          { pid: 200, startedAt: 1_000_000 },
+          { pid: 201, startedAt: 2_000_000 },
+        ],
+      },
+    ]);
+  });
+
+  it('records a delegate’s own command, and drops it when that command ends', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c pnpm test --watch'),
+    ]);
+    line(child, { run: 'agent-1', cmd: undefined });
+    line(child, {
+      work: 'd1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'agent-1',
+    });
+    line(child, { run: 't9', cmd: 'pnpm test --watch', parent: 'agent-1' });
+    line(child, {
+      work: 'b9',
+      phase: 'started',
+      unit: 'other',
+      call: 't9',
+      owned: true,
+    });
+    await afterReading(reads, 1);
+    expect(reads()).toBe(1);
+
+    line(child, { work: 'b9', phase: 'settled', unit: 'other' });
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('hands over a delegate’s own command still running when the process ends', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c pnpm test --watch'),
+    ]);
+    line(child, { run: 'agent-1', cmd: undefined });
+    line(child, {
+      work: 'd1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'agent-1',
+    });
+    line(child, { run: 't9', cmd: 'pnpm test --watch', parent: 'agent-1' });
+    line(child, {
+      work: 'b9',
+      phase: 'started',
+      unit: 'other',
+      call: 't9',
+      owned: true,
+    });
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+    ]);
+  });
+
+  function waitedOn(child: FakeChild): void {
+    line(child, { run: 't1', cmd: 'pnpm test' });
+    line(child, {
+      work: 'f1',
+      phase: 'started',
+      unit: 'other',
+      call: 't1',
+      fore: true,
+    });
+  }
+  const TESTING = [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c pnpm test')];
+
+  it('records a command the agent waits on, from its start', async () => {
+    const { session, child, reads } = openRecordingSession(() => TESTING);
+    waitedOn(child);
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+    ]);
+  });
+
+  it('drops a waited-on command once it settles', async () => {
+    const { session, child, reads } = openRecordingSession(() => TESTING);
+    waitedOn(child);
+    await afterReading(reads, 1);
+
+    line(child, { work: 'f1', phase: 'settled', unit: 'other' });
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('opens no shell for a waited-on command whose move to the background arrives after its end', async () => {
+    const opened: AgentEvent[] = [];
+    const { spawn, child } = fakeSpawn(new FakeChild(100));
+    const session = runCliSession({
+      command: 'codex',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: resultOnDone,
+      spawn,
+      listProcessGroups: () => Promise.resolve(null),
+    });
+    session.startTurn({ onEvent: (event) => opened.push(event) });
+    line(child, { run: 't1', cmd: 'pnpm dev' });
+    line(child, {
+      work: 'u1',
+      phase: 'started',
+      unit: 'other',
+      call: 't1',
+      fore: true,
+    });
+    // codex held its turn's ending while a steer went unanswered, and the
+    // command completed inside that hold.
+    line(child, { work: 'u1', phase: 'settled', unit: 'other' });
+    line(child, { work: 'u1', phase: 'backgrounded', unit: 'other' });
+
+    expect(opened.filter((event) => event.type === 'shell_open')).toEqual([]);
+    expect(session.shellsRunning).toBe(0);
+  });
+
+  it('records a command in the CLI’s own session but not its group leader’s group', async () => {
+    // The CLI (pid 100) runs in group 90 — a wrapper leads it — and a command
+    // matched in that group shares it with the CLI and its MCP servers.
+    const { session, child, reads } = openRecordingSession(() => [
+      row(90, 1, 90, 'node /usr/local/bin/claude'),
+      row(100, 90, 90, 'claude'),
+      row(200, 100, 90, '/bin/sh -c pnpm dev'),
+    ]);
+    background(child, 'b1', 't1', 'pnpm dev');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('matches a command whose line ps escapes', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      // `ps` writes the em dash's three UTF-8 bytes as `M-bM^@M^T`.
+      row(200, 100, 200, 'node ./serveM-bM^@M^Tall.js'),
+    ]);
+    background(child, 'b1', 't1', 'node ./serve—all.js');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)?.map((group) => group.pgid)).toEqual([
+      200,
+    ]);
+  });
+
+  it('drops a record once a reading finds nothing of the command', async () => {
+    let table = [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c sleep 600')];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'sleep 600');
+    await afterReading(reads, 1);
+
+    table = [...CLI_AND_MCP];
+    background(child, 'b2', 't2', 'echo unrelated work');
+    await afterReading(reads, 2);
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  describe('for a CLI that reports no units (cursor)', () => {
+    const executeMapper = (obj: unknown): AgentEvent[] => {
+      const row = obj as { run?: string; id?: string; answered?: string };
+      if (typeof row.run === 'string') {
+        return [
+          {
+            type: 'tool_call',
+            id: row.id ?? 'call-1',
+            name: 'Shell',
+            input: { command: row.run },
+            kind: 'execute',
+          },
+        ];
+      }
+      if (typeof row.answered === 'string') {
+        return [
+          {
+            type: 'tool_result',
+            id: row.answered,
+            name: null,
+            result: { exitCode: 0, stdout: '', stderr: '' },
+            isError: false,
+          },
+        ];
+      }
+      return [];
+    };
+
+    function openExecuteSession(table: () => PlainProcess[]) {
+      let reads = 0;
+      const { spawn, child } = fakeSpawn(new FakeChild(100));
+      const session = runCliSession({
+        command: 'cursor-agent',
+        args: [],
+        cwd: '/proj',
+        stdinLifetime: 'session',
+        mapper: executeMapper,
+        spawn,
+        detectDetachedShells: true,
+        listProcesses: () => Promise.resolve([]),
+        commandGroupReadDelayMs: 0,
+        listProcessGroups: () => {
+          reads += 1;
+          return Promise.resolve().then(table);
+        },
+      });
+      session.startTurn({ onEvent: () => {} });
+      return { session, child, reads: () => reads };
+    }
+
+    it('reads the table again once an approval lets the command it asked about run', async () => {
+      vi.useFakeTimers();
+      let reads = 0;
+      const { spawn, child } = fakeSpawn(new FakeChild(100));
+      const session = runCliSession({
+        command: 'cursor-agent',
+        args: [],
+        cwd: '/proj',
+        stdinLifetime: 'session',
+        mapper: (obj) => {
+          const ask = (obj as { ask?: string }).ask;
+          return typeof ask === 'string'
+            ? [
+                {
+                  type: 'approval_request',
+                  id: ask,
+                  toolName: 'Shell',
+                  input: {},
+                },
+              ]
+            : executeMapper(obj);
+        },
+        spawn,
+        detectDetachedShells: true,
+        listProcesses: () => Promise.resolve([]),
+        listProcessGroups: () => {
+          reads += 1;
+          return Promise.resolve([...CLI_AND_MCP]);
+        },
+      });
+      const handle = session.startTurn({
+        onEvent: () => {},
+        buildApprovalResponse: (id, allow) =>
+          `${JSON.stringify({ verdict: id, allow })}\n`,
+      });
+      line(child, { run: 'sleep 600', id: 'call-1' });
+      line(child, { ask: 'card-1' });
+      await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+      expect(reads).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(handle?.respondApproval('card-1', true, undefined)).toBe(true);
+      await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+      expect(reads).toBe(2);
+    });
+
+    it('records a command from its call, and keeps it once answered while it runs on', async () => {
+      const { session, child, reads } = openExecuteSession(() => [
+        ...CLI_AND_MCP,
+        row(200, 100, 200, '/bin/zsh -c sleep 600'),
+      ]);
+      line(child, { run: 'sleep 600', id: 'call-1' });
+      await afterReading(reads, 1);
+      // cursor answers a command it backgrounded as finished, exit code 0.
+      line(child, { answered: 'call-1' });
+      await afterReading(reads, 2);
+
+      expect(groupsAtDeath(session, child)).toEqual([
+        { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+      ]);
+    });
+
+    it('keeps no leftover the answered call’s group held once it has left the tree', async () => {
+      let table = [
+        ...CLI_AND_MCP,
+        row(200, 100, 200, '/bin/zsh -c make serve'),
+        row(201, 200, 200, 'node leftover.js', 2_000_000),
+      ];
+      const { session, child, reads } = openExecuteSession(() => table);
+      line(child, { run: 'make serve', id: 'call-1' });
+      await afterReading(reads, 1);
+
+      // The call is answered; its shell is gone and what it left hangs off
+      // launchd, still in its group.
+      table = [...CLI_AND_MCP, row(201, 1, 200, 'node leftover.js', 2_000_000)];
+      line(child, { answered: 'call-1' });
+      await afterReading(reads, 2);
+
+      expect(groupsAtDeath(session, child)).toEqual([]);
+    });
+
+    it('drops an answered command that no longer runs', async () => {
+      let table = [...CLI_AND_MCP, row(200, 100, 200, '/bin/zsh -c make')];
+      const { session, child, reads } = openExecuteSession(() => table);
+      line(child, { run: 'make', id: 'call-1' });
+      await afterReading(reads, 1);
+
+      table = [...CLI_AND_MCP];
+      line(child, { answered: 'call-1' });
+      await afterReading(reads, 2);
+
+      expect(groupsAtDeath(session, child)).toEqual([]);
+    });
+  });
+
+  it('keeps the last record, and says so, when a later reading fails', async () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    let fail = false;
+    const { session, child, reads } = openRecordingSession(() => {
+      if (fail) {
+        throw new Error('ps exploded');
+      }
+      return [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c sleep 600; :')];
+    }, logger);
+    background(child, 'b1', 't1', 'sleep 600; :');
+    await afterReading(reads, 1);
+
+    fail = true;
+    background(child, 'b2', 't2', 'tail -f build.log');
+    await afterReading(reads, 2);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'claude: could not record where its background commands run: ps exploded',
+    );
+    expect(groupsAtDeath(session, child)).toEqual([
+      { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+    ]);
   });
 });

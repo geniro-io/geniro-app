@@ -509,12 +509,19 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
  * is also the one row that reaches here with no terminal event behind it: a
  * steered message the CLI refuses once its turn has ended arrives as a notice,
  * and reading that as `running` would latch a finished run's badge on.
+ *
+ * So is the result that reports a background command's END
+ * (`endsBackgroundWork`): codex completes the item of a command a turn left
+ * running when it exits, usually with no turn open, and nothing follows it.
+ * Measured on a live daemon (codex-cli 0.162.0): read as work, it latched a
+ * finished chat on `running` once its `sleep` ended.
  */
 export function restatesRunAsWorking(event: AgentEvent): boolean {
   return !(
     (event.type === 'subagent_info' && event.backgroundOpen !== true) ||
     event.type === 'shell_info' ||
     event.type === 'shell_open' ||
+    (event.type === 'tool_result' && event.endsBackgroundWork === true) ||
     event.type === 'notice' ||
     // A record of a message that never reached the agent — a codex steer is
     // refused after its turn ended — not the agent doing anything.

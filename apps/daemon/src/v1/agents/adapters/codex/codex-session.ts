@@ -122,6 +122,23 @@ export class CodexSession implements TurnDriver {
    */
   readonly endedTurns = new Set<string>();
   /**
+   * Every command codex runs, by item id → the sub-agent thread that runs it
+   * (null for this conversation's own), from the item's start until codex
+   * completes it — or, for one held in no process store, until its turn (or
+   * its sub-agent's turn) ends. Each is reported as a unit of work from its
+   * first moment, so `spawn-cli` records where it runs while the CLI lives.
+   * On the session: a command outlives the turn that started it.
+   */
+  readonly commandUnits = new Map<string, string | null>();
+  /**
+   * Of {@link commandUnits}, the ones codex holds in its process store that
+   * were still running when their turn ended — codex ends a turn without
+   * waiting on a command it has backgrounded. Their
+   * completion, under the old turn's id and usually with no turn open, is
+   * that command's end rather than the agent at work again.
+   */
+  readonly leftRunning = new Set<string>();
+  /**
    * Server requests awaiting the user's verdict, by encoded id. Thread-scoped
    * rather than per-turn: a request left unanswered when its turn settles is
    * re-offered to the next turn, and its verdict has to find it there.

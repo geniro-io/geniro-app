@@ -23,6 +23,7 @@ function scanned(pid: number, ppid = 1, runId = RUN): ScannedProcess {
   return {
     pid,
     ppid,
+    pgid: pid,
     uid: 501,
     tty: null,
     startedAt: pid * 10,

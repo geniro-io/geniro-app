@@ -49,6 +49,8 @@ export function runTagEnv(
 export interface ScannedProcess {
   pid: number;
   ppid: number;
+  /** Its process group — what a command an agent left running is recorded by. */
+  pgid: number;
   uid: number;
   /** Its controlling terminal (`ttys003`), or null when it has none. */
   tty: string | null;
@@ -61,6 +63,9 @@ export interface ScannedProcess {
    */
   env: string | null;
 }
+
+/** A process as the plain listing alone describes it, with no environment. */
+export type PlainProcess = Omit<ScannedProcess, 'env'>;
 
 /** A process a stop action may name; its start time is what a press re-checks. */
 export type StopCandidate = ScannedProcess & { startedAt: number };
@@ -99,9 +104,15 @@ const CONTAINER_VM = /^(?:colima|lima|limactl)$/;
 /** Lima's own directory under any home (`$COLIMA_HOME/_lima`), and the defaults. */
 const CONTAINER_VM_DIRS = ['/_lima/', '/.colima/', '/.lima/'];
 
+const PLAIN_COLUMNS = [
+  '-axww',
+  '-o',
+  'pid=,ppid=,pgid=,uid=,tt=,lstart=,args=',
+];
+
 // `lstart` is five fields with a space-padded day: `Mon Oct  5 17:34:22 2026`.
 const PLAIN_ROW =
-  /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/;
+  /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/;
 const ENV_ROW = /^\s*(\d+) (.*)$/;
 
 /**
@@ -113,7 +124,7 @@ const ENV_ROW = /^\s*(\d+) (.*)$/;
  */
 export async function scanProcessTable(): Promise<ScannedProcess[] | null> {
   const [plain, withEnv] = await Promise.all([
-    runPs(['-axww', '-o', 'pid=,ppid=,uid=,tt=,lstart=,args=']),
+    runPs(PLAIN_COLUMNS),
     // Every process's whole environment: a few MB on a busy machine.
     runPs(['-axwwE', '-o', 'pid=,args='], 64 * 1024 * 1024),
   ]);
@@ -127,12 +138,56 @@ export async function scanProcessTable(): Promise<ScannedProcess[] | null> {
 }
 
 /**
- * Join `ps -axww -o pid=,ppid=,uid=,tt=,lstart=,args=` with
- * `ps -axwwE -o pid=,args=` into rows that carry their environment.
- *
- * A line of either listing that does not open the way it was asked to is
- * skipped rather than guessed at — this is another program's output, and a
- * header read as a row would arrive as pid 0.
+ * The plain listing alone, or null when it could not be read: what a session
+ * reads while a command it ran is out, where the megabytes of `ps -E` buy
+ * nothing.
+ */
+export async function scanPlainTable(): Promise<PlainProcess[] | null> {
+  const plain = await runPs(PLAIN_COLUMNS);
+  if (plain === null) {
+    return null;
+  }
+  const rows = parsePlainTable(plain);
+  // As in {@link scanProcessTable}: an empty parse is an unreadable format.
+  return rows.length === 0 ? null : rows;
+}
+
+/**
+ * `ps -axww -o pid=,ppid=,pgid=,uid=,tt=,lstart=,args=` into rows. A line that
+ * does not open the way it was asked to is skipped rather than guessed at —
+ * this is another program's output, and a header read as a row would arrive as
+ * pid 0.
+ */
+export function parsePlainTable(plain: string): PlainProcess[] {
+  const rows: PlainProcess[] = [];
+  for (const line of plain.split('\n')) {
+    const match = PLAIN_ROW.exec(line.trimEnd());
+    if (match === null) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const args = (match[7] ?? '').trim();
+    if (!Number.isInteger(pid) || pid <= 0 || args === '') {
+      continue;
+    }
+    const tty = match[5] ?? '??';
+    const startedAt = Date.parse(match[6] ?? '');
+    rows.push({
+      pid,
+      ppid: Number(match[2]),
+      pgid: Number(match[3]),
+      uid: Number(match[4]),
+      tty: tty === '??' || tty === '-' ? null : tty,
+      startedAt: Number.isNaN(startedAt) ? null : startedAt,
+      args,
+    });
+  }
+  return rows;
+}
+
+/**
+ * The plain listing joined with `ps -axwwE -o pid=,args=` into rows that carry
+ * their environment.
  */
 export function parseScan(plain: string, withEnv: string): ScannedProcess[] {
   const envLines = new Map<number, string>();
@@ -142,31 +197,13 @@ export function parseScan(plain: string, withEnv: string): ScannedProcess[] {
       envLines.set(Number(match[1]), match[2] ?? '');
     }
   }
-  const rows: ScannedProcess[] = [];
-  for (const line of plain.split('\n')) {
-    const match = PLAIN_ROW.exec(line.trimEnd());
-    if (match === null) {
-      continue;
-    }
-    const pid = Number(match[1]);
-    const args = (match[6] ?? '').trim();
-    if (!Number.isInteger(pid) || pid <= 0 || args === '') {
-      continue;
-    }
-    const tty = match[4] ?? '??';
-    const startedAt = Date.parse(match[5] ?? '');
-    const envLine = envLines.get(pid);
-    rows.push({
-      pid,
-      ppid: Number(match[2]),
-      uid: Number(match[3]),
-      tty: tty === '??' || tty === '-' ? null : tty,
-      startedAt: Number.isNaN(startedAt) ? null : startedAt,
-      args,
-      env: envLine === undefined ? null : envSuffix(args, envLine),
-    });
-  }
-  return rows;
+  return parsePlainTable(plain).map((row) => {
+    const envLine = envLines.get(row.pid);
+    return {
+      ...row,
+      env: envLine === undefined ? null : envSuffix(row.args, envLine),
+    };
+  });
 }
 
 /**
@@ -247,7 +284,6 @@ export function attributeRunProcesses(
   rows: readonly ScannedProcess[],
   scope: AttributionScope,
 ): Map<string, ScannedProcess[]> {
-  const byPid = new Map(rows.map((row) => [row.pid, row]));
   const tagOf = new Map<number, string>();
   for (const row of rows) {
     const runId = row.env === null ? null : runTagOf(row.env, scope.owner);
@@ -256,14 +292,9 @@ export function attributeRunProcesses(
     }
   }
 
-  const blocked = new Set<number>();
+  const blocked = daemonChain(rows, scope.selfPid);
   const selfRuns = new Set<string>();
-  for (
-    let pid: number | undefined = scope.selfPid;
-    pid !== undefined && pid > 1 && !blocked.has(pid);
-    pid = byPid.get(pid)?.ppid
-  ) {
-    blocked.add(pid);
+  for (const pid of blocked) {
     const runId = tagOf.get(pid);
     if (runId !== undefined) {
       selfRuns.add(runId);
@@ -279,35 +310,7 @@ export function attributeRunProcesses(
     }
   }
 
-  // Fenced off, with everything below: another user's process, one never any
-  // run's, and one on a terminal. The fence stops at the daemon's own chain —
-  // geniro itself is an installed app, and its agents are its children.
-  const fenceFrom = rows.filter(
-    (row) =>
-      row.pid > 1 &&
-      !blocked.has(row.pid) &&
-      (row.uid !== scope.uid || isOutsideAnyRun(row.args)),
-  );
-  // On a terminal right now: the user's shell and what they run in it. Only
-  // while it lasts — once the terminal closes, what was left is attributable
-  // again. Never its host: an agent works on terminals too (codex runs
-  // commands on a pseudo-terminal), and a whole agent must not vanish behind one.
-  fenceFrom.push(
-    ...rows.filter((row) => row.tty !== null && !blocked.has(row.pid)),
-  );
-  const fenced = new Set<number>();
-  while (fenceFrom.length > 0) {
-    const row = fenceFrom.pop() as ScannedProcess;
-    if (fenced.has(row.pid)) {
-      continue;
-    }
-    fenced.add(row.pid);
-    for (const child of byParent.get(row.pid) ?? []) {
-      if (!blocked.has(child.pid)) {
-        fenceFrom.push(child);
-      }
-    }
-  }
+  const fenced = fencedPids(rows, scope.uid, blocked, true);
   const eligible = (row: ScannedProcess): boolean =>
     row.pid > 1 && !blocked.has(row.pid) && !fenced.has(row.pid);
 
@@ -343,6 +346,72 @@ export function attributeRunProcesses(
     procs.sort((a, b) => a.pid - b.pid);
   }
   return owned;
+}
+
+/** The daemon and every ancestor of it, launchd excluded. */
+export function daemonChain(
+  rows: readonly PlainProcess[],
+  selfPid: number,
+): Set<number> {
+  const parentOf = new Map(rows.map((row) => [row.pid, row.ppid]));
+  const chain = new Set<number>();
+  for (
+    let pid: number | undefined = selfPid;
+    pid !== undefined && pid > 1 && !chain.has(pid);
+    pid = parentOf.get(pid)
+  ) {
+    chain.add(pid);
+  }
+  return chain;
+}
+
+/**
+ * What no run may own, each with everything below it: another user's process,
+ * one never any run's ({@link isOutsideAnyRun}) and, with `terminals`, one on a
+ * terminal — the user's shell and what they run in it, only while that
+ * terminal is open. The fence stops at `chain`, the daemon's own: geniro itself
+ * is an installed app, and its agents are its children.
+ *
+ * Never the HOST of a terminal: an agent works on terminals too (codex runs
+ * commands on a pseudo-terminal), and a whole agent must not vanish behind one.
+ */
+export function fencedPids(
+  rows: readonly PlainProcess[],
+  uid: number,
+  chain: ReadonlySet<number>,
+  terminals: boolean,
+): Set<number> {
+  const byParent = new Map<number, PlainProcess[]>();
+  for (const row of rows) {
+    const siblings = byParent.get(row.ppid);
+    if (siblings) {
+      siblings.push(row);
+    } else {
+      byParent.set(row.ppid, [row]);
+    }
+  }
+  const fenceFrom = rows.filter(
+    (row) =>
+      row.pid > 1 &&
+      !chain.has(row.pid) &&
+      (row.uid !== uid ||
+        isOutsideAnyRun(row.args) ||
+        (terminals && row.tty !== null)),
+  );
+  const fenced = new Set<number>();
+  while (fenceFrom.length > 0) {
+    const row = fenceFrom.pop() as PlainProcess;
+    if (fenced.has(row.pid)) {
+      continue;
+    }
+    fenced.add(row.pid);
+    for (const child of byParent.get(row.pid) ?? []) {
+      if (!chain.has(child.pid)) {
+        fenceFrom.push(child);
+      }
+    }
+  }
+  return fenced;
 }
 
 /** Over the cap the answer is to kill nothing, and to say what matched. */

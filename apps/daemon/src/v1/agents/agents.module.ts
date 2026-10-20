@@ -97,7 +97,10 @@ import {
   currentRunOwner,
   RunProcessAttribution,
 } from './services/run-process-attribution.service';
-import { RunProcessReaper } from './services/run-process-reaper.service';
+import {
+  createRunProcessReaper,
+  RunProcessReaper,
+} from './services/run-process-reaper.service';
 import { RunProcessSweep } from './services/run-process-sweep.service';
 import { RunProcessesService } from './services/run-processes.service';
 import { RunStateService } from './services/run-state.service';
@@ -370,9 +373,7 @@ import { defaultSpawn } from './utils/spawn-cli';
         em: EntityManager,
         runDao: RunDao,
       ) =>
-        new RunProcessReaper(attribution, {
-          held: (runId) => sessions.processRoots(runId).length > 0,
-          processRoots: () => sessions.processRoots().map((root) => root.pid),
+        createRunProcessReaper(attribution, sessions, {
           stillGone: async (runIds) => {
             const live = await runDao.getAll(
               { id: { $in: runIds }, archivedAt: null },

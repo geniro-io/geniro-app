@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
 import type { ProcessUsageRow } from '../utils/process-usage';
 import {
+  type PlainProcess,
   RUN_ID_ENV,
   RUN_OWNER_ENV,
   type ScannedProcess,
@@ -28,6 +29,7 @@ function row(
   return {
     pid,
     ppid,
+    pgid: pid,
     uid: UID,
     tty: null,
     startedAt: pid * 10,
@@ -573,5 +575,233 @@ describe('isUnsignallable', () => {
     expect(isUnsignallable(-1, SELF)).toBe(true);
     expect(isUnsignallable(SELF, SELF)).toBe(true);
     expect(isUnsignallable(10, SELF)).toBe(false);
+  });
+});
+
+describe('RunProcessReaper.stopLeftGroups', () => {
+  /** A table row whose kernel start time is what `sameAsListed` reports. */
+  const groupRow = (
+    pid: number,
+    ppid: number,
+    pgid: number,
+    args: string,
+    overrides: Partial<PlainProcess> = {},
+  ): PlainProcess => ({
+    pid,
+    ppid,
+    pgid,
+    uid: UID,
+    tty: null,
+    startedAt: pid * 10,
+    args,
+    ...overrides,
+  });
+
+  /** What the session recorded: the wrapper shell and its `sleep`. */
+  const RECORDED = [
+    {
+      pgid: 200,
+      members: [
+        { pid: 200, startedAt: 2000 },
+        { pid: 201, startedAt: 2010 },
+      ],
+    },
+  ];
+
+  const leftBy = (
+    table: PlainProcess[] | null,
+    options: RunProcessReaperOptions = {},
+  ) =>
+    reaper([], {
+      listGroups: () => Promise.resolve(table),
+      uid: UID,
+      ...options,
+    });
+
+  it('stops every current member of a group a recorded member still anchors, and nothing else', async () => {
+    const {
+      reaper: subject,
+      signals,
+      waits,
+    } = leftBy([
+      // The dead CLI's orphaned MCP server, still in the CLI's own group.
+      groupRow(101, 1, 100, 'node mcp.js'),
+      groupRow(200, 1, 200, '/bin/sh -c sleep 600; :'),
+      groupRow(201, 200, 200, 'sleep 600'),
+      // Forked into the group after the last recording.
+      groupRow(205, 201, 200, 'sleep-helper'),
+      groupRow(400, 1, 400, 'node /Users/me/other-project/server.js'),
+    ]);
+
+    expect(await subject.stopLeftGroups(RUN, RECORDED)).toEqual([
+      200, 201, 205,
+    ]);
+    expect(signals).toEqual([
+      [200, 'SIGTERM'],
+      [201, 'SIGTERM'],
+      [205, 'SIGTERM'],
+      [200, 'SIGKILL'],
+      [201, 'SIGKILL'],
+      [205, 'SIGKILL'],
+    ]);
+    // The CLI's own shutdown gets the grace first, then TERM → grace → KILL.
+    expect(waits).toEqual([GROUP_KILL_GRACE_MS, GROUP_KILL_GRACE_MS]);
+  });
+
+  it('reads the table only after the grace a CLI stopping its own commands is given', async () => {
+    const order: string[] = [];
+    const { reaper: subject } = reaper([], {
+      uid: UID,
+      wait: (ms) => {
+        order.push(`wait ${ms}`);
+        return Promise.resolve();
+      },
+      listGroups: () => {
+        order.push('read');
+        return Promise.resolve([]);
+      },
+    });
+
+    await subject.stopLeftGroups(RUN, RECORDED);
+
+    expect(order).toEqual([`wait ${GROUP_KILL_GRACE_MS}`, 'read']);
+  });
+
+  it('acts on no group whose recorded members are gone or are now other processes', async () => {
+    const { reaper: subject, signals } = leftBy([
+      // Same pid, later start: a recycled pid, not the recorded wrapper.
+      groupRow(200, 1, 200, 'node unrelated.js', { startedAt: 999_999 }),
+      // In the group, but never recorded: proves nothing about the group.
+      groupRow(202, 200, 200, 'node unrelated-child.js'),
+    ]);
+
+    expect(await subject.stopLeftGroups(RUN, RECORDED)).toEqual([]);
+    expect(signals).toEqual([]);
+  });
+
+  it('acts on no group whose recorded member has moved to another group', async () => {
+    const { reaper: subject, signals } = leftBy([
+      // The recorded wrapper, alive and itself, but now leading group 300.
+      groupRow(200, 1, 300, '/bin/sh -c sleep 600; :'),
+      // Whatever now reads as group 200 was never shown to be the agent's.
+      groupRow(250, 1, 200, 'node unrelated.js'),
+    ]);
+
+    expect(await subject.stopLeftGroups(RUN, RECORDED)).toEqual([]);
+    expect(signals).toEqual([]);
+  });
+
+  it('never acts on the daemon’s own group or launchd’s, whatever was recorded', async () => {
+    const { reaper: subject, signals } = leftBy([
+      groupRow(SELF, 1, 200, 'Geniro Helper'),
+      groupRow(200, 1, 200, '/bin/sh -c sleep 600; :'),
+      groupRow(201, 200, 200, 'sleep 600'),
+      groupRow(50, 1, 1, 'loginwindow'),
+    ]);
+
+    expect(
+      await subject.stopLeftGroups(RUN, [
+        ...RECORDED,
+        { pgid: 1, members: [{ pid: 50, startedAt: 500 }] },
+      ]),
+    ).toEqual([]);
+    expect(signals).toEqual([]);
+  });
+
+  it('spares a CLI the registry holds, another user’s process and a system executable', async () => {
+    const { reaper: subject, signals } = leftBy(
+      [
+        groupRow(200, 1, 200, '/bin/sh -c sleep 600; :'),
+        groupRow(201, 200, 200, 'sleep 600'),
+        // Under the run's NEW CLI (pid 300), whatever group it reads as.
+        groupRow(300, SELF, 300, 'claude'),
+        groupRow(301, 300, 200, 'node mcp.js'),
+        groupRow(203, 200, 200, 'sudo-helper', { uid: 0 }),
+        groupRow(204, 200, 200, '/System/Library/CoreServices/helper'),
+      ],
+      { processRoots: () => [300] },
+    );
+
+    await subject.stopLeftGroups(RUN, RECORDED);
+
+    expect(new Set(signals.map(([pid]) => pid))).toEqual(new Set([200, 201]));
+  });
+
+  it('stops a member on a terminal, since codex runs its commands on one', async () => {
+    const { reaper: subject, signals } = leftBy([
+      groupRow(200, 1, 200, '/bin/zsh -lc sleep 600', { tty: 'ttys009' }),
+      groupRow(201, 200, 200, 'sleep 600', { tty: 'ttys009' }),
+    ]);
+
+    expect(await subject.stopLeftGroups(RUN, RECORDED)).toEqual([200, 201]);
+    expect(signals.filter(([, sig]) => sig === 'SIGTERM')).toEqual([
+      [200, 'SIGTERM'],
+      [201, 'SIGTERM'],
+    ]);
+  });
+
+  it('stops nothing when the selection is over the cap or the table cannot be read', async () => {
+    const crowd = Array.from({ length: 300 }, (_, i) =>
+      groupRow(1000 + i, 200, 200, 'worker'),
+    );
+    const over = leftBy([groupRow(200, 1, 200, 'sh'), ...crowd]);
+    expect(await over.reaper.stopLeftGroups(RUN, RECORDED)).toEqual([]);
+    expect(over.signals).toEqual([]);
+    expect(over.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('more than a run can own — killed none'),
+    );
+
+    const unread = leftBy(null);
+    expect(await unread.reaper.stopLeftGroups(RUN, RECORDED)).toEqual([]);
+    expect(unread.signals).toEqual([]);
+    expect(unread.logger.warn).toHaveBeenCalledWith(
+      `could not read the process table — left what run ${RUN}'s agent left running alone`,
+    );
+  });
+
+  it('stops nothing, and says why, when it cannot tell which user the daemon runs as', async () => {
+    const {
+      reaper: subject,
+      signals,
+      logger,
+    } = leftBy(
+      [
+        groupRow(200, 1, 200, '/bin/sh -c sleep 600; :'),
+        groupRow(201, 200, 200, 'sleep 600'),
+      ],
+      { uid: null },
+    );
+
+    expect(await subject.stopLeftGroups(RUN, RECORDED)).toEqual([]);
+    expect(signals).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      `could not tell which user the daemon runs as — left what run ${RUN}'s agent left running alone`,
+    );
+  });
+
+  it('never throws, and stops nothing, when reading the table fails', async () => {
+    const {
+      reaper: subject,
+      signals,
+      logger,
+    } = reaper([], {
+      uid: UID,
+      listGroups: () => Promise.reject(new Error('ps exploded')),
+    });
+
+    await expect(subject.stopLeftGroups(RUN, RECORDED)).resolves.toEqual([]);
+    expect(signals).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      `could not stop what run ${RUN}'s agent left running: ps exploded`,
+    );
+  });
+
+  it('reads nothing when no group was recorded', async () => {
+    const listGroups = vi.fn(() => Promise.resolve([] as PlainProcess[]));
+    const { reaper: subject, waits } = reaper([], { uid: UID, listGroups });
+
+    expect(await subject.stopLeftGroups(RUN, [])).toEqual([]);
+    expect(listGroups).not.toHaveBeenCalled();
+    expect(waits).toEqual([]);
   });
 });

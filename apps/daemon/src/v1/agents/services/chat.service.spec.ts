@@ -864,7 +864,9 @@ function fakeAdapter(
           return !record.closed;
         },
         shellsRunning: 0,
+        detachedRunning: 0,
         runningCommands: [],
+        recordedGroupsOf: () => [],
         endedRunning: null,
         close: () => {
           record.closed = true;

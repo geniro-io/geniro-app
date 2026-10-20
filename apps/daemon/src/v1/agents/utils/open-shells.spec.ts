@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { type ShellRow, strandedShells } from './open-shells';
+import {
+  isDelegateCall,
+  launchingCallOf,
+  type ShellRow,
+  strandedShells,
+} from './open-shells';
 
 const open = (
   id: string | null,
@@ -70,5 +75,52 @@ describe('strandedShells', () => {
         open('t1', 'b1'),
       ]).map((shell) => shell.workId),
     ).toEqual(['b1']);
+  });
+});
+
+describe('launchingCallOf', () => {
+  const call = (
+    command: string,
+    extra: Record<string, unknown> = {},
+    nodeId: string | null = 'dev',
+  ) => ({
+    payload: JSON.stringify({ id: 't1', input: { command }, ...extra }),
+    nodeId,
+  });
+  const shell = { toolCallId: 't1', nodeId: 'dev', callId: 'call-A' };
+
+  it('takes the newest call by that id under the same node and workflow call', () => {
+    // An ACP CLI numbers calls per session: other conversations reuse `t1`.
+    const calls = [
+      call('pnpm older', { callId: 'call-A' }),
+      call('pnpm dev', { callId: 'call-A' }),
+      call('pnpm other-call', { callId: 'call-B' }),
+      call('pnpm other-node', { callId: 'call-A' }, 'review'),
+    ];
+    expect(launchingCallOf(shell, calls)).toBe(calls[1]);
+  });
+
+  it("prefers the agent's own call over a delegate's, and falls back to it", () => {
+    const own = call('pnpm dev', { callId: 'call-A' });
+    const delegate = call('pnpm delegate', {
+      callId: 'call-A',
+      parentToolUseId: 'task-1',
+    });
+    expect(launchingCallOf(shell, [own, delegate])).toBe(own);
+    expect(launchingCallOf(shell, [delegate])).toBe(delegate);
+    expect(isDelegateCall(delegate)).toBe(true);
+    expect(isDelegateCall(own)).toBe(false);
+  });
+
+  it('pairs a chat shell, which has no workflow call, with a call that has none', () => {
+    const chat = { toolCallId: 't1', nodeId: null, callId: null };
+    const calls = [
+      call('pnpm dev', {}, null),
+      call('x', { callId: 'c' }, null),
+    ];
+    expect(launchingCallOf(chat, calls)).toBe(calls[0]);
+    expect(
+      launchingCallOf({ ...chat, toolCallId: null }, calls),
+    ).toBeUndefined();
   });
 });

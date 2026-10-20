@@ -18,14 +18,17 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { NO_CALL_INDEX } from '../__tests__/no-call-index';
-import { SINGLE_AGENT_NODE } from '../chat.types';
+import { NO_STOPS } from '../__tests__/no-stops';
+import { type ActionPressResult, SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { parseJsonColumn } from '../utils/json-util';
 import { ActionPressService } from './action-press.service';
 import {
   type ActionPublishContext,
   ActionPublishService,
 } from './action-publish.service';
+import type { ActionStopService } from './action-stop.service';
 import { AgentEventBus } from './agent-events.bus';
 import type { ChatService } from './chat.service';
 import { ChatActionsService } from './chat-actions.service';
@@ -76,11 +79,15 @@ describe('ActionPressService (in-memory sqlite)', () => {
       NO_CALL_INDEX,
       new ItemSeqAllocator(orm.em, items),
     );
-    publisher = new ActionPublishService(actions);
+    publisher = new ActionPublishService(actions, NO_STOPS);
     sendMessage = vi.fn(() => Promise.resolve({ seq: 99 }));
-    presses = new ActionPressService(orm.em, runs, actions, {
-      sendMessage,
-    } as unknown as ChatService);
+    presses = new ActionPressService(
+      orm.em,
+      runs,
+      actions,
+      { sendMessage } as unknown as ChatService,
+      NO_STOPS,
+    );
     await runs.create({ id: 'run-a', status: 'completed', workflowId: null });
   });
 
@@ -298,5 +305,187 @@ describe('ActionPressService (in-memory sqlite)', () => {
     await expect(
       presses.pressChat('nope', 1, 'c1', 'desktop'),
     ).rejects.toMatchObject({ errorCode: 'RUN_NOT_FOUND' });
+  });
+
+  describe('stop presses', () => {
+    const TARGETS = [
+      {
+        pid: 48211,
+        startedAt: '2026-10-20T10:00:00.000Z',
+        command: 'python3 -m http.server 8765',
+      },
+    ];
+    let stopCalls: unknown[][];
+    let stopResult: () => Promise<ActionPressResult>;
+    let stopper: ActionPressService;
+
+    beforeEach(async () => {
+      stopCalls = [];
+      stopResult = () => Promise.resolve({ state: 'stopped' });
+      const stops = {
+        resolve: () => Promise.resolve({ targets: TARGETS }),
+        stop: (...args: unknown[]) => {
+          stopCalls.push(args);
+          return stopResult();
+        },
+      } as unknown as ActionStopService;
+      publisher = new ActionPublishService(actions, stops);
+      stopper = new ActionPressService(
+        orm.em,
+        runs,
+        actions,
+        { sendMessage } as unknown as ChatService,
+        stops,
+      );
+      await publisher.publish(ctx, {
+        label: 'Stop preview',
+        stop: { pid: 48211 },
+      });
+    });
+
+    it('stops what the action recorded and retires it', async () => {
+      const seq = await publishedSeq('stop-preview');
+
+      const result = await stopper.pressChat('run-a', seq, 'c1', 'desktop');
+
+      expect(stopCalls).toEqual([
+        ['run-a', { kind: 'stop', targets: TARGETS }],
+      ]);
+      expect(result.outcome).toMatchObject({
+        state: 'stopped',
+        via: 'desktop',
+      });
+      expect(result.outcome.alreadyStopped).toBeUndefined();
+      expect(await actions.live('run-a')).toEqual([]);
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('records already stopped, and retires the button', async () => {
+      stopResult = () =>
+        Promise.resolve({ state: 'stopped', alreadyStopped: true });
+      const seq = await publishedSeq('stop-preview');
+
+      const result = await stopper.pressChat('run-a', seq, 'c1', 'desktop');
+
+      expect(result.outcome).toMatchObject({
+        state: 'stopped',
+        alreadyStopped: true,
+      });
+      expect(await actions.live('run-a')).toEqual([]);
+    });
+
+    it('records a refused stop as failed and keeps the button live', async () => {
+      stopResult = () =>
+        Promise.resolve({
+          state: 'failed',
+          error:
+            'pid 48211 is no longer a process this thread may stop; stopped none',
+        });
+      const seq = await publishedSeq('stop-preview');
+
+      const result = await stopper.pressChat('run-a', seq, 'c1', 'desktop');
+
+      expect(result.outcome).toMatchObject({
+        state: 'failed',
+        error:
+          'pid 48211 is no longer a process this thread may stop; stopped none',
+      });
+      expect(await actions.live('run-a')).toMatchObject([
+        { seq, lastOutcome: { state: 'failed' } },
+      ]);
+    });
+
+    it('answers ACTION_BUSY to a second press or a dismissal while it stops, without holding the run', async () => {
+      let finish: (outcome: ActionPressResult) => void = () => undefined;
+      stopResult = () =>
+        new Promise<ActionPressResult>((resolve) => {
+          finish = resolve;
+        });
+      const seq = await publishedSeq('stop-preview');
+
+      const first = stopper.pressChat('run-a', seq, 'c1', 'desktop');
+      await vi.waitFor(() => expect(stopCalls).toHaveLength(1));
+
+      await expect(
+        stopper.pressChat('run-a', seq, 'c2', 'remote'),
+      ).rejects.toMatchObject({ errorCode: 'ACTION_BUSY' });
+      await expect(
+        stopper.dismissChat('run-a', seq, 'desktop'),
+      ).rejects.toMatchObject({ errorCode: 'ACTION_BUSY' });
+      // The run's lock is free meanwhile: another button publishes.
+      expect(
+        await publisher.publish(ctx, { label: 'Ping', message: 'ping' }),
+      ).toMatchObject({ status: 'published' });
+
+      finish({ state: 'stopped' });
+      expect((await first).outcome.state).toBe('stopped');
+      expect(stopCalls).toHaveLength(1);
+    });
+
+    it('keeps a button the agent removed while it stopped removed when the stop fails', async () => {
+      let finish: (outcome: ActionPressResult) => void = () => undefined;
+      stopResult = () =>
+        new Promise<ActionPressResult>((resolve) => {
+          finish = resolve;
+        });
+      const seq = await publishedSeq('stop-preview');
+
+      const pressed = stopper.pressChat('run-a', seq, 'c1', 'desktop');
+      await vi.waitFor(() => expect(stopCalls).toHaveLength(1));
+      expect(await publisher.remove(ctx, 'stop-preview')).toMatchObject({
+        status: 'removed',
+      });
+      finish({
+        state: 'failed',
+        error:
+          'pid 48211 is no longer a process this thread may stop; stopped none',
+      });
+
+      await expect(pressed).rejects.toMatchObject({
+        errorCode: 'ACTION_GONE',
+      });
+      expect(await actions.live('run-a')).toEqual([]);
+      expect(
+        (await items.rowsOfKinds('run-a', ['action_outcome'])).map(
+          (row) =>
+            (parseJsonColumn(row.payload) as { state: string } | null)?.state,
+        ),
+      ).toEqual(['removed']);
+    });
+
+    it('answers ACTION_CHANGED when the agent republished the button while it stopped', async () => {
+      let finish: (outcome: ActionPressResult) => void = () => undefined;
+      stopResult = () =>
+        new Promise<ActionPressResult>((resolve) => {
+          finish = resolve;
+        });
+      const seq = await publishedSeq('stop-preview');
+
+      const pressed = stopper.pressChat('run-a', seq, 'c1', 'desktop');
+      await vi.waitFor(() => expect(stopCalls).toHaveLength(1));
+      await publisher.publish(ctx, {
+        label: 'Stop preview',
+        stop: { pid: 48211 },
+      });
+      finish({ state: 'failed', error: 'stopped none' });
+
+      await expect(pressed).rejects.toMatchObject({
+        errorCode: 'ACTION_CHANGED',
+      });
+      expect(await items.rowsOfKinds('run-a', ['action_outcome'])).toEqual([]);
+    });
+
+    it('frees the button for another press when the stop throws', async () => {
+      stopResult = () => Promise.reject(new Error('boom'));
+      const seq = await publishedSeq('stop-preview');
+
+      await expect(
+        stopper.pressChat('run-a', seq, 'c1', 'desktop'),
+      ).rejects.toThrow('boom');
+      stopResult = () => Promise.resolve({ state: 'stopped' });
+      expect(
+        (await stopper.pressChat('run-a', seq, 'c2', 'desktop')).outcome.state,
+      ).toBe('stopped');
+    });
   });
 });

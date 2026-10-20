@@ -29,6 +29,7 @@ import { WallTurnDao } from './dao/wall-turn.dao';
 import { ActionBroker } from './services/action.broker';
 import { ActionPressService } from './services/action-press.service';
 import { ActionPublishService } from './services/action-publish.service';
+import { ActionStopService } from './services/action-stop.service';
 import {
   AGENT_ADAPTERS,
   AgentAdapterRegistry,
@@ -197,6 +198,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ActionBroker,
     ActionPublishService,
     ActionPressService,
+    ActionStopService,
     ArtifactPageService,
     PlanBroker,
     NotifyBroker,

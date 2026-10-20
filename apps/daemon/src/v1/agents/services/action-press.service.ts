@@ -4,13 +4,16 @@ import { BadRequestException, ConflictException } from '@packages/common';
 
 import type {
   ActionOutcomePayload,
+  ActionPressResult,
   ActionPressWire,
   ActionSpec,
   ActionVia,
   LiveAction,
 } from '../chat.types';
 import { RunDao } from '../dao/run.dao';
+import type { ActionFold } from '../utils/action-fold';
 import { assertChatRun, assertWorkflowRun } from '../utils/run-kind';
+import { ActionStopService } from './action-stop.service';
 import { ChatService } from './chat.service';
 import { ChatActionsService } from './chat-actions.service';
 
@@ -44,7 +47,11 @@ type ActionExecutor = (
   input: ActionPressInput,
 ) => Promise<Pick<ActionOutcomePayload, 'state'>>;
 
-/** What a press does, by kind. A kind with no entry is refused at the press. */
+/**
+ * What a press does inside the run's lock, by kind. `stop` is not here: it
+ * waits out a grace period, so it runs outside the lock ({@link
+ * ActionPressService.pressStop}). A kind with neither is refused at the press.
+ */
 const EXECUTORS: Partial<Record<ActionSpec['kind'], ActionExecutor>> = {
   message: async (action, input) => {
     // A busy chat either takes the text into its running turn or answers
@@ -67,12 +74,20 @@ const EXECUTORS: Partial<Record<ActionSpec['kind'], ActionExecutor>> = {
  */
 @Injectable()
 export class ActionPressService {
+  /**
+   * Stop presses under way, by `actionSlot`. Held in memory, not as a
+   * `running` row: a daemon that dies mid-stop must not leave the button
+   * pending for good, and a stop outlives no process.
+   */
+  private readonly stopping = new Set<string>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly actions: ChatActionsService,
     /** One way only, as `ChatShellsService` holds it: nothing in `ChatService` knows this service. */
     private readonly chats: ChatService,
+    private readonly stops: ActionStopService,
   ) {}
 
   /** A press in a 1:1 chat: the message goes to the chat's own agent. */
@@ -97,18 +112,62 @@ export class ActionPressService {
     input: ActionPressInput,
   ): Promise<ActionPressWire> {
     await this.assertPressable(runId, input.run);
-    return this.actions.serialize(runId, async () => {
-      const action = await this.liveAt(runId, seq);
-      const execute = EXECUTORS[action.spec.kind];
-      if (execute === undefined) {
-        throw new BadRequestException(
-          'ACTION_KIND_UNAVAILABLE',
-          `${action.spec.kind} actions cannot be pressed yet`,
-        );
-      }
-      const { state } = await execute(action, input);
-      return { outcome: await this.record(runId, action, state, input.via) };
-    });
+    const pressed = await this.actions.serialize(
+      runId,
+      async (): Promise<ActionPressWire | LiveAction> => {
+        const action = await this.liveAt(runId, seq);
+        if (action.spec.kind === 'stop') {
+          this.stopping.add(actionSlot(runId, seq));
+          return action;
+        }
+        const execute = EXECUTORS[action.spec.kind];
+        if (execute === undefined) {
+          throw new BadRequestException(
+            'ACTION_KIND_UNAVAILABLE',
+            `${action.spec.kind} actions cannot be pressed yet`,
+          );
+        }
+        const { state } = await execute(action, input);
+        return {
+          outcome: await this.record(runId, action, { state }, input.via),
+        };
+      },
+    );
+    return 'outcome' in pressed
+      ? pressed
+      : this.pressStop(runId, pressed, input.via);
+  }
+
+  /**
+   * The stop itself, outside the lock it was claimed under: other buttons of
+   * the run stay pressable meanwhile, and this one answers `ACTION_BUSY`.
+   */
+  private async pressStop(
+    runId: string,
+    action: LiveAction,
+    via: ActionVia,
+  ): Promise<ActionPressWire> {
+    try {
+      const result = await this.stops.stop(runId, action.spec);
+      return await this.actions.serialize(runId, async () => {
+        // The agent may remove or replace the button while it stops; a failure
+        // written after that would make the old publish pressable again.
+        const fold = await this.actions.fold(runId);
+        if (
+          result.state !== 'stopped' &&
+          !fold.live.some((entry) => entry.seq === action.seq)
+        ) {
+          throw notLive(
+            fold,
+            action.seq,
+            `; the stop did not happen: ${result.error ?? 'nothing was stopped'}`,
+          );
+        }
+        return { outcome: await this.record(runId, action, result, via) };
+      });
+    } finally {
+      this.stopping.delete(actionSlot(runId, action.seq));
+    }
   }
 
   /** {@link dismiss} on the chat route, which a workflow run has its own of. */
@@ -130,7 +189,9 @@ export class ActionPressService {
     await this.assertPressable(runId, run);
     return this.actions.serialize(runId, async () => {
       const action = await this.liveAt(runId, seq);
-      return { outcome: await this.record(runId, action, 'dismissed', via) };
+      return {
+        outcome: await this.record(runId, action, { state: 'dismissed' }, via),
+      };
     });
   }
 
@@ -156,23 +217,12 @@ export class ActionPressService {
   }
 
   private async liveAt(runId: string, seq: number): Promise<LiveAction> {
-    const { live, keyOfSeq } = await this.actions.fold(runId);
-    const action = live.find((entry) => entry.seq === seq);
+    const fold = await this.actions.fold(runId);
+    const action = fold.live.find((entry) => entry.seq === seq);
     if (action === undefined) {
-      const key = keyOfSeq.get(seq);
-      const replaced =
-        key !== undefined &&
-        live.some(
-          (entry) => keyOfSeq.get(entry.seq) === key && entry.seq !== seq,
-        );
-      throw replaced
-        ? new ConflictException(
-            'ACTION_CHANGED',
-            'the agent has changed this action since it was shown',
-          )
-        : new ConflictException('ACTION_GONE', 'this action is no longer live');
+      throw notLive(fold, seq);
     }
-    if (action.pending) {
+    if (action.pending || this.stopping.has(actionSlot(runId, seq))) {
       throw new ConflictException(
         'ACTION_BUSY',
         'this action is already being pressed',
@@ -184,7 +234,7 @@ export class ActionPressService {
   private async record(
     runId: string,
     action: LiveAction,
-    state: ActionOutcomePayload['state'],
+    result: ActionPressResult,
     via: ActionVia,
   ): Promise<ActionOutcomePayload> {
     const outcome: ActionOutcomePayload = {
@@ -192,7 +242,7 @@ export class ActionPressService {
       actionId: action.actionId,
       nodeId: action.nodeId,
       conversationId: action.conversationId,
-      state,
+      ...result,
       via,
     };
     // Filed in the run's own flow (`nodeId` null): the user pressed it, and the
@@ -200,4 +250,34 @@ export class ActionPressService {
     await this.actions.appendOutcome(runId, null, outcome);
     return outcome;
   }
+}
+
+/**
+ * Why the publish at `seq` is not live: the agent republished its id, or it
+ * is gone. `detail` follows the reason.
+ */
+function notLive(
+  fold: ActionFold,
+  seq: number,
+  detail = '',
+): ConflictException {
+  const key = fold.keyOfSeq.get(seq);
+  const replaced =
+    key !== undefined &&
+    fold.live.some(
+      (entry) => fold.keyOfSeq.get(entry.seq) === key && entry.seq !== seq,
+    );
+  return replaced
+    ? new ConflictException(
+        'ACTION_CHANGED',
+        `the agent has changed this action since it was shown${detail}`,
+      )
+    : new ConflictException(
+        'ACTION_GONE',
+        `this action is no longer live${detail}`,
+      );
+}
+
+function actionSlot(runId: string, seq: number): string {
+  return `${runId}\u0000${seq}`;
 }

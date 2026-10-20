@@ -104,11 +104,7 @@ import {
 } from '../../agents/utils/event-to-item';
 import { firstTurnWindow } from '../../agents/utils/first-turn-window';
 import { hostMcpServerName } from '../../agents/utils/host-question';
-import {
-  asRecord,
-  asString,
-  parseJsonColumn,
-} from '../../agents/utils/json-util';
+import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { readNodePoolMembers } from '../../agents/utils/node-pool-members';
 import {
@@ -118,6 +114,7 @@ import {
   strandedDelegates,
 } from '../../agents/utils/open-delegates';
 import {
+  launchingCallOf,
   shellCloseEvent,
   shellCommandOf,
   type StrandedShell,
@@ -4997,28 +4994,22 @@ export class GraphExecutorService
                 shell.callId !== null &&
                 calls.has(shell.callId),
             );
-            const words = new Map<string, string>();
-            for (const row of await this.itemDao.toolCallsByIds(
+            const launching = await this.itemDao.toolCallsByIds(
               runId,
               shells.flatMap((shell) =>
                 shell.toolCallId === null ? [] : [shell.toolCallId],
               ),
               em,
-            )) {
-              const id = asString(asRecord(parseJsonColumn(row.payload))?.id);
-              const command = shellCommandOf(row.payload);
-              if (id && command !== null) {
-                words.set(id, command);
-              }
-            }
+            );
             resolve(
-              shells.map((shell) => ({
-                command:
-                  shell.toolCallId === null
-                    ? null
-                    : (words.get(shell.toolCallId) ?? null),
-                callId: shell.callId,
-              })),
+              shells.map((shell) => {
+                const call = launchingCallOf(shell, launching);
+                return {
+                  command:
+                    call === undefined ? null : shellCommandOf(call.payload),
+                  callId: shell.callId,
+                };
+              }),
             );
           } catch (err) {
             this.logger.warn(

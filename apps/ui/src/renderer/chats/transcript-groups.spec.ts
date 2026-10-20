@@ -1407,6 +1407,51 @@ describe('groupTranscript', () => {
     expect(entries[1]).toMatchObject({ seq: other.seq, outcome: null });
   });
 
+  it('reads what a stop action stops and whether it had already stopped', () => {
+    const stop = item('action', {
+      actionId: 'stop-preview',
+      label: 'Stop preview',
+      once: true,
+      spec: {
+        kind: 'stop',
+        shellId: 'bg1',
+        targets: [
+          {
+            pid: 48211,
+            startedAt: '2026-10-20T10:00:00.000Z',
+            command: 'python3 -m http.server 8765',
+          },
+          { pid: 'not a pid', command: 'x' },
+          { pid: 48212 },
+        ],
+      },
+      publisher: { nodeId: 'agent', conversationId: '' },
+    });
+    const entries = groupTranscript([
+      stop,
+      item('action_outcome', {
+        actionSeq: stop.seq,
+        actionId: 'stop-preview',
+        nodeId: 'agent',
+        conversationId: '',
+        state: 'stopped',
+        alreadyStopped: true,
+      }),
+    ]);
+
+    expect(entries).toMatchObject([
+      {
+        type: 'action',
+        action: {
+          kind: 'stop',
+          text: null,
+          targets: [{ pid: 48211, command: 'python3 -m http.server 8765' }],
+        },
+        outcome: { state: 'stopped', alreadyStopped: true },
+      },
+    ]);
+  });
+
   it('drops an action row that does not parse', () => {
     expect(
       groupTranscript([

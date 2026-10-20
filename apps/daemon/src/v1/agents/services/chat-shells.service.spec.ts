@@ -111,7 +111,13 @@ function service(
               ? {}
               : { parentToolUseId: call.parentToolUseId }),
           }),
-          nodeId: null,
+          // Filed where the shell it launched was: a call and its shell are
+          // the same conversation's rows.
+          nodeId:
+            rows.find(
+              (row) =>
+                (JSON.parse(row.payload) as { id?: string }).id === call.id,
+            )?.nodeId ?? null,
           createdAt: new Date(0),
         }));
     },

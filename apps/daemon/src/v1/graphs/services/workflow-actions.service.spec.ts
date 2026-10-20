@@ -15,6 +15,7 @@ import {
 } from 'vitest';
 
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
+import { NO_STOPS } from '../../agents/__tests__/no-stops';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ActionPressService } from '../../agents/services/action-press.service';
@@ -90,13 +91,17 @@ describe('WorkflowActionsService (in-memory sqlite)', () => {
       NO_CALL_INDEX,
       new ItemSeqAllocator(orm.em, items),
     );
-    publisher = new ActionPublishService(actions);
+    publisher = new ActionPublishService(actions, NO_STOPS);
     sendMessage = vi.fn(() => Promise.resolve({ seq: 99 }));
     chatSend = vi.fn();
     service = new WorkflowActionsService(
-      new ActionPressService(orm.em, runs, actions, {
-        sendMessage: chatSend,
-      } as unknown as ChatService),
+      new ActionPressService(
+        orm.em,
+        runs,
+        actions,
+        { sendMessage: chatSend } as unknown as ChatService,
+        NO_STOPS,
+      ),
       { sendMessage } as unknown as GraphExecutorService,
     );
     await runs.create({ id: 'run-w', status: 'running', workflowId: 'team' });

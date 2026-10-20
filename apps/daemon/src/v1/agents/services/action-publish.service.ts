@@ -9,10 +9,12 @@ import {
   type ActionPublisher,
   type ActionPublishInput,
   type ActionSpec,
+  type ActionStopInput,
   type ActionToolOutcome,
   type LiveAction,
 } from '../chat.types';
 import { actionKey } from '../utils/action-fold';
+import { ActionStopService } from './action-stop.service';
 import { ChatActionsService } from './chat-actions.service';
 
 /** What a call's envelope says about one button published inside it. */
@@ -85,7 +87,10 @@ function hasHiddenText(value: string, lineBreaks: boolean): boolean {
 export class ActionPublishService {
   private readonly logger = new Logger(ActionPublishService.name);
 
-  constructor(private readonly actions: ChatActionsService) {}
+  constructor(
+    private readonly actions: ChatActionsService,
+    private readonly stops: ActionStopService,
+  ) {}
 
   async publish(
     ctx: ActionPublishContext,
@@ -95,7 +100,23 @@ export class ActionPublishService {
     if ('reason' in checked) {
       return { status: 'refused', reason: checked.reason };
     }
-    const { label, description, actionId, spec } = checked;
+    const { label, description, actionId } = checked;
+    let spec: ActionSpec;
+    if ('stop' in checked) {
+      // Outside the lock: a fresh process-table read is slow, and the cap
+      // and live-set checks below do not depend on it.
+      const resolved = await this.stops.resolve(
+        ctx.runId,
+        ctx.rowNodeId,
+        checked.stop,
+      );
+      if ('reason' in resolved) {
+        return { status: 'refused', reason: resolved.reason };
+      }
+      spec = { kind: 'stop', ...resolved };
+    } else {
+      spec = checked.spec;
+    }
     const once = input.once ?? true;
     return this.actions.serialize(ctx.runId, async () => {
       const { live } = await this.actions.fold(ctx.runId);
@@ -137,7 +158,7 @@ export class ActionPublishService {
       }
       return {
         status: 'published',
-        text: `Published action "${actionId}" (${spec.kind}). Re-publish the same action_id to change it; remove_action "${actionId}" retires it. ${others.length + 1}/${ACTION_LIVE_MAX} live.`,
+        text: `Published action "${actionId}" (${describeSpec(spec)}). Re-publish the same action_id to change it; remove_action "${actionId}" retires it. ${others.length + 1}/${ACTION_LIVE_MAX} live.`,
       };
     });
   }
@@ -187,11 +208,21 @@ function keyOf(action: LiveAction): string {
   return actionKey(action.nodeId, action.conversationId, action.actionId);
 }
 
-interface CheckedInput {
+type CheckedInput = {
   label: string;
   description: string | undefined;
   actionId: string;
-  spec: ActionSpec;
+} & ({ spec: ActionSpec } | { stop: ActionStopInput });
+
+/** The kind and, for a stop, what it will stop — for the agent's receipt. */
+function describeSpec(spec: ActionSpec): string {
+  if (spec.kind !== 'stop') {
+    return spec.kind;
+  }
+  const pids = (spec.targets ?? []).map((target) => target.pid).join(', ');
+  return spec.shellId === undefined
+    ? `stop · pid ${pids}`
+    : `stop · shell ${spec.shellId}: pid ${pids}`;
 }
 
 function checkInput(
@@ -240,9 +271,21 @@ function checkInput(
       reason: 'give exactly one of message, stop or command',
     };
   }
+  if (input.stop !== undefined) {
+    if ((input.stop.shell === undefined) === (input.stop.pid === undefined)) {
+      return { reason: 'stop takes exactly one of shell or pid' };
+    }
+    if (input.once === false) {
+      return {
+        reason: 'a stop action is always one-shot; leave out once',
+      };
+    }
+    return { label, description, actionId, stop: input.stop };
+  }
   if (input.message === undefined) {
     return {
-      reason: `${input.stop === undefined ? 'command' : 'stop'} actions are not available yet; publish a message action instead`,
+      reason:
+        'command actions are not available yet; publish a message or stop action instead',
     };
   }
   const text = input.message.trim();

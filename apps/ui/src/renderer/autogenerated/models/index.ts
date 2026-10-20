@@ -60,6 +60,12 @@ export interface ActionOutcomePayload {
      * @memberof ActionOutcomePayload
      */
     error?: string;
+    /**
+     * stop: every process it named had exited before the press reached it
+     * @type {boolean}
+     * @memberof ActionOutcomePayload
+     */
+    alreadyStopped?: boolean;
 }
 
 

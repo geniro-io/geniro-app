@@ -5,14 +5,17 @@ import type { ChatShellsWire, OpenShell, ShellKillWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { asRecord, asString } from '../utils/json-util';
 import { GROUP_KILL_GRACE_MS, killProcessGroup } from '../utils/kill-tree';
-import { shellCommandOf } from '../utils/open-shells';
+import {
+  isDelegateCall,
+  launchingCallOf,
+  shellCommandOf,
+} from '../utils/open-shells';
 import { persistItemAndEmit } from '../utils/persist-item';
 import {
-  commandNeedles,
+  commandTargets,
   descendantsOf,
   listProcesses,
   pidsRunningCommand,
-  type ProcessRow,
 } from '../utils/process-descendants';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
@@ -133,39 +136,27 @@ export class ChatShellsService {
       return [];
     }
     // The WORDS. A lifecycle row names the call and nothing else, so the
-    // command is read from the call it decorates — matched by id, and read
-    // only while a command is open.
-    const commands = new Map<string, string>();
-    const delegates = new Set<string>();
-    for (const row of await this.itemDao.toolCallsByIds(
+    // command is read from the call it decorates (`launchingCallOf`), and
+    // read only while a command is open.
+    const calls = await this.itemDao.toolCallsByIds(
       runId,
       [...open.keys()],
       em,
-    )) {
-      const payload = asRecord(parse(row.payload));
-      const id = asString(payload?.id);
-      if (id === null || !open.has(id)) {
-        continue;
-      }
-      const parent = asString(payload?.parentToolUseId);
-      if (parent !== null && parent !== '') {
-        delegates.add(id);
-      }
-      const command = shellCommandOf(payload);
-      if (command !== null) {
-        commands.set(id, command);
-      }
-    }
+    );
     const shells: FoldedShell[] = [];
     for (const [id, row] of open) {
+      const call = launchingCallOf(
+        { toolCallId: id, nodeId: row.nodeId, callId: row.callId || null },
+        calls,
+      );
       shells.push({
         id,
-        command: commands.get(id) ?? null,
+        command: call === undefined ? null : shellCommandOf(call.payload),
         nodeId: row.nodeId,
         callId: row.callId,
         startedAt: row.startedAt,
         workId: row.workId,
-        delegate: delegates.has(id),
+        delegate: call !== undefined && isDelegateCall(call),
       });
     }
     return shells;
@@ -304,7 +295,7 @@ export class ChatShellsService {
     }
     const table = await listProcesses();
     const owned = roots.flatMap((root) => descendantsOf(table, root.pid));
-    const targets = foregroundTargets(owned, command);
+    const targets = commandTargets(owned, command);
     if (targets.length === 0) {
       return {
         killed: false,
@@ -396,37 +387,6 @@ interface FoldedShell {
   workId: string | null;
   /** Started by a delegate rather than by the agent itself. */
   delegate: boolean;
-}
-
-/**
- * Which of a run's processes ARE this command: the matches of the most specific
- * needle that matches anything, each kept only when no ancestor of it matched
- * too — the wrapper and what it wraps are one command, stopped through the top.
- */
-function foregroundTargets(
-  owned: readonly ProcessRow[],
-  command: string,
-): number[] {
-  for (const needle of commandNeedles(command)) {
-    const matched = new Set(pidsRunningCommand(owned, needle));
-    if (matched.size === 0) {
-      continue;
-    }
-    const parentOf = new Map(owned.map((row) => [row.pid, row.ppid]));
-    return [...matched].filter((pid) => {
-      const seen = new Set<number>([pid]);
-      let parent = parentOf.get(pid);
-      while (parent !== undefined && !seen.has(parent)) {
-        if (matched.has(parent)) {
-          return false;
-        }
-        seen.add(parent);
-        parent = parentOf.get(parent);
-      }
-      return true;
-    });
-  }
-  return [];
 }
 
 /** A payload that will not parse is a row this fold skips, never a throw. */

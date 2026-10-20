@@ -20,6 +20,8 @@ const entry = (
     text?: string;
     agentLabel?: string;
     callId?: string;
+    kind?: 'message' | 'stop';
+    targets?: { pid: number; command: string }[];
   } = {},
 ): ActionEntry => ({
   type: 'action',
@@ -32,8 +34,9 @@ const entry = (
     actionId: 'merged',
     label: 'Merged',
     description: null,
-    kind: 'message',
-    text: extra.text ?? 'continue',
+    kind: extra.kind ?? 'message',
+    text: extra.kind === 'stop' ? null : (extra.text ?? 'continue'),
+    targets: extra.targets ?? [],
     once: extra.once ?? true,
     nodeId: 'agent',
     conversationId: '',
@@ -111,6 +114,7 @@ describe('ActionCard', () => {
             state: 'succeeded',
             exitCode: null,
             error: null,
+            alreadyStopped: false,
             at,
           }),
           {},
@@ -129,7 +133,14 @@ describe('ActionCard', () => {
     expect(
       status(
         render(
-          entry(5, { actionSeq: 5, state, exitCode: null, error: 'boom', at }),
+          entry(5, {
+            actionSeq: 5,
+            state,
+            exitCode: null,
+            error: 'boom',
+            alreadyStopped: false,
+            at,
+          }),
           {},
         ),
       ),
@@ -147,6 +158,7 @@ describe('ActionCard', () => {
       state,
       exitCode: null,
       error: null,
+      alreadyStopped: false,
       at,
     });
     expect(
@@ -180,6 +192,41 @@ describe('ActionCard', () => {
     expect(toggle?.getAttribute('aria-expanded')).toBe('true');
   });
 
+  it('lists the processes a stop press ends, and says when they had already stopped', () => {
+    const targets = [
+      { pid: 48211, command: 'python3 -m http.server 8765' },
+      { pid: 48212, command: 'node watcher.js' },
+    ];
+    const container = render(entry(5, null, { kind: 'stop', targets }), {
+      actions: [live(5)],
+    });
+    expect(
+      container.querySelector('[data-slot="action-targets"]')?.textContent,
+    ).toBe(
+      'Stops, with what these start:python3 -m http.server 8765 · pid 48211node watcher.js · pid 48212',
+    );
+    expect(container.querySelector('[data-slot="action-message"]')).toBeNull();
+
+    const at = new Date(2026, 9, 18, 0, 0).toISOString();
+    const stopped = (alreadyStopped: boolean) =>
+      entry(
+        5,
+        {
+          actionSeq: 5,
+          state: 'stopped',
+          exitCode: null,
+          error: null,
+          alreadyStopped,
+          at,
+        },
+        { kind: 'stop', targets },
+      );
+    expect(status(render(stopped(false), {}))).toBe('Pressed 00:00 · stopped');
+    expect(status(render(stopped(true), {}))).toBe(
+      'Pressed 00:00 · already stopped',
+    );
+  });
+
   it('shows the exact text a press sends', () => {
     const container = render(entry(5), { actions: [live(5)] });
 
@@ -204,6 +251,7 @@ describe('ActionCard', () => {
             state: 'dismissed',
             exitCode: null,
             error: null,
+            alreadyStopped: false,
             at: 'now',
           })}
         />,

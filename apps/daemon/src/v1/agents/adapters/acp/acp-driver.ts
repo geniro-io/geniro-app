@@ -601,6 +601,30 @@ export interface AcpSessionOptions {
    * An agent that does not know the key ignores it, so sending it is free.
    */
   clientMeta?: Readonly<Record<string, unknown>>;
+  /**
+   * Whether a turn's prompt must WAIT for the reply to its last config frame —
+   * the model or a parameter, whichever went last — rather than follow it
+   * straight down the pipe.
+   *
+   * Without it the prompt is pipelined behind the last frame, on the reasoning
+   * that one ordered stdio stream already puts them in order. That holds for
+   * an agent that reads a setting per REQUEST, and it does not hold for one
+   * that binds the turn's settings when the PROMPT arrives: a frame still in
+   * flight then is accepted, its reply names the new value, and the turn runs
+   * on the old one. Nothing but the timing tells the two apart.
+   *
+   * A fact about the CLI, not about one setting, so it is one switch: which
+   * frame ends up last depends on what the turn happens to name, and a model
+   * switch with no parameter is a turn whose last frame is the model's.
+   *
+   * The cost is one round trip per turn that sends a frame, however many it
+   * sends: they already go out one at a time ({@link
+   * AcpTurnDriver.configSteps}), so only the last can still be in flight when
+   * the prompt is written. A turn that sends none pays nothing. A frame
+   * refused, or unanswered past its deadline, releases the prompt the way an
+   * answered one does.
+   */
+  promptAwaitsConfig?: boolean;
 }
 
 /**
@@ -687,28 +711,6 @@ export interface AcpModelParameter {
    * hold more than one axis.
    */
   category?: string;
-  /**
-   * Whether the prompt must WAIT for this frame's reply.
-   *
-   * Every other frame this driver sends before a prompt is pipelined, on the
-   * reasoning that one ordered stdio stream already puts them in order — see
-   * {@link AcpTurnDriver.applyModel}. That holds for anything the agent reads
-   * per REQUEST, and it does not hold for a setting the agent binds when the
-   * TURN begins.
-   *
-   * Measured on cursor-agent 2026.08.11-e8db854, same profile, same frames,
-   * same values, only the waiting differing: with the `context` reply awaited
-   * the CLI's own accounting reports a 1,000,000-token window; with the frame
-   * and the prompt sent back to back it reports 300,000 — the model's default —
-   * even though the reply confirms `context = 1m`. So the option was set and
-   * the turn had already started without it.
-   *
-   * The cost is one round trip on the turns that ask, and only those. It is not
-   * set on the effort axis: nothing has measured that one to bind at turn
-   * start, and the deferral was priced at ~1.4s per turn when it was considered
-   * for the model frame.
-   */
-  applyBeforePrompt?: boolean;
 }
 
 function textOf(content: unknown): string | null {
@@ -1091,15 +1093,6 @@ export class AcpTurnDriver {
   private readonly configSteps: ConfigStep[] = [];
   /** The config frame awaiting its reply, or null when none is. */
   private configInFlight: JsonRpcId | null = null;
-  /**
-   * Whether the prompt waits for the LAST config frame's reply too, rather than
-   * following it straight down the pipe.
-   *
-   * Only for a parameter the adapter marked `applyBeforePrompt` — see that
-   * field for the measurement. Every other turn sends its prompt right behind
-   * its last frame, which is the one round-trip pipelining still saves.
-   */
-  private configBlocksPrompt = false;
   /** The prompt, not yet sent because a config frame is still ahead of it. */
   private promptHeld = false;
   /**
@@ -1911,9 +1904,10 @@ export class AcpTurnDriver {
   /**
    * Send the next queued config frame — or, with none left, the prompt.
    *
-   * The prompt follows the LAST frame straight down the pipe unless a queued
-   * parameter asked for it to wait (`configBlocksPrompt`), in which case it
-   * goes when that frame is answered. A step that sends nothing is skipped.
+   * The prompt follows the LAST frame straight down the pipe unless the agent
+   * binds its settings when the prompt arrives
+   * ({@link AcpSessionOptions.promptAwaitsConfig}), in which case it goes when
+   * that frame is answered. A step that sends nothing is skipped.
    */
   private advanceConfig(events: AgentEvent[]): void {
     for (
@@ -1926,7 +1920,10 @@ export class AcpTurnDriver {
         continue;
       }
       this.configInFlight = id;
-      if (this.configSteps.length === 0 && !this.configBlocksPrompt) {
+      if (
+        this.configSteps.length === 0 &&
+        this.session.options.promptAwaitsConfig !== true
+      ) {
         this.sendHeldPrompt(events);
       }
       return;
@@ -2427,9 +2424,9 @@ export class AcpTurnDriver {
   ): AgentEvent[] {
     // Only the frame the queue is waiting on has anything to rescue — the
     // frames behind it and, until the queue drains, the prompt. Once the prompt
-    // has gone out (it follows the last frame down the pipe unless that frame
-    // blocks it) the turn has run on regardless of what this reply would have
-    // said.
+    // has gone out (it follows the last frame down the pipe unless the agent
+    // asks it to wait, `promptAwaitsConfig`) the turn has run on regardless of
+    // what this reply would have said.
     //
     // Speaking anyway is worse than silence: an event emitted once the turn has
     // settled reaches the off-turn handler, which reads a `notice` as the run
@@ -2482,10 +2479,10 @@ export class AcpTurnDriver {
   /**
    * Put the turn on the model it asked for, before the prompt goes out.
    *
-   * Sent rather than awaited, exactly as `session/set_mode` above is: the
-   * frames leave on one ordered stdio stream, so the agent applies the model
-   * before it reads the prompt. Waiting for the reply would cost a round-trip
-   * on every turn to learn something the ordering already guarantees.
+   * Queued ahead of its parameters (`configSteps`), with the prompt behind the
+   * last of them — pipelined, unless the agent binds its settings when the
+   * prompt arrives ({@link AcpSessionOptions.promptAwaitsConfig}); then the
+   * prompt waits for this frame's reply when it is the last one.
    *
    * A turn that names no model is left alone — the agent's own default is the
    * right answer, and forcing the id it just reported as current would spend a
@@ -2662,9 +2659,6 @@ export class AcpTurnDriver {
       return;
     }
     for (const parameter of parameters) {
-      if (parameter.applyBeforePrompt) {
-        this.configBlocksPrompt = true;
-      }
       this.configSteps.push({
         send: (events) => {
           // Read at SEND time: by then the model frame ahead of this one has

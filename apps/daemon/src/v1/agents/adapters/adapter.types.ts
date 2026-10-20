@@ -18,6 +18,7 @@ import type {
 } from '../utils/model-prices';
 import type {
   SessionAsk,
+  SessionCloseOptions,
   SessionLogger,
   SpawnFn,
   StoppedCommands,
@@ -3519,9 +3520,10 @@ export interface AgentSession {
    * the session owns that obligation: nothing else will reap it.
    *
    * `cause` says why, when that decides how the work still out ended — see
-   * {@link SessionCloseCause}.
+   * {@link SessionCloseCause}. `graceful` closes an idle process's stdin
+   * first — see `SessionCloseOptions`.
    */
-  close(cause?: SessionCloseCause): void;
+  close(cause?: SessionCloseCause, options?: SessionCloseOptions): void;
   /** See `CliSession.noteCloseCause` — the one place a close's cause is kept. */
   noteCloseCause?(cause: SessionCloseCause | null): void;
   readonly closeCause?: SessionCloseCause | null;
@@ -4161,11 +4163,13 @@ export interface AdapterConfig {
    * Why this CLI's MCP client will NOT hold ONE `tools/call` open for as long
    * as a PERSON takes to answer it — or null when it will.
    *
-   * Non-null means `ask_user_question` must answer IMMEDIATELY and let the
-   * user's answer arrive as the run's next message instead (see
-   * `ChatService`'s deferred ask), because the alternative is not a slow
-   * answer but a LOST one: the client gives up, the model is handed a tool
-   * error, and the person is still reading the question.
+   * Non-null means `ask_user_question`, `propose_plan` and `propose_patch` must
+   * answer IMMEDIATELY and let the user's answer arrive as the run's next
+   * message instead (see `ChatService`'s deferred cards), because the
+   * alternative is not a slow answer but a LOST one: the client gives up, the
+   * model is handed a tool error, and the person is still reading the card.
+   * The deadline is on `tools/call`, not on one tool, which is why the same
+   * field covers all three.
    *
    * A REASON rather than a boolean, on the rule every capability here follows.
    * cursor-agent's is a MEASUREMENT of its shipped bundle

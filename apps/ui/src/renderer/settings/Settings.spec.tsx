@@ -1540,6 +1540,47 @@ describe('Settings appearance section', () => {
     });
   });
 
+  it('shows an hour for an idle agent by default, and persists a step as a number of minutes', async () => {
+    await mount();
+    const value = container.querySelector<HTMLElement>(
+      '[role="spinbutton"][aria-label="Minutes to keep an idle agent running"]',
+    );
+    expect(value?.textContent).toBe('60');
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Decrease Minutes to keep an idle agent running"]',
+        )!
+        .click();
+    });
+
+    expect(value?.textContent).toBe('55');
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      keptSessionIdleMinutes: 55,
+    });
+  });
+
+  it('opens the idle-agent window on the stored value, and stops at 5 minutes', async () => {
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      keptSessionIdleMinutes: 5,
+    });
+
+    await mount();
+
+    expect(
+      container.querySelector(
+        '[role="spinbutton"][aria-label="Minutes to keep an idle agent running"]',
+      )?.textContent,
+    ).toBe('5');
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Decrease Minutes to keep an idle agent running"]',
+      )?.disabled,
+    ).toBe(true);
+  });
+
   it('does NOT sweep on the spot when the window is set', async () => {
     // Setting a standing policy is not pressing a delete. Destroying
     // conversations inside the gesture that expressed a preference is the shape

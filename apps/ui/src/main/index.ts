@@ -18,6 +18,7 @@ import { installFetchDispatcher } from './fetch-dispatcher';
 import { readFinishedTasks } from './finished-tasks';
 import { readGitStamp } from './git-info';
 import { registerIpc } from './ipc';
+import { KeptSessionConfigPush } from './kept-session-config-push';
 import { flushWindowsThen } from './line-measurement-flush';
 import {
   applyTheme,
@@ -152,8 +153,21 @@ const shareConfigPush = new ShareConfigPush((message) => {
     source: 'share-config',
   });
 });
+/**
+ * The kept-session idle window, the same way: the daemon holds it in memory
+ * (an hour until the first push), so every daemon is told on start, after a
+ * restart from Settings, and after any write that changed it.
+ */
+const keptSessionConfigPush = new KeptSessionConfigPush((message) => {
+  void reportMainLog(supervisor.getHandle(), 'warn', message, {
+    source: 'kept-session-config',
+  });
+});
 onSettingsWritten((settings) => {
   void shareConfigPush.pushIfChanged(supervisor.getHandle(), settings.sharing);
+  void keptSessionConfigPush.pushIfChanged(supervisor.getHandle(), {
+    idleMinutes: settings.keptSessionIdleMinutes,
+  });
 });
 
 /**
@@ -564,6 +578,15 @@ function reapWorktrees(handle: DaemonHandle): void {
     });
 }
 
+/** Hand a daemon that just came up every setting it holds in memory only. */
+function pushDaemonConfig(handle: DaemonHandle): void {
+  const settings = readSettings();
+  void shareConfigPush.push(handle, settings.sharing);
+  void keptSessionConfigPush.push(handle, {
+    idleMinutes: settings.keptSessionIdleMinutes,
+  });
+}
+
 /**
  * A daemon came up — hand the renderer its address, and do what waits on one.
  *
@@ -573,7 +596,7 @@ function reapWorktrees(handle: DaemonHandle): void {
  */
 function daemonCameUp(handle: DaemonHandle): void {
   notifyDaemonReady(mainWindow, handle);
-  void shareConfigPush.push(handle, readSettings().sharing);
+  pushDaemonConfig(handle);
   // The window is opened BEFORE the first one, so whatever it already reported
   // about its own load has been waiting for an address to send it to.
   void flushMainLogs(handle);
@@ -657,7 +680,7 @@ function main(): void {
       },
       (handle) => {
         if (handle !== null) {
-          void shareConfigPush.push(handle, readSettings().sharing);
+          pushDaemonConfig(handle);
         }
       },
     );

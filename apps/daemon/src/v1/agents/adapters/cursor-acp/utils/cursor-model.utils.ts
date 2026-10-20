@@ -43,12 +43,6 @@ export interface CursorModelParameter {
    * spells the axis in a way no `alternateIds` entry names.
    */
   category?: string;
-  /**
-   * Whether the prompt must wait for this frame's reply — the driver's
-   * {@link AcpModelParameter.applyBeforePrompt}, set here because WHICH
-   * settings this CLI binds at turn start is a fact about this CLI.
-   */
-  applyBeforePrompt?: boolean;
 }
 
 /**
@@ -103,10 +97,6 @@ export function cursorModelSelection(
  * than trusted — they are the axes with their own control, and letting one
  * through here would set the same option twice, once from the chip the user
  * pressed and once from a map that happened to carry the same key.
- *
- * Not `applyBeforePrompt`: nothing has measured any of these to bind at turn
- * start the way `context` does, and paying a round trip per parameter on a
- * guess would cost every turn.
  */
 function withModelParameters(
   selection: CursorModelSelection,
@@ -150,18 +140,7 @@ function withContextWindow(
       ...selection.parameters,
       // ONE spelling, so no `alternateIds` — see the constant for the sweep
       // that measured that, and for what would turn this into a list.
-      //
-      // `applyBeforePrompt` because this CLI binds the window when the TURN
-      // begins, not per request: measured on 2026.08.11-e8db854, the identical
-      // frames pipelined behind the prompt leave the turn on the model's
-      // default (300,000) while awaited they give the 1,000,000 that was asked
-      // for — and the reply confirms `context = 1m` either way, so nothing
-      // short of the timing distinguishes them.
-      {
-        id: CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
-        value: wanted,
-        applyBeforePrompt: true,
-      },
+      { id: CURSOR_CONTEXT_WINDOW_PARAMETER_ID, value: wanted },
     ],
   };
 }

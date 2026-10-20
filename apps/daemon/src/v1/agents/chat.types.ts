@@ -1420,11 +1420,16 @@ export interface HostPatch {
  * rejected when it was in fact accepted, and folding it into `unavailable`
  * would hide that the right move is to look at the file again and re-propose.
  * The `reason` is what separates the cases.
+ *
+ * `posted` is the fifth, and it is not an ending — the same arm a deferred
+ * question has. A CLI that will not hold the call open is told the card is up;
+ * Apply or Reject arrives later, as the run's next message.
  */
 export type HostPatchOutcome =
   | { status: 'applied'; path: string }
   | { status: 'declined' }
   | { status: 'stale'; reason: string }
+  | { status: 'posted' }
   | { status: 'unavailable'; reason: string };
 
 /**
@@ -1492,10 +1497,15 @@ export interface HostPlan {
  * action, so nothing can go `stale` between the press and the effect. The note
  * hangs off BOTH verdicts because a user who approves with a caveat is telling
  * the agent something it must not lose.
+ *
+ * `posted` is the fourth, shared with the question and the patch: the card is
+ * on screen and the verdict will arrive as the run's next message, because
+ * this CLI will not hold the call open for a person.
  */
 export type HostPlanOutcome =
   | { status: 'approved'; note?: string }
   | { status: 'declined'; note?: string }
+  | { status: 'posted' }
   | { status: 'unavailable'; reason: string };
 
 /**
@@ -2649,6 +2659,35 @@ export interface KeptProcessRoot {
   cwd: string;
   pid: number;
 }
+
+/**
+ * How long a run's CLI process is kept after its last turn, in minutes, until
+ * Electron main pushes the user's own window — see `SESSION_IDLE_MS`.
+ */
+export const DEFAULT_KEPT_SESSION_IDLE_MINUTES = 60;
+
+/**
+ * The window a user may set (`Settings.keptSessionIdleMinutes`). Bounded the
+ * same in `apps/ui/src/main/ipc-schemas.ts`, so a value main lets through is
+ * never one the route refuses.
+ */
+export const MIN_KEPT_SESSION_IDLE_MINUTES = 5;
+export const MAX_KEPT_SESSION_IDLE_MINUTES = 180;
+
+/**
+ * TWIN PARSER: the body `apps/ui/src/main/kept-session-config-push.ts` sends,
+ * built from `Settings.keptSessionIdleMinutes`.
+ */
+export const KeptSessionConfigSchema = z
+  .object({
+    idleMinutes: z
+      .number()
+      .int()
+      .min(MIN_KEPT_SESSION_IDLE_MINUTES)
+      .max(MAX_KEPT_SESSION_IDLE_MINUTES),
+  })
+  .meta({ id: 'KeptSessionConfig' });
+export type KeptSessionConfig = z.infer<typeof KeptSessionConfigSchema>;
 
 /** A command line longer than this is cut — a full prompt can ride argv. */
 export const MAX_PROCESS_ARGS_CHARS = 2_000;

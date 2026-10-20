@@ -13,9 +13,11 @@ import {
   MAX_FAST_ACTION_NAME,
   MAX_FAST_ACTION_TEXT,
   MAX_FAST_ACTIONS,
+  MAX_KEPT_SESSION_IDLE_MINUTES,
   MAX_RUN_CONFIG_NAME,
   MAX_RUN_CONFIGS,
   MIN_AUTO_COMPACT_PERCENT,
+  MIN_KEPT_SESSION_IDLE_MINUTES,
   PROFILE_COLORS,
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_ROWS,
@@ -339,6 +341,14 @@ export const settingsPatchSchema = z.strictObject({
   // ENUMERATED, like `theme`: a size outside the list is one the screen never
   // offered, and a file written by another build falls back to the default.
   historyPageSize: z.literal(HISTORY_PAGE_SIZES).optional(),
+  // Bounded to exactly what the daemon's `KeptSessionConfigSchema` accepts, so
+  // a value this side lets through is never one the push is refused for.
+  keptSessionIdleMinutes: z
+    .number()
+    .int()
+    .min(MIN_KEPT_SESSION_IDLE_MINUTES)
+    .max(MAX_KEPT_SESSION_IDLE_MINUTES)
+    .optional(),
   // Each CLI's own switches (`AdapterConfig.options` in the daemon), as
   // `{optionId: on}`. The ids are the CLI's, published on the capabilities
   // wire, so this side bounds them and enumerates none.

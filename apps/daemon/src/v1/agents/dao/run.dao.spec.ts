@@ -460,6 +460,26 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('clearPendingQuestionIf', () => {
+    it('clears the column only while it still holds the expected card', async () => {
+      // The compare-and-swap a deferred verdict clears its own card with: a
+      // different card that went up meanwhile must survive the clear.
+      const mine = await dao.create({ pendingQuestion: 'MINE' });
+      const other = await dao.create({ pendingQuestion: 'OTHER' });
+
+      await expect(dao.clearPendingQuestionIf(mine.id, 'MINE')).resolves.toBe(
+        true,
+      );
+      await expect(dao.clearPendingQuestionIf(other.id, 'MINE')).resolves.toBe(
+        false,
+      );
+
+      const reader = new RunDao(orm.em.fork());
+      expect((await reader.getById(mine.id))?.pendingQuestion).toBeNull();
+      expect((await reader.getById(other.id))?.pendingQuestion).toBe('OTHER');
+    });
+  });
+
   describe('retitle', () => {
     // The predicate is the whole no-clobber guarantee, and it lives in SQL —
     // the service's own read is only an early exit, so a fake cannot stand in

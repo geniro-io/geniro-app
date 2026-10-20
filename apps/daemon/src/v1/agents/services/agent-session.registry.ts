@@ -16,7 +16,10 @@ import type {
   SessionCloseCause,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
-import type { KeptProcessRoot } from '../chat.types';
+import {
+  DEFAULT_KEPT_SESSION_IDLE_MINUTES,
+  type KeptProcessRoot,
+} from '../chat.types';
 import { runTagEnv } from '../utils/run-process-scan';
 import { runIdOfSessionKey, runSessionKeyPrefix } from '../utils/session-keys';
 import {
@@ -29,25 +32,33 @@ import {
 import type {
   BetweenTurnApproval,
   CliSessionOptions,
+  SessionCloseOptions,
 } from '../utils/spawn-cli';
 import { currentRunOwner } from './run-process-attribution.service';
 
 /**
- * How long a run's CLI process is kept after its last turn.
+ * How long a run's CLI process is kept after its last turn, until the user
+ * sets their own window (`Settings.keptSessionIdleMinutes`, pushed by Electron
+ * main through `PUT /v1/agents/sessions/config` on every daemon start and after
+ * each change — see {@link AgentSessionRegistry.setIdleMinutes}). The daemon
+ * reads no settings file, so this is what it uses until the first push lands.
  *
  * The whole cost/benefit of a run-scoped process sits on this number. Too
  * short and the user's MCP servers — and a browser one of them owns — are
- * rebooted while they are still reading the last answer, which is the very
- * complaint this exists to fix. Too long and an abandoned chat holds a CLI and
- * every server it started for hours.
+ * rebooted while they are still reading the last answer, and the conversation
+ * resumes cold. Too long and an abandoned chat holds a CLI and every server it
+ * started for hours.
  *
- * THREE HOURS, raised from thirty minutes on request. Thirty covered reading a
- * long answer and coming back from another window; it did not cover the way
- * these threads are actually used — left open across a meeting or an afternoon
- * and returned to — and the cost of getting that wrong is asymmetric. A window
- * that is too long reaps an abandoned chat late; one that is too short reboots
- * the user's MCP servers, and a browser one of them owns, in front of someone
- * who was still working in that thread.
+ * ONE HOUR by default, because that is what the cold resume costs: claude
+ * keeps a subscription's prompt cache for an hour, and a fresh `--resume`
+ * misses that cache once `git status` has changed — which in a worktree it
+ * almost always has. Closing a process before the hour is up pays a full cache
+ * rewrite on top of booting every MCP server again. Lowering it trades that for
+ * memory; raising it past the cache keeps only the warm MCP servers.
+ *
+ * The same window for every run. A card's run is an ordinary chat run: a card
+ * in Done can still be written to, so how long its process lives does not
+ * depend on the card's column.
  *
  * What it changes is WHICH mechanism does the reaping, not whether anything
  * does — and neither of the other two moved:
@@ -56,13 +67,13 @@ import { currentRunOwner } from './run-process-attribution.service';
  *   everything the moment the app is closed, so this only ever governs a
  *   session whose window the user still has open.
  * - {@link MAX_LIVE_SESSIONS} still caps how many are held at once, derived
- *   from this machine's memory at ~1GB each. Past three hours that ceiling is
+ *   from this machine's memory at ~1GB each. Within the window that ceiling is
  *   what closes the oldest IDLE session rather than the clock — which is the
  *   better order anyway: it reclaims the process the user is least likely to
  *   come back to, at the moment the memory is actually wanted, instead of on a
  *   timer that cannot see whether anything needs the room.
  */
-export const SESSION_IDLE_MS = 3 * 60 * 60_000;
+export const SESSION_IDLE_MS = DEFAULT_KEPT_SESSION_IDLE_MINUTES * 60_000;
 
 /**
  * What one kept CLI process costs in memory.
@@ -319,6 +330,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     string,
     { rows: string[]; prompts: string[] }
   >();
+  /**
+   * Processes the idle close has asked to finish gracefully
+   * (`SessionCloseOptions`) and that have not exited yet, with the key each
+   * was closed under. A graceful close signals nothing at first, so the CLI
+   * can run for a few seconds after its entry is gone — and it is still this
+   * registry's to end: shutdown ({@link closeAll}) and a teardown
+   * ({@link closeRun}) escalate it, and it is still reported as the run's
+   * ({@link processRoots}), so no reap signals it mid-exit. An immediate close
+   * is not kept here: its process is already being signalled.
+   */
+  private readonly closing = new Map<SessionEntry, string>();
   private shuttingDown = false;
   private readonly closeListeners = new Set<
     (
@@ -344,6 +366,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
 
   /** This geniro's owner tag, stamped on every process beside the run id. */
   private readonly runOwner = currentRunOwner();
+
+  /** The idle window every arm uses — see {@link setIdleMinutes}. */
+  private idleWindowMs = SESSION_IDLE_MS;
 
   constructor(@Optional() ceiling?: number) {
     this.ceiling = ceiling ?? MAX_LIVE_SESSIONS;
@@ -627,6 +652,12 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   closeRun(runId: string): void {
     const prefix = runSessionKeyPrefix(runId);
+    // At once: a process still finishing an idle close under the run too.
+    for (const [entry, key] of [...this.closing]) {
+      if (key === runId || key.startsWith(prefix)) {
+        this.escalate(key, entry);
+      }
+    }
     for (const [key, entry] of [...this.entries]) {
       if (key === runId || key.startsWith(prefix)) {
         this.closeEntry(key, entry, 'its run was torn down', false);
@@ -763,6 +794,30 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return true;
   }
 
+  /** The idle window in minutes, as the user last set it. */
+  get idleMinutes(): number {
+    return this.idleWindowMs / 60_000;
+  }
+
+  /**
+   * Take the user's idle window (`Settings.keptSessionIdleMinutes`), pushed by
+   * Electron main on every daemon start and after each change. Held in memory
+   * only, {@link SESSION_IDLE_MS} until the first push.
+   *
+   * Every later arm uses it, and every process already waiting out a window is
+   * re-timed to its last use plus the new one, on awake time as before
+   * (`AwakeTimer.retime`). One already past the new deadline goes through the
+   * ordinary idle close at once, so the exemptions hold as they always do: a
+   * parked question or a detached command re-arms it. A process with a turn in
+   * flight has no window yet; its settle arms the new one.
+   */
+  setIdleMinutes(minutes: number): void {
+    this.idleWindowMs = minutes * 60_000;
+    for (const entry of this.entries.values()) {
+      entry.timer?.retime(this.idleWindowMs);
+    }
+  }
+
   /** Runs currently holding a process — for diagnostics and the specs. */
   get liveCount(): number {
     return this.entries.size;
@@ -836,6 +891,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       }
       roots.push({ key, agent: entry.agent, cwd: entry.cwd, pid });
     }
+    // Still the run's until it exits — see {@link closing}. `pid` reads null
+    // once the CLI has exited.
+    for (const [entry, key] of this.closing) {
+      if (prefix !== null && key !== runId && !key.startsWith(prefix)) {
+        continue;
+      }
+      const pid = entry.session.pid;
+      if (pid !== null) {
+        roots.push({ key, agent: entry.agent, cwd: entry.cwd, pid });
+      }
+    }
     return roots;
   }
 
@@ -888,6 +954,11 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   closeAll(): void {
     this.shuttingDown = true;
+    // A graceful close still under way would outlive the daemon: `cursor-agent
+    // acp` ignores EOF, and its deadline is a timer in this process.
+    for (const [entry, key] of [...this.closing]) {
+      this.escalate(key, entry);
+    }
     for (const [runId, entry] of [...this.entries]) {
       this.closeEntry(runId, entry, 'the daemon is shutting down');
     }
@@ -1088,8 +1159,8 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    *
    * Time asleep is not a chat going unused, whether its process was working
    * between turns or the chat was merely left idle. What that costs: a chat
-   * idle overnight keeps its CLI, and the MCP servers it dialled, for up to
-   * three awake hours after the wake.
+   * idle overnight keeps its CLI, and the MCP servers it dialled, for up to one
+   * whole window of awake time after the wake.
    */
   private arm(runId: string, entry: SessionEntry): void {
     this.disarm(entry);
@@ -1123,7 +1194,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         return;
       }
       void this.closeAfterFarewell(runId, entry);
-    }, SESSION_IDLE_MS);
+    }, this.idleWindowMs);
   }
 
   private disarm(entry: SessionEntry): void {
@@ -1192,7 +1263,10 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
-   * Let {@link onIdleFarewell} have its last word, then close.
+   * Let {@link onIdleFarewell} have its last word, then close — gracefully
+   * (`SessionCloseOptions`): nothing is waiting on this process, so it may
+   * finish on its own, and the group signal after it exits reaches what an MCP
+   * server left behind. The only graceful close here.
    *
    * The entry stays in the map for the duration, which is what lets the
    * listener reach the process through {@link peek} — and is also why the state
@@ -1219,7 +1293,25 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     if (this.entries.get(runId) !== entry || !entry.session.idle) {
       return;
     }
-    this.closeEntry(runId, entry, 'it went unused');
+    this.closeEntry(runId, entry, 'it went unused', true, undefined, {
+      graceful: true,
+    });
+  }
+
+  /**
+   * Turn a graceful close still under way into an immediate one — a signal to
+   * the group now — and stop counting the process as {@link closing}, as an
+   * immediate close never does.
+   */
+  private escalate(key: string, entry: SessionEntry): void {
+    this.closing.delete(entry);
+    try {
+      entry.session.close();
+    } catch (err) {
+      this.logger.warn(
+        `failed to close the agent session for run ${key}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -1233,6 +1325,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     reason: string,
     tell = true,
     explicitCause?: SessionCloseCause,
+    options?: SessionCloseOptions,
   ): void {
     const cause = explicitCause ?? entry.session.closeCause ?? undefined;
     // Read BEFORE the entry is dropped and the timer disarmed — both are what
@@ -1248,8 +1341,12 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     }
     this.disarm(entry);
     this.entries.delete(runId);
+    if (options?.graceful === true) {
+      this.closing.set(entry, runId);
+      void entry.session.closed.then(() => this.closing.delete(entry));
+    }
     try {
-      entry.session.close(cause);
+      entry.session.close(cause, options);
     } catch (err) {
       // One session that cannot be closed must not stop the others — this runs
       // in a loop on shutdown, where giving up would orphan every later

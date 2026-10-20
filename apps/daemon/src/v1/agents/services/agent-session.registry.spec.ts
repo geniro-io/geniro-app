@@ -28,6 +28,7 @@ import {
 } from '../utils/session-keys';
 import type {
   CliSessionOptions,
+  SessionCloseOptions,
   SpawnedProcess,
   SpawnFn,
 } from '../utils/spawn-cli';
@@ -157,10 +158,19 @@ class FakeSession implements AgentSession {
     this.closeCause = cause;
   }
 
-  close(cause?: SessionCloseCause): void {
+  /** What each close asked for — a graceful close or an immediate one. */
+  closeOptions: (SessionCloseOptions | undefined)[] = [];
+
+  /** Set to keep the process running after a close, until {@link exit}. */
+  lingers = false;
+
+  close(cause?: SessionCloseCause, options?: SessionCloseOptions): void {
     this.closes += 1;
     this.closeCause ??= cause ?? null;
-    this.resolveClosed();
+    this.closeOptions.push(options);
+    if (!this.lingers) {
+      this.resolveClosed();
+    }
     if (this.closeThrows) {
       throw new Error('close boom');
     }
@@ -176,6 +186,11 @@ class FakeSession implements AgentSession {
       commands: this.runningCommands,
     };
     this.processGone = true;
+    this.resolveClosed();
+  }
+
+  /** A lingering process finally exits after its close. */
+  exit(): void {
     this.resolveClosed();
   }
 
@@ -848,6 +863,263 @@ describe('AgentSessionRegistry — ending a process', () => {
 
     expect(seen).toBeDefined();
     expect(seen?.betweenTurnApproval).toBeUndefined();
+  });
+});
+
+describe('AgentSessionRegistry — the user’s idle window', () => {
+  const MINUTE = 60_000;
+
+  it('keeps a process for an hour until Electron main pushes a window', async () => {
+    // A subscription's prompt cache lives an hour, and a fresh `--resume`
+    // misses it once `git status` changed: closing earlier pays a full cache
+    // rewrite and a cold MCP start.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+
+    expect(SESSION_IDLE_MS).toBe(60 * MINUTE);
+    expect(registry.idleMinutes).toBe(60);
+    await vi.advanceTimersByTimeAsync(60 * MINUTE - 1);
+    expect(at(sessions, 0).closes).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
+  it('arms the next window with the value pushed', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.setIdleMinutes(15);
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+
+    expect(registry.idleMinutes).toBe(15);
+    await vi.advanceTimersByTimeAsync(15 * MINUTE - 1);
+    expect(at(sessions, 0).closes).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
+  it('re-times a waiting process to its last use plus a longer window', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+
+    registry.setIdleMinutes(120);
+
+    await vi.advanceTimersByTimeAsync(110 * MINUTE - 1);
+    expect(at(sessions, 0).closes).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
+  it('closes, through the idle close, a process already past a lowered window, and re-times the rest', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const farewells: string[] = [];
+    registry.onIdleFarewell(async (runId) => {
+      farewells.push(runId);
+    });
+    registry.startTurn('old', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    await vi.advanceTimersByTimeAsync(40 * MINUTE);
+    registry.startTurn('recent', adapter, INPUT, noop);
+    await at(sessions, 1).endTurn();
+    await vi.advanceTimersByTimeAsync(5 * MINUTE);
+
+    registry.setIdleMinutes(30);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(farewells).toEqual(['old']);
+    expect(sessions.map((session) => session.closes)).toEqual([1, 0]);
+    await vi.advanceTimersByTimeAsync(25 * MINUTE - 1);
+    expect(at(sessions, 1).closes).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sessions.map((session) => session.closes)).toEqual([1, 1]);
+  });
+
+  it('still keeps a parked question, a detached command, off-turn work and a turn in flight when the window is lowered', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(5);
+    const { adapter, sessions } = fakeAdapter();
+    for (const run of ['parked', 'shell', 'off-turn', 'turn']) {
+      registry.startTurn(run, adapter, INPUT, noop, undefined, noop);
+      await at(sessions, sessions.length - 1).endTurn();
+    }
+    const [parked, shell, offTurn, turn] = sessions as [
+      FakeSession,
+      FakeSession,
+      FakeSession,
+      FakeSession,
+    ];
+    parked.parked = true;
+    shell.shellsRunning = 1;
+    registry.startTurn('turn', adapter, INPUT, noop);
+    // A delegate the settled turn left working, writing a row every 4 minutes.
+    for (let i = 0; i < 10; i += 1) {
+      await vi.advanceTimersByTimeAsync(4 * MINUTE);
+      offTurn.emitBetweenTurn(`Bash-${i}`);
+    }
+
+    registry.setIdleMinutes(5);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sessions.map((session) => session.closes)).toEqual([0, 0, 0, 0]);
+    // Each one goes once its work ends, on the new window.
+    parked.parked = false;
+    shell.shellsRunning = 0;
+    await turn.endTurn();
+    await vi.advanceTimersByTimeAsync(5 * MINUTE);
+    expect(sessions.map((session) => session.closes)).toEqual([1, 1, 1, 1]);
+  });
+
+  it('does not count time asleep toward a window changed after the wake', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    await simulateSleep(4 * 60 * MINUTE);
+    await vi.advanceTimersByTimeAsync(5 * MINUTE);
+
+    registry.setIdleMinutes(30);
+
+    await vi.advanceTimersByTimeAsync(25 * MINUTE - 1);
+    expect(at(sessions, 0).closes).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
+  it('gives a card’s run the same window as a chat’s', async () => {
+    // A card in Done can still be written to: its run is an ordinary chat run
+    // (or a workflow run), and how long its process lives does not depend on
+    // the card's column. Nothing here knows which run is a card's.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.setIdleMinutes(20);
+    registry.startTurn('chat-run', adapter, INPUT, noop);
+    registry.startTurn('card-run', adapter, INPUT, noop);
+    registry.startTurn(nodeSessionKey('card-flow', 'qa'), adapter, INPUT, noop);
+    for (const session of sessions) {
+      await session.endTurn();
+    }
+
+    await vi.advanceTimersByTimeAsync(20 * MINUTE - 1);
+    expect(sessions.map((session) => session.closes)).toEqual([0, 0, 0]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sessions.map((session) => session.closes)).toEqual([1, 1, 1]);
+  });
+});
+
+describe('AgentSessionRegistry — closing an idle process gracefully', () => {
+  it('lets a process that went unused finish on its own', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    expect(at(sessions, 0).closeOptions).toEqual([{ graceful: true }]);
+    expect(registry.liveCount).toBe(0);
+  });
+
+  it('closes at once for an eviction, a teardown and shutdown', async () => {
+    const registry = new AgentSessionRegistry(2);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('evicted', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    registry.startTurn('torn-down', adapter, INPUT, noop);
+    await at(sessions, 1).endTurn();
+    registry.startTurn('third', adapter, INPUT, noop);
+    registry.closeRun('torn-down');
+    await at(sessions, 2).endTurn();
+
+    registry.closeAll();
+
+    expect(sessions.map((session) => session.closeOptions)).toEqual([
+      [undefined],
+      [undefined],
+      [undefined],
+    ]);
+  });
+
+  it('still reports a process in a graceful close as the run’s until it exits', async () => {
+    // What `RunProcessSweep` and `RunProcessReaper.held` read: the reap must
+    // not find the run unheld and signal a CLI that is finishing on its own.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    const cli = at(sessions, 0);
+    cli.pid = 4242;
+    await cli.endTurn();
+    cli.lingers = true;
+
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    expect(cli.closeOptions).toEqual([{ graceful: true }]);
+    expect(registry.liveCount).toBe(0);
+    expect(registry.processRoots('run-1').map((root) => root.pid)).toEqual([
+      4242,
+    ]);
+    expect(registry.processRoots().map((root) => root.pid)).toEqual([4242]);
+    cli.exit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(registry.processRoots('run-1')).toEqual([]);
+  });
+
+  it('escalates a graceful close still under way when the run is torn down', async () => {
+    // An archive or delete wants the processes gone now.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn(nodeSessionKey('run-1', 'qa'), adapter, INPUT, noop);
+    registry.startTurn('run-2', adapter, INPUT, noop);
+    for (const session of sessions) {
+      await session.endTurn();
+      session.lingers = true;
+    }
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    registry.closeRun('run-1');
+
+    expect(sessions.map((session) => session.closeOptions)).toEqual([
+      [{ graceful: true }, undefined],
+      [{ graceful: true }],
+    ]);
+    // Escalated, so no longer held as finishing; the other run's still is.
+    expect(registry.processRoots('run-1')).toEqual([]);
+  });
+
+  it('escalates a graceful close still under way when the daemon shuts down', async () => {
+    // `cursor-agent acp` ignores EOF and its deadline is a timer in the
+    // daemon: left alone, it and its MCP servers outlive the shutdown.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).lingers = true;
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    registry.closeAll();
+
+    expect(at(sessions, 0).closeOptions).toEqual([
+      { graceful: true },
+      undefined,
+    ]);
   });
 });
 

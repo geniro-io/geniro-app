@@ -77,6 +77,8 @@ const OPENS_BLOCK = {
   comparison: true,
   gallery: true,
   artifact: true,
+  // Never filed under a delegate — see the `action` arm of `groupTranscript`.
+  action: false,
   workflow: true,
 } as const satisfies Record<CardEntry['type'], boolean>;
 
@@ -120,6 +122,7 @@ const CARD_NOUN = {
   comparison: 'a comparison',
   gallery: 'a gallery',
   artifact: 'a page',
+  action: 'a button',
   workflow: 'a workflow',
 } as const satisfies Record<CardEntry['type'], string>;
 

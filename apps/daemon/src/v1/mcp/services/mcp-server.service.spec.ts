@@ -22,15 +22,18 @@ import {
   HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PUBLISH_ACTION_TOOL,
   HOST_QUESTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
   HOST_RECOMMENDATION_MARKS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
+  HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
   HOST_WORKFLOW_CHANGE_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
 } from '../../agents/chat.types';
 import { ChatSearchIndexDao } from '../../agents/dao/chat-search-index.dao';
+import { ActionBroker } from '../../agents/services/action.broker';
 import { AnalysisBroker } from '../../agents/services/analysis.broker';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
@@ -144,6 +147,7 @@ function service(
   threads = {} as ThreadReaderService,
   workflowChanges = {} as WorkflowChangeService,
   shares = fakeShares(false).service,
+  actions = new ActionBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -155,6 +159,7 @@ function service(
       comparisons,
       galleries,
       artifacts,
+      actions,
       patches,
       plans,
       notices,
@@ -201,6 +206,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
   const galleries = new GalleryBroker();
   const artifacts = new ArtifactBroker();
   const notices = new NotifyBroker();
+  const actions = new ActionBroker();
   for (const broker of [
     questions,
     findings,
@@ -212,6 +218,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
     galleries,
     artifacts,
     notices,
+    actions,
   ]) {
     broker.register('run-1', 'agent', noop as never);
   }
@@ -244,12 +251,40 @@ async function everyHostTool(): Promise<ToolListing[]> {
       board,
       undefined,
       analysis,
+      undefined,
+      undefined,
+      undefined,
+      actions,
     ),
     'run-1',
     'agent',
     rpc('tools/list', {}),
   );
   return (json().result as { tools: ToolListing[] }).tools;
+}
+
+/** A service whose only registered host sink is the action one. */
+function actionService(actions: ActionBroker): McpServerService {
+  return service(
+    new CallBroker(),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    actions,
+  );
 }
 
 function patchService(patches: PatchBroker): McpServerService {
@@ -1979,6 +2014,87 @@ describe('McpServerService', () => {
     expect(kind.enum).toEqual(['line', 'bar', 'area']);
   });
 
+  it('tools/call publish_action hands the button over and answers with its receipt', async () => {
+    const actions = new ActionBroker();
+    const published: unknown[] = [];
+    actions.register('run-1', 'agent', {
+      publish: async (input) => {
+        published.push(input);
+        return { status: 'published', text: 'Published action "pr-merged".' };
+      },
+      remove: async () => ({ status: 'refused', reason: 'unused' }),
+    });
+    const call = async (args: Record<string, unknown>) => {
+      const { json } = await post(
+        actionService(actions),
+        'run-1',
+        'agent',
+        rpc('tools/call', { name: HOST_PUBLISH_ACTION_TOOL, arguments: args }),
+      );
+      return json().result as { content: { text: string }[]; isError: boolean };
+    };
+
+    const result = await call({
+      label: 'PR merged',
+      message: 'PR merged — continue',
+      action_id: null,
+    });
+
+    expect(published).toEqual([
+      { label: 'PR merged', message: 'PR merged — continue' },
+    ]);
+    expect(result).toEqual({
+      content: [{ type: 'text', text: 'Published action "pr-merged".' }],
+      isError: false,
+    });
+    // A misspelt kind must not publish a button that sends nothing.
+    expect(await call({ label: 'x', mesage: 'typo' })).toMatchObject({
+      isError: true,
+    });
+    expect(published).toHaveLength(1);
+  });
+
+  it('tools/call answers a refused publish as an error, and remove_action with its receipt', async () => {
+    const actions = new ActionBroker();
+    const removed: string[] = [];
+    actions.register('run-1', 'agent', {
+      publish: async () => ({
+        status: 'refused',
+        reason: 'give exactly one of message, stop or command',
+      }),
+      remove: async (actionId) => {
+        removed.push(actionId);
+        return { status: 'removed', text: `Removed action "${actionId}".` };
+      },
+    });
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const { json } = await post(
+        actionService(actions),
+        'run-1',
+        'agent',
+        rpc('tools/call', { name, arguments: args }),
+      );
+      return json().result as { content: { text: string }[]; isError: boolean };
+    };
+
+    expect(await call(HOST_PUBLISH_ACTION_TOOL, { label: 'x' })).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'INVALID_ARGS: give exactly one of message, stop or command',
+        },
+      ],
+      isError: true,
+    });
+    expect(
+      await call(HOST_REMOVE_ACTION_TOOL, { action_id: 'pr-merged' }),
+    ).toEqual({
+      content: [{ type: 'text', text: 'Removed action "pr-merged".' }],
+      isError: false,
+    });
+    expect(removed).toEqual(['pr-merged']);
+  });
+
   it('tools/call show_chart hands the chart over and answers with a receipt', async () => {
     const charts = new ChartBroker();
     const drawn: unknown[] = [];
@@ -2967,6 +3083,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_RECOMMENDATIONS_TOOL,
       HOST_RECOMMENDATION_MARKS_TOOL,
       HOST_WORKFLOW_CHANGE_TOOL,
+      HOST_PUBLISH_ACTION_TOOL,
+      HOST_REMOVE_ACTION_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
@@ -2984,6 +3102,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_RECOMMENDATIONS_TOOL,
       HOST_RECOMMENDATION_MARKS_TOOL,
       HOST_WORKFLOW_CHANGE_TOOL,
+      HOST_PUBLISH_ACTION_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when NOT`).toMatch(

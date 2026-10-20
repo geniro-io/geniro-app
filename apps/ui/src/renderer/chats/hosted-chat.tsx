@@ -96,6 +96,7 @@ import { useAgentEfforts } from './use-agent-efforts';
 import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { readAsBase64, useAttachments } from './use-attachments';
+import { type PressHooks, useChatActions } from './use-chat-actions';
 import {
   appendPaths,
   CHAT_UPLOAD_TIMEOUT_MS,
@@ -270,6 +271,49 @@ export function HostedChat({
   const sendingRef = useRef(false);
 
   const runId = chat.run?.id ?? null;
+  // The agent here is offered `publish_action` like any chat's, so its buttons
+  // must be pressable here too — the card reads them through this.
+  const { state: runState, refresh: refreshRunState } = useRunState(
+    apis?.chats ?? null,
+    chat.client,
+    runId,
+    chat.reconnectNonce,
+  );
+  // A press starts a turn like a typed send, so it takes the send's steps:
+  // flush the canvas first, and raise `working` before the request.
+  // Lowered only by the press that raised it: a press into a running turn
+  // must not take down the turn's own flag when it fails.
+  const { markWorking } = chat;
+  const pressWorkingRef = useRef(chat.working);
+  useEffect(() => {
+    pressWorkingRef.current = chat.working;
+  }, [chat.working]);
+  const raisedByPressRef = useRef(false);
+  const pressHooks = useMemo<PressHooks>(
+    () => ({
+      beforePress: async () => {
+        await onBeforeSend?.();
+        if (!pressWorkingRef.current) {
+          raisedByPressRef.current = true;
+          markWorking(true);
+        }
+      },
+      onPressSettled: (taken) => {
+        if (raisedByPressRef.current && !taken) {
+          markWorking(false);
+        }
+        raisedByPressRef.current = false;
+      },
+    }),
+    [onBeforeSend, markWorking],
+  );
+  const chatActions = useChatActions(
+    apis?.chats ?? null,
+    runId,
+    runState,
+    refreshRunState,
+    pressHooks,
+  );
   const ownerRef = useRef(runId ?? ownerKey);
   ownerRef.current = runId ?? ownerKey;
   const attachments = useAttachments(undefined, {
@@ -850,7 +894,8 @@ export function HostedChat({
       }}
       loadAttachment={loadAttachment}
       applyRecommendations={applyRecommendations}
-      notSent={notSent}>
+      notSent={notSent}
+      chatActions={chatActions}>
       {header({ run, status })}
 
       <div

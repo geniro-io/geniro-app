@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
+  ActionPressWireSchema,
   AgentOptionsSchema,
   AppProcessesWireSchema,
   AttachmentMediaTypeSchema,
@@ -201,6 +202,21 @@ export const applyRecommendationsSchema = z.object({
 export class ApplyRecommendationsDto extends createZodDto(
   applyRecommendationsSchema,
 ) {}
+
+/** `POST /v1/chats/:runId/actions/:seq/press` — one press of an agent's button. */
+export const pressActionSchema = z.object({
+  clientMessageId: z
+    .string()
+    .min(1)
+    .max(128)
+    .describe(
+      'ID generated once per press and reused when the press is retried after RUN_BUSY',
+    ),
+});
+export class PressActionDto extends createZodDto(pressActionSchema) {}
+
+/** What a press or a dismissal wrote. */
+export class ActionPressDto extends createZodDto(ActionPressWireSchema) {}
 
 export const updateChatSettingsSchema = z
   .object({

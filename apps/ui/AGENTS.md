@@ -271,6 +271,7 @@ One home for each concern:
 **Cards (agent-drawn payloads):**
 
 - Each card kind has a twin parser (`*-payload.ts`) of the daemon's schema.
+- Agent buttons (`action-chip.tsx`, `action-card.tsx`, `use-chat-actions.ts`): what is pressable is run state's `actions`, never a fold of the window. A press refused `RUN_BUSY` is retried by the hook (same seq, same `clientMessageId`) once the turn settles, never through the composer queue, which would send the text without recording the press. The shelf group sits after the task list, ahead of the turn-scoped chips.
 - `isCardEntry` (`transcript-groups.ts`) is the one predicate over card kinds. Never write a `'task-list' || …` chain.
 - A new card tool also goes in `GENIRO_TOOL_NAMES`, which the compiler cannot check.
 - Findings keep the agent's order.

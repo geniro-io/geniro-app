@@ -1370,6 +1370,50 @@ describe('groupTranscript', () => {
     expect(card.artifact.title).toBe('Migration plan');
   });
 
+  it('groups an action row into an action card and folds its outcome', () => {
+    const publish = (label: string): ChatItem =>
+      item('action', {
+        actionId: label.toLowerCase(),
+        label,
+        once: true,
+        spec: { kind: 'message', text: 'continue' },
+        publisher: { nodeId: 'agent', conversationId: '' },
+      });
+    const merged = publish('Merged');
+    const other = publish('Deploy');
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__publish_action', 't1', { label: 'Merged' }),
+      result('t1', 'Published action "merged" (message).'),
+      merged,
+      other,
+      item('action_outcome', {
+        actionSeq: merged.seq,
+        actionId: 'merged',
+        nodeId: 'agent',
+        conversationId: '',
+        state: 'succeeded',
+        via: 'desktop',
+      }),
+    ]);
+
+    // The tool's own rows are hidden and the outcome draws nothing of its own.
+    expect(entries.map((e) => e.type)).toEqual(['action', 'action']);
+    expect(entries[0]).toMatchObject({
+      seq: merged.seq,
+      action: { label: 'Merged', kind: 'message', once: true },
+      outcome: { actionSeq: merged.seq, state: 'succeeded' },
+    });
+    expect(entries[1]).toMatchObject({ seq: other.seq, outcome: null });
+  });
+
+  it('drops an action row that does not parse', () => {
+    expect(
+      groupTranscript([
+        item('action', { actionId: 'x', label: 'X', spec: { kind: 'shell' } }),
+      ]),
+    ).toEqual([]);
+  });
+
   it('drops a show_artifact row that cannot address a page', () => {
     // No key means no URL to frame, so the card could only ever say it cannot
     // open itself — worse than drawing nothing.

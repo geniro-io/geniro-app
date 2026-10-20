@@ -157,6 +157,8 @@ const AFTER_TURN_BOOKKEEPING: ReadonlySet<string> = new Set([
   'shell_info',
   'shell_open',
   'subagent_info',
+  // A button dismissed after the turn ended, from this window or a paired phone.
+  'action_outcome',
 ]);
 
 /** Whether this row is {@link AFTER_TURN_BOOKKEEPING} — it says nothing about the turn. */

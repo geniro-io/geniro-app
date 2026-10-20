@@ -68,8 +68,10 @@ import {
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PUBLISH_ACTION_TOOL,
   HOST_QUESTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
   SINGLE_AGENT_NODE,
@@ -87,6 +89,8 @@ import {
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import { UnknownAgentVersion } from './__tests__/unknown-agent-version';
+import { ActionBroker } from './action.broker';
+import { ActionPublishService } from './action-publish.service';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import type { AgentMcpService } from './agent-mcp.service';
@@ -99,6 +103,7 @@ import { ArtifactStoreService } from './artifact-store.service';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChartBroker } from './chart.broker';
 import { ChatService } from './chat.service';
+import { ChatActionsService } from './chat-actions.service';
 import type { ChatUploadStoreService } from './chat-upload-store.service';
 import type { CliSessionsService } from './cli-sessions.service';
 import { ComparisonBroker } from './comparison.broker';
@@ -1085,6 +1090,7 @@ function setup(
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
   const artifacts = new ArtifactBroker();
+  const actionSinks = new ActionBroker();
   // The REAL store, on the reasoning the patch broker's comment gives: what a
   // published artifact observably DOES is put a page on disk and hand back a
   // key that opens it, and a double would pin the double. One root shared by
@@ -1231,6 +1237,16 @@ function setup(
     comparisons,
     galleries,
     artifacts,
+    actionSinks,
+    new ActionPublishService(
+      new ChatActionsService(
+        em,
+        itemDao as unknown as ItemDao,
+        bus,
+        NO_CALL_INDEX,
+        seqs,
+      ),
+    ),
     artifactStore,
     notices,
     callTokens,
@@ -1279,6 +1295,7 @@ function setup(
     comparisons,
     galleries,
     artifacts,
+    actionSinks,
     artifactStore,
     statuses,
     deletedRuns,
@@ -2621,6 +2638,20 @@ describe('ChatService', () => {
       });
       expect(itemDao.items).toHaveLength(before);
       await settle(claude);
+    });
+
+    it('offers the action tools only while a turn can publish', async () => {
+      // The registration and its disposer: without the first the tools are
+      // never listed, without the second a settled chat keeps publishing.
+      const { service, claude, actionSinks } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
+
+      await service.sendMessage(run.id, 'hello');
+      expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+      expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
     });
 
     it('stops accepting artifacts once the turn that could show them is over', async () => {
@@ -9078,6 +9109,37 @@ describe('ChatService — approval modes (parity M1)', () => {
       input,
     );
     // No permission card of its own, and nothing parked for a human here.
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves both action tools in an `ask` chat', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    for (const tool of [HOST_PUBLISH_ACTION_TOOL, HOST_REMOVE_ACTION_TOOL]) {
+      claude.emit({
+        type: 'approval_request',
+        id: `p-${tool}`,
+        toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
+        input: { label: 'x' },
+      });
+    }
+    await drain();
+
+    for (const tool of [HOST_PUBLISH_ACTION_TOOL, HOST_REMOVE_ACTION_TOOL]) {
+      expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+        `p-${tool}`,
+        true,
+        { label: 'x' },
+      );
+    }
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,
     );

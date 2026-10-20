@@ -1,5 +1,6 @@
 import { memo } from 'react';
 
+import { ActionCard } from './action-card';
 import { ArtifactCard } from './artifact-block';
 import { ChartCard } from './chart-block';
 import { ComparisonCard } from './comparison-block';
@@ -72,6 +73,8 @@ export const EntryCard = memo(function EntryCard({
           memoryKey={`artifact:${entry.id}`}
         />
       );
+    case 'action':
+      return <ActionCard entry={entry} />;
     case 'workflow':
       return <WorkflowCard entry={entry} />;
   }

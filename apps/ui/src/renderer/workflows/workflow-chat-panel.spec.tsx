@@ -84,6 +84,9 @@ function chatState(overrides: Partial<WorkflowChatState>): WorkflowChatState {
     run: { id: 'run-1', status: 'pending' } as WorkflowChatState['run'],
     items: [],
     anchors: [],
+    client: null,
+    reconnectNonce: 0,
+    markWorking: vi.fn(),
     liveText: new Map(),
     loading: false,
     error: null,
@@ -242,6 +245,152 @@ describe('WorkflowChatPanel', () => {
     expect(onBeforeSend.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       send.mock.invocationCallOrder[0] ?? 0,
     );
+  });
+
+  it('writes pending canvas edits before an action press reaches the daemon', async () => {
+    const chats = APIS.chats as unknown as {
+      readRunState: ReturnType<typeof vi.fn>;
+      pressChatAction?: ReturnType<typeof vi.fn>;
+    };
+    chats.readRunState.mockResolvedValueOnce({
+      ...emptyRunState(),
+      actions: [
+        {
+          seq: 4,
+          actionId: 'go',
+          nodeId: 'agent',
+          conversationId: '',
+          label: 'Go on',
+          once: true,
+          spec: { kind: 'message', text: 'continue' },
+          publisher: { nodeId: 'agent', conversationId: '' },
+          pending: false,
+        },
+      ],
+      throughSeq: 4,
+    });
+    const pressChatAction = vi.fn(async () => ({}));
+    chats.pressChatAction = pressChatAction;
+    chat.current = chatState({
+      items: [
+        {
+          id: 'i4',
+          runId: 'run-1',
+          seq: 4,
+          kind: 'action',
+          role: null,
+          nodeId: null,
+          payload: {
+            actionId: 'go',
+            label: 'Go on',
+            once: true,
+            spec: { kind: 'message', text: 'continue' },
+            publisher: { nodeId: 'agent', conversationId: '' },
+          },
+          createdAt: '2026-10-15T00:00:04.000Z',
+        } as unknown as WorkflowChatState['items'][number],
+      ],
+    });
+    await paint();
+
+    const chip = document.querySelector<HTMLButtonElement>(
+      '[data-slot="action-chip"]',
+    );
+    await act(async () => chip!.click());
+
+    expect(onBeforeSend).toHaveBeenCalledTimes(1);
+    expect(pressChatAction).toHaveBeenCalledTimes(1);
+    expect(onBeforeSend.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+      pressChatAction.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(chat.current?.markWorking).toHaveBeenCalledWith(true);
+    delete chats.pressChatAction;
+  });
+
+  async function paintWithAction(
+    pressChatAction: ReturnType<typeof vi.fn>,
+    working = false,
+  ): Promise<void> {
+    const chats = APIS.chats as unknown as {
+      readRunState: ReturnType<typeof vi.fn>;
+      pressChatAction?: ReturnType<typeof vi.fn>;
+    };
+    chats.readRunState.mockResolvedValueOnce({
+      ...emptyRunState(),
+      actions: [
+        {
+          seq: 4,
+          actionId: 'go',
+          nodeId: 'agent',
+          conversationId: '',
+          label: 'Go on',
+          once: true,
+          spec: { kind: 'message', text: 'continue' },
+          publisher: { nodeId: 'agent', conversationId: '' },
+          pending: false,
+        },
+      ],
+      throughSeq: 4,
+    });
+    chats.pressChatAction = pressChatAction;
+    chat.current = chatState({
+      working,
+      items: [
+        {
+          id: 'i4',
+          runId: 'run-1',
+          seq: 4,
+          kind: 'action',
+          role: null,
+          nodeId: null,
+          payload: {
+            actionId: 'go',
+            label: 'Go on',
+            once: true,
+            spec: { kind: 'message', text: 'continue' },
+            publisher: { nodeId: 'agent', conversationId: '' },
+          },
+          createdAt: '2026-10-15T00:00:04.000Z',
+        } as unknown as WorkflowChatState['items'][number],
+      ],
+    });
+    await paint();
+    const chip = document.querySelector<HTMLButtonElement>(
+      '[data-slot="action-chip"]',
+    );
+    await act(async () => chip!.click());
+  }
+
+  function refusal(code: string): Error {
+    return new Error(
+      `daemon POST /v1/chats/run-1/actions/4/press failed (409): ${JSON.stringify({ code, message: code })}`,
+    );
+  }
+
+  it("a failed press during a turn leaves the turn's working flag alone", async () => {
+    await paintWithAction(
+      vi.fn(async () => {
+        throw refusal('ACTION_CHANGED');
+      }),
+      true,
+    );
+
+    expect(chat.current?.markWorking).not.toHaveBeenCalled();
+    delete (APIS.chats as unknown as { pressChatAction?: unknown })
+      .pressChatAction;
+  });
+
+  it('a press the chat refuses as busy lowers the flag it raised', async () => {
+    await paintWithAction(
+      vi.fn(async () => {
+        throw refusal('RUN_BUSY');
+      }),
+    );
+
+    expect(chat.current?.markWorking).toHaveBeenNthCalledWith(1, true);
+    expect(chat.current?.markWorking).toHaveBeenNthCalledWith(2, false);
+    delete (APIS.chats as unknown as { pressChatAction?: unknown })
+      .pressChatAction;
   });
 
   it('sends nothing at all when the box is empty', async () => {

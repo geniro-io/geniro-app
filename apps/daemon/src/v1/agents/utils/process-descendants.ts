@@ -308,12 +308,16 @@ function unwrapShell(command: string): string | null {
 }
 
 /**
- * What a segment leaves running once `env` and the shell have exec'd away: the
- * leading `env [-i] [-u NAME]…` and `NAME=value` assignments dropped, and
- * everything from the first redirection on cut, since `ps` never shows one.
+ * What a segment leaves running once `nohup`, `env` and the shell have exec'd
+ * away: a leading `nohup`, the `env [-i] [-u NAME]…` and `NAME=value`
+ * assignments dropped, and everything from the first redirection on cut, since
+ * `ps` never shows one.
  */
 function commandCore(segment: string): string | null {
   const words = segment.trim().split(' ');
+  if (words[0] === 'nohup') {
+    words.shift();
+  }
   if (words[0] === 'env') {
     words.shift();
     while (words[0]?.startsWith('-')) {

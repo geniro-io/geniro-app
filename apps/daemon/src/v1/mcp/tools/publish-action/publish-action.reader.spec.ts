@@ -30,10 +30,34 @@ describe('readPublishAction', () => {
     ).toEqual({ label: 'x', message: 'y' });
   });
 
-  it('passes stop and command through whatever their shape', () => {
+  it('reads a stop by shell or pid and refuses any other shape', () => {
     expect(readPublishAction({ label: 'x', stop: { pid: 1 } })).toEqual({
       label: 'x',
       stop: { pid: 1 },
+    });
+    expect(readPublishAction({ label: 'x', stop: { shell: ' bg1 ' } })).toEqual(
+      {
+        label: 'x',
+        stop: { shell: 'bg1' },
+      },
+    );
+    for (const stop of [
+      { pid: -3 },
+      { pid: 1.5 },
+      { shell: '' },
+      { name: 'x' },
+      'bg1',
+    ]) {
+      expect(readPublishAction({ label: 'x', stop })).toEqual({
+        error: expect.stringContaining('stop') as string,
+      });
+    }
+  });
+
+  it('passes command through whatever its shape', () => {
+    expect(readPublishAction({ label: 'x', command: 'ls' })).toEqual({
+      label: 'x',
+      command: 'ls',
     });
   });
 

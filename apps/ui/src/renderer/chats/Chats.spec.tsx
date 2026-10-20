@@ -59,6 +59,8 @@ const api = vi.hoisted(() => ({
   searchChat: vi.fn(),
   searchAllChats: vi.fn(),
   readRunState: vi.fn(),
+  pressChatAction: vi.fn(),
+  dismissChatAction: vi.fn(),
   readChatTimeline: vi.fn(),
   readRunArtifacts: vi.fn(),
   readRunWaterfall: vi.fn(),
@@ -130,6 +132,8 @@ const workflowApi = vi.hoisted(() => ({
   cancelWorkflowRun: vi.fn(),
   deleteWorkflowRun: vi.fn(),
   sendWorkflowRunMessage: vi.fn(),
+  pressWorkflowAction: vi.fn(),
+  dismissWorkflowAction: vi.fn(),
 }));
 const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 // There is no terminal panel to stub any more: the daemon resolves an
@@ -4756,6 +4760,10 @@ describe('Chats workflow runs', () => {
       vi.unstubAllGlobals();
     }
     expect(card?.dataset.revealed).toBe('true');
+    // Shown, not opened: only an action card's link opens the card it names.
+    expect(
+      card?.querySelector('[aria-expanded]')?.getAttribute('aria-expanded'),
+    ).toBe('false');
     expect(document.querySelector('[data-slot="running-call-row"]')).toBeNull();
 
     await act(async () => {
@@ -10145,6 +10153,290 @@ describe('Chats run composer chips', () => {
       },
     });
     expect(api.sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('a workflow run presses a callee’s button through the workflow route, and its card opens the call', async () => {
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        title: null,
+        agentKind: null,
+        workflowId: 'review-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.listWorkflows.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    const publisher = {
+      nodeId: 'eng',
+      conversationId: 'call-1',
+      callId: 'call-1',
+      agentLabel: 'Engineer',
+    };
+    api.listRunItems.mockResolvedValue([
+      { ...msg(0, 'user', 'go'), runId: 'w1' },
+      {
+        ...msg(2, 'assistant', ''),
+        runId: 'w1',
+        kind: 'call_started',
+        role: null,
+        nodeId: 'lead',
+        payload: {
+          callId: 'call-1',
+          callerNodeId: 'lead',
+          calleeNodeId: 'eng',
+          mode: 'async',
+          title: 'Open the PR',
+          message: 'open it',
+        },
+      },
+      {
+        ...msg(5, 'assistant', ''),
+        runId: 'w1',
+        kind: 'action',
+        role: null,
+        nodeId: 'eng',
+        payload: {
+          actionId: 'pr-merged',
+          label: 'PR merged',
+          once: true,
+          spec: { kind: 'message', text: 'merged — go on' },
+          publisher,
+        },
+      },
+    ]);
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      throughSeq: 5,
+      actions: [
+        {
+          seq: 5,
+          actionId: 'pr-merged',
+          nodeId: 'eng',
+          conversationId: 'call-1',
+          label: 'PR merged',
+          once: true,
+          spec: { kind: 'message', text: 'merged — go on' },
+          publisher,
+          pending: false,
+        },
+      ],
+      calls: [
+        {
+          callId: 'call-1',
+          callerNodeId: 'lead',
+          calleeNodeId: 'eng',
+          title: 'Open the PR',
+          brief: null,
+          mode: 'async',
+          thread: null,
+          startSeq: 2,
+          startedAt: '2026-10-20T10:00:00Z',
+          endedAt: null,
+          status: 'running',
+          member: null,
+        },
+      ],
+    });
+    workflowApi.pressWorkflowAction.mockResolvedValue({
+      outcome: {
+        actionSeq: 5,
+        actionId: 'pr-merged',
+        nodeId: 'eng',
+        conversationId: 'call-1',
+        state: 'succeeded',
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const chip = container.querySelector<HTMLButtonElement>(
+      '[data-slot="chat-actions"] [data-slot="action-chip"]',
+    );
+    expect(chip?.textContent).toBe('PR merged· Engineer');
+    await act(async () => chip!.click());
+
+    expect(workflowApi.pressWorkflowAction).toHaveBeenCalledWith({
+      runId: 'w1',
+      seq: 5,
+      pressActionDto: { clientMessageId: expect.any(String) },
+    });
+    expect(api.pressChatAction).not.toHaveBeenCalled();
+
+    // The card's "from Engineer" opens the call's card, as a press on it would.
+    const callCard = (): Element | null =>
+      container.querySelector('[data-role="call-block"]');
+    expect(callCard()).not.toBeNull();
+    const expanded = (): string | null | undefined =>
+      callCard()
+        ?.querySelector('[aria-expanded]')
+        ?.getAttribute('aria-expanded');
+    expect(expanded()).toBe('false');
+    const link = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Open Engineer\'s thread"]',
+    );
+    // jsdom ships no `CSS` namespace; the reveal builds its selector with it.
+    vi.stubGlobal('CSS', { escape: (value: string) => value });
+    try {
+      await act(async () => link!.click());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(expanded()).toBe('true');
+    expect((callCard() as HTMLElement | null)?.dataset.revealed).toBe('true');
+  });
+
+  it('opens a call card the window does not draw, after paging to it', async () => {
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        title: null,
+        agentKind: null,
+        workflowId: 'review-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.listWorkflows.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    const publisher = {
+      nodeId: 'eng',
+      conversationId: 'call-1',
+      callId: 'call-1',
+      agentLabel: 'Engineer',
+    };
+    const allRows = [
+      { ...msg(0, 'user', 'go'), runId: 'w1' },
+      {
+        ...msg(2, 'assistant', ''),
+        runId: 'w1',
+        kind: 'call_started',
+        role: null,
+        nodeId: 'lead',
+        payload: {
+          callId: 'call-1',
+          callerNodeId: 'lead',
+          calleeNodeId: 'eng',
+          mode: 'async',
+          title: 'Open the PR',
+          message: 'open it',
+        },
+      },
+      {
+        ...msg(5, 'assistant', ''),
+        runId: 'w1',
+        kind: 'action',
+        role: null,
+        nodeId: 'eng',
+        payload: {
+          actionId: 'pr-merged',
+          label: 'PR merged',
+          once: true,
+          spec: { kind: 'message', text: 'merged — go on' },
+          publisher,
+        },
+      },
+    ];
+    const startRow = allRows[1]!;
+    // The newest page starts after the call's start; a read around it has it.
+    api.listRunItems.mockImplementation(
+      (args: { beforeSeq?: number; take?: string }) =>
+        Promise.resolve(
+          args.take !== undefined
+            ? [startRow]
+            : args.beforeSeq !== undefined
+              ? allRows
+              : allRows.filter((row) => row.seq > startRow.seq),
+        ),
+    );
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      throughSeq: 5,
+      actions: [
+        {
+          seq: 5,
+          actionId: 'pr-merged',
+          nodeId: 'eng',
+          conversationId: 'call-1',
+          label: 'PR merged',
+          once: true,
+          spec: { kind: 'message', text: 'merged — go on' },
+          publisher,
+          pending: false,
+        },
+      ],
+      calls: [
+        {
+          callId: 'call-1',
+          callerNodeId: 'lead',
+          calleeNodeId: 'eng',
+          title: 'Open the PR',
+          brief: null,
+          mode: 'async',
+          thread: null,
+          startSeq: 2,
+          startedAt: '2026-10-20T10:00:00Z',
+          endedAt: null,
+          status: 'running',
+          member: null,
+        },
+      ],
+    });
+    workflowApi.pressWorkflowAction.mockResolvedValue({
+      outcome: {
+        actionSeq: 5,
+        actionId: 'pr-merged',
+        nodeId: 'eng',
+        conversationId: 'call-1',
+        state: 'succeeded',
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    expect(container.querySelector('[data-role="call-block"]')).toBeNull();
+    const link = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Open Engineer\'s thread"]',
+    );
+    vi.stubGlobal('CSS', { escape: (value: string) => value });
+    try {
+      await act(async () => link!.click());
+      await act(async () => {});
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const callCard = container.querySelector<HTMLElement>(
+      '[data-role="call-block"]',
+    );
+    expect(callCard).not.toBeNull();
+    expect(
+      callCard?.querySelector('[aria-expanded]')?.getAttribute('aria-expanded'),
+    ).toBe('true');
   });
 });
 

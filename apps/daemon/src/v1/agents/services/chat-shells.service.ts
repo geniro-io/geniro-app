@@ -6,7 +6,11 @@ import type { ChatShellsWire, OpenShell, ShellKillWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { asRecord, asString } from '../utils/json-util';
 import { GROUP_KILL_GRACE_MS, killProcessGroup } from '../utils/kill-tree';
-import { shellCommandOf } from '../utils/open-shells';
+import {
+  isDelegateCall,
+  launchingCallOf,
+  shellCommandOf,
+} from '../utils/open-shells';
 import { persistItemAndEmit } from '../utils/persist-item';
 import {
   commandTargets,
@@ -139,39 +143,27 @@ export class ChatShellsService {
       return [];
     }
     // The WORDS. A lifecycle row names the call and nothing else, so the
-    // command is read from the call it decorates — matched by id, and read
-    // only while a command is open.
-    const commands = new Map<string, string>();
-    const delegates = new Set<string>();
-    for (const row of await this.itemDao.toolCallsByIds(
+    // command is read from the call it decorates (`launchingCallOf`), and
+    // read only while a command is open.
+    const calls = await this.itemDao.toolCallsByIds(
       runId,
       [...open.keys()],
       em,
-    )) {
-      const payload = asRecord(parse(row.payload));
-      const id = asString(payload?.id);
-      if (id === null || !open.has(id)) {
-        continue;
-      }
-      const parent = asString(payload?.parentToolUseId);
-      if (parent !== null && parent !== '') {
-        delegates.add(id);
-      }
-      const command = shellCommandOf(payload);
-      if (command !== null) {
-        commands.set(id, command);
-      }
-    }
+    );
     const shells: FoldedShell[] = [];
     for (const [id, row] of open) {
+      const call = launchingCallOf(
+        { toolCallId: id, nodeId: row.nodeId, callId: row.callId || null },
+        calls,
+      );
       shells.push({
         id,
-        command: commands.get(id) ?? null,
+        command: call === undefined ? null : shellCommandOf(call.payload),
         nodeId: row.nodeId,
         callId: row.callId,
         startedAt: row.startedAt,
         workId: row.workId,
-        delegate: delegates.has(id),
+        delegate: call !== undefined && isDelegateCall(call),
       });
     }
     return shells;

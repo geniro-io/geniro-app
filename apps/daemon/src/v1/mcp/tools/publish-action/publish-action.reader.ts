@@ -9,9 +9,9 @@ import { readToolArgs } from '../tool-args';
 
 /**
  * Strict on the names (a misspelt `mesage` must not publish a button that
- * sends nothing) and loose on the kinds: `stop` and `command` are read whatever
- * their shape so the service can answer that they are not available yet,
- * rather than the call failing on a schema it was never shown.
+ * sends nothing) and loose on `command`, read whatever its shape so the service
+ * can answer that it is not available yet, rather than the call failing on a
+ * schema it was never shown.
  */
 const PublishActionArgsSchema = z
   .object({
@@ -20,7 +20,13 @@ const PublishActionArgsSchema = z
     action_id: z.string().optional(),
     once: z.boolean().optional(),
     message: z.string().optional(),
-    stop: z.unknown().optional(),
+    stop: z
+      .object({
+        shell: z.string().trim().min(1).optional(),
+        pid: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     command: z.unknown().optional(),
   })
   .strict();
@@ -42,7 +48,16 @@ export function readPublishAction(
     ...(query.action_id === undefined ? {} : { actionId: query.action_id }),
     ...(query.once === undefined ? {} : { once: query.once }),
     ...(query.message === undefined ? {} : { message: query.message }),
-    ...(query.stop === undefined ? {} : { stop: query.stop }),
+    ...(query.stop === undefined
+      ? {}
+      : {
+          stop: {
+            ...(query.stop.shell === undefined
+              ? {}
+              : { shell: query.stop.shell }),
+            ...(query.stop.pid === undefined ? {} : { pid: query.stop.pid }),
+          },
+        }),
     ...(query.command === undefined ? {} : { command: query.command }),
   };
 }

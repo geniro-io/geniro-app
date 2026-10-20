@@ -25,6 +25,7 @@ import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { type FakeChild, fakeSpawn } from '../../agents/__tests__/fake-child';
 import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
+import { NO_STOPS } from '../../agents/__tests__/no-stops';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
@@ -55,6 +56,8 @@ import type { RunDao } from '../../agents/dao/run.dao';
 import type { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
+import { ActionBroker } from '../../agents/services/action.broker';
+import { ActionPublishService } from '../../agents/services/action-publish.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { AgentMcpService } from '../../agents/services/agent-mcp.service';
@@ -63,6 +66,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import type { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { ChatActionsService } from '../../agents/services/chat-actions.service';
 import type { ChatUploadStoreService } from '../../agents/services/chat-upload-store.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -77,6 +81,11 @@ import { SessionTranscriptsService } from '../../agents/services/session-transcr
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
+import {
+  callMembershipLookupOf,
+  callMembershipOf,
+  OUTSIDE_ANY_CALL,
+} from '../../agents/utils/call-membership';
 import type { ModelPriceLookup } from '../../agents/utils/model-prices';
 import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import {
@@ -1063,6 +1072,9 @@ function setup(
   createdRuns: { event: RunCreatedEvent; row: Run | undefined }[];
   removedAttachmentRuns: string[];
   artifacts: ArtifactBroker;
+  /** The button tools' broker, over the real publisher and its one writer. */
+  actions: ActionBroker;
+  chatActions: ChatActionsService;
   /** The page store's answer, switchable per test: a refusal names its reason. */
   pageStore: { refusal: string | null };
   /** The real registry the executor opens its processes on. */
@@ -1270,6 +1282,14 @@ function setup(
   };
   const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   const artifacts = new ArtifactBroker();
+  const actions = new ActionBroker();
+  const chatActions = new ChatActionsService(
+    em,
+    itemDao as unknown as ItemDao,
+    bus,
+    NO_CALL_INDEX,
+    seqs,
+  );
   // The page store's answer, switchable per test: a refusal names the reason the
   // executor must hand back to the caller verbatim.
   const pageStore: { refusal: string | null } = { refusal: null };
@@ -1394,6 +1414,8 @@ function setup(
     // machine-derived default differs by host.
     4,
     opts.agentMcp as AgentMcpService | undefined,
+    actions,
+    new ActionPublishService(chatActions, NO_STOPS),
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -1430,6 +1452,8 @@ function setup(
     createdRuns,
     removedAttachmentRuns,
     artifacts,
+    actions,
+    chatActions,
     pageStore,
   };
 }
@@ -5548,6 +5572,287 @@ describe('GraphExecutorService — agent calls', () => {
     release();
     expect((await publishing).status).toBe('published');
     await drain();
+  });
+
+  it('a callee action is stamped with its callId, stays in the root flow and is listed in the call result envelope', async () => {
+    const { service, claude, callBroker, actions, chatActions, itemDao } =
+      setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'open the PR',
+    });
+    await drain();
+
+    expect(actions.canPublish(run.id, 'helper')).toBe(true);
+    expect(
+      await actions.publish(
+        run.id,
+        'helper',
+        { label: 'PR merged', message: 'the PR is merged — continue' },
+        callerKey('helper', 'call-1'),
+      ),
+    ).toMatchObject({ status: 'published' });
+    const rows = itemDao.items.filter((item) => item.kind === 'action');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.nodeId).toBe('helper');
+    const payload = JSON.parse(rows[0]!.payload) as Record<string, unknown>;
+    expect(payload.publisher).toEqual({
+      nodeId: 'helper',
+      conversationId: 'call-1',
+      callId: 'call-1',
+      agentLabel: 'Helper',
+    });
+    // The call is named only inside the publisher, so the row is drawn in the
+    // run's own flow rather than folded into the call's card.
+    const lookup = callMembershipLookupOf(itemDao.items);
+    expect(
+      callMembershipOf({ kind: 'action', nodeId: 'helper', payload }, lookup),
+    ).toBe(OUTSIDE_ANY_CALL);
+    expect((await chatActions.live(run.id)).map((a) => a.label)).toEqual([
+      'PR merged',
+    ]);
+
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'opened');
+    expect(await envelope).toMatchObject({
+      status: 'ok',
+      result: {
+        call_id: 'call-1',
+        actions: [
+          { action_id: 'pr-merged', label: 'PR merged', kind: 'message' },
+        ],
+      },
+    });
+    await drain();
+  });
+
+  it('leaves the sole trigger-fed agent’s own buttons unattributed, and labels every other publisher', async () => {
+    const { service, actions, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    await actions.publish(
+      run.id,
+      'orch',
+      { label: 'Deploy', message: 'deploy it' },
+      'orch',
+    );
+    // helper is no trigger's: even in its own conversation it says who it is.
+    await actions.publish(
+      run.id,
+      'helper',
+      { label: 'Recheck', message: 'recheck' },
+      'helper',
+    );
+    const publishers = itemDao.items
+      .filter((item) => item.kind === 'action')
+      .map(
+        (item) =>
+          (JSON.parse(item.payload) as { publisher: unknown }).publisher,
+      );
+    expect(publishers).toEqual([
+      { nodeId: 'orch', conversationId: '' },
+      { nodeId: 'helper', conversationId: '', agentLabel: 'Helper' },
+    ]);
+    await drain();
+  });
+
+  it('labels a trigger-fed agent’s own button when the run has another trigger-fed agent', async () => {
+    // A press reaches both roots, so the one that did not write it is told who did.
+    const twoRoots: Workflow = {
+      name: 'two-roots',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'start-peer', kind: 'trigger', trigger: 'manual' },
+        {
+          id: 'lead',
+          kind: 'agent',
+          name: 'Lead',
+          agent: 'claude',
+          approval: 'auto',
+        },
+        { id: 'peer', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'helper', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [
+        { from: 'start', to: 'lead', kind: 'data' as const },
+        { from: 'start-peer', to: 'peer', kind: 'data' as const },
+        { from: 'lead', to: 'helper', kind: 'call' as const },
+      ],
+    };
+    const { service, actions, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two-roots',
+      workflow: twoRoots,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    await actions.publish(
+      run.id,
+      'lead',
+      { label: 'Deploy', message: 'deploy it' },
+      'lead',
+    );
+    const [row] = itemDao.items.filter((item) => item.kind === 'action');
+    expect(
+      (JSON.parse(row!.payload) as { publisher: unknown }).publisher,
+    ).toEqual({ nodeId: 'lead', conversationId: '', agentLabel: 'Lead' });
+    await drain();
+  });
+
+  it('takes a removed callee button out of the call’s envelope', async () => {
+    const { service, claude, callBroker, actions } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    await drain();
+    const caller = callerKey('helper', 'call-1');
+    await actions.publish(
+      run.id,
+      'helper',
+      { label: 'Stop preview', message: 'stop it' },
+      caller,
+    );
+    expect(
+      await actions.remove(run.id, 'helper', 'stop-preview', caller),
+    ).toMatchObject({ status: 'removed' });
+
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done');
+    expect(((await envelope) as { result: object }).result).not.toHaveProperty(
+      'actions',
+    );
+    await drain();
+  });
+
+  it('reaches an ancestor’s envelope with what a callee publishes or removes after its own call settled', async () => {
+    // a → b (call-1) → c fire-and-forget (call-2): c publishes inside call-2,
+    // then call-2 settles with c's turn while call-1 runs on; what c publishes
+    // or removes after that must still reach call-1.
+    const chain: Workflow = {
+      name: 'chain',
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'c', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [
+        { from: 'a', to: 'b', kind: 'call' as const },
+        { from: 'b', to: 'c', kind: 'call' as const },
+      ],
+    };
+    const { service, claude, callBroker, actions, artifacts } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(chain),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const outer = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'b',
+      message: 'm',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, callerKey('b', 'call-1'), {
+      title: 'why',
+      agent: 'c',
+      message: 'm',
+      mode: 'fire_and_forget',
+    });
+    await drain();
+    const caller = callerKey('c', 'call-2');
+    await actions.publish(
+      run.id,
+      'c',
+      { label: 'Stop preview', message: 'stop it' },
+      caller,
+    );
+    await actions.publish(
+      run.id,
+      'c',
+      { label: 'Deploy v1', actionId: 'deploy', message: 'go' },
+      caller,
+    );
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'c done');
+    await drain();
+    expect(callBroker.callAnsweredBy(run.id, caller)).toBeNull();
+
+    expect(
+      await actions.remove(run.id, 'c', 'stop-preview', caller),
+    ).toMatchObject({ status: 'removed' });
+    await actions.publish(
+      run.id,
+      'c',
+      { label: 'Deploy v2', actionId: 'deploy', message: 'go' },
+      caller,
+    );
+    // A button and a page first published now reach call-1 too.
+    await actions.publish(
+      run.id,
+      'c',
+      { label: 'Rollback', message: 'roll back' },
+      caller,
+    );
+    await artifacts.publish(
+      run.id,
+      'c',
+      { title: 'Late', html: '<!doctype html><title>Late</title><p>hi</p>' },
+      caller,
+    );
+
+    const bTurn = claude.starts.find((t) => t.input.prompt === 'm')!;
+    completeTurn(bTurn, 'b done');
+    expect(await outer).toMatchObject({
+      result: {
+        actions: [
+          { action_id: 'deploy', label: 'Deploy v2', kind: 'message' },
+          { action_id: 'rollback', label: 'Rollback', kind: 'message' },
+        ],
+        artifacts: [expect.objectContaining({ title: 'Late' })],
+      },
+    });
+    await drain();
+  });
+
+  it('drops a deleted run’s button tools', async () => {
+    const { service, actions } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(actions.canPublish(run.id, 'helper')).toBe(true);
+
+    await service.deleteRun(run.id);
+
+    expect(actions.canPublish(run.id, 'helper')).toBe(false);
+    expect(actions.canPublish(run.id, 'orch')).toBe(false);
   });
 
   it('marks every workflow run for the page tool’s run-wide wording, call edges or none, until the run is deleted', async () => {

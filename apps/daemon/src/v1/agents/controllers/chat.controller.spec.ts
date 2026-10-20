@@ -309,7 +309,7 @@ describe('POST /v1/chats/:runId/actions/:seq/press|dismiss', () => {
   function actionController() {
     const actionPresses = {
       pressChat: vi.fn(async () => ({ outcome: {} })),
-      dismiss: vi.fn(async () => ({ outcome: {} })),
+      dismissChat: vi.fn(async () => ({ outcome: {} })),
     };
     const controller = Object.create(
       ChatController.prototype,
@@ -342,6 +342,6 @@ describe('POST /v1/chats/:runId/actions/:seq/press|dismiss', () => {
 
     await controller.dismissAction(RUN, 4, { 'x-geniro-via': 'remote' });
 
-    expect(actionPresses.dismiss).toHaveBeenCalledWith(RUN, 4, 'remote');
+    expect(actionPresses.dismissChat).toHaveBeenCalledWith(RUN, 4, 'remote');
   });
 });

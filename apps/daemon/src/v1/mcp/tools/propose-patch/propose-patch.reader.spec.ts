@@ -140,4 +140,11 @@ describe('hostPatchResultText', () => {
       hostPatchResultText({ status: 'unavailable', reason: 'no turn running' }),
     ).toContain('no turn running');
   });
+
+  it('tells a deferred call to stop and not write the file itself', () => {
+    const text = hostPatchResultText({ status: 'posted' });
+    expect(text).toContain('STOP HERE');
+    expect(text).toContain('do not write the file yourself');
+    expect(text).toContain('next user message');
+  });
 });

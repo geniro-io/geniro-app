@@ -229,6 +229,18 @@ export const HISTORY_PAGE_SIZES = [250, 500, 1000, 2000] as const;
 export type HistoryPageSize = (typeof HISTORY_PAGE_SIZES)[number];
 export const DEFAULT_HISTORY_PAGE_SIZE: HistoryPageSize = 1000;
 
+/**
+ * How long, in minutes, a run's CLI process (and every MCP server it started)
+ * is kept after its last turn — `Settings.keptSessionIdleMinutes`.
+ *
+ * TWIN: `DEFAULT_KEPT_SESSION_IDLE_MINUTES`, `MIN_KEPT_SESSION_IDLE_MINUTES`
+ * and `MAX_KEPT_SESSION_IDLE_MINUTES` in `apps/daemon/src/v1/agents/chat.types.ts`,
+ * whose route refuses a value outside these bounds.
+ */
+export const DEFAULT_KEPT_SESSION_IDLE_MINUTES = 60;
+export const MIN_KEPT_SESSION_IDLE_MINUTES = 5;
+export const MAX_KEPT_SESSION_IDLE_MINUTES = 180;
+
 /** Persisted, non-secret application settings. Secrets never live here. */
 export interface OnboardingProgress {
   step: 0 | 1 | 2 | 3;
@@ -479,6 +491,16 @@ export interface Settings {
    */
   historyPageSize: HistoryPageSize;
   /**
+   * How long a run's CLI process is kept after its last turn, in minutes,
+   * the same for a chat and a card's run. Main pushes it to every daemon
+   * (`kept-session-config-push.ts`); the daemon holds it in memory only.
+   *
+   * An hour by default: claude keeps a subscription's prompt cache for an
+   * hour, and a fresh `--resume` misses it once `git status` has changed, so a
+   * shorter window pays a cache rewrite and a cold MCP start on the next turn.
+   */
+  keptSessionIdleMinutes: number;
+  /**
    * Each CLI's own switches — cursor's Max Mode, claude's browser tools, and
    * whatever a CLI declares next — as `{agentKind: {optionId: on}}`. The
    * daemon publishes every CLI's options (label, description, default) on
@@ -623,6 +645,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sharing: DEFAULT_SHARING,
   archiveRetentionDays: null,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
+  keptSessionIdleMinutes: DEFAULT_KEPT_SESSION_IDLE_MINUTES,
   agentOptions: {},
   collapseToolSteps: false,
   daemonInspect: null,

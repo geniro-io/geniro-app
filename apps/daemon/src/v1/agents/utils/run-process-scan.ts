@@ -67,6 +67,9 @@ export interface ScannedProcess {
 /** A process as the plain listing alone describes it, with no environment. */
 export type PlainProcess = Omit<ScannedProcess, 'env'>;
 
+/** A process a stop action may name; its start time is what a press re-checks. */
+export type StopCandidate = ScannedProcess & { startedAt: number };
+
 /** Whose processes a scan may attribute, and what it must never touch. */
 export interface AttributionScope {
   /** This geniro's {@link runOwnerOf}. */

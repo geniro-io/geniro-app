@@ -2419,16 +2419,18 @@ const CALL_FOLLOWUP_KINDS = new Set<ChatItem['kind']>([
  * Kinds that must stay in the MAIN flow even when callId-tagged: the block
  * anchor itself, the broker's pickup note (renders as nothing), approval
  * requests/verdicts — a pending card hidden inside a block's flow could never
- * be answered — and published pages: a page is made for the user, and inside
- * a shut call card (or a card nested in one) nobody would see it. Left here,
- * a revision anywhere in the run also folds the older card, since the
- * newest-card sweep runs over this flow.
+ * be answered — and published pages and buttons: they are made for the user,
+ * and inside a shut call card (or a card nested in one) nobody would see them.
+ * Left here, a revision anywhere in the run also folds the older card, since
+ * the newest-card sweep runs over this flow.
  *
  * TWIN PARSER: `callMembershipOf` in
  * apps/daemon/src/v1/agents/utils/call-membership.ts decides the same claim on
  * the daemon, which serves a workflow run's rows one conversation at a time on
  * its answer. A kind moved between these sets moves there too, with a bump of
- * its `CALL_MEMBERSHIP_VERSION` so the rows already stamped are stamped again.
+ * its `CALL_MEMBERSHIP_VERSION` so the rows already stamped are stamped again
+ * — unless no stored row of the kind answers differently, as the daemon's
+ * note on `action` / `action_outcome` records.
  */
 const UNCLAIMABLE_KINDS = new Set<ChatItem['kind']>([
   'call_started',
@@ -2436,6 +2438,8 @@ const UNCLAIMABLE_KINDS = new Set<ChatItem['kind']>([
   'approval_request',
   'approval_verdict',
   'show_artifact',
+  'action',
+  'action_outcome',
 ]);
 
 const BLOCK_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);

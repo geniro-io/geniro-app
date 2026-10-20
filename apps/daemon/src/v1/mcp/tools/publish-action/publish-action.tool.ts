@@ -35,13 +35,13 @@ export class PublishActionTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId }: McpCallContext,
+    { runId, nodeId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const input = readPublishAction(args);
     if ('error' in input) {
       return this.invalidArgs(input.error);
     }
-    const outcome = await this.actions.publish(runId, nodeId, input);
+    const outcome = await this.actions.publish(runId, nodeId, input, caller);
     // A refusal is the call's own fault (a cap, a character, a missing kind),
     // so it reads as one; an unavailable channel is an answer to carry on from.
     return outcome.status === 'refused'

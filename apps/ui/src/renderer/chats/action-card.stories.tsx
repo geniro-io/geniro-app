@@ -10,6 +10,8 @@ function entry(
   label: string,
   outcome: ActionEntry['outcome'] = null,
   description: string | null = 'Tell the agent the pull request landed',
+  agentLabel: string | null = null,
+  targets: { pid: number; command: string }[] = [],
 ): ActionEntry {
   return {
     type: 'action',
@@ -22,17 +24,22 @@ function entry(
       actionId: label.toLowerCase(),
       label,
       description,
-      kind: 'message',
-      text: 'PR merged — continue',
+      kind: targets.length > 0 ? 'stop' : 'message',
+      text: targets.length > 0 ? null : 'PR merged — continue',
+      targets,
       once: true,
       nodeId: 'agent',
       conversationId: '',
+      agentLabel,
+      callId: agentLabel === null ? null : 'call-1',
     },
     outcome,
   };
 }
 
-function live(seq: number, label: string): LiveAction {
+const PREVIEW = [{ pid: 48211, command: 'python3 -m http.server 8765' }];
+
+function live(seq: number, label: string, agentLabel?: string): LiveAction {
   return {
     seq,
     actionId: label.toLowerCase(),
@@ -40,18 +47,32 @@ function live(seq: number, label: string): LiveAction {
     conversationId: '',
     label,
     once: true,
-    spec: { kind: 'message', text: 'continue' },
-    publisher: { nodeId: 'agent', conversationId: '' },
+    spec:
+      agentLabel === undefined
+        ? { kind: 'message', text: 'continue' }
+        : {
+            kind: 'stop',
+            targets: PREVIEW.map((target) => ({
+              ...target,
+              startedAt: '2026-10-18T14:20:00Z',
+            })),
+          },
+    publisher: {
+      nodeId: 'agent',
+      conversationId: '',
+      ...(agentLabel === undefined ? {} : { callId: 'call-1', agentLabel }),
+    },
     pending: false,
   };
 }
 
 const chat: ChatActions = {
-  actions: [live(10, 'PR merged')],
+  actions: [live(10, 'PR merged'), live(11, 'Stop preview', 'Engineer')],
   throughSeq: 50,
   phases: new Map(),
   press: () => undefined,
   dismiss: () => undefined,
+  openCall: () => undefined,
 };
 
 function Cards(): React.JSX.Element {
@@ -60,13 +81,34 @@ function Cards(): React.JSX.Element {
       <div className="flex w-[28rem] flex-col gap-3">
         <ActionCard entry={entry(10, 'PR merged')} />
         <ActionCard
+          entry={entry(11, 'Stop preview', null, null, 'Engineer', PREVIEW)}
+        />
+        <ActionCard
           entry={entry(4, 'Deploy approved', {
             actionSeq: 4,
             state: 'succeeded',
             exitCode: null,
             error: null,
+            alreadyStopped: false,
             at: '2026-10-18T14:32:00Z',
           })}
+        />
+        <ActionCard
+          entry={entry(
+            6,
+            'Stop dev server',
+            {
+              actionSeq: 6,
+              state: 'stopped',
+              exitCode: null,
+              error: null,
+              alreadyStopped: true,
+              at: '2026-10-18T14:32:30Z',
+            },
+            null,
+            null,
+            [{ pid: 48090, command: 'pnpm dev' }],
+          )}
         />
         <ActionCard
           entry={entry(3, 'Ship it', {
@@ -74,6 +116,7 @@ function Cards(): React.JSX.Element {
             state: 'removed',
             exitCode: null,
             error: null,
+            alreadyStopped: false,
             at: '2026-10-18T14:33:00Z',
           })}
         />
@@ -98,5 +141,9 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Live (with its button and Dismiss), pressed, removed by the agent, gone. */
+/**
+ * Live (with its button and Dismiss), a workflow callee's stop (from its agent,
+ * linking to its call, listing what it stops), pressed, a stop whose process
+ * had already exited, removed by the agent, gone.
+ */
 export const States: Story = {};

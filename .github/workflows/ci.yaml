@@ -42,6 +42,11 @@ jobs:
         env:
           HUSKY: 0
 
+      # .cursor/rules/<name>.mdc is generated from .claude/rules/<name>.md and
+      # committed; fail before the build if one is missing, stale or extra.
+      - name: Check .cursor/rules is generated from .claude/rules
+        run: pnpm -s sync:cursor-rules --check
+
       - name: Build packages
         run: pnpm build:packages
 

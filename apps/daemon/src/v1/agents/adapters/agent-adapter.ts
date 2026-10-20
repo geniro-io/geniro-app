@@ -3135,7 +3135,7 @@ export abstract class AgentAdapter {
       get endedRunning() {
         return session.endedRunning;
       },
-      close: (cause) => session.close(cause),
+      close: (cause, options) => session.close(cause, options),
       noteCloseCause: (cause) => session.noteCloseCause?.(cause),
       get closeCause() {
         return session.closeCause ?? null;

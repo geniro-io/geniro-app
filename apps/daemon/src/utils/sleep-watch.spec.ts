@@ -169,6 +169,77 @@ describe('awakeTimeout', () => {
   });
 });
 
+describe('awakeTimeout — retime', () => {
+  it('ends a pending window at its start plus the new length', async () => {
+    const fired = vi.fn();
+    const timer = awakeTimeout(fired, HOUR, watch);
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+
+    timer.retime(30 * MINUTE);
+
+    await vi.advanceTimersByTimeAsync(20 * MINUTE - 1);
+    expect(fired).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fired).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires at once when the new length has already passed', async () => {
+    const fired = vi.fn();
+    const timer = awakeTimeout(fired, HOUR, watch);
+    await vi.advanceTimersByTimeAsync(40 * MINUTE);
+
+    timer.retime(30 * MINUTE);
+
+    expect(fired).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fired).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a sleep toward the new length', async () => {
+    // Retimed after a wake: the window's start is the wake, not its arm.
+    const fired = vi.fn();
+    const timer = awakeTimeout(fired, HOUR, watch);
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    await simulateSleep(4 * HOUR);
+    await vi.advanceTimersByTimeAsync(5 * MINUTE);
+
+    timer.retime(30 * MINUTE);
+
+    await vi.advanceTimersByTimeAsync(25 * MINUTE - 1);
+    expect(fired).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fired).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the new length whole from a later refresh', async () => {
+    const fired = vi.fn();
+    const timer = awakeTimeout(fired, HOUR, watch);
+    timer.retime(30 * MINUTE);
+    await vi.advanceTimersByTimeAsync(20 * MINUTE);
+
+    timer.refresh();
+
+    await vi.advanceTimersByTimeAsync(30 * MINUTE - 1);
+    expect(fired).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fired).toHaveBeenCalledTimes(1);
+  });
+
+  it('only sets the next length on a cleared timer', async () => {
+    const fired = vi.fn();
+    const timer = awakeTimeout(fired, HOUR, watch);
+    timer.clear();
+
+    timer.retime(MINUTE);
+    await vi.advanceTimersByTimeAsync(2 * HOUR);
+    expect(fired).not.toHaveBeenCalled();
+
+    timer.refresh();
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    expect(fired).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('SleepWatch', () => {
   it('logs one line per gap with its length, without asserting it was a sleep, and the count of re-armed deadlines', async () => {
     awakeTimeout(() => {}, 30 * MINUTE, watch);

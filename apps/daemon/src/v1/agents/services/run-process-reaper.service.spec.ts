@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
+import type { ProcessUsageRow } from '../utils/process-usage';
 import {
   type PlainProcess,
   RUN_ID_ENV,
@@ -379,6 +380,191 @@ describe('RunProcessReaper', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       `could not stop the processes of run(s) ${RUN}: boom`,
     );
+  });
+});
+
+describe('RunProcessReaper.stopRecorded', () => {
+  /**
+   * A live CLI (10) leading its own group with an MCP server in it (11), and
+   * a command it backgrounded in a group of its own (12) running a server (13).
+   */
+  const table = (
+    overrides: Record<number, Partial<ScannedProcess>> = {},
+  ): ScannedProcess[] => [
+    row(10, 1, 'claude', { env: tag(), ...overrides[10] }),
+    row(11, 10, 'node mcp-server.js', overrides[11]),
+    row(12, 10, 'bash -c python3 -m http.server', overrides[12]),
+    row(13, 12, 'python3 -m http.server', overrides[13]),
+  ];
+  const groups: Record<number, number> = { 10: 10, 11: 10, 12: 12, 13: 12 };
+  const usageOf = (rows: ScannedProcess[]): ProcessUsageRow[] =>
+    rows.map((scanned) => ({
+      pid: scanned.pid,
+      ppid: scanned.ppid,
+      args: scanned.args,
+      pgid: groups[scanned.pid] ?? scanned.pid,
+      cpuPercent: 0,
+      rssBytes: 0,
+      elapsedSeconds: null,
+      comm: null,
+    }));
+  const stopper = (
+    rows: ScannedProcess[],
+    options: RunProcessReaperOptions = {},
+  ): ReturnType<typeof reaper> =>
+    reaper(rows, {
+      processRoots: () => [10],
+      listUsage: () => Promise.resolve(usageOf(rows)),
+      ...options,
+    });
+  const recorded = (pid: number) => ({ pid, startedAt: pid * 10 });
+
+  it('stopRecorded stops a background child under the CLI but never a CLI root pid', async () => {
+    const { reaper: subject, signals } = stopper(table());
+
+    expect(
+      (await subject.stopCandidates(RUN)).map((process) => process.pid),
+    ).toEqual([12, 13]);
+    expect(await subject.stopRecorded(RUN, [recorded(13)])).toEqual({
+      stopped: [13],
+      gone: [],
+    });
+    expect(signals).toEqual([
+      [13, 'SIGTERM'],
+      [13, 'SIGKILL'],
+    ]);
+
+    for (const pid of [10, 11]) {
+      await expect(
+        subject.stopRecorded(RUN, [recorded(pid)]),
+      ).rejects.toMatchObject({ errorCode: 'PROCESS_CHANGED' });
+    }
+    expect(signals).toHaveLength(2);
+  });
+
+  it('refuses the whole press when a recorded process is no longer this thread’s', async () => {
+    // 13 was reparented out from under the tagged CLI and carries no tag of
+    // its own, so nothing attributes it to the run any more.
+    const { reaper: subject, signals } = stopper(
+      table({ 13: { ppid: 1, env: null } }),
+    );
+    await expect(
+      subject.stopRecorded(RUN, [recorded(12), recorded(13)]),
+    ).rejects.toMatchObject({ errorCode: 'PROCESS_CHANGED' });
+    expect(signals).toEqual([]);
+  });
+
+  it('reports already stopped when every target is gone', async () => {
+    const {
+      reaper: subject,
+      signals,
+      waits,
+    } = stopper(table(), {
+      // 12 exited; 13's pid now belongs to a process that started later.
+      startTimes: () => Promise.resolve(new Map([[13, 130 + 60_000]])),
+    });
+    expect(
+      await subject.stopRecorded(RUN, [recorded(12), recorded(13)]),
+    ).toEqual({ stopped: [], gone: [12, 13] });
+    expect(signals).toEqual([]);
+    expect(waits).toEqual([]);
+  });
+
+  it('also stops what a recorded target started after it was published', async () => {
+    // 12 was recorded alone; the server under it (13) came up later.
+    const { reaper: subject, signals } = stopper(table());
+    expect(await subject.stopRecorded(RUN, [recorded(12)])).toEqual({
+      stopped: [12, 13],
+      gone: [],
+    });
+    expect(signals.filter(([, sig]) => sig === 'SIGTERM')).toEqual([
+      [12, 'SIGTERM'],
+      [13, 'SIGTERM'],
+    ]);
+  });
+
+  it('never offers a CLI that leads no group of its own', async () => {
+    // Spawned into its spawner's group: only its own pid can exclude it.
+    const rows = table();
+    const { reaper: subject } = stopper(rows, {
+      listUsage: () =>
+        Promise.resolve(
+          usageOf(rows).map((usage) =>
+            usage.pid === 10 ? { ...usage, pgid: 5 } : usage,
+          ),
+        ),
+    });
+    expect(
+      (await subject.stopCandidates(RUN)).map((process) => process.pid),
+    ).not.toContain(10);
+  });
+
+  it.each([
+    [
+      'a start time cannot be read',
+      { startTimes: () => Promise.resolve(null) },
+      'PROCESS_IDENTITY_UNREADABLE',
+    ],
+    [
+      'a CLI root is missing from the usage table',
+      { processRoots: () => [10, 99] },
+      'PROCESS_TABLE_CHANGED',
+    ],
+  ] as const)(
+    'refuses to stop anything when %s',
+    async (_case, options, errorCode) => {
+      const { reaper: subject, signals } = stopper(table(), options);
+      await expect(
+        subject.stopRecorded(RUN, [recorded(13)]),
+      ).rejects.toMatchObject({ errorCode });
+      expect(signals).toEqual([]);
+    },
+  );
+
+  it('says SIGTERM went out when the identity read before SIGKILL fails', async () => {
+    let reads = 0;
+    const { reaper: subject, signals } = stopper(table(), {
+      startTimes: (pids) => {
+        reads += 1;
+        // The press's own check and the one before SIGTERM read; the one
+        // before SIGKILL cannot.
+        return reads <= 2
+          ? Promise.resolve(new Map(pids.map((pid) => [pid, pid * 10])))
+          : Promise.resolve(null);
+      },
+    });
+    await expect(
+      subject.stopRecorded(RUN, [recorded(13)]),
+    ).rejects.toMatchObject({
+      errorCode: 'PROCESS_IDENTITY_UNREADABLE',
+      message:
+        'sent SIGTERM to 1 process(es), then could not confirm process identities; refresh and try again',
+    });
+    expect(signals).toEqual([[13, 'SIGTERM']]);
+  });
+
+  it('refuses to stop anything for a run over the cap', async () => {
+    const rows = [
+      ...table(),
+      ...Array.from({ length: 300 }, (_, i) =>
+        row(2000 + i, 12, 'node worker.js'),
+      ),
+    ];
+    const { reaper: subject, signals } = stopper(rows);
+    await expect(
+      subject.stopRecorded(RUN, [recorded(13)]),
+    ).rejects.toMatchObject({ errorCode: 'RUN_PROCESS_CAP' });
+    expect(signals).toEqual([]);
+  });
+
+  it('refuses to stop anything when the usage table cannot be read', async () => {
+    const { reaper: subject, signals } = stopper(table(), {
+      listUsage: () => Promise.resolve(null),
+    });
+    await expect(
+      subject.stopRecorded(RUN, [recorded(13)]),
+    ).rejects.toMatchObject({ errorCode: 'PROCESS_TABLE_UNREADABLE' });
+    expect(signals).toEqual([]);
   });
 });
 

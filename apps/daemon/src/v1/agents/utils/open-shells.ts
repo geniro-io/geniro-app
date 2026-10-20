@@ -97,6 +97,47 @@ export function shellCommandOf(toolCallPayload: unknown): string | null {
   return command === null || command === '' ? null : command;
 }
 
+/**
+ * The tool call that launched a shell, from the run's calls oldest first: the
+ * newest with the shell's call id under the same node and workflow call. An
+ * ACP CLI numbers its calls from one in every session, so another
+ * conversation can reuse the id; a delegate's call is taken only when no call
+ * of the agent's own matches. Every reader that pairs a shell with its call
+ * goes through here.
+ */
+export function launchingCallOf<
+  T extends { payload: unknown; nodeId: string | null },
+>(
+  shell: {
+    toolCallId: string | null;
+    nodeId: string | null;
+    callId: string | null;
+  },
+  calls: readonly T[],
+): T | undefined {
+  if (shell.toolCallId === null) {
+    return undefined;
+  }
+  const matching = calls.filter((row) => {
+    const payload = asRecord(parseJsonColumn(row.payload));
+    return (
+      row.nodeId === shell.nodeId &&
+      asString(payload?.id) === shell.toolCallId &&
+      (asString(payload?.callId) || null) === shell.callId
+    );
+  });
+  return (
+    matching.filter((row) => !isDelegateCall(row)).at(-1) ?? matching.at(-1)
+  );
+}
+
+/** Whether a tool call row is a delegate's rather than the agent's own. */
+export function isDelegateCall(row: { payload: unknown }): boolean {
+  return Boolean(
+    asString(asRecord(parseJsonColumn(row.payload))?.parentToolUseId),
+  );
+}
+
 /** The close `spawn-cli` would have written had its process exit been heard. */
 export function shellCloseEvent(shell: StrandedShell): AgentEvent {
   return {

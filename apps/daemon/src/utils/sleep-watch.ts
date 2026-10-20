@@ -112,6 +112,15 @@ export interface AwakeTimer {
   clear(): void;
   /** Start the same window again from now, watching again if it was cleared or fired. */
   refresh(): void;
+  /**
+   * Change the window's length to `ms`, keeping where it started: a pending
+   * window now runs out at its start plus `ms` — at once when that has already
+   * passed. Its start is the arm, the last refresh, or the last wake, so time
+   * asleep is still not counted. Every later start (a refresh, a wake) runs
+   * the new length whole. On a cleared or fired timer it only sets the length
+   * the next refresh uses.
+   */
+  retime(ms: number): void;
 }
 
 /**
@@ -126,9 +135,12 @@ export function awakeTimeout(
   ms: number,
   watch: SleepWatch = sleepWatch,
 ): AwakeTimer {
+  let length = ms;
+  /** When the pending window started: its arm, refresh, or the last wake. */
+  let startedAt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let unsubscribe: (() => void) | null = null;
-  const arm = (): void => {
+  const schedule = (delay: number): void => {
     clearTimeout(timer);
     timer = setTimeout(() => {
       // At a wake the ticker usually runs first and has already re-armed this
@@ -138,8 +150,12 @@ export function awakeTimeout(
         clear();
         callback();
       }
-    }, ms);
+    }, delay);
     timer.unref();
+  };
+  const arm = (): void => {
+    startedAt = Date.now();
+    schedule(length);
   };
   const clear = (): void => {
     clearTimeout(timer);
@@ -150,6 +166,16 @@ export function awakeTimeout(
     arm();
     unsubscribe ??= watch.subscribe(arm);
   };
+  const retime = (next: number): void => {
+    length = next;
+    if (unsubscribe === null) {
+      return;
+    }
+    // A sleep the ticker has not noticed yet re-arms this window from the wake
+    // here, before its start is read.
+    watch.check();
+    schedule(Math.max(0, startedAt + next - Date.now()));
+  };
   start();
-  return { clear, refresh: start };
+  return { clear, refresh: start, retime };
 }

@@ -509,9 +509,10 @@ export interface CliSession {
    * (claude's MCP servers; codex gives each of its own a group). Its
    * detached commands run in sessions of their own and are stopped by its
    * shutdown. On a `user-stop` the delegates still out are closed `stopped`,
-   * not `untracked`.
+   * not `untracked` — after a graceful close too, which keeps the cause for
+   * the exit it waits for (see {@link SessionCloseOptions}).
    */
-  close(cause?: SessionCloseCause): void;
+  close(cause?: SessionCloseCause, options?: SessionCloseOptions): void;
   /**
    * Record why the process will be closed, ahead of whatever ends it — a
    * later close, its own kill after a refused interrupt, or its exit. Null
@@ -522,6 +523,23 @@ export interface CliSession {
   readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
+}
+
+/**
+ * How a kept process is ended.
+ *
+ * `graceful` asks an IDLE process to finish rather than signalling it at once:
+ * its stdin is closed first, and the group is SIGTERMed the moment the CLI
+ * exits — or {@link TURN_END_EXIT_GRACE_MS} (2s) later if it has not. claude
+ * exits on EOF; `cursor-agent acp` does not, and the deadline ends it. The
+ * group signal after the CLI is gone is what reaches a grandchild it left
+ * behind — an MCP server's own worker outlives a CLI killed by pid alone, at
+ * ppid 1. A process with a turn in flight is signalled at once either way.
+ * Only the idle close asks for it (`AgentSessionRegistry`); eviction, a
+ * teardown and shutdown stay immediate.
+ */
+export interface SessionCloseOptions {
+  graceful?: boolean;
 }
 
 function errorMessage(err: unknown): string {
@@ -1437,6 +1455,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * exit, after which there is nothing left to escalate against.
    */
   let reapAfterEnd = false;
+  /**
+   * A graceful close is under way: the group is owed a SIGTERM when the CLI
+   * exits — see {@link SessionCloseOptions}.
+   */
+  let reapGroupOnExit = false;
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
   /** See {@link TURN_END_EXIT_GRACE_MS} — one per process, which serves one turn. */
   let turnExitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1536,8 +1559,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * {@link TURN_END_EXIT_GRACE_MS}.
    *
    * Armed from the terminal event, beside the stdin close it is the backstop
-   * for. Idempotent and a no-op once the process is accounted for, so a second
-   * terminal condition cannot arm a second kill.
+   * for — and by a graceful close of a kept process, which closes stdin for the
+   * same reason with no turn left to kill. Idempotent and a no-op once the
+   * process is accounted for, so a second terminal condition cannot arm a
+   * second kill.
    */
   const armTurnExitDeadline = (): void => {
     if (turnExitTimer !== null || processGone) {
@@ -3527,6 +3552,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // An abandoned child has now gone, so its pending escalation has nothing
     // left to force — `isGone` reads true again from here.
     reapAfterEnd = false;
+    // The one exit that DOES signal the group: geniro asked this idle process
+    // to finish, so what it left behind is not the user's to keep. A fresh
+    // terminator, so the escalation outlives the settle below — safe by the
+    // POSIX rule `runAsProcessGroup`'s reap relies on: a group id is not
+    // reissued while the group has members, and an empty one finds nothing.
+    if (reapGroupOnExit) {
+      reapGroupOnExit = false;
+      createGroupTerminator(child).terminate();
+    }
     if (processGone || exitTimer) {
       return;
     }
@@ -4222,11 +4256,19 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get endedRunning() {
       return endedRunning;
     },
-    close: (cause) => {
+    close: (cause, options) => {
       if (processGone) {
         return;
       }
+      // Before the graceful return: the exit it waits for is what closes the
+      // delegates still out, and it reads the cause from here.
       closeCause ??= cause ?? null;
+      if (options?.graceful === true && current === null && !processExited) {
+        reapGroupOnExit = true;
+        endStdin();
+        armTurnExitDeadline();
+        return;
+      }
       const turn = current;
       if (turn) {
         turn.cancelRequested = true;

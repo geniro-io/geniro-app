@@ -50,6 +50,11 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
+import { ActionBroker } from '../../agents/services/action.broker';
+import {
+  type ActionPublishContext,
+  ActionPublishService,
+} from '../../agents/services/action-publish.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentMcpService } from '../../agents/services/agent-mcp.service';
@@ -99,11 +104,7 @@ import {
 } from '../../agents/utils/event-to-item';
 import { firstTurnWindow } from '../../agents/utils/first-turn-window';
 import { hostMcpServerName } from '../../agents/utils/host-question';
-import {
-  asRecord,
-  asString,
-  parseJsonColumn,
-} from '../../agents/utils/json-util';
+import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { readNodePoolMembers } from '../../agents/utils/node-pool-members';
 import {
@@ -113,6 +114,7 @@ import {
   strandedDelegates,
 } from '../../agents/utils/open-delegates';
 import {
+  launchingCallOf,
   shellCloseEvent,
   shellCommandOf,
   type StrandedShell,
@@ -757,6 +759,9 @@ export class GraphExecutorService
     @Optional() private readonly artifactStore?: ArtifactStoreService,
     @Optional() parallelism?: number,
     @Optional() private readonly agentMcp?: AgentMcpService,
+    /** The button tools (`publish_action`), optional on `artifacts`' terms. */
+    @Optional() private readonly actionSinks?: ActionBroker,
+    @Optional() private readonly actionPublisher?: ActionPublishService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -781,6 +786,9 @@ export class GraphExecutorService
 
   /** Each run's artifact publishers, disposed when the run is deleted. */
   private readonly artifactDisposers = new Map<string, (() => void)[]>();
+
+  /** Each run's button publishers, on the same terms. */
+  private readonly actionDisposers = new Map<string, (() => void)[]>();
 
   /**
    * What to do when one of a LIVE run's sessions is closed by something other
@@ -922,7 +930,7 @@ export class GraphExecutorService
     this.bus.allDeleted().subscribe((runId) => {
       this.forgetCompactions(runId);
       this.workingRoots.delete(runId);
-      this.disposeArtifactPublishers(runId);
+      this.disposeHostPublishers(runId);
       // `deleteRun` forgets these itself; the archive sweep reaches this run
       // only through the shared teardown, so without this line a swept run's
       // detached commands stayed counted for the life of the daemon.
@@ -1704,17 +1712,22 @@ export class GraphExecutorService
       // leaving it registered would let a child that outlived its run dispatch
       // into rows that are already (partly) gone.
       this.callBroker.unregisterRun(runId);
-      this.disposeArtifactPublishers(runId);
+      this.disposeHostPublishers(runId);
       this.deleting.delete(runId);
     }
   }
 
-  /** Drop a run's page publishers — every way a run is destroyed calls this. */
-  private disposeArtifactPublishers(runId: string): void {
-    for (const dispose of this.artifactDisposers.get(runId) ?? []) {
-      dispose();
+  /**
+   * Drop a run's page and button publishers — every way a run is destroyed
+   * calls this.
+   */
+  private disposeHostPublishers(runId: string): void {
+    for (const disposers of [this.artifactDisposers, this.actionDisposers]) {
+      for (const dispose of disposers.get(runId) ?? []) {
+        dispose();
+      }
+      disposers.delete(runId);
     }
-    this.artifactDisposers.delete(runId);
   }
 
   /**
@@ -1742,7 +1755,9 @@ export class GraphExecutorService
     // The previous pass's publishers go first: each holds that pass's whole
     // scope (its database fork, its queues), and without this every pass of a
     // long-lived run added another set that only a delete would release.
-    this.disposeArtifactPublishers(runId);
+    for (const dispose of this.artifactDisposers.get(runId) ?? []) {
+      dispose();
+    }
     const disposers: (() => void)[] = [broker.markWorkflowRun(runId)];
     for (const nodeId of nodeIds) {
       disposers.push(
@@ -1771,10 +1786,11 @@ export class GraphExecutorService
             // it. A row that then fails takes the page back from every call
             // still running; one that settled in between keeps naming it.
             const callId = this.callBroker.callAnsweredBy(runId, caller);
+            const noteOn = this.callBroker.callToNoteOn(runId, caller);
             const unnote =
-              callId === null
+              noteOn === null
                 ? () => {}
-                : this.callBroker.notePublishedArtifact(runId, callId, {
+                : this.callBroker.notePublishedArtifact(runId, noteOn, {
                     artifact_id: row.artifactId,
                     title: row.title,
                     version: row.version,
@@ -1809,6 +1825,73 @@ export class GraphExecutorService
       );
     }
     this.artifactDisposers.set(runId, disposers);
+  }
+
+  /**
+   * Give each agent node of this pass the button tools (`publish_action`,
+   * `remove_action`), on {@link registerArtifactPublishers}' terms. A button
+   * belongs to the conversation publishing it — the node's own, or one it
+   * answers calls in — and one published inside a call is named to that call
+   * and every call above it still running.
+   *
+   * `agentLabel` is stamped on every publisher but the run's sole
+   * trigger-fed agent in its own conversation: a press goes to every
+   * trigger-fed agent whoever published, so any other publisher says who it
+   * is, on the chip and in the message.
+   */
+  private registerActionPublishers(
+    runId: string,
+    nodes: readonly WorkflowAgentNode[],
+    roots: ReadonlySet<string>,
+  ): void {
+    const broker = this.actionSinks;
+    const publisher = this.actionPublisher;
+    if (broker === undefined || publisher === undefined) {
+      return;
+    }
+    for (const dispose of this.actionDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    const disposers: (() => void)[] = [];
+    for (const node of nodes) {
+      // Per call, not per registration: one node speaks in several
+      // conversations, and which call one answers changes as calls settle.
+      const contextOf = (caller: string): ActionPublishContext => {
+        const conversationId = callerConversationOf(caller) ?? '';
+        const callId = this.callBroker.callAnsweredBy(runId, caller);
+        const noteOn = this.callBroker.callToNoteOn(runId, caller);
+        const unattributed =
+          conversationId === '' && roots.size === 1 && roots.has(node.id);
+        return {
+          runId,
+          rowNodeId: node.id,
+          publisher: {
+            nodeId: node.id,
+            conversationId,
+            ...(callId === null ? {} : { callId }),
+            ...(unattributed ? {} : { agentLabel: node.name ?? node.id }),
+          },
+          notes: {
+            published: (key, action) =>
+              this.callBroker.notePublishedAction(runId, noteOn, key, {
+                action_id: action.actionId,
+                label: action.label,
+                kind: action.kind,
+              }),
+            removed: (key) => this.callBroker.forgetPublishedAction(runId, key),
+          },
+        };
+      };
+      disposers.push(
+        broker.register(runId, node.id, {
+          publish: (input, caller) =>
+            publisher.publish(contextOf(caller), input),
+          remove: (actionId, caller) =>
+            publisher.remove(contextOf(caller), actionId),
+        }),
+      );
+    }
+    this.actionDisposers.set(runId, disposers);
   }
 
   /** Drop every per-key fact of one run — its keys are `<runId>::…`. */
@@ -4911,28 +4994,22 @@ export class GraphExecutorService
                 shell.callId !== null &&
                 calls.has(shell.callId),
             );
-            const words = new Map<string, string>();
-            for (const row of await this.itemDao.toolCallsByIds(
+            const launching = await this.itemDao.toolCallsByIds(
               runId,
               shells.flatMap((shell) =>
                 shell.toolCallId === null ? [] : [shell.toolCallId],
               ),
               em,
-            )) {
-              const id = asString(asRecord(parseJsonColumn(row.payload))?.id);
-              const command = shellCommandOf(row.payload);
-              if (id && command !== null) {
-                words.set(id, command);
-              }
-            }
+            );
             resolve(
-              shells.map((shell) => ({
-                command:
-                  shell.toolCallId === null
-                    ? null
-                    : (words.get(shell.toolCallId) ?? null),
-                callId: shell.callId,
-              })),
+              shells.map((shell) => {
+                const call = launchingCallOf(shell, launching);
+                return {
+                  command:
+                    call === undefined ? null : shellCommandOf(call.payload),
+                  callId: shell.callId,
+                };
+              }),
             );
           } catch (err) {
             this.logger.warn(
@@ -6625,16 +6702,16 @@ export class GraphExecutorService
         this.callTokens.ensure(runId, node.id);
       }
     }
+    const hostToolNodes = nodes.filter(
+      (node): node is WorkflowAgentNode =>
+        node.kind === 'agent' && callCapable(node),
+    );
     this.registerArtifactPublishers(
       runId,
-      nodes
-        .filter(
-          (node): node is WorkflowAgentNode =>
-            node.kind === 'agent' && callCapable(node),
-        )
-        .map((node) => node.id),
+      hostToolNodes.map((node) => node.id),
       persistItem,
     );
+    this.registerActionPublishers(runId, hostToolNodes, triggerFed);
     /** The node a caller conversation runs as — its pool member, once known. */
     const agentNodeOfConversation = (
       caller: string,

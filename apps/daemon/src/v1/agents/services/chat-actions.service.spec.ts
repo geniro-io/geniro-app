@@ -9,13 +9,16 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { NO_CALL_INDEX } from '../__tests__/no-call-index';
+import { NO_STOPS } from '../__tests__/no-stops';
 import { ACTION_LIVE_MAX, SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { actionKey } from '../utils/action-fold';
 import {
   type ActionPublishContext,
   ActionPublishService,
 } from './action-publish.service';
+import type { ActionStopService } from './action-stop.service';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
@@ -73,7 +76,7 @@ describe('ChatActionsService (in-memory sqlite)', () => {
       NO_CALL_INDEX,
       seqs,
     );
-    publisher = new ActionPublishService(actions);
+    publisher = new ActionPublishService(actions, NO_STOPS);
     state = new RunStateService(
       orm.em,
       runs,
@@ -300,14 +303,17 @@ describe('ChatActionsService (in-memory sqlite)', () => {
   });
 
   it('answers a failed write without the error, and publishes nothing', async () => {
-    const failing = new ActionPublishService({
-      serialize: actions.serialize.bind(actions),
-      fold: actions.fold.bind(actions),
-      appendAction: () =>
-        Promise.reject(new Error('SQLITE_IOERR: /Users/x/geniro.db')),
-      appendOutcome: () =>
-        Promise.reject(new Error('SQLITE_IOERR: /Users/x/geniro.db')),
-    } as unknown as ChatActionsService);
+    const failing = new ActionPublishService(
+      {
+        serialize: actions.serialize.bind(actions),
+        fold: actions.fold.bind(actions),
+        appendAction: () =>
+          Promise.reject(new Error('SQLITE_IOERR: /Users/x/geniro.db')),
+        appendOutcome: () =>
+          Promise.reject(new Error('SQLITE_IOERR: /Users/x/geniro.db')),
+      } as unknown as ChatActionsService,
+      NO_STOPS,
+    );
 
     expect(await failing.publish(ctx, { label: 'x', message: 'go' })).toEqual({
       status: 'refused',
@@ -323,18 +329,175 @@ describe('ChatActionsService (in-memory sqlite)', () => {
     ]);
   });
 
-  it('answers stop and command as not available yet', async () => {
-    expect(
-      await publisher.publish(ctx, { label: 'Stop', stop: { pid: 1 } }),
-    ).toMatchObject({
-      reason:
-        'stop actions are not available yet; publish a message action instead',
+  it('tells the publisher’s notes about a publish only once it is allowed, and takes it back when the write fails', async () => {
+    const log: string[] = [];
+    const notes = {
+      published: (
+        key: string,
+        action: { actionId: string; label: string; kind: string },
+      ) => {
+        log.push(`note ${key} ${action.label} ${action.kind}`);
+        return () => log.push(`undo ${key}`);
+      },
+      removed: (key: string) => log.push(`removed ${key}`),
+    };
+    const noted: ActionPublishContext = { ...ctx, notes };
+    const key = (actionId: string) =>
+      actionKey(SINGLE_AGENT_NODE, '', actionId);
+
+    await publisher.publish(noted, { label: 'PR merged', message: 'go' });
+    await publisher.publish(noted, { label: 'x' });
+    await publisher.remove(noted, 'pr-merged');
+    // A removal refused (nothing live by that id) tells nobody.
+    await publisher.remove(noted, 'unknown');
+    const failing = new ActionPublishService(
+      {
+        serialize: actions.serialize.bind(actions),
+        fold: actions.fold.bind(actions),
+        appendAction: () => Promise.reject(new Error('SQLITE_IOERR')),
+      } as unknown as ChatActionsService,
+      NO_STOPS,
+    );
+    await failing.publish(noted, { label: 'Lost', message: 'go' });
+
+    expect(log).toEqual([
+      `note ${key('pr-merged')} PR merged message`,
+      `removed ${key('pr-merged')}`,
+      `note ${key('lost')} Lost message`,
+      `undo ${key('lost')}`,
+    ]);
+  });
+
+  it('tells the notes nothing about a publish the live cap refuses', async () => {
+    for (let i = 0; i < ACTION_LIVE_MAX; i++) {
+      await publisher.publish(ctx, { label: `a${i}`, message: 'x' });
+    }
+    const log: string[] = [];
+    const outcome = await publisher.publish(
+      {
+        ...ctx,
+        notes: {
+          published: () => {
+            log.push('noted');
+            return () => {};
+          },
+          removed: () => {},
+        },
+      },
+      { label: 'One more', message: 'x' },
+    );
+
+    expect(outcome.status).toBe('refused');
+    expect(log).toEqual([]);
+  });
+
+  it('publishes a stop action against the targets resolved for it, always one-shot', async () => {
+    const asked: unknown[][] = [];
+    const stopping = new ActionPublishService(actions, {
+      resolve: (...args: unknown[]) => {
+        asked.push(args);
+        return Promise.resolve({
+          shellId: 'bg1',
+          targets: [
+            {
+              pid: 48211,
+              startedAt: '2026-10-20T10:00:00.000Z',
+              command: 'python3 -m http.server 8765',
+            },
+          ],
+        });
+      },
+    } as unknown as ActionStopService);
+
+    const outcome = await stopping.publish(ctx, {
+      label: 'Stop preview',
+      stop: { shell: 'bg1' },
     });
+
+    expect(outcome).toEqual({
+      status: 'published',
+      text: `Published action "stop-preview" (stop · shell bg1: pid 48211). Re-publish the same action_id to change it; remove_action "stop-preview" retires it. 1/${ACTION_LIVE_MAX} live.`,
+    });
+    expect(asked).toEqual([['run-a', null, { shell: 'bg1' }]]);
+    expect((await actions.live('run-a'))[0]).toMatchObject({
+      once: true,
+      spec: {
+        kind: 'stop',
+        shellId: 'bg1',
+        targets: [
+          {
+            pid: 48211,
+            startedAt: '2026-10-20T10:00:00.000Z',
+            command: 'python3 -m http.server 8765',
+          },
+        ],
+      },
+    });
+  });
+
+  it('names a pid stop by its pids in the receipt', async () => {
+    const stopping = new ActionPublishService(actions, {
+      resolve: () =>
+        Promise.resolve({
+          targets: [
+            { pid: 7, startedAt: '2026-10-20T10:00:00.000Z', command: 'a' },
+            { pid: 8, startedAt: '2026-10-20T10:00:01.000Z', command: 'b' },
+          ],
+        }),
+    } as unknown as ActionStopService);
+
+    expect(
+      await stopping.publish(ctx, { label: 'Stop', stop: { pid: 7 } }),
+    ).toMatchObject({
+      text: expect.stringContaining(
+        'Published action "stop" (stop · pid 7, 8).',
+      ),
+    });
+  });
+
+  it('relays why a stop could not be resolved, and writes nothing', async () => {
+    const stopping = new ActionPublishService(actions, {
+      resolve: () =>
+        Promise.resolve({
+          reason: 'pid 7 is not a running process of this chat',
+        }),
+    } as unknown as ActionStopService);
+
+    expect(
+      await stopping.publish(ctx, { label: 'Stop', stop: { pid: 7 } }),
+    ).toEqual({
+      status: 'refused',
+      reason: 'pid 7 is not a running process of this chat',
+    });
+    expect(await items.rowsOfKinds('run-a', ['action'])).toEqual([]);
+  });
+
+  it('refuses a malformed stop before looking at any process', async () => {
+    for (const [stop, once, reason] of [
+      [{}, undefined, 'stop takes exactly one of shell or pid'],
+      [
+        { shell: 'bg1', pid: 7 },
+        undefined,
+        'stop takes exactly one of shell or pid',
+      ],
+      [{ pid: 7 }, false, 'a stop action is always one-shot; leave out once'],
+    ] as const) {
+      expect(
+        await publisher.publish(ctx, {
+          label: 'Stop',
+          stop,
+          ...(once === undefined ? {} : { once }),
+        }),
+      ).toEqual({ status: 'refused', reason });
+    }
+  });
+
+  it('answers command as not available yet', async () => {
     expect(
       await publisher.publish(ctx, { label: 'Run', command: { argv: ['ls'] } }),
     ).toMatchObject({
       reason:
-        'command actions are not available yet; publish a message action instead',
+        'command actions are not available yet; publish a message or stop action instead',
     });
   });
 

@@ -15,7 +15,14 @@ import { type ChatActions, ChatActionsContext } from './use-chat-actions';
 const entry = (
   seq: number,
   outcome: ActionEntry['outcome'] = null,
-  extra: { once?: boolean; text?: string } = {},
+  extra: {
+    once?: boolean;
+    text?: string;
+    agentLabel?: string;
+    callId?: string;
+    kind?: 'message' | 'stop';
+    targets?: { pid: number; command: string }[];
+  } = {},
 ): ActionEntry => ({
   type: 'action',
   id: `i-${seq}`,
@@ -27,11 +34,14 @@ const entry = (
     actionId: 'merged',
     label: 'Merged',
     description: null,
-    kind: 'message',
-    text: extra.text ?? 'continue',
+    kind: extra.kind ?? 'message',
+    text: extra.kind === 'stop' ? null : (extra.text ?? 'continue'),
+    targets: extra.targets ?? [],
     once: extra.once ?? true,
     nodeId: 'agent',
     conversationId: '',
+    agentLabel: extra.agentLabel ?? null,
+    callId: extra.callId ?? null,
   },
   outcome,
 });
@@ -104,6 +114,7 @@ describe('ActionCard', () => {
             state: 'succeeded',
             exitCode: null,
             error: null,
+            alreadyStopped: false,
             at,
           }),
           {},
@@ -122,7 +133,14 @@ describe('ActionCard', () => {
     expect(
       status(
         render(
-          entry(5, { actionSeq: 5, state, exitCode: null, error: 'boom', at }),
+          entry(5, {
+            actionSeq: 5,
+            state,
+            exitCode: null,
+            error: 'boom',
+            alreadyStopped: false,
+            at,
+          }),
           {},
         ),
       ),
@@ -140,6 +158,7 @@ describe('ActionCard', () => {
       state,
       exitCode: null,
       error: null,
+      alreadyStopped: false,
       at,
     });
     expect(
@@ -173,6 +192,41 @@ describe('ActionCard', () => {
     expect(toggle?.getAttribute('aria-expanded')).toBe('true');
   });
 
+  it('lists the processes a stop press ends, and says when they had already stopped', () => {
+    const targets = [
+      { pid: 48211, command: 'python3 -m http.server 8765' },
+      { pid: 48212, command: 'node watcher.js' },
+    ];
+    const container = render(entry(5, null, { kind: 'stop', targets }), {
+      actions: [live(5)],
+    });
+    expect(
+      container.querySelector('[data-slot="action-targets"]')?.textContent,
+    ).toBe(
+      'Stops, with what these start:python3 -m http.server 8765 · pid 48211node watcher.js · pid 48212',
+    );
+    expect(container.querySelector('[data-slot="action-message"]')).toBeNull();
+
+    const at = new Date(2026, 9, 18, 0, 0).toISOString();
+    const stopped = (alreadyStopped: boolean) =>
+      entry(
+        5,
+        {
+          actionSeq: 5,
+          state: 'stopped',
+          exitCode: null,
+          error: null,
+          alreadyStopped,
+          at,
+        },
+        { kind: 'stop', targets },
+      );
+    expect(status(render(stopped(false), {}))).toBe('Pressed 00:00 · stopped');
+    expect(status(render(stopped(true), {}))).toBe(
+      'Pressed 00:00 · already stopped',
+    );
+  });
+
   it('shows the exact text a press sends', () => {
     const container = render(entry(5), { actions: [live(5)] });
 
@@ -197,6 +251,7 @@ describe('ActionCard', () => {
             state: 'dismissed',
             exitCode: null,
             error: null,
+            alreadyStopped: false,
             at: 'now',
           })}
         />,
@@ -207,6 +262,37 @@ describe('ActionCard', () => {
 
   it('reads Updated when a newer publish of the same id is live', () => {
     expect(status(render(entry(5), { actions: [live(9)] }))).toBe('Updated');
+  });
+
+  it('callee action card renders with from <agent>, linking to its call', () => {
+    const openCall = vi.fn();
+    const container = render(
+      entry(5, null, { agentLabel: 'Engineer', callId: 'call-1' }),
+      { actions: [live(5)], openCall },
+    );
+
+    expect(
+      container.querySelector('[data-slot="action-publisher"]')?.textContent,
+    ).toBe('from Engineer');
+    const link = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Open Engineer\'s thread"]',
+    );
+    act(() => link!.click());
+    expect(openCall).toHaveBeenCalledWith('call-1');
+  });
+
+  it('names the publisher without a link where no call can be opened, and nobody for the run’s own agent', () => {
+    const named = render(entry(5, null, { agentLabel: 'Engineer' }), {});
+    expect(
+      named.querySelector('[data-slot="action-publisher"]')?.textContent,
+    ).toBe('from Engineer');
+    expect(named.querySelector('[aria-label="Open Engineer\'s thread"]')).toBe(
+      null,
+    );
+
+    expect(
+      render(entry(5), {}).querySelector('[data-slot="action-publisher"]'),
+    ).toBeNull();
   });
 
   it('says nothing about a publish the live set has not been read through yet', () => {

@@ -82,6 +82,8 @@ import type { ShareService } from '../../shares/services/share.service';
 import type { AgentShareOutcome } from '../../shares/shares.types';
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import { createMcpTools } from '../tools/mcp-tools';
+import { proposePatchInstructions } from '../tools/propose-patch/propose-patch.instructions';
+import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
 import { McpServerService } from './mcp-server.service';
 
 /** One row of `tools/list`, as the description audit reads it. */
@@ -2014,12 +2016,44 @@ describe('McpServerService', () => {
     expect(kind.enum).toEqual(['line', 'bar', 'area']);
   });
 
-  it('tools/call publish_action hands the button over and answers with its receipt', async () => {
+  it('lists publish_action with message optional and a stop by shell or pid', async () => {
+    const actions = new ActionBroker();
+    actions.register('run-1', 'agent', {
+      publish: async () => ({ status: 'refused', reason: 'unused' }),
+      remove: async () => ({ status: 'refused', reason: 'unused' }),
+    });
+    const { json } = await post(
+      actionService(actions),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const schema = (
+      json().result as {
+        tools: {
+          name: string;
+          inputSchema: {
+            required: string[];
+            properties: { stop: { properties: Record<string, unknown> } };
+          };
+        }[];
+      }
+    ).tools.find((t) => t.name === HOST_PUBLISH_ACTION_TOOL)!.inputSchema;
+    expect(schema.required).toEqual(['label']);
+    expect(Object.keys(schema.properties.stop.properties)).toEqual([
+      'shell',
+      'pid',
+    ]);
+  });
+
+  it('tools/call publish_action hands the button and its calling conversation over and answers with its receipt', async () => {
     const actions = new ActionBroker();
     const published: unknown[] = [];
+    const callers: string[] = [];
     actions.register('run-1', 'agent', {
-      publish: async (input) => {
+      publish: async (input, caller) => {
         published.push(input);
+        callers.push(caller);
         return { status: 'published', text: 'Published action "pr-merged".' };
       },
       remove: async () => ({ status: 'refused', reason: 'unused' }),
@@ -2030,6 +2064,7 @@ describe('McpServerService', () => {
         'run-1',
         'agent',
         rpc('tools/call', { name: HOST_PUBLISH_ACTION_TOOL, arguments: args }),
+        'call-3',
       );
       return json().result as { content: { text: string }[]; isError: boolean };
     };
@@ -2043,6 +2078,8 @@ describe('McpServerService', () => {
     expect(published).toEqual([
       { label: 'PR merged', message: 'PR merged — continue' },
     ]);
+    // The sink, not the model, learns which conversation published it.
+    expect(callers).toEqual([callerKey('agent', 'call-3')]);
     expect(result).toEqual({
       content: [{ type: 'text', text: 'Published action "pr-merged".' }],
       isError: false,
@@ -2062,8 +2099,8 @@ describe('McpServerService', () => {
         status: 'refused',
         reason: 'give exactly one of message, stop or command',
       }),
-      remove: async (actionId) => {
-        removed.push(actionId);
+      remove: async (actionId, caller) => {
+        removed.push(`${actionId} by ${caller}`);
         return { status: 'removed', text: `Removed action "${actionId}".` };
       },
     });
@@ -2092,7 +2129,7 @@ describe('McpServerService', () => {
       content: [{ type: 'text', text: 'Removed action "pr-merged".' }],
       isError: false,
     });
-    expect(removed).toEqual(['pr-merged']);
+    expect(removed).toEqual(['pr-merged by agent']);
   });
 
   it('tools/call show_chart hands the chart over and answers with a receipt', async () => {
@@ -3018,6 +3055,103 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const tools = await everyHostTool();
     expect(find(tools, HOST_CHART_TOOL)).toContain('show_metrics');
     expect(find(tools, HOST_METRICS_TOOL)).toContain('show_chart');
+  });
+
+  it('keeps propose_patch and propose_plan descriptions byte-identical in both modes', () => {
+    // The BLOCKING pair is the text these two tools served before the deferred
+    // mode existed, byte for byte; the DEFERRED pair is new. A drift in either
+    // is a model-facing behaviour change, not a refactor detail.
+    const patchDeferred =
+      'Propose a change to ONE file without making it. The user sees the diff with Apply and Reject, and this ' +
+      'app writes the file only if they accept. ' +
+      'Use it when you have a concrete fix and would rather hand it over than edit directly — and do NOT also ' +
+      'write the file yourself: if the user accepts, the change is already on disk. ' +
+      'One file per call; call it again for the next one. ' +
+      'The call returns at once — the card is on their screen, so STOP and end your turn. Do not write the file ' +
+      'yourself, and do not call this again for the same change. What happened arrives as your next user message, ' +
+      'and the four outcomes mean different things: applied (it is on disk, do not write it again), rejected ' +
+      '(do NOT route around it — ask what they would prefer), stale (they ACCEPTED but the file no longer matches, ' +
+      'so re-read it and propose again — this is not a refusal), and unavailable (the card could not be shown at ' +
+      'all, so describe the change in your reply instead).';
+    const patchBlocking =
+      'Propose a change to ONE file without making it. The user sees the diff with Apply and Reject, and this ' +
+      'app writes the file only if they accept. ' +
+      'Use it when you have a concrete fix and would rather hand it over than edit directly — and do NOT also ' +
+      'write the file yourself: if the user accepts, the change is already on disk. ' +
+      'One file per call; call it again for the next one. ' +
+      'The result tells you what happened, and the four outcomes mean different things: applied (it is on ' +
+      'disk, do not write it again), rejected (do NOT route around it — ask what they would prefer), stale ' +
+      '(they ACCEPTED but the file no longer matches, so re-read it and propose again — this is not a ' +
+      'refusal), and unavailable (the card could not be shown at all, so describe the change in your reply ' +
+      'instead).';
+    const planBody =
+      'Use it when the work is worth more than a couple of edits, when a request could reasonably be read more ' +
+      'than one way, or when you are about to touch something wide — a rename across files, a dependency, a ' +
+      'schema, anything hard to undo. Do not use it for work you have already been told to do, or for a ' +
+      'one-line change: a plan for something obvious is a card in the way. ' +
+      'If you have a plan mode of your own (an ExitPlanMode tool, or similar), use EITHER that or this, never ' +
+      'both for the same piece of work — two approval cards for one plan is a gate the user has to answer ' +
+      'twice. Prefer this one when it is offered: its card is the one rendered in the app they are watching. ' +
+      'Call it ONCE, before the work, and do not also write the steps out as text — the user sees the card. ';
+    const planTail =
+      'Use show_artifact instead when you want to SHOW a plan rather than be approved for one — a laid-out ' +
+      'page you keep updating as the work moves. This tool is the gate; that one is the picture, and it asks ' +
+      'the user nothing.';
+    const planDeferred =
+      'Show the user how you intend to carry out a request, and wait for them to approve it before you start. ' +
+      planBody +
+      'The call returns at once — the card is on their screen, so STOP and end your turn. Do not start the work, ' +
+      'and do not call this again for the same plan. Their verdict arrives as your next user message: approved ' +
+      '(carry it out), or rejected (do NOT do it another way). Either verdict may carry a note from the user — ' +
+      'when it does, that note outranks the plan you proposed. ' +
+      planTail;
+    const planBlocking =
+      'Show the user how you intend to carry out a request, and WAIT for them to approve it before you start. ' +
+      planBody +
+      'The call blocks until they answer, and the result is what to do next: approved (carry it out), or ' +
+      'rejected (do NOT do it another way). Either verdict may carry a note from the user — when it does, that ' +
+      'note outranks the plan you proposed. ' +
+      planTail;
+
+    expect(proposePatchInstructions(true)).toBe(patchDeferred);
+    expect(proposePatchInstructions(false)).toBe(patchBlocking);
+    expect(proposePlanInstructions(true)).toBe(planDeferred);
+    expect(proposePlanInstructions(false)).toBe(planBlocking);
+  });
+
+  it('tells a deferring plan and patch that the call returns at once', async () => {
+    // The blocking sentences stay for a sink that holds the call. A cursor
+    // listing is the other one: the model has to stop, because the verdict
+    // arrives later, as a message, and waiting on this call is how it times out.
+    const plans = new PlanBroker();
+    const patches = new PatchBroker();
+    const noop = async (): Promise<never> => {
+      throw new Error('not called');
+    };
+    plans.register('run-1', 'agent', noop as never, { answersAtOnce: true });
+    patches.register('run-1', 'agent', noop as never, { answersAtOnce: true });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        new UserQuestionBroker(),
+        new FindingsReportBroker(),
+        new ChartBroker(),
+        patches,
+        plans,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: ToolListing[] }).tools;
+    const plan = find(tools, HOST_PLAN_TOOL);
+    const patch = find(tools, HOST_PATCH_TOOL);
+    expect(plan).toContain('returns at once');
+    expect(plan).toContain('next user message');
+    expect(plan).not.toContain('The call blocks');
+    expect(patch).toContain('returns at once');
+    expect(patch).toContain('four outcomes');
+    expect(patch).toContain('next user message');
   });
 
   it('names ALL FOUR patch outcomes it promises', async () => {

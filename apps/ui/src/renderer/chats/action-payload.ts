@@ -19,9 +19,21 @@ export interface ActionCardView {
   kind: ActionSpecKindEnum;
   /** What a message press sends — shown so the user sees it before pressing. */
   text: string | null;
+  /** What a stop press stops — shown, like `text`, before it is pressed. */
+  targets: StopTargetView[];
   once: boolean;
   nodeId: string;
   conversationId: string;
+  /** Who published it, when a press must say so — another agent of a workflow. */
+  agentLabel: string | null;
+  /** The call its publisher was answering, which the card links to. */
+  callId: string | null;
+}
+
+/** One process a stop action stops. */
+export interface StopTargetView {
+  pid: number;
+  command: string;
 }
 
 /** What happened to a publish, as the card's status line reads it. */
@@ -30,6 +42,8 @@ export interface ActionOutcomeView {
   state: ActionOutcomeState;
   exitCode: number | null;
   error: string | null;
+  /** A stop whose processes had all exited before the press. */
+  alreadyStopped: boolean;
   at: string;
 }
 
@@ -74,9 +88,21 @@ export function readActionPayload(item: ChatItem): ActionCardView | null {
     description: text(payload?.description),
     kind: kind as ActionSpecKindEnum,
     text: text(spec?.text),
+    targets: Array.isArray(spec?.targets)
+      ? spec.targets.flatMap((value: unknown) => {
+          const target = record(value);
+          const pid = target?.pid;
+          const command = text(target?.command);
+          return typeof pid === 'number' && command !== null
+            ? [{ pid, command }]
+            : [];
+        })
+      : [],
     once: payload?.once !== false,
     nodeId,
     conversationId,
+    agentLabel: text(publisher?.agentLabel),
+    callId: text(publisher?.callId),
   };
 }
 
@@ -101,6 +127,7 @@ export function readActionOutcome(item: ChatItem): ActionOutcomeView | null {
     state: state as ActionOutcomeState,
     exitCode: typeof exitCode === 'number' ? exitCode : null,
     error: text(payload?.error),
+    alreadyStopped: payload?.alreadyStopped === true,
     at: item.createdAt,
   };
 }

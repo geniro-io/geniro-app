@@ -5,6 +5,7 @@ import { liveRowKind } from './live-row';
 import { CHAT_LIVE_KEY, type LiveState } from './live-text';
 import { foldTaskList, readTaskAnnouncement } from './task-payload';
 import {
+  type ActionEntry,
   type ArtifactEntry,
   buildSubagentBlocks,
   buildTurnBlocks,
@@ -1406,6 +1407,51 @@ describe('groupTranscript', () => {
     expect(entries[1]).toMatchObject({ seq: other.seq, outcome: null });
   });
 
+  it('reads what a stop action stops and whether it had already stopped', () => {
+    const stop = item('action', {
+      actionId: 'stop-preview',
+      label: 'Stop preview',
+      once: true,
+      spec: {
+        kind: 'stop',
+        shellId: 'bg1',
+        targets: [
+          {
+            pid: 48211,
+            startedAt: '2026-10-20T10:00:00.000Z',
+            command: 'python3 -m http.server 8765',
+          },
+          { pid: 'not a pid', command: 'x' },
+          { pid: 48212 },
+        ],
+      },
+      publisher: { nodeId: 'agent', conversationId: '' },
+    });
+    const entries = groupTranscript([
+      stop,
+      item('action_outcome', {
+        actionSeq: stop.seq,
+        actionId: 'stop-preview',
+        nodeId: 'agent',
+        conversationId: '',
+        state: 'stopped',
+        alreadyStopped: true,
+      }),
+    ]);
+
+    expect(entries).toMatchObject([
+      {
+        type: 'action',
+        action: {
+          kind: 'stop',
+          text: null,
+          targets: [{ pid: 48211, command: 'python3 -m http.server 8765' }],
+        },
+        outcome: { state: 'stopped', alreadyStopped: true },
+      },
+    ]);
+  });
+
   it('drops an action row that does not parse', () => {
     expect(
       groupTranscript([
@@ -2348,6 +2394,47 @@ describe('groupTranscript — call blocks', () => {
         (e) => e.type === 'item' && e.item.kind === 'approval_request',
       ),
     ).toBe(true);
+  });
+
+  describe('a button a callee publishes', () => {
+    const button = (publisher: Record<string, unknown>) => ({
+      actionId: 'pr-merged',
+      label: 'PR merged',
+      once: true,
+      spec: { kind: 'message', text: 'merged — go on' },
+      publisher,
+    });
+    const actions = (entries: readonly { type: string }[]) =>
+      entries.filter((e): e is ActionEntry => e.type === 'action');
+
+    it('stays in the MAIN flow under its publisher, not inside the shut call card', () => {
+      const publisher = {
+        nodeId: 'poet',
+        conversationId: 'call-1',
+        callId: 'call-1',
+        agentLabel: 'Poet',
+      };
+      const entries = groupTranscript([
+        startCall('call-1', 'poet'),
+        tagged('status', { status: 'running' }, 'poet', 'call-1'),
+        item('action', button(publisher), 'poet'),
+        // Even a row naming the call at its top level is never claimed.
+        tagged('action', button(publisher), 'poet', 'call-1'),
+      ]);
+
+      const block = entries.find(isBlock)!;
+      expect(actions(block.entries)).toEqual([]);
+      expect(
+        actions(entries).map((e) => [
+          e.nodeId,
+          e.action.agentLabel,
+          e.action.callId,
+        ]),
+      ).toEqual([
+        ['poet', 'Poet', 'call-1'],
+        ['poet', 'Poet', 'call-1'],
+      ]);
+    });
   });
 
   describe('a page a callee publishes', () => {

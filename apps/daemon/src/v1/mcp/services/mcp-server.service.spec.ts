@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 
+import { BadRequestException, NotFoundException } from '@packages/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,9 +23,11 @@ import {
   HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PROPOSE_WORKFLOW_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
   HOST_QUESTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_READ_WORKFLOWS_TOOL,
   HOST_RECOMMENDATION_MARKS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
   HOST_REMOVE_ACTION_TOOL,
@@ -47,6 +50,7 @@ import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
 import {
   MAX_ARTIFACT_IMAGE_BYTES,
   MAX_ARTIFACT_PAGE_IMAGE_BYTES,
@@ -72,6 +76,8 @@ import {
 import { CallBroker } from '../../graphs/services/call-broker.service';
 import { TaskBoardBroker } from '../../graphs/services/task-board.broker';
 import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
+import type { WorkflowProposalService } from '../../graphs/services/workflow-proposal.service';
+import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import {
   ANSWERING_A_CALL,
   ANSWERING_WITH_CALLS_OUT,
@@ -150,6 +156,8 @@ function service(
   workflowChanges = {} as WorkflowChangeService,
   shares = fakeShares(false).service,
   actions = new ActionBroker(),
+  workflowGate = new WorkflowProposalBroker(),
+  workflowStore = {} as WorkflowStoreService,
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -170,6 +178,10 @@ function service(
       analysis,
       threads,
       workflowChanges,
+      workflowGate,
+      workflowStore,
+      // Never asked by the cases that list tools.
+      workflowProposals: {} as WorkflowProposalService,
       shares,
     }),
     {
@@ -209,6 +221,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
   const artifacts = new ArtifactBroker();
   const notices = new NotifyBroker();
   const actions = new ActionBroker();
+  const workflowGate = new WorkflowProposalBroker();
   for (const broker of [
     questions,
     findings,
@@ -221,6 +234,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
     artifacts,
     notices,
     actions,
+    workflowGate,
   ]) {
     broker.register('run-1', 'agent', noop as never);
   }
@@ -257,6 +271,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
       undefined,
       undefined,
       actions,
+      workflowGate,
     ),
     'run-1',
     'agent',
@@ -3096,7 +3111,9 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const planTail =
       'Use show_artifact instead when you want to SHOW a plan rather than be approved for one — a laid-out ' +
       'page you keep updating as the work moves. This tool is the gate; that one is the picture, and it asks ' +
-      'the user nothing.';
+      'the user nothing. ' +
+      'Use propose_workflow instead, where it is offered, when the user wants a saved team of ' +
+      'agents (a workflow) rather than a plan for the work in this chat.';
     const planDeferred =
       'Show the user how you intend to carry out a request, and wait for them to approve it before you start. ' +
       planBody +
@@ -3219,6 +3236,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_WORKFLOW_CHANGE_TOOL,
       HOST_PUBLISH_ACTION_TOOL,
       HOST_REMOVE_ACTION_TOOL,
+      HOST_READ_WORKFLOWS_TOOL,
+      HOST_PROPOSE_WORKFLOW_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
@@ -3237,6 +3256,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_RECOMMENDATION_MARKS_TOOL,
       HOST_WORKFLOW_CHANGE_TOOL,
       HOST_PUBLISH_ACTION_TOOL,
+      HOST_PROPOSE_WORKFLOW_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when NOT`).toMatch(
@@ -3264,6 +3284,246 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const tools = await everyHostTool();
     expect(find(tools, HOST_ARTIFACT_TOOL)).toContain('propose_plan');
     expect(find(tools, HOST_PLAN_TOOL)).toContain('show_artifact');
+  });
+
+  it('makes the two proposal tools, and the workflow pair, name each other', async () => {
+    // A plan of work and a workflow are both "proposed" on a card the user
+    // approves; without the names a model asked for "a team that reviews my
+    // PRs" reaches for the plan card, which saves nothing.
+    const tools = await everyHostTool();
+    expect(find(tools, HOST_PROPOSE_WORKFLOW_TOOL)).toContain(HOST_PLAN_TOOL);
+    expect(find(tools, HOST_PLAN_TOOL)).toContain(HOST_PROPOSE_WORKFLOW_TOOL);
+    expect(find(tools, HOST_PROPOSE_WORKFLOW_TOOL)).toContain(
+      HOST_READ_WORKFLOWS_TOOL,
+    );
+    expect(find(tools, HOST_READ_WORKFLOWS_TOOL)).toContain(
+      HOST_PROPOSE_WORKFLOW_TOOL,
+    );
+  });
+
+  it('offers the workflow tools only where the gate is registered, and refuses an unlisted call', async () => {
+    const gate = new WorkflowProposalBroker();
+    const listed = async (): Promise<string[]> => {
+      const { json } = await post(
+        service(
+          new CallBroker(),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          gate,
+        ),
+        'run-1',
+        'agent',
+        rpc('tools/list', {}),
+      );
+      return (json().result as { tools: { name: string }[] }).tools.map(
+        (tool) => tool.name,
+      );
+    };
+    expect(await listed()).not.toContain(HOST_PROPOSE_WORKFLOW_TOOL);
+    expect(await listed()).not.toContain(HOST_READ_WORKFLOWS_TOOL);
+
+    const dispose = gate.register('run-1', 'agent', { runId: 'run-1' });
+    expect(await listed()).toEqual(
+      expect.arrayContaining([
+        HOST_READ_WORKFLOWS_TOOL,
+        HOST_PROPOSE_WORKFLOW_TOOL,
+      ]),
+    );
+    dispose();
+
+    const { json } = await post(
+      service(),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_PROPOSE_WORKFLOW_TOOL,
+        arguments: { workflow: { name: 'x', nodes: [], edges: [] } },
+      }),
+    );
+    expect(json().result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'Not proposed: workflows are proposed from ordinary chats only.',
+        },
+      ],
+      isError: true,
+    });
+  });
+
+  it('refuses an unlisted read_workflows call', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'agent',
+      rpc('tools/call', { name: HOST_READ_WORKFLOWS_TOOL, arguments: {} }),
+    );
+    expect(json().result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'Not read: the workflow library is offered to ordinary chats only.',
+        },
+      ],
+      isError: true,
+    });
+  });
+
+  it('hands a listed propose_workflow call to the proposal service, and marks a refusal an error', async () => {
+    const gate = new WorkflowProposalBroker();
+    gate.register('run-1', 'agent', { runId: 'run-1' });
+    const propose = vi.fn(() =>
+      Promise.resolve({
+        status: 'refused' as const,
+        code: 'GRAPH_NO_TRIGGER',
+        message: 'add a trigger',
+      }),
+    );
+    const workflow = { name: 'x', nodes: [], edges: [] };
+    const tools = createMcpTools({
+      calls: new CallBroker(),
+      questions: new UserQuestionBroker(),
+      findings: new FindingsReportBroker(),
+      charts: new ChartBroker(),
+      metrics: new MetricsBroker(),
+      comparisons: new ComparisonBroker(),
+      galleries: new GalleryBroker(),
+      artifacts: new ArtifactBroker(),
+      actions: new ActionBroker(),
+      patches: new PatchBroker(),
+      plans: new PlanBroker(),
+      notices: new NotifyBroker(),
+      board: new TaskBoardBroker(),
+      history: new GlobalChatSearchService({} as ChatSearchIndexDao),
+      analysis: new AnalysisBroker(),
+      threads: {} as ThreadReaderService,
+      workflowChanges: {} as WorkflowChangeService,
+      workflowGate: gate,
+      workflowStore: {} as WorkflowStoreService,
+      workflowProposals: { propose } as unknown as WorkflowProposalService,
+      shares: fakeShares(false).service,
+    } as Parameters<typeof createMcpTools>[0]);
+    const tool = tools.find((t) => t.handles(HOST_PROPOSE_WORKFLOW_TOOL))!;
+
+    const result = await tool.call(
+      HOST_PROPOSE_WORKFLOW_TOOL,
+      { workflow, replaces: 'team' },
+      { runId: 'run-1', nodeId: 'agent' } as Parameters<typeof tool.call>[2],
+    );
+
+    expect(propose).toHaveBeenCalledWith('run-1', {
+      workflow,
+      replaces: 'team',
+    });
+    expect(result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'Not proposed — GRAPH_NO_TRIGGER: add a trigger. No card was shown.',
+        },
+      ],
+      isError: true,
+    });
+  });
+
+  it('answers read_workflows failures with a code, never a path', async () => {
+    const gate = new WorkflowProposalBroker();
+    gate.register('run-1', 'agent', { runId: 'run-1' });
+    const store = {
+      get: (slug: string) =>
+        Promise.reject(
+          slug === 'gone'
+            ? new NotFoundException(
+                'WORKFLOW_NOT_FOUND',
+                "No workflow 'gone' in the library",
+              )
+            : // The yaml library quotes the file's lines around the fault.
+              new BadRequestException(
+                'WORKFLOW_YAML_INVALID',
+                'YAML parse error: Nested mappings are not allowed at line 4, column 16:\n\n    configDir: /Users/me/.claude-work\n               ^\n',
+              ),
+        ),
+      list: () =>
+        Promise.reject(
+          Object.assign(
+            new Error("EACCES: permission denied, mkdir '/Users/me/geniro'"),
+            { code: 'EACCES' },
+          ),
+        ),
+    } as unknown as WorkflowStoreService;
+    const read = async (args: Record<string, unknown>): Promise<unknown> => {
+      const { json } = await post(
+        service(
+          new CallBroker(),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          gate,
+          store,
+        ),
+        'run-1',
+        'agent',
+        rpc('tools/call', { name: HOST_READ_WORKFLOWS_TOOL, arguments: args }),
+      );
+      return json().result;
+    };
+
+    await expect(read({ slug: 'gone' })).resolves.toEqual({
+      content: [
+        {
+          type: 'text',
+          text: "WORKFLOW_NOT_FOUND: No workflow 'gone' in the library",
+        },
+      ],
+      isError: true,
+    });
+    await expect(read({ slug: 'broken' })).resolves.toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'WORKFLOW_YAML_INVALID: YAML parse error: Nested mappings are not allowed at line 4, column 16',
+        },
+      ],
+      isError: true,
+    });
+    await expect(read({})).resolves.toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'Not read: the workflow library could not be read (EACCES).',
+        },
+      ],
+      isError: true,
+    });
   });
 
   it('sends each fixed shape to the sibling that already draws it', async () => {

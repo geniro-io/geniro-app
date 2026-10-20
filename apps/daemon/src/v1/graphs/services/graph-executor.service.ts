@@ -1242,22 +1242,15 @@ export class GraphExecutorService
    * bus → WS while the graph executes.
    */
   async startRun(input: StartWorkflowRunInput): Promise<RunWire> {
-    validateWorkflowGraph(input.workflow.nodes, input.workflow.edges);
-    validateRunnableGraph(input.workflow.nodes, input.workflow.edges);
-    computeRunOrder(input.workflow.nodes, input.workflow.edges);
+    // Node settings are resolved HERE rather than per turn, for the same two
+    // reasons `cwd` is: a bad config directory is a configuration mistake, so
+    // refusing the run names it once up front instead of failing one node
+    // halfway through the graph — and the CANONICAL path is what the turn must
+    // spawn with, since that is what was actually checked. The CLI itself would
+    // say nothing: it ignores an unusable --plugin-dir silently
+    // (probe-verified), which reads as "this node has no MCP servers".
+    const { workflow, dropped } = await this.assertRunnable(input.workflow);
     const cwd = resolveValidCwd(input.cwd);
-    // Resolved HERE rather than per turn, for the same two reasons `cwd` is:
-    // a bad config directory is a configuration mistake, so refusing the run
-    // names it once up front instead of failing one node halfway through the
-    // graph — and the CANONICAL path is what the turn must spawn with, since
-    // that is what was actually checked. The CLI itself would say nothing: it
-    // ignores an unusable --plugin-dir silently (probe-verified), which reads
-    // as "this node has no MCP servers".
-    const { workflow, dropped } = withResolvedNodeSettings(
-      input.workflow,
-      (kind) => this.adapterFor(kind),
-    );
-    await this.validateWorkflowModels(workflow);
 
     // Which sidebar group claims this run — by the WORKFLOW first, which is the
     // rule a graph exists for: one team graph runs over a dozen repositories,
@@ -1561,14 +1554,8 @@ export class GraphExecutorService
       );
     }
     const stored = await this.runWorkflows.workflowOf(run, em);
-    validateWorkflowGraph(stored.nodes, stored.edges);
-    validateRunnableGraph(stored.nodes, stored.edges);
-    computeRunOrder(stored.nodes, stored.edges);
+    const { workflow, dropped } = await this.assertRunnable(stored);
     const cwd = resolveValidCwd(run.cwd);
-    const { workflow, dropped } = withResolvedNodeSettings(stored, (kind) =>
-      this.adapterFor(kind),
-    );
-    await this.validateWorkflowModels(workflow);
     const resumeSessions = new Map<string, string>();
     const nodePoolMembers = new Map<string, number>();
     if (
@@ -2318,6 +2305,26 @@ export class GraphExecutorService
         `boot reconcile of orphaned workflow runs failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * Everything a run start refuses a workflow for — the graph rules, a run
+   * order, and a model each CLI can run — asked without starting one, so a
+   * workflow can be judged runnable before it is saved. Resolves to the copy a
+   * run would execute, with the node settings its CLI cannot honour stripped,
+   * and what was stripped.
+   */
+  async assertRunnable(
+    workflow: Workflow,
+  ): Promise<{ workflow: Workflow; dropped: DroppedNodeSetting[] }> {
+    validateWorkflowGraph(workflow.nodes, workflow.edges);
+    validateRunnableGraph(workflow.nodes, workflow.edges);
+    computeRunOrder(workflow.nodes, workflow.edges);
+    const resolved = withResolvedNodeSettings(workflow, (kind) =>
+      this.adapterFor(kind),
+    );
+    await this.validateWorkflowModels(resolved.workflow);
+    return resolved;
   }
 
   private async validateWorkflowModels(workflow: Workflow): Promise<void> {

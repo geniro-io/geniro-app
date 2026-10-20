@@ -180,6 +180,19 @@ describe('WorkflowStoreService', () => {
     expect(second.slug).toBe('review-team-2');
   });
 
+  it('names the slug a create would derive without writing a file', async () => {
+    await expect(store.freeDerivedSlug('Review Team')).resolves.toBe(
+      'review-team',
+    );
+    await expect(readdir(dir)).resolves.toEqual([]);
+    await store.create(WF);
+    await expect(store.freeDerivedSlug('Review Team')).resolves.toBe(
+      'review-team-2',
+    );
+    await expect(store.freeDerivedSlug('Runs')).resolves.toBe('runs-1');
+    expect((await store.list()).map((w) => w.slug)).toEqual(['review-team']);
+  });
+
   it('never lets concurrent creates with the same name silently share one file', async () => {
     // Rapid concurrent creates (e.g. a double-clicked "New workflow" button)
     // race through the derive-slug → exists-check → write sequence. Every

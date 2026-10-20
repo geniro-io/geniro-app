@@ -27,7 +27,9 @@ export interface PendingApproval {
    * Whether this card OUTLIVES the turn that raised it — a question, a plan or
    * a patch whose agent was told to stop and wait, because its CLI's MCP
    * client will not hold a call open for a person
-   * (`AdapterConfig.hostQuestionDeferredReason`).
+   * (`AdapterConfig.hostQuestionDeferredReason`), or a card another module
+   * raised through `ChatService.raiseOwnedCard` (a workflow proposal), which
+   * never holds a call open at all.
    *
    * It is the one entry {@link ApprovalRegistry.sweepNode} leaves alone. Every
    * other pending card is a PARKED CALL, so a settled turn means nobody is on
@@ -40,6 +42,13 @@ export interface PendingApproval {
    * Absent means false, so nothing that tracks an ordinary approval changes.
    */
   deferred?: boolean;
+  /**
+   * Whether this deferred card stands ACROSS turns — a card another module owns
+   * (`ChatService.raiseOwnedCard`, a workflow proposal), which a new turn does
+   * not retire and which counts as `awaiting` only while no turn runs. Absent
+   * means false: a question, plan or patch is retired by the next turn.
+   */
+  standing?: boolean;
   /**
    * Delivers the verdict to the owning turn (persisting the verdict item on
    * success). Returns whether the turn was still live to receive it.
@@ -188,16 +197,23 @@ export class ApprovalRegistry {
    * `unanswerable` transcript item, or the card stays on screen answering into
    * nothing.
    *
-   * Two callers, and they are the two ways a standing question stops being the
+   * Two callers, and they are the two ways a standing card stops being the
    * thing the run is waiting on. A NEW TURN supersedes it — the user typed
    * something else, so the agent has already moved on and a card offering to
    * answer a question it is no longer asking is a trap. And a run TEARDOWN
    * takes it with everything else.
+   *
+   * `only` narrows the sweep: a new turn retires the run's deferred questions,
+   * plans and patches, while a {@link PendingApproval.standing} card (a
+   * workflow proposal) stays until its owner retires it.
    */
-  sweepDeferred(runId: string): PendingApproval[] {
+  sweepDeferred(
+    runId: string,
+    only: (entry: PendingApproval) => boolean = () => true,
+  ): PendingApproval[] {
     const swept: PendingApproval[] = [];
     for (const [key, entry] of this.pending) {
-      if (entry.runId === runId && entry.deferred === true) {
+      if (entry.runId === runId && entry.deferred === true && only(entry)) {
         this.pending.delete(key);
         swept.push(entry);
       }
@@ -220,10 +236,13 @@ export class ApprovalRegistry {
    * the same thing, but only a client subscribed to that run's room ever
    * receives them.
    */
-  awaitingFor(runId: string): RunAwaiting | null {
+  awaitingFor(
+    runId: string,
+    ignore: (entry: PendingApproval) => boolean = () => false,
+  ): RunAwaiting | null {
     let found: RunAwaiting | null = null;
     for (const entry of this.pending.values()) {
-      if (entry.runId !== runId) {
+      if (entry.runId !== runId || ignore(entry)) {
         continue;
       }
       if (entry.question) {

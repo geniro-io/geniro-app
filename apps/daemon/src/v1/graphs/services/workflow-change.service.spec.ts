@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { Workflow } from '../graphs.types';
+import { WORKFLOW_BACKUP_DIR } from '../utils/workflow-backup';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import {
-  WORKFLOW_BACKUP_DIR,
   type WorkflowChange,
   WorkflowChangeService,
 } from './workflow-change.service';

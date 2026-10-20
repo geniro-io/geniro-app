@@ -1,3 +1,5 @@
+import { HOST_PROPOSE_WORKFLOW_TOOL } from '../../../agents/chat.types';
+
 /** Shared body before the blocking vs deferred ending. */
 const PROPOSE_PLAN_DESCRIPTION_BODY =
   'Use it when the work is worth more than a couple of edits, when a request could reasonably be read more ' +
@@ -23,7 +25,9 @@ const PROPOSE_PLAN_DESCRIPTION_BLOCKING_MIDDLE =
 const PROPOSE_PLAN_DESCRIPTION_TAIL =
   'Use show_artifact instead when you want to SHOW a plan rather than be approved for one — a laid-out ' +
   'page you keep updating as the work moves. This tool is the gate; that one is the picture, and it asks ' +
-  'the user nothing.';
+  'the user nothing. ' +
+  `Use ${HOST_PROPOSE_WORKFLOW_TOOL} instead, where it is offered, when the user wants a saved team of ` +
+  'agents (a workflow) rather than a plan for the work in this chat.';
 
 /**
  * What a model reads about `propose_plan`.

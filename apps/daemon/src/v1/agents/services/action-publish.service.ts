@@ -14,6 +14,7 @@ import {
   type LiveAction,
 } from '../chat.types';
 import { actionKey } from '../utils/action-fold';
+import { hasHiddenText } from '../utils/hidden-text';
 import { ActionStopService } from './action-stop.service';
 import { ChatActionsService } from './chat-actions.service';
 
@@ -52,32 +53,6 @@ const ACTION_ID_PATTERN = new RegExp(
   `^[\\p{L}\\p{N}][\\p{L}\\p{N}_-]{0,${ACTION_ID_MAX - 1}}$`,
   'u',
 );
-
-/**
- * Text that would show the user something other than what it holds: any
- * control, any format character (bidi overrides, isolates and marks,
- * zero-width characters, invisible tags), anything Unicode says to draw as
- * nothing, and the line and paragraph separators. Emoji stay usable, and only
- * by position: a joiner between two pictographs (a skin tone or a
- * presentation selector may sit before it), and one presentation selector
- * straight after an emoji. Every other variation selector is refused — they
- * draw as nothing, so a run of them could carry text nobody sees.
- */
-const HIDDEN_TEXT =
-  /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029]/u;
-const EMOJI_JOINER =
-  /(?<=\p{Extended_Pictographic}[\p{Emoji_Modifier}\uFE0F]?)\u200D(?=\p{Extended_Pictographic})/gu;
-const EMOJI_PRESENTATION = /(?<=\p{Emoji}\p{Emoji_Modifier}?)[\uFE0E\uFE0F]/gu;
-
-/** `lineBreaks`: a message may hold tabs and newlines; a label is one line. */
-function hasHiddenText(value: string, lineBreaks: boolean): boolean {
-  const visible = value
-    .replace(EMOJI_JOINER, '')
-    .replace(EMOJI_PRESENTATION, '');
-  return HIDDEN_TEXT.test(
-    lineBreaks ? visible.replace(/[\t\n\r]/g, '') : visible,
-  );
-}
 
 /**
  * Validates and records an agent's buttons. The rules live here rather than

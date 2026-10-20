@@ -1952,6 +1952,27 @@ describe('GraphExecutorService', () => {
     expect(runDao.runs.size).toBe(0);
   });
 
+  it('judges a workflow runnable with the run-start checks, without starting a run', async () => {
+    const { service, claude, runDao } = setup();
+    const agent = {
+      id: 'a',
+      kind: 'agent',
+      agent: 'claude',
+      approval: 'auto',
+    } as const;
+
+    await expect(
+      service.assertRunnable({ name: 'bare', nodes: [agent], edges: [] }),
+    ).rejects.toMatchObject({ errorCode: 'GRAPH_NO_TRIGGER' });
+    await expect(
+      service.assertRunnable(
+        triggered({ name: 'ok', nodes: [agent], edges: [] }),
+      ),
+    ).resolves.toMatchObject({ dropped: [] });
+    expect(claude.starts).toHaveLength(0);
+    expect(runDao.runs.size).toBe(0);
+  });
+
   it('hands a node turn the CANONICAL config directory, the way it hands it a canonical cwd', async () => {
     // `AgentTurnInput.configDir` states its contract in its own doc block:
     // "Already validated and canonicalized by the caller — an adapter puts it

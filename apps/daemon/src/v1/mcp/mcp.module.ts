@@ -15,10 +15,13 @@ import { PatchBroker } from '../agents/services/patch.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
 import { ThreadReaderService } from '../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../agents/services/user-question.broker';
+import { WorkflowProposalBroker } from '../agents/services/workflow-proposal.broker';
 import { GraphsModule } from '../graphs/graphs.module';
 import { CallBroker } from '../graphs/services/call-broker.service';
 import { TaskBoardBroker } from '../graphs/services/task-board.broker';
 import { WorkflowChangeService } from '../graphs/services/workflow-change.service';
+import { WorkflowProposalService } from '../graphs/services/workflow-proposal.service';
+import { WorkflowStoreService } from '../graphs/services/workflow-store.service';
 import { ShareService } from '../shares/services/share.service';
 import { SharesModule } from '../shares/shares.module';
 import { McpController } from './controllers/mcp.controller';
@@ -62,6 +65,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         analysis: AnalysisBroker,
         threads: ThreadReaderService,
         workflowChanges: WorkflowChangeService,
+        workflowGate: WorkflowProposalBroker,
+        workflowStore: WorkflowStoreService,
+        workflowProposals: WorkflowProposalService,
         shares: ShareService,
       ) =>
         createMcpTools({
@@ -82,6 +88,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           analysis,
           threads,
           workflowChanges,
+          workflowGate,
+          workflowStore,
+          workflowProposals,
           shares,
         }),
       inject: [
@@ -102,6 +111,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         AnalysisBroker,
         ThreadReaderService,
         WorkflowChangeService,
+        WorkflowProposalBroker,
+        WorkflowStoreService,
+        WorkflowProposalService,
         ShareService,
       ],
     },

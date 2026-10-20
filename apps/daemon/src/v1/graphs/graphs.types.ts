@@ -12,6 +12,7 @@ import {
   ChatApprovalModeSchema,
   ChatTotalsWireSchema,
   CustomInstructionsSchema,
+  PendingOwnedCardSchema,
   type PersistedResetWake,
 } from '../agents/chat.types';
 import { createChatSchema } from '../agents/dto/chat.dto';
@@ -20,6 +21,7 @@ import {
   type ItemKind,
   NodeStatusSchema,
 } from '../runs/runs.types';
+import type { WorkflowDiff } from './utils/workflow-diff';
 
 /**
  * The workflow domain model — the zod half of the Geniro graph-core port
@@ -668,6 +670,67 @@ export const WorkflowWireSchema = z.object({
     ),
 });
 export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
+
+/** How long an agent's one-line `summary` for a proposal card may be. */
+export const WORKFLOW_SUMMARY_MAX = 200;
+
+const WorkflowProposalBaseSchema = z.object({
+  workflow: WorkflowSchema,
+  /** The library file the approval writes, fixed when the card was raised. */
+  slug: z.string(),
+  /** The agent's one line for the card — its own words, never trusted. */
+  summary: z.string().optional(),
+  /**
+   * Every agent that would run tools without asking — `approval: 'auto'` only,
+   * a pool member's own or inherited; an `acceptEdits` agent, which edits files
+   * unasked but asks for the rest, is not listed — as the card names it,
+   * worked out by the daemon from `workflow` because the agent's own summary
+   * may leave one out.
+   */
+  autoAgents: z.array(z.string()),
+});
+
+/**
+ * One `propose_workflow` card: the `input` of its `approval_request` row and,
+ * with the card's id, what `Run.pendingWorkflowProposal` holds so the card
+ * outlives a restart.
+ *
+ * A replacement quotes the hash the file was read at, so an approval pressed
+ * after the file changed is refused rather than written over the newer copy.
+ */
+export const WorkflowProposalSchema = z.discriminatedUnion('mode', [
+  WorkflowProposalBaseSchema.extend({ mode: z.literal('create') }),
+  WorkflowProposalBaseSchema.extend({
+    mode: z.literal('replace'),
+    replacesName: z.string(),
+    baseHash: z.string(),
+    diff: z.custom<WorkflowDiff>(
+      (value) => typeof value === 'object' && value !== null,
+    ),
+  }),
+]);
+export type WorkflowProposal = z.infer<typeof WorkflowProposalSchema>;
+
+/** What an agent sends `propose_workflow`. */
+export interface WorkflowProposalRequest {
+  workflow: unknown;
+  /** The library slug this proposal replaces; absent for a new workflow. */
+  replaces?: string;
+  summary?: string;
+}
+
+/** What `propose_workflow` tells the agent. */
+export type ProposalOutcome =
+  | { status: 'shown'; proposal: WorkflowProposal }
+  | { status: 'refused'; code: string; message: string };
+
+/** `Run.pendingWorkflowProposal`: the standing card and what it proposes. */
+export const PendingWorkflowProposalSchema = PendingOwnedCardSchema.extend({
+  proposal: WorkflowProposalSchema,
+});
+export type PendingWorkflowProposal = z.infer<
+  typeof PendingWorkflowProposalSchema
+>;
 
 /** Where one workflow's file sits on disk (`WorkflowStoreService.locate`). */
 export interface WorkflowLocation {

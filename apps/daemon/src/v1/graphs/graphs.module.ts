@@ -11,6 +11,7 @@ import { TaskBoardBroker } from './services/task-board.broker';
 import { WorkflowActionsService } from './services/workflow-actions.service';
 import { WorkflowChangeService } from './services/workflow-change.service';
 import { WorkflowChatService } from './services/workflow-chat.service';
+import { WorkflowProposalService } from './services/workflow-proposal.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
 
 /**
@@ -41,6 +42,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     WorkflowChatService,
     WorkflowChangeService,
     WorkflowActionsService,
+    WorkflowProposalService,
   ],
   // `GraphExecutorService` is exported for `TasksModule`, whose cards may name
   // a workflow instead of an agent — the graph twin of the `ChatService` export
@@ -52,6 +54,8 @@ import { WorkflowStoreService } from './services/workflow-store.service';
   // `RunWorkflowService` is exported for every reader of an EXISTING run's
   // graph outside this module (the handoff): a run's workflow is its snapshot,
   // and reading the library there is how an edit would reach a run it must not.
+  // `WorkflowProposalService` is exported for the MCP host's `propose_workflow`
+  // and for `main.ts`'s boot rehydration of standing proposal cards.
   exports: [
     WorkflowStoreService,
     GraphExecutorService,
@@ -59,6 +63,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     TaskBoardBroker,
     RunWorkflowService,
     WorkflowChangeService,
+    WorkflowProposalService,
   ],
 })
 export class GraphsModule {}

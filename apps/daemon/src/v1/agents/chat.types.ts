@@ -371,6 +371,42 @@ export const HOST_RECOMMENDATIONS_TOOL = 'report_recommendations';
 export const HOST_RECOMMENDATION_MARKS_TOOL = 'mark_recommendations';
 export const HOST_WORKFLOW_CHANGE_TOOL = 'save_workflow_change';
 
+/**
+ * The workflow tools of an ordinary chat: read the library, and propose a whole
+ * workflow on a card the user approves. The daemon writes the file, never the
+ * agent.
+ */
+export const HOST_READ_WORKFLOWS_TOOL = 'read_workflows';
+export const HOST_PROPOSE_WORKFLOW_TOOL = 'propose_workflow';
+
+/**
+ * What every owned card's durable column holds at least — the card's id. The
+ * one reading of the envelope both modules share: `v1/agents` reads only this
+ * (the boot reconcile), and the owner extends it with what it needs.
+ */
+export const PendingOwnedCardSchema = z.object({ requestId: z.string() });
+
+/** A deferred card raised by another module through `ChatService.raiseOwnedCard`. */
+export interface DeferredCard {
+  toolName: string;
+  input: unknown;
+}
+
+/**
+ * Called once with the user's verdict on a {@link DeferredCard}; `answer` is
+ * the note they typed, on either button.
+ */
+export type DeferredCardResponder = (allow: boolean, answer?: string) => void;
+
+/**
+ * How a `propose_workflow` card was answered, as the agent is told it; `note`
+ * is what the user typed on either button.
+ */
+export type WorkflowProposalVerdict =
+  | { kind: 'saved'; slug: string; backup: string | null; note: string | null }
+  | { kind: 'declined'; note: string | null }
+  | { kind: 'not-saved'; reason: string; note: string | null };
+
 export const ANALYSIS_VIEWS = [
   'overview',
   'spans',

@@ -651,6 +651,9 @@ function archiveDialogCopy(run: ChatRun | null): {
   };
 }
 
+/** How long a link's ask to open a call card waits for the card to be drawn. */
+const OPEN_CALL_WAIT_MS = 10_000;
+
 /**
  * Where the agents panel is hosted: its own grid column, or a right-edge
  * drawer at phone width.
@@ -2985,6 +2988,16 @@ export function Chats({
    */
   const activeWorkflowId =
     runs.find((run) => run.id === activeRunId)?.workflowId ?? null;
+  /** Open a call's card, as the reader's own press on its header would. */
+  const openCallCard = useCallback(
+    (blockId: string): void => {
+      const runId = activeRunIdRef.current;
+      if (runId !== null) {
+        writeThreadFlag(runId, `call:${blockId}`, true);
+      }
+    },
+    [activeRunIdRef],
+  );
   const callJumps = useMemo<CallJumps | undefined>(
     () =>
       activeWorkflowId === null
@@ -3021,16 +3034,11 @@ export function Chats({
             startOf: (callId) =>
               callJumpRef.current.calls.find((call) => call.callId === callId)
                 ?.startSeq ?? null,
-            openCard: (cardId) => {
-              const runId = activeRunIdRef.current;
-              if (runId !== null) {
-                writeThreadFlag(runId, `call:${cardId}`, true);
-              }
-            },
+            openCard: openCallCard,
             loadThrough: (conversation, seq) =>
               callJumpRef.current.loadThrough(conversation, seq),
           },
-    [activeWorkflowId, activeRunIdRef, chatApi],
+    [activeWorkflowId, activeRunIdRef, chatApi, openCallCard],
   );
   /** The folds a row is drawn inside, from what the transcript holds now. */
   const foldsOfRow = useCallback(
@@ -4543,8 +4551,8 @@ export function Chats({
     reconnectNonce,
   );
   /** The agents' buttons on this chat, and their press — see `useChatActions`. */
-  const chatActions = useChatActions(
-    chatApi,
+  const pressableActions = useChatActions(
+    activeWorkflowId === null ? chatApi : workflowApi,
     activeRunId,
     runState,
     refreshRunState,
@@ -6259,6 +6267,70 @@ export function Chats({
       });
     },
     [revealCallBlock, runState.calls, loadAround],
+  );
+  /**
+   * A call whose card a link asked to OPEN (`openCall`), waiting until the
+   * transcript draws it: then every card around it is opened, outermost first
+   * (a card inside another is mounted only while that one is open), and the
+   * card is revealed once that has rendered. Dropped with the thread, and
+   * after `OPEN_CALL_WAIT_MS` — a jump that never arrives must not open the
+   * card whenever the reader later scrolls to it.
+   */
+  const [callToOpen, setCallToOpen] = useState<string | null>(null);
+  const [revealAfterOpen, setRevealAfterOpen] = useState<string | null>(null);
+  useEffect(() => {
+    setCallToOpen(null);
+    setRevealAfterOpen(null);
+  }, [activeRunId]);
+  useEffect(() => {
+    if (callToOpen === null) {
+      return;
+    }
+    const timer = setTimeout(() => setCallToOpen(null), OPEN_CALL_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [callToOpen]);
+  useEffect(() => {
+    if (callToOpen === null) {
+      return;
+    }
+    const path = callBlockPath(durableEntries, callToOpen);
+    if (path.length === 0) {
+      return;
+    }
+    setCallToOpen(null);
+    for (const block of path) {
+      openCallCard(block.id);
+    }
+    setRevealAfterOpen(path[path.length - 1]!.id);
+  }, [callToOpen, durableEntries, openCallCard]);
+  useEffect(() => {
+    if (revealAfterOpen !== null) {
+      setRevealAfterOpen(null);
+      revealCallBlock(revealAfterOpen);
+    }
+  }, [revealAfterOpen, revealCallBlock]);
+  // A callee's button card links to the call it was answering: its card,
+  // opened. A card the window does not draw — off the page, or inside a card
+  // whose conversation is not read yet — is reached by the jump machine,
+  // which pages and opens its way to the call's start row first.
+  const openCall = useCallback(
+    (callId: string): void => {
+      setCallToOpen(callId);
+      if (callBlockIndex.has(callId)) {
+        return;
+      }
+      const start = runState.calls.find(
+        (call) => call.callId === callId,
+      )?.startSeq;
+      if (start !== undefined) {
+        jumpToSeq(start);
+      }
+    },
+    [callBlockIndex, runState.calls, jumpToSeq],
+  );
+  const chatActions = useMemo(
+    () => ({ ...pressableActions, openCall }),
+    [pressableActions, openCall],
   );
   /**
    * How long each of this run's turns worked — see `turn-duration.ts`.

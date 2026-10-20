@@ -87,6 +87,24 @@ export const Overflowing: Story = {};
 
 export const Single: Story = { args: { initial: [LIVE[0]!] } };
 
+/** A workflow run: the manager's own button, and a callee's that says who it is. */
+export const FromAnotherAgent: Story = {
+  args: {
+    initial: [
+      {
+        ...action(7, 'PR merged', 'message', 'The engineer opened #12'),
+        publisher: {
+          nodeId: 'engineer',
+          conversationId: 'call-1',
+          callId: 'call-1',
+          agentLabel: 'Engineer',
+        },
+      },
+      action(6, 'Deploy approved'),
+    ],
+  },
+};
+
 /** A press out, one waiting for the turn to settle, one refused. */
 export const States: Story = {
   args: {

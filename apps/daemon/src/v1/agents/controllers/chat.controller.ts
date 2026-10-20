@@ -584,7 +584,7 @@ export class ChatController {
     @Param('seq', ParseIntPipe) seq: number,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<ActionPressWire> {
-    return this.actionPresses.dismiss(
+    return this.actionPresses.dismissChat(
       runId,
       seq,
       cameViaRemote(headers) ? 'remote' : 'desktop',

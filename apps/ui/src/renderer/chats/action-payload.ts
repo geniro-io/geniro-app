@@ -22,6 +22,10 @@ export interface ActionCardView {
   once: boolean;
   nodeId: string;
   conversationId: string;
+  /** Who published it, when a press must say so — another agent of a workflow. */
+  agentLabel: string | null;
+  /** The call its publisher was answering, which the card links to. */
+  callId: string | null;
 }
 
 /** What happened to a publish, as the card's status line reads it. */
@@ -77,6 +81,8 @@ export function readActionPayload(item: ChatItem): ActionCardView | null {
     once: payload?.once !== false,
     nodeId,
     conversationId,
+    agentLabel: text(publisher?.agentLabel),
+    callId: text(publisher?.callId),
   };
 }
 

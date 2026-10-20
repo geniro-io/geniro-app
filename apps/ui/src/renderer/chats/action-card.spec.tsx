@@ -15,7 +15,12 @@ import { type ChatActions, ChatActionsContext } from './use-chat-actions';
 const entry = (
   seq: number,
   outcome: ActionEntry['outcome'] = null,
-  extra: { once?: boolean; text?: string } = {},
+  extra: {
+    once?: boolean;
+    text?: string;
+    agentLabel?: string;
+    callId?: string;
+  } = {},
 ): ActionEntry => ({
   type: 'action',
   id: `i-${seq}`,
@@ -32,6 +37,8 @@ const entry = (
     once: extra.once ?? true,
     nodeId: 'agent',
     conversationId: '',
+    agentLabel: extra.agentLabel ?? null,
+    callId: extra.callId ?? null,
   },
   outcome,
 });
@@ -207,6 +214,37 @@ describe('ActionCard', () => {
 
   it('reads Updated when a newer publish of the same id is live', () => {
     expect(status(render(entry(5), { actions: [live(9)] }))).toBe('Updated');
+  });
+
+  it('callee action card renders with from <agent>, linking to its call', () => {
+    const openCall = vi.fn();
+    const container = render(
+      entry(5, null, { agentLabel: 'Engineer', callId: 'call-1' }),
+      { actions: [live(5)], openCall },
+    );
+
+    expect(
+      container.querySelector('[data-slot="action-publisher"]')?.textContent,
+    ).toBe('from Engineer');
+    const link = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Open Engineer\'s thread"]',
+    );
+    act(() => link!.click());
+    expect(openCall).toHaveBeenCalledWith('call-1');
+  });
+
+  it('names the publisher without a link where no call can be opened, and nobody for the run’s own agent', () => {
+    const named = render(entry(5, null, { agentLabel: 'Engineer' }), {});
+    expect(
+      named.querySelector('[data-slot="action-publisher"]')?.textContent,
+    ).toBe('from Engineer');
+    expect(named.querySelector('[aria-label="Open Engineer\'s thread"]')).toBe(
+      null,
+    );
+
+    expect(
+      render(entry(5), {}).querySelector('[data-slot="action-publisher"]'),
+    ).toBeNull();
   });
 
   it('says nothing about a publish the live set has not been read through yet', () => {

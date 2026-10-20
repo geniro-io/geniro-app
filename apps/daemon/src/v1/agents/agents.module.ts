@@ -92,6 +92,7 @@ import { RecommendationsApplyService } from './services/recommendations-apply.se
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import { RunIdleReapService } from './services/run-idle-reap.service';
 import { RunNamedPathsService } from './services/run-named-paths.service';
 import {
   currentRunOwner,
@@ -398,18 +399,32 @@ import { defaultSpawn } from './utils/spawn-cli';
       useFactory: (
         em: EntityManager,
         runDao: RunDao,
+        itemDao: ItemDao,
         sessions: AgentSessionRegistry,
         reaper: RunProcessReaper,
         attribution: RunProcessAttribution,
-      ) => new RunProcessSweep(em, runDao, sessions, reaper, attribution),
+        idleReap: RunIdleReapService,
+      ) =>
+        new RunProcessSweep(
+          em,
+          runDao,
+          itemDao,
+          sessions,
+          reaper,
+          attribution,
+          idleReap,
+        ),
       inject: [
         EntityManager,
         RunDao,
+        ItemDao,
         AgentSessionRegistry,
         RunProcessReaper,
         RunProcessAttribution,
+        RunIdleReapService,
       ],
     },
+    RunIdleReapService,
     RunTeardownService,
     SessionTranscriptsService,
     RunGroupsService,

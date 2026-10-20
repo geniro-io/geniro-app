@@ -365,6 +365,109 @@ describe('RunProcessReaper', () => {
     ).toEqual([10, 30]);
   });
 
+  it('hands an idle reap the processes it stopped for that run alone', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const scans: number[] = [];
+    const { reaper: subject, signals } = reaper(null, {
+      scan: async () => {
+        scans.push(scans.length);
+        if (scans.length === 1) {
+          await gate;
+        }
+        return [
+          row(10, 1, 'node dev-server.js', { env: tag('run-a') }),
+          row(11, 10, 'node worker.js'),
+          row(20, 1, 'node b.js', { env: tag('run-b') }),
+        ];
+      },
+    });
+    // Held behind a reap of another run, so run-a and run-b share one reap.
+    subject.reapInBackground('run-z');
+    const idle = subject.reapIdle('run-a');
+    subject.reapInBackground('run-b');
+    release();
+    const stopped = await idle;
+    await subject.settled();
+    expect(stopped.map((process) => process.pid).sort()).toEqual([10, 11]);
+    expect(stopped.map((process) => process.args)).toContain(
+      'node dev-server.js',
+    );
+    expect(scans).toHaveLength(2);
+    expect(
+      signals.filter(([, sig]) => sig === 'SIGTERM').map(([pid]) => pid),
+    ).toEqual([10, 11, 20]);
+  });
+
+  it('hands what it stopped to the first of two idle reaps of one run sharing a reap', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let scans = 0;
+    const { reaper: subject, signals } = reaper(null, {
+      scan: async () => {
+        scans += 1;
+        if (scans === 1) {
+          await gate;
+        }
+        return [row(10, 1, 'node dev-server.js', { env: tag('run-a') })];
+      },
+    });
+    subject.reapInBackground('run-z');
+    const first = subject.reapIdle('run-a');
+    const second = subject.reapIdle('run-a');
+    release();
+
+    const answers = await Promise.all([first, second]);
+
+    expect(answers.map((rows) => rows.map((process) => process.pid))).toEqual([
+      [10],
+      [],
+    ]);
+    expect(signals.filter(([, sig]) => sig === 'SIGTERM')).toEqual([
+      [10, 'SIGTERM'],
+    ]);
+  });
+
+  it.each(['', '  '])(
+    'resolves an idle reap of the run id %j empty, reading nothing',
+    async (runId) => {
+      const { reaper: subject, scan } = reaper([
+        row(10, 1, 'node a.js', { env: tag('') }),
+      ]);
+      expect(await subject.reapIdle(runId)).toEqual([]);
+      expect(scan).not.toHaveBeenCalled();
+    },
+  );
+
+  it('resolves an idle reap empty, signalling nothing, for a run that holds an agent again', async () => {
+    const { reaper: subject, signals } = reaper(
+      [row(10, 1, 'node dev-server.js', { env: tag('run-a') })],
+      { held: (runId) => runId === 'run-a' },
+    );
+    expect(await subject.reapIdle('run-a')).toEqual([]);
+    expect(signals).toEqual([]);
+  });
+
+  it('resolves an idle reap empty instead of rejecting when the reap fails', async () => {
+    const logger = { log: vi.fn(), warn: vi.fn() };
+    const subject = new RunProcessReaper(
+      new RunProcessAttribution(OWNER, {
+        scan: () => Promise.reject(new Error('boom')),
+        selfPid: SELF,
+        uid: UID,
+      }),
+      { logger, selfPid: SELF },
+    );
+    expect(await subject.reapIdle(RUN)).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      `could not stop the processes of run(s) ${RUN}: boom`,
+    );
+  });
+
   it('reports a failed background reap as a warning instead of rejecting', async () => {
     const logger = { log: vi.fn(), warn: vi.fn() };
     const subject = new RunProcessReaper(

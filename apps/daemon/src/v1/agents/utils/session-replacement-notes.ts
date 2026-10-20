@@ -94,6 +94,36 @@ export function endedCommandsNote(
   };
 }
 
+/**
+ * The run sat unused for the kept-session window (`minutes`), so the
+ * `processes` its agents had left running outside any CLI were stopped. The
+ * user reads the `commands` that started the rest; the agent reads only their
+ * `executables`, since the prompt leaves the machine.
+ */
+export function idleStoppedNote(
+  minutes: number,
+  commands: readonly string[],
+  executables: readonly string[],
+  processes: number,
+): SessionNote {
+  const count = processes === 1 ? '1 process' : `${processes} processes`;
+  const window = `the kept-session window, ${minutes} min`;
+  const named = executables.slice(0, MAX_NAMED_COMMANDS).map(clip);
+  const more = executables.length - named.length;
+  const starters =
+    more > 0 ? `${named.join(', ')} and ${more} more` : named.join(', ');
+  return {
+    transcript:
+      `This conversation sat unused for ${window}, so geniro stopped ${count} its agents ` +
+      `had left running:\n${commandList(commands, commands.length)}\nThe next message ` +
+      `lets the agent start again any it still needs.`,
+    prompt:
+      `While this conversation sat unused (${window}), geniro stopped ${count} its agents ` +
+      `had left running outside their own processes, started by: ${starters}. ` +
+      `If you started any of them and still need it, start it again.`,
+  };
+}
+
 function commandCount(running: number): string {
   return running === 1
     ? '1 background command'

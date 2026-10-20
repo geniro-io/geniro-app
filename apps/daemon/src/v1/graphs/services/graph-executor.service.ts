@@ -3949,6 +3949,11 @@ export class GraphExecutorService
             return;
           }
           if (event.type === 'follow_up_dropped') {
+            // Each marker is written where the row it names lives: a run
+            // follow-up's at run level — under the root that answered last it
+            // opened an empty node block, since the row draws itself on the
+            // message — and a message into this turn's call in that call.
+            const runDeliveries: string[] = [];
             const userDeliveries: string[] = [];
             for (const deliveryId of event.deliveryIds) {
               const prompted = promptDeliveries.get(deliveryId);
@@ -3975,11 +3980,23 @@ export class GraphExecutorService
                 });
                 const rowId = await settleSharedDelivery(rooted.delivery);
                 if (rowId !== null) {
-                  userDeliveries.push(rowId);
+                  runDeliveries.push(rowId);
                 }
               } else {
                 userDeliveries.push(deliveryId);
               }
+            }
+            const runMarker =
+              runDeliveries.length === 0
+                ? null
+                : mapEventToItem({ ...event, deliveryIds: runDeliveries });
+            if (runMarker) {
+              await persistItem(
+                null,
+                runMarker.kind,
+                runMarker.role,
+                runMarker.payload,
+              );
             }
             const mapped =
               userDeliveries.length === 0

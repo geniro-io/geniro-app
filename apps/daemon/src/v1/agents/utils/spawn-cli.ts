@@ -3680,6 +3680,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           );
           return false;
         }
+        // And refused once the turn has been asked to stop: whatever the CLI
+        // does next, it ends this turn — codex answers "no active turn to
+        // steer", claude's queue dies with a closed session. MEASURED: a
+        // message sent to codex right after Stop was steered into the stopping
+        // turn and refused, so it never opened the turn the user meant. The
+        // refusal is the same RUN_BUSY, which queues it for the next turn.
+        if (turn.cancelRequested) {
+          opts.logger?.debug?.(
+            `${opts.command}: refusing a follow-up — this turn is being stopped`,
+          );
+          return false;
+        }
         const delivered = turnOptions.sendFollowUp
           ? !turn.settled &&
             !turn.terminalEmitted &&

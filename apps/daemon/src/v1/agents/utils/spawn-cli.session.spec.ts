@@ -1350,6 +1350,28 @@ describe('cancelling a session turn', () => {
     ]);
   });
 
+  it('refuses a follow-up into a turn that has been asked to stop, writing nothing', () => {
+    // A message sent right after Stop belongs to the NEXT turn: written into
+    // the stopping one, codex refused it ("no active turn to steer") and
+    // claude's queue died with the closed session.
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      onEvent: () => {},
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      buildFollowUpPayload: (message) => `${message.text}\n`,
+    });
+    expect(
+      handle?.sendUserMessage({ text: 'before stop', images: undefined }),
+    ).toBe(true);
+    handle?.cancel();
+
+    expect(
+      handle?.sendUserMessage({ text: 'after stop', images: undefined }),
+    ).toBe(false);
+    expect(child.stdin.written).toContain('before stop');
+    expect(child.stdin.written).not.toContain('after stop');
+  });
+
   describe('closing a session whose turn asks for a grace', () => {
     it('lets the stopped turn end on its own, then signals the group', async () => {
       vi.useFakeTimers();

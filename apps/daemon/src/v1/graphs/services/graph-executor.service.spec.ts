@@ -4078,12 +4078,16 @@ describe('GraphExecutorService — follow-up messages', () => {
     b.emit({ type: 'follow_up_dropped', deliveryIds: [idOf(b)] });
     await drain();
 
-    const systems = itemDao.items
-      .filter((row) => row.runId === run.id && row.kind === 'system')
-      .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
-    expect(systems).toEqual([
-      expect.objectContaining({ unsentMessages: [rowId] }),
-    ]);
+    const systems = itemDao.items.filter(
+      (row) => row.runId === run.id && row.kind === 'system',
+    );
+    expect(
+      systems.map((row) => JSON.parse(row.payload) as Record<string, unknown>),
+    ).toEqual([expect.objectContaining({ unsentMessages: [rowId] })]);
+    // At run level, where the message's own row is: under the root that
+    // answered last it opened an empty node block in the transcript.
+    expect(systems[0]!.nodeId).toBeNull();
+    expect(JSON.parse(systems[0]!.payload)).not.toHaveProperty('nodeId');
   });
 
   it('waits for every agent before naming the one that missed a follow-up', async () => {

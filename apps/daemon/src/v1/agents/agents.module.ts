@@ -24,6 +24,9 @@ import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
 import { WallTurnDao } from './dao/wall-turn.dao';
+import { ActionBroker } from './services/action.broker';
+import { ActionPressService } from './services/action-press.service';
+import { ActionPublishService } from './services/action-publish.service';
 import {
   AGENT_ADAPTERS,
   AgentAdapterRegistry,
@@ -43,6 +46,7 @@ import { AttachmentStoreService } from './services/attachment-store.service';
 import { CacheResetService } from './services/cache-reset.service';
 import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
+import { ChatActionsService } from './services/chat-actions.service';
 import { ChatArtifactsService } from './services/chat-artifacts.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatHistoryService } from './services/chat-history.service';
@@ -144,6 +148,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatSearchIndexDao,
     ChatTextIndexService,
     GlobalChatSearchService,
+    ChatActionsService,
     ChatArtifactsService,
     ChatTimelineService,
     ChatWaterfallService,
@@ -185,6 +190,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     ArtifactBroker,
+    ActionBroker,
+    ActionPublishService,
+    ActionPressService,
     ArtifactPageService,
     PlanBroker,
     NotifyBroker,
@@ -473,6 +481,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     ArtifactBroker,
+    ActionBroker,
     // And the store behind it: a WORKFLOW node publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,

@@ -107,6 +107,7 @@ import {
   terminalStatus,
 } from '../utils/event-to-item';
 import { firstTurnWindow } from '../utils/first-turn-window';
+import { isHostActionCall } from '../utils/host-action';
 import {
   isHostAnalysisReadCall,
   isHostRecommendationsCall,
@@ -158,6 +159,8 @@ import { createSessionIdSaver } from '../utils/session-saver';
 import { StandingQuestions } from '../utils/standing-questions';
 import { unanswerablePayload, unansweredRequests } from '../utils/unanswerable';
 import { cliTurnDurationMs } from '../utils/wall-worked';
+import { ActionBroker } from './action.broker';
+import { ActionPublishService } from './action-publish.service';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentMcpService } from './agent-mcp.service';
@@ -632,6 +635,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly comparisons: ComparisonBroker,
     private readonly galleries: GalleryBroker,
     private readonly artifacts: ArtifactBroker,
+    private readonly actionSinks: ActionBroker,
+    private readonly actionPublisher: ActionPublishService,
     private readonly artifactStore: ArtifactStoreService,
     private readonly notices: NotifyBroker,
     private readonly callTokens: CallTokenRegistry,
@@ -4540,6 +4545,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         isHostPlanCall(hostServerName, toolName) ||
         isHostMetricsCall(hostServerName, toolName) ||
         isHostComparisonCall(hostServerName, toolName) ||
+        // The action tools: a published button does nothing until the user
+        // presses it, so the press is the gate — see `isHostActionCall`.
+        isHostActionCall(hostServerName, toolName) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited
@@ -5746,6 +5754,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const disposeNotifier = mcpEndpoint
         ? this.notices.register(runId, SINGLE_AGENT_NODE, notifyUser)
         : null;
+      const actionContext = {
+        runId,
+        rowNodeId: null,
+        publisher: { nodeId: SINGLE_AGENT_NODE, conversationId: '' },
+      };
+      const disposeActions = mcpEndpoint
+        ? this.actionSinks.register(runId, SINGLE_AGENT_NODE, {
+            publish: (input) =>
+              this.actionPublisher.publish(actionContext, input),
+            remove: (actionId) =>
+              this.actionPublisher.remove(actionContext, actionId),
+          })
+        : null;
       // Only an analysis chat reads another thread — see `AnalysisBroker`.
       const analysisSourceRunId = run.analysisSourceRunId;
       const analysisSourceSeq = run.analysisSourceSeq;
@@ -5793,6 +5814,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeComparer?.();
         disposeGallerist?.();
         disposePublisher?.();
+        disposeActions?.();
         disposeAnalysis?.();
       };
       // ZERO the last turn's running bill before this one's first request can

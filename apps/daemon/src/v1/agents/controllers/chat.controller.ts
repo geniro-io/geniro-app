@@ -3,16 +3,25 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Put,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
+import { cameViaRemote } from '../../../auth/remote-marker';
 import type {
+  ActionPressWire,
   AppProcessesWire,
   AttachmentDataWire,
   ChatExportWire,
@@ -37,6 +46,7 @@ import type {
   ThreadOverviewWire,
 } from '../chat.types';
 import {
+  ActionPressDto,
   AnalyzeThreadDto,
   ApplyRecommendationsDto,
   AppProcessesDto,
@@ -60,6 +70,7 @@ import {
   LocalImageQueryDto,
   NamedPathsDto,
   NamedPathsResultDto,
+  PressActionDto,
   RenameRunDto,
   RetriedDto,
   RunArtifactsDto,
@@ -88,6 +99,7 @@ import {
 import { SetRunColorDto } from '../dto/run-color.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ReorderPinnedDto, SetRunPinnedDto } from '../dto/run-pin.dto';
+import { ActionPressService } from '../services/action-press.service';
 import { ChatService } from '../services/chat.service';
 import { ChatArtifactsService } from '../services/chat-artifacts.service';
 import { ChatExportService } from '../services/chat-export.service';
@@ -140,6 +152,7 @@ export class ChatController {
     private readonly analyses: ThreadAnalysisService,
     private readonly overview: ThreadOverviewService,
     private readonly recommendations: RecommendationsApplyService,
+    private readonly actionPresses: ActionPressService,
   ) {}
 
   @Post()
@@ -535,6 +548,47 @@ export class ChatController {
     @Body() dto: ApplyRecommendationsDto,
   ): Promise<ItemWire> {
     return this.recommendations.apply(runId, dto);
+  }
+
+  /**
+   * A press of an agent's button. 409 `ACTION_CHANGED` when the agent has
+   * republished it since, `ACTION_GONE` when it is no longer live,
+   * `ACTION_BUSY` mid-press, `RUN_ARCHIVED` for an archived chat, and the
+   * chat's own `RUN_BUSY`, after which the same press may be repeated.
+   */
+  @Post(':runId/actions/:seq/press')
+  @ApiOperation({ operationId: 'pressChatAction' })
+  @ApiParam({ name: 'seq', type: Number })
+  @ZodResponse({ status: 201, type: ActionPressDto })
+  pressAction(
+    @Param('runId') runId: string,
+    @Param('seq', ParseIntPipe) seq: number,
+    @Body() dto: PressActionDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ): Promise<ActionPressWire> {
+    return this.actionPresses.pressChat(
+      runId,
+      seq,
+      dto.clientMessageId,
+      cameViaRemote(headers) ? 'remote' : 'desktop',
+    );
+  }
+
+  /** Takes an agent's button off the chat; the agent is not told. */
+  @Post(':runId/actions/:seq/dismiss')
+  @ApiOperation({ operationId: 'dismissChatAction' })
+  @ApiParam({ name: 'seq', type: Number })
+  @ZodResponse({ status: 201, type: ActionPressDto })
+  dismissAction(
+    @Param('runId') runId: string,
+    @Param('seq', ParseIntPipe) seq: number,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ): Promise<ActionPressWire> {
+    return this.actionPresses.dismiss(
+      runId,
+      seq,
+      cameViaRemote(headers) ? 'remote' : 'desktop',
+    );
   }
 
   @Post(':runId/messages')

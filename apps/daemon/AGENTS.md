@@ -112,7 +112,7 @@ In `utils/spawn-cli.ts` unless noted.
 
 ### Host tools
 
-geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`, `show_comparison`, `show_gallery`, `show_artifact`, `propose_patch`, `propose_plan`, `notify_user`). Layout and wiring: `mcp-tools.md`. Brokers live in `v1/agents/services/` over `HostSinkBroker`.
+geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`, `show_comparison`, `show_gallery`, `show_artifact`, `propose_patch`, `propose_plan`, `notify_user`, `publish_action`, `remove_action`). Layout and wiring: `mcp-tools.md`. Brokers live in `v1/agents/services/` over `HostSinkBroker`.
 
 - `HostSinkBroker`: the disposer is identity-checked and `deliver` never throws. Keep both in the base only.
 - The tool result is a receipt; the row is the only copy of the payload.
@@ -134,6 +134,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - `old_string` must match exactly once. Filesystem errors go to the model as their `code` only (paths leave the machine).
 - `propose_plan`: no `stale` outcome; a blank note is normalized to absent; caps truncate.
 - `notify_user` writes no row; it publishes on `run_status`.
+- `publish_action` / `remove_action` (an agent's buttons, `ActionBroker` → `ActionPublishService`): append-only `action` / `action_outcome` rows, never edited. `ChatActionsService` is their one writer and holds the per-run lock every publish, press and dismissal takes; the live set is folded from the whole run (`utils/action-fold.ts`) and served as run state's `actions`, never folded by a client. An outcome counts only against the publish seq it names, so a press of a republished button is refused `409 ACTION_CHANGED`. An id is scoped to its publishing conversation; 20 live per run, the 21st refused. Labels refuse controls, format characters and line separators; the card and tooltip show a message's exact text before it is pressed. Press and dismiss (`ActionPressService`, chat routes `:runId/actions/:seq/press|dismiss`) carry no desktop-only guard; `via` comes from `cameViaRemote`. A message press on a busy chat answers the chat's own `RUN_BUSY` with nothing written, and the renderer presses the same seq again with the same `clientMessageId` when the turn settles.
 - Descriptions are audited as a set (`mcp-server.service.spec.ts`). `report_findings` asks to be preferred over claude's `ReportFindings`; `propose_plan` says to use either plan mode or this tool, never both.
 - No graph node registers a findings/chart/metrics/comparison/gallery/notify sink; `show_artifact` is the one render tool nodes get.
 

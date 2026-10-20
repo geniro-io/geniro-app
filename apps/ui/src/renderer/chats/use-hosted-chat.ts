@@ -74,6 +74,12 @@ function isTurnRunning(status: RunDto['status']): boolean {
 }
 
 export interface HostedChatState {
+  /** The socket the conversation streams over — what run-state readouts listen on. */
+  client: DaemonClient | null;
+  /** Bumped on every socket reconnect — what run-state readouts re-read on. */
+  reconnectNonce: number;
+  /** For a turn started other than by `post` (an action press): raise or lower `working` as `post` does. */
+  markWorking: (working: boolean) => void;
   /** The conversation, or null while it is being opened / the surface is shut. */
   run: RunDto | null;
   /**
@@ -209,6 +215,7 @@ export function useHostedChat({
   const [liveUnsent, setLiveUnsent] = useState<HostedChatState['liveUnsent']>(
     [],
   );
+  const [reconnectNonce, setReconnectNonce] = useState(0);
   // Bumped by `discard`, which is the one thing that ends a conversation
   // without the surface closing — the subject has not changed, so nothing
   // else would re-run the open effect and the surface would sit empty until
@@ -391,6 +398,7 @@ export function useHostedChat({
         liveTurnEndedRef.current = false;
       }
     },
+    onReconnect: () => setReconnectNonce((n) => n + 1),
     onLiveEvent: (event) => {
       rememberContext(
         event.runId,
@@ -731,6 +739,9 @@ export function useHostedChat({
   }, [apis, subject, resetConversation]);
 
   return {
+    client,
+    reconnectNonce,
+    markWorking: setWorking,
     run,
     items,
     anchors,

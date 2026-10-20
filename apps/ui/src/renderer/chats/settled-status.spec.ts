@@ -206,7 +206,7 @@ describe('lastTerminalItemAt', () => {
 describe('replayTail', () => {
   // The daemon writes these about work that outlives a turn, after the turn's
   // own ending — so a replay reading the plain last row would read "not ended".
-  it.each(['shell_info', 'shell_open', 'subagent_info'])(
+  it.each(['shell_info', 'shell_open', 'subagent_info', 'action_outcome'])(
     'reads past a trailing %s to the turn end before it',
     (kind) => {
       const ended = { ...item('turn_complete'), id: 'end', seq: 1 };

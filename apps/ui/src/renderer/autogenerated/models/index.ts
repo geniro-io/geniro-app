@@ -3,6 +3,231 @@
 /**
  * 
  * @export
+ * @interface ActionOutcomePayload
+ */
+export interface ActionOutcomePayload {
+    /**
+     * 
+     * @type {number}
+     * @memberof ActionOutcomePayload
+     */
+    actionSeq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    actionId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    conversationId: string;
+    /**
+     * 
+     * @type {ActionOutcomeState}
+     * @memberof ActionOutcomePayload
+     */
+    state: ActionOutcomeState;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    via?: ActionOutcomePayloadViaEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActionOutcomePayload
+     */
+    exitCode?: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    outputTail?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    error?: string;
+}
+
+
+/**
+ * @export
+ */
+export const ActionOutcomePayloadViaEnum = {
+    Desktop: 'desktop',
+    Remote: 'remote'
+} as const;
+export type ActionOutcomePayloadViaEnum = typeof ActionOutcomePayloadViaEnum[keyof typeof ActionOutcomePayloadViaEnum];
+
+
+/**
+ * 
+ * @export
+ */
+export const ActionOutcomeState = {
+    Pressed: 'pressed',
+    Running: 'running',
+    Succeeded: 'succeeded',
+    Failed: 'failed',
+    Stopped: 'stopped',
+    Removed: 'removed',
+    Dismissed: 'dismissed',
+    Interrupted: 'interrupted'
+} as const;
+export type ActionOutcomeState = typeof ActionOutcomeState[keyof typeof ActionOutcomeState];
+
+/**
+ * 
+ * @export
+ * @interface ActionPressDto
+ */
+export interface ActionPressDto {
+    /**
+     * 
+     * @type {ActionOutcomePayload}
+     * @memberof ActionPressDto
+     */
+    outcome: ActionOutcomePayload;
+}
+/**
+ * 
+ * @export
+ * @interface ActionPublisher
+ */
+export interface ActionPublisher {
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionPublisher
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionPublisher
+     */
+    conversationId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionPublisher
+     */
+    callId?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionPublisher
+     */
+    agentLabel?: string;
+}
+/**
+ * 
+ * @export
+ * @interface ActionSpec
+ */
+export interface ActionSpec {
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionSpec
+     */
+    kind: ActionSpecKindEnum;
+    /**
+     * message: what a press sends into the chat
+     * @type {string}
+     * @memberof ActionSpec
+     */
+    text?: string;
+    /**
+     * stop: the background command it was published against
+     * @type {string}
+     * @memberof ActionSpec
+     */
+    shellId?: string;
+    /**
+     * stop: the processes a press stops
+     * @type {Array<ActionSpecTargetsInner>}
+     * @memberof ActionSpec
+     */
+    targets?: Array<ActionSpecTargetsInner>;
+    /**
+     * command: never a shell line
+     * @type {Array<string>}
+     * @memberof ActionSpec
+     */
+    argv?: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionSpec
+     */
+    cwd?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActionSpec
+     */
+    timeoutMs?: number;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ActionSpec
+     */
+    notifyAgent?: boolean;
+}
+
+
+/**
+ * @export
+ */
+export const ActionSpecKindEnum = {
+    Message: 'message',
+    Stop: 'stop',
+    Command: 'command'
+} as const;
+export type ActionSpecKindEnum = typeof ActionSpecKindEnum[keyof typeof ActionSpecKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface ActionSpecTargetsInner
+ */
+export interface ActionSpecTargetsInner {
+    /**
+     * 
+     * @type {number}
+     * @memberof ActionSpecTargetsInner
+     */
+    pid: number;
+    /**
+     * the start time recorded at publish, re-checked at press
+     * @type {string}
+     * @memberof ActionSpecTargetsInner
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionSpecTargetsInner
+     */
+    command: string;
+}
+/**
+ * 
+ * @export
  * @interface ActiveSpan
  */
 export interface ActiveSpan {
@@ -3740,7 +3965,9 @@ export const ItemKind = {
     ShowGallery: 'show_gallery',
     ShowArtifact: 'show_artifact',
     Recommendations: 'recommendations',
-    RecommendationOutcome: 'recommendation_outcome'
+    RecommendationOutcome: 'recommendation_outcome',
+    Action: 'action',
+    ActionOutcome: 'action_outcome'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -3921,6 +4148,79 @@ export interface LineSnapshotDto {
      * @memberof LineSnapshotDto
      */
     occurredAt?: string;
+}
+/**
+ * 
+ * @export
+ * @interface LiveAction
+ */
+export interface LiveAction {
+    /**
+     * the publish row — what a press addresses
+     * @type {number}
+     * @memberof LiveAction
+     */
+    seq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    actionId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    conversationId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    label: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    description?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof LiveAction
+     */
+    once: boolean;
+    /**
+     * 
+     * @type {ActionSpec}
+     * @memberof LiveAction
+     */
+    spec: ActionSpec;
+    /**
+     * 
+     * @type {ActionPublisher}
+     * @memberof LiveAction
+     */
+    publisher: ActionPublisher;
+    /**
+     * a press is under way
+     * @type {boolean}
+     * @memberof LiveAction
+     */
+    pending: boolean;
+    /**
+     * 
+     * @type {ActionOutcomePayload}
+     * @memberof LiveAction
+     */
+    lastOutcome?: ActionOutcomePayload;
 }
 /**
  * 
@@ -4338,6 +4638,19 @@ export interface PlanWindow {
      * @memberof PlanWindow
      */
     resetsAt: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface PressActionDto
+ */
+export interface PressActionDto {
+    /**
+     * ID generated once per press and reused when the press is retried after RUN_BUSY
+     * @type {string}
+     * @memberof PressActionDto
+     */
+    clientMessageId: string;
 }
 /**
  * 
@@ -5790,6 +6103,12 @@ export interface RunStateDto {
      * @memberof RunStateDto
      */
     shells: Array<OpenShell>;
+    /**
+     * the buttons agents published that can still be pressed, newest first
+     * @type {Array<LiveAction>}
+     * @memberof RunStateDto
+     */
+    actions: Array<LiveAction>;
     /**
      * the unanswered tool calls of every conversation's open turn — the commands running in the foreground, whatever page a client holds
      * @type {Array<ChatHistoryDtoItemsInner>}
@@ -8041,6 +8360,12 @@ export interface ThreadOverviewDtoState {
      * @memberof ThreadOverviewDtoState
      */
     shells: Array<OpenShell>;
+    /**
+     * the buttons agents published that can still be pressed, newest first
+     * @type {Array<LiveAction>}
+     * @memberof ThreadOverviewDtoState
+     */
+    actions: Array<LiveAction>;
     /**
      * the unanswered tool calls of every conversation's open turn — the commands running in the foreground, whatever page a client holds
      * @type {Array<ChatHistoryDtoItemsInner>}

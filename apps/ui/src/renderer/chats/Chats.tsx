@@ -89,6 +89,7 @@ import type { SettingsSection } from '../settings/Settings';
 import { useLineSnapshots } from '../stats/use-line-snapshots';
 import { useSharedCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
+import { ChatActionChips } from './action-chip';
 import {
   type AgentActivity,
   type AgentDisplay,
@@ -347,6 +348,7 @@ import {
   type CallTarget,
   useCallMessageQueues,
 } from './use-call-message-queues';
+import { useChatActions } from './use-chat-actions';
 import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatSearch } from './use-chat-search';
@@ -4540,6 +4542,13 @@ export function Chats({
     activeRunId,
     reconnectNonce,
   );
+  /** The agents' buttons on this chat, and their press — see `useChatActions`. */
+  const chatActions = useChatActions(
+    chatApi,
+    activeRunId,
+    runState,
+    refreshRunState,
+  );
   /**
    * The card rows to read open requests from: the window's, and every card the
    * daemon still holds open that the window does not — a question asked above
@@ -8636,6 +8645,17 @@ export function Chats({
         // about the same task for as long as that lasted.
         live={activeRunStatus === 'running'}
       />
+      {/* An agent's buttons outlive the turn that made them,
+            so they sit after the task list and ahead of
+            everything that ends within a turn — behind their
+            own divider, since they are controls rather than
+            readings. */}
+      <ChatActionChips
+        actions={chatActions.actions}
+        phases={chatActions.phases}
+        onPress={chatActions.press}
+        onDismiss={chatActions.dismiss}
+      />
       <ActiveWorkflowChips workflows={runWorkflows} onReveal={revealWorkflow} />
       <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
       <RunningSubagentChips
@@ -8687,7 +8707,8 @@ export function Chats({
         runSettledAt={activeRunSettledAt}
         callConversations={callConversations}
         applyRecommendations={applyRecommendations}
-        notSent={notSent}>
+        notSent={notSent}
+        chatActions={chatActions}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

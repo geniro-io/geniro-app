@@ -46,6 +46,7 @@ import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
 import { CardBackedRequestsContext } from './transcript-item';
 import { type TurnDuration, TurnDurationContext } from './turn-duration';
 import type { ArtifactSharing } from './use-artifact-sharing';
+import { type ChatActions, ChatActionsContext } from './use-chat-actions';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /**
@@ -112,6 +113,7 @@ export function ChatProviders({
   jumpMark = null,
   applyRecommendations = null,
   notSent = null,
+  chatActions = null,
   children,
 }: {
   /**
@@ -181,6 +183,8 @@ export function ChatProviders({
    * `NotSentMessagesContext`. Absent marks no message.
    */
   notSent?: NotSentMessages | null;
+  /** The open chat's buttons and their press — see `ChatActionsContext`. */
+  chatActions?: ChatActions | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -198,13 +202,15 @@ export function ChatProviders({
                           <RecommendationsApplyContext.Provider
                             value={applyRecommendations}>
                             <NotSentMessagesContext.Provider value={notSent}>
-                              {transcript === undefined ? (
-                                children
-                              ) : (
-                                <SurfaceContexts {...transcript}>
-                                  {children}
-                                </SurfaceContexts>
-                              )}
+                              <ChatActionsContext.Provider value={chatActions}>
+                                {transcript === undefined ? (
+                                  children
+                                ) : (
+                                  <SurfaceContexts {...transcript}>
+                                    {children}
+                                  </SurfaceContexts>
+                                )}
+                              </ChatActionsContext.Provider>
                             </NotSentMessagesContext.Provider>
                           </RecommendationsApplyContext.Provider>
                         </RunSettledContext.Provider>

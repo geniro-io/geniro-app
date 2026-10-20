@@ -217,7 +217,12 @@ export class CodexSession implements TurnDriver {
         const entry = this.pending.take(message.id, this.turn, outlivesItsTurn);
         return entry === null
           ? []
-          : entry.turn.onReply(entry.kind, message.result, entry.detail);
+          : entry.turn.onReply(
+              entry.kind,
+              message.result,
+              entry.detail,
+              entry.deliveryId,
+            );
       }
       case 'error': {
         const entry = this.pending.take(
@@ -227,7 +232,12 @@ export class CodexSession implements TurnDriver {
         );
         return entry === null
           ? []
-          : entry.turn.onErrorReply(entry.kind, message.message, entry.detail);
+          : entry.turn.onErrorReply(
+              entry.kind,
+              message.message,
+              entry.detail,
+              entry.deliveryId,
+            );
       }
       case 'request':
         return this.turn.onServerRequest(
@@ -252,6 +262,30 @@ export class CodexSession implements TurnDriver {
 
   sendFollowUp(message: FollowUpMessage): boolean {
     return this.turn.sendFollowUp(message);
+  }
+
+  withdrawHeldPrompt(): boolean {
+    return this.turn.withdrawHeldPrompt();
+  }
+
+  onProcessEnded(): AgentEvent[] {
+    return this.turn.onProcessEnded();
+  }
+
+  closeGraceMs(): number {
+    return this.turn.closeGraceMs();
+  }
+
+  /** Whether `turn` is the one this session is serving now. */
+  isCurrentTurn(turn: CodexTurnDriver): boolean {
+    return this.turn === turn;
+  }
+
+  /** Emit to the turn now open, outside any reply — the held ending's release. */
+  emitNow(events: readonly AgentEvent[]): void {
+    for (const event of events) {
+      this.io?.emit(event);
+    }
   }
 
   buildInterruptPayload(): string | undefined {
@@ -356,6 +390,7 @@ export class CodexSession implements TurnDriver {
    * Send one request, answering whether it actually went out. `detail` is what
    * the turn wants said about the reply. `owner` is the turn the reply goes to:
    * the current one, unless an ended turn is still finishing its own work.
+   * `deliveryId` is the message's own, for a `turn/steer` refusal to name.
    */
   request(
     method: string,
@@ -364,6 +399,7 @@ export class CodexSession implements TurnDriver {
     events: AgentEvent[],
     detail: string | null = null,
     owner: CodexTurnDriver = this.turn,
+    deliveryId: string | null = null,
   ): boolean {
     const id = this.pending.send(
       method,
@@ -372,6 +408,7 @@ export class CodexSession implements TurnDriver {
       owner,
       (frame) => this.write(frame),
       detail,
+      deliveryId,
     );
     if (id === null) {
       events.push({

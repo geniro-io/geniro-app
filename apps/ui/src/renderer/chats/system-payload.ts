@@ -100,3 +100,46 @@ export function noticeCaption(payload: unknown): string | null {
     ? row.caption
     : null;
 }
+
+/**
+ * The delivery ids a "not sent" row names — the user messages a turn accepted
+ * and then dropped because the turn ended before its agent took them. Empty
+ * for every other row.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/event-to-item.ts` writes the
+ * `unsentMessages` key from the `follow_up_dropped` event; each id is the
+ * `deliveryId` the daemon stamped on that user message's own row. Same
+ * `origin` guard as above: relayed CLI text cannot mark a message unsent.
+ */
+export function unsentMessageIds(payload: unknown): string[] {
+  if (payload === null || typeof payload !== 'object') {
+    return [];
+  }
+  const row = payload as { unsentMessages?: unknown; origin?: unknown };
+  if (!Array.isArray(row.unsentMessages) || row.origin === 'cli') {
+    return [];
+  }
+  return row.unsentMessages.filter(
+    (id): id is string => typeof id === 'string' && id !== '',
+  );
+}
+
+/**
+ * What the agent's CLI said refusing the messages a "not sent" row names, or
+ * null when the turn simply ended before taking them.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/event-to-item.ts` writes the
+ * `unsentReason` key from the `follow_up_dropped` event's `reason`. Same
+ * `origin` guard as `unsentMessageIds`.
+ */
+export function unsentReason(payload: unknown): string | null {
+  if (payload === null || typeof payload !== 'object') {
+    return null;
+  }
+  const row = payload as { unsentReason?: unknown; origin?: unknown };
+  return typeof row.unsentReason === 'string' &&
+    row.unsentReason !== '' &&
+    row.origin !== 'cli'
+    ? row.unsentReason
+    : null;
+}

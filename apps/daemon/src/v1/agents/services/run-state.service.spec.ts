@@ -17,10 +17,13 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
+import { NO_CALL_INDEX } from '../__tests__/no-call-index';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
+import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
+import { ChatActionsService } from './chat-actions.service';
 import type { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { RunStateService } from './run-state.service';
@@ -100,6 +103,13 @@ describe('RunStateService (in-memory sqlite)', () => {
       shells,
       adapters,
       seqs,
+      new ChatActionsService(
+        orm.em,
+        items,
+        new AgentEventBus(),
+        NO_CALL_INDEX,
+        seqs,
+      ),
     );
   }
 

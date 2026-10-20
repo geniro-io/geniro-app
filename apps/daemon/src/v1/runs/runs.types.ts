@@ -159,6 +159,13 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * key that opens it), and alone in this family it is REVISABLE — publishing the
  * same `artifactId` again writes a new row naming a higher version rather than a
  * second artifact, which is what lets a plan stay current as the work moves.
+ *
+ * `action` is a BUTTON an agent published (`publish_action`), and
+ * `action_outcome` is everything that happens to one afterwards: a press, a
+ * removal, a dismissal. Both are append-only — a button's state is never an
+ * edit of its row but the newest outcome naming its seq — and the daemon folds
+ * the pair into the live set it serves on run state (`ChatActionsService`), so
+ * no client derives "still pressable" from the window of rows it holds.
  */
 export const ItemKindSchema = z
   .enum([
@@ -192,6 +199,8 @@ export const ItemKindSchema = z
     'show_artifact',
     'recommendations',
     'recommendation_outcome',
+    'action',
+    'action_outcome',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

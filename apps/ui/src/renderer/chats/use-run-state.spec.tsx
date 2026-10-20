@@ -31,6 +31,7 @@ const state = (calls: number): RunStateDto => ({
   workflowRows: [],
   artifactRows: [],
   shells: [],
+  actions: [],
   openToolCalls: [],
   throughSeq: -1,
   turnStartedAt: null,

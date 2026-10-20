@@ -1,3 +1,4 @@
+import type { ActionBroker } from '../../agents/services/action.broker';
 import type { AnalysisBroker } from '../../agents/services/analysis.broker';
 import type { ArtifactBroker } from '../../agents/services/artifact.broker';
 import type { ChartBroker } from '../../agents/services/chart.broker';
@@ -28,8 +29,10 @@ import { MessageAgentTool } from './message-agent/message-agent.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposePatchTool } from './propose-patch/propose-patch.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
+import { PublishActionTool } from './publish-action/publish-action.tool';
 import { ReadAnalyzedThreadTool } from './read-analyzed-thread/read-analyzed-thread.tool';
 import { ReadChatContextTool } from './read-chat-context/read-chat-context.tool';
+import { RemoveActionTool } from './remove-action/remove-action.tool';
 import { ReportFindingsTool } from './report-findings/report-findings.tool';
 import { ReportRecommendationsTool } from './report-recommendations/report-recommendations.tool';
 import { SaveWorkflowChangeTool } from './save-workflow-change/save-workflow-change.tool';
@@ -53,6 +56,7 @@ export interface McpToolDeps {
   comparisons: ComparisonBroker;
   galleries: GalleryBroker;
   artifacts: ArtifactBroker;
+  actions: ActionBroker;
   patches: PatchBroker;
   plans: PlanBroker;
   notices: NotifyBroker;
@@ -70,8 +74,9 @@ export interface McpToolDeps {
  *
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
- * surface, then the question, the render family, the board, the chat history,
- * the analysis tools, and the agent's own notification last.
+ * surface, then the question, the render family, the action buttons, the
+ * board, the chat history, the analysis tools, and the agent's own
+ * notification last.
  */
 export function createMcpTools(deps: McpToolDeps): McpTool[] {
   return [
@@ -90,6 +95,8 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new ShowArtifactTool(deps.artifacts, deps.shares),
     new ProposePatchTool(deps.patches),
     new ProposePlanTool(deps.plans),
+    new PublishActionTool(deps.actions),
+    new RemoveActionTool(deps.actions),
     new BoardTools(deps.board),
     new SearchChatsTool(deps.history),
     new ReadChatContextTool(deps.history),

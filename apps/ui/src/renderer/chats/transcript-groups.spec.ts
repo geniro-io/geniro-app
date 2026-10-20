@@ -5,6 +5,7 @@ import { liveRowKind } from './live-row';
 import { CHAT_LIVE_KEY, type LiveState } from './live-text';
 import { foldTaskList, readTaskAnnouncement } from './task-payload';
 import {
+  type ActionEntry,
   type ArtifactEntry,
   buildSubagentBlocks,
   buildTurnBlocks,
@@ -1370,6 +1371,50 @@ describe('groupTranscript', () => {
     expect(card.artifact.title).toBe('Migration plan');
   });
 
+  it('groups an action row into an action card and folds its outcome', () => {
+    const publish = (label: string): ChatItem =>
+      item('action', {
+        actionId: label.toLowerCase(),
+        label,
+        once: true,
+        spec: { kind: 'message', text: 'continue' },
+        publisher: { nodeId: 'agent', conversationId: '' },
+      });
+    const merged = publish('Merged');
+    const other = publish('Deploy');
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__publish_action', 't1', { label: 'Merged' }),
+      result('t1', 'Published action "merged" (message).'),
+      merged,
+      other,
+      item('action_outcome', {
+        actionSeq: merged.seq,
+        actionId: 'merged',
+        nodeId: 'agent',
+        conversationId: '',
+        state: 'succeeded',
+        via: 'desktop',
+      }),
+    ]);
+
+    // The tool's own rows are hidden and the outcome draws nothing of its own.
+    expect(entries.map((e) => e.type)).toEqual(['action', 'action']);
+    expect(entries[0]).toMatchObject({
+      seq: merged.seq,
+      action: { label: 'Merged', kind: 'message', once: true },
+      outcome: { actionSeq: merged.seq, state: 'succeeded' },
+    });
+    expect(entries[1]).toMatchObject({ seq: other.seq, outcome: null });
+  });
+
+  it('drops an action row that does not parse', () => {
+    expect(
+      groupTranscript([
+        item('action', { actionId: 'x', label: 'X', spec: { kind: 'shell' } }),
+      ]),
+    ).toEqual([]);
+  });
+
   it('drops a show_artifact row that cannot address a page', () => {
     // No key means no URL to frame, so the card could only ever say it cannot
     // open itself — worse than drawing nothing.
@@ -2304,6 +2349,47 @@ describe('groupTranscript — call blocks', () => {
         (e) => e.type === 'item' && e.item.kind === 'approval_request',
       ),
     ).toBe(true);
+  });
+
+  describe('a button a callee publishes', () => {
+    const button = (publisher: Record<string, unknown>) => ({
+      actionId: 'pr-merged',
+      label: 'PR merged',
+      once: true,
+      spec: { kind: 'message', text: 'merged — go on' },
+      publisher,
+    });
+    const actions = (entries: readonly { type: string }[]) =>
+      entries.filter((e): e is ActionEntry => e.type === 'action');
+
+    it('stays in the MAIN flow under its publisher, not inside the shut call card', () => {
+      const publisher = {
+        nodeId: 'poet',
+        conversationId: 'call-1',
+        callId: 'call-1',
+        agentLabel: 'Poet',
+      };
+      const entries = groupTranscript([
+        startCall('call-1', 'poet'),
+        tagged('status', { status: 'running' }, 'poet', 'call-1'),
+        item('action', button(publisher), 'poet'),
+        // Even a row naming the call at its top level is never claimed.
+        tagged('action', button(publisher), 'poet', 'call-1'),
+      ]);
+
+      const block = entries.find(isBlock)!;
+      expect(actions(block.entries)).toEqual([]);
+      expect(
+        actions(entries).map((e) => [
+          e.nodeId,
+          e.action.agentLabel,
+          e.action.callId,
+        ]),
+      ).toEqual([
+        ['poet', 'Poet', 'call-1'],
+        ['poet', 'Poet', 'call-1'],
+      ]);
+    });
   });
 
   describe('a page a callee publishes', () => {

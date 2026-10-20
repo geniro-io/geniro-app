@@ -80,6 +80,10 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   show_artifact: 'artifact',
   propose_patch: 'patch',
   propose_plan: 'plan',
+  // The action card is drawn from the `action` / `action_outcome` rows the
+  // daemon writes, so these calls need no loader of their own.
+  publish_action: null,
+  remove_action: null,
 };
 
 /** The bare tool names, for the matching below. */

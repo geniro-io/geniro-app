@@ -758,6 +758,45 @@ describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => 
     expect(methods).not.toContain('session/prompt');
     expect(child.kills).toBe(0);
   });
+
+  it('reports a follow-up waiting behind an unanswered cancel dropped when Stop falls back to killing the process', () => {
+    vi.useFakeTimers();
+    try {
+      const { spawn, child } = fakeSpawn();
+      const events: AgentEvent[] = [];
+      const session = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).startSession(BASE, { runScoped: true });
+      const handle = session.startTurn(BASE, (event) => events.push(event));
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(stdoutLine({ id: 2, result: { sessionId: 's' } }));
+      expect(
+        handle?.sendUserMessage({
+          text: 'do X instead',
+          deliveryId: 'delivery-1',
+        }),
+      ).toBe(true);
+
+      handle?.cancel();
+      vi.advanceTimersByTime(5_000);
+      expect(child.kills).toBeGreaterThan(0);
+      child.emit('close', null, 'SIGTERM');
+
+      const types = events.map((event) => event.type);
+      expect(events).toContainEqual({
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1'],
+      });
+      expect(types.indexOf('follow_up_dropped')).toBeLessThan(
+        types.indexOf('turn_cancelled'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('CursorAcpAdapter turn shaping', () => {
@@ -961,6 +1000,213 @@ describe('CursorAcpAdapter turn shaping', () => {
         .filter((frame) => frame.method === 'session/set_config_option')
         .map((frame) => (frame.params as { configId: string }).configId),
     ).toEqual(['effort']);
+  });
+
+  describe('the prompt waits for the LAST setting to be answered', () => {
+    // REPORTED from billing: a card run on `gpt-5.6-sol` with effort `high` was
+    // billed as `gpt-5.6-sol-medium` — that model's own default (probed on
+    // 2026.10.01-e373342: `thought_level/reasoning current=medium`, and a
+    // `reasoning=high` frame on its own is answered `current=high`). A card
+    // names no context window, so its effort was the LAST frame, and the
+    // prompt followed it down the pipe before cursor had applied it — the
+    // timing `context` was already measured to need. A chat that also sends a
+    // context window never showed it, because that frame held the prompt.
+    //
+    // Measured since by billing on the same build: a pipelined `reasoning=high`,
+    // `fast=false` AND a model switch were each lost on that turn, every reply
+    // confirming the new value. So the wait belongs to the CLI, not to a
+    // parameter, and it covers the model frame too.
+    const SESSION_ON_DEFAULT_MODEL = {
+      sessionId: 's',
+      configOptions: [
+        {
+          id: 'model',
+          category: 'model',
+          currentValue: 'auto-smart',
+          options: [
+            { value: 'gpt-5.6-sol' },
+            { value: 'grok-4.7' },
+            { value: 'auto-smart' },
+          ],
+        },
+      ],
+    };
+
+    /** A `session/set_config_option` reply listing a model's own options. */
+    function modelOptions(
+      options: {
+        id: string;
+        category: string;
+        current: string;
+        values: string[];
+      }[],
+    ): Record<string, unknown> {
+      return {
+        configOptions: options.map(({ id, category, current, values }) => ({
+          id,
+          category,
+          currentValue: current,
+          options: values.map((value) => ({ value, name: value })),
+        })),
+      };
+    }
+
+    const methodsOn = (child: FakeChild): unknown[] =>
+      framesOn(child).map((frame) => frame.method);
+
+    const settingsOn = (child: FakeChild): [string, string][] =>
+      framesOn(child)
+        .filter((frame) => frame.method === 'session/set_config_option')
+        .map((frame) => frame.params as { configId: string; value: string })
+        .map(({ configId, value }) => [configId, value]);
+
+    /** The id of the newest `set_config_option` frame on the wire. */
+    const lastSettingId = (child: FakeChild): unknown =>
+      framesOn(child)
+        .filter((frame) => frame.method === 'session/set_config_option')
+        .at(-1)?.id;
+
+    it('holds a card’s prompt until its effort frame is answered', () => {
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start({ ...BASE, model: 'gpt-5.6-sol', effort: 'high' }, () => {});
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(
+        stdoutLine({ id: 2, result: SESSION_ON_DEFAULT_MODEL }),
+      );
+
+      // The model frame's reply is the Sol option list as cursor sends it.
+      child.stdout.emitData(
+        stdoutLine({
+          id: lastSettingId(child),
+          result: modelOptions([
+            {
+              id: 'context',
+              category: 'model_config',
+              current: '272k',
+              values: ['272k', '1m'],
+            },
+            {
+              id: 'reasoning',
+              category: 'thought_level',
+              current: 'medium',
+              values: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+            },
+            {
+              id: 'fast',
+              category: 'model_config',
+              current: 'false',
+              values: ['false', 'true'],
+            },
+          ]),
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([
+        ['model', 'gpt-5.6-sol'],
+        ['reasoning', 'high'],
+      ]);
+      // The effort is on the wire and unanswered: the prompt must not be.
+      expect(methodsOn(child)).not.toContain('session/prompt');
+
+      child.stdout.emitData(
+        stdoutLine({ id: lastSettingId(child), result: {} }),
+      );
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
+
+    it('holds the prompt behind a model setting too, when that is the last frame', () => {
+      // Grok runs as Fast unless told otherwise (`fast current=true`, probed),
+      // and a card asking `fast=false` is that setting's whole point — so it
+      // must land before the turn starts, for the same reason the effort must.
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start(
+        { ...BASE, model: 'grok-4.7', modelParameters: { fast: 'false' } },
+        () => {},
+      );
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(
+        stdoutLine({ id: 2, result: SESSION_ON_DEFAULT_MODEL }),
+      );
+      child.stdout.emitData(
+        stdoutLine({
+          id: lastSettingId(child),
+          result: modelOptions([
+            {
+              id: 'reasoning_effort',
+              category: 'thought_level',
+              current: 'high',
+              values: ['low', 'medium', 'high', 'xhigh'],
+            },
+            {
+              id: 'fast',
+              category: 'model_config',
+              current: 'true',
+              values: ['false', 'true'],
+            },
+          ]),
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([
+        ['model', 'grok-4.7'],
+        ['fast', 'false'],
+      ]);
+      expect(methodsOn(child)).not.toContain('session/prompt');
+
+      child.stdout.emitData(
+        stdoutLine({ id: lastSettingId(child), result: {} }),
+      );
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
+
+    it('holds the prompt behind a model switch that sets nothing else', () => {
+      // Measured by billing: a pipelined switch to `gpt-5.5` with no parameter
+      // ran on the session's old `gpt-5.6-sol`, though the reply confirmed the
+      // switch. The model frame is the LAST frame here, so it is the one the
+      // prompt waits on — the case a per-parameter flag could never reach.
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start({ ...BASE, model: 'gpt-5.5' }, () => {});
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(
+        stdoutLine({
+          id: 2,
+          result: {
+            sessionId: 's',
+            configOptions: [
+              {
+                id: 'model',
+                category: 'model',
+                currentValue: 'gpt-5.6-sol',
+                options: [{ value: 'gpt-5.6-sol' }, { value: 'gpt-5.5' }],
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([['model', 'gpt-5.5']]);
+      expect(methodsOn(child)).not.toContain('session/prompt');
+
+      child.stdout.emitData(
+        stdoutLine({ id: lastSettingId(child), result: {} }),
+      );
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
   });
 
   it('points the child at its OWN config dir, never the user’s ~/.cursor', () => {

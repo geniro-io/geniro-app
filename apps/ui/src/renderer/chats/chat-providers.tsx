@@ -27,6 +27,10 @@ import {
   AttachmentLoaderContext,
 } from './message-attachments';
 import {
+  type NotSentMessages,
+  NotSentMessagesContext,
+} from './not-sent-messages';
+import {
   type ArtifactUrlBuilder,
   ArtifactUrlContext,
 } from './published-artifact';
@@ -42,6 +46,7 @@ import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
 import { CardBackedRequestsContext } from './transcript-item';
 import { type TurnDuration, TurnDurationContext } from './turn-duration';
 import type { ArtifactSharing } from './use-artifact-sharing';
+import { type ChatActions, ChatActionsContext } from './use-chat-actions';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /**
@@ -107,6 +112,8 @@ export function ChatProviders({
   callConversations = null,
   jumpMark = null,
   applyRecommendations = null,
+  notSent = null,
+  chatActions = null,
   children,
 }: {
   /**
@@ -171,6 +178,13 @@ export function ChatProviders({
    * Absent draws the card read-only (the workflow dock has no analysis).
    */
   applyRecommendations?: RecommendationsApplier | null;
+  /**
+   * The user messages a turn dropped, and how to resend one — see
+   * `NotSentMessagesContext`. Absent marks no message.
+   */
+  notSent?: NotSentMessages | null;
+  /** The open chat's buttons and their press — see `ChatActionsContext`. */
+  chatActions?: ChatActions | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -187,13 +201,17 @@ export function ChatProviders({
                         <RunSettledContext.Provider value={runSettledAt}>
                           <RecommendationsApplyContext.Provider
                             value={applyRecommendations}>
-                            {transcript === undefined ? (
-                              children
-                            ) : (
-                              <SurfaceContexts {...transcript}>
-                                {children}
-                              </SurfaceContexts>
-                            )}
+                            <NotSentMessagesContext.Provider value={notSent}>
+                              <ChatActionsContext.Provider value={chatActions}>
+                                {transcript === undefined ? (
+                                  children
+                                ) : (
+                                  <SurfaceContexts {...transcript}>
+                                    {children}
+                                  </SurfaceContexts>
+                                )}
+                              </ChatActionsContext.Provider>
+                            </NotSentMessagesContext.Provider>
                           </RecommendationsApplyContext.Provider>
                         </RunSettledContext.Provider>
                       </AttachmentLoaderContext.Provider>

@@ -17,6 +17,7 @@ import {
 } from '../utils/run-state-folds';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ApprovalRegistry } from './approval-registry';
+import { ChatActionsService } from './chat-actions.service';
 import { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 
@@ -43,6 +44,7 @@ export class RunStateService {
     private readonly shells: ChatShellsService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly seqs: ItemSeqAllocator,
+    private readonly actions: ChatActionsService,
   ) {}
 
   async read(runId: string): Promise<RunStateWire> {
@@ -181,6 +183,7 @@ export class RunStateService {
       workflowRows,
       artifactRows,
       shells: (await this.shells.read(runId)).shells,
+      actions: await this.actions.live(runId, em),
       turnStartedAt,
     };
   }

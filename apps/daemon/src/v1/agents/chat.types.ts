@@ -1420,11 +1420,16 @@ export interface HostPatch {
  * rejected when it was in fact accepted, and folding it into `unavailable`
  * would hide that the right move is to look at the file again and re-propose.
  * The `reason` is what separates the cases.
+ *
+ * `posted` is the fifth, and it is not an ending — the same arm a deferred
+ * question has. A CLI that will not hold the call open is told the card is up;
+ * Apply or Reject arrives later, as the run's next message.
  */
 export type HostPatchOutcome =
   | { status: 'applied'; path: string }
   | { status: 'declined' }
   | { status: 'stale'; reason: string }
+  | { status: 'posted' }
   | { status: 'unavailable'; reason: string };
 
 /**
@@ -1492,10 +1497,15 @@ export interface HostPlan {
  * action, so nothing can go `stale` between the press and the effect. The note
  * hangs off BOTH verdicts because a user who approves with a caveat is telling
  * the agent something it must not lose.
+ *
+ * `posted` is the fourth, shared with the question and the patch: the card is
+ * on screen and the verdict will arrive as the run's next message, because
+ * this CLI will not hold the call open for a person.
  */
 export type HostPlanOutcome =
   | { status: 'approved'; note?: string }
   | { status: 'declined'; note?: string }
+  | { status: 'posted' }
   | { status: 'unavailable'; reason: string };
 
 /**
@@ -2962,6 +2972,176 @@ export const RunDelegateStateSchema = z
   .meta({ id: 'RunDelegateState' });
 export type RunDelegateState = z.infer<typeof RunDelegateStateSchema>;
 
+/** geniro's own tools that put a button in the chat and take one away. */
+export const HOST_PUBLISH_ACTION_TOOL = 'publish_action';
+export const HOST_REMOVE_ACTION_TOOL = 'remove_action';
+
+/**
+ * Caps on one action. They REFUSE rather than truncate: a label cut short is a
+ * different button than the one the agent meant. The live cap is per chat — the
+ * shelf is one line, and past it the overflow stops being a list a person reads.
+ */
+export const ACTION_LABEL_MAX = 40;
+export const ACTION_ID_MAX = 40;
+export const ACTION_DESCRIPTION_MAX = 200;
+export const ACTION_MESSAGE_MAX = 4000;
+export const ACTION_LIVE_MAX = 20;
+
+/**
+ * A `publish_action` call as its reader hands it over: the shape is checked,
+ * the rules (caps, characters, exactly one kind) are `ActionPublishService`'s.
+ */
+export interface ActionPublishInput {
+  label: string;
+  description?: string;
+  actionId?: string;
+  once?: boolean;
+  message?: string;
+  stop?: unknown;
+  command?: unknown;
+}
+
+/** What either action tool answers; `text` is the receipt the agent reads. */
+export type ActionToolOutcome =
+  | { status: 'published' | 'removed'; text: string }
+  | { status: 'refused'; reason: string };
+
+/**
+ * What a press does. Flat rather than a union so the generated client reads it
+ * without a discriminator: `kind` says which of the other fields are set, and
+ * a reader takes only that kind's fields.
+ */
+export const ActionSpecSchema = z
+  .object({
+    kind: z.enum(['message', 'stop', 'command']),
+    text: z
+      .string()
+      .optional()
+      .describe('message: what a press sends into the chat'),
+    shellId: z
+      .string()
+      .optional()
+      .describe('stop: the background command it was published against'),
+    targets: z
+      .array(
+        z.object({
+          pid: z.number().int(),
+          startedAt: z
+            .string()
+            .describe(
+              'the start time recorded at publish, re-checked at press',
+            ),
+          command: z.string(),
+        }),
+      )
+      .optional()
+      .describe('stop: the processes a press stops'),
+    argv: z
+      .array(z.string())
+      .optional()
+      .describe('command: never a shell line'),
+    cwd: z.string().optional(),
+    timeoutMs: z.number().int().optional(),
+    notifyAgent: z.boolean().optional(),
+  })
+  .meta({ id: 'ActionSpec' });
+export type ActionSpec = z.infer<typeof ActionSpecSchema>;
+
+/** Who published an action — which conversation its id is scoped to. */
+export const ActionPublisherSchema = z
+  .object({
+    nodeId: z.string(),
+    conversationId: z.string(),
+    callId: z.string().optional(),
+    agentLabel: z.string().optional(),
+  })
+  .meta({ id: 'ActionPublisher' });
+export type ActionPublisher = z.infer<typeof ActionPublisherSchema>;
+
+/**
+ * The payload of an `action` row: one publish of one button.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/action-payload.ts (`readActionPayload`),
+ * which draws the transcript card from these rows.
+ */
+export const ActionPayloadSchema = z
+  .object({
+    actionId: z.string(),
+    label: z.string(),
+    description: z.string().optional(),
+    once: z.boolean().describe('a successful press retires it'),
+    spec: ActionSpecSchema,
+    publisher: ActionPublisherSchema,
+  })
+  .meta({ id: 'ActionPayload' });
+export type ActionPayload = z.infer<typeof ActionPayloadSchema>;
+
+export const ActionOutcomeStateSchema = z
+  .enum([
+    'pressed',
+    'running',
+    'succeeded',
+    'failed',
+    'stopped',
+    'removed',
+    'dismissed',
+    'interrupted',
+  ])
+  .meta({ id: 'ActionOutcomeState' });
+export type ActionOutcomeState = z.infer<typeof ActionOutcomeStateSchema>;
+
+/** Which side of the gateway a press came from. */
+export const ActionViaSchema = z.enum(['desktop', 'remote']);
+export type ActionVia = z.infer<typeof ActionViaSchema>;
+
+/**
+ * The payload of an `action_outcome` row: what happened to the publish at
+ * `actionSeq`.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/action-payload.ts (`readActionOutcome`).
+ */
+export const ActionOutcomePayloadSchema = z
+  .object({
+    actionSeq: z.number().int(),
+    actionId: z.string(),
+    nodeId: z.string(),
+    conversationId: z.string(),
+    state: ActionOutcomeStateSchema,
+    via: ActionViaSchema.optional(),
+    exitCode: z.number().int().nullable().optional(),
+    outputTail: z.string().optional(),
+    error: z.string().optional(),
+  })
+  .meta({ id: 'ActionOutcomePayload' });
+export type ActionOutcomePayload = z.infer<typeof ActionOutcomePayloadSchema>;
+
+/** One button still pressable, as `ChatActionsService` folds it. */
+export const LiveActionSchema = z
+  .object({
+    seq: z.number().int().describe('the publish row — what a press addresses'),
+    actionId: z.string(),
+    nodeId: z.string(),
+    conversationId: z.string(),
+    label: z.string(),
+    description: z.string().optional(),
+    once: z.boolean(),
+    spec: ActionSpecSchema,
+    publisher: ActionPublisherSchema,
+    pending: z.boolean().describe('a press is under way'),
+    lastOutcome: ActionOutcomePayloadSchema.optional(),
+  })
+  .meta({ id: 'LiveAction' });
+export type LiveAction = z.infer<typeof LiveActionSchema>;
+
+/**
+ * What a press or a dismissal wrote. No `.meta({ id })` on this root, for
+ * `ChatTimelineWireSchema`'s reason.
+ */
+export const ActionPressWireSchema = z.object({
+  outcome: ActionOutcomePayloadSchema,
+});
+export type ActionPressWire = z.infer<typeof ActionPressWireSchema>;
+
 /**
  * What a run holds AS A WHOLE, for every readout that is not the transcript's
  * own rows — `GET /v1/chats/:runId/state`.
@@ -3000,6 +3180,11 @@ export const RunStateWireSchema = z.object({
   shells: z
     .array(OpenShellSchema)
     .describe('every DETACHED command still running'),
+  actions: z
+    .array(LiveActionSchema)
+    .describe(
+      'the buttons agents published that can still be pressed, newest first',
+    ),
   openToolCalls: z
     .array(ItemWireSchema)
     .describe(
@@ -5352,7 +5537,17 @@ export interface RunCallSeed {
   messageFailures?: MessageDeliveryFailure[];
 }
 
+/**
+ * A `message_agent` message that never reached its callee, kept until the
+ * caller has been told (a `messageDeliveryNotices` row acknowledges it).
+ */
 export interface MessageDeliveryFailure {
+  /**
+   * The FAILURE's own id, minted by the broker — not a
+   * `FollowUpMessage.deliveryId`, the id a message rides into a running turn
+   * with and a user row carries. Persisted on `call_answer` rows, so renaming
+   * it would leave earlier transcripts unread.
+   */
   deliveryId: string;
   callId: string;
   callerNodeId: string;

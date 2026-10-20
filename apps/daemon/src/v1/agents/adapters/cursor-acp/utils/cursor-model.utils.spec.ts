@@ -72,7 +72,7 @@ describe('cursorModelSelection', () => {
     expect(selection.parameters).toEqual([
       // ONE spelling, so no `alternateIds`: swept across all 34 models, every
       // one that has the axis calls it `context`.
-      { id: 'context', value: '1m', applyBeforePrompt: true },
+      { id: 'context', value: '1m' },
     ]);
   });
 
@@ -86,7 +86,7 @@ describe('cursorModelSelection', () => {
         alternateIds: ['effort', 'reasoning', 'reasoning_effort'],
         category: 'thought_level',
       },
-      { id: 'context', value: '1m', applyBeforePrompt: true },
+      { id: 'context', value: '1m' },
     ]);
   });
 
@@ -95,7 +95,7 @@ describe('cursorModelSelection', () => {
     // still has a current model, and its `context` option is set on that.
     expect(cursorModelSelection(null, null, '1m')).toEqual({
       model: null,
-      parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+      parameters: [{ id: 'context', value: '1m' }],
     });
   });
 

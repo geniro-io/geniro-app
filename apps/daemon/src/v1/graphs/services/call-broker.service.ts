@@ -18,6 +18,7 @@ import type {
   CallEnvelope,
   CallHoldRelease,
   CallMode,
+  CallPublishedAction,
   CallPublishedPage,
   CallSettledResult,
   ParkQuestionInput,
@@ -33,7 +34,11 @@ import {
   poolSize,
 } from '../utils/agent-pool';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
-import { PUBLISHED_PAGES_NOTE, quotedCommand } from '../utils/callee-text';
+import {
+  PUBLISHED_ACTIONS_NOTE,
+  PUBLISHED_PAGES_NOTE,
+  quotedCommand,
+} from '../utils/callee-text';
 import {
   callerConversationOf,
   callerKey,
@@ -367,9 +372,15 @@ interface ActiveCall {
   /**
    * The pages published while this call ran — by its callee, or inside any
    * call made under it — keyed by artifact id. Named in its envelope
-   * ({@link withPublishedPages}).
+   * ({@link withPublished}).
    */
   published: Map<string, CallPublishedPage>;
+  /**
+   * The buttons published while this call ran, on the same terms as
+   * {@link published}, keyed by the publisher's action key (two conversations
+   * may each publish an id) and dropped again when removed.
+   */
+  publishedActions: Map<string, CallPublishedAction>;
 }
 
 /**
@@ -437,6 +448,13 @@ interface RunCallState {
    * cannot serve: a call whose launch threw leaves no thread record.
    */
   settledMadeIn: Map<string, string | null>;
+  /**
+   * Each callee conversation's newest call, recorded when the call opens —
+   * where a page or button its callee publishes after that call settled is
+   * named from ({@link CallBroker.callToNoteOn}). Kept apart from `threads`
+   * for `settledMadeIn`'s reason.
+   */
+  newestCallOf: Map<string, string>;
   /**
    * The highest call number an EARLIER daemon gave this run — what
    * {@link RunCallSeed} carried in. An id at or below it that no map holds is
@@ -820,6 +838,7 @@ export class CallBroker implements OnModuleInit {
       seededCallSeq: seed?.callSeq ?? 0,
       activeCalls: new Map(),
       settledMadeIn: new Map(),
+      newestCallOf: new Map(),
       pendingAsync: new Map(),
       messageFailures,
       threads,
@@ -1328,8 +1347,10 @@ export class CallBroker implements OnModuleInit {
       cancelledOwing: false,
       reportedWaitingOn: 0,
       published: new Map(),
+      publishedActions: new Map(),
     };
     state.activeCalls.set(callId, call);
+    state.newestCallOf.set(call.conversationId, callId);
     this.armSilenceWatch(runId, callId, call);
     // TWIN PARSER: apps/ui/src/renderer/chats/transcript-groups.ts reads this
     // payload — `buildCallBlock` (`title` onto `CallBlockEntry.title`) and
@@ -1396,7 +1417,7 @@ export class CallBroker implements OnModuleInit {
           recordPoolHealth(state, callee.id, outcome);
           threadMember = member;
         }
-        const envelope = toEnvelope(callId, callee.id, outcome, call.published);
+        const envelope = toEnvelope(callId, callee.id, outcome, call);
         if (
           envelope.status === 'error' &&
           outcome.failureClass === 'rate_limited' &&
@@ -1429,11 +1450,11 @@ export class CallBroker implements OnModuleInit {
         // reason, not the generic CALLEE_CANCELLED the cancel maps to. Never
         // over a COMPLETED turn: a stop that lost the race to the callee's own
         // ending stopped nothing, and the finished work is the caller's.
-        const final = withPublishedPages(
+        const final = withPublished(
           call.failReason !== null && envelope.status !== 'ok'
             ? { status: 'error', error: call.failReason }
             : envelope,
-          call.published,
+          call,
         );
         // The turn died with a question still parked (external cancel,
         // crash) — the timer must not fire into a settled call, and the
@@ -2375,7 +2396,13 @@ export class CallBroker implements OnModuleInit {
         },
       };
     }
-    this.recordDeliveredMessage(state, args.call_id, call, args.message);
+    this.recordDeliveredMessage(
+      state,
+      args.call_id,
+      call,
+      args.message,
+      outcome.deliveryId,
+    );
     return {
       status: 'ok',
       result: {
@@ -2389,12 +2416,17 @@ export class CallBroker implements OnModuleInit {
     };
   }
 
-  /** A message_agent message that reached the callee: row, and a fresh silence window. */
+  /**
+   * A message_agent message that reached the callee: row, and a fresh silence
+   * window. `followUpId` is the id it rode into the turn with, kept on the row
+   * so a drop's "not delivered" row can retract it (`markMessageDropped`).
+   */
   private recordDeliveredMessage(
     state: RunCallState,
     callId: string,
     call: ActiveCall,
     message: string,
+    followUpId?: string,
   ): void {
     this.noteCalleeActivity(state.runId, callId);
     state.capability.persistItem(
@@ -2410,6 +2442,10 @@ export class CallBroker implements OnModuleInit {
         calleeNodeId: call.calleeId,
         message,
         outcome: 'message',
+        // TWIN PARSER: `apps/ui/src/renderer/chats/not-sent-messages.ts`
+        // pairs this with the `followUpId` of a later "not delivered" row and
+        // draws only that one. Rename it there too.
+        ...(followUpId !== undefined ? { followUpId } : {}),
       },
     );
   }
@@ -2430,6 +2466,36 @@ export class CallBroker implements OnModuleInit {
     }
   }
 
+  /**
+   * A `message_agent` message the callee's turn accepted (recorded delivered)
+   * but dropped because the turn ended before its agent took it. Recorded
+   * undelivered so the caller is told at its next turn, the same as one the
+   * call ended before. Its row carries `followUpId`, the id the "delivered"
+   * row was written with, so the transcript shows the message once, as not
+   * delivered.
+   */
+  markMessageDropped(
+    runId: string,
+    callId: string,
+    message: string,
+    followUpId: string,
+  ): void {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    if (!state || !call) {
+      return;
+    }
+    this.recordUndeliveredMessage(
+      state,
+      callId,
+      call.owner,
+      call.calleeId,
+      message,
+      "The callee's turn ended before it took the message.",
+      followUpId,
+    );
+  }
+
   private recordUndeliveredMessage(
     state: RunCallState,
     callId: string,
@@ -2437,6 +2503,7 @@ export class CallBroker implements OnModuleInit {
     calleeNodeId: string,
     message: string,
     reason: string,
+    followUpId?: string,
   ): void {
     const conversation = callerConversationOf(caller);
     const failure: MessageDeliveryFailure = {
@@ -2451,6 +2518,7 @@ export class CallBroker implements OnModuleInit {
     state.capability.persistItem(failure.callerNodeId, 'call_answer', null, {
       ...failure,
       outcome: 'undelivered',
+      ...(followUpId !== undefined ? { followUpId } : {}),
     });
     state.messageFailures.set(failure.deliveryId, failure);
   }
@@ -2561,11 +2629,18 @@ export class CallBroker implements OnModuleInit {
       if (message === undefined || call.parked !== null) {
         break;
       }
-      if (!state.capability.messageCallee(callId, message).delivered) {
+      const outcome = state.capability.messageCallee(callId, message);
+      if (!outcome.delivered) {
         break;
       }
       call.pendingMessages.shift();
-      this.recordDeliveredMessage(state, callId, call, message);
+      this.recordDeliveredMessage(
+        state,
+        callId,
+        call,
+        message,
+        outcome.deliveryId,
+      );
     }
     if (call.pendingMessages.length > 0) {
       this.scheduleMessageRetry(runId, callId, call);
@@ -3335,7 +3410,11 @@ export class CallBroker implements OnModuleInit {
     } else {
       const live = state.capability.isNodeLive(owner);
       if (live) {
-        told = state.capability.tellLiveNode(owner, prompt);
+        // A turn that ends before taking it was told nothing: the reset is
+        // delivered afresh once that turn has ended.
+        told = state.capability.tellLiveNode(owner, prompt, () =>
+          this.deliverResetWake(runId, owner, calls, resetsAt, instant),
+        );
       }
       // A live conversation that could not be told is one whose turn is
       // ending with its call not held yet — waited for like a queued call.
@@ -4062,6 +4141,22 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * The call a page or button `caller` publishes is named from: the one it
+   * answers, else — a callee carrying on after its call settled — the newest
+   * call its conversation answered, whose ancestors may still be running
+   * (the notes walk up past a settled call). Null for a node's own
+   * conversation.
+   */
+  callToNoteOn(runId: string, caller: string): string | null {
+    const answered = this.callAnsweredBy(runId, caller);
+    const conversationId = callerConversationOf(caller);
+    if (answered !== null || conversationId === null) {
+      return answered;
+    }
+    return this.runs.get(runId)?.newestCallOf.get(conversationId) ?? null;
+  }
+
+  /**
    * The ids of the calls recorded on the callee conversation `conversationId`
    * (its first call's id) — the calls whose rows that conversation wrote. A
    * call is recorded once it settles, so the one settling now is not listed.
@@ -4074,9 +4169,9 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * A page is being published inside call `callId` (see
-   * {@link callAnsweredBy}): record it on that call AND on every call above it
-   * still running, so each caller up the chain is told in its envelope — a
+   * A page is being published from call `callId` (the one
+   * {@link callToNoteOn} names — possibly settled; the walk goes up past it):
+   * record it on that call AND on every call above it still running, so each caller up the chain is told in its envelope — a
    * page a callee of a callee publishes is what the run's root agent has to
    * point the user at.
    *
@@ -4089,11 +4184,65 @@ export class CallBroker implements OnModuleInit {
     callId: string,
     page: CallPublishedPage,
   ): () => void {
+    // Set on an existing key keeps its place: pages are listed in the order
+    // they first appeared, each at its newest version.
+    return noteOnCalls(
+      this.runningCallsUpFrom(runId, callId).map((call) => call.published),
+      page.artifact_id,
+      page,
+    );
+  }
+
+  /**
+   * A button is being published, on {@link notePublishedArtifact}'s terms:
+   * named before its row is written, with the undo for a row that then fails.
+   * It is named on call `callId` (the one {@link callToNoteOn} names —
+   * possibly settled, null for none) and every call above it still running, and
+   * refreshed on every running call already naming `key`. `key` is its
+   * publisher's action key, unique within the run.
+   */
+  notePublishedAction(
+    runId: string,
+    callId: string | null,
+    key: string,
+    action: CallPublishedAction,
+  ): () => void {
     const state = this.runs.get(runId);
     if (!state) {
       return () => {};
     }
-    const replaced: [ActiveCall, CallPublishedPage | undefined][] = [];
+    const calls = new Set([
+      ...(callId === null ? [] : this.runningCallsUpFrom(runId, callId)),
+      ...[...state.activeCalls.values()].filter((call) =>
+        call.publishedActions.has(key),
+      ),
+    ]);
+    return noteOnCalls(
+      [...calls].map((call) => call.publishedActions),
+      key,
+      action,
+    );
+  }
+
+  /** A button was removed: no running call's envelope names it now. */
+  forgetPublishedAction(runId: string, key: string): void {
+    for (const call of this.runs.get(runId)?.activeCalls.values() ?? []) {
+      call.publishedActions.delete(key);
+    }
+  }
+
+  /**
+   * Call `callId` and every call above it still running, innermost first. A
+   * call that settled already — a fire-and-forget callee outlives the call
+   * that launched it — has nobody left to tell, but a call above it may still
+   * be running.
+   */
+  private runningCallsUpFrom(runId: string, callId: string): ActiveCall[] {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return [];
+    }
+    const calls: ActiveCall[] = [];
     // `madeIn` cannot loop — a call is made inside one already live — but a
     // walk over shared state stays bounded regardless.
     const seen = new Set<string>();
@@ -4102,30 +4251,13 @@ export class CallBroker implements OnModuleInit {
       seen.add(next);
       const call = state.activeCalls.get(next);
       if (call) {
-        replaced.push([call, call.published.get(page.artifact_id)]);
-        // Set on an existing key keeps its place: pages are listed in the
-        // order they first appeared, each at its newest version.
-        call.published.set(page.artifact_id, page);
+        calls.push(call);
         next = call.madeIn;
       } else {
-        // A call that settled already — a fire-and-forget callee outlives the
-        // call that launched it — has nobody left to tell, but a call above it
-        // may still be running.
         next = state.settledMadeIn.get(next) ?? null;
       }
     }
-    return () => {
-      for (const [call, before] of replaced) {
-        if (call.published.get(page.artifact_id) !== page) {
-          continue;
-        }
-        if (before === undefined) {
-          call.published.delete(page.artifact_id);
-        } else {
-          call.published.set(page.artifact_id, before);
-        }
-      }
-    };
+    return calls;
   }
 
   /**
@@ -4992,11 +5124,42 @@ function inlineCode(text: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
+/**
+ * Set `value` at `key` in each call's published map, answering the undo: it
+ * puts back what each map held before, unless something newer replaced
+ * `value` meanwhile.
+ */
+function noteOnCalls<T>(
+  maps: readonly Map<string, T>[],
+  key: string,
+  value: T,
+): () => void {
+  const replaced = maps.map((map) => [map, map.get(key)] as const);
+  for (const map of maps) {
+    map.set(key, value);
+  }
+  return () => {
+    for (const [map, before] of replaced) {
+      if (map.get(key) !== value) {
+        continue;
+      }
+      if (before === undefined) {
+        map.delete(key);
+      } else {
+        map.set(key, before);
+      }
+    }
+  };
+}
+
+/** What a call published while it ran, as its envelope names it. */
+type CallPublished = Pick<ActiveCall, 'published' | 'publishedActions'>;
+
 function toEnvelope(
   callId: string,
   calleeId: string,
   outcome: CalleeTurnOutcome,
-  published: ReadonlyMap<string, CallPublishedPage>,
+  { published, publishedActions }: CallPublished,
 ): CallEnvelope {
   if (outcome.status === 'completed') {
     const stillOut = outcome.delegatesStillOut ?? 0;
@@ -5034,6 +5197,7 @@ function toEnvelope(
           ]
         : []),
       ...(published.size > 0 ? [PUBLISHED_PAGES_NOTE] : []),
+      ...(publishedActions.size > 0 ? [PUBLISHED_ACTIONS_NOTE] : []),
     ];
     const result: CallSettledResult = {
       call_id: callId,
@@ -5046,6 +5210,9 @@ function toEnvelope(
       ...(commands.length > 0 ? { running_commands: commands } : {}),
       ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
       ...(published.size > 0 ? { artifacts: [...published.values()] } : {}),
+      ...(publishedActions.size > 0
+        ? { actions: [...publishedActions.values()] }
+        : {}),
     };
     return { status: 'ok', result };
   }
@@ -5063,17 +5230,24 @@ function toEnvelope(
 }
 
 /**
- * A FAILED call's envelope naming the pages it published before it failed —
- * they stay in the user's chat. A completed call names them in its result
- * ({@link toEnvelope}).
+ * A FAILED call's envelope naming the pages and buttons it published before
+ * it failed — they stay in the user's chat. A completed call names them in
+ * its result ({@link toEnvelope}).
  */
-function withPublishedPages(
+function withPublished(
   envelope: CallEnvelope,
-  published: ReadonlyMap<string, CallPublishedPage>,
+  { published, publishedActions }: CallPublished,
 ): CallEnvelope {
-  return envelope.status === 'error' && published.size > 0
-    ? { ...envelope, artifacts: [...published.values()] }
-    : envelope;
+  if (envelope.status !== 'error') {
+    return envelope;
+  }
+  return {
+    ...envelope,
+    ...(published.size > 0 ? { artifacts: [...published.values()] } : {}),
+    ...(publishedActions.size > 0
+      ? { actions: [...publishedActions.values()] }
+      : {}),
+  };
 }
 
 /** A settled call's measured cache facts, as optional `call_result` keys. */

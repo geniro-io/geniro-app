@@ -46,7 +46,9 @@ export function readCodexThreads(result: unknown): AgentSessionRecord[] {
 }
 
 /** The words of a `userMessage` item — its text inputs, joined. */
-function userMessageText(item: Readonly<Record<string, unknown>>): string {
+export function userMessageText(
+  item: Readonly<Record<string, unknown>>,
+): string {
   return asArray(item.content)
     .flatMap((input) => {
       const record = asRecord(input);

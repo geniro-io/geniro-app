@@ -303,3 +303,44 @@ describe('GET /v1/chats', () => {
     });
   });
 });
+
+describe('POST /v1/chats/:runId/actions/:seq/press|dismiss', () => {
+  function actionController() {
+    const actionPresses = {
+      pressChat: vi.fn(async () => ({ outcome: {} })),
+      dismissChat: vi.fn(async () => ({ outcome: {} })),
+    };
+    const controller = Object.create(
+      ChatController.prototype,
+    ) as ChatController;
+    Object.assign(controller, { actionPresses });
+    return { controller, actionPresses };
+  }
+
+  it('records a press through the gateway as remote, and one without the stamp as desktop', async () => {
+    const { controller, actionPresses } = actionController();
+
+    await controller.pressAction(
+      RUN,
+      4,
+      { clientMessageId: 'c1' },
+      {
+        'x-geniro-via': 'remote',
+      },
+    );
+    await controller.pressAction(RUN, 4, { clientMessageId: 'c2' }, {});
+
+    expect(actionPresses.pressChat.mock.calls).toEqual([
+      [RUN, 4, 'c1', 'remote'],
+      [RUN, 4, 'c2', 'desktop'],
+    ]);
+  });
+
+  it('records a dismissal through the gateway as remote', async () => {
+    const { controller, actionPresses } = actionController();
+
+    await controller.dismissAction(RUN, 4, { 'x-geniro-via': 'remote' });
+
+    expect(actionPresses.dismissChat).toHaveBeenCalledWith(RUN, 4, 'remote');
+  });
+});

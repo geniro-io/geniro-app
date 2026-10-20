@@ -70,6 +70,7 @@ function cardRow(): ChatItem {
 
 function chatState(overrides: Partial<HostedChatState>): HostedChatState {
   return {
+    liveUnsent: [],
     run: {
       id: 'analysis-1',
       status: 'completed',
@@ -81,6 +82,9 @@ function chatState(overrides: Partial<HostedChatState>): HostedChatState {
     } as HostedChatState['run'],
     items: [],
     anchors: [],
+    client: null,
+    reconnectNonce: 0,
+    markWorking: vi.fn(),
     liveText: new Map(),
     loading: false,
     error: null,
@@ -190,6 +194,86 @@ describe('AnalysisDialog', () => {
     await expect(hosted.args!.open()).rejects.toThrow('no analysis');
   });
 
+  describe('a message a Stop dropped', () => {
+    const userRow = {
+      id: 'i5',
+      runId: 'analysis-1',
+      seq: 5,
+      kind: 'message',
+      role: 'user',
+      nodeId: null,
+      payload: { text: 'look again', deliveryId: 'd-1' },
+      createdAt: '2026-10-15T00:00:05.000Z',
+    } as unknown as ChatItem;
+    const marker = {
+      id: 'i6',
+      runId: 'analysis-1',
+      seq: 6,
+      kind: 'system',
+      role: null,
+      nodeId: null,
+      payload: {
+        message: 'Your message was not sent',
+        severity: 'warning',
+        caption: 'Not sent',
+        unsentMessages: ['d-1'],
+      },
+      createdAt: '2026-10-15T00:00:06.000Z',
+    } as unknown as ChatItem;
+    const doc = (): Document => container.ownerDocument;
+
+    it('resends it through the queue when the run can take it', async () => {
+      hosted.state = chatState({ items: [userRow, marker] });
+      await paint(SOURCE);
+
+      const resend = [...doc().querySelectorAll('button')].find(
+        (button) => button.textContent === 'Resend',
+      );
+      await act(async () => {
+        resend!.click();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(hosted.state.post).toHaveBeenCalledWith(
+        'look again',
+        [],
+        expect.any(String),
+      );
+    });
+
+    it('puts it back in the empty composer when it was dropped just now', async () => {
+      hosted.state = chatState({
+        items: [userRow, marker],
+        liveUnsent: [{ rowId: 'i6', deliveryIds: ['d-1'] }],
+      });
+      await paint(SOURCE);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(doc().querySelector('textarea')?.value).toBe('look again');
+    });
+
+    it('waits for the message row when the marker lands first', async () => {
+      hosted.state = chatState({
+        items: [marker],
+        liveUnsent: [{ rowId: 'i6', deliveryIds: ['d-1'] }],
+      });
+      await paint(SOURCE);
+      expect(doc().querySelector('textarea')?.value).toBe('');
+
+      hosted.state = { ...hosted.state, items: [userRow, marker] };
+      await paint(SOURCE);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(doc().querySelector('textarea')?.value).toBe('look again');
+    });
+  });
+
   it('draws nothing while no thread is chosen', async () => {
     await paint(null);
 
@@ -219,6 +303,88 @@ describe('AnalysisDialog', () => {
     });
 
     expect(apply).toHaveBeenCalledWith('analysis-1', 7, ['R-1']);
+  });
+
+  it("presses an agent's button from its card in the popup", async () => {
+    const live = {
+      seq: 9,
+      actionId: 'go',
+      nodeId: 'agent',
+      conversationId: '',
+      label: 'Go on',
+      once: true,
+      spec: { kind: 'message' as const, text: 'continue' },
+      publisher: { nodeId: 'agent', conversationId: '' },
+      pending: false,
+    };
+    const chats = APIS.chats as unknown as {
+      readRunState: ReturnType<typeof vi.fn>;
+      pressChatAction?: ReturnType<typeof vi.fn>;
+    };
+    chats.readRunState.mockResolvedValueOnce({
+      ...emptyRunState(),
+      actions: [live],
+      throughSeq: 9,
+    });
+    const pressChatAction = vi.fn(async () => ({
+      outcome: {
+        actionSeq: 9,
+        actionId: 'go',
+        nodeId: 'agent',
+        conversationId: '',
+        state: 'succeeded',
+      },
+    }));
+    chats.pressChatAction = pressChatAction;
+    hosted.state = chatState({
+      items: [
+        {
+          id: 'i9',
+          runId: 'analysis-1',
+          seq: 9,
+          kind: 'action',
+          role: null,
+          nodeId: null,
+          payload: {
+            actionId: 'go',
+            label: 'Go on',
+            once: true,
+            spec: { kind: 'message', text: 'continue' },
+            publisher: { nodeId: 'agent', conversationId: '' },
+          },
+          createdAt: '2026-10-15T00:00:09.000Z',
+        } as unknown as ChatItem,
+      ],
+    });
+    await paint(SOURCE);
+
+    const chip = document.querySelector<HTMLButtonElement>(
+      '[data-slot="analysis-transcript"] [data-slot="action-chip"]',
+    );
+    await act(async () => chip!.click());
+
+    expect(pressChatAction).toHaveBeenCalledWith({
+      runId: 'analysis-1',
+      seq: 9,
+      pressActionDto: { clientMessageId: expect.any(String) as string },
+    });
+    delete chats.pressChatAction;
+  });
+
+  it('re-reads the live buttons after the socket reconnects', async () => {
+    const readRunState = (
+      APIS.chats as unknown as { readRunState: ReturnType<typeof vi.fn> }
+    ).readRunState;
+    readRunState.mockClear();
+    await paint(SOURCE);
+    // Re-painting with nothing changed reads nothing more.
+    await paint(SOURCE);
+    const settled = readRunState.mock.calls.length;
+
+    hosted.state = chatState({ reconnectNonce: 1 });
+    await paint(SOURCE);
+
+    expect(readRunState).toHaveBeenCalledTimes(settled + 1);
   });
 
   it('offers a new analysis from its header', async () => {

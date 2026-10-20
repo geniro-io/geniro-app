@@ -56,8 +56,9 @@ import {
  * `set_mode` is absent for the reason the handshake frames are: it is not in
  * that queue, so it cannot strand anything, and arming it would only buy a
  * chance to narrate a turn that had already run on. Being listed here is not
- * on its own permission to speak — the last frame usually does not hold the
- * prompt, so `AcpTurnDriver.onRequestDeadline` re-checks before it emits.
+ * on its own permission to speak — the last frame holds the prompt only for an
+ * agent that asks it to (`AcpSessionOptions.promptAwaitsConfig`), so
+ * `AcpTurnDriver.onRequestDeadline` re-checks before it emits.
  */
 const REQUEST_DEADLINE_MS: Partial<Record<PendingKind, number>> = {
   set_model: 30_000,
@@ -470,6 +471,10 @@ export class AcpSession implements TurnDriver {
 
   withdrawHeldPrompt(): boolean {
     return this.turn.withdrawHeldPrompt();
+  }
+
+  onProcessEnded(): AgentEvent[] {
+    return this.turn.onProcessEnded();
   }
 
   /**

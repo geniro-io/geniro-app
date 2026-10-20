@@ -15,6 +15,7 @@
 
 import * as runtime from '../runtime';
 import type {
+  ActionPressDto,
   CancelledDto,
   CreateWorkflowDto,
   ExportWorkflowDto,
@@ -22,6 +23,7 @@ import type {
   ImportWorkflowDto,
   ItemDto,
   NodeStateDto,
+  PressActionDto,
   ResetWakesCancelledDto,
   RunDto,
   RunWorkflowDto,
@@ -59,6 +61,11 @@ export interface WorkflowsApiDiscardWorkflowChatRequest {
     slug: string;
 }
 
+export interface WorkflowsApiDismissWorkflowActionRequest {
+    runId: string;
+    seq: number;
+}
+
 export interface WorkflowsApiExportWorkflowRequest {
     slug: string;
     exportWorkflowDto: ExportWorkflowDto;
@@ -91,6 +98,12 @@ export interface WorkflowsApiListWorkflowRunsRequest {
 export interface WorkflowsApiOpenWorkflowChatRequest {
     slug: string;
     startWorkflowChatDto: StartWorkflowChatDto;
+}
+
+export interface WorkflowsApiPressWorkflowActionRequest {
+    runId: string;
+    seq: number;
+    pressActionDto: PressActionDto;
 }
 
 export interface WorkflowsApiSaveWorkflowRequest {
@@ -389,6 +402,59 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async discardWorkflowChat(requestParameters: WorkflowsApiDiscardWorkflowChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowChatsDiscardedDto> {
         const response = await this.discardWorkflowChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async dismissWorkflowActionRaw(requestParameters: WorkflowsApiDismissWorkflowActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ActionPressDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling dismissWorkflowAction().'
+            );
+        }
+
+        if (requestParameters['seq'] == null) {
+            throw new runtime.RequiredError(
+                'seq',
+                'Required parameter "seq" was null or undefined when calling dismissWorkflowAction().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}/actions/{seq}/dismiss`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"seq"}}`, encodeURIComponent(String(requestParameters['seq'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async dismissWorkflowAction(requestParameters: WorkflowsApiDismissWorkflowActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionPressDto> {
+        const response = await this.dismissWorkflowActionRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -775,6 +841,69 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async openWorkflowChat(requestParameters: WorkflowsApiOpenWorkflowChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.openWorkflowChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async pressWorkflowActionRaw(requestParameters: WorkflowsApiPressWorkflowActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ActionPressDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling pressWorkflowAction().'
+            );
+        }
+
+        if (requestParameters['seq'] == null) {
+            throw new runtime.RequiredError(
+                'seq',
+                'Required parameter "seq" was null or undefined when calling pressWorkflowAction().'
+            );
+        }
+
+        if (requestParameters['pressActionDto'] == null) {
+            throw new runtime.RequiredError(
+                'pressActionDto',
+                'Required parameter "pressActionDto" was null or undefined when calling pressWorkflowAction().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}/actions/{seq}/press`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"seq"}}`, encodeURIComponent(String(requestParameters['seq'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['pressActionDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async pressWorkflowAction(requestParameters: WorkflowsApiPressWorkflowActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionPressDto> {
+        const response = await this.pressWorkflowActionRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

@@ -24,6 +24,8 @@ import type {
   AgentSkillDto,
   AgentVocabularyDto,
   CopyPluginMcpServerDto,
+  KeptSessionConfigAckDto,
+  KeptSessionConfigDto,
   RecheckMcpServerDto,
   SetMcpServerEnabledDto,
   WriteMcpConfigDto,
@@ -74,6 +76,10 @@ export interface AgentsApiRecheckAgentMcpServerRequest {
 
 export interface AgentsApiSetAgentMcpServerEnabledRequest {
     setMcpServerEnabledDto: SetMcpServerEnabledDto;
+}
+
+export interface AgentsApiSetKeptSessionConfigRequest {
+    keptSessionConfigDto: KeptSessionConfigDto;
 }
 
 export interface AgentsApiWriteAgentMcpConfigRequest {
@@ -598,6 +604,53 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async setAgentMcpServerEnabled(requestParameters: AgentsApiSetAgentMcpServerEnabledRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpListingDto> {
         const response = await this.setAgentMcpServerEnabledRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async setKeptSessionConfigRaw(requestParameters: AgentsApiSetKeptSessionConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<KeptSessionConfigAckDto>> {
+        if (requestParameters['keptSessionConfigDto'] == null) {
+            throw new runtime.RequiredError(
+                'keptSessionConfigDto',
+                'Required parameter "keptSessionConfigDto" was null or undefined when calling setKeptSessionConfig().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/sessions/config`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['keptSessionConfigDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setKeptSessionConfig(requestParameters: AgentsApiSetKeptSessionConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<KeptSessionConfigAckDto> {
+        const response = await this.setKeptSessionConfigRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

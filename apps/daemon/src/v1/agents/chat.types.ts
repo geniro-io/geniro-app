@@ -2660,6 +2660,35 @@ export interface KeptProcessRoot {
   pid: number;
 }
 
+/**
+ * How long a run's CLI process is kept after its last turn, in minutes, until
+ * Electron main pushes the user's own window — see `SESSION_IDLE_MS`.
+ */
+export const DEFAULT_KEPT_SESSION_IDLE_MINUTES = 60;
+
+/**
+ * The window a user may set (`Settings.keptSessionIdleMinutes`). Bounded the
+ * same in `apps/ui/src/main/ipc-schemas.ts`, so a value main lets through is
+ * never one the route refuses.
+ */
+export const MIN_KEPT_SESSION_IDLE_MINUTES = 5;
+export const MAX_KEPT_SESSION_IDLE_MINUTES = 180;
+
+/**
+ * TWIN PARSER: the body `apps/ui/src/main/kept-session-config-push.ts` sends,
+ * built from `Settings.keptSessionIdleMinutes`.
+ */
+export const KeptSessionConfigSchema = z
+  .object({
+    idleMinutes: z
+      .number()
+      .int()
+      .min(MIN_KEPT_SESSION_IDLE_MINUTES)
+      .max(MAX_KEPT_SESSION_IDLE_MINUTES),
+  })
+  .meta({ id: 'KeptSessionConfig' });
+export type KeptSessionConfig = z.infer<typeof KeptSessionConfigSchema>;
+
 /** A command line longer than this is cut — a full prompt can ride argv. */
 export const MAX_PROCESS_ARGS_CHARS = 2_000;
 

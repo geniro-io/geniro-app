@@ -110,6 +110,24 @@ describe('readSettings', () => {
     expect(readSettings().historyPageSize).toBe(250);
   });
 
+  it('keeps a run’s CLI for an hour by default, and a stored window survives a read', () => {
+    expect(readSettings().keptSessionIdleMinutes).toBe(60);
+
+    writeRaw({ keptSessionIdleMinutes: 5 });
+
+    expect(readSettings().keptSessionIdleMinutes).toBe(5);
+  });
+
+  it('an idle window outside 5–180 whole minutes costs only that key', () => {
+    for (const keptSessionIdleMinutes of [4, 181, 12.5, '30']) {
+      writeRaw({ keptSessionIdleMinutes, onboardingComplete: true });
+
+      const settings = readSettings();
+      expect(settings.keptSessionIdleMinutes).toBe(60);
+      expect(settings.onboardingComplete).toBe(true);
+    }
+  });
+
   it("a future agent kind inside cliPaths costs only that entry — this build's known CLI paths survive", () => {
     // The salvage exists for version skew (a settings.json written by a NEWER
     // build under the notify-only brew flow). The most likely schema growth is

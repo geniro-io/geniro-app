@@ -2,6 +2,7 @@ import type { ExecutionContext } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it } from 'vitest';
 
+import { KeptSessionsController } from '../v1/agents/controllers/kept-sessions.controller';
 import { SharesController } from '../v1/shares/controllers/shares.controller';
 import { DesktopOnlyGuard } from './desktop-only.guard';
 
@@ -35,6 +36,12 @@ describe('DesktopOnlyGuard', () => {
   it('guards every shares route', () => {
     const guards: unknown[] =
       Reflect.getMetadata(GUARDS_METADATA, SharesController) ?? [];
+    expect(guards).toContain(DesktopOnlyGuard);
+  });
+
+  it('guards the kept-session config a paired device may not change', () => {
+    const guards: unknown[] =
+      Reflect.getMetadata(GUARDS_METADATA, KeptSessionsController) ?? [];
     expect(guards).toContain(DesktopOnlyGuard);
   });
 });

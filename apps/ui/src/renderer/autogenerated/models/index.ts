@@ -3974,6 +3974,32 @@ export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 /**
  * 
  * @export
+ * @interface KeptSessionConfigAckDto
+ */
+export interface KeptSessionConfigAckDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof KeptSessionConfigAckDto
+     */
+    idleMinutes: number;
+}
+/**
+ * 
+ * @export
+ * @interface KeptSessionConfigDto
+ */
+export interface KeptSessionConfigDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof KeptSessionConfigDto
+     */
+    idleMinutes: number;
+}
+/**
+ * 
+ * @export
  * @interface LabelInstructionDeletedDto
  */
 export interface LabelInstructionDeletedDto {

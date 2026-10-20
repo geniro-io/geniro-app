@@ -68,6 +68,8 @@ import type {
   AgentTurnInput,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
+  RecoveredSubagentOutcome,
+  SubagentRecoveryRef,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
@@ -3110,6 +3112,34 @@ export class CursorAcpAdapter extends AgentAdapter {
     return join(this.cursorOptions.homeDir ?? homedir(), CURSOR_HOME_DIR_NAME);
   }
 
+  override async recoverSubagent(
+    ref: SubagentRecoveryRef,
+  ): Promise<RecoveredSubagentOutcome | null> {
+    if (
+      !isPlainSessionId(ref.sessionId) ||
+      !isPlainSessionId(ref.toolCallId) ||
+      (ref.childSessionId !== null && !isPlainSessionId(ref.childSessionId))
+    ) {
+      return null;
+    }
+    // A brief alone can identify several simultaneous or resumed delegates.
+    if (ref.childSessionId === null) {
+      return null;
+    }
+    const ending = await readCursorDelegateEnding(
+      {
+        conversationId: ref.childSessionId,
+        cwd: ref.cwd,
+        sessionId: ref.sessionId,
+        notBeforeMs: ref.launchedAtMs,
+      },
+      this.cursorHome(),
+    );
+    return ending?.state === 'ended' && ending.outcome !== 'untracked'
+      ? ending.outcome
+      : null;
+  }
+
   protected override createTurnDriver(input: AgentTurnInput): TurnDriver {
     return new AcpSession(
       {
@@ -3117,6 +3147,23 @@ export class CursorAcpAdapter extends AgentAdapter {
         clientVersion: this.clientVersion,
         // What unlocks the separate effort control; see CURSOR_ACP_CLIENT_META.
         clientMeta: CURSOR_ACP_CLIENT_META,
+        // This CLI binds a turn's model and every parameter when the PROMPT
+        // arrives; a frame still in flight then is accepted, confirmed in its
+        // reply, and lost for that turn (it sticks from the next one).
+        //
+        // - The context window, measured on 2026.08.11-e8db854: pipelined, the
+        //   turn ran at the default 300,000; awaited, at the 1,000,000 asked
+        //   for. The reply confirmed `context = 1m` either way.
+        // - Billing on 2026.10.01-e373342 (`GetFilteredUsageEvents`, by
+        //   conversation): pipelined `reasoning=high` on `gpt-5.6-sol` billed
+        //   `-medium` (3/3), `fast=false` on `grok-4.7` billed `-high-fast`, and
+        //   a model switch to `gpt-5.5` with nothing else set billed
+        //   `gpt-5.6-sol-medium` (2/2). Awaited, each billed what was asked.
+        //   Re-sending an unchanged value pipelined was harmless.
+        //
+        // It costs one `set_config_option` round trip per turn that sends a
+        // frame, ~1.7–2.0s on that build.
+        promptAwaitsConfig: true,
         turnOptions: (turnInput) => this.acpTurnOptions(turnInput),
         declinedWithoutNotice: CURSOR_SILENTLY_DECLINED_METHODS,
         question: {

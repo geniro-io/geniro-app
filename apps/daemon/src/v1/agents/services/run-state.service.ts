@@ -9,10 +9,15 @@ import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { rowsWithId, workflowEdgeRows } from '../utils/history-anchors';
 import { itemToWire } from '../utils/item-wire';
-import { parseJsonColumn, payloadString } from '../utils/json-util';
-import { foldRunCalls, foldRunDelegates } from '../utils/run-state-folds';
+import { payloadString } from '../utils/json-util';
+import {
+  foldRunCalls,
+  foldRunDelegates,
+  turnEndingOf,
+} from '../utils/run-state-folds';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ApprovalRegistry } from './approval-registry';
+import { ChatActionsService } from './chat-actions.service';
 import { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 
@@ -39,6 +44,7 @@ export class RunStateService {
     private readonly shells: ChatShellsService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly seqs: ItemSeqAllocator,
+    private readonly actions: ChatActionsService,
   ) {}
 
   async read(runId: string): Promise<RunStateWire> {
@@ -142,14 +148,13 @@ export class RunStateService {
       launches: delegationCalls,
       replies: delegateReplies,
       runSettled,
-      endings: runSettled
-        ? []
-        : await this.endingsAfterUnanswered(
-            runId,
-            [...delegationCalls, ...declarations],
-            idsOf(delegateReplies),
-            em,
-          ),
+      runCancelled: run.status === 'cancelled',
+      endings: await this.endingsAfterUnanswered(
+        runId,
+        [...delegationCalls, ...declarations],
+        idsOf(delegateReplies),
+        em,
+      ),
     });
     const workflowRows = [
       ...workflowEdgeRows(announcements, workflowIds),
@@ -178,6 +183,7 @@ export class RunStateService {
       workflowRows,
       artifactRows,
       shells: (await this.shells.read(runId)).shells,
+      actions: await this.actions.live(runId, em),
       turnStartedAt,
     };
   }
@@ -251,11 +257,7 @@ export class RunStateService {
       return [];
     }
     return (await this.itemDao.turnEndingsAfter(runId, oldest, em)).map(
-      (row) => ({
-        seq: row.seq,
-        nodeId: row.nodeId,
-        callId: payloadString(parseJsonColumn(row.payload), 'callId'),
-      }),
+      turnEndingOf,
     );
   }
 }

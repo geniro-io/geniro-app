@@ -23,6 +23,8 @@ import { ComposingRow, liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { callFollowUpId, NotSentMessagesContext } from './not-sent-messages';
+import { NotSentNotice } from './not-sent-notice';
 import { RetryContext } from './retry-context';
 import { settlesOnContinuation } from './settled-status';
 import { NestedThreadContext } from './subagent-context';
@@ -32,6 +34,7 @@ import {
   isInfoNotice,
   isWarningNotice,
   noticeCaption,
+  unsentMessageIds,
 } from './system-payload';
 import { ThinkingDisclosure } from './thinking-block';
 import { ToolBodyView } from './tool-body-view';
@@ -164,6 +167,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   namesSender?: boolean;
 }): React.JSX.Element | null {
   const cardBacked = useContext(CardBackedRequestsContext);
+  const notSent = useContext(NotSentMessagesContext);
   const resolveSignIn = useContext(CliLoginContext);
   const retry = useContext(RetryContext);
   const nested = useContext(NestedThreadContext);
@@ -182,7 +186,9 @@ export const TranscriptItem = memo(function TranscriptItem({
       // the bubble carries only the markdown-rendered text.
       const text = payloadString(item.payload, 'text') ?? '';
       const attachments = messageAttachments(item.payload);
-      return (
+      const deliveryId =
+        item.role === 'user' ? payloadString(item.payload, 'deliveryId') : null;
+      const bubble = (
         <MessageBubble
           variant={item.role === 'user' ? 'user' : 'assistant'}
           // The SenderRow frame names the AGENT, which is the same agent for a
@@ -199,6 +205,23 @@ export const TranscriptItem = memo(function TranscriptItem({
               markdown block under it. */}
           {text ? <MarkdownContent content={text} /> : null}
         </MessageBubble>
+      );
+      if (
+        notSent === null ||
+        deliveryId === null ||
+        !notSent.unsent.has(deliveryId)
+      ) {
+        return bubble;
+      }
+      const resend = notSent.resend;
+      return (
+        <>
+          {bubble}
+          <NotSentNotice
+            reason={notSent.unsent.get(deliveryId) ?? null}
+            onResend={resend === null ? null : () => resend(item)}
+          />
+        </>
       );
     }
     case 'reasoning': {
@@ -433,6 +456,15 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (isDeliveryAcknowledgement(item.payload)) {
         return null;
       }
+      // Drawn on the user messages it names instead, once they are on screen.
+      const unsent = unsentMessageIds(item.payload);
+      if (
+        unsent.length > 0 &&
+        notSent !== null &&
+        unsent.every((id) => notSent.unsent.has(id))
+      ) {
+        return null;
+      }
       const message = payloadString(item.payload, 'message');
       if (message === null) {
         return null;
@@ -628,6 +660,16 @@ export const TranscriptItem = memo(function TranscriptItem({
       // inside the call — and without this arm it fell through to the red
       // "orphaned" line below, which is the opposite of what happened.
       if (outcome === 'message') {
+        // Accepted, then dropped by the callee's turn: the "not delivered" row
+        // the drop wrote shows these words instead.
+        const followUpId = callFollowUpId(item, 'message');
+        if (
+          followUpId !== null &&
+          notSent !== null &&
+          notSent.unsent.has(followUpId)
+        ) {
+          return null;
+        }
         return (
           <MessageBubble
             variant="call"

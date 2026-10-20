@@ -189,7 +189,7 @@ Anchors and run state:
 - Whatever replaces anchors calls `forget`. A page landing after a live answer merges.
 - Rows refused by `addItem`'s away-from-tail guard bring no anchors.
 - Never rebuild a call heuristically from its later rows: it draws ghost cards.
-- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window supplies details; the daemon decides what has ENDED: a shell, delegate or call the page reads as running that began at or before the read's `throughSeq` and that the read says is over, is over (`withoutDaemonEndedShells`, `withDaemonDelegateEndings`, `callEndedPerDaemon`). The open turns' unanswered calls (`openToolCalls`) are folded in with the page, so a foreground command shows while the reader is elsewhere. Open requests off the tail are the daemon's too.
+- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window supplies details; the daemon decides what has ENDED: a shell, delegate or call the page reads as running that began at or before the read's `throughSeq` and that the read says is over, is over (`withoutDaemonEndedShells`, `applyDaemonReadings` in `durable-transcript.ts`, `callEndedPerDaemon`). The open turns' unanswered calls (`openToolCalls`) are folded in with the page, so a foreground command shows while the reader is elsewhere. Open requests off the tail are the daemon's too.
 
 Jumps (search, global search, timeline, the Agents chip) — `chats/use-transcript-jump.ts`, DOM contract in `chats/jump-target.ts`:
 
@@ -217,6 +217,7 @@ One home for each concern:
 - A held turn (`holdingFor`) is not a working agent. The live announce drains once, on the transition into held. `queueMayDrainAfterReplay` treats a held run as drainable.
 - A workflow whose manager has ended its turn (`rootsWorking = 0`) takes a message at once.
 - A send clears the composer first. `restoreUnsent` puts unsent content back into the thread it came from, never over newer typing.
+- A message a turn accepted and then dropped (`unsentMessages` on a `system` row, paired by the user row's `deliveryId`) is drawn "Not sent" with Resend, quoting the CLI's `unsentReason` when it refused the message; the rules live in `chats/not-sent-messages.ts`. A `message_agent` "delivered" row whose `followUpId` a later "not delivered" row names draws nothing (`callFollowUpId`). Nothing is sent again unasked. Only a LIVE marker restores, and only into an empty composer (`restoreIntoEmpty`); a callee's message is never restored, since the composer feeds the trigger; Resend goes through the queue with `followUpDelivery`'s kick, and a callee's message back to its own call (`callTargetOf`), never to the trigger. A marker whose messages are all on screen draws nothing itself.
 - Send waits for `useAttachments().reading` and for uploads (`attachBusy`). Each read and upload carries its owning thread.
 - "Send now" checks the mid-turn channel of every agent the message lands in (`triggerFedAgentIds`), never `activeRun.agentKind` alone (it is null for workflow runs).
 - Queue drag: call `preventDefault` on `dragover` first, then decide what to move. Never return early over the dragged row.
@@ -233,7 +234,8 @@ One home for each concern:
 - `settled-status.ts`: only a live terminal item mirrors its status onto the run row. A replay takes one reading from its last item (`reconcileFromTail`).
 - A `turn_complete` stamped `insideTurn` is not terminal. Never mirror it.
 - `RunStatusEvent.noTerminalItem` lets `use-chat-run.ts` end `streaming` and drain the queue.
-- A run settling is a moment, not a flag. `settleMomentOf` reads the last terminal item first and the row's `updatedAt` only as a fallback. `subagentBlockStatus` and `taskCardIsLive` use that moment.
+- A settle arriving after the open run's live terminal row ends `streaming` too, without a second drain (`liveTurnEndedRef`; `use-hosted-chat.ts` mirrors it): a stray `running` can land between the two. After-turn bookkeeping rows (`isAfterTurnBookkeeping`) do not count as the run resuming.
+- A run settling is a moment, not a flag. `settleMomentOf` reads the last terminal item first and the row's `updatedAt` only as a fallback. `subagentSpokeSince` and `taskCardIsLive` use that moment. A sub-agent's own status (`subagentBlockStatus`) reads no run state at all: its rows, else the daemon's whole-conversation reading (`daemonSubagentReadings` + `applyDaemonReadings` in `durable-transcript.ts`), which is the only place a missing ending is resolved.
 - A null activity means "working, nothing named". Both live rows fall back to the one `STANDING_ACTIVITY`. `WORKING_WORDS[0]` is its twin.
 - Live clocks count from durable-row timestamps, never from their own mount.
 - The chat live-plane key is `CHAT_LIVE_KEY` (`liveTextKey`), never the daemon's owner key `agent`. Node id is the discriminator.
@@ -269,6 +271,7 @@ One home for each concern:
 **Cards (agent-drawn payloads):**
 
 - Each card kind has a twin parser (`*-payload.ts`) of the daemon's schema.
+- Agent buttons (`action-chip.tsx`, `action-card.tsx`, `use-chat-actions.ts`): what is pressable is run state's `actions`, never a fold of the window. A press refused `RUN_BUSY` is retried by the hook (same seq, same `clientMessageId`) once the turn settles, never through the composer queue, which would send the text without recording the press. The shelf group sits after the task list, ahead of the turn-scoped chips. A workflow run presses through the workflow routes (the hook takes whichever API the open run needs; the chat route refuses a workflow run), and its busy refusals are asked again on `ACTION_RETRY_MS`, since its run state opens no turn. A button whose `publisher.agentLabel` is set (another workflow agent's) says so: `· <agent>` on the chip, `from <agent>` on the card, linking to its call's card, which it opens (`ChatActions.openCall`: the `call:<blockId>` thread flag, then a reveal, paging first when the card is off the window; the Agents chip only reveals).
 - `isCardEntry` (`transcript-groups.ts`) is the one predicate over card kinds. Never write a `'task-list' || …` chain.
 - A new card tool also goes in `GENIRO_TOOL_NAMES`, which the compiler cannot check.
 - Findings keep the agent's order.

@@ -57,6 +57,13 @@ import { MessageComposer } from './message-composer';
 import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import {
+  notSentDeliveryIds,
+  restoreIntoEmpty,
+  stagedFrom,
+  unsentMessageContent,
+  userDeliveryId,
+} from './not-sent-messages';
+import {
   type ArtifactUrlBuilder,
   artifactUrlBuilder,
 } from './published-artifact';
@@ -89,6 +96,7 @@ import { useAgentEfforts } from './use-agent-efforts';
 import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { readAsBase64, useAttachments } from './use-attachments';
+import { type PressHooks, useChatActions } from './use-chat-actions';
 import {
   appendPaths,
   CHAT_UPLOAD_TIMEOUT_MS,
@@ -96,6 +104,7 @@ import {
 } from './use-file-attach';
 import type { HostedChatState } from './use-hosted-chat';
 import { useMessageQueue } from './use-message-queue';
+import { useRunState } from './use-run-state';
 
 /** No workflow is ever a target here: a hosted chat is one agent's. */
 const NO_WORKFLOW_TARGETS = [] as const;
@@ -262,6 +271,49 @@ export function HostedChat({
   const sendingRef = useRef(false);
 
   const runId = chat.run?.id ?? null;
+  // The agent here is offered `publish_action` like any chat's, so its buttons
+  // must be pressable here too — the card reads them through this.
+  const { state: runState, refresh: refreshRunState } = useRunState(
+    apis?.chats ?? null,
+    chat.client,
+    runId,
+    chat.reconnectNonce,
+  );
+  // A press starts a turn like a typed send, so it takes the send's steps:
+  // flush the canvas first, and raise `working` before the request.
+  // Lowered only by the press that raised it: a press into a running turn
+  // must not take down the turn's own flag when it fails.
+  const { markWorking } = chat;
+  const pressWorkingRef = useRef(chat.working);
+  useEffect(() => {
+    pressWorkingRef.current = chat.working;
+  }, [chat.working]);
+  const raisedByPressRef = useRef(false);
+  const pressHooks = useMemo<PressHooks>(
+    () => ({
+      beforePress: async () => {
+        await onBeforeSend?.();
+        if (!pressWorkingRef.current) {
+          raisedByPressRef.current = true;
+          markWorking(true);
+        }
+      },
+      onPressSettled: (taken) => {
+        if (raisedByPressRef.current && !taken) {
+          markWorking(false);
+        }
+        raisedByPressRef.current = false;
+      },
+    }),
+    [onBeforeSend, markWorking],
+  );
+  const chatActions = useChatActions(
+    apis?.chats ?? null,
+    runId,
+    runState,
+    refreshRunState,
+    pressHooks,
+  );
   const ownerRef = useRef(runId ?? ownerKey);
   ownerRef.current = runId ?? ownerKey;
   const attachments = useAttachments(undefined, {
@@ -368,7 +420,14 @@ export function HostedChat({
   );
   // From here on the run is read through the chat screen's own functions, so
   // the transcript, the status and the ring cannot read the same rows two ways.
+  const { state: delegateState } = useRunState(
+    apis?.chats ?? null,
+    null,
+    runId,
+    settledTurns,
+  );
   const { foldItems, entries: durableEntries } = useDurableTranscript({
+    delegateState,
     items: chat.items,
     anchors: chat.anchors,
     runId,
@@ -403,13 +462,8 @@ export function HostedChat({
       ? settleMomentOf(run, chat.items)
       : null;
   const subagentRunning = useMemo(
-    () =>
-      anySubagentRunning(
-        durableEntries,
-        runStoppedAt,
-        run?.subagentsOut ?? null,
-      ),
-    [durableEntries, runStoppedAt, run?.subagentsOut],
+    () => anySubagentRunning(durableEntries, runStoppedAt),
+    [durableEntries, runStoppedAt],
   );
   const status =
     run === null
@@ -511,6 +565,84 @@ export function HostedChat({
     subagentsOut: (run?.subagentsOut ?? 0) > 0,
     shellsOut: (run?.shellsOpen ?? 0) > 0,
   };
+  // Messages a turn dropped because it ended first — see `Chats.tsx`.
+  const notSentIds = useMemo(
+    () => notSentDeliveryIds(chat.items),
+    [chat.items],
+  );
+  const deliveryFactsRef = useRef(deliveryFacts);
+  deliveryFactsRef.current = deliveryFacts;
+  const notSent = useMemo(
+    () => ({
+      unsent: notSentIds,
+      resend: (item: ChatItem): void => {
+        void unsentMessageContent(item, loadAttachment)
+          .then(({ text, images }) => {
+            // Queued, then kicked by the composer's own rule.
+            messageQueue.enqueue(item.runId, { text, images });
+            const decision = followUpDelivery({
+              ...deliveryFactsRef.current,
+              queued: true,
+            });
+            if (decision.action !== 'queue' || decision.kickDrain) {
+              void messageQueue.drain(item.runId);
+            }
+          })
+          .catch((err: unknown) => {
+            setComposeError(describeDaemonError(err));
+          });
+      },
+    }),
+    [notSentIds, loadAttachment, messageQueue],
+  );
+  // A live drop puts the words back in an EMPTY composer, by the chat
+  // screen's rule (`restoreIntoEmpty`). Each marker waits for the rows it
+  // names — it can land before them — and is restored once.
+  const { liveUnsent } = chat;
+  const restoredMarkersRef = useRef(new Set<string>());
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  useEffect(() => {
+    for (const marker of liveUnsent) {
+      if (restoredMarkersRef.current.has(marker.rowId)) {
+        continue;
+      }
+      const dropped = chat.items.filter((row) => {
+        const id = userDeliveryId(row);
+        return id !== null && marker.deliveryIds.includes(id);
+      });
+      if (dropped.length === 0) {
+        continue;
+      }
+      restoredMarkersRef.current.add(marker.rowId);
+      void Promise.all(
+        dropped.map((row) => unsentMessageContent(row, loadAttachment)),
+      )
+        .then((contents) => {
+          const next = restoreIntoEmpty(
+            {
+              text: draftRef.current,
+              staged: attachmentsRef.current.attachments,
+            },
+            {
+              text: contents.map((content) => content.text).join('\n\n'),
+              staged: contents.flatMap((content) =>
+                content.images.map((image) => stagedFrom(image, null)),
+              ),
+            },
+          );
+          setDraft(next.text);
+          if (attachmentsRef.current.attachments.length === 0) {
+            attachmentsRef.current.restore([...next.staged]);
+          }
+        })
+        .catch((err: unknown) => {
+          setComposeError(describeDaemonError(err));
+        });
+    }
+  }, [liveUnsent, chat.items, loadAttachment]);
   const paused = runId !== null && messageQueue.pausedQueues.has(runId);
   const composerButton = followUpButton(
     followUpDelivery(deliveryFacts),
@@ -749,7 +881,6 @@ export function HostedChat({
       callChannel={null}
       artifactUrl={artifactUrl}
       runSettledAt={runSettledAt}
-      delegatesOut={run?.subagentsOut ?? null}
       transcript={{
         collapseToolSteps,
         runActivity: chat.activity,
@@ -762,7 +893,9 @@ export function HostedChat({
         loadMetrics,
       }}
       loadAttachment={loadAttachment}
-      applyRecommendations={applyRecommendations}>
+      applyRecommendations={applyRecommendations}
+      notSent={notSent}
+      chatActions={chatActions}>
       {header({ run, status })}
 
       <div

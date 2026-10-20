@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { ActionBroker } from '../agents/services/action.broker';
 import { AnalysisBroker } from '../agents/services/analysis.broker';
 import { ArtifactBroker } from '../agents/services/artifact.broker';
 import { ChartBroker } from '../agents/services/chart.broker';
@@ -52,6 +53,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         comparisons: ComparisonBroker,
         galleries: GalleryBroker,
         artifacts: ArtifactBroker,
+        actions: ActionBroker,
         patches: PatchBroker,
         plans: PlanBroker,
         notices: NotifyBroker,
@@ -71,6 +73,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           comparisons,
           galleries,
           artifacts,
+          actions,
           patches,
           plans,
           notices,
@@ -90,6 +93,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         ComparisonBroker,
         GalleryBroker,
         ArtifactBroker,
+        ActionBroker,
         PatchBroker,
         PlanBroker,
         NotifyBroker,

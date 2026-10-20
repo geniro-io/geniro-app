@@ -94,6 +94,10 @@ export async function writeRunStatus(
   // and saying so here is what keeps a `needs-input` badge from outliving the
   // turn it belonged to — the card is gone from the screen, and the badge would
   // have gone on claiming the user was the blocker.
+  //
+  // A deferred card is the exception `sweepNode` leaves standing. The null
+  // here is still right — the status write does not know about that card —
+  // and the chat finalizer re-announces `awaiting` afterwards when one remains.
   // A TERMINAL status always carries `summary`, null included; a non-terminal
   // one never does. The two are different statements and the wire has to keep
   // them apart: the client holds the last sentence it was given, so omitting a

@@ -68,8 +68,10 @@ import {
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PUBLISH_ACTION_TOOL,
   HOST_QUESTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
   SINGLE_AGENT_NODE,
@@ -80,6 +82,7 @@ import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import type { WallTurnDao } from '../dao/wall-turn.dao';
 import { hostCardQuestions, hostMcpServerName } from '../utils/host-question';
+import { serializePendingQuestion } from '../utils/pending-question';
 import {
   CHAT_WALL_CLOCK_ROW_KINDS,
   type WallClockRow,
@@ -87,6 +90,8 @@ import {
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import { UnknownAgentVersion } from './__tests__/unknown-agent-version';
+import { ActionBroker } from './action.broker';
+import { ActionPublishService } from './action-publish.service';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import type { AgentMcpService } from './agent-mcp.service';
@@ -99,6 +104,7 @@ import { ArtifactStoreService } from './artifact-store.service';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChartBroker } from './chart.broker';
 import { ChatService } from './chat.service';
+import { ChatActionsService } from './chat-actions.service';
 import type { ChatUploadStoreService } from './chat-upload-store.service';
 import type { CliSessionsService } from './cli-sessions.service';
 import { ComparisonBroker } from './comparison.broker';
@@ -188,6 +194,15 @@ class FakeRunDao {
     if (run) {
       run.pendingQuestion = value;
     }
+  }
+  /** The real one is a conditional UPDATE; so is this. */
+  async clearPendingQuestionIf(id: string, expected: string): Promise<boolean> {
+    const run = this.runs.get(id);
+    if (run?.pendingQuestion !== expected) {
+      return false;
+    }
+    run.pendingQuestion = null;
+    return true;
   }
   async listRunsWithPendingQuestion(): Promise<Run[]> {
     return [...this.runs.values()].filter(
@@ -1085,6 +1100,7 @@ function setup(
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
   const artifacts = new ArtifactBroker();
+  const actionSinks = new ActionBroker();
   // The REAL store, on the reasoning the patch broker's comment gives: what a
   // published artifact observably DOES is put a page on disk and hand back a
   // key that opens it, and a double would pin the double. One root shared by
@@ -1231,6 +1247,16 @@ function setup(
     comparisons,
     galleries,
     artifacts,
+    actionSinks,
+    new ActionPublishService(
+      new ChatActionsService(
+        em,
+        itemDao as unknown as ItemDao,
+        bus,
+        NO_CALL_INDEX,
+        seqs,
+      ),
+    ),
     artifactStore,
     notices,
     callTokens,
@@ -1279,6 +1305,7 @@ function setup(
     comparisons,
     galleries,
     artifacts,
+    actionSinks,
     artifactStore,
     statuses,
     deletedRuns,
@@ -2623,6 +2650,20 @@ describe('ChatService', () => {
       await settle(claude);
     });
 
+    it('offers the action tools only while a turn can publish', async () => {
+      // The registration and its disposer: without the first the tools are
+      // never listed, without the second a settled chat keeps publishing.
+      const { service, claude, actionSinks } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
+
+      await service.sendMessage(run.id, 'hello');
+      expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+      expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
+    });
+
     it('stops accepting artifacts once the turn that could show them is over', async () => {
       // The disposer. Without it a settled turn goes on publishing into a
       // transcript nobody is producing any more.
@@ -3453,6 +3494,460 @@ describe('ChatService', () => {
               item.kind === 'message' && item.payload.includes('Postgres'),
           ),
         ).toBe(true);
+      });
+
+      it('clears a standing card an older build wrote, at boot', async () => {
+        // No compatibility reader: a row that names no kind is unreadable, and
+        // the rehydration clears what it cannot track rather than leaving the
+        // run waiting on a card nobody can answer.
+        const { service, approvals, runDao } = setup();
+        const run = await asking(service);
+        runDao.runs.get(run.id)!.pendingQuestion = JSON.stringify({
+          requestId: 'req-old',
+          title: null,
+          questions: QUESTIONS,
+        });
+
+        await service.rehydrateDeferredQuestions();
+
+        expect(runDao.runs.get(run.id)?.pendingQuestion).toBeNull();
+        expect(approvals.listByRun(run.id)).toEqual([]);
+      });
+
+      const PLAN = {
+        title: 'Make the queue test deterministic',
+        steps: [{ title: 'Replace the sleep', detail: 'wait for the queue' }],
+      };
+
+      /**
+       * The call against a sentinel that resolves on the next flush.
+       *
+       * A blocking plan or patch never settles until the user answers, so
+       * awaiting it hangs the suite. Racing it makes the missing `posted`
+       * arm fail as an assertion (`still-pending`) instead.
+       */
+      function postedOrPending<T>(
+        call: Promise<T>,
+      ): Promise<T | 'still-pending'> {
+        return Promise.race([
+          call,
+          drain().then(() => 'still-pending' as const),
+        ]);
+      }
+
+      it('answers a deferred plan at once instead of parking the call', async () => {
+        const { service, plans } = setup();
+        const run = await asking(service);
+
+        const outcome = await postedOrPending(
+          plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
+        );
+
+        expect(outcome).toEqual({ status: 'posted' });
+      });
+
+      it('leaves a deferred plan standing after the turn and parks the run on an approval', async () => {
+        // The badge and the banner read `awaiting` off the status channel.
+        // A question announces itself as `question`; a plan is an approval,
+        // and the announce has to still be the last word once the turn's own
+        // settle has said the run is parked on nothing.
+        const { service, cursor, plans, approvals, itemDao, statuses, runDao } =
+          setup();
+        const run = await asking(service);
+
+        const outcome = await postedOrPending(
+          plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(cursor);
+
+        expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+          false,
+        );
+        expect(approvals.awaitingFor(run.id)).toBe('approval');
+        expect(approvals.listByRun(run.id)[0]?.question).toBe(false);
+        expect(approvals.listByRun(run.id)[0]?.deferred).toBe(true);
+        expect(runDao.runs.get(run.id)?.pendingQuestion).toContain(PLAN.title);
+        const awaiting = statuses.filter(
+          (event) => event.runId === run.id && event.awaiting !== undefined,
+        );
+        expect(awaiting.at(-1)).toEqual({
+          runId: run.id,
+          status: null,
+          activity: null,
+          awaiting: 'approval',
+        });
+      });
+
+      it('sends the plan verdict and the note as the run’s next message', async () => {
+        const { service, cursor, plans, approvals, itemDao } = setup();
+        const run = await asking(service);
+        const outcome = await postedOrPending(
+          plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(cursor);
+        const turnsBefore = cursor.start.mock.calls.length;
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+
+        expect(
+          approvals.resolve(run.id, requestId, true, 'skip the sleep'),
+        ).toBe(true);
+        await drain();
+        await drain();
+        await drain();
+
+        expect(
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'message' &&
+              item.payload.includes('approved') &&
+              item.payload.includes('skip the sleep'),
+          ),
+        ).toBe(true);
+        expect(cursor.start.mock.calls.length).toBe(turnsBefore + 1);
+      });
+
+      it('answers a deferred patch at once, and Apply writes the file', async () => {
+        const { service, cursor, patches, approvals, itemDao } = setup();
+        const run = await asking(service);
+        writeFileSync(join(dir, 'a.ts'), 'const timeout = 30;\n', 'utf8');
+
+        const outcome = await postedOrPending(
+          patches.propose(run.id, SINGLE_AGENT_NODE, {
+            filePath: 'a.ts',
+            oldString: 'const timeout = 30;',
+            newString: 'const timeout = 60;',
+            summary: 'Raise the timeout',
+          }),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(cursor);
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+
+        expect(approvals.resolve(run.id, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(readFileSync(join(dir, 'a.ts'), 'utf8')).toBe(
+            'const timeout = 60;\n',
+          );
+          expect(
+            itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes('Applied to a.ts'),
+            ),
+          ).toBe(true);
+        });
+      });
+
+      it('reports a deferred patch stale after a restart when the file moved, and writes nothing', async () => {
+        // The body in the column is what Apply runs, and it runs through the
+        // same write the blocking path uses — so a target that changed after
+        // the card went up is `stale`, not a second copy of the file.
+        const { service, cursor, patches, approvals, itemDao } = setup();
+        const run = await asking(service);
+        writeFileSync(join(dir, 'c.ts'), 'const timeout = 30;\n', 'utf8');
+
+        const outcome = await postedOrPending(
+          patches.propose(run.id, SINGLE_AGENT_NODE, {
+            filePath: 'c.ts',
+            oldString: 'const timeout = 30;',
+            newString: 'const timeout = 60;',
+          }),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(cursor);
+        writeFileSync(
+          join(dir, 'c.ts'),
+          'somebody else changed this\n',
+          'utf8',
+        );
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+        approvals.sweepDeferred(run.id);
+
+        await service.rehydrateDeferredQuestions();
+        expect(approvals.resolve(run.id, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(
+            itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes('could not be applied') &&
+                item.payload.includes('no longer in the file'),
+            ),
+          ).toBe(true);
+        });
+
+        expect(readFileSync(join(dir, 'c.ts'), 'utf8')).toBe(
+          'somebody else changed this\n',
+        );
+      });
+
+      it('reports a deferred patch stale when the chat’s folder is gone, and does not recreate it', async () => {
+        // A deferred card stands with no turn running, so the folder can be
+        // removed before Apply (a task worktree, a moved project). The blocking
+        // sink writes only into `resolveValidCwd(run.cwd)`; a whole-file write
+        // here must not bring the folder back with one file in it.
+        const ctx = setup();
+        const run = await asking(ctx.service);
+        const outcome = await postedOrPending(
+          ctx.patches.propose(run.id, SINGLE_AGENT_NODE, {
+            filePath: 'src/x.ts',
+            newString: 'x\n',
+          }),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(ctx.cursor);
+        const gone = join(dir, 'removed-worktree');
+        ctx.runDao.runs.get(run.id)!.cwd = gone;
+        const send = vi.spyOn(ctx.service, 'sendMessage');
+        const requestId = ctx.approvals.listByRun(run.id)[0]!.requestId;
+
+        expect(ctx.approvals.resolve(run.id, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(send).toHaveBeenCalledWith(
+            run.id,
+            expect.stringContaining(
+              'could not be applied (the chat’s folder no longer exists)',
+            ),
+          );
+        });
+
+        expect(existsSync(gone)).toBe(false);
+      });
+
+      it.each([
+        [
+          'the chat has no folder',
+          (ctx: ReturnType<typeof setup>, runId: string): void => {
+            ctx.runDao.runs.get(runId)!.cwd = null;
+          },
+          'the chat has no working folder',
+        ],
+        [
+          'the chat cannot be read',
+          (ctx: ReturnType<typeof setup>): void => {
+            vi.spyOn(ctx.runDao, 'getById').mockRejectedValueOnce(
+              new Error('database is locked'),
+            );
+          },
+          'the file could not be written',
+        ],
+      ])(
+        'tells the agent the user pressed Apply when %s',
+        async (_name, breakRun, reason) => {
+          // The user saw the card and accepted it; only the write failed. The
+          // `unavailable` sentence would say the patch never reached them.
+          const ctx = setup();
+          const { runId, requestId } = await deferredPatch(ctx, 'n.ts');
+          breakRun(ctx, runId);
+          const send = vi.spyOn(ctx.service, 'sendMessage');
+
+          expect(ctx.approvals.resolve(runId, requestId, true)).toBe(true);
+          await vi.waitFor(() => {
+            expect(send).toHaveBeenCalledWith(
+              runId,
+              `The user accepted the patch but it could not be applied (${reason}). Re-read the file and propose again against its current text.`,
+            );
+          });
+          expect(readFileSync(join(dir, 'n.ts'), 'utf8')).toBe(
+            'const timeout = 30;\n',
+          );
+        },
+      );
+
+      /** A deferred patch on `file`, posted, with its turn settled. */
+      async function deferredPatch(
+        ctx: ReturnType<typeof setup>,
+        file: string,
+      ): Promise<{ runId: string; requestId: string }> {
+        const run = await asking(ctx.service);
+        writeFileSync(join(dir, file), 'const timeout = 30;\n', 'utf8');
+        const outcome = await postedOrPending(
+          ctx.patches.propose(run.id, SINGLE_AGENT_NODE, {
+            filePath: file,
+            oldString: 'const timeout = 30;',
+            newString: 'const timeout = 60;',
+          }),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(ctx.cursor);
+        return {
+          runId: run.id,
+          requestId: ctx.approvals.listByRun(run.id)[0]!.requestId,
+        };
+      }
+
+      it('writes nothing on a Reject of a deferred patch, and says it was rejected', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'r.ts');
+
+        expect(ctx.approvals.resolve(runId, requestId, false)).toBe(true);
+        await vi.waitFor(() => {
+          expect(
+            ctx.itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes('The user rejected the patch'),
+            ),
+          ).toBe(true);
+        });
+
+        expect(readFileSync(join(dir, 'r.ts'), 'utf8')).toBe(
+          'const timeout = 30;\n',
+        );
+        const verdict = ctx.itemDao.items.find(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(JSON.parse(verdict!.payload)).toEqual({
+          id: requestId,
+          allow: false,
+        });
+      });
+
+      it('records what Apply did, and clears the column before the verdict goes out', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'v.ts');
+        const send = ctx.service.sendMessage.bind(ctx.service);
+        const seenAtSend: { column: unknown; verdict: boolean }[] = [];
+        vi.spyOn(ctx.service, 'sendMessage').mockImplementation(
+          async (id, text, ...rest) => {
+            seenAtSend.push({
+              column: ctx.runDao.runs.get(id)?.pendingQuestion,
+              verdict: ctx.itemDao.items.some(
+                (item) => item.kind === 'approval_verdict',
+              ),
+            });
+            return send(id, text, ...rest);
+          },
+        );
+
+        expect(ctx.approvals.resolve(runId, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(seenAtSend).toHaveLength(1);
+        });
+
+        expect(seenAtSend[0]).toEqual({ column: null, verdict: true });
+        const verdict = ctx.itemDao.items.find(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(JSON.parse(verdict!.payload)).toEqual({
+          id: requestId,
+          allow: true,
+          answer: 'applied to v.ts',
+        });
+      });
+
+      it('leaves alone a DIFFERENT card that went up while Apply was writing', async () => {
+        // The user pressed Apply and typed on; the new turn put up card X
+        // before the delivery got to its clear. X's pointer is what brings it
+        // back after a restart, so the delivery must not clear it. The send
+        // is refused here as it is for a run that is busy with that turn.
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'x.ts');
+        const other = serializePendingQuestion({
+          kind: 'question',
+          requestId: 'card-x',
+          title: null,
+          questions: QUESTIONS,
+        });
+        vi.spyOn(ctx.runDao, 'getById').mockImplementationOnce(
+          async (id: string) => {
+            const row = ctx.runDao.runs.get(id)!;
+            row.pendingQuestion = other;
+            return row;
+          },
+        );
+        const sent = vi
+          .spyOn(ctx.service, 'sendMessage')
+          .mockRejectedValueOnce(new Error('RUN_BUSY'));
+
+        expect(ctx.approvals.resolve(runId, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(sent).toHaveBeenCalledTimes(1);
+        });
+
+        expect(ctx.runDao.runs.get(runId)?.pendingQuestion).toBe(other);
+      });
+
+      it('refuses a plan while a question of the same run is standing', async () => {
+        const { service, userQuestions, plans, itemDao } = setup();
+        const run = await asking(service);
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null);
+        await drain();
+
+        const outcome = await postedOrPending(
+          plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
+        );
+
+        expect(outcome).toEqual({
+          status: 'unavailable',
+          reason: expect.stringContaining('already on the user’s screen'),
+        });
+        expect(
+          itemDao.items.filter((item) => item.kind === 'approval_request'),
+        ).toHaveLength(1);
+      });
+
+      it('answers Apply as unavailable when the chat has no folder by then', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'n.ts');
+        ctx.runDao.runs.get(runId)!.cwd = null;
+        // A run with no folder refuses the turn itself, so the words are read
+        // where the delivery hands them over.
+        const sent = vi
+          .spyOn(ctx.service, 'sendMessage')
+          .mockResolvedValueOnce(undefined as never);
+
+        expect(ctx.approvals.resolve(runId, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(sent).toHaveBeenCalledTimes(1);
+        });
+        expect(sent.mock.calls[0]?.[1]).toContain(
+          'the chat has no working folder',
+        );
+        expect(readFileSync(join(dir, 'n.ts'), 'utf8')).toBe(
+          'const timeout = 30;\n',
+        );
+      });
+
+      it('answers Apply as unavailable, without the storage error, when the run cannot be read', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'e.ts');
+        vi.spyOn(ctx.runDao, 'getById').mockRejectedValueOnce(
+          new Error('SQLITE_IOERR /Users/someone/geniro.db'),
+        );
+
+        expect(ctx.approvals.resolve(runId, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(
+            ctx.itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes('the file could not be written'),
+            ),
+          ).toBe(true);
+        });
+        expect(
+          ctx.itemDao.items.some((item) => item.payload.includes('SQLITE')),
+        ).toBe(false);
+        expect(readFileSync(join(dir, 'e.ts'), 'utf8')).toBe(
+          'const timeout = 30;\n',
+        );
+      });
+
+      it('describes the call as returning at once only while the deferring turn holds the sink', async () => {
+        const { service, cursor, plans, patches } = setup();
+        const run = await asking(service);
+
+        expect(plans.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(true);
+        expect(patches.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(true);
+        await settle(cursor);
+
+        // The sink is gone with the turn, so the flag goes too: whatever turn
+        // registers next is described from its own adapter.
+        expect(plans.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(false);
+        expect(patches.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(false);
       });
     });
   });
@@ -5324,6 +5819,33 @@ describe('ChatService', () => {
     await drain();
   });
 
+  it('marks a mid-turn message unsent when its turn reports dropping it', async () => {
+    // The row is written as soon as the turn ACCEPTS the message; a Stop
+    // landing before the agent takes it is reported afterwards, by the id the
+    // row carries.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'first');
+
+    const followUp = await service.sendMessage(run.id, 'do X instead');
+    const sent = vi.mocked(claude.handles[0]!.sendUserMessage).mock
+      .calls[0]![0];
+    claude.emit({
+      type: 'follow_up_dropped',
+      deliveryIds: [sent.deliveryId!],
+    });
+    claude.emit({ type: 'turn_cancelled' });
+    await drain();
+
+    expect(followUp.payload).toMatchObject({ deliveryId: sent.deliveryId });
+    const marker = (await itemDao.getByRun(run.id)).find(
+      (row) => row.kind === 'system',
+    );
+    expect(JSON.parse(marker!.payload)).toMatchObject({
+      unsentMessages: [sent.deliveryId],
+    });
+  });
+
   it('gives a mid-turn message a seq the running turn has not already reserved', async () => {
     // THE duplicate-seq defect, reproduced on a real transcript: a user item
     // and the assistant's reply both landed on seq 5927, and the renderer —
@@ -7086,7 +7608,7 @@ describe('ChatService', () => {
     const close = (await itemDao.getByRun(run.id)).find(
       (i) =>
         i.kind === 'subagent_info' &&
-        JSON.parse(i.payload).backgroundOutcome === 'stopped',
+        JSON.parse(i.payload).backgroundOutcome === 'untracked',
     );
     expect(JSON.parse(close!.payload)).toMatchObject({
       id: 'toolu_review',
@@ -9057,6 +9579,37 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toEqual([]);
   });
 
+  it('auto-approves both action tools in an `ask` chat', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    for (const tool of [HOST_PUBLISH_ACTION_TOOL, HOST_REMOVE_ACTION_TOOL]) {
+      claude.emit({
+        type: 'approval_request',
+        id: `p-${tool}`,
+        toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
+        input: { label: 'x' },
+      });
+    }
+    await drain();
+
+    for (const tool of [HOST_PUBLISH_ACTION_TOOL, HOST_REMOVE_ACTION_TOOL]) {
+      expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+        `p-${tool}`,
+        true,
+        { label: 'x' },
+      );
+    }
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
   it('auto-approves the show_comparison CALL, like every drawing tool', async () => {
     const { service, claude, approvals, itemDao } = setup();
     const run = await service.createChat({
@@ -10745,6 +11298,390 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(announce?.noTerminalItem).toBe(true);
   });
 
+  /**
+   * The daemon's global EntityManager keeps the first copy of a run it loaded,
+   * while status writes go through forks — so a read made WITHOUT an em sees
+   * the status as it was then. This fake does the same: from the moment it is
+   * installed, an em-less read returns the run as it stood then, and a read
+   * through an em the live row.
+   */
+  async function readWithoutEmIsStale(
+    runDao: FakeRunDao,
+    runId: string,
+  ): Promise<void> {
+    const live = runDao.getById.bind(runDao);
+    const row = await live(runId);
+    const snapshot = row === null ? null : { ...row };
+    runDao.getById = async (id: string, em?: unknown) =>
+      em === undefined && id === runId ? snapshot : live(id);
+  }
+
+  /** A claude chat whose first turn is in flight. */
+  async function chatInTurn(): Promise<
+    ReturnType<typeof setup> & { runId: string }
+  > {
+    const ctx = setup();
+    const run = await ctx.service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await ctx.service.sendMessage(run.id, 'go');
+    await drain();
+    return { ...ctx, runId: run.id };
+  }
+
+  async function endTurn(claude: ReturnType<typeof setup>['claude']) {
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+  }
+
+  it('restates an off-turn run once, however many off-turn rows arrive', async () => {
+    // Main-thread rows and a delegate's row each re-read the run before
+    // deciding; a read that still saw the settled status re-wrote `running`
+    // and announced it once per row.
+    const { claude, runDao, statuses, runId } = await chatInTurn();
+    await endTurn(claude);
+    await readWithoutEmIsStale(runDao, runId);
+    statuses.length = 0;
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    emit({
+      type: 'tool_call',
+      id: 'call-2',
+      name: 'Read',
+      input: {},
+      parentToolUseId: 'toolu_task_1',
+    });
+    await drain();
+    emit({ type: 'tool_call', id: 'call-3', name: 'Bash', input: {} });
+    await drain();
+
+    expect(statuses.filter((event) => event.status === 'running')).toHaveLength(
+      1,
+    );
+  });
+
+  it('restates a settled run on an off-turn signal even when the run was loaded while its turn ran', async () => {
+    const { claude, runDao, runId } = await chatInTurn();
+    await readWithoutEmIsStale(runDao, runId);
+    await endTurn(claude);
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+
+    claude.sessions[0]!.onBetweenTurnEvent!({
+      type: 'text_delta',
+      text: 'carrying on',
+    });
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('running');
+  });
+
+  /**
+   * Delays the answer of the next `count` run reads until the returned release
+   * is called — each answer is the row as it stood when it was READ, as a
+   * database round-trip resolving late would return it.
+   */
+  function holdNextReads(runDao: FakeRunDao, count = 1): () => void {
+    const live = runDao.getById.bind(runDao);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let left = count;
+    runDao.getById = async (id: string) => {
+      const row = await live(id);
+      if (left > 0) {
+        left -= 1;
+        const seen = row === null ? null : { ...row };
+        await gate;
+        return seen;
+      }
+      return row;
+    };
+    return () => release();
+  }
+
+  it('writes `running` once for two off-turn rows whose reads overlap', async () => {
+    const { claude, runDao, statuses, runId } = await chatInTurn();
+    await endTurn(claude);
+    statuses.length = 0;
+    const release = holdNextReads(runDao, 2);
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    emit({ type: 'tool_call', id: 'call-2', name: 'Bash', input: {} });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('running');
+    expect(statuses.filter((event) => event.status === 'running')).toHaveLength(
+      1,
+    );
+  });
+
+  it('leaves a run settled when its continuation ends while an off-turn row is still being read', async () => {
+    const { claude, runDao, runId } = await chatInTurn();
+    await endTurn(claude);
+    const release = holdNextReads(runDao);
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+  });
+
+  it('writes `running` once when a second off-turn row arrives while the first one’s write is in flight', async () => {
+    const { claude, runDao, statuses } = await chatInTurn();
+    await endTurn(claude);
+    statuses.length = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    runDao.beforeUpdate = (data) =>
+      data.status === 'running' ? gate : undefined;
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    emit({ type: 'tool_call', id: 'call-2', name: 'Bash', input: {} });
+    await drain();
+    runDao.beforeUpdate = null;
+    release();
+    await drain();
+
+    expect(statuses.filter((event) => event.status === 'running')).toHaveLength(
+      1,
+    );
+  });
+
+  it('lets a stopped process’s late terminal leave the live session’s off-turn restate alone', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    const old = claude.sessions[0]!;
+    await service.cancel(run.id);
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'continue');
+    await endTurn(claude);
+    const live = claude.sessions.at(-1)!;
+    expect(live).not.toBe(old);
+    const release = holdNextReads(runDao);
+
+    live.onBetweenTurnEvent!({
+      type: 'tool_call',
+      id: 'call-1',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    old.onBetweenTurnEvent!({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+  });
+
+  it('lets a stopped process’s late row leave the live session’s off-turn restate alone', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    const old = claude.sessions[0]!;
+    await service.cancel(run.id);
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'continue');
+    await endTurn(claude);
+    const live = claude.sessions.at(-1)!;
+    const release = holdNextReads(runDao);
+
+    live.onBetweenTurnEvent!({
+      type: 'tool_call',
+      id: 'call-1',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    old.onBetweenTurnEvent!({
+      type: 'tool_call',
+      id: 'late-main',
+      name: 'Read',
+      input: {},
+    });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+  });
+
+  it('retries the off-turn restate on the next row when the first `running` write failed', async () => {
+    const { claude, runDao, runId } = await chatInTurn();
+    await endTurn(claude);
+    runDao.beforeUpdate = (data) =>
+      data.status === 'running'
+        ? Promise.reject(new Error('write failed'))
+        : undefined;
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+    runDao.beforeUpdate = null;
+
+    emit({ type: 'tool_call', id: 'call-2', name: 'Bash', input: {} });
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('running');
+  });
+
+  it('leaves a run settled when its continuation ends while an off-turn signal is still being read', async () => {
+    const { claude, runDao, runId } = await chatInTurn();
+    await endTurn(claude);
+    const release = holdNextReads(runDao);
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'text_delta', text: 'carrying on' });
+    await drain();
+    emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    await drain();
+    release();
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+  });
+
+  it.each([
+    ['row', { type: 'tool_call', id: 'call-1', name: 'Bash', input: {} }],
+    ['signal', { type: 'text_delta', text: 'carrying on' }],
+  ] as const)(
+    'lets no trailing terminal settle a turn the user sent while an off-turn %s was being read',
+    async (_label, offTurn) => {
+      const { service, claude, runDao, runId } = await chatInTurn();
+      await endTurn(claude);
+      const release = holdNextReads(runDao);
+      const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+      emit(offTurn);
+      await drain();
+      await service.sendMessage(runId, 'next');
+      await drain();
+      release();
+      await drain();
+      emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      });
+      await drain();
+
+      expect(runDao.runs.get(runId)?.status).toBe('running');
+    },
+  );
+
+  it('keeps a continuation settled when the price of its delegate lands after the settle', async () => {
+    // claude prices a continuation's delegates on its `result` line; that row
+    // is handled concurrently with the continuation's `turn_complete` and can
+    // land after its settle.
+    const { claude, runDao, statuses, runId } = await chatInTurn();
+    await endTurn(claude);
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+    emit({ type: 'text_delta', text: 'carrying on' });
+    await drain();
+    emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    await drain();
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+    statuses.length = 0;
+
+    emit({
+      type: 'subagent_info',
+      id: 'toolu_a',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: 0.0016,
+      stepsUnavailableReason: null,
+      backgroundOpen: null,
+      backgroundOutcome: null,
+    });
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+    expect(statuses.filter((event) => event.status === 'running')).toEqual([]);
+  });
+
+  it('hands an off-turn badge back on session close even when the run was loaded before it flipped', async () => {
+    const { claude, runDao, sessions, runId } = await chatInTurn();
+    await endTurn(claude);
+    await readWithoutEmIsStale(runDao, runId);
+    claude.sessions[0]!.onBetweenTurnEvent!({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    expect(runDao.runs.get(runId)?.status).toBe('running');
+
+    sessions.close(runId, 'closed');
+    await drain();
+
+    expect(runDao.runs.get(runId)?.status).toBe('completed');
+  });
+
   it('announces no restore over a turn that claimed the run during the read', async () => {
     // The flagged settle ends the working state in every window, so sent over
     // a turn that has just started it would drop Stop under that turn.
@@ -10881,18 +11818,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(notes[0]?.payload).not.toContain('geniro closed its process');
   });
 
-  it('states the ending for a delegate the CLI left declared out', async () => {
-    // The one thing geniro can honestly say about a background sub-agent whose
-    // CLI never announces an ending. Re-measured on cursor-agent
-    // 2026.08.31-4057e58: nine reviewers declared out, no close on any channel
-    // across the twelve minutes its process went on living. But such a delegate
-    // runs INSIDE that process, so a session closing is not a guess about the
-    // work — it is the work being over.
-    //
-    // Without this row nothing downstream can ever end the delegate: the
-    // renderer deliberately no longer reads the turn's own ending as the
-    // delegate's, so it would report a fan-out as working for the life of the
-    // transcript.
+  it('marks a delegate untracked when its session closes without a reported ending', async () => {
     const { service, claude, itemDao, sessions, statuses } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -10938,15 +11864,65 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     const closes = itemDao.items.filter(
       (item) =>
         item.kind === 'subagent_info' &&
-        item.payload.includes('"backgroundOutcome":"stopped"'),
+        item.payload.includes('"backgroundOutcome":"untracked"'),
     );
     expect(closes).toHaveLength(1);
     expect(closes[0]?.payload).toContain('"id":"task-a"');
-    // `stopped` and not `completed`: the delegate never reported, so claiming
-    // it finished its work would be an outcome nothing measured.
+    // The delegate never reported its ending, so its outcome remains unknown;
+    // its work is over with the process that hosted it.
     expect(closes[0]?.payload).toContain('"backgroundOpen":false');
+    expect(closes[0]?.payload).toContain('"trackingLost":"process-ended"');
     // And the count every row reads goes with it, in the same breath.
     expect(statuses.at(-1)?.subagentsOut).toBe(0);
+  });
+
+  it('closes a delegate the user’s Stop cut off as stopped', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'subagent_info',
+      id: 'task-a',
+      label: 'Review: bugs dimension',
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: true,
+      backgroundOutcome: null,
+    });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    await service.cancel(run.id);
+    await drain();
+
+    const closes = itemDao.items.filter(
+      (item) =>
+        item.kind === 'subagent_info' &&
+        item.payload.includes('"backgroundOpen":false'),
+    );
+    expect(closes).toHaveLength(1);
+    expect(closes[0]?.payload).toContain('"backgroundOutcome":"stopped"');
+    expect(closes[0]?.payload).not.toContain('trackingLost');
   });
 
   it('leaves a delegate the CLI already closed alone', async () => {
@@ -10998,7 +11974,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       itemDao.items.some(
         (item) =>
           item.kind === 'subagent_info' &&
-          item.payload.includes('"backgroundOutcome":"stopped"'),
+          item.payload.includes('"backgroundOutcome":"untracked"'),
       ),
     ).toBe(false);
   });

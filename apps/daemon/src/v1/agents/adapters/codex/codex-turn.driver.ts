@@ -29,7 +29,9 @@ import {
   CODEX_OLLAMA_PROVIDER,
   CODEX_REASONING_SUMMARY,
   CODEX_SERVER_REQUESTS,
+  CODEX_STEER_ANSWER_GRACE_MS,
   CODEX_STEER_PREVIEW_MAX_CHARS,
+  CODEX_STOP_CLOSE_GRACE_MS,
   CODEX_STOPPED_COMMAND_PREVIEW_MAX_CHARS,
   CODEX_STOPPED_TOOL_RESULT,
   CODEX_TERMINAL_LIST_MAX_PAGES,
@@ -60,6 +62,7 @@ import {
   subagentState,
 } from './utils/codex-items.utils';
 import { codexTurnMcpOverrides } from './utils/codex-mcp.utils';
+import { userMessageText } from './utils/codex-threads.utils';
 import {
   baselineOf,
   type CodexSpend,
@@ -82,6 +85,12 @@ export type CodexPendingKind =
   | 'turn_interrupt'
   | 'terminals_list'
   | 'terminal_terminate';
+
+/** A steer in flight: the row id it carries, and the words codex echoes back. */
+interface PendingSteer {
+  deliveryId: string | null;
+  text: string;
+}
 
 /** Everything about ONE turn, derived from that turn's own input. */
 export interface CodexTurnOptions {
@@ -169,6 +178,32 @@ export class CodexTurnDriver {
   private switchesPlanMode = false;
   /** Times this turn's resume was asked again after an active-writer refusal. */
   private writerRetries = 0;
+  /**
+   * Steers sent into this turn that codex has not answered yet, each with the
+   * `deliveryId` it carried (null for one with no row) and its words.
+   */
+  private readonly steersOut: PendingSteer[] = [];
+  /**
+   * Steers codex ACCEPTED that it has not yet shown taking. An accepted steer
+   * is only queued: codex takes it as a `userMessage` item at its next step
+   * (probed on 0.162.0, ~55 ms later), and an interrupt that lands first
+   * discards it — no item, and no trace in the thread. So a turn that ends
+   * stopped or failed with one still here dropped it.
+   */
+  private readonly steersAccepted: PendingSteer[] = [];
+  /** `userMessage` words this turn has shown, for an item ahead of its reply. */
+  private readonly userMessagesSeen: string[] = [];
+  /** The turn ended stopped or failed — what it held of a steer is lost. */
+  private endedUnfinished = false;
+  /**
+   * The turn's ending while a steer is unanswered: a refusal must reach the
+   * owner AHEAD of the terminal, as every owner matches a dropped message by
+   * the turn it was sent into. Released when the last steer is answered, on a
+   * Stop, or after {@link CODEX_STEER_ANSWER_GRACE_MS}.
+   */
+  private heldEnding: AgentEvent[] | null = null;
+  /** The ending has gone out: a refusal now is no longer this turn's. */
+  private endingReleased = false;
   /**
    * The thread config that leaves this node's switched-off MCP servers out,
    * once codex's own config has been read — null until then (and for good on a
@@ -311,6 +346,7 @@ export class CodexTurnDriver {
     kind: CodexPendingKind,
     result: unknown,
     detail: string | null = null,
+    deliveryId: string | null = null,
   ): AgentEvent[] {
     const events: AgentEvent[] = [];
     switch (kind) {
@@ -404,16 +440,129 @@ export class CodexTurnDriver {
         }
         break;
       }
+      case 'turn_steer':
+        events.push(...this.steerAnswered(deliveryId, true));
+        break;
       default:
         break;
     }
     return events;
   }
 
+  /**
+   * A steer was answered — `accepted` by codex, or refused. An accepted one is
+   * owed its `userMessage` item unless that already came. The held ending goes
+   * out once no steer is left unanswered.
+   */
+  private steerAnswered(
+    deliveryId: string | null,
+    accepted: boolean,
+  ): AgentEvent[] {
+    const index = this.steersOut.findIndex(
+      (steer) => steer.deliveryId === deliveryId,
+    );
+    const [steer] = this.steersOut.splice(index === -1 ? 0 : index, 1);
+    if (accepted && steer !== undefined) {
+      const seen = this.userMessagesSeen.indexOf(steer.text);
+      if (seen === -1) {
+        this.steersAccepted.push(steer);
+      } else {
+        this.userMessagesSeen.splice(seen, 1);
+      }
+    }
+    return this.steersOut.length === 0 ? this.releaseEnding() : [];
+  }
+
+  /** codex showed a user message taken into the turn: a steer it matches landed. */
+  private noteUserMessage(text: string): void {
+    const index = this.steersAccepted.findIndex((steer) => steer.text === text);
+    if (index === -1) {
+      this.userMessagesSeen.push(text);
+    } else {
+      this.steersAccepted.splice(index, 1);
+    }
+  }
+
+  /**
+   * The steers in `lists` this turn will never deliver, emptied into one
+   * `follow_up_dropped` said ahead of whatever ends the turn.
+   */
+  private dropSteers(lists: PendingSteer[][]): AgentEvent[] {
+    const dropped = lists
+      .flatMap((list) => list.splice(0))
+      .flatMap((steer) =>
+        steer.deliveryId === null ? [] : [steer.deliveryId],
+      );
+    return dropped.length === 0
+      ? []
+      : [{ type: 'follow_up_dropped', deliveryIds: dropped }];
+  }
+
+  /**
+   * The process ended under this turn: every steer codex never answered, and
+   * every one it accepted but never took, died with it. Its ending — held for
+   * those answers — will never be released: the session's process-end path
+   * writes the terminal instead.
+   */
+  onProcessEnded(): AgentEvent[] {
+    this.heldEnding = null;
+    this.endingReleased = true;
+    return this.dropSteers([this.steersOut, this.steersAccepted]);
+  }
+
+  /**
+   * How long a session closed under this turn should let it finish first: a
+   * Stop's interrupt is on its way, and while a steer's fate is unknown the
+   * only honest answer about it is the one codex gives on finishing
+   * ({@link CODEX_STOP_CLOSE_GRACE_MS}). Zero when there is nothing to learn.
+   */
+  closeGraceMs(): number {
+    return !this.settled &&
+      this.steersOut.length + this.steersAccepted.length > 0
+      ? CODEX_STOP_CLOSE_GRACE_MS
+      : 0;
+  }
+
+  /**
+   * The held ending, once — `[]` when nothing is held, or when another turn has
+   * opened since: its stream is no longer this turn's to end.
+   */
+  private releaseEnding(): AgentEvent[] {
+    const ending = this.heldEnding;
+    if (ending === null) {
+      return [];
+    }
+    this.heldEnding = null;
+    this.endingReleased = true;
+    if (!this.session.isCurrentTurn(this)) {
+      return [];
+    }
+    // A steer accepted while the stopped turn's ending was held can no longer
+    // be taken: the turn is over.
+    return this.endedUnfinished
+      ? [...this.dropSteers([this.steersAccepted]), ...ending]
+      : ending;
+  }
+
+  /**
+   * A Stop while the ending is held: the turn has finished, so there is
+   * nothing to interrupt — its ending goes out now, which settles the turn, and
+   * the caller is told nothing is left to stop.
+   */
+  withdrawHeldPrompt(): boolean {
+    const ending = this.releaseEnding();
+    if (ending.length === 0) {
+      return false;
+    }
+    this.session.emitNow(ending);
+    return true;
+  }
+
   onErrorReply(
     kind: CodexPendingKind,
     message: string,
     detail: string | null = null,
+    deliveryId: string | null = null,
   ): AgentEvent[] {
     switch (kind) {
       case 'config_read': {
@@ -462,15 +611,29 @@ export class CodexTurnDriver {
           },
         ];
       }
-      case 'turn_steer':
-        // The message is quoted because this can arrive after the turn it was
-        // sent into has ended — even after the next one has opened.
-        return [
-          {
-            type: 'notice',
-            message: `codex did not take your message${detail ? ` "${detail}"` : ''} into the turn it was sent during (${message}) — send it again.`,
-          },
-        ];
+      case 'turn_steer': {
+        // The message's row was written when the steer went out, so a
+        // refusal inside its turn is the message dropped: its row is marked
+        // not sent. A steer with no row, or a refusal after the turn's ending
+        // went out, says so in words, quoting the message.
+        const events: AgentEvent[] =
+          deliveryId !== null && !this.endingReleased
+            ? [
+                {
+                  type: 'follow_up_dropped',
+                  deliveryIds: [deliveryId],
+                  reason: message,
+                },
+              ]
+            : [
+                {
+                  type: 'notice',
+                  message: `codex did not take your message${detail ? ` "${detail}"` : ''} into the turn it was sent during (${message}) — send it again.`,
+                },
+              ];
+        this.session.log(`codex: turn/steer was refused (${message})`);
+        return [...events, ...this.steerAnswered(deliveryId, false)];
+      }
       case 'turn_interrupt':
         this.session.log(`codex: turn/interrupt was refused: ${message}`);
         return [];
@@ -646,7 +809,7 @@ export class CodexTurnDriver {
     if (threadId === null || this.turnId === null || this.settled) {
       return false;
     }
-    return this.session.request(
+    const sent = this.session.request(
       CODEX_METHODS.turnSteer,
       {
         threadId,
@@ -656,7 +819,16 @@ export class CodexTurnDriver {
       'turn_steer',
       [],
       firstLine(message.text, CODEX_STEER_PREVIEW_MAX_CHARS),
+      this,
+      message.deliveryId ?? null,
     );
+    if (sent) {
+      this.steersOut.push({
+        deliveryId: message.deliveryId ?? null,
+        text: message.text,
+      });
+    }
+    return sent;
   }
 
   /**
@@ -756,6 +928,9 @@ export class CodexTurnDriver {
       return [];
     }
     this.session.items.set(item.id, item);
+    if (item.type === 'userMessage') {
+      this.noteUserMessage(userMessageText(item.record));
+    }
     if (item.type === 'contextCompaction') {
       this.compactingFrom = this.session.lastUsage?.last.totalTokens ?? null;
       return [
@@ -867,7 +1042,15 @@ export class CodexTurnDriver {
       }
       if (receiverThreadsOf(item).length > 0) {
         this.session.openSubagent(item.id);
-        events.push(subagentState(item.id, { open: true }));
+        events.push(
+          subagentState(item.id, {
+            open: true,
+            childSessionId:
+              receiverThreadsOf(item).length === 1
+                ? receiverThreadsOf(item)[0]
+                : undefined,
+          }),
+        );
       }
     }
     for (const { threadId, outcome } of finishedAgentsOf(item)) {
@@ -891,7 +1074,13 @@ export class CodexTurnDriver {
     if (activity.kind === 'started') {
       this.session.subagents.set(activity.threadId, item.id);
       this.session.openSubagent(item.id);
-      return [subagentState(item.id, { open: true, label: activity.name })];
+      return [
+        subagentState(item.id, {
+          open: true,
+          label: activity.name,
+          childSessionId: activity.threadId,
+        }),
+      ];
     }
     const outcome = subagentOutcomeOf(activity.kind);
     return outcome === null
@@ -942,7 +1131,7 @@ export class CodexTurnDriver {
         const status = asString(asRecord(record.turn)?.status);
         return this.session.closeSubagent(
           threadId,
-          subagentOutcomeOf(status) ?? 'failed',
+          subagentOutcomeOf(status) ?? 'untracked',
         );
       }
       default:
@@ -1331,7 +1520,24 @@ export class CodexTurnDriver {
     }));
   }
 
+  /**
+   * The turn's ending — held while a steer is unanswered (see
+   * {@link heldEnding}), else at once.
+   */
   private onTurnCompleted(turn: Record<string, unknown> | null): AgentEvent[] {
+    const ending = this.endingOf(turn);
+    if (ending.length === 0 || this.steersOut.length === 0) {
+      this.endingReleased = ending.length > 0 || this.endingReleased;
+      return ending;
+    }
+    this.heldEnding = ending;
+    this.session.schedule(this, CODEX_STEER_ANSWER_GRACE_MS, (events) => {
+      events.push(...this.releaseEnding());
+    });
+    return [];
+  }
+
+  private endingOf(turn: Record<string, unknown> | null): AgentEvent[] {
     const id = asString(turn?.id);
     if (this.settled || (this.turnId !== null && id !== this.turnId)) {
       return [];
@@ -1352,6 +1558,13 @@ export class CodexTurnDriver {
       events.push(...this.endStoppedCommands(running));
     } else if (status === 'failed') {
       events.push(...this.endUnfinishedTurn(id, CODEX_FAILED_TOOL_RESULT));
+    }
+    // A stopped or failed turn takes no more input: a steer codex accepted and
+    // never took is gone, said ahead of the terminal. One still unanswered is
+    // the held ending's business ({@link releaseEnding}).
+    if (status === 'interrupted' || status === 'failed') {
+      this.endedUnfinished = true;
+      events.push(...this.dropSteers([this.steersAccepted]));
     }
     if (status === 'interrupted') {
       events.push({

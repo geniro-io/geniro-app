@@ -229,6 +229,8 @@ interface Harness {
   swapDraft: ReturnType<typeof vi.fn>;
   resetSteerStatus: ReturnType<typeof vi.fn>;
   drain: ReturnType<typeof vi.fn>;
+  /** What the hook reported of "not sent" rows arriving live. */
+  liveUnsent: ReturnType<typeof vi.fn>;
   /** Which runs the composer is holding follow-ups for. */
   queued: Set<string>;
   unmount: () => void;
@@ -245,6 +247,8 @@ async function mount(
   const drain = vi.fn();
   const queued = new Set<string>();
   const drainQueueRef = { current: drain };
+  const liveUnsent = vi.fn();
+  const onLiveUnsentRef = { current: liveUnsent };
   function Probe(): null {
     latest = useChatRun({
       client,
@@ -254,6 +258,7 @@ async function mount(
       resetSteerStatus,
       hasQueuedMessages: (runId) => queued.has(runId),
       drainQueueRef,
+      onLiveUnsentRef,
       historyPageSize,
     });
     return null;
@@ -274,6 +279,7 @@ async function mount(
     swapDraft,
     resetSteerStatus,
     drain,
+    liveUnsent,
     queued,
     unmount: () => {
       act(() => {
@@ -1224,6 +1230,27 @@ describe('useChatRun', () => {
     expect(harness.swapDraft).not.toHaveBeenCalled();
   });
 
+  it('reports a "not sent" row that arrives live, and never one replayed on open', async () => {
+    const marker = (seq: number): ChatItem => ({
+      ...msg('r1', seq, 'assistant', ''),
+      kind: 'system',
+      role: null,
+      payload: { message: 'not sent', unsentMessages: [`d-${seq}`] },
+    });
+    chatApi.listRunItems.mockResolvedValue([marker(0)]);
+    const { client, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    expect(harness.liveUnsent).not.toHaveBeenCalled();
+
+    await act(async () => {
+      emitItem(marker(1));
+    });
+
+    expect(harness.liveUnsent).toHaveBeenCalledTimes(1);
+    expect(harness.liveUnsent).toHaveBeenCalledWith('r1', ['d-1'], 'r1-i1');
+  });
+
   it('renders a live item for the open run and drops one for another', async () => {
     const { client, emitItem } = makeClient();
     const harness = await mount(client);
@@ -1415,6 +1442,97 @@ describe('useChatRun', () => {
 
     expect(harness.state().streaming).toBe(false);
     expect(harness.drain.mock.calls).toEqual([['r1']]);
+  });
+
+  it.each([
+    ['nothing', []],
+    [
+      'only bookkeeping',
+      [{ ...msg('r1', 3, 'assistant', ''), kind: 'shell_info' }],
+    ],
+  ] as const)(
+    'leaves the working state down when a stray `running` lands between the turn end and its settle, with %s after the turn end',
+    async (_label, after) => {
+      // The daemon's order when an off-turn row restates the run between the
+      // turn's `turn_complete` row and its settle: the settle carries no
+      // `noTerminalItem`, since its row already landed.
+      const { client, emitItem, emitRunStatus } = makeClient();
+      chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+      const harness = await mount(client);
+      await open(harness, 'r1');
+      expect(harness.state().streaming).toBe(true);
+
+      await act(async () => {
+        emitItem({ ...msg('r1', 1, 'assistant', ''), kind: 'subagent_info' });
+        emitItem(turnEnd('r1', 2));
+        for (const row of after) {
+          emitItem(row);
+        }
+        emitRunStatus({
+          runId: 'r1',
+          status: 'running',
+          activity: 'still working',
+        } as RunStatusEvent);
+        emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
+      });
+
+      expect(harness.state().runs.find((run) => run.id === 'r1')?.status).toBe(
+        'completed',
+      );
+      expect(harness.state().streaming).toBe(false);
+    },
+  );
+
+  it('ends no other run’s working state on a settle after a turn end', async () => {
+    const { client, emitItem, emitRunStatus } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitItem(turnEnd('r1', 1));
+      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r2', status: 'completed' } as RunStatusEvent);
+    });
+
+    expect(harness.state().streaming).toBe(true);
+  });
+
+  it('forgets a turn end when another thread is opened', async () => {
+    const { client, emitItem, emitRunStatus } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      emitItem(turnEnd('r1', 1));
+    });
+
+    chatApi.listRunItems.mockResolvedValue([msg('r2', 0, 'user', 'go')]);
+    await open(harness, 'r2');
+    expect(harness.state().streaming).toBe(true);
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed' } as RunStatusEvent);
+    });
+
+    expect(harness.state().streaming).toBe(true);
+  });
+
+  it('leaves a settle without a terminal row to its row once the run wrote past its turn end', async () => {
+    // The CLI carried on after the turn: its rows are live again, so only its
+    // own terminal row (or a `noTerminalItem` settle) may end the working state.
+    const { client, emitItem, emitRunStatus } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitItem(turnEnd('r1', 1));
+      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitItem(msg('r1', 2, 'assistant', 'carrying on'));
+      emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
+    });
+
+    expect(harness.state().streaming).toBe(true);
   });
 
   it('does not drain behind an item-less settle the user STOPPED', async () => {
@@ -1832,6 +1950,27 @@ describe('useChatRun', () => {
       fireDisconnect();
       fireReconnect();
       await Promise.resolve();
+    });
+
+    expect(harness.state().streaming).toBe(false);
+  });
+
+  it('leaves the working state down past a stray running when the turn end arrived by replay', async () => {
+    const { client, emitRunStatus, fireDisconnect, fireReconnect } =
+      makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    chatApi.listRunItems.mockResolvedValue([turnEnd('r1', 1)]);
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
     });
 
     expect(harness.state().streaming).toBe(false);

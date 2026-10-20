@@ -6,6 +6,8 @@ import type {
   AgentEvent,
   AgentTurnHandle,
   FollowUpMessage,
+  SessionCloseCause,
+  SubagentTrackingLost,
   TurnIo,
 } from '../adapters/adapter.types';
 import { isUserQuestion } from './approval-answer';
@@ -200,6 +202,21 @@ export interface CliTurnOptions {
    */
   withdrawPrompt?: () => boolean;
   /**
+   * Asked when the PROCESS ends under this turn before the turn's own terminal
+   * event — the 5s interrupt fallback's group kill, a crash, a process
+   * `error`, or a stdin that broke — for what the driver still holds that only it can report
+   * (`TurnDriver.onProcessEnded`). Its events are emitted ahead of the
+   * terminal this module writes.
+   */
+  onProcessEnded?: () => AgentEvent[];
+  /**
+   * Asked when the session is CLOSED under this live turn: how long to let the
+   * turn end on its own before the group is signalled
+   * (`TurnDriver.closeGraceMs`). The process still goes — at the turn's settle
+   * or the deadline, whichever comes first.
+   */
+  closeGraceMs?: () => number;
+  /**
    * Awaited BEFORE this turn's opening payload is written, for a CLI that can
    * accept a prompt before it is ready to serve one (claude's MCP servers are
    * still dialling for the first seconds of a process — see
@@ -372,6 +389,7 @@ export interface SessionAsk<T> {
 }
 
 export interface CliSession {
+  subagentRecoveryBlocked?(id: string): boolean;
   /**
    * Ask the CLI something on its own stdin control channel, out of band of any
    * turn.
@@ -457,8 +475,19 @@ export interface CliSession {
    * reads what it took from here.
    */
   readonly endedRunning: StoppedCommands | null;
-  /** Terminate the process group (the CLI plus every grandchild). */
-  close(): void;
+  /**
+   * Terminate the process group (the CLI plus every grandchild). On a
+   * `user-stop` the delegates still out are closed `stopped`, not `untracked`.
+   */
+  close(cause?: SessionCloseCause): void;
+  /**
+   * Record why the process will be closed, ahead of whatever ends it — a
+   * later close, its own kill after a refused interrupt, or its exit. Null
+   * withdraws it; the next turn withdraws it too.
+   */
+  noteCloseCause?(cause: SessionCloseCause | null): void;
+  /** The cause recorded by {@link noteCloseCause} or `close`, or null. */
+  readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
 }
@@ -691,6 +720,8 @@ interface TurnState {
    */
   stoppedBeforePrompt: boolean;
   resolveDone: () => void;
+  /** Resolves when the turn settles — what a graceful close waits on. */
+  done: Promise<void>;
   options: CliTurnOptions;
   /** Fallback deadline armed when an in-protocol interrupt was delivered. */
   interruptTimer: ReturnType<typeof setTimeout> | null;
@@ -831,8 +862,14 @@ interface TurnState {
    *
    * Only filled for a CLI whose options set `followUpConsumptionReported` —
    * without an acknowledgement nothing could ever empty it.
+   *
+   * Each keeps the `deliveryId` it was written with: one still here when the
+   * process ends died queued inside the CLI — PROBED on claude 2.1.295, which
+   * logs it `enqueue` and runs it as a turn of its own after an interrupt, but
+   * only while the process lives, and a chat's Stop closes the session — so
+   * {@link emitProcessEnded} reports it `follow_up_dropped`.
    */
-  unconsumedFollowUps: string[];
+  unconsumedFollowUps: { text: string; deliveryId: string | null }[];
   /**
    * The `turn_complete` held back because a follow-up was still unconsumed,
    * folded into the one the turn finally settles on ({@link foldTurnComplete})
@@ -1247,6 +1284,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * the ratio that turned out to be the diagnosis.
    */
   const approvalSeenAt = new Map<string, number>();
+  /** Why the process was closed, when a close said — see `CliSession.close`. */
+  let closeCause: SessionCloseCause | null = null;
   let processGone = false;
   /**
    * The child's `exit` has fired — set SYNCHRONOUSLY, ahead of the settle.
@@ -1471,8 +1510,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // Given up on, so they must not hold the NEXT turn either — the set is
         // session-scoped now, and a unit this deadline has already written off
         // would otherwise hold every turn after it for as long as the session
-        // lives. `delegateWork` is deliberately left alone: a late report is
-        // still what closes that delegate's block.
+        // lives. `delegateWork` is deliberately left alone so a late report
+        // can resolve its outcome.
+        closeOpenDelegates();
         openWork.clear();
         finishTurn(turn, held);
         return;
@@ -1782,6 +1822,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     turn.liveCostUsd = 0;
     turn.liveEstimatedCostUsd = 0;
     publishLiveCost(turn);
+    // Ending with its process already told to go (a chat's Stop closes the
+    // session): what the CLI still holds queued goes with it, so it is said
+    // ahead of the terminal, where every owner matches it.
+    if (groupKilled) {
+      emitUntakenFollowUps(turn);
+    }
     if (opts.stdinLifetime === 'turn') {
       endStdin();
       // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
@@ -1813,6 +1859,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const announceDelegateWork = (
     event: Extract<AgentEvent, { type: 'background_work' }>,
+    trackingLost?: SubagentTrackingLost,
   ): void => {
     const toolCallId =
       event.phase === 'started'
@@ -1919,11 +1966,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // A foreground `started` returned above, so both other arms here open it.
       backgroundOpen: event.phase !== 'settled',
       // What the settle SAID, not merely that it happened. Null on a `started`
-      // and on a settle whose CLI names no outcome, on the same terms as every
-      // other field here: absent claims nothing, so a CLI with no such
-      // vocabulary leaves the block reading exactly as it did before.
+      // and on a settle whose CLI names no outcome: absent claims no outcome,
+      // so a recoverable delegate's block reads untracked until its record
+      // is read (`foldRunDelegates`).
       backgroundOutcome:
         event.phase === 'settled' ? (event.outcome ?? null) : null,
+      ...(trackingLost === undefined ? {} : { trackingLost }),
     };
     // To whoever can carry it. A delegate launched between turns is the whole
     // reason this is not simply `turn.options.onEvent`: that path had no turn,
@@ -1934,6 +1982,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return;
     }
     opts.onBetweenTurnEvent?.(announcement);
+  };
+
+  const closeOpenDelegates = (
+    outcome: 'untracked' | 'stopped' = 'untracked',
+    trackingLost?: SubagentTrackingLost,
+  ): void => {
+    for (const id of openWork) {
+      if (delegateWork.has(id)) {
+        announceDelegateWork(
+          {
+            type: 'background_work',
+            id,
+            phase: 'settled',
+            unit: 'agent',
+            toolCallId: null,
+            outcome,
+          },
+          trackingLost,
+        );
+      }
+    }
   };
 
   /**
@@ -1960,6 +2029,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       );
       // Written off exactly as the turn's deadline writes its own units off,
       // and for the same reason: they must not hold anything after this.
+      closeOpenDelegates();
       openWork.clear();
       releaseOffTurnHold();
     }, TURN_SILENCE_DEADLINE_MS);
@@ -2003,6 +2073,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         opts.logger?.warn(
           `${opts.command}: the CLI went idle with ${openWork.size} unit(s) of background work never reported — settling the held '${held.type}'`,
         );
+        closeOpenDelegates();
         openWork.clear();
       } else {
         opts.logger?.debug?.(
@@ -2602,7 +2673,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         turn.promptTaken = true;
         return;
       }
-      const index = turn.unconsumedFollowUps.indexOf(event.text);
+      const index = turn.unconsumedFollowUps.findIndex(
+        (followUp) => followUp.text === event.text,
+      );
       if (index !== -1) {
         turn.unconsumedFollowUps.splice(index, 1);
         armSilenceDeadline(turn);
@@ -2815,6 +2888,31 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     turn.options.onEvent(normalized);
   };
 
+  /**
+   * What the driver still holds that only it can report, for a turn whose
+   * process ended or broke under it — emitted ahead of the terminal this
+   * module writes (`CliTurnOptions.onProcessEnded`). Then the follow-ups this
+   * module wrote into the CLI's stdin that it never took: they died with it
+   * (see {@link TurnState.unconsumedFollowUps}).
+   */
+  const emitProcessEnded = (turn: TurnState): void => {
+    for (const event of turn.options.onProcessEnded?.() ?? []) {
+      emit(event);
+    }
+    emitUntakenFollowUps(turn);
+  };
+
+  /** Report the follow-ups `turn` wrote that the CLI never took, once. */
+  function emitUntakenFollowUps(turn: TurnState): void {
+    const dropped = turn.unconsumedFollowUps.flatMap((followUp) =>
+      followUp.deliveryId === null ? [] : [followUp.deliveryId],
+    );
+    turn.unconsumedFollowUps = [];
+    if (dropped.length > 0) {
+      turn.options.onEvent({ type: 'follow_up_dropped', deliveryIds: dropped });
+    }
+  }
+
   let child: SpawnedProcess;
   try {
     child = spawnFn(opts.command, opts.args, {
@@ -2941,9 +3039,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     osDetachedShells.clear();
     executeCalls.clear();
     // A delegate's own commands die with the group as well, so a settle held
-    // for them is owed now — as `stopped`, figures kept: its work was cut off,
-    // and it is the outcome the session-close sweep writes for a delegate it
-    // finds still open, so the two writers cannot disagree.
+    // for them is owed now as stopped, figures kept: its CLI reported it done
+    // while those commands ran, and ending the group is what stopped them.
     delegateCommands.clear();
     delegateCommandCalls.clear();
     unownedDelegateCommands.clear();
@@ -2973,6 +3070,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // so the loop above did not settle it — but it died with the group too.
     runningShells.clear();
     callCommands.clear();
+    // The user's Stop is what ended them; any other end of the process says
+    // only that their work is over.
+    if (closeCause === 'user-stop') {
+      closeOpenDelegates('stopped');
+    } else {
+      closeOpenDelegates('untracked', 'process-ended');
+    }
     openWork.clear();
     releaseOffTurnHold();
     if (current) {
@@ -2985,6 +3089,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return;
     }
     if (current && !current.settled) {
+      emitProcessEnded(current);
       emit({
         type: 'error',
         message: `${opts.command} process error: ${err.message}`,
@@ -3005,6 +3110,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   ): void => {
     buffer.flush();
     if (current && !current.terminalEmitted) {
+      emitProcessEnded(current);
       if (signal && current.cancelRequested) {
         emit({ type: 'turn_cancelled' });
       } else if (signal) {
@@ -3250,6 +3356,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         opts.logger?.warn(failure.message);
         return;
       }
+      emitProcessEnded(current);
       emit(failure);
       // The same abandon as the between-turns case, for the same reason.
       // Ending the session with no signal at all — `endProcess` marks it gone
@@ -3261,7 +3368,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     });
   }
 
-  const killGroup = (): void => terminator.terminate();
+  /**
+   * The group has been told to go — set before the signal, so a terminal the
+   * CLI still prints on its way out (claude answers an interrupt in ~25 ms,
+   * inside the SIGTERM's window) knows the follow-ups it never took die with it
+   * ({@link emitUntakenFollowUps}).
+   */
+  let groupKilled = false;
+  const killGroup = (): void => {
+    groupKilled = true;
+    terminator.terminate();
+  };
 
   /**
    * End a session whose child may still be running: signal the group with an
@@ -3284,6 +3401,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     ) {
       return null;
     }
+    // Asked to work again: whatever closes it next is not the Stop's.
+    closeCause = null;
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
@@ -3295,6 +3414,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       cancelRequested: false,
       stoppedBeforePrompt: false,
       resolveDone: () => resolveDone(),
+      done,
       options: turnOptions,
       interruptTimer: null,
       silenceTimer: null,
@@ -3560,6 +3680,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           );
           return false;
         }
+        // And refused once the turn has been asked to stop: whatever the CLI
+        // does next, it ends this turn — codex answers "no active turn to
+        // steer", claude's queue dies with a closed session. MEASURED: a
+        // message sent to codex right after Stop was steered into the stopping
+        // turn and refused, so it never opened the turn the user meant. The
+        // refusal is the same RUN_BUSY, which queues it for the next turn.
+        if (turn.cancelRequested) {
+          opts.logger?.debug?.(
+            `${opts.command}: refusing a follow-up — this turn is being stopped`,
+          );
+          return false;
+        }
         const delivered = turnOptions.sendFollowUp
           ? !turn.settled &&
             !turn.terminalEmitted &&
@@ -3577,7 +3709,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             !turnOptions.sendFollowUp &&
             turnOptions.followUpConsumptionReported
           ) {
-            turn.unconsumedFollowUps.push(message.text);
+            turn.unconsumedFollowUps.push({
+              text: message.text,
+              deliveryId: message.deliveryId ?? null,
+            });
           }
         }
         // A message delivered into a HELD turn ends the hold at the write,
@@ -3738,6 +3873,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get pid() {
       return processGone || processExited ? null : (child.pid ?? null);
     },
+    subagentRecoveryBlocked: (id) =>
+      [...delegateCommands.values()].includes(id),
     get shellsRunning() {
       return runningShells.size + delegateCommands.size;
     },
@@ -3747,14 +3884,39 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get endedRunning() {
       return endedRunning;
     },
-    close: () => {
+    close: (cause) => {
       if (processGone) {
         return;
       }
-      if (current) {
-        current.cancelRequested = true;
+      closeCause ??= cause ?? null;
+      const turn = current;
+      if (turn) {
+        turn.cancelRequested = true;
+      }
+      // A driver that learns a delivered message's fate only from the turn's
+      // own end gets that end before the signal — bounded, and the process
+      // goes either way.
+      const grace =
+        turn && !turn.terminalEmitted
+          ? (turn.options.closeGraceMs?.() ?? 0)
+          : 0;
+      if (turn && grace > 0) {
+        const deadline = setTimeout(killGroup, grace);
+        void turn.done.then(() => {
+          clearTimeout(deadline);
+          killGroup();
+        });
+        return;
       }
       killGroup();
+    },
+    noteCloseCause: (cause) => {
+      if (!processGone) {
+        closeCause = cause;
+      }
+    },
+    get closeCause() {
+      return closeCause;
     },
     closed,
   };

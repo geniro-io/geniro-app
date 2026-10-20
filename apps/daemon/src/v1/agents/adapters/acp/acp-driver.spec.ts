@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../__tests__/temp-dir';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
-import type { AcpSessionOptions, AcpTurnOptions } from './acp-driver';
+import type {
+  AcpDelegateProtocol,
+  AcpSessionOptions,
+  AcpTurnOptions,
+} from './acp-driver';
 import {
   CUT_OFF_TOOL_RESULT,
   HOST_CONTEXT_NOTE,
@@ -54,6 +58,14 @@ interface Harness {
     turnOverrides?: Partial<AcpTurnOptions>,
   ) => void;
 }
+
+const UNWATCHABLE_DELEGATE: AcpDelegateProtocol = {
+  method: 'test/task',
+  launchMarker: { key: '_toolName', value: 'task' },
+  read: () => null,
+  resultIsBookkeeping: true,
+  stepsUnavailableReason: null,
+};
 
 const BASE_INPUT: AgentTurnInput = { prompt: 'do the thing', cwd: '/work' };
 
@@ -2715,6 +2727,35 @@ describe('AcpSession turn completion', () => {
       rawInput: { command: 'pnpm test' },
     });
 
+    it('marks an unwatchable delegate untracked when its parent request fails', () => {
+      const h = primed({ ...resumable(), delegate: UNWATCHABLE_DELEGATE });
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'delegate',
+          title: 'Review',
+          status: 'in_progress',
+          rawInput: { _toolName: 'task' },
+        }),
+      );
+      h.feed(chunk('agent_message_chunk', DROP));
+      const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'subagent_info',
+          id: 'delegate',
+          backgroundOutcome: 'untracked',
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_result',
+          id: 'delegate',
+          isError: false,
+        }),
+      );
+    });
+
     it('closes a step the failed request left open, which the agent never will', () => {
       // Read out of cursor-agent 2026.10.01-e373342: when its run throws it
       // writes `Error: …`, answers `end_turn`, and sends no `tool_call_update`
@@ -3188,12 +3229,13 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     };
   }
 
-  function turnAsking(applyBeforePrompt: boolean): Partial<AcpDriverOptions> {
+  function turnAsking(promptAwaitsConfig: boolean): Partial<AcpDriverOptions> {
     return {
+      promptAwaitsConfig,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
-        parameters: [{ id: 'context', value: '1m', applyBeforePrompt }],
+        parameters: [{ id: 'context', value: '1m' }],
       },
     };
   }
@@ -3219,9 +3261,10 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     expect(methods(h.sent)).toContain('session/prompt');
   });
 
-  it('sends the prompt straight away for a parameter that does not ask', () => {
-    // Every other frame stays pipelined — one ordered stdio stream already puts
-    // them in order, and deferring behind a reply was priced at ~1.4s per turn.
+  it('sends the prompt straight away for an agent that does not ask', () => {
+    // An agent that reads its settings per request keeps the pipeline — one
+    // ordered stdio stream already puts the frames in order, and deferring
+    // behind a reply costs a round trip (~1.7–2.0s on cursor) per turn.
     const h = harness(turnAsking(false));
     h.feed(initializeReply(1));
     h.feed({ id: 2, result: sessionOfferingContext() });
@@ -3293,8 +3336,8 @@ describe('AcpSession — a parameter the turn must not start without', () => {
 
   it('stays silent for a frame that never held the prompt', () => {
     // Every parameter goes out under the one `set_model_parameter` kind while
-    // only an `applyBeforePrompt` one blocks, so most armed frames have nothing
-    // to rescue. Speaking anyway is worse than silence: an event emitted after
+    // the last one blocks only for a `promptAwaitsConfig` agent, so on any
+    // other the armed frame has nothing to rescue. Speaking anyway is worse than silence: an event emitted after
     // the turn settles reaches the off-turn handler, which reads a `notice` as
     // the run working again with no terminal left to take the badge back down.
     vi.useFakeTimers();
@@ -3347,12 +3390,13 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     vi.useFakeTimers();
     try {
       const h = harness({
+        promptAwaitsConfig: true,
         input: { ...BASE_INPUT, model: 'claude-opus-5' },
         modelSelection: {
           model: 'claude-opus-5',
           parameters: [
-            { id: 'effort', value: 'xhigh', applyBeforePrompt: false },
-            { id: 'context', value: '1m', applyBeforePrompt: true },
+            { id: 'effort', value: 'xhigh' },
+            { id: 'context', value: '1m' },
           ],
         },
       });
@@ -3445,14 +3489,15 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     // 256K "only sometimes". Probed on cursor-agent 2026.09.10-fd3934a, the
     // pipelined frames landed right one run in three; one at a time, three of
     // three. The order is the adapter's: effort first, the context window
-    // (which also holds the prompt) after it.
+    // (which, being last, also holds the prompt) after it.
     const h = harness({
+      promptAwaitsConfig: true,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
         parameters: [
-          { id: 'effort', value: 'xhigh', applyBeforePrompt: false },
-          { id: 'context', value: '1m', applyBeforePrompt: true },
+          { id: 'effort', value: 'xhigh' },
+          { id: 'context', value: '1m' },
         ],
       },
     });
@@ -3508,14 +3553,65 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     ]);
   });
 
+  describe('a model switch that sets nothing else', () => {
+    // The model frame is then the LAST frame, so whether the prompt waits is
+    // the agent's answer alone — no parameter is there to ask for it. cursor
+    // binds the model when the prompt arrives too (a pipelined switch to
+    // `gpt-5.5` billed as the old `gpt-5.6-sol`, though the reply confirmed it).
+    function switching(promptAwaitsConfig: boolean): Harness {
+      const h = harness({
+        promptAwaitsConfig,
+        input: { ...BASE_INPUT, model: 'claude-opus-5' },
+        modelSelection: { model: 'claude-opus-5', parameters: [] },
+      });
+      h.feed(initializeReply(1));
+      h.feed({
+        id: 2,
+        result: {
+          sessionId: 's-1',
+          configOptions: [
+            {
+              id: 'model',
+              category: 'model',
+              currentValue: 'grok-4.6',
+              options: [
+                { value: 'grok-4.6', name: 'grok' },
+                { value: 'claude-opus-5', name: 'opus' },
+              ],
+            },
+          ],
+        },
+      });
+      return h;
+    }
+
+    it('holds the prompt until the model frame is answered', () => {
+      const h = switching(true);
+      expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+      expect(methods(h.sent)).not.toContain('session/prompt');
+
+      h.feed({ id: 3, result: { configOptions: [] } });
+      expect(methods(h.sent)).toContain('session/prompt');
+    });
+
+    it('pipelines the prompt behind it for an agent that does not ask', () => {
+      const h = switching(false);
+      expect(methods(h.sent).slice(-2)).toEqual([
+        'session/set_config_option',
+        'session/prompt',
+      ]);
+    });
+  });
+
   it('drops the parameters queued behind a model the agent refused', () => {
     // They belong to the refused model; set on whichever model the agent kept,
     // they would apply half of a selection the user never made.
     const h = harness({
+      promptAwaitsConfig: true,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
-        parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+        parameters: [{ id: 'context', value: '1m' }],
       },
     });
     h.feed(initializeReply(1));
@@ -4285,6 +4381,35 @@ describe('AcpSession — a message delivered into the running turn', () => {
     });
   });
 
+  it('marks an unwatchable delegate untracked when a follow-up interrupts its parent', () => {
+    const h = running({ delegate: UNWATCHABLE_DELEGATE });
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'delegate',
+        title: 'Review',
+        status: 'in_progress',
+        rawInput: { _toolName: 'task' },
+      }),
+    );
+    h.driver.sendFollowUp({ text: 'do something else' });
+    const events = h.feed(STOPPED);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'delegate',
+        backgroundOutcome: 'untracked',
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_result',
+        id: 'delegate',
+        isError: false,
+      }),
+    );
+  });
+
   it('closes the tool calls the stopped prompt left running, and only those', () => {
     // MEASURED: an interrupt aborts a running shell and a foreground
     // sub-agent, and the agent sends no update for either — so the row read as
@@ -4346,6 +4471,66 @@ describe('AcpSession — a message delivered into the running turn', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /** Where the drop sits relative to the event that ends the turn. */
+  function dropBeforeTerminal(events: AgentEvent[]): void {
+    const types = events.map((event) => event.type);
+    const terminal = types.findIndex(
+      (type) =>
+        type === 'turn_cancelled' ||
+        type === 'turn_complete' ||
+        type === 'error',
+    );
+    expect(types.indexOf('follow_up_dropped')).toBeGreaterThanOrEqual(0);
+    expect(types.indexOf('follow_up_dropped')).toBeLessThan(terminal);
+  }
+
+  // A message accepted while the cancel is in flight has already been written
+  // as a sent row by its caller; a Stop landing before the agent confirms
+  // drops it, so the turn has to say which messages never reached the agent.
+  it.each([
+    ['answers `cancelled`', STOPPED],
+    ['fails', { id: 3, error: { code: -32603, message: 'Internal error' } }],
+    ['ends normally', { id: 3, result: { stopReason: 'end_turn' } }],
+  ])(
+    'reports every message a Stop dropped from the cancel window when the stopped prompt %s',
+    (_reply, reply) => {
+      const h = running();
+      const first = { text: 'do X instead', deliveryId: 'delivery-1' };
+      const second = { text: 'and then Y', deliveryId: 'delivery-2' };
+      expect(h.driver.sendFollowUp(first)).toBe(true);
+      expect(h.driver.sendFollowUp(second)).toBe(true);
+      h.driver.buildInterruptPayload();
+
+      const events = h.feed(reply);
+
+      expect(prompts(h)).toHaveLength(1);
+      expect(events).toContainEqual({
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1', 'delivery-2'],
+      });
+      dropBeforeTerminal(events);
+    },
+  );
+
+  it('reports the dropped message ahead of the failure the stopped prompt reported', () => {
+    const h = running({
+      agentFailure: {
+        read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+      },
+    });
+    h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' });
+    h.driver.buildInterruptPayload();
+    h.feed(chunk('agent_message_chunk', '\n\nError: ProviderError: gone'));
+
+    const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+    expect(events).toContainEqual({
+      type: 'follow_up_dropped',
+      deliveryIds: ['delivery-1'],
+    });
+    dropBeforeTerminal(events);
   });
 
   it('sends the message anyway, and says so, when the agent never confirms', () => {
@@ -4447,10 +4632,11 @@ describe('AcpSession — a message delivered into the running turn', () => {
     // the message queued, which is safe and is what the chat route turns into
     // the RUN_BUSY the composer already handles.
     const h = harness({
+      promptAwaitsConfig: true,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
-        parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+        parameters: [{ id: 'context', value: '1m' }],
       },
     });
     h.feed(initializeReply(1));
@@ -4480,6 +4666,59 @@ describe('AcpSession — a message delivered into the running turn', () => {
   it('refuses before there is a session at all', () => {
     const h = harness();
     expect(h.driver.sendFollowUp({ text: 'too early' })).toBe(false);
+  });
+
+  it('hands back the message waiting behind an unconfirmed cancel when the process ends under the turn', () => {
+    const h = running();
+    h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' });
+    h.driver.buildInterruptPayload();
+
+    expect(h.driver.onProcessEnded()).toEqual([
+      { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+    ]);
+  });
+
+  it('reports the waiting message dropped when its prompt cannot be written after the agent confirms', () => {
+    let writable = true;
+    const h = harness({}, () => writable);
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    expect(
+      h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' }),
+    ).toBe(true);
+    writable = false;
+
+    const events = h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+
+    expect(prompts(h)).toHaveLength(1);
+    expect(events).toContainEqual({
+      type: 'follow_up_dropped',
+      deliveryIds: ['delivery-1'],
+    });
+    dropBeforeTerminal(events);
+  });
+
+  it('reports the waiting message dropped when the agent never confirms and the late prompt cannot be written', () => {
+    vi.useFakeTimers();
+    try {
+      let writable = true;
+      const h = harness({}, () => writable);
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+      h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' });
+      writable = false;
+
+      vi.advanceTimersByTime(INTERRUPT_ACK_DEADLINE_MS);
+
+      expect(prompts(h)).toHaveLength(1);
+      expect(h.emitted).toContainEqual({
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1'],
+      });
+      dropBeforeTerminal(h.emitted);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('answers FALSE when the cancel does not land, and stays settleable', () => {
@@ -4930,10 +5169,11 @@ describe('AcpSession — a Stop that lands before the prompt went out', () => {
   /** A turn whose prompt waits on a parameter frame the agent has not answered. */
   function heldBehindConfig(): Harness {
     const h = harness({
+      promptAwaitsConfig: true,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
-        parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+        parameters: [{ id: 'context', value: '1m' }],
       },
     });
     h.feed(initializeReply(1));

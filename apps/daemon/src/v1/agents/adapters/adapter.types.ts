@@ -22,6 +22,7 @@ import type {
   SpawnFn,
   StoppedCommands,
 } from '../utils/spawn-cli';
+import type { SubagentRecoveryRefSchema } from '../utils/subagent-recovery-ref';
 
 // ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
 // The two names that identify OUR server and OUR tools inside a CLI's config
@@ -70,7 +71,8 @@ export const GENIRO_MCP_CALL_TOOLS = [
  * which is why translating at the read site is the only place it can be done
  * once.
  */
-export type BackgroundUnitOutcome = 'completed' | 'failed' | 'stopped';
+export type BackgroundUnitOutcome =
+  'completed' | 'failed' | 'stopped' | 'untracked';
 
 export interface BackgroundUnitUsage {
   /** Every token the unit spent, prompt and completion together. */
@@ -480,6 +482,23 @@ export interface AgentSessionReadInput {
   /** That conversation's CLI session id, or null before the CLI names one. */
   sessionId: string | null;
 }
+
+/** Durable identity used only to read a lost delegate's existing CLI record. */
+export type SubagentRecoveryRef = z.infer<typeof SubagentRecoveryRefSchema>;
+
+export type SubagentTrackingLost = 'process-ended';
+
+/**
+ * Why a session is closed, when it decides how the work still out ended:
+ * `user-stop` — the user's Stop, so every delegate it cuts off is `stopped`.
+ * Any other close leaves them `untracked`, its process having ended.
+ */
+export type SessionCloseCause = 'user-stop';
+
+export type RecoveredSubagentOutcome = Exclude<
+  BackgroundUnitOutcome,
+  'untracked'
+>;
 
 /**
  * One rate-limit window an account's plan enforces — the thing that actually
@@ -1119,6 +1138,21 @@ type AgentEventBody =
       id: string;
     }
   | {
+      /**
+       * Follow-ups the driver accepted (`sendFollowUp` answered true, so the
+       * owner already wrote their rows) that will now never reach the agent —
+       * the turn they were addressed to ended first, typically by a Stop.
+       * Carries the `FollowUpMessage.deliveryId`s it was given, oldest first.
+       */
+      type: 'follow_up_dropped';
+      deliveryIds: string[];
+      /**
+       * What the CLI said when it REFUSED the messages (a codex `turn/steer`
+       * error), quoted to the user. Absent when the turn simply ended first.
+       */
+      reason?: string;
+    }
+  | {
       type: 'error';
       message: string;
       recovery?: AgentErrorRecovery;
@@ -1346,6 +1380,16 @@ type AgentEventBody =
        * nothing here and keeps the old reading, where the tool result is the end.
        */
       backgroundOpen: boolean | null;
+      /** The child conversation identity, when this CLI exposes one. */
+      subagentSessionId?: string;
+      /** Internal recovery metadata; the renderer does not interpret it. */
+      recovery?: SubagentRecoveryRef | null;
+      /**
+       * On an `untracked` close the daemon wrote: `process-ended` when the
+       * process hosting the delegate is gone, so its work is over and only its
+       * outcome is unknown. Absent when tracking was lost while it may still run.
+       */
+      trackingLost?: SubagentTrackingLost;
     }
   | {
       /**
@@ -1867,6 +1911,13 @@ export interface TurnImage {
 export interface FollowUpMessage {
   text: string;
   images?: TurnImage[];
+  /**
+   * The owner's id for the row it wrote for this message, echoed back in
+   * `follow_up_dropped` when the message never reaches the agent: an ACP turn
+   * that ends before it went out, or a codex `turn/steer` codex refused. Not
+   * `MessageDeliveryFailure.deliveryId`, which names a broker failure record.
+   */
+  deliveryId?: string;
 }
 
 /**
@@ -3393,6 +3444,8 @@ export interface AgentTurnInput {
  * is logged into. A process per turn tears that down on every message.
  */
 export interface AgentSession {
+  /** A live subordinate command still holds this delegate's terminal report. */
+  subagentRecoveryBlocked?(id: string): boolean;
   /**
    * Open a turn on this process. Null when this session cannot serve it: the
    * process is gone, a turn is already in flight, this CLI hosts one turn per
@@ -3464,8 +3517,14 @@ export interface AgentSession {
    *
    * This is the ONLY thing that stops a run-scoped process, so whoever holds
    * the session owns that obligation: nothing else will reap it.
+   *
+   * `cause` says why, when that decides how the work still out ended — see
+   * {@link SessionCloseCause}.
    */
-  close(): void;
+  close(cause?: SessionCloseCause): void;
+  /** See `CliSession.noteCloseCause` — the one place a close's cause is kept. */
+  noteCloseCause?(cause: SessionCloseCause | null): void;
+  readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
 }
@@ -3602,6 +3661,19 @@ export interface TurnDriver {
    * behind.
    */
   withdrawHeldPrompt?(): boolean;
+  /**
+   * The process ended under this turn before the turn's own reply — answered
+   * with what the driver held that will now never be delivered, emitted ahead
+   * of the terminal `spawn-cli` writes. Undefined = nothing to report.
+   */
+  onProcessEnded?(): AgentEvent[];
+  /**
+   * How long closing the session should let a STOPPED turn finish before the
+   * process is signalled — for a driver that will only learn a delivered
+   * message's fate from the turn's own end (codex's steer). 0 or undefined =
+   * signal at once.
+   */
+  closeGraceMs?(): number;
   /** Map one parsed stdout line to zero or more normalized events. */
   onMessage(obj: unknown): AgentEvent[];
   /**
@@ -4089,11 +4161,13 @@ export interface AdapterConfig {
    * Why this CLI's MCP client will NOT hold ONE `tools/call` open for as long
    * as a PERSON takes to answer it — or null when it will.
    *
-   * Non-null means `ask_user_question` must answer IMMEDIATELY and let the
-   * user's answer arrive as the run's next message instead (see
-   * `ChatService`'s deferred ask), because the alternative is not a slow
-   * answer but a LOST one: the client gives up, the model is handed a tool
-   * error, and the person is still reading the question.
+   * Non-null means `ask_user_question`, `propose_plan` and `propose_patch` must
+   * answer IMMEDIATELY and let the user's answer arrive as the run's next
+   * message instead (see `ChatService`'s deferred cards), because the
+   * alternative is not a slow answer but a LOST one: the client gives up, the
+   * model is handed a tool error, and the person is still reading the card.
+   * The deadline is on `tools/call`, not on one tool, which is why the same
+   * field covers all three.
    *
    * A REASON rather than a boolean, on the rule every capability here follows.
    * cursor-agent's is a MEASUREMENT of its shipped bundle

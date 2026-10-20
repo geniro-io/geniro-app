@@ -1,4 +1,7 @@
-import { delegateCloseEvent } from '../../utils/open-delegates';
+import {
+  delegateCloseEvent,
+  delegateDeclarationEvent,
+} from '../../utils/open-delegates';
 import type {
   AgentEvent,
   AgentTurnInput,
@@ -53,8 +56,9 @@ import {
  * `set_mode` is absent for the reason the handshake frames are: it is not in
  * that queue, so it cannot strand anything, and arming it would only buy a
  * chance to narrate a turn that had already run on. Being listed here is not
- * on its own permission to speak — the last frame usually does not hold the
- * prompt, so `AcpTurnDriver.onRequestDeadline` re-checks before it emits.
+ * on its own permission to speak — the last frame holds the prompt only for an
+ * agent that asks it to (`AcpSessionOptions.promptAwaitsConfig`), so
+ * `AcpTurnDriver.onRequestDeadline` re-checks before it emits.
  */
 const REQUEST_DEADLINE_MS: Partial<Record<PendingKind, number>> = {
   set_model: 30_000,
@@ -74,12 +78,8 @@ const REQUEST_DEADLINE_MS: Partial<Record<PendingKind, number>> = {
 const DELEGATE_ENDING_POLL_MS = 5_000;
 
 /**
- * How many consecutive reads may find NO record before a delegate stops being
- * watched. The record is created when the delegate starts (measured: each
- * reviewer's transcript directory is stamped with its launch minute), so six
- * misses — thirty seconds — is a layout this reader does not know, not a record
- * still being created. Past it the delegate falls back to being closed with the
- * turn, which is what happened to every delegate before this reader existed.
+ * Consecutive missing records release the turn hold. The delegate becomes
+ * untracked; durable recovery can still resolve it from a later CLI record.
  */
 const DELEGATE_RECORD_MISS_LIMIT = 6;
 
@@ -270,6 +270,7 @@ export class AcpSession implements TurnDriver {
   private readonly delegateLaunchedAt = new Map<string, number>();
   /** Background delegates whose close has been emitted — by any closer here. */
   private readonly closedDelegates = new Set<string>();
+  private readonly untrackedDelegates = new Set<string>();
   /** Consecutive reads that found no record, per delegate. */
   private readonly delegateRecordMisses = new Map<string, number>();
 
@@ -286,7 +287,7 @@ export class AcpSession implements TurnDriver {
   readonly unplacedChildSessions = new Set<string>();
   /**
    * How each delegate ended, as the agent STATED it on the wire, by launching
-   * call — null for a child the agent lost track of (`disconnected`).
+   * call, including `untracked` for a disconnected child.
    */
   readonly wireEndings = new Map<string, BackgroundUnitOutcome | null>();
   /** What each child said last, by launching call — its report. */
@@ -309,9 +310,8 @@ export class AcpSession implements TurnDriver {
   /** The pending look at the delegates' records, or null while none is due. */
   private delegateWatch: NodeJS.Timeout | null = null;
   /**
-   * The most recent turn COMPLETED — the one condition under which a delegate
-   * nothing can watch may be closed with no outcome claimed, as a turn that
-   * ran to its end had what it asked its delegates for. Reset as a turn opens.
+   * Once the parent has completed, an unwatchable delegate becomes untracked.
+   * Reset as a turn opens.
    */
   private turnCompleted = false;
   /**
@@ -471,6 +471,10 @@ export class AcpSession implements TurnDriver {
 
   withdrawHeldPrompt(): boolean {
     return this.turn.withdrawHeldPrompt();
+  }
+
+  onProcessEnded(): AgentEvent[] {
+    return this.turn.onProcessEnded();
   }
 
   /**
@@ -690,8 +694,19 @@ export class AcpSession implements TurnDriver {
     id: string,
     outcome: BackgroundUnitOutcome | null,
   ): AgentEvent | null {
+    const wasUntracked = this.untrackedDelegates.has(id);
     this.wireEndings.set(id, outcome);
-    if (!this.backgroundDelegates.has(id) || this.closedDelegates.has(id)) {
+    if (
+      outcome !== null &&
+      outcome !== 'untracked' &&
+      this.untrackedDelegates.delete(id)
+    ) {
+      this.closedDelegates.delete(id);
+    }
+    if (
+      (!this.backgroundDelegates.has(id) && !wasUntracked) ||
+      this.closedDelegates.has(id)
+    ) {
       return null;
     }
     const launchedAt = this.delegateLaunchedAt.get(id);
@@ -798,7 +813,7 @@ export class AcpSession implements TurnDriver {
   }
 
   /**
-   * A turn on this session COMPLETED: close, with no outcome claimed, every
+   * A turn on this session COMPLETED: mark untracked every
    * background delegate still out that nothing can watch — no reader, no
    * address, or a record that never turned up.
    *
@@ -812,7 +827,7 @@ export class AcpSession implements TurnDriver {
     this.delegateWaiter = null;
     return this.outstandingDelegates()
       .filter((id) => !this.canWatch(id))
-      .map((id) => this.closeDelegate(id, null, null));
+      .map((id) => this.closeDelegate(id, 'untracked', null));
   }
 
   /**
@@ -870,12 +885,26 @@ export class AcpSession implements TurnDriver {
     );
   }
 
+  /** Remember synthetic closes so a later wire ending can resolve tracking loss. */
+  closeCutOffDelegate(id: string): AgentEvent {
+    return this.closeDelegate(
+      id,
+      this.wireEndings.get(id) ?? 'untracked',
+      null,
+    );
+  }
+
   private closeDelegate(
     id: string,
     outcome: BackgroundUnitOutcome | null,
     durationMs: number | null,
-  ): AgentEvent {
+  ): Extract<AgentEvent, { type: 'subagent_info' }> {
     this.closedDelegates.add(id);
+    if (outcome === null || outcome === 'untracked') {
+      this.untrackedDelegates.add(id);
+    } else {
+      this.untrackedDelegates.delete(id);
+    }
     this.delegateRecordMisses.delete(id);
     return delegateCloseEvent(id, outcome, durationMs);
   }
@@ -911,7 +940,8 @@ export class AcpSession implements TurnDriver {
       return this.delegateConversations.get(id) ?? null;
     }
     // Continued by a later delegate: the one that held it was cut off, and
-    // nothing it says from here on is its own. Closed as stopped — and never
+    // nothing it says from here on is its own. Marked stopped, with recovery
+    // off since its record now belongs to the continuation — and never
     // reported to the agent, which hears about the work from its continuation.
     for (const [other, conversation] of this.delegateConversations) {
       if (
@@ -920,10 +950,12 @@ export class AcpSession implements TurnDriver {
         !this.closedDelegates.has(other)
       ) {
         this.delegateConversations.delete(other);
-        this.emit(this.closeDelegate(other, 'stopped', null));
+        const closed = this.closeDelegate(other, 'stopped', null);
+        this.emit({ ...closed, recovery: null });
       }
     }
     this.delegateConversations.set(id, found);
+    this.emit(delegateDeclarationEvent(id, { subagentSessionId: found }));
     return found;
   }
 
@@ -945,8 +977,7 @@ export class AcpSession implements TurnDriver {
    * Chained timeouts rather than an interval, so a slow disk cannot overlap
    * one sweep with the next — the timer stays set until its sweep finishes —
    * and `unref`'d, so a forgotten watch can never keep the daemon alive. It
-   * stops once the process is gone: the delegates died with it, and the
-   * process closer is the one that says so.
+   * stops once the process is gone; durable recovery owns later record reads.
    */
   private armDelegateWatch(): void {
     if (
@@ -1018,8 +1049,8 @@ export class AcpSession implements TurnDriver {
           // nothing else would ever come for it then — nor will a turn that is
           // WAITING on it ever be over, until it is closed.
           if (this.turnCompleted || this.delegateWaiter !== null) {
-            this.emit(this.closeDelegate(id, null, null));
-            this.noteEnded(id, null, null, null, null);
+            this.emit(this.closeDelegate(id, 'untracked', null));
+            this.noteEnded(id, 'untracked', null, null, null);
             closedAny = true;
           }
         }

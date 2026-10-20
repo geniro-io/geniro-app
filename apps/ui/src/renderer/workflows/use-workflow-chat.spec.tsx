@@ -431,6 +431,21 @@ describe('useWorkflowChat', () => {
     expect(state().settledTurns).toBe(1);
   });
 
+  it('lowers working on a settle that follows its turn’s terminal row past a stray running', async () => {
+    // The daemon's order when an off-turn row restates the run between the
+    // turn's `turn_complete` row and its settle: the settle carries no
+    // `noTerminalItem`, since its row already landed.
+    await mount();
+    await emitItem(turnComplete('done-1'));
+    await emitStatus({ runId: 'run-1', status: 'running' } as RunStatusEvent);
+    expect(state().working).toBe(true);
+
+    await emitStatus({ runId: 'run-1', status: 'completed' } as RunStatusEvent);
+
+    expect(state().working).toBe(false);
+    expect(state().settledTurns).toBe(1);
+  });
+
   it('mirrors the counts a status announce carries onto the run row, and leaves its status alone', async () => {
     // The header, the context ring and the delegate blocks read these off the
     // row. A count-only announce is the ordinary way a count moves, so it must
@@ -822,6 +837,18 @@ describe('useWorkflowChat', () => {
       }
     });
   };
+
+  it('lowers working on a settle past a stray running when the turn end arrived by replay', async () => {
+    await mount();
+    listRunItems.mockResolvedValueOnce([{ ...turnComplete('end-1'), seq: 2 }]);
+    await reconnect();
+    await emitStatus({ runId: 'run-1', status: 'running' } as RunStatusEvent);
+    expect(state().working).toBe(true);
+
+    await emitStatus({ runId: 'run-1', status: 'completed' } as RunStatusEvent);
+
+    expect(state().working).toBe(false);
+  });
 
   it('counts a turn ending once when the socket and the replay both deliver it', async () => {
     // Each count re-reads the builder's canvas.

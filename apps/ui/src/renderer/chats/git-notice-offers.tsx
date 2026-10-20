@@ -12,7 +12,7 @@ import type { GitNotice } from './use-git-info';
  * look, re-toned to the strip it sits in so it cannot read as unrelated
  * caramel.
  */
-const offerLink = cva(
+export const offerLink = cva(
   'h-auto shrink-0 p-0 text-xs underline underline-offset-4',
   {
     variants: {

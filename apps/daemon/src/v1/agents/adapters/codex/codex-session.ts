@@ -131,6 +131,7 @@ export class CodexSession implements TurnDriver {
   readonly subagents = new Map<string, string>();
   /** Spawning calls whose delegate this session has announced as running. */
   private readonly openSubagents = new Set<string>();
+  private readonly untrackedSubagents = new Set<string>();
   /**
    * The thread is in plan mode, as codex last confirmed it. codex keeps a
    * turn's collaboration mode for the turns after it — across processes too,
@@ -216,7 +217,12 @@ export class CodexSession implements TurnDriver {
         const entry = this.pending.take(message.id, this.turn, outlivesItsTurn);
         return entry === null
           ? []
-          : entry.turn.onReply(entry.kind, message.result, entry.detail);
+          : entry.turn.onReply(
+              entry.kind,
+              message.result,
+              entry.detail,
+              entry.deliveryId,
+            );
       }
       case 'error': {
         const entry = this.pending.take(
@@ -226,7 +232,12 @@ export class CodexSession implements TurnDriver {
         );
         return entry === null
           ? []
-          : entry.turn.onErrorReply(entry.kind, message.message, entry.detail);
+          : entry.turn.onErrorReply(
+              entry.kind,
+              message.message,
+              entry.detail,
+              entry.deliveryId,
+            );
       }
       case 'request':
         return this.turn.onServerRequest(
@@ -251,6 +262,30 @@ export class CodexSession implements TurnDriver {
 
   sendFollowUp(message: FollowUpMessage): boolean {
     return this.turn.sendFollowUp(message);
+  }
+
+  withdrawHeldPrompt(): boolean {
+    return this.turn.withdrawHeldPrompt();
+  }
+
+  onProcessEnded(): AgentEvent[] {
+    return this.turn.onProcessEnded();
+  }
+
+  closeGraceMs(): number {
+    return this.turn.closeGraceMs();
+  }
+
+  /** Whether `turn` is the one this session is serving now. */
+  isCurrentTurn(turn: CodexTurnDriver): boolean {
+    return this.turn === turn;
+  }
+
+  /** Emit to the turn now open, outside any reply — the held ending's release. */
+  emitNow(events: readonly AgentEvent[]): void {
+    for (const event of events) {
+      this.io?.emit(event);
+    }
   }
 
   buildInterruptPayload(): string | undefined {
@@ -296,16 +331,25 @@ export class CodexSession implements TurnDriver {
   }
 
   /**
-   * End one sub-agent: announce its spawning call closed, once, with how it
-   * ended — whichever report of its ending arrives first.
+   * Publish the first known ending, allowing it to replace tracking loss.
    */
   closeSubagent(
     threadId: string,
     outcome: BackgroundUnitOutcome,
   ): AgentEvent[] {
     const parent = this.subagents.get(threadId);
-    if (parent === undefined || !this.openSubagents.delete(parent)) {
+    if (parent === undefined) {
       return [];
+    }
+    const wasOpen = this.openSubagents.delete(parent);
+    const wasUntracked = this.untrackedSubagents.has(parent);
+    if (!wasOpen && !wasUntracked) {
+      return [];
+    }
+    if (outcome === 'untracked') {
+      this.untrackedSubagents.add(parent);
+    } else {
+      this.untrackedSubagents.delete(parent);
     }
     return [subagentState(parent, { open: false, outcome })];
   }
@@ -313,6 +357,7 @@ export class CodexSession implements TurnDriver {
   /** Mark a spawning call's delegate as running, so its ending is owed. */
   openSubagent(spawnItemId: string): void {
     this.openSubagents.add(spawnItemId);
+    this.untrackedSubagents.delete(spawnItemId);
   }
 
   /**
@@ -345,6 +390,7 @@ export class CodexSession implements TurnDriver {
    * Send one request, answering whether it actually went out. `detail` is what
    * the turn wants said about the reply. `owner` is the turn the reply goes to:
    * the current one, unless an ended turn is still finishing its own work.
+   * `deliveryId` is the message's own, for a `turn/steer` refusal to name.
    */
   request(
     method: string,
@@ -353,6 +399,7 @@ export class CodexSession implements TurnDriver {
     events: AgentEvent[],
     detail: string | null = null,
     owner: CodexTurnDriver = this.turn,
+    deliveryId: string | null = null,
   ): boolean {
     const id = this.pending.send(
       method,
@@ -361,6 +408,7 @@ export class CodexSession implements TurnDriver {
       owner,
       (frame) => this.write(frame),
       detail,
+      deliveryId,
     );
     if (id === null) {
       events.push({

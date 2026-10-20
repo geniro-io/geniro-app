@@ -1,6 +1,6 @@
 import { awakeTimeout, type AwakeTimer } from '../../../../utils/sleep-watch';
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
-import { delegateCloseEvent } from '../../utils/open-delegates';
+import { delegateDeclarationEvent } from '../../utils/open-delegates';
 import type {
   AgentEvent,
   AgentReportedCommand,
@@ -145,6 +145,8 @@ export interface AcpDelegateRef {
   cwd: string;
   /** The PARENT session's id, when it is known yet. */
   sessionId: string | null;
+  /** Recovery must not accept a previous execution's terminal record. */
+  notBeforeMs?: number;
 }
 
 /** What is known about a delegate that has no address yet. */
@@ -320,8 +322,8 @@ export interface AcpDelegateProtocol {
   /**
    * How a delegate the launching call said is still running can be seen to
    * end — see {@link AcpDelegateEndings}. An adapter that declares none has its
-   * background delegates closed, with no outcome claimed, when the turn that
-   * launched them completes: nothing more about them could ever be learned.
+   * background delegates marked untracked when the launching turn completes,
+   * because no further observation channel is available.
    */
   endings?: AcpDelegateEndings;
   /**
@@ -599,6 +601,30 @@ export interface AcpSessionOptions {
    * An agent that does not know the key ignores it, so sending it is free.
    */
   clientMeta?: Readonly<Record<string, unknown>>;
+  /**
+   * Whether a turn's prompt must WAIT for the reply to its last config frame —
+   * the model or a parameter, whichever went last — rather than follow it
+   * straight down the pipe.
+   *
+   * Without it the prompt is pipelined behind the last frame, on the reasoning
+   * that one ordered stdio stream already puts them in order. That holds for
+   * an agent that reads a setting per REQUEST, and it does not hold for one
+   * that binds the turn's settings when the PROMPT arrives: a frame still in
+   * flight then is accepted, its reply names the new value, and the turn runs
+   * on the old one. Nothing but the timing tells the two apart.
+   *
+   * A fact about the CLI, not about one setting, so it is one switch: which
+   * frame ends up last depends on what the turn happens to name, and a model
+   * switch with no parameter is a turn whose last frame is the model's.
+   *
+   * The cost is one round trip per turn that sends a frame, however many it
+   * sends: they already go out one at a time ({@link
+   * AcpTurnDriver.configSteps}), so only the last can still be in flight when
+   * the prompt is written. A turn that sends none pays nothing. A frame
+   * refused, or unanswered past its deadline, releases the prompt the way an
+   * answered one does.
+   */
+  promptAwaitsConfig?: boolean;
 }
 
 /**
@@ -685,28 +711,6 @@ export interface AcpModelParameter {
    * hold more than one axis.
    */
   category?: string;
-  /**
-   * Whether the prompt must WAIT for this frame's reply.
-   *
-   * Every other frame this driver sends before a prompt is pipelined, on the
-   * reasoning that one ordered stdio stream already puts them in order — see
-   * {@link AcpTurnDriver.applyModel}. That holds for anything the agent reads
-   * per REQUEST, and it does not hold for a setting the agent binds when the
-   * TURN begins.
-   *
-   * Measured on cursor-agent 2026.08.11-e8db854, same profile, same frames,
-   * same values, only the waiting differing: with the `context` reply awaited
-   * the CLI's own accounting reports a 1,000,000-token window; with the frame
-   * and the prompt sent back to back it reports 300,000 — the model's default —
-   * even though the reply confirms `context = 1m`. So the option was set and
-   * the turn had already started without it.
-   *
-   * The cost is one round trip on the turns that ask, and only those. It is not
-   * set on the effort axis: nothing has measured that one to bind at turn
-   * start, and the deferral was priced at ~1.4s per turn when it was considered
-   * for the model frame.
-   */
-  applyBeforePrompt?: boolean;
 }
 
 function textOf(content: unknown): string | null {
@@ -1089,15 +1093,6 @@ export class AcpTurnDriver {
   private readonly configSteps: ConfigStep[] = [];
   /** The config frame awaiting its reply, or null when none is. */
   private configInFlight: JsonRpcId | null = null;
-  /**
-   * Whether the prompt waits for the LAST config frame's reply too, rather than
-   * following it straight down the pipe.
-   *
-   * Only for a parameter the adapter marked `applyBeforePrompt` — see that
-   * field for the measurement. Every other turn sends its prompt right behind
-   * its last frame, which is the one round-trip pipelining still saves.
-   */
-  private configBlocksPrompt = false;
   /** The prompt, not yet sent because a config frame is still ahead of it. */
   private promptHeld = false;
   /**
@@ -1645,12 +1640,14 @@ export class AcpTurnDriver {
       this.dropSupersededFailure(id);
       return this.flushPending();
     }
+    const events: AgentEvent[] = [];
     if (kind === 'prompt') {
       this.promptOutstanding = false;
       this.clearInterrupt();
-      this.queuedFollowUps.length = 0;
+      events.push(...this.dropped(this.queuedFollowUps.splice(0)));
     }
-    return [{ type: 'error', message: `acp ${kind} failed: ${message}` }];
+    events.push({ type: 'error', message: `acp ${kind} failed: ${message}` });
+    return events;
   }
 
   private onInitialized(result: unknown): AgentEvent[] {
@@ -1907,9 +1904,10 @@ export class AcpTurnDriver {
   /**
    * Send the next queued config frame — or, with none left, the prompt.
    *
-   * The prompt follows the LAST frame straight down the pipe unless a queued
-   * parameter asked for it to wait (`configBlocksPrompt`), in which case it
-   * goes when that frame is answered. A step that sends nothing is skipped.
+   * The prompt follows the LAST frame straight down the pipe unless the agent
+   * binds its settings when the prompt arrives
+   * ({@link AcpSessionOptions.promptAwaitsConfig}), in which case it goes when
+   * that frame is answered. A step that sends nothing is skipped.
    */
   private advanceConfig(events: AgentEvent[]): void {
     for (
@@ -1922,7 +1920,10 @@ export class AcpTurnDriver {
         continue;
       }
       this.configInFlight = id;
-      if (this.configSteps.length === 0 && !this.configBlocksPrompt) {
+      if (
+        this.configSteps.length === 0 &&
+        this.session.options.promptAwaitsConfig !== true
+      ) {
         this.sendHeldPrompt(events);
       }
       return;
@@ -2002,9 +2003,11 @@ export class AcpTurnDriver {
    * open block is closed at the interrupt, as a Stop closes one.
    *
    * True means ACCEPTED, and a message accepted while the cancel is in flight
-   * is sent when the agent confirms: the caller commits its row either way,
-   * and the only way it goes unsent is a Stop pressed in that window, which
-   * ends the turn it was addressed to.
+   * is sent when the agent confirms: the caller commits its row either way.
+   * When it never goes out — a Stop pressed in that window, the process ending
+   * under the turn, or the prompt failing to write — the turn emits
+   * `follow_up_dropped` naming its `deliveryId`, ahead of its terminal, so the
+   * owner can mark that row unsent.
    */
   sendFollowUp(message: FollowUpMessage): boolean {
     // No session yet, or a prompt still held behind a parameter frame: in both
@@ -2108,7 +2111,7 @@ export class AcpTurnDriver {
       ...this.flushPending(),
       ...this.closeInterruptedToolCalls(),
     ];
-    this.sendFollowUpPrompt(this.queuedFollowUps.splice(0), events);
+    events.push(...this.sendQueuedFollowUps());
     return events;
   }
 
@@ -2143,12 +2146,22 @@ export class AcpTurnDriver {
             'The agent did not confirm it had stopped before your message — it was sent anyway, and the agent may carry on with its earlier work beside it.',
         },
       ];
-      this.sendFollowUpPrompt(this.queuedFollowUps.splice(0), events);
+      events.push(...this.sendQueuedFollowUps());
       for (const event of events) {
         this.session.emit(event);
       }
     }, INTERRUPT_ACK_DEADLINE_MS);
     this.interruptTimer.unref?.();
+  }
+
+  /**
+   * The process ended before this turn's last prompt answered — Stop's group
+   * kill when the agent never confirmed the cancel, or a crash. Whatever was
+   * waiting behind the cancel goes with it — `TurnDriver.onProcessEnded`.
+   */
+  onProcessEnded(): AgentEvent[] {
+    this.clearInterrupt();
+    return this.dropped(this.queuedFollowUps.splice(0));
   }
 
   /** Forget an interrupt in flight — confirmed, or overtaken by a Stop. */
@@ -2160,20 +2173,29 @@ export class AcpTurnDriver {
     }
   }
 
-  /**
-   * Close every tool call the stopped prompt left open — see
-   * {@link openToolCalls} for why everything open is that prompt's.
-   */
-  private closeInterruptedToolCalls(): AgentEvent[] {
-    const events: AgentEvent[] = [];
-    for (const id of this.openToolCalls) {
-      events.push({
+  /** A parent request stopping is not a report about its delegate's outcome. */
+  private cutOffToolCall(id: string, result: string): AgentEvent[] {
+    const delegate = this.session.delegateToolCalls.has(id);
+    const events: AgentEvent[] = [
+      {
         type: 'tool_result',
         id,
         name: this.session.toolNames.get(id) ?? null,
-        result: INTERRUPTED_TOOL_RESULT,
-        isError: true,
-      });
+        result: delegate ? null : result,
+        isError: !delegate,
+      },
+    ];
+    if (delegate) {
+      events.push(this.session.closeCutOffDelegate(id));
+    }
+    return events;
+  }
+
+  /** Close the calls the stopped prompt left open. */
+  private closeInterruptedToolCalls(): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    for (const id of this.openToolCalls) {
+      events.push(...this.cutOffToolCall(id, INTERRUPTED_TOOL_RESULT));
     }
     this.openToolCalls.clear();
     return events;
@@ -2238,6 +2260,33 @@ export class AcpTurnDriver {
     }
     events.push(...this.flushPending());
     return true;
+  }
+
+  /**
+   * Send what waited behind the cancel. A send that fails reports its messages
+   * dropped AHEAD of the error it ends the turn with: anything after a
+   * terminal reaches the owner as off-turn work, after the run has settled.
+   */
+  private sendQueuedFollowUps(): AgentEvent[] {
+    const waiting = this.queuedFollowUps.splice(0);
+    const events: AgentEvent[] = [];
+    return this.sendFollowUpPrompt(waiting, events)
+      ? events
+      : [...this.dropped(waiting), ...events];
+  }
+
+  /**
+   * Report accepted follow-ups that will never reach the agent. Their owner
+   * wrote each row when {@link sendFollowUp} answered true, so without this the
+   * transcript shows them as sent.
+   */
+  private dropped(messages: readonly FollowUpMessage[]): AgentEvent[] {
+    const deliveryIds = messages.flatMap((message) =>
+      message.deliveryId === undefined ? [] : [message.deliveryId],
+    );
+    return deliveryIds.length === 0
+      ? []
+      : [{ type: 'follow_up_dropped', deliveryIds }];
   }
 
   /**
@@ -2375,9 +2424,9 @@ export class AcpTurnDriver {
   ): AgentEvent[] {
     // Only the frame the queue is waiting on has anything to rescue — the
     // frames behind it and, until the queue drains, the prompt. Once the prompt
-    // has gone out (it follows the last frame down the pipe unless that frame
-    // blocks it) the turn has run on regardless of what this reply would have
-    // said.
+    // has gone out (it follows the last frame down the pipe unless the agent
+    // asks it to wait, `promptAwaitsConfig`) the turn has run on regardless of
+    // what this reply would have said.
     //
     // Speaking anyway is worse than silence: an event emitted once the turn has
     // settled reaches the off-turn handler, which reads a `notice` as the run
@@ -2430,10 +2479,10 @@ export class AcpTurnDriver {
   /**
    * Put the turn on the model it asked for, before the prompt goes out.
    *
-   * Sent rather than awaited, exactly as `session/set_mode` above is: the
-   * frames leave on one ordered stdio stream, so the agent applies the model
-   * before it reads the prompt. Waiting for the reply would cost a round-trip
-   * on every turn to learn something the ordering already guarantees.
+   * Queued ahead of its parameters (`configSteps`), with the prompt behind the
+   * last of them — pipelined, unless the agent binds its settings when the
+   * prompt arrives ({@link AcpSessionOptions.promptAwaitsConfig}); then the
+   * prompt waits for this frame's reply when it is the last one.
    *
    * A turn that names no model is left alone — the agent's own default is the
    * right answer, and forcing the id it just reported as current would spend a
@@ -2610,9 +2659,6 @@ export class AcpTurnDriver {
       return;
     }
     for (const parameter of parameters) {
-      if (parameter.applyBeforePrompt) {
-        this.configBlocksPrompt = true;
-      }
       this.configSteps.push({
         send: (events) => {
           // Read at SEND time: by then the model frame ahead of this one has
@@ -2965,10 +3011,11 @@ export class AcpTurnDriver {
       return this.flushPending();
     }
     // The turn's own last prompt has answered. A mid-turn message still
-    // waiting here was overtaken by a Stop, which ends the turn it was for.
+    // waiting here was overtaken by a Stop, which ends the turn it was for —
+    // reported, since its row already reads as sent.
     this.promptOutstanding = false;
     this.clearInterrupt();
-    this.queuedFollowUps.length = 0;
+    const dropped = this.dropped(this.queuedFollowUps.splice(0));
     const root = asRecord(result);
     const rawStopReason = root ? asString(root.stopReason) : null;
     const stopReason = (ACP_STOP_REASONS as readonly string[]).includes(
@@ -2982,7 +3029,7 @@ export class AcpTurnDriver {
       // final answer downstream nodes would then consume. What the user
       // ALREADY SAW is a different question: the open block is still written,
       // so cancelling does not erase the words that reached the screen.
-      return [...this.flushPending(), { type: 'turn_cancelled' }];
+      return [...this.flushPending(), ...dropped, { type: 'turn_cancelled' }];
     }
 
     if (this.agentFailure !== null) {
@@ -2999,7 +3046,7 @@ export class AcpTurnDriver {
       // transport error as this node's output.
       const message = this.agentFailure;
       this.agentFailure = null;
-      const events: AgentEvent[] = [...this.flushPending()];
+      const events: AgentEvent[] = [...this.flushPending(), ...dropped];
       // Whatever the request left open, the agent will never close — whether
       // the turn is resumed or ends here.
       const stillRunning = this.settleCutOffToolCalls(events);
@@ -3015,7 +3062,7 @@ export class AcpTurnDriver {
     }
     // The prompt is over, so the last block has no more chunks coming — this
     // is the ONLY close for a reply that ended without a tool call after it.
-    const events: AgentEvent[] = [...this.flushPending()];
+    const events: AgentEvent[] = [...this.flushPending(), ...dropped];
     if (this.holdForDelegates(rawStopReason, events)) {
       return events;
     }
@@ -3358,8 +3405,7 @@ export class AcpTurnDriver {
    * cut off would draw a verifier that went on to finish as one that did not;
    * it is closed the way a background launch closes — its call answered, its
    * block left open — and its own record says when it is over. One that cannot
-   * be watched (no brief, no reader) is closed like any other step, since
-   * nothing would ever close it otherwise.
+   * be watched (no brief, no reader) is marked untracked.
    */
   private settleCutOffToolCalls(events: AgentEvent[]): string[] {
     const stillRunning: string[] = [];
@@ -3384,7 +3430,7 @@ export class AcpTurnDriver {
             result: null,
             isError: false,
           },
-          delegateCloseEvent(id, this.session.wireEndings.get(id) ?? null),
+          this.session.closeCutOffDelegate(id),
         );
         continue;
       }
@@ -3418,13 +3464,7 @@ export class AcpTurnDriver {
         );
         continue;
       }
-      events.push({
-        type: 'tool_result',
-        id,
-        name: this.session.toolNames.get(id) ?? null,
-        result: CUT_OFF_TOOL_RESULT,
-        isError: true,
-      });
+      events.push(...this.cutOffToolCall(id, CUT_OFF_TOOL_RESULT));
     }
     return stillRunning;
   }
@@ -4206,7 +4246,11 @@ export class AcpTurnDriver {
       }
       this.session.childSessions.set(spawn.childSessionId, launch);
       this.session.noteDelegateLaunch(launch);
-      return [];
+      return [
+        delegateDeclarationEvent(launch, {
+          subagentSessionId: spawn.childSessionId,
+        }),
+      ];
     }
     const end = readSubagentEnd(update);
     if (end === null) {

@@ -34,6 +34,7 @@ import type {
   AgentTurnInput,
   ApprovalResolution,
   InstalledApprovalSupport,
+  SessionCloseCause,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
@@ -54,6 +55,8 @@ import type { RunDao } from '../../agents/dao/run.dao';
 import type { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
+import { ActionBroker } from '../../agents/services/action.broker';
+import { ActionPublishService } from '../../agents/services/action-publish.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { AgentMcpService } from '../../agents/services/agent-mcp.service';
@@ -62,6 +65,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import type { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { ChatActionsService } from '../../agents/services/chat-actions.service';
 import type { ChatUploadStoreService } from '../../agents/services/chat-upload-store.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -76,6 +80,11 @@ import { SessionTranscriptsService } from '../../agents/services/session-transcr
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
+import {
+  callMembershipLookupOf,
+  callMembershipOf,
+  OUTSIDE_ANY_CALL,
+} from '../../agents/utils/call-membership';
 import type { ModelPriceLookup } from '../../agents/utils/model-prices';
 import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import {
@@ -791,6 +800,7 @@ class FakeAdapter {
     this.sessionsOpened += 1;
     let live: FakeTurn | null = null;
     let closed = false;
+    let closeCause: SessionCloseCause | null = null;
     let resolveClosed!: () => void;
     const closedPromise = new Promise<void>((resolve) => {
       resolveClosed = resolve;
@@ -812,6 +822,7 @@ class FakeAdapter {
         if (!canTakeTurn()) {
           return null;
         }
+        closeCause = null;
         const turn = this.start(turnInput, onEvent);
         live = this.starts[this.starts.length - 1]!;
         live.emitOffTurn = (event) => opts.onBetweenTurnEvent?.(event);
@@ -831,10 +842,17 @@ class FakeAdapter {
       runningCommands: [],
       endedRunning: null,
       pid: null,
-      close: () => {
+      noteCloseCause: (cause: SessionCloseCause | null) => {
+        closeCause = cause;
+      },
+      get closeCause() {
+        return closeCause;
+      },
+      close: (cause?: SessionCloseCause) => {
         if (closed) {
           return;
         }
+        closeCause ??= cause ?? null;
         closed = true;
         if (live) {
           live.sessionClosed = true;
@@ -1051,6 +1069,9 @@ function setup(
   createdRuns: { event: RunCreatedEvent; row: Run | undefined }[];
   removedAttachmentRuns: string[];
   artifacts: ArtifactBroker;
+  /** The button tools' broker, over the real publisher and its one writer. */
+  actions: ActionBroker;
+  chatActions: ChatActionsService;
   /** The page store's answer, switchable per test: a refusal names its reason. */
   pageStore: { refusal: string | null };
   /** The real registry the executor opens its processes on. */
@@ -1258,6 +1279,14 @@ function setup(
   };
   const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   const artifacts = new ArtifactBroker();
+  const actions = new ActionBroker();
+  const chatActions = new ChatActionsService(
+    em,
+    itemDao as unknown as ItemDao,
+    bus,
+    NO_CALL_INDEX,
+    seqs,
+  );
   // The page store's answer, switchable per test: a refusal names the reason the
   // executor must hand back to the caller verbatim.
   const pageStore: { refusal: string | null } = { refusal: null };
@@ -1382,6 +1411,8 @@ function setup(
     // machine-derived default differs by host.
     4,
     opts.agentMcp as AgentMcpService | undefined,
+    actions,
+    new ActionPublishService(chatActions),
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -1418,6 +1449,8 @@ function setup(
     createdRuns,
     removedAttachmentRuns,
     artifacts,
+    actions,
+    chatActions,
     pageStore,
   };
 }
@@ -1726,6 +1759,7 @@ describe('GraphExecutorService', () => {
     expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledWith({
       text: 'a question',
       images: [],
+      deliveryId: expect.any(String),
     });
     // A node with no live turn has nothing to join.
     expect(claudeCaller.tellLiveNode('callee', 'a question')).toBe(false);
@@ -1742,6 +1776,110 @@ describe('GraphExecutorService', () => {
     expect(cursor.getConfig().followUp.interrupts).toBe(true);
     expect(cursorCaller.tellLiveNode('a', 'a question')).toBe(false);
     expect(cursor.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('delivers a tell again once the turn that dropped it has ended, and writes no unsent row', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const capability = register.mock.calls.at(-1)![1];
+    const turn = claude.starts[0]!;
+    const redeliver = vi.fn();
+    expect(capability.tellLiveNode('a', 'the limit reset', redeliver)).toBe(
+      true,
+    );
+    expect(capability.tellLiveNode('a', 'a question')).toBe(true);
+    const ids = turn.sendUserMessage.mock.calls.map(
+      ([message]) => message.deliveryId!,
+    );
+
+    turn.emit({ type: 'follow_up_dropped', deliveryIds: ids });
+    await drain();
+    // Not while the turn that dropped it is still ending.
+    expect(redeliver).not.toHaveBeenCalled();
+    completeTurn(turn, 'done');
+    await drain();
+
+    expect(redeliver).toHaveBeenCalledTimes(1);
+    // A tell is not the user's message: nothing reads "not sent".
+    const unsent = itemDao.items
+      .filter((row) => row.runId === run.id && row.kind === 'system')
+      .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
+      .filter((payload) => 'unsentMessages' in payload);
+    expect(unsent).toEqual([]);
+  });
+
+  it('wakes a conversation again for a wake its working turn dropped', async () => {
+    const { service, claude, callBroker } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    await service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const capability = register.mock.calls.at(-1)![1];
+    const turn = claude.starts[0]!;
+    expect(capability.wakeNode('a', 'the callee result is ready')).toBe(true);
+    await drain();
+    // The conversation was working: the wake joined its turn.
+    expect(claude.starts).toHaveLength(1);
+    const [{ deliveryId }] = turn.sendUserMessage.mock.calls[0]!;
+
+    turn.emit({ type: 'follow_up_dropped', deliveryIds: [deliveryId!] });
+    completeTurn(turn, 'done');
+    await drain();
+
+    expect(claude.starts).toHaveLength(2);
+    expect(claude.starts[1]!.input.prompt).toBe('the callee result is ready');
+  });
+
+  it('forgets a tell the turn took, so its end delivers nothing again', async () => {
+    const { service, claude, callBroker } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    await service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const capability = register.mock.calls.at(-1)![1];
+    const redeliver = vi.fn();
+    capability.tellLiveNode('a', 'the limit reset', redeliver);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    expect(redeliver).not.toHaveBeenCalled();
   });
 
   it('hands nothing to a caller whose run is being cancelled', async () => {
@@ -3875,6 +4013,7 @@ describe('GraphExecutorService — follow-up messages', () => {
     expect(b.sendUserMessage).toHaveBeenCalledWith({
       text: 'one more thing',
       images: [],
+      deliveryId: expect.any(String),
     });
     const again = turnsOf(claude, 'role-a');
     expect(again).toHaveLength(2);
@@ -3913,6 +4052,101 @@ describe('GraphExecutorService — follow-up messages', () => {
     expect(userTexts(itemDao, run.id)).toEqual(['go']);
     // Nor was the idle agent handed a message the other never received.
     expect(turnsOf(claude, 'role-a')).toHaveLength(1);
+  });
+
+  it('notes which agent missed a follow-up the others took, without marking it unsent', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A1');
+    await drain();
+    const working = turnsOf(claude, 'role-b')[0]!;
+
+    await service.sendMessage(run.id, 'do X instead');
+    const { deliveryId } = working.sendUserMessage.mock.calls[0]![0];
+    working.emit({ type: 'follow_up_dropped', deliveryIds: [deliveryId!] });
+    await drain();
+
+    const systems = itemDao.items
+      .filter((row) => row.runId === run.id && row.kind === 'system')
+      .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+    expect(systems).toHaveLength(1);
+    expect(systems[0]).not.toHaveProperty('unsentMessages');
+    expect(systems[0]!.message).toContain('Not sent to');
+  });
+
+  it('marks a follow-up unsent once every agent it went to dropped it', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    const b = turnsOf(claude, 'role-b')[0]!;
+
+    const followUp = await service.sendMessage(run.id, 'do X instead');
+    const rowId = (followUp.payload as { deliveryId: string }).deliveryId;
+    const idOf = (turn: typeof a): string =>
+      turn.sendUserMessage.mock.calls[0]![0].deliveryId!;
+    expect(idOf(a)).not.toBe(idOf(b));
+    a.emit({ type: 'follow_up_dropped', deliveryIds: [idOf(a)] });
+    b.emit({ type: 'follow_up_dropped', deliveryIds: [idOf(b)] });
+    await drain();
+
+    const systems = itemDao.items.filter(
+      (row) => row.runId === run.id && row.kind === 'system',
+    );
+    expect(
+      systems.map((row) => JSON.parse(row.payload) as Record<string, unknown>),
+    ).toEqual([expect.objectContaining({ unsentMessages: [rowId] })]);
+    // At run level, where the message's own row is: under the root that
+    // answered last it opened an empty node block in the transcript.
+    expect(systems[0]!.nodeId).toBeNull();
+    expect(JSON.parse(systems[0]!.payload)).not.toHaveProperty('nodeId');
+  });
+
+  it('waits for every agent before naming the one that missed a follow-up', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    const b = turnsOf(claude, 'role-b')[0]!;
+    await service.sendMessage(run.id, 'do X instead');
+    const systems = (): Record<string, unknown>[] =>
+      itemDao.items
+        .filter((row) => row.runId === run.id && row.kind === 'system')
+        .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+
+    a.emit({
+      type: 'follow_up_dropped',
+      deliveryIds: [a.sendUserMessage.mock.calls[0]![0].deliveryId!],
+    });
+    await drain();
+    expect(systems()).toEqual([]);
+
+    completeTurn(b, 'B1');
+    await drain();
+
+    expect(systems()).toEqual([
+      expect.objectContaining({
+        caption: 'Not sent',
+        message: expect.stringContaining('Not sent to'),
+      }),
+    ]);
+    expect(systems()[0]).not.toHaveProperty('unsentMessages');
   });
 
   it('rolls a live run up as FAILED when the follow-up turn it opened fails', async () => {
@@ -3968,6 +4202,7 @@ describe('GraphExecutorService — follow-up messages', () => {
     expect(JSON.parse(row.payload)).toEqual({
       text: 'see this',
       images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
+      deliveryId: expect.any(String),
     });
   });
 
@@ -4279,6 +4514,7 @@ describe('GraphExecutorService — agent calls', () => {
     expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledWith({
       text: 'also check the flag control',
       images: [],
+      deliveryId: expect.any(String),
     });
     expect(await envelope).toMatchObject({
       status: 'pending',
@@ -4423,6 +4659,60 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
+  it('splits one drop between the caller’s message_agent and the user’s call message', async () => {
+    const { service, claude, itemDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'help me',
+      mode: 'async',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    const userRow = await service.sendCallMessage(
+      run.id,
+      'helper',
+      'call-1',
+      'use v2',
+      [],
+      'phone-call',
+    );
+    callBroker.messageAgent(run.id, 'orch', {
+      call_id: 'call-1',
+      message: 'and keep the labels',
+    });
+    await drain();
+    const ids = callee.sendUserMessage.mock.calls.map(
+      ([message]) => message.deliveryId!,
+    );
+
+    callee.emit({ type: 'follow_up_dropped', deliveryIds: ids });
+    await drain();
+
+    const rows = itemDao.items.filter((row) => row.runId === run.id);
+    const payload = (row: (typeof rows)[number]): Record<string, unknown> =>
+      JSON.parse(row.payload) as Record<string, unknown>;
+    expect(
+      rows.find(
+        (row) =>
+          row.kind === 'call_answer' && payload(row).outcome === 'undelivered',
+      ),
+    ).toBeDefined();
+    const markers = rows.filter((row) => row.kind === 'system');
+    expect(markers).toHaveLength(1);
+    expect(payload(markers[0]!)).toMatchObject({
+      unsentMessages: [(userRow.payload as { deliveryId: string }).deliveryId],
+      callId: 'call-1',
+    });
+  });
+
   it('hands a message addressed to a RUNNING call to that callee’s turn, filed under the call', async () => {
     const { service, claude, itemDao, callBroker } = setup();
     const run = await service.startRun({
@@ -4475,6 +4765,7 @@ describe('GraphExecutorService — agent calls', () => {
     expect(callee.sendUserMessage).toHaveBeenCalledWith({
       text: 'use v2',
       images: [],
+      deliveryId: expect.any(String),
     });
     // Past the caller: the trigger's agent is not told.
     expect(caller.sendUserMessage).not.toHaveBeenCalled();
@@ -4594,6 +4885,7 @@ describe('GraphExecutorService — agent calls', () => {
           mediaType: 'image/png',
         },
       ],
+      deliveryId: expect.any(String),
     });
     const row = itemDao.items.find(
       (item) =>
@@ -4604,6 +4896,7 @@ describe('GraphExecutorService — agent calls', () => {
       images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
       nodeId: 'helper',
       callId: 'call-1',
+      deliveryId: expect.any(String),
     });
   });
 
@@ -5276,6 +5569,287 @@ describe('GraphExecutorService — agent calls', () => {
     release();
     expect((await publishing).status).toBe('published');
     await drain();
+  });
+
+  it('a callee action is stamped with its callId, stays in the root flow and is listed in the call result envelope', async () => {
+    const { service, claude, callBroker, actions, chatActions, itemDao } =
+      setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'open the PR',
+    });
+    await drain();
+
+    expect(actions.canPublish(run.id, 'helper')).toBe(true);
+    expect(
+      await actions.publish(
+        run.id,
+        'helper',
+        { label: 'PR merged', message: 'the PR is merged — continue' },
+        callerKey('helper', 'call-1'),
+      ),
+    ).toMatchObject({ status: 'published' });
+    const rows = itemDao.items.filter((item) => item.kind === 'action');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.nodeId).toBe('helper');
+    const payload = JSON.parse(rows[0]!.payload) as Record<string, unknown>;
+    expect(payload.publisher).toEqual({
+      nodeId: 'helper',
+      conversationId: 'call-1',
+      callId: 'call-1',
+      agentLabel: 'Helper',
+    });
+    // The call is named only inside the publisher, so the row is drawn in the
+    // run's own flow rather than folded into the call's card.
+    const lookup = callMembershipLookupOf(itemDao.items);
+    expect(
+      callMembershipOf({ kind: 'action', nodeId: 'helper', payload }, lookup),
+    ).toBe(OUTSIDE_ANY_CALL);
+    expect((await chatActions.live(run.id)).map((a) => a.label)).toEqual([
+      'PR merged',
+    ]);
+
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'opened');
+    expect(await envelope).toMatchObject({
+      status: 'ok',
+      result: {
+        call_id: 'call-1',
+        actions: [
+          { action_id: 'pr-merged', label: 'PR merged', kind: 'message' },
+        ],
+      },
+    });
+    await drain();
+  });
+
+  it('leaves the sole trigger-fed agent’s own buttons unattributed, and labels every other publisher', async () => {
+    const { service, actions, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    await actions.publish(
+      run.id,
+      'orch',
+      { label: 'Deploy', message: 'deploy it' },
+      'orch',
+    );
+    // helper is no trigger's: even in its own conversation it says who it is.
+    await actions.publish(
+      run.id,
+      'helper',
+      { label: 'Recheck', message: 'recheck' },
+      'helper',
+    );
+    const publishers = itemDao.items
+      .filter((item) => item.kind === 'action')
+      .map(
+        (item) =>
+          (JSON.parse(item.payload) as { publisher: unknown }).publisher,
+      );
+    expect(publishers).toEqual([
+      { nodeId: 'orch', conversationId: '' },
+      { nodeId: 'helper', conversationId: '', agentLabel: 'Helper' },
+    ]);
+    await drain();
+  });
+
+  it('labels a trigger-fed agent’s own button when the run has another trigger-fed agent', async () => {
+    // A press reaches both roots, so the one that did not write it is told who did.
+    const twoRoots: Workflow = {
+      name: 'two-roots',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'start-peer', kind: 'trigger', trigger: 'manual' },
+        {
+          id: 'lead',
+          kind: 'agent',
+          name: 'Lead',
+          agent: 'claude',
+          approval: 'auto',
+        },
+        { id: 'peer', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'helper', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [
+        { from: 'start', to: 'lead', kind: 'data' as const },
+        { from: 'start-peer', to: 'peer', kind: 'data' as const },
+        { from: 'lead', to: 'helper', kind: 'call' as const },
+      ],
+    };
+    const { service, actions, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two-roots',
+      workflow: twoRoots,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    await actions.publish(
+      run.id,
+      'lead',
+      { label: 'Deploy', message: 'deploy it' },
+      'lead',
+    );
+    const [row] = itemDao.items.filter((item) => item.kind === 'action');
+    expect(
+      (JSON.parse(row!.payload) as { publisher: unknown }).publisher,
+    ).toEqual({ nodeId: 'lead', conversationId: '', agentLabel: 'Lead' });
+    await drain();
+  });
+
+  it('takes a removed callee button out of the call’s envelope', async () => {
+    const { service, claude, callBroker, actions } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    await drain();
+    const caller = callerKey('helper', 'call-1');
+    await actions.publish(
+      run.id,
+      'helper',
+      { label: 'Stop preview', message: 'stop it' },
+      caller,
+    );
+    expect(
+      await actions.remove(run.id, 'helper', 'stop-preview', caller),
+    ).toMatchObject({ status: 'removed' });
+
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done');
+    expect(((await envelope) as { result: object }).result).not.toHaveProperty(
+      'actions',
+    );
+    await drain();
+  });
+
+  it('reaches an ancestor’s envelope with what a callee publishes or removes after its own call settled', async () => {
+    // a → b (call-1) → c fire-and-forget (call-2): c publishes inside call-2,
+    // then call-2 settles with c's turn while call-1 runs on; what c publishes
+    // or removes after that must still reach call-1.
+    const chain: Workflow = {
+      name: 'chain',
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'c', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [
+        { from: 'a', to: 'b', kind: 'call' as const },
+        { from: 'b', to: 'c', kind: 'call' as const },
+      ],
+    };
+    const { service, claude, callBroker, actions, artifacts } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(chain),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const outer = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'b',
+      message: 'm',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, callerKey('b', 'call-1'), {
+      title: 'why',
+      agent: 'c',
+      message: 'm',
+      mode: 'fire_and_forget',
+    });
+    await drain();
+    const caller = callerKey('c', 'call-2');
+    await actions.publish(
+      run.id,
+      'c',
+      { label: 'Stop preview', message: 'stop it' },
+      caller,
+    );
+    await actions.publish(
+      run.id,
+      'c',
+      { label: 'Deploy v1', actionId: 'deploy', message: 'go' },
+      caller,
+    );
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'c done');
+    await drain();
+    expect(callBroker.callAnsweredBy(run.id, caller)).toBeNull();
+
+    expect(
+      await actions.remove(run.id, 'c', 'stop-preview', caller),
+    ).toMatchObject({ status: 'removed' });
+    await actions.publish(
+      run.id,
+      'c',
+      { label: 'Deploy v2', actionId: 'deploy', message: 'go' },
+      caller,
+    );
+    // A button and a page first published now reach call-1 too.
+    await actions.publish(
+      run.id,
+      'c',
+      { label: 'Rollback', message: 'roll back' },
+      caller,
+    );
+    await artifacts.publish(
+      run.id,
+      'c',
+      { title: 'Late', html: '<!doctype html><title>Late</title><p>hi</p>' },
+      caller,
+    );
+
+    const bTurn = claude.starts.find((t) => t.input.prompt === 'm')!;
+    completeTurn(bTurn, 'b done');
+    expect(await outer).toMatchObject({
+      result: {
+        actions: [
+          { action_id: 'deploy', label: 'Deploy v2', kind: 'message' },
+          { action_id: 'rollback', label: 'Rollback', kind: 'message' },
+        ],
+        artifacts: [expect.objectContaining({ title: 'Late' })],
+      },
+    });
+    await drain();
+  });
+
+  it('drops a deleted run’s button tools', async () => {
+    const { service, actions } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(actions.canPublish(run.id, 'helper')).toBe(true);
+
+    await service.deleteRun(run.id);
+
+    expect(actions.canPublish(run.id, 'helper')).toBe(false);
+    expect(actions.canPublish(run.id, 'orch')).toBe(false);
   });
 
   it('marks every workflow run for the page tool’s run-wide wording, call edges or none, until the run is deleted', async () => {
@@ -11889,11 +12463,11 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       .sort((a, b) => a.seq - b.seq);
   const payloadOf = (row: Item): Record<string, unknown> =>
     JSON.parse(row.payload as string) as Record<string, unknown>;
-  const stoppedDelegates = (itemDao: FakeItemDao, runId: string): Item[] =>
+  const untrackedDelegates = (itemDao: FakeItemDao, runId: string): Item[] =>
     rowsOf(itemDao, runId).filter(
       (i) =>
         i.kind === 'subagent_info' &&
-        payloadOf(i).backgroundOutcome === 'stopped',
+        payloadOf(i).backgroundOutcome === 'untracked',
     );
 
   it('leaves the delegates and detached commands a pass left running OPEN, and closes them with their process', async () => {
@@ -11919,7 +12493,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     await drain();
 
     // The pass is over, and nothing it left running is claimed to have stopped.
-    expect(stoppedDelegates(itemDao, run.id)).toEqual([]);
+    expect(untrackedDelegates(itemDao, run.id)).toEqual([]);
     expect(
       rowsOf(itemDao, run.id).filter((row) => row.kind === 'shell_info'),
     ).toEqual([]);
@@ -11928,16 +12502,47 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     // is closed under the node that owns it, after the pass's own ending.
     sessions.closeRun(run.id);
     await drain();
-    const stopped = stoppedDelegates(itemDao, run.id);
+    const stopped = untrackedDelegates(itemDao, run.id);
     // Only what was still out: the delegate that reported back is left alone.
     expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-out']);
     expect(stopped[0]!.nodeId).toBe('a');
+    expect(payloadOf(stopped[0]!).trackingLost).toBe('process-ended');
     const rows = rowsOf(itemDao, run.id);
     const terminal = rows.findIndex(
       (row) => row.kind === 'turn_complete' && row.nodeId === null,
     );
     expect(terminal).toBeGreaterThan(-1);
     expect(rows.indexOf(stopped[0]!)).toBeGreaterThan(terminal);
+  });
+
+  it('closes a delegate out when the user stopped the run as stopped, whenever its process goes', async () => {
+    const { service, claude, itemDao, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const turn = claude.starts[0]!;
+    turn.emit(delegate('task-out', true));
+    completeTurn(turn, 'done');
+    await drain();
+
+    await service.cancel(run.id);
+    // The processes are kept past the Stop; the close comes later.
+    sessions.closeRun(run.id);
+    await drain();
+
+    const closes = rowsOf(itemDao, run.id).filter(
+      (row) =>
+        row.kind === 'subagent_info' &&
+        payloadOf(row).id === 'task-out' &&
+        payloadOf(row).backgroundOpen === false,
+    );
+    expect(closes.map((row) => payloadOf(row).backgroundOutcome)).toEqual([
+      'stopped',
+    ]);
   });
 
   it('announces the run’s detached commands and background delegates as their counts move', async () => {
@@ -12019,12 +12624,58 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     expect(callee.sendUserMessage).toHaveBeenCalledWith({
       text: 'the user says: keep the old labels',
       images: [],
+      deliveryId: expect.any(String),
     });
     const row = rowsOf(itemDao, run.id).find(
       (i) => i.kind === 'call_answer' && payloadOf(i).outcome === 'message',
     );
     expect(row?.nodeId).toBe('a');
     expect(payloadOf(row!)).toMatchObject({ callId: 'call-1' });
+  });
+
+  it('records a message_agent message undelivered, not as a user row, when the callee’s turn drops it', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callBroker.messageAgent(run.id, 'a', {
+      call_id: 'call-1',
+      message: 'keep the old labels',
+    });
+    await drain();
+
+    const { deliveryId } = callee.sendUserMessage.mock.calls[0]![0];
+    callee.emit({ type: 'follow_up_dropped', deliveryIds: [deliveryId!] });
+    await drain();
+
+    const undelivered = rowsOf(itemDao, run.id).find(
+      (i) => i.kind === 'call_answer' && payloadOf(i).outcome === 'undelivered',
+    );
+    expect(payloadOf(undelivered!)).toMatchObject({
+      callId: 'call-1',
+      message: 'keep the old labels',
+      followUpId: deliveryId,
+    });
+    // The "delivered" row it retracts carries the same id.
+    const delivered = rowsOf(itemDao, run.id).find(
+      (i) => i.kind === 'call_answer' && payloadOf(i).outcome === 'message',
+    );
+    expect(payloadOf(delivered!).followUpId).toBe(deliveryId);
+    expect(rowsOf(itemDao, run.id).some((i) => i.kind === 'system')).toBe(
+      false,
+    );
   });
 
   it('refuses the executor message channel once its callee is marked cancelled', async () => {
@@ -12462,7 +13113,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     sessions.close(`${run.id}::call:call-1`, 'closed');
     await drain();
 
-    const stopped = stoppedDelegates(itemDao, run.id);
+    const stopped = untrackedDelegates(itemDao, run.id);
     expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-callee']);
     // Filed where the callee's rows are, call id and all — the renderer nests
     // a call's rows under its block by that id.
@@ -12477,13 +13128,13 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     completeTurn(caller, 'done');
     await drain();
     expect(
-      stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
+      untrackedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee']);
     // It is closed when the caller's OWN process goes.
     sessions.close(`${run.id}::node:a`, 'closed');
     await drain();
     expect(
-      stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
+      untrackedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee', 'task-caller']);
   });
 
@@ -12501,7 +13152,9 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     });
     await drain();
     const stoppedIds = (): string[] =>
-      stoppedDelegates(itemDao, run.id).map((row) => String(payloadOf(row).id));
+      untrackedDelegates(itemDao, run.id).map((row) =>
+        String(payloadOf(row).id),
+      );
     const continueWith = async (
       message: string,
       thread: string | undefined,
@@ -12651,7 +13304,11 @@ describe('GraphExecutorService — Ollama launch validation', () => {
       await drain();
       expect(claude.starts).toHaveLength(3);
       expect(claude.starts[2]!.sendUserMessage).toHaveBeenCalledExactlyOnceWith(
-        { text: 'the callee result is ready', images: [] },
+        {
+          text: 'the callee result is ready',
+          images: [],
+          deliveryId: expect.any(String),
+        },
       );
     } finally {
       release(metadata());
@@ -12742,7 +13399,11 @@ describe('GraphExecutorService — Ollama launch validation', () => {
       expect(claude.starts).toHaveLength(3);
       expect(claude.starts[2]!.input.prompt).toBe('first follow-up');
       expect(claude.starts[2]!.sendUserMessage).toHaveBeenCalledExactlyOnceWith(
-        { text: 'the callee result is ready', images: [] },
+        {
+          text: 'the callee result is ready',
+          images: [],
+          deliveryId: expect.any(String),
+        },
       );
     } finally {
       releaseWrite();
@@ -13036,6 +13697,7 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(b.sendUserMessage).toHaveBeenCalledWith({
       text: 'one more thing',
       images: [],
+      deliveryId: expect.any(String),
     });
     expect(turnsOf(claude, 'role-a')[2]!.input.prompt).toBe('one more thing');
   });

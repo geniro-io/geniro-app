@@ -690,7 +690,12 @@ describe('the expanded readout the meter opens onto', () => {
     await act(async () => {});
 
     expect(container.textContent).toContain('System prompt');
-    expect(container.textContent).toContain('Updating…');
+    // Marked as being re-read where it stands, not by a row of its own.
+    expect(
+      container
+        .querySelector('[data-slot="context-breakdown"]')
+        ?.getAttribute('aria-busy'),
+    ).toBe('true');
   });
 
   it('asks for the breakdown only once the readout is OPENED', async () => {
@@ -1044,6 +1049,94 @@ describe('the expanded readout the meter opens onto', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps a refresh press alive when the live re-read supersedes it mid-flight', async () => {
+    // The live tick re-runs the one fetch and drops the in-flight reply. A
+    // press it dropped must ride on the request that replaced it, or that
+    // ordinary read serves the very reading the user pressed to replace.
+    vi.useFakeTimers();
+    try {
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce(withPlanAged(1))
+        .mockReturnValueOnce(new Promise(() => {}))
+        .mockResolvedValue(withPlanAged(1));
+      renderWithLoader(load, 'run-1', true);
+      openMeter();
+      await act(async () => {});
+
+      act(() =>
+        container
+          .querySelector<HTMLButtonElement>('[data-slot="plan-limits-refresh"]')
+          ?.click(),
+      );
+      await act(async () => {});
+      expect(load).toHaveBeenLastCalledWith('run-1', null, null, true);
+
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(load).toHaveBeenCalledTimes(3);
+      expect(load).toHaveBeenLastCalledWith('run-1', null, null, true);
+
+      // Answered, so the next tick is an ordinary read again.
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(load).toHaveBeenLastCalledWith('run-1', null, null, false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not carry an unanswered press over to another chat', async () => {
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(withPlanAged(1))
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockResolvedValue(withPlanAged(1));
+    renderWithLoader(load, 'run-1');
+    openMeter();
+    await act(async () => {});
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('[data-slot="plan-limits-refresh"]')
+        ?.click(),
+    );
+    await act(async () => {});
+    expect(load).toHaveBeenLastCalledWith('run-1', null, null, true);
+
+    // The composer keeps one meter and swaps the run under it.
+    render(tree(load, 'run-2', false));
+    await act(async () => {});
+
+    expect(load).toHaveBeenLastCalledWith('run-2', null, null, false);
+  });
+
+  it('drops an unanswered press when the readout closes', async () => {
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(withPlanAged(1))
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockResolvedValue(withPlanAged(1));
+    renderWithLoader(load, 'run-1');
+    openMeter();
+    await act(async () => {});
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('[data-slot="plan-limits-refresh"]')
+        ?.click(),
+    );
+    await act(async () => {});
+
+    // Closed and reopened: an ordinary open, not a press nobody made.
+    openMeter();
+    openMeter();
+    await act(async () => {});
+
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(load).toHaveBeenLastCalledWith('run-1', null, null, false);
   });
 
   it('never re-reads a chat nobody is looking at, however live it is', async () => {

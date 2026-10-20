@@ -13,12 +13,8 @@ import {
   blockStatusLabel,
   BlockTitle,
 } from './block-shell';
-import {
-  DelegatesOutContext,
-  formatElapsed,
-  RunSettledContext,
-  WorkingRow,
-} from './live-row';
+import { formatElapsed, WorkingRow } from './live-row';
+import { untrackedExplanation, untrackedSummary } from './run-status';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
 import { SubagentMetaChips } from './subagent-meta';
 import { taskProgress } from './task-payload';
@@ -27,7 +23,6 @@ import {
   type CardEntry,
   countTools,
   isCardEntry,
-  type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
   subagentTitle,
@@ -35,18 +30,16 @@ import {
 } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
 
-function shellStatusOf(
-  block: SubagentBlockEntry,
-  runSettledAt: RunSettleAt,
-  delegatesOut: number | null,
-): BlockStatus {
-  switch (subagentBlockStatus(block, runSettledAt, delegatesOut)) {
+function shellStatusOf(block: SubagentBlockEntry): BlockStatus {
+  switch (subagentBlockStatus(block)) {
     case 'completed':
       return 'done';
     case 'failed':
       return 'error';
     case 'stopped':
       return 'stopped';
+    case 'untracked':
+      return 'untracked';
     case 'running':
       return 'running';
   }
@@ -84,6 +77,8 @@ const OPENS_BLOCK = {
   comparison: true,
   gallery: true,
   artifact: true,
+  // Never filed under a delegate — see the `action` arm of `groupTranscript`.
+  action: false,
   workflow: true,
 } as const satisfies Record<CardEntry['type'], boolean>;
 
@@ -127,6 +122,7 @@ const CARD_NOUN = {
   comparison: 'a comparison',
   gallery: 'a gallery',
   artifact: 'a page',
+  action: 'a button',
   workflow: 'a workflow',
 } as const satisfies Record<CardEntry['type'], string>;
 
@@ -425,13 +421,10 @@ export function SubagentThread({
   factsStated?: boolean;
 }): React.JSX.Element {
   const title = subagentTitle(block);
-  // Read from the SAME source the header's own spinner uses, so the block
-  // cannot show a live row under a header that says the delegate has stopped.
-  const runSettledAt = useContext(RunSettledContext);
-  const delegatesOut = useContext(DelegatesOutContext);
   // ONE reading for both the live row and the ending below it, so the thread
-  // can never show a spinner and a "completed" line at once.
-  const status = shellStatusOf(block, runSettledAt, delegatesOut);
+  // can never show a spinner and a "completed" line at once — and the same
+  // reading the header's own status uses.
+  const status = shellStatusOf(block);
   const working = status === 'running';
   return (
     <NestedThreadContext.Provider value={true}>
@@ -446,7 +439,9 @@ export function SubagentThread({
       {/* Above the (empty) thread rather than below the result: it explains why
           there is nothing between here and there, and a caveat placed after the
           result reads as a caveat ABOUT the result. */}
-      <SubagentStepsMissing block={block} />
+      {status !== 'untracked' || block.stepsUnavailableReason !== null ? (
+        <SubagentStepsMissing block={block} />
+      ) : null}
       {block.entries.map((entry) => (
         <TranscriptEntryView
           key={entry.type === 'item' ? entry.item.id : entry.id}
@@ -487,7 +482,16 @@ export function SubagentThread({
           text={block.result}
         />
       ) : null}
-      <SubagentEnded block={block} status={status} />
+      {status === 'untracked' ? (
+        <p
+          data-role="subagent-untracked"
+          className="m-0 flex items-center gap-1.5 text-[11px] text-warning">
+          <BlockStatusIcon status={status} className="size-3" />
+          <span>{untrackedExplanation(block.processEnded)}</span>
+        </p>
+      ) : (
+        <SubagentEnded block={block} status={status} />
+      )}
       {/*
         No footer beyond that one line. It used to close every delegate's
         thread with `<title> is
@@ -524,26 +528,33 @@ export const SubagentBlock = memo(function SubagentBlock({
   chatAgentName?: string | null;
 }): React.JSX.Element {
   const openDetail = useContext(SubagentDetailContext);
-  const runSettledAt = useContext(RunSettledContext);
-  const delegatesOut = useContext(DelegatesOutContext);
   const title = subagentTitle(block);
   const toolCount = countTools(block.entries);
   const tasks = subagentTaskProgress(block);
   const cards = renderCards(block.entries);
   const cardSummary = renderCardSummary(cards);
+  const status = shellStatusOf(block);
+  const untracked = status === 'untracked';
   return (
     <div data-role="subagent-block" data-subagent={block.id} className="w-full">
       <BlockShell
         eyebrow="Sub-agent"
         eyebrowIcon={<Bot aria-hidden="true" className="size-3" />}
-        status={shellStatusOf(block, runSettledAt, delegatesOut)}
+        status={status}
+        statusTitle={
+          untracked ? untrackedExplanation(block.processEnded) : undefined
+        }
         collapsible
         memoryKey={`subagent:${block.id}`}
         defaultOpen={cards.length > 0}
         summary={
-          cardSummary === null ? undefined : (
+          cardSummary !== null ? (
             <span data-slot="subagent-card-summary">{cardSummary}</span>
-          )
+          ) : untracked ? (
+            <span data-slot="subagent-untracked-summary">
+              {untrackedSummary(block.processEnded)}
+            </span>
+          ) : undefined
         }
         toggleLabel={`Show ${title}'s conversation`}
         header={

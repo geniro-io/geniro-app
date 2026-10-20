@@ -133,4 +133,10 @@ describe('hostPlanResultText', () => {
       hostPlanResultText({ status: 'unavailable', reason: 'no turn' }),
     ).toContain('no turn');
   });
+
+  it('tells a deferred call to stop and wait for the next message', () => {
+    const text = hostPlanResultText({ status: 'posted' });
+    expect(text).toContain('STOP HERE');
+    expect(text).toContain('next user message');
+  });
 });

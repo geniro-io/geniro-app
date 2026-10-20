@@ -79,6 +79,7 @@ import {
   isRunBusyError,
 } from '../daemon-api';
 import { DaemonClient } from '../daemon-client';
+import { reportRendererIssue } from '../debug/report-ui-errors';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
 import { randomId } from '../random-id';
@@ -88,6 +89,7 @@ import type { SettingsSection } from '../settings/Settings';
 import { useLineSnapshots } from '../stats/use-line-snapshots';
 import { useSharedCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
+import { ChatActionChips } from './action-chip';
 import {
   type AgentActivity,
   type AgentDisplay,
@@ -194,6 +196,14 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { browserImageCodec } from './normalize-image';
+import {
+  callTargetOf,
+  notSentDeliveryIds,
+  restoreIntoEmpty,
+  stagedFrom,
+  unsentMessageContent,
+  userDeliveryId,
+} from './not-sent-messages';
 import { OlderMessagesControl } from './older-messages-control';
 import { PromptCacheNotice } from './prompt-cache-notice';
 import {
@@ -225,7 +235,6 @@ import { effectiveConfigDir } from './run-profile';
 import {
   callEndedPerDaemon,
   OFF_WINDOW_CALL_PREFIX,
-  withDaemonDelegateEndings,
   withDurableDelegates,
   withDurableShells,
   withoutDaemonEndedShells,
@@ -339,6 +348,7 @@ import {
   type CallTarget,
   useCallMessageQueues,
 } from './use-call-message-queues';
+import { useChatActions } from './use-chat-actions';
 import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatSearch } from './use-chat-search';
@@ -640,6 +650,9 @@ function archiveDialogCopy(run: ChatRun | null): {
     confirmLabel: working ? 'Cancel turn & archive' : 'Archive',
   };
 }
+
+/** How long a link's ask to open a call card waits for the card to be drawn. */
+const OPEN_CALL_WAIT_MS = 10_000;
 
 /**
  * Where the agents panel is hosted: its own grid column, or a right-edge
@@ -1098,6 +1111,11 @@ export function Chats({
   // Ref indirection: the stable addItem callback fires the drain on a turn's
   // terminal item, before the turn start the drain sends through exists.
   const drainQueueRef = useRef<(runId: string) => void>(() => {});
+  // Set once the transcript rows exist, below; `useChatRun` calls it on a
+  // live "not sent" row.
+  const onLiveUnsentRef = useRef<
+    (runId: string, deliveryIds: string[], rowId: string) => void
+  >(() => {});
 
   /**
    * Park the composer's contents under `from`, and put `to`'s back.
@@ -1138,20 +1156,25 @@ export function Chats({
    */
   const restoreUnsent = useCallback(
     (runId: string, text: string, staged: StagedAttachment[]): void => {
+      const restored = { text, staged };
       if (composerOwnerRef.current === runId) {
-        setInput((current) => (current.length === 0 ? text : current));
+        setInput(
+          (current) =>
+            restoreIntoEmpty({ text: current, staged: [] }, restored).text,
+        );
         if (attachmentsRef.current.length === 0) {
           attachments.restore(staged);
         }
         return;
       }
       const draft = draftsRef.current.get(runId);
+      const next = restoreIntoEmpty(
+        { text: draft?.text ?? '', staged: draft?.images ?? [] },
+        restored,
+      );
       draftsRef.current.set(runId, {
-        text: draft !== undefined && draft.text.length > 0 ? draft.text : text,
-        images:
-          draft !== undefined && draft.images.length > 0
-            ? draft.images
-            : staged,
+        text: next.text,
+        images: [...next.staged],
       });
     },
     [attachments],
@@ -1222,6 +1245,7 @@ export function Chats({
     resetSteerStatus,
     hasQueuedMessages,
     drainQueueRef,
+    onLiveUnsentRef,
   });
 
   // A thread opening (a row tapped, a jump from Tasks, the composer's first
@@ -2964,6 +2988,16 @@ export function Chats({
    */
   const activeWorkflowId =
     runs.find((run) => run.id === activeRunId)?.workflowId ?? null;
+  /** Open a call's card, as the reader's own press on its header would. */
+  const openCallCard = useCallback(
+    (blockId: string): void => {
+      const runId = activeRunIdRef.current;
+      if (runId !== null) {
+        writeThreadFlag(runId, `call:${blockId}`, true);
+      }
+    },
+    [activeRunIdRef],
+  );
   const callJumps = useMemo<CallJumps | undefined>(
     () =>
       activeWorkflowId === null
@@ -3000,16 +3034,11 @@ export function Chats({
             startOf: (callId) =>
               callJumpRef.current.calls.find((call) => call.callId === callId)
                 ?.startSeq ?? null,
-            openCard: (cardId) => {
-              const runId = activeRunIdRef.current;
-              if (runId !== null) {
-                writeThreadFlag(runId, `call:${cardId}`, true);
-              }
-            },
+            openCard: openCallCard,
             loadThrough: (conversation, seq) =>
               callJumpRef.current.loadThrough(conversation, seq),
           },
-    [activeWorkflowId, activeRunIdRef, chatApi],
+    [activeWorkflowId, activeRunIdRef, chatApi, openCallCard],
   );
   /** The folds a row is drawn inside, from what the transcript holds now. */
   const foldsOfRow = useCallback(
@@ -4521,6 +4550,13 @@ export function Chats({
     activeRunId,
     reconnectNonce,
   );
+  /** The agents' buttons on this chat, and their press — see `useChatActions`. */
+  const pressableActions = useChatActions(
+    activeWorkflowId === null ? chatApi : workflowApi,
+    activeRunId,
+    runState,
+    refreshRunState,
+  );
   /**
    * The card rows to read open requests from: the window's, and every card the
    * daemon still holds open that the window does not — a question asked above
@@ -4626,12 +4662,6 @@ export function Chats({
       activeRun && activeRun.analysisSourceRunId == null ? activeRun.id : null,
     refreshKey: analysisGeneration,
   });
-  /**
-   * How many delegates the open run reports out — the daemon's fold over every
-   * declaration the run wrote, which a block the loaded window knows only by
-   * its rows cannot see (`subagentBlockStatus`'s `delegatesOut`).
-   */
-  const activeDelegatesOut = activeRun?.subagentsOut ?? null;
   // The repository a TASK run's worktree was cut from, for the header chip —
   // asked only for a task's run, whose folder geniro named by the task's id.
   const taskWorktreeOf = useWorktreeOrigin(
@@ -4695,6 +4725,7 @@ export function Chats({
    * anchor only ever builds the card it belongs to (`history-anchors.ts`).
    */
   const { foldItems, entries: durableEntries } = useDurableTranscript({
+    delegateState: runState,
     items,
     anchors,
     runId: activeRun?.id ?? null,
@@ -4769,6 +4800,135 @@ export function Chats({
       },
     };
   }, [activeWorkflowRunId, callQueues, capabilities]);
+  // User messages a turn accepted and then dropped because it ended before
+  // the agent took them, each drawn "not sent" with a Resend.
+  const notSentIds = useMemo(
+    () => notSentDeliveryIds(transcriptRows),
+    [transcriptRows],
+  );
+  // The rows the call cards are folded from: a call's `call_started` can be an
+  // anchor from before the loaded window.
+  const foldItemsRef = useRef(foldItems);
+  foldItemsRef.current = foldItems;
+  /** A dropped message's words and pictures, read back from its own row. */
+  const unsentContent = useCallback(
+    (item: ChatItem) => unsentMessageContent(item, loadAttachment),
+    [loadAttachment],
+  );
+  const resendNotSent = useCallback(
+    (item: ChatItem): void => {
+      const runId = item.runId;
+      void unsentContent(item)
+        .then(({ text, images }) => {
+          // A message to ONE callee goes back to that callee's call, never to
+          // the agents the run's trigger feeds.
+          const call = callTargetOf(item, foldItemsRef.current);
+          if (call === null) {
+            throw new Error(
+              'This message was for a call that is no longer on screen — send it from that call.',
+            );
+          }
+          if (call !== 'run') {
+            callQueues.enqueue(call, text, images);
+            void callQueues.drain(call);
+            return;
+          }
+          enqueueMessage(runId, { text, images, clientMessageId: randomId() });
+          // The kick `sendFollowUp` would make for a message typed now: not
+          // while the agent is working, whose turn end drains the queue anyway.
+          // Read at this moment, after the pictures loaded, from the refs.
+          const decision = followUpDelivery({
+            streaming: activeRunIdRef.current === runId && streamingRef.current,
+            queued: true,
+            held: holdingRef.current.has(runId),
+            awaitingCalls: awaitingCallsRef.current.has(runId),
+            rootsIdle: rootsIdleRef.current.has(runId),
+            subagentsOut: delegatesOutRef.current.has(runId),
+            shellsOut: shellsOutRef.current.has(runId),
+          });
+          if (decision.action !== 'queue' || decision.kickDrain) {
+            drainQueueRef.current(runId);
+          }
+        })
+        .catch((err: unknown) => {
+          if (activeRunIdRef.current === runId) {
+            setError(describeDaemonError(err));
+          }
+        });
+    },
+    [unsentContent, callQueues, enqueueMessage],
+  );
+  const notSent = useMemo(
+    () => ({ unsent: notSentIds, resend: resendNotSent }),
+    [notSentIds, resendNotSent],
+  );
+  // A drop that happens NOW also puts the words back in the composer — only
+  // into an empty one, which `restoreUnsent` already guarantees. A message to a
+  // callee is left to its own row: the composer would send it to the trigger.
+  // Each live marker waits for the render holding its rows (it can arrive in
+  // the same batch as the message it names), is restored once, and is dropped
+  // with its thread.
+  const [liveUnsent, setLiveUnsent] = useState<
+    readonly { rowId: string; runId: string; deliveryIds: string[] }[]
+  >([]);
+  onLiveUnsentRef.current = (
+    runId: string,
+    deliveryIds: string[],
+    rowId: string,
+  ): void => {
+    setLiveUnsent((pending) =>
+      pending.some((entry) => entry.rowId === rowId)
+        ? pending
+        : [...pending, { rowId, runId, deliveryIds }],
+    );
+  };
+  useEffect(() => {
+    if (liveUnsent.length === 0) {
+      return;
+    }
+    const resolved: string[] = [];
+    for (const entry of liveUnsent) {
+      if (entry.runId !== activeRunId) {
+        resolved.push(entry.rowId);
+        continue;
+      }
+      const dropped = transcriptRows.filter((row) => {
+        const id = userDeliveryId(row);
+        return (
+          id !== null &&
+          entry.deliveryIds.includes(id) &&
+          payloadString(row.payload, 'callId') === null
+        );
+      });
+      if (dropped.length === 0) {
+        continue;
+      }
+      resolved.push(entry.rowId);
+      const { runId } = entry;
+      void Promise.all(dropped.map(unsentContent))
+        .then((contents) => {
+          restoreUnsent(
+            runId,
+            contents.map((content) => content.text).join('\n\n'),
+            contents.flatMap((content) =>
+              content.images.map((image) => stagedFrom(image, runId)),
+            ),
+          );
+        })
+        .catch((err: unknown) => {
+          // The row still says "not sent" and offers Resend.
+          reportRendererIssue('could not restore a message that was not sent', {
+            runId,
+            error: String(err),
+          });
+        });
+    }
+    if (resolved.length > 0) {
+      setLiveUnsent((pending) =>
+        pending.filter((entry) => !resolved.includes(entry.rowId)),
+      );
+    }
+  }, [liveUnsent, activeRunId, transcriptRows, unsentContent, restoreUnsent]);
   /**
    * The open thread is shelved, so its composer is inert.
    *
@@ -5771,8 +5931,8 @@ export function Chats({
    * that had finished speaking, and swallowed its turn-end notification with it.
    */
   const subagentRunning = useMemo(
-    () => anySubagentRunning(durableEntries, runStoppedAt, activeDelegatesOut),
-    [durableEntries, runStoppedAt, activeDelegatesOut],
+    () => anySubagentRunning(durableEntries, runStoppedAt),
+    [durableEntries, runStoppedAt],
   );
   /**
    * The badge reading WITHOUT the background-command clause — what the run
@@ -6107,6 +6267,70 @@ export function Chats({
       });
     },
     [revealCallBlock, runState.calls, loadAround],
+  );
+  /**
+   * A call whose card a link asked to OPEN (`openCall`), waiting until the
+   * transcript draws it: then every card around it is opened, outermost first
+   * (a card inside another is mounted only while that one is open), and the
+   * card is revealed once that has rendered. Dropped with the thread, and
+   * after `OPEN_CALL_WAIT_MS` — a jump that never arrives must not open the
+   * card whenever the reader later scrolls to it.
+   */
+  const [callToOpen, setCallToOpen] = useState<string | null>(null);
+  const [revealAfterOpen, setRevealAfterOpen] = useState<string | null>(null);
+  useEffect(() => {
+    setCallToOpen(null);
+    setRevealAfterOpen(null);
+  }, [activeRunId]);
+  useEffect(() => {
+    if (callToOpen === null) {
+      return;
+    }
+    const timer = setTimeout(() => setCallToOpen(null), OPEN_CALL_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [callToOpen]);
+  useEffect(() => {
+    if (callToOpen === null) {
+      return;
+    }
+    const path = callBlockPath(durableEntries, callToOpen);
+    if (path.length === 0) {
+      return;
+    }
+    setCallToOpen(null);
+    for (const block of path) {
+      openCallCard(block.id);
+    }
+    setRevealAfterOpen(path[path.length - 1]!.id);
+  }, [callToOpen, durableEntries, openCallCard]);
+  useEffect(() => {
+    if (revealAfterOpen !== null) {
+      setRevealAfterOpen(null);
+      revealCallBlock(revealAfterOpen);
+    }
+  }, [revealAfterOpen, revealCallBlock]);
+  // A callee's button card links to the call it was answering: its card,
+  // opened. A card the window does not draw — off the page, or inside a card
+  // whose conversation is not read yet — is reached by the jump machine,
+  // which pages and opens its way to the call's start row first.
+  const openCall = useCallback(
+    (callId: string): void => {
+      setCallToOpen(callId);
+      if (callBlockIndex.has(callId)) {
+        return;
+      }
+      const start = runState.calls.find(
+        (call) => call.callId === callId,
+      )?.startSeq;
+      if (start !== undefined) {
+        jumpToSeq(start);
+      }
+    },
+    [callBlockIndex, runState.calls, jumpToSeq],
+  );
+  const chatActions = useMemo(
+    () => ({ ...pressableActions, openCall }),
+    [pressableActions, openCall],
   );
   /**
    * How long each of this run's turns worked — see `turn-duration.ts`.
@@ -6505,20 +6729,15 @@ export function Chats({
    */
   const subagentThreads = useMemo(
     () =>
-      withDaemonDelegateEndings(
-        withDurableDelegates(
-          subagentThreadsByAgent(
-            collectSubagentBlocks(durableEntries),
-            CHAT_AGENT_KEY,
-            runStoppedAt,
-            activeDelegatesOut,
-          ),
-          runState.delegates,
+      withDurableDelegates(
+        subagentThreadsByAgent(
+          collectSubagentBlocks(durableEntries),
           CHAT_AGENT_KEY,
         ),
-        runState,
+        runState.delegates,
+        CHAT_AGENT_KEY,
       ),
-    [durableEntries, runStoppedAt, activeDelegatesOut, runState],
+    [durableEntries, runState.delegates],
   );
   const agents = useMemo((): AgentDisplay[] => {
     if (!activeRun) {
@@ -8498,6 +8717,17 @@ export function Chats({
         // about the same task for as long as that lasted.
         live={activeRunStatus === 'running'}
       />
+      {/* An agent's buttons outlive the turn that made them,
+            so they sit after the task list and ahead of
+            everything that ends within a turn — behind their
+            own divider, since they are controls rather than
+            readings. */}
+      <ChatActionChips
+        actions={chatActions.actions}
+        phases={chatActions.phases}
+        onPress={chatActions.press}
+        onDismiss={chatActions.dismiss}
+      />
       <ActiveWorkflowChips workflows={runWorkflows} onReveal={revealWorkflow} />
       <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
       <RunningSubagentChips
@@ -8547,9 +8777,10 @@ export function Chats({
         // `thread-ui-memory.ts`.
         threadId={activeRunId}
         runSettledAt={activeRunSettledAt}
-        delegatesOut={activeDelegatesOut}
         callConversations={callConversations}
-        applyRecommendations={applyRecommendations}>
+        applyRecommendations={applyRecommendations}
+        notSent={notSent}
+        chatActions={chatActions}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

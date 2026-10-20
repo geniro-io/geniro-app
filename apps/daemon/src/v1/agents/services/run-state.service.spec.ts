@@ -17,10 +17,13 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
+import { NO_CALL_INDEX } from '../__tests__/no-call-index';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
+import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
+import { ChatActionsService } from './chat-actions.service';
 import type { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { RunStateService } from './run-state.service';
@@ -100,6 +103,13 @@ describe('RunStateService (in-memory sqlite)', () => {
       shells,
       adapters,
       seqs,
+      new ChatActionsService(
+        orm.em,
+        items,
+        new AgentEventBus(),
+        NO_CALL_INDEX,
+        seqs,
+      ),
     );
   }
 
@@ -296,7 +306,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     ).toEqual(['art-1']);
   });
 
-  it('reads an unanswered delegate as stopped once its launching turn ended, but not a backgrounded one', async () => {
+  it('reads an unanswered delegate as cancelled once the user’s Stop ended its launching turn, but not a backgrounded one', async () => {
     // The run is working again — a later turn — so the run's own status says
     // nothing about a sync delegate the user's Stop cut off.
     await createRun('running');
@@ -316,7 +326,64 @@ describe('RunStateService (in-memory sqlite)', () => {
     ]);
   });
 
-  it('closes a delegate only on ITS turn’s ending — same node, same call, a real end', async () => {
+  const recoverable = async (seq: number, id: string): Promise<void> => {
+    await insert(seq, 'tool_call', { id, name: 'Task', input: {} });
+    await insert(seq + 1, 'subagent_info', {
+      id,
+      recovery: {
+        agentKind: 'claude',
+        sessionId: 's',
+        cwd: '/project',
+        configDir: null,
+        toolCallId: id,
+        launchedAtMs: 1,
+        childSessionId: null,
+      },
+    });
+  };
+
+  it('reads a recoverable delegate as untracked when its launching turn finished without its report', async () => {
+    await createRun('running');
+    await recoverable(1, 'toolu_a');
+    await insert(3, 'turn_complete', {});
+
+    expect((await service().read('run-a')).delegates[0]!.status).toBe(
+      'untracked',
+    );
+  });
+
+  it('reads a recoverable delegate by its OWN turn’s ending once the chat settled again', async () => {
+    // A chat settles after every turn, so its status says only what the
+    // latest turn did.
+    await createRun('cancelled');
+    await recoverable(1, 'toolu_done');
+    await insert(3, 'turn_complete', {});
+    await insert(4, 'message', { text: 'next' }, { role: 'user' });
+    await recoverable(5, 'toolu_stopped');
+    await insert(7, 'turn_cancelled', {});
+
+    expect(
+      (await service().read('run-a')).delegates.map((d) => [d.id, d.status]),
+    ).toEqual([
+      // Its turn finished without its report; a later Stop ended nothing of it.
+      ['toolu_done', 'untracked'],
+      ['toolu_stopped', 'cancelled'],
+    ]);
+  });
+
+  it('keeps a Stop-cut recoverable delegate cancelled after a later turn completes', async () => {
+    await createRun('completed');
+    await recoverable(1, 'toolu_a');
+    await insert(3, 'turn_cancelled', {});
+    await insert(4, 'message', { text: 'go on' }, { role: 'user' });
+    await insert(5, 'turn_complete', {});
+
+    expect((await service().read('run-a')).delegates[0]!.status).toBe(
+      'cancelled',
+    );
+  });
+
+  it('ends a delegate only on ITS parent turn’s ending — same node, same call, a real end', async () => {
     await createRun('running', 'dev-team');
     const qa = { nodeId: 'qa' };
     await insert(
@@ -347,7 +414,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     );
   });
 
-  it('closes only the delegates launched BEFORE a turn ended — a later turn’s keeps working', async () => {
+  it('ends only the delegates launched BEFORE a turn ended — a later turn’s keeps working', async () => {
     await createRun('running');
     await insert(1, 'tool_call', { id: 'toolu_a', name: 'Task', input: {} });
     await insert(2, 'turn_cancelled', {});

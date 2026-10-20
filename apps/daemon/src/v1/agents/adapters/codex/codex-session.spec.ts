@@ -6,6 +6,8 @@ import {
   CODEX_ACTIVE_WRITER_RETRIES,
   CODEX_ACTIVE_WRITER_RETRY_MS,
   CODEX_FAILED_TOOL_RESULT,
+  CODEX_STEER_ANSWER_GRACE_MS,
+  CODEX_STOP_CLOSE_GRACE_MS,
   CODEX_STOPPED_TOOL_RESULT,
 } from './codex.const';
 import { CodexSession } from './codex-session';
@@ -996,6 +998,197 @@ describe('mid-turn', () => {
     const { message } = events[0] as { message: string };
     expect(message).toContain('turn already finishing');
     expect(message).toContain('"also update the docs"');
+  });
+
+  it('reports a refused steer of a message with a row as that message not sent', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    session.sendFollowUp({
+      text: 'also update the docs',
+      deliveryId: 'delivery-1',
+    });
+
+    const events = feed(session, {
+      id: frameFor('turn/steer').id,
+      error: { code: -32600, message: 'turn already finishing' },
+    });
+
+    expect(events).toEqual([
+      {
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1'],
+        reason: 'turn already finishing',
+      },
+    ]);
+  });
+
+  describe('a turn that ends while a steer is unanswered', () => {
+    const COMPLETED = {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+    };
+    const INTERRUPTED = {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'interrupted' } },
+    };
+    /** codex taking the steer into the turn, as it shows it. */
+    const TAKEN = {
+      method: 'item/started',
+      params: {
+        threadId: THREAD,
+        turnId: TURN,
+        item: {
+          type: 'userMessage',
+          id: 'steer-item',
+          content: [
+            { type: 'text', text: 'also update the docs', text_elements: [] },
+          ],
+        },
+      },
+    };
+    function steered(): { session: CodexSession; steerId: unknown } {
+      const session = openSession();
+      acceptTurnStart(session);
+      session.sendFollowUp({
+        text: 'also update the docs',
+        deliveryId: 'delivery-1',
+      });
+      return { session, steerId: frameFor('turn/steer').id };
+    }
+
+    it('holds its ending until the refusal, which is reported ahead of it', () => {
+      const { session, steerId } = steered();
+
+      expect(feed(session, COMPLETED)).toEqual([]);
+      const events = feed(session, {
+        id: steerId,
+        error: { code: -32600, message: 'no active turn' },
+      });
+
+      expect(events.map((event) => event.type)).toEqual([
+        'follow_up_dropped',
+        'turn_complete',
+      ]);
+    });
+
+    it('reports a steer codex never answered as dropped when the process ends', () => {
+      // Measured in the app: a chat's Stop closes the session in the same
+      // tick as the steer, and codex's rollout records the turn aborted with
+      // no trace of the message.
+      const { session } = steered();
+
+      expect(session.onProcessEnded()).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ]);
+      // Once: the process-end path writes the terminal, not a held ending.
+      expect(session.onProcessEnded()).toEqual([]);
+    });
+
+    it('reports nothing on process end for a steer codex took', () => {
+      const { session, steerId } = steered();
+      feed(session, { id: steerId, result: {} });
+      feed(session, TAKEN);
+
+      expect(session.onProcessEnded()).toEqual([]);
+    });
+
+    it('reports a steer codex accepted but never took as dropped when the process ends', () => {
+      const { session, steerId } = steered();
+      feed(session, { id: steerId, result: {} });
+
+      expect(session.onProcessEnded()).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ]);
+    });
+
+    it('reports an accepted steer the stop discarded ahead of the cancel', () => {
+      // PROBED on codex 0.162.0, three of three: a steer accepted just before
+      // the interrupt gets no `userMessage` item and is not in the thread.
+      const { session, steerId } = steered();
+      feed(session, { id: steerId, result: {} });
+
+      const events = feed(session, INTERRUPTED);
+
+      expect(
+        events.filter((event) => event.type === 'follow_up_dropped'),
+      ).toEqual([{ type: 'follow_up_dropped', deliveryIds: ['delivery-1'] }]);
+      expect(events.map((event) => event.type).slice(-2)).toEqual([
+        'follow_up_dropped',
+        'turn_cancelled',
+      ]);
+    });
+
+    it('reports nothing for a steer codex took before the stop, its item ahead of its reply or after', () => {
+      const after = steered();
+      feed(after.session, { id: after.steerId, result: {} });
+      feed(after.session, TAKEN);
+      const before = steered();
+      feed(before.session, TAKEN);
+      feed(before.session, { id: before.steerId, result: {} });
+
+      for (const { session } of [after, before]) {
+        expect(
+          feed(session, INTERRUPTED).some(
+            (event) => event.type === 'follow_up_dropped',
+          ),
+        ).toBe(false);
+      }
+    });
+
+    it('asks a closing session to wait only while a steer is still unconfirmed', () => {
+      const { session, steerId } = steered();
+      expect(session.closeGraceMs()).toBe(CODEX_STOP_CLOSE_GRACE_MS);
+      feed(session, { id: steerId, result: {} });
+      expect(session.closeGraceMs()).toBe(CODEX_STOP_CLOSE_GRACE_MS);
+
+      feed(session, TAKEN);
+
+      expect(session.closeGraceMs()).toBe(0);
+    });
+
+    it('releases its ending when codex takes the steer', () => {
+      const { session, steerId } = steered();
+      feed(session, COMPLETED);
+
+      expect(
+        feed(session, { id: steerId, result: {} }).map((event) => event.type),
+      ).toEqual(['turn_complete']);
+    });
+
+    it('ends after the grace, and a refusal later than that is a notice quoting the message', () => {
+      vi.useFakeTimers();
+      try {
+        const { session, steerId } = steered();
+        feed(session, COMPLETED);
+        emitted = [];
+
+        vi.advanceTimersByTime(CODEX_STEER_ANSWER_GRACE_MS);
+        expect(emitted.map((event) => event.type)).toEqual(['turn_complete']);
+
+        const late = feed(session, {
+          id: steerId,
+          error: { code: -32600, message: 'no active turn' },
+        });
+        expect(late).toEqual([
+          expect.objectContaining({
+            type: 'notice',
+            message: expect.stringContaining('"also update the docs"'),
+          }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('lets a Stop end the held turn at once, with its own ending', () => {
+      const { session } = steered();
+      feed(session, COMPLETED);
+      emitted = [];
+
+      expect(session.withdrawHeldPrompt()).toBe(true);
+      expect(emitted.map((event) => event.type)).toEqual(['turn_complete']);
+      expect(session.withdrawHeldPrompt()).toBe(false);
+    });
   });
 
   it('quotes only the start of a long refused message', () => {

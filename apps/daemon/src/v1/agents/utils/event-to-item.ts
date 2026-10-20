@@ -81,6 +81,26 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // retire the card it drew for the request — which is the owner's registry
       // and an `unanswerable` row of its own, not a row of this event's.
       return null;
+    case 'follow_up_dropped':
+      // Mapped HERE rather than by each owner, so a chat and a workflow node
+      // write the same row through the path every other row takes.
+      //
+      // TWIN PARSER: `apps/ui/src/renderer/chats/system-payload.ts` reads
+      // `unsentMessages` back and pairs each id with the user row whose payload
+      // carries that `deliveryId`, which then draws as not sent — with the
+      // CLI's words from `unsentReason` when it refused them. Rename a key here
+      // and that file must change too.
+      return {
+        kind: 'system',
+        role: null,
+        payload: {
+          message: unsentMessage(event.deliveryIds.length, event.reason),
+          severity: 'warning',
+          caption: 'Not sent',
+          unsentMessages: event.deliveryIds,
+          ...(event.reason !== undefined ? { unsentReason: event.reason } : {}),
+        },
+      };
     case 'user_message_consumed':
       // Turn plumbing too, and for the same reason: `runCliSession` reads it to
       // decide whether the turn is over and never forwards it. The message it
@@ -209,6 +229,10 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           costUsd: event.costUsd,
           stepsUnavailableReason: event.stepsUnavailableReason,
           backgroundOpen: event.backgroundOpen,
+          ...(event.recovery === undefined ? {} : { recovery: event.recovery }),
+          ...(event.trackingLost === undefined
+            ? {}
+            : { trackingLost: event.trackingLost }),
           backgroundOutcome: event.backgroundOutcome,
         },
       };
@@ -440,8 +464,9 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
 /**
  * Whether an OFF-TURN row means the run is working again.
  *
- * Asked at exactly one place — `ChatService.handleBetweenTurnEvent`, which only
- * ever sees events that produced a durable row — so the default is YES: a
+ * Asked by `ChatService.handleBetweenTurnEvent` and the graph executor's
+ * `onOffTurnEvent` (a workflow node's off-turn badge), both of which only ever
+ * see events that produced a durable row — so the default is YES: a
  * settled run whose CLI is writing rows again is the CLI carrying on by itself,
  * and its own continuation settles it a second time. What this names is the
  * exceptions, which are the rows the DAEMON writes about the run's plumbing
@@ -455,11 +480,15 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
  * A DELEGATE announcement has two directions meaning opposite things
  * (`spawn-cli`'s `announceDelegateWork`): starting is work beginning, finishing
  * is work ending, and reading a finish as a start would latch the spinner on
- * with nothing left to take it down. `backgroundOpen` is nullable and null is
- * NOT a close — an announcement carrying the delegate's FACTS (its label, its
- * prompt) claims nothing about its liveness, and reading that as "it has
- * stopped" would silence a run every time the CLI described a delegate it had
- * just launched.
+ * with nothing left to take it down. Only an announced START restates the run:
+ * `backgroundOpen` is nullable, and an announcement carrying the delegate's
+ * FACTS (its label, its prompt, the price claude reports with a continuation's
+ * `result`) claims nothing about liveness either way. Read as work, the price
+ * row — which can land after that continuation's own settle — put a finished
+ * run back to `running` with no terminal event left to end it. Work it
+ * describes is announced elsewhere: an off-turn launch by its main-thread
+ * `tool_call` or a `backgroundOpen: true` announcement, a delegate's own rows
+ * through the lease.
  *
  * BOTH SHELL ROWS are excluded, and that is the pair rather than one of them.
  * `shell_info` is a close and always was: a detached command routinely outlives
@@ -483,11 +512,26 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
  */
 export function restatesRunAsWorking(event: AgentEvent): boolean {
   return !(
-    (event.type === 'subagent_info' && event.backgroundOpen === false) ||
+    (event.type === 'subagent_info' && event.backgroundOpen !== true) ||
     event.type === 'shell_info' ||
     event.type === 'shell_open' ||
-    event.type === 'notice'
+    event.type === 'notice' ||
+    // A record of a message that never reached the agent — a codex steer is
+    // refused after its turn ended — not the agent doing anything.
+    event.type === 'follow_up_dropped'
   );
+}
+
+/** The "not sent" row's sentence: why `count` messages never reached the agent. */
+function unsentMessage(count: number, reason: string | undefined): string {
+  const them = count === 1 ? 'it' : 'them';
+  const why =
+    reason === undefined
+      ? `the turn ended before the agent took ${them}`
+      : `the agent refused ${them} (${reason})`;
+  return count === 1
+    ? `Your message was not sent — ${why}.`
+    : `${count} messages were not sent — ${why}.`;
 }
 
 /** The run status a terminal event implies, or null for a mid-turn event. */

@@ -236,6 +236,9 @@ function useChatMetrics(
   // than state: it is a message to the next run of the effect, not something
   // to render.
   const refreshPending = useRef(false);
+  // A press whose request was superseded before it answered, keyed by the
+  // target it was made on: it rides on the next request for THAT target only.
+  const carriedPress = useRef<string | null>(null);
   // One automatic refresh per OPEN, never a loop: a refresh that brings back
   // nothing newer must not keep asking for as long as the panel stays open.
   const autoRefreshed = useRef(false);
@@ -246,6 +249,8 @@ function useChatMetrics(
   useEffect(() => {
     if (!open) {
       autoRefreshed.current = false;
+      // A press still unanswered when the panel closed ends with it.
+      carriedPress.current = null;
     }
   }, [open]);
   useEffect(() => {
@@ -271,8 +276,11 @@ function useChatMetrics(
     // chat's window under the second chat's name. Named `current` rather than
     // `live`, which is now the working-agent PROP this effect also depends on.
     let current = true;
-    const refreshing = refreshPending.current;
+    let answered = false;
+    const refreshing =
+      refreshPending.current || carriedPress.current === target;
     refreshPending.current = false;
+    carriedPress.current = null;
     setState((previous) =>
       // Re-reading the SAME chat keeps what is already on screen, so a refetch
       // costs no blank panel. A DIFFERENT chat keeps nothing: those figures
@@ -283,6 +291,7 @@ function useChatMetrics(
     );
     void load(runId, nodeId, callId, refreshing)
       .then((data) => {
+        answered = true;
         if (!current) {
           return;
         }
@@ -308,6 +317,7 @@ function useChatMetrics(
         }
       })
       .catch((err: unknown) => {
+        answered = true;
         if (current) {
           setState((previous) => ({
             ...previous,
@@ -319,6 +329,12 @@ function useChatMetrics(
       });
     return () => {
       current = false;
+      // A press this request was still answering rides on the one that
+      // replaces it — the live re-read supersedes requests every ten seconds,
+      // and an ordinary read would serve the reading the press was for.
+      if (refreshing && !answered) {
+        carriedPress.current = target;
+      }
     };
     // `live` rides the deps so a settle takes one final reading; `nonce` is the
     // live re-read.

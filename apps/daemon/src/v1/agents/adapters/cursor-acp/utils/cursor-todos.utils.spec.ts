@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseCursorTodos } from './cursor-todos.utils';
+import { foldTaskLists } from '../../../utils/task-list-fold';
+import { parseCursorPlan, parseCursorTodos } from './cursor-todos.utils';
 
 /**
  * Every payload here is TRANSCRIBED from the wire — cursor-agent
@@ -103,5 +104,144 @@ describe('parseCursorTodos', () => {
       tasks: [],
       toolCallId: null,
     });
+  });
+});
+
+/**
+ * TRANSCRIBED from the wire — cursor-agent 2026.10.19-6bbf2c4, 2026-10-21, a
+ * plan-mode turn asking for a three-file plan, then a turn executing it. The
+ * frames are written out in `cursor-acp.const.ts`'s plan block.
+ */
+const CREATE_PLAN = {
+  toolCallId: 'call-9d94fff3-0',
+  name: 'Create three files',
+  overview: 'Create a.txt, b.txt, and c.txt in the workspace folder.',
+  plan: '# Create three text files\n…',
+  todos: [
+    {
+      id: 'create-a-txt',
+      content: 'Create a.txt containing "alpha"',
+      status: 'pending',
+    },
+    {
+      id: 'create-b-txt',
+      content: 'Create b.txt containing "beta"',
+      status: 'pending',
+    },
+    {
+      id: 'create-c-txt',
+      content: 'Create c.txt containing "gamma"',
+      status: 'pending',
+    },
+  ],
+};
+/** The execution turn's first two `cursor/update_todos` frames. */
+const EXECUTION = [
+  {
+    toolCallId: 'call-1c417799-3',
+    merge: true,
+    todos: [
+      {
+        id: 'create-a-txt',
+        content: 'Create a.txt containing "alpha"',
+        status: 'in_progress',
+      },
+      {
+        id: 'create-b-txt',
+        content: 'Create b.txt containing "beta"',
+        status: 'pending',
+      },
+      {
+        id: 'create-c-txt',
+        content: 'Create c.txt containing "gamma"',
+        status: 'pending',
+      },
+    ],
+  },
+  {
+    toolCallId: 'call-997d9633-6',
+    merge: true,
+    todos: [
+      {
+        id: 'create-a-txt',
+        content: 'Create a.txt containing "alpha"',
+        status: 'completed',
+      },
+      {
+        id: 'create-b-txt',
+        content: 'Create b.txt containing "beta"',
+        status: 'in_progress',
+      },
+    ],
+  },
+];
+
+describe('parseCursorPlan', () => {
+  it('reads the plan’s todos with cursor’s own ids', () => {
+    expect(parseCursorPlan(CREATE_PLAN)).toEqual([
+      {
+        id: 'create-a-txt',
+        title: 'Create a.txt containing "alpha"',
+        status: 'pending',
+        activeForm: null,
+      },
+      {
+        id: 'create-b-txt',
+        title: 'Create b.txt containing "beta"',
+        status: 'pending',
+        activeForm: null,
+      },
+      {
+        id: 'create-c-txt',
+        title: 'Create c.txt containing "gamma"',
+        status: 'pending',
+        activeForm: null,
+      },
+    ]);
+  });
+
+  it('is the list the execution turn’s patches join, so no task is drawn twice', () => {
+    // The point of reading the plan here rather than off its `plan` update:
+    // that update carries no ids, and the patches below name these. Folded the
+    // way the run's list is, the plan and its execution are ONE list of three.
+    const plan = parseCursorPlan(CREATE_PLAN);
+    const rows = [
+      { mode: 'snapshot', tasks: plan, toolCallId: null },
+      ...EXECUTION.map((frame) => parseCursorTodos(frame)),
+    ].map((payload) => ({ nodeId: null, payload }));
+
+    expect(foldTaskLists(rows)[0]?.tasks).toEqual([
+      {
+        id: 'create-a-txt',
+        title: 'Create a.txt containing "alpha"',
+        status: 'completed',
+        activeForm: null,
+      },
+      {
+        id: 'create-b-txt',
+        title: 'Create b.txt containing "beta"',
+        status: 'in_progress',
+        activeForm: null,
+      },
+      {
+        id: 'create-c-txt',
+        title: 'Create c.txt containing "gamma"',
+        status: 'pending',
+        activeForm: null,
+      },
+    ]);
+  });
+
+  it('reads `cancelled` — a status only the plan carries — as unknown', () => {
+    expect(
+      parseCursorPlan({
+        todos: [{ id: 'x', content: 'y', status: 'cancelled' }],
+      }),
+    ).toEqual([{ id: 'x', title: 'y', status: null, activeForm: null }]);
+  });
+
+  it('refuses a payload carrying no list, so the driver falls back to the plan update', () => {
+    expect(parseCursorPlan({ name: 'A plan' })).toBeNull();
+    expect(parseCursorPlan(null)).toBeNull();
   });
 });

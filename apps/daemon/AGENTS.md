@@ -346,7 +346,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - Stop is `session/cancel` with a 5s kill fallback. `cursor-agent acp` ignores EOF; the registry's `close()` kills the group.
 - cursor offers no `acceptEdits`: a stored `acceptEdits` asks exactly like `ask` (`cursorAutoDecision` → null); never auto-approve under it.
 - Model selection reads `configOptions` (`configId`, not `configOptionId`) or the legacy `models`. Pick the frame from what the agent advertised, never a version. `cursor-agent models` ids are never the picker source.
-- `create_plan` / `generate_image` are declined `-32601`; `ask_question`, `task` and `update_todos` are answered. Do not reintroduce the legacy `-p` cursor adapter, its `.cursor/mcp.json` merge or its trust probe.
+- `create_plan` / `generate_image` are declined `-32601`; `ask_question`, `task` and `update_todos` are answered. `create_plan` is READ before the refusal: its todos carry the ids the baseline `plan` update lacks and later `update_todos` patches key on, so it (not the held `plan` update) is the plan's `task_list` snapshot (`AcpTodoProtocol.plan`). Do not reintroduce the legacy `-p` cursor adapter, its `.cursor/mcp.json` merge or its trust probe.
 
 ### Auto-compaction
 

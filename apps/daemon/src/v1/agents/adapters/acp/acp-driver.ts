@@ -391,8 +391,8 @@ export interface AcpResumeContext {
 }
 
 /**
- * How ONE agent reports its own task list, since baseline ACP's `plan` update
- * is not what the shipped agents actually send.
+ * How ONE agent reports its own task list beyond baseline ACP's `plan` update,
+ * which carries no ids and so cannot be joined to anything the agent says later.
  *
  * Supplied by the adapter — the method name and the params shape are that
  * vendor's facts. What the driver owns is the LIFECYCLE, and there is one thing
@@ -414,6 +414,28 @@ export interface AcpTodoProtocol {
    * we could not parse is worse than not having one.
    */
   read(params: unknown): AcpTodoUpdate | null;
+  /**
+   * Where this agent states the plan it just sent as a `plan` update AGAIN,
+   * this time with its own ids — absent for an agent that does not.
+   *
+   * The ids are the whole point. A `plan` entry has none, so the rows it draws
+   * carry ids made up from their position; when the agent later works through
+   * that plan, its patches name the tasks by ITS ids, match none of those rows,
+   * and land as a second copy of every task. Measured on cursor-agent
+   * 2026.10.19: a plan of three todos became six rows across the plan turn and
+   * the turn that executed it. So when this is declared, the `plan` update is
+   * HELD and this request is the plan's one announcement — the held entries are
+   * drawn only when the request's payload cannot be read.
+   *
+   * The request itself is still DECLINED after it is read: its reply is a
+   * verdict on the plan (accept or reject) that this client does not give on
+   * the user's behalf.
+   */
+  plan?: {
+    method: string;
+    /** The plan as a whole list, or null when the shape is unrecognized. */
+    read(params: unknown): AgentTask[] | null;
+  };
 }
 
 /**
@@ -818,6 +840,48 @@ function readToolLocations(value: unknown): AcpToolLocation[] | null {
   return locations.length > 0 ? locations : null;
 }
 
+/**
+ * ACP `PlanEntry[]` — the agent's plan, as the task list it is.
+ *
+ * Null for an absent or non-array `entries`: an unreadable plan is not an empty
+ * one, and reading it as empty would wipe a list the user is watching.
+ *
+ * An entry carries no id (ACP's schema has `content`, `priority`, `status` and
+ * nothing else), so each row is given one from its position. `plan-` keeps them
+ * apart from the numbers an agent gives its own todo list (`"1"`, `"2"`, …),
+ * which a later patch would otherwise mistake for these rows. `priority` is not
+ * carried: the task list has no place for it, and the one agent seen sending
+ * plans writes `"medium"` for every entry whatever the model said.
+ */
+function readAcpPlan(entries: unknown): AgentTask[] | null {
+  if (!Array.isArray(entries)) {
+    return null;
+  }
+  const tasks: AgentTask[] = [];
+  for (const entry of entries) {
+    const record = asRecord(entry);
+    const content = record ? asString(record.content) : null;
+    if (content === null || content.length === 0) {
+      // A step that says nothing is not a step the user can follow.
+      continue;
+    }
+    const status = asString(record?.status);
+    tasks.push({
+      id: `plan-${tasks.length + 1}`,
+      title: content,
+      // ACP's own three words; anything else reads as unknown, never coerced.
+      status:
+        status === 'pending' ||
+        status === 'in_progress' ||
+        status === 'completed'
+          ? status
+          : null,
+      activeForm: null,
+    });
+  }
+  return tasks;
+}
+
 function readToolCall(source: Record<string, unknown>): AcpToolCall {
   return {
     toolCallId: asString(source.toolCallId) ?? '',
@@ -1189,6 +1253,12 @@ export class AcpTurnDriver {
    * updates are dropped until the load reply lands.
    */
   private replaying = false;
+  /**
+   * The newest `plan` update, held for an agent that restates its plan with ids
+   * — see {@link AcpTodoProtocol.plan}. Drawn only when that restatement cannot
+   * be read; turn-scoped because both frames come from one tool call.
+   */
+  private heldPlan: AgentTask[] | null = null;
   /**
    * Replay accounting for a resumed turn. `session/load` streams the whole
    * prior conversation back before the prompt can be sent, and nothing in the
@@ -3918,11 +3988,59 @@ export class AcpTurnDriver {
         `acp: ${method} arrived in an unrecognized shape — declined rather than recorded as a task list`,
       );
     }
-    // Everything else is a client capability we deliberately did not advertise
-    // (`fs/*`, `terminal/*`) or a vendor extension we don't implement. A
-    // blocking request MUST be answered or the agent parks forever, so refuse
-    // it in-protocol — and say so once, since a refused extension can change
-    // what the agent is able to do this turn.
+    const plan = todos?.plan;
+    if (plan !== undefined && method === plan.method) {
+      // READ, then declined like any other below — see `AcpTodoProtocol.plan`.
+      return [
+        ...this.onPlanRestated(method, plan.read(params)),
+        ...this.decline(id, method),
+      ];
+    }
+    return this.decline(id, method);
+  }
+
+  /**
+   * The plan an agent restated with its own ids, drawn in place of the `plan`
+   * update held for it — or that held update, when the restatement could not be
+   * read or named no tasks (cursor's `plan` update then carries one stand-in
+   * entry naming the plan, which is still worth a row).
+   */
+  private onPlanRestated(
+    method: string,
+    tasks: AgentTask[] | null,
+  ): AgentEvent[] {
+    if (tasks === null) {
+      this.session.options.logger?.warn(
+        `acp: ${method} arrived in an unrecognized shape — its plan is drawn from the plan update instead`,
+      );
+    }
+    const drawn = tasks !== null && tasks.length > 0 ? tasks : this.heldPlan;
+    this.heldPlan = null;
+    return drawn === null ? [] : [this.planEvent(drawn)];
+  }
+
+  /**
+   * A plan, announced as the agent's whole task list — ACP's own rule for the
+   * `plan` update ("the client MUST replace the current plan completely"), and
+   * true of a restatement for the same reason. No `toolCallId`: a list that
+   * names one is drawn INSTEAD of that tool's row, and the row a plan rides on
+   * (cursor's `Create Plan`) carries the plan's document, which the list does
+   * not.
+   */
+  private planEvent(tasks: AgentTask[]): AgentEvent {
+    return { type: 'task_list', mode: 'snapshot', tasks, toolCallId: null };
+  }
+
+  /**
+   * Refuse a request this client does not take.
+   *
+   * It is a client capability we deliberately did not advertise (`fs/*`,
+   * `terminal/*`) or a vendor extension we don't implement. A blocking request
+   * MUST be answered or the agent parks forever, so refuse it in-protocol — and
+   * say so once, since a refused extension can change what the agent is able
+   * to do this turn.
+   */
+  private decline(id: JsonRpcId, method: string): AgentEvent[] {
     if (
       !this.session.write(
         encodeError(
@@ -4755,9 +4873,30 @@ export class AcpTurnDriver {
         }
         return [];
       }
+      case 'plan': {
+        // The agent's plan — sent whatever capabilities the client declares
+        // (cursor-agent 2026.10.19 sends one from every CreatePlan, before its
+        // own `cursor/create_plan`). History during a replay, like any row.
+        if (this.replaying) {
+          return [];
+        }
+        const tasks = readAcpPlan(update.entries);
+        if (tasks === null) {
+          return [];
+        }
+        if (this.session.options.todos?.plan !== undefined) {
+          // The agent restates this plan with ids — see `AcpTodoProtocol.plan`.
+          this.heldPlan = tasks;
+          return [];
+        }
+        // A row, so the text before it is a finished block — the same close a
+        // tool call makes, without which the list would be written ahead of
+        // the words that introduced it.
+        return [...this.flushTextBlock(), this.planEvent(tasks)];
+      }
       default:
-        // plan/plan_update, config_option_update, session_info_update — all
-        // real ACP updates this transcript does not model.
+        // config_option_update, session_info_update — real ACP updates this
+        // transcript does not model.
         //
         // `session_info_update` carries a `title` and nothing else, and the
         // agent WRITES that same name into its own session store before

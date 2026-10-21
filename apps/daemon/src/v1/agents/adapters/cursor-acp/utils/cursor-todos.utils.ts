@@ -3,7 +3,8 @@ import type { AcpTodoUpdate } from '../../acp/acp-driver';
 import type { AgentTask, AgentTaskStatus } from '../../adapter.types';
 
 /**
- * Reading cursor's own task list off its `cursor/update_todos` request.
+ * Reading cursor's own task list off its `cursor/update_todos` request, and a
+ * plan's off its `cursor/create_plan` request.
  *
  * The frames this parses are transcribed in `cursor-acp.const.ts`'s task-list
  * section. Two of its fields are the whole reason the agent-agnostic event has
@@ -22,25 +23,21 @@ function readStatus(value: unknown): AgentTaskStatus | null {
 }
 
 /**
- * Read a `cursor/update_todos` payload, or null when it does not read as one —
- * which the driver turns back into the ordinary decline.
+ * Read cursor's `todos` rows — the same `{id, content, status}` shape on both
+ * methods that carry them — or null when there is no list.
  *
  * A row with no id is DROPPED rather than positioned, unlike claude's
  * `TodoWrite`: cursor sends real ids and its patches are keyed by them, so a
  * row without one cannot be joined to anything, and inventing an index for it
  * would silently overwrite whichever task happened to sit there.
  */
-export function parseCursorTodos(params: unknown): AcpTodoUpdate | null {
-  const record = asRecord(params);
-  if (!record) {
-    return null;
-  }
-  if (!Array.isArray(record.todos)) {
+function readTodoRows(value: unknown): AgentTask[] | null {
+  if (!Array.isArray(value)) {
     // An absent list is not an empty one. Reading it as "the agent has no
     // tasks" would let a drifted payload wipe a list the user is watching.
     return null;
   }
-  const tasks = asArray(record.todos)
+  return asArray(value)
     .map((entry): AgentTask | null => {
       const row = asRecord(entry);
       const id = row ? asString(row.id) : null;
@@ -58,6 +55,18 @@ export function parseCursorTodos(params: unknown): AcpTodoUpdate | null {
       };
     })
     .filter((task): task is AgentTask => task !== null);
+}
+
+/**
+ * Read a `cursor/update_todos` payload, or null when it does not read as one —
+ * which the driver turns back into the ordinary decline.
+ */
+export function parseCursorTodos(params: unknown): AcpTodoUpdate | null {
+  const record = asRecord(params);
+  const tasks = record ? readTodoRows(record.todos) : null;
+  if (record === null || tasks === null) {
+    return null;
+  }
   return {
     // The agent SAYS which it sent, so nothing is inferred from the contents:
     // `merge:true` names only the rows that moved (measured — the second
@@ -73,4 +82,18 @@ export function parseCursorTodos(params: unknown): AcpTodoUpdate | null {
     tasks,
     toolCallId: asString(record.toolCallId),
   };
+}
+
+/**
+ * Read the plan off a `cursor/create_plan` request — the plan's todos with the
+ * ids its later `cursor/update_todos` patches name, which the `plan` update sent
+ * just before it lacks. Null when the payload carries no list.
+ *
+ * The frames are transcribed in `cursor-acp.const.ts`'s plan block. The rest of
+ * the payload (name, overview, the plan document) is the `Create Plan` tool
+ * row's, which shows it; only the list is read here.
+ */
+export function parseCursorPlan(params: unknown): AgentTask[] | null {
+  const record = asRecord(params);
+  return record ? readTodoRows(record.todos) : null;
 }

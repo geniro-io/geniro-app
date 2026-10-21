@@ -67,12 +67,12 @@ configurations. Each member can have its own CLI, account profile, model,
 approval mode and MCP settings. For example, a reviewer can use two Claude
 accounts and a Codex configuration.
 
-New calls rotate through members. Those that recently hit a limit or need
-sign-in are tried last.
-If a member hits a usage limit or its sign-in expires, Geniro tries the next one.
-Continuing a call keeps it on the member that handled it. Pools apply to
-**calls between agents**; ordinary workflow steps and direct messages use the
-node's main configuration.
+Work goes to the first member in pool order that is available. If a member hits
+a usage limit or its sign-in expires, Geniro hands the work to the next one and
+remembers until when that account is spent — across every workflow run, for
+calls, workflow steps and direct messages alike. Once the limit resets, the next
+turn or call goes back to the first member, carrying the recent conversation
+over. Continuing a call keeps it on the member that handled it.
 
 ## Local models
 

@@ -1022,6 +1022,15 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     );
   }
 
+  /**
+   * Whether the live session under `key` {@link holdsWork} — work of its own
+   * that closing the process would stop.
+   */
+  holdsWorkFor(key: string): boolean {
+    const entry = this.entries.get(key);
+    return entry !== undefined && entry.session.alive && this.holdsWork(entry);
+  }
+
   /** The CLI the live session under `key` runs, or null when it holds none. */
   agentOf(key: string): string | null {
     const entry = this.entries.get(key);

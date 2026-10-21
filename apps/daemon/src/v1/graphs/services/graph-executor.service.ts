@@ -186,12 +186,13 @@ import {
   callPoolHandOffPrompt,
   fallsThroughPool,
   nodePoolHandOffPrompt,
+  nodeStartMember,
   poolAttempts,
   poolHandOffNotice,
   poolHandOffPrompt,
   poolMemberNode,
   poolMembersOf,
-  poolSize,
+  poolMoveNotice,
 } from '../utils/agent-pool';
 import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
 import {
@@ -5264,16 +5265,30 @@ export class GraphExecutorService
         persistTurnStart(node, sessionKey);
         return beginAgentTurn(node, prompt, undefined, extras);
       }
-      const member = nodePoolMembers.get(node.id) ?? 1;
+      const cooldowns = this.callBroker.poolCooldowns;
+      const held = nodePoolMembers.get(node.id) ?? 1;
+      const heldSessionId = extras.resumeSessionId ?? null;
+      const heldWindow = nodeWindows.get(node.id);
+      const heldBaseline = this.compactionBaselines.get(sessionKey);
+      const site = { cwd, runId, nodeId: node.id };
+      const { standings, order } = cooldowns.order(node, site);
+      const start = nodeStartMember({
+        standings,
+        order,
+        held,
+        hasSession: heldSessionId !== null,
+        holdsWork: this.sessions.holdsWorkFor(sessionKey),
+      });
       const attempts = poolAttempts(node, [
-        member,
-        ...Array.from({ length: poolSize(node) }, (_, i) => i + 1).filter(
-          (other) => other !== member,
-        ),
+        start,
+        ...order.filter((member) => member !== start),
       ]);
       let index = 0;
       let stopped = false;
       let currentPrompt = prompt;
+      let resumeSessionId = heldSessionId;
+      /** Whether any attempt of this turn so far made a tool call. */
+      let turnDidWork = false;
       let finalResult: NodeTurnResult | null = null;
       const failureOf = (turn: NodeTurnResult): CalleeTurnOutcome => ({
         status: turn.outcome === 'skipped' ? 'failed' : turn.outcome,
@@ -5283,19 +5298,20 @@ export class GraphExecutorService
           this.adapterFor(attempts[index]!.node.agent).failureFrom(message),
         ),
       });
-      const handOn = async (
-        outcome: CalleeTurnOutcome,
-        retireCards?: () => () => Promise<void>,
+      /**
+       * Move the node's conversation to member `to`: its session belongs to
+       * the account it was opened on, so the next attempt starts a fresh one,
+       * and the row records which member now holds the node for later passes.
+       */
+      const moveConversation = async (
+        from: number,
+        to: number,
+        previousSessionId: string | null,
+        message: string,
+        retireReason: string,
+        recordRetired?: () => Promise<void>,
       ): Promise<void> => {
-        const from = attempts[index]!;
-        const next = attempts[++index]!;
-        // Keep the caller retained: its asynchronous calls must still wake
-        // this node, and must not be orphaned between accounts.
-        const recordRetired = retireCards?.();
-        this.sessions.retire(
-          sessionKey,
-          'its turn was handed to another pool member',
-        );
+        this.sessions.retire(sessionKey, retireReason);
         nodeSessionIds.delete(node.id);
         nodeWindows.delete(node.id);
         this.compactionBaselines.delete(sessionKey);
@@ -5306,17 +5322,11 @@ export class GraphExecutorService
               await this.nodeStateDao.clearConversation(runId, node.id, em);
               await persistItem(node.id, 'system', null, {
                 severity: 'info',
-                member: next.member,
+                member: to,
                 nodePoolHandOff: true,
-                fromMember: from.member,
-                previousSessionId: outcome.sessionId,
-                message: poolHandOffNotice(
-                  node.name ?? node.id,
-                  from.member,
-                  next.member,
-                  outcome,
-                  'turn',
-                ),
+                fromMember: from,
+                previousSessionId,
+                message,
               });
               resolve();
             } catch (err) {
@@ -5324,7 +5334,50 @@ export class GraphExecutorService
             }
           });
         });
-        nodePoolMembers.set(node.id, next.member);
+        nodePoolMembers.set(node.id, to);
+      };
+      const handOn = async (
+        outcome: CalleeTurnOutcome,
+        madeToolCalls: boolean,
+        retireCards?: () => () => Promise<void>,
+      ): Promise<void> => {
+        const from = attempts[index]!;
+        const next = attempts[++index]!;
+        turnDidWork ||= madeToolCalls;
+        cooldowns.record(from.node, site, outcome, true);
+        // Keep the caller retained: its asynchronous calls must still wake
+        // this node, and must not be orphaned between accounts.
+        const recordRetired = retireCards?.();
+        await moveConversation(
+          from.member,
+          next.member,
+          outcome.sessionId,
+          poolHandOffNotice(
+            node.name ?? node.id,
+            from.member,
+            next.member,
+            outcome,
+            'turn',
+          ),
+          'its turn was handed to another pool member',
+          recordRetired,
+        );
+        // Back on the member the conversation left before this turn: its own
+        // session still holds everything, so it resumes rather than starts
+        // over from a transcript excerpt — unless an attempt of this turn
+        // already did work, which that session never saw.
+        if (next.member === held && heldSessionId !== null && !turnDidWork) {
+          resumeSessionId = heldSessionId;
+          currentPrompt = prompt;
+          if (heldWindow !== undefined) {
+            nodeWindows.set(node.id, heldWindow);
+          }
+          if (heldBaseline !== undefined) {
+            this.compactionBaselines.set(sessionKey, heldBaseline);
+          }
+          return;
+        }
+        resumeSessionId = null;
         currentPrompt = nodePoolHandOffPrompt(
           prompt,
           node.id,
@@ -5352,24 +5405,44 @@ export class GraphExecutorService
               {
                 ...extras,
                 poolMember: attempt.member,
-                resumeSessionId: index === 0 ? extras.resumeSessionId : null,
+                resumeSessionId,
               },
             );
           } catch (err) {
             if (stopped || cancelRequested || index === attempts.length - 1) {
               throw err;
             }
-            await handOn({
-              status: 'failed',
-              finalText: null,
-              sessionId: null,
-              ...geniroSideFailure(
-                `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
-              ),
-            });
+            await handOn(
+              {
+                status: 'failed',
+                finalText: null,
+                sessionId: null,
+                ...geniroSideFailure(
+                  `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+                ),
+              },
+              false,
+            );
           }
         }
       };
+      if (start !== held) {
+        await moveConversation(
+          held,
+          start,
+          heldSessionId,
+          poolMoveNotice(node.name ?? node.id, held, start),
+          'its conversation moved to another pool member',
+        );
+        if (heldSessionId !== null) {
+          currentPrompt = nodePoolHandOffPrompt(
+            prompt,
+            node.id,
+            await this.itemDao.nodePoolContextRows(runId, node.id, em),
+          );
+          resumeSessionId = null;
+        }
+      }
       let current = await startAttempt();
       const done = (async (): Promise<void> => {
         for (;;) {
@@ -5383,11 +5456,12 @@ export class GraphExecutorService
             index === attempts.length - 1 ||
             !fallsThroughPool(outcome, turn.madeToolCalls)
           ) {
+            cooldowns.record(attempts[index]!.node, site, outcome, false);
             finalResult = turn;
             return;
           }
           try {
-            await handOn(outcome, current.retireCards);
+            await handOn(outcome, turn.madeToolCalls, current.retireCards);
             current = await startAttempt();
           } catch (err) {
             finalResult = {
@@ -6149,6 +6223,20 @@ export class GraphExecutorService
             ...(pool?.fallbacks ?? []),
           ];
           const skipped: PoolSkip[] = [];
+          const recordAttempt = (
+            member: WorkflowAgentNode,
+            outcome: CalleeTurnOutcome,
+            handedPast: boolean,
+          ): void => {
+            if (pool !== undefined) {
+              this.callBroker.poolCooldowns.record(
+                member,
+                { cwd, runId, nodeId: callee.id },
+                outcome,
+                handedPast,
+              );
+            }
+          };
           let attemptPrompt = message;
           for (let index = 0; ; index += 1) {
             const attempt = attempts[index]!;
@@ -6202,12 +6290,16 @@ export class GraphExecutorService
                 handsOn,
               );
               if (!followed.handedOn) {
+                recordAttempt(attempt.node, followed.outcome, false);
                 callMessages.delete(callId);
                 forgetCallDeliveries(callId);
                 return followed.outcome;
               }
               outcome = followed.outcome;
             }
+            // Recorded as it is handed on, not when the call settles: until
+            // then every other run would still start new work on it.
+            recordAttempt(attempt.node, outcome, true);
             const next = attempts[index + 1]!;
             skipped.push({
               member: attempt.member,
@@ -6823,6 +6915,7 @@ export class GraphExecutorService
         runId,
         {
           calleesOf,
+          cwd,
           messageTargets: triggerFed,
           launchCalleeTurn,
           persistItem: (nodeId, kind, role, payload) => {

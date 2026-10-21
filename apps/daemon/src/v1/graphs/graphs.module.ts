@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { ConfigDirPinService } from '../agents/services/config-dir-pin.service';
 import { CapabilitiesController } from './controllers/capabilities.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
 import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
 import { GraphExecutorService } from './services/graph-executor.service';
+import { PoolCooldowns } from './services/pool-cooldowns.store';
 import { RunWorkflowService } from './services/run-workflow.service';
 import { TaskBoardBroker } from './services/task-board.broker';
 import { WorkflowActionsService } from './services/workflow-actions.service';
@@ -35,6 +37,16 @@ import { WorkflowStoreService } from './services/workflow-store.service';
       useFactory: () => new WorkflowStoreService(),
     },
     CapabilitiesService,
+    {
+      // One record for the daemon: a limit belongs to an account, whichever
+      // run met it.
+      provide: PoolCooldowns,
+      useFactory: (pins: ConfigDirPinService) =>
+        new PoolCooldowns(
+          (agent, cwd) => pins.forRun(agent, cwd)?.effective ?? null,
+        ),
+      inject: [ConfigDirPinService],
+    },
     GraphExecutorService,
     CallBroker,
     TaskBoardBroker,

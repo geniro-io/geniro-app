@@ -90,6 +90,7 @@ import {
   CURSOR_ASK_QUESTION_METHOD,
   CURSOR_CONFIG_DIR_ENV,
   CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
+  CURSOR_CREATE_PLAN_METHOD,
   CURSOR_CREDENTIAL_ENV_KEYS,
   CURSOR_DATA_DIR_ENV,
   CURSOR_HOME_DIR_NAME,
@@ -186,7 +187,7 @@ import {
   readCursorTask,
   readCursorTaskInput,
 } from './utils/cursor-task.utils';
-import { parseCursorTodos } from './utils/cursor-todos.utils';
+import { parseCursorPlan, parseCursorTodos } from './utils/cursor-todos.utils';
 import { cursorTransientResumePrompt } from './utils/cursor-transient-resume.utils';
 import {
   cursorUsagePageLength,
@@ -3160,6 +3161,10 @@ export class CursorAcpAdapter extends AgentAdapter {
         todos: {
           method: CURSOR_TODOS_METHOD,
           read: parseCursorTodos,
+          // The plan's ids, which its `plan` update lacks and every later
+          // `cursor/update_todos` patch keys on — see the task-list block in
+          // `cursor-acp.const.ts`.
+          plan: { method: CURSOR_CREATE_PLAN_METHOD, read: parseCursorPlan },
         },
         // This CLI catches its own failure, writes the sentence out as an
         // assistant message and answers `end_turn` regardless — so without this

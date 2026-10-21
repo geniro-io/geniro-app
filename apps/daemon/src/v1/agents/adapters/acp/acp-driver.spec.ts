@@ -2436,7 +2436,11 @@ describe('AcpSession session updates', () => {
   it('ignores updates the transcript does not model', () => {
     const h = harness();
     expect(h.feed(chunk('user_message_chunk', 'our own prompt'))).toEqual([]);
-    expect(h.feed(update({ sessionUpdate: 'plan', entries: [] }))).toEqual([]);
+    expect(
+      h.feed(
+        update({ sessionUpdate: 'config_option_update', configOptions: [] }),
+      ),
+    ).toEqual([]);
   });
 
   it('records a mode the AGENT switched to, and draws no row for it', () => {
@@ -4147,6 +4151,167 @@ describe('AcpSession task list', () => {
       h.feed({ id: 7, method: TODOS, params: { rows: [{ id: '1' }] } }).length,
     ).toBe(1);
     expect(h.sent.find((frame) => frame.id === 7)?.error).toBeDefined();
+  });
+});
+
+describe('AcpSession plan updates', () => {
+  /** Baseline ACP's `plan` update, as cursor-agent 2026.10.19 sends one. */
+  const planUpdate = update({
+    sessionUpdate: 'plan',
+    entries: [
+      { content: 'Create a.txt', priority: 'medium', status: 'completed' },
+      { content: 'Create b.txt', priority: 'medium', status: 'in_progress' },
+      { content: '', priority: 'low', status: 'pending' },
+      { content: 'Create c.txt', priority: 'high', status: 'cancelled' },
+    ],
+  });
+  const fromPlan = [
+    {
+      id: 'plan-1',
+      title: 'Create a.txt',
+      status: 'completed',
+      activeForm: null,
+    },
+    {
+      id: 'plan-2',
+      title: 'Create b.txt',
+      status: 'in_progress',
+      activeForm: null,
+    },
+    // The blank entry is not a step; the next one keeps a contiguous id, and
+    // a status outside ACP's three reads as unknown rather than coerced.
+    { id: 'plan-3', title: 'Create c.txt', status: null, activeForm: null },
+  ];
+
+  it('draws the plan as the whole task list, after the words before it', () => {
+    const h = harness();
+    h.feed(chunk('agent_message_chunk', 'Here is the plan.'));
+
+    // A snapshot — ACP: "the client MUST replace the current plan completely" —
+    // and tied to no tool call, so it replaces no row. The text block closes
+    // first, or the list would be written ahead of the words introducing it.
+    expect(h.feed(planUpdate)).toEqual([
+      { type: 'text', text: 'Here is the plan.' },
+      {
+        type: 'task_list',
+        mode: 'snapshot',
+        tasks: fromPlan,
+        toolCallId: null,
+      },
+    ]);
+  });
+
+  it('draws nothing for a plan update with no entries list', () => {
+    // An unreadable plan is not an empty one: an empty snapshot would wipe the
+    // list the user is watching.
+    const h = harness();
+    expect(h.feed(update({ sessionUpdate: 'plan' }))).toEqual([]);
+  });
+
+  it('drops a plan the session/load replay streams back', () => {
+    const h = harness({
+      input: { ...BASE_INPUT, resumeSessionId: 'prior-7' },
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+    expect(h.feed(planUpdate)).toEqual([]);
+  });
+
+  describe('for an agent that restates its plan with ids', () => {
+    const PLAN = 'vendor/create_plan';
+    const restated = [
+      {
+        id: 'make-a',
+        title: 'Create a.txt',
+        status: 'pending',
+        activeForm: null,
+      },
+    ] as const;
+    const todos = {
+      method: 'vendor/update_todos',
+      read: () => null,
+      plan: {
+        method: PLAN,
+        read: (params: unknown) => {
+          const rows = (params as { rows?: unknown } | null)?.rows;
+          return Array.isArray(rows) ? (rows as never[]) : null;
+        },
+      },
+    };
+    const options = { todos, declinedWithoutNotice: [PLAN] };
+
+    it('holds the plan update and draws the restatement, keyed by its ids', () => {
+      // The duplication this prevents: the agent's later patches name the
+      // tasks by ITS ids, so a list drawn with positional ids gains a second
+      // copy of every task as soon as the agent works through it.
+      const h = harness(options);
+      expect(h.feed(planUpdate)).toEqual([]);
+
+      const events = h.feed({
+        id: 9,
+        method: PLAN,
+        params: { rows: restated },
+      });
+
+      expect(events).toEqual([
+        {
+          type: 'task_list',
+          mode: 'snapshot',
+          tasks: restated,
+          toolCallId: null,
+        },
+      ]);
+      // Still REFUSED: the reply is a verdict on the plan, never ours to give.
+      expect(h.sent.find((frame) => frame.id === 9)?.error).toEqual({
+        code: -32601,
+        message: `${PLAN} is not implemented by this client`,
+      });
+    });
+
+    it('falls back to the held plan update when the restatement is unreadable', () => {
+      const warn = vi.fn();
+      const h = harness({ ...options, logger: { warn } });
+      h.feed(planUpdate);
+
+      expect(h.feed({ id: 9, method: PLAN, params: { rows: 'nope' } })).toEqual(
+        [
+          {
+            type: 'task_list',
+            mode: 'snapshot',
+            tasks: fromPlan,
+            toolCallId: null,
+          },
+        ],
+      );
+      expect(warn).toHaveBeenCalledWith(
+        `acp: ${PLAN} arrived in an unrecognized shape — its plan is drawn from the plan update instead`,
+      );
+      expect(h.sent.find((frame) => frame.id === 9)?.error).toBeDefined();
+    });
+
+    it('falls back to the held plan update, quietly, when the restatement names no tasks', () => {
+      // cursor's CreatePlan with no todos still sends one stand-in entry naming
+      // the plan on the `plan` update, while its restatement's list is empty.
+      const warn = vi.fn();
+      const h = harness({ ...options, logger: { warn } });
+      h.feed(planUpdate);
+
+      const events = h.feed({ id: 9, method: PLAN, params: { rows: [] } });
+
+      expect(events[0]?.type === 'task_list' && events[0].tasks).toEqual(
+        fromPlan,
+      );
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('draws a held plan once, not again on a later restatement', () => {
+      const h = harness(options);
+      h.feed(planUpdate);
+      h.feed({ id: 9, method: PLAN, params: { rows: 'nope' } });
+
+      expect(h.feed({ id: 10, method: PLAN, params: { rows: [] } })).toEqual(
+        [],
+      );
+    });
   });
 });
 

@@ -28,6 +28,7 @@ export function useOneShotVerdict(
     allow: boolean,
     answer?: string,
     images?: SendMessageDtoImagesInner[],
+    optionId?: string,
   ) => void,
 ): {
   responded: boolean;
@@ -36,6 +37,7 @@ export function useOneShotVerdict(
     allow: boolean,
     answer?: string,
     images?: SendMessageDtoImagesInner[],
+    optionId?: string,
   ) => void;
 } {
   const [responded, setResponded] = useState(false);
@@ -50,6 +52,7 @@ export function useOneShotVerdict(
     allow: boolean,
     answer?: string,
     images?: SendMessageDtoImagesInner[],
+    optionId?: string,
   ): void => {
     if (responded) {
       return;
@@ -57,7 +60,11 @@ export function useOneShotVerdict(
     setResponded(true);
     // Preserve the caller-visible arity: a plain approve/deny stays a
     // one-argument call, and an answer with no attachment a two-argument one.
-    if (answer === undefined) {
+    // A picked remembering option ("allow for this session") is the one case
+    // that reaches the fourth position.
+    if (optionId !== undefined) {
+      onRespond(allow, answer, images, optionId);
+    } else if (answer === undefined) {
       onRespond(allow);
     } else if (images === undefined || images.length === 0) {
       onRespond(allow, answer);

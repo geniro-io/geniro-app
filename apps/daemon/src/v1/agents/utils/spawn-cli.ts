@@ -5,6 +5,7 @@ import type {
   AgentApprovalMode,
   AgentEvent,
   AgentTurnHandle,
+  ApprovalOption,
   FollowUpMessage,
   SessionCloseCause,
   SubagentTrackingLost,
@@ -143,6 +144,7 @@ export interface CliTurnOptions {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ) => string | undefined;
   /**
    * Encode a user message sent while THIS turn is still running, as the stdin
@@ -344,7 +346,8 @@ export interface CliSessionOptions {
    * encoded line on a stdin that is already open, and neither the encoder nor
    * the stdin belongs to a turn. Its `input` argument echoes the request's own
    * arguments back exactly as the in-turn seam does, so an ALLOW cannot hand
-   * the CLI a blanked argument list.
+   * the CLI a blanked argument list. Its `option` is the one of the request's
+   * own `options` the user picked, exactly as `respondApproval` takes it.
    *
    * Returns whether the owner TOOK the request. False (or no handler at all)
    * falls back to holding it — a caller with nowhere to draw a card must not
@@ -352,7 +355,11 @@ export interface CliSessionOptions {
    */
   onHeldApproval?: (
     event: ApprovalRequestEvent,
-    respond: (allow: boolean, input?: unknown) => boolean,
+    respond: (
+      allow: boolean,
+      input?: unknown,
+      option?: ApprovalOption,
+    ) => boolean,
   ) => boolean;
 }
 
@@ -1784,9 +1791,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // never come. A verdict needs no turn — only this stdin and the encoder
       // the last turn installed, both of which outlive it.
       if (opts.onHeldApproval && approvalEncoder) {
-        const respond = (allow: boolean, input?: unknown): boolean => {
+        const respond = (
+          allow: boolean,
+          input?: unknown,
+          option?: ApprovalOption,
+        ): boolean => {
           ownedApprovals.delete(event.id);
-          const answer = approvalEncoder?.(event.id, allow, input);
+          const answer = approvalEncoder?.(event.id, allow, input, option);
           const written = answer !== undefined && sessionWrite(answer);
           if (written) {
             // Answered, so it must be dropped wherever it has moved to since
@@ -3978,9 +3989,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // Looked up THROUGH the live set, never off {@link delegateWork}.
         return (workId === undefined ? null : delegateWork.get(workId)) ?? null;
       },
-      respondApproval: (id, allow, updatedInput) => {
+      respondApproval: (id, allow, updatedInput, option) => {
         const delivered = turnWrite(() =>
-          turnOptions.buildApprovalResponse?.(id, allow, updatedInput),
+          turnOptions.buildApprovalResponse?.(id, allow, updatedInput, option),
         );
         if (delivered) {
           // Answered, so it must not be re-held when this turn settles.
@@ -4006,7 +4017,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // delivered" has no answer unless the delivered ones are written down
         // too.
         opts.logger?.debug?.(
-          `${opts.command}: approval ${id} ${allow ? 'allowed' : 'denied'} — ` +
+          `${opts.command}: approval ${id} ${allow ? 'allowed' : 'denied'}` +
+            `${option === undefined ? '' : ` (${option.scope}: ${option.id})`} — ` +
             `${delivered ? 'written to stdin' : 'NOT written (turn already settled)'}` +
             (seenAt === undefined
               ? ''

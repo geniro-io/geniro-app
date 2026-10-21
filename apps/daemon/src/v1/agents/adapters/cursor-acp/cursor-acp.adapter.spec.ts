@@ -1790,6 +1790,56 @@ describe('CursorAcpAdapter permission round-trip', () => {
       outcome: { outcome: 'selected', optionId: 'o-allow' },
     });
   });
+
+  it('offers "Allow always" as the session-long answer it is under geniro, and answers it with that option', () => {
+    // The options cursor-agent 2026.10.19 puts on every request it raises. Its
+    // "always" lands in the per-conversation profile geniro seeds, so the card
+    // must not promise more than one session.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, approvalMode: 'ask' }, (event) => events.push(event));
+    handshake(child);
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 8,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 's',
+          toolCall: { toolCallId: 't-2', title: '`touch a`', kind: 'execute' },
+          options: [
+            { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+            {
+              optionId: 'allow-always',
+              name: 'Allow always',
+              kind: 'allow_always',
+            },
+            { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+          ],
+        },
+      }),
+    );
+    const card = events.find((event) => event.type === 'approval_request');
+    const options = card?.type === 'approval_request' ? card.options : [];
+    expect(options).toEqual([
+      {
+        id: 'allow-always',
+        label: 'Allow for this session',
+        allow: true,
+        scope: 'session',
+      },
+    ]);
+
+    expect(handle.respondApproval('n:8', true, undefined, options?.[0])).toBe(
+      true,
+    );
+    expect(framesOn(child).find((frame) => frame.id === 8)?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'allow-always' },
+    });
+  });
 });
 
 describe('CursorAcpAdapter — no mid-turn user message', () => {

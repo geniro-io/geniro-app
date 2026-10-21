@@ -1151,7 +1151,12 @@ function ApprovalRow({
   item: ChatItem;
   verdicts: ReturnType<typeof collectVerdicts>;
   unanswerable: ReadonlySet<string>;
-  onRespond: (requestId: string, allow: boolean, answer?: string) => void;
+  onRespond: (
+    requestId: string,
+    allow: boolean,
+    answer?: string,
+    optionId?: string,
+  ) => void;
 }): React.JSX.Element | null {
   const requestId = payloadString(item.payload, 'id');
   if (requestId === null) {
@@ -1163,12 +1168,16 @@ function ApprovalRow({
       toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
       input={(item.payload as { input?: unknown } | null)?.input ?? null}
       questions={(item.payload as { questions?: unknown } | null)?.questions}
+      options={(item.payload as { options?: unknown } | null)?.options}
       requestId={requestId}
       verdict={settled?.allow ?? null}
+      verdictOption={settled?.optionLabel ?? null}
       answer={settled?.answer ?? null}
       outcome={settled?.outcome ?? null}
       expired={unanswerable.has(requestId)}
-      onRespond={(allow, answer) => onRespond(requestId, allow, answer)}
+      onRespond={(allow, answer, _images, optionId) =>
+        onRespond(requestId, allow, answer, optionId)
+      }
     />
   );
 }

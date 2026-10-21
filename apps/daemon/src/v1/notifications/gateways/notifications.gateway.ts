@@ -14,7 +14,10 @@ import type { Server, Socket } from 'socket.io';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { enforceWsHandshakeAuth } from '../../../auth/ws-auth';
-import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
+import {
+  MAX_ANSWER_LENGTH,
+  MAX_OPTION_ID_LENGTH,
+} from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
@@ -44,15 +47,17 @@ function extractVerdict(data: unknown): {
   requestId: string;
   allow: boolean;
   answer?: string;
+  optionId?: string;
 } | null {
   if (!data || typeof data !== 'object') {
     return null;
   }
-  const { runId, requestId, allow, answer } = data as {
+  const { runId, requestId, allow, answer, optionId } = data as {
     runId?: unknown;
     requestId?: unknown;
     allow?: unknown;
     answer?: unknown;
+    optionId?: unknown;
   };
   if (
     typeof runId !== 'string' ||
@@ -63,7 +68,11 @@ function extractVerdict(data: unknown): {
     (answer !== undefined &&
       (typeof answer !== 'string' ||
         answer.length === 0 ||
-        answer.length > MAX_ANSWER_LENGTH))
+        answer.length > MAX_ANSWER_LENGTH)) ||
+    (optionId !== undefined &&
+      (typeof optionId !== 'string' ||
+        optionId.length === 0 ||
+        optionId.length > MAX_OPTION_ID_LENGTH))
   ) {
     return null;
   }
@@ -72,6 +81,7 @@ function extractVerdict(data: unknown): {
     requestId,
     allow,
     answer: typeof answer === 'string' ? answer : undefined,
+    ...(typeof optionId === 'string' ? { optionId } : {}),
   };
 }
 
@@ -447,6 +457,7 @@ export class NotificationsGateway
       parsed.requestId,
       parsed.allow,
       parsed.answer,
+      parsed.optionId,
     );
     return {
       event: 'verdict_ack',

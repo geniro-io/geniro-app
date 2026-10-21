@@ -566,8 +566,28 @@ describe('the driver’s other half is the stateless default', () => {
       buildApprovalResponse,
     });
 
+    const option = {
+      id: 'session',
+      label: 'Allow for this session',
+      allow: true,
+      scope: 'session' as const,
+    };
+
     expect(driver.buildApprovalResponse('id-1', true, { a: 1 })).toBe('LINE\n');
-    expect(buildApprovalResponse).toHaveBeenCalledWith('id-1', true, { a: 1 });
+    expect(buildApprovalResponse).toHaveBeenCalledWith(
+      'id-1',
+      true,
+      { a: 1 },
+      undefined,
+    );
+    // A picked option reaches the encoder too, or "this session" is lost.
+    driver.buildApprovalResponse('id-2', true, { a: 1 }, option);
+    expect(buildApprovalResponse).toHaveBeenLastCalledWith(
+      'id-2',
+      true,
+      { a: 1 },
+      option,
+    );
   });
 });
 

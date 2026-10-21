@@ -551,6 +551,7 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'approval_verdict': {
       const allow = (item.payload as { allow?: unknown } | null)?.allow;
       const answer = payloadString(item.payload, 'answer');
+      const optionLabel = verdictOptionLabel(item.payload);
       const requestId = payloadString(item.payload, 'id');
       if (requestId !== null && cardBacked.has(requestId)) {
         // The card that asked is on screen and renders its own settled line —
@@ -565,8 +566,12 @@ export const TranscriptItem = memo(function TranscriptItem({
             allow === true
               ? answer
                 ? `✓ answered — ${answer}`
-                : '✓ tool approved'
-              : '✗ tool denied',
+                : optionLabel
+                  ? `✓ tool approved — ${optionLabel}`
+                  : '✓ tool approved'
+              : optionLabel
+                ? `✗ tool denied — ${optionLabel}`
+                : '✗ tool denied',
           )}
         </MessageBubble>
       );
@@ -815,6 +820,25 @@ export interface RecordedVerdict {
    * that knows its shape reads it (`readProposalOutcome`).
    */
   outcome: unknown;
+  /**
+   * The remembering option the user picked ("Allow for this session"), by the
+   * label the card showed, or null for a one-time Approve or Deny.
+   *
+   * TWIN PARSER: the daemon writes it as `option.label` on the
+   * `approval_verdict` payload (`deliverApprovalAnswer`'s record), only for an
+   * option the CLI was actually sent.
+   */
+  optionLabel: string | null;
+}
+
+/** The picked option's label off an `approval_verdict` payload, or null. */
+function verdictOptionLabel(payload: unknown): string | null {
+  const option = (payload as { option?: unknown } | null)?.option;
+  if (!option || typeof option !== 'object') {
+    return null;
+  }
+  const label = (option as { label?: unknown }).label;
+  return typeof label === 'string' && label.length > 0 ? label : null;
 }
 
 /** All persisted verdicts of a transcript, keyed by approval request id. */
@@ -834,6 +858,7 @@ export function collectVerdicts(
           allow: allow === true,
           answer: payloadString(item.payload, 'answer'),
           outcome: outcome ?? null,
+          optionLabel: verdictOptionLabel(item.payload),
         });
       }
     }

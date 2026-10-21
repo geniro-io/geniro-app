@@ -4628,7 +4628,7 @@ export class GraphExecutorService
               // Already decided above from this node's adapter — the registry
               // never re-derives it (`PendingApproval.question`).
               question: isQuestion,
-              respond: (allow, answer) => {
+              respond: (allow, answer, optionId) => {
                 openCards.delete(cardId);
                 // The card is gone whatever the delivery outcome, so the
                 // window restarts either way — a refused delivery leaves the
@@ -4645,7 +4645,13 @@ export class GraphExecutorService
                   event,
                   allow,
                   answer,
-                  (input) => handle.respondApproval(event.id, allow, input),
+                  // Arity-preserving: a one-time verdict keeps the
+                  // three-argument call it always made.
+                  (input, option) =>
+                    option === undefined
+                      ? handle.respondApproval(event.id, allow, input)
+                      : handle.respondApproval(event.id, allow, input, option),
+                  optionId,
                 );
                 if (delivered) {
                   enqueue(async () => {

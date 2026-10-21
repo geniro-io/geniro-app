@@ -156,7 +156,12 @@ export interface HostedChatState {
     windowTokens: number | null,
   ) => void;
   /** Answer an approval or question card this chat raised. */
-  respond: (requestId: string, allow: boolean, answer?: string) => void;
+  respond: (
+    requestId: string,
+    allow: boolean,
+    answer?: string,
+    optionId?: string,
+  ) => void;
   /** Stop the turn in flight. */
   cancel: () => Promise<void>;
   /**
@@ -717,11 +722,21 @@ export function useHostedChat({
   );
 
   const respond = useCallback(
-    (requestId: string, allow: boolean, answer?: string): void => {
+    (
+      requestId: string,
+      allow: boolean,
+      answer?: string,
+      optionId?: string,
+    ): void => {
       if (client === null || runId === null) {
         return;
       }
-      client.sendVerdict(runId, requestId, allow, answer);
+      // Arity-preserving: a one-time verdict keeps the call it always made.
+      if (optionId === undefined) {
+        client.sendVerdict(runId, requestId, allow, answer);
+      } else {
+        client.sendVerdict(runId, requestId, allow, answer, optionId);
+      }
     },
     [client, runId],
   );

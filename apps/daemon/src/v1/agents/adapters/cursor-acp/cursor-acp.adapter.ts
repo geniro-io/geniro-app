@@ -88,6 +88,7 @@ import {
   CURSOR_ACP_CLIENT_META,
   CURSOR_ACP_CLIENT_NAME,
   CURSOR_ACP_SESSIONS_DIR_NAME,
+  CURSOR_ALWAYS_ANSWER_SCOPE,
   CURSOR_API_HOST,
   CURSOR_ASK_QUESTION_METHOD,
   CURSOR_CONFIG_DIR_ENV,
@@ -3173,6 +3174,9 @@ export class CursorAcpAdapter extends AgentAdapter {
         skipUnchangedParameters: true,
         turnOptions: (turnInput) => this.acpTurnOptions(turnInput),
         declinedWithoutNotice: CURSOR_SILENTLY_DECLINED_METHODS,
+        // cursor's "Allow always" lands in the config directory geniro seeds
+        // per conversation process — see CURSOR_ALWAYS_ANSWER_SCOPE.
+        alwaysAnswerScope: CURSOR_ALWAYS_ANSWER_SCOPE,
         question: {
           method: CURSOR_ASK_QUESTION_METHOD,
           toolName: this.getConfig().questionToolName ?? '',

@@ -4458,10 +4458,16 @@ export function Chats({
       allow: boolean,
       answer?: string,
       images?: SendMessageDtoImagesInner[],
+      optionId?: string,
     ): void => {
       const requestId = payloadString(item.payload, 'id');
       if (requestId) {
-        client.sendVerdict(item.runId, requestId, allow, answer);
+        // Arity-preserving: a one-time verdict keeps the call it always made.
+        if (optionId === undefined) {
+          client.sendVerdict(item.runId, requestId, allow, answer);
+        } else {
+          client.sendVerdict(item.runId, requestId, allow, answer, optionId);
+        }
       }
       if (!images?.length) {
         return;
@@ -4644,8 +4650,10 @@ export function Chats({
           questions={
             (item.payload as { questions?: unknown } | null)?.questions
           }
+          options={(item.payload as { options?: unknown } | null)?.options}
           requestId={requestId}
           verdict={settled?.allow ?? null}
+          verdictOption={settled?.optionLabel ?? null}
           // The user's own words, read back from the SAME item that settled the
           // card — so a card can never show an answer the transcript does not
           // hold, and a replayed transcript reads exactly like the live one.
@@ -4660,8 +4668,8 @@ export function Chats({
               // to annotate.
               deadRequestKeys.has(`${item.runId}:${requestId}`))
           }
-          onRespond={(allow, answer, images) =>
-            respondApproval(item, allow, answer, images)
+          onRespond={(allow, answer, images, optionId) =>
+            respondApproval(item, allow, answer, images, optionId)
           }
         />
       );

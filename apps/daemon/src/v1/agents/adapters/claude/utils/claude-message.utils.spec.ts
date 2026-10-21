@@ -1052,6 +1052,42 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
     ]);
   });
 
+  it("offers a permission the CLI's own remembering answers, and a question none", () => {
+    const request = (toolName: string): unknown => ({
+      type: 'control_request',
+      request_id: 'req-r',
+      request: {
+        subtype: 'can_use_tool',
+        tool_name: toolName,
+        input: { questions: [] },
+        permission_suggestions: [
+          {
+            type: 'addRules',
+            rules: [{ toolName: 'Bash', ruleContent: 'npm test' }],
+            behavior: 'allow',
+            destination: 'localSettings',
+          },
+        ],
+      },
+    });
+    const [permission] = mapClaudeMessage(
+      request('Bash'),
+      new ClaudeSessionCostLedger(),
+    );
+    expect(
+      permission?.type === 'approval_request'
+        ? permission.options?.map((option) => option.id)
+        : null,
+    ).toEqual(['session', 'always']);
+    const [question] = mapClaudeMessage(
+      request('AskUserQuestion'),
+      new ClaudeSessionCostLedger(),
+    );
+    expect(
+      question?.type === 'approval_request' ? question.options : null,
+    ).toBeUndefined();
+  });
+
   it('carries requires_user_interaction — the question-vs-permission discriminator (M4)', () => {
     const events = mapClaudeMessage(
       {

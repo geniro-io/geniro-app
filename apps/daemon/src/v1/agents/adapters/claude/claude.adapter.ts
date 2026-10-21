@@ -43,6 +43,7 @@ import type {
   AgentSessionsInput,
   AgentTitleInput,
   AgentTurnInput,
+  ApprovalOption,
   CarrySessionInput,
   CarrySessionResult,
   ConfigDirPin,
@@ -200,6 +201,7 @@ import {
   readModelResolutions,
 } from './utils/claude-model-resolution.utils';
 import { claudeModels } from './utils/claude-models.utils';
+import { claudeUpdatedPermissions } from './utils/claude-permission-options.utils';
 import {
   readPlanLimitsReply,
   usageRequestLine,
@@ -2405,14 +2407,23 @@ export class ClaudeAdapter extends AgentAdapter {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string {
+    // A picked "this session" / "always" option carries the permission updates
+    // claude suggested on the request; a one-time allow carries none, so an
+    // auto-approval (which never passes an option) teaches the CLI nothing.
+    const updatedPermissions = allow ? claudeUpdatedPermissions(option) : null;
     return `${JSON.stringify({
       type: 'control_response',
       response: {
         subtype: 'success',
         request_id: id,
         response: allow
-          ? { behavior: 'allow', updatedInput: updatedInput ?? {} }
+          ? {
+              behavior: 'allow',
+              updatedInput: updatedInput ?? {},
+              ...(updatedPermissions === null ? {} : { updatedPermissions }),
+            }
           : { behavior: 'deny', message: CLAUDE_DENY_MESSAGE },
       },
     })}\n`;
@@ -2551,8 +2562,8 @@ export class ClaudeAdapter extends AgentAdapter {
     return new ClaudeTurnDriver({
       requestedModel: input.model,
       mapMessage: (obj) => this.mapMessage(obj),
-      buildApprovalResponse: (id, allow, updatedInput) =>
-        this.buildApprovalResponse(id, allow, updatedInput),
+      buildApprovalResponse: (id, allow, updatedInput, option) =>
+        this.buildApprovalResponse(id, allow, updatedInput, option),
       logger: this.options.logger,
     });
   }

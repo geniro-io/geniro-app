@@ -817,6 +817,14 @@ describe('approvals and questions', () => {
       id: 'n:41',
       toolName: 'shell',
       input: { command: 'npm test', cwd: '/repo' },
+      options: [
+        {
+          id: 'session',
+          label: 'Allow for this session',
+          allow: true,
+          scope: 'session',
+        },
+      ],
     });
     const reply = session.buildApprovalResponse('n:41', true);
     expect(JSON.parse(reply!)).toMatchObject({
@@ -824,6 +832,28 @@ describe('approvals and questions', () => {
       result: { decision: 'accept' },
     });
     expect(session.buildApprovalResponse('n:41', true)).toBeUndefined();
+  });
+
+  it("answers the card's session-long option with `acceptForSession`", () => {
+    const session = openSession(turnInput({ approvalMode: 'ask' }));
+    const [card] = feed(session, {
+      id: 43,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: THREAD,
+        turnId: TURN,
+        itemId: 'c',
+        command: 'npm test',
+        cwd: '/repo',
+      },
+    });
+    const option =
+      card?.type === 'approval_request' ? card.options?.[0] : undefined;
+    expect(
+      JSON.parse(
+        session.buildApprovalResponse('n:43', true, undefined, option)!,
+      ),
+    ).toMatchObject({ id: 43, result: { decision: 'acceptForSession' } });
   });
 
   it('lets `acceptEdits` file changes through without a card', () => {

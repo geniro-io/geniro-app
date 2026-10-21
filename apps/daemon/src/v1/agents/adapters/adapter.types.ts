@@ -1866,7 +1866,45 @@ type AgentEventBody =
        * question whose payload read as none, which is then offered as one.
        */
       questions?: CardQuestion[];
+      /**
+       * The answers this CLI offers BESIDE a one-time Approve and Deny — "allow
+       * for this session", "always allow" — each built by the adapter from
+       * what its CLI put on THIS request, so the card offers only what the CLI
+       * would honour. Absent or empty: the card is Approve/Deny alone.
+       */
+      options?: ApprovalOption[];
     };
+
+/**
+ * How long a CLI remembers an {@link ApprovalOption} once picked: for the rest
+ * of this conversation's process (`session`), or past it, in the CLI's own
+ * settings (`always`). A one-time answer is Approve/Deny and has no option.
+ */
+export type ApprovalOptionScope = 'session' | 'always';
+
+/**
+ * One remembering answer to a permission request, as the user's card draws it
+ * and as the verdict names it back (`id`).
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/approval-card.tsx
+ * `readApprovalOptions` reads `id`, `label`, `allow` and `scope` off the
+ * `approval_request` row (`publicApprovalOptions` writes them there).
+ */
+export interface ApprovalOption {
+  /** Unique within its request; what the card's verdict names. */
+  id: string;
+  /** The button's words — the adapter's, describing the option's real reach. */
+  label: string;
+  /** Whether picking it lets the tool call run. */
+  allow: boolean;
+  scope: ApprovalOptionScope;
+  /**
+   * What this adapter's encoder needs to answer with the option and cannot
+   * re-read at verdict time (claude's permission rules ride the request, not
+   * the reply). Adapter-private: never persisted, never sent to a client.
+   */
+  reply?: unknown;
+}
 
 /**
  * One option of a {@link CardQuestion}. `description` and `preview` are for
@@ -3700,6 +3738,7 @@ export interface TurnDriver {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined;
   /**
    * Deliver a user message into the turn this driver is running, answering
@@ -3756,8 +3795,18 @@ export interface AgentTurnHandle {
    * delivered — false once the turn has settled/ended (a late verdict must not
    * be recorded as applied) and for adapters whose CLI has no approval
    * protocol.
+   *
+   * `option` is one of the request's own `options`, when the user picked one
+   * of those rather than plain Approve/Deny. Absent is a ONE-TIME answer, and
+   * every auto-approval sends it absent, so nothing the daemon decides on its
+   * own is remembered by the CLI.
    */
-  respondApproval(id: string, allow: boolean, updatedInput?: unknown): boolean;
+  respondApproval(
+    id: string,
+    allow: boolean,
+    updatedInput?: unknown,
+    option?: ApprovalOption,
+  ): boolean;
   /**
    * Hand the RUNNING turn another user message. Returns whether it was
    * actually delivered — false once the turn has settled, and false for a CLI

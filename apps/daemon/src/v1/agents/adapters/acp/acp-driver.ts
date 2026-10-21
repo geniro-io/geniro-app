@@ -7,10 +7,13 @@ import type {
   AgentTask,
   AgentTurnInput,
   AgentUsage,
+  ApprovalOption,
+  ApprovalOptionScope,
   BackgroundUnitOutcome,
   CardQuestion,
   FollowUpMessage,
 } from '../adapter.types';
+import { approvalOption } from '../utils/approval-options.utils';
 import {
   decodeRequestId,
   encodeError,
@@ -568,6 +571,18 @@ export interface AcpSessionOptions {
   /** How this agent reports its own task list, or absent when it does not. */
   todos?: AcpTodoProtocol;
   /**
+   * How long this agent keeps an `*_always` permission answer, as geniro runs
+   * it — which is what decides whether such an option reaches the card, and
+   * the reach its button claims. Absent: never offered, and every verdict is
+   * answered with a `*_once` option as before.
+   *
+   * The adapter's fact, never the protocol's: ACP says only that `*_always`
+   * is remembered, not where. cursor keeps it in its config directory, which
+   * geniro gives each conversation's process afresh, so for cursor "always"
+   * lasts exactly one session.
+   */
+  alwaysAnswerScope?: ApprovalOptionScope;
+  /**
    * How this agent reports its OWN failure inside the conversation, or absent
    * when its failures reach the protocol.
    */
@@ -917,9 +932,10 @@ function readPermissionOptions(value: unknown): AcpPermissionOption[] {
 /**
  * Pick the option to answer a permission request with. Only `*_once` kinds are
  * eligible: selecting an `*_always` option would persist a decision beyond the
- * turn that the user was never asked to make at that scope. Returns null when
- * the agent offered nothing matching, which the caller reports as a `cancelled`
- * outcome rather than guessing.
+ * turn that the user was never asked to make at that scope — the one path to
+ * one is the user picking it off the card ({@link permissionAnswerOptionId}).
+ * Returns null when the agent offered nothing matching, which the caller
+ * reports as a `cancelled` outcome rather than guessing.
  */
 export function selectPermissionOption(
   options: AcpPermissionOption[],
@@ -927,6 +943,48 @@ export function selectPermissionOption(
 ): string | null {
   const wanted: AcpPermissionOptionKind = allow ? 'allow_once' : 'reject_once';
   return options.find((option) => option.kind === wanted)?.optionId ?? null;
+}
+
+/**
+ * The card's remembering options for one permission request: each `*_always`
+ * option the agent offered, under the id the agent gave it, worded by the
+ * reach geniro actually gives it (`scope`). Empty when the adapter declares no
+ * scope — `*_always` is then never offered.
+ */
+export function acpApprovalOptions(
+  options: readonly AcpPermissionOption[],
+  scope: ApprovalOptionScope | undefined,
+): ApprovalOption[] {
+  if (scope === undefined) {
+    return [];
+  }
+  return options.flatMap((option) =>
+    option.kind === 'allow_always' || option.kind === 'reject_always'
+      ? [approvalOption(option.optionId, option.kind === 'allow_always', scope)]
+      : [],
+  );
+}
+
+/**
+ * The option id a verdict answers a parked permission with: the picked card
+ * option when it is one of this request's own `*_always` options pointing the
+ * verdict's way, else the `*_once` option of {@link selectPermissionOption}.
+ */
+export function permissionAnswerOptionId(
+  options: readonly AcpPermissionOption[],
+  allow: boolean,
+  picked: ApprovalOption | undefined,
+): string | null {
+  const wanted: AcpPermissionOptionKind = allow
+    ? 'allow_always'
+    : 'reject_always';
+  const remembered =
+    picked === undefined
+      ? undefined
+      : options.find(
+          (option) => option.optionId === picked.id && option.kind === wanted,
+        );
+  return remembered?.optionId ?? selectPermissionOption([...options], allow);
 }
 
 /**
@@ -1495,6 +1553,7 @@ export class AcpTurnDriver {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined {
     const requestId = decodeRequestId(id);
     if (this.session.parkedQuestions.has(id)) {
@@ -1514,7 +1573,7 @@ export class AcpTurnDriver {
       return undefined;
     }
     this.session.parkedPermissions.delete(id);
-    const optionId = selectPermissionOption(options, allow);
+    const optionId = permissionAnswerOptionId(options, allow, option);
     return encodeResult(requestId, {
       outcome:
         optionId === null
@@ -4268,12 +4327,17 @@ export class AcpTurnDriver {
 
     const encodedId = encodeRequestId(id);
     this.session.parkedPermissions.set(encodedId, options);
+    const remembering = acpApprovalOptions(
+      options,
+      this.session.options.alwaysAnswerScope,
+    );
     return [
       {
         type: 'approval_request',
         id: encodedId,
         toolName: toolCall.name,
         input: toolCall.rawInput,
+        ...(remembering.length > 0 ? { options: remembering } : {}),
       },
     ];
   }

@@ -1,5 +1,10 @@
 import { asNumber, asRecord } from '../../utils/json-util';
-import type { AgentEvent, TurnDriver, TurnIo } from '../adapter.types';
+import type {
+  AgentEvent,
+  ApprovalOption,
+  TurnDriver,
+  TurnIo,
+} from '../adapter.types';
 import {
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
   CLAUDE_LIVE_COST_ASK_INTERVAL_MS,
@@ -56,6 +61,7 @@ export interface ClaudeTurnDriverDeps {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ) => string | undefined;
   /** Sink for the gate's account of itself; silent by default. */
   logger?: { warn(message: string): void; debug?(message: string): void };
@@ -756,8 +762,9 @@ export class ClaudeTurnDriver implements TurnDriver {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined {
-    return this.deps.buildApprovalResponse(id, allow, updatedInput);
+    return this.deps.buildApprovalResponse(id, allow, updatedInput, option);
   }
 
   /**

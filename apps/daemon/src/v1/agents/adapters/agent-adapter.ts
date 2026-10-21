@@ -77,6 +77,7 @@ import type {
   AgentTurnFailure,
   AgentTurnHandle,
   AgentTurnInput,
+  ApprovalOption,
   ApprovalResolution,
   CarrySessionInput,
   CarrySessionResult,
@@ -2340,8 +2341,8 @@ export abstract class AgentAdapter {
   protected createTurnDriver(_input: AgentTurnInput): TurnDriver {
     return {
       onMessage: (obj) => this.mapMessage(obj),
-      buildApprovalResponse: (id, allow, updatedInput) =>
-        this.buildApprovalResponse(id, allow, updatedInput),
+      buildApprovalResponse: (id, allow, updatedInput, option) =>
+        this.buildApprovalResponse(id, allow, updatedInput, option),
     };
   }
 
@@ -2349,6 +2350,7 @@ export abstract class AgentAdapter {
     _id: string,
     _allow: boolean,
     _updatedInput?: unknown,
+    _option?: ApprovalOption,
   ): string | undefined {
     return undefined;
   }
@@ -2983,8 +2985,8 @@ export abstract class AgentAdapter {
           stdinPayload: modeLine
             ? `${modeLine}${stdinPayload ?? ''}`
             : stdinPayload,
-          buildApprovalResponse: (id, allow, updatedInput) =>
-            driver.buildApprovalResponse?.(id, allow, updatedInput),
+          buildApprovalResponse: (id, allow, updatedInput, option) =>
+            driver.buildApprovalResponse?.(id, allow, updatedInput, option),
           buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
           followUpConsumptionReported:
             this.getConfig().followUp.consumptionReported,

@@ -3,6 +3,7 @@ import type { SessionLogger } from '../../utils/spawn-cli';
 import type {
   AgentEvent,
   AgentTurnInput,
+  ApprovalOption,
   BackgroundUnitOutcome,
   FollowUpMessage,
   TurnDriver,
@@ -273,8 +274,9 @@ export class CodexSession implements TurnDriver {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined {
-    return this.turn.buildApprovalResponse(id, allow, updatedInput);
+    return this.turn.buildApprovalResponse(id, allow, updatedInput, option);
   }
 
   sendFollowUp(message: FollowUpMessage): boolean {

@@ -6,6 +6,7 @@ import type {
   AgentTaskStatus,
   AgentTurnInput,
   AgentUsage,
+  ApprovalOption,
   FollowUpMessage,
 } from '../adapter.types';
 import {
@@ -789,6 +790,9 @@ export class CodexTurnDriver {
         ...(card.questions && card.questions.length > 0
           ? { questions: card.questions }
           : {}),
+        ...(card.options && card.options.length > 0
+          ? { options: card.options }
+          : {}),
       },
     ];
   }
@@ -802,6 +806,7 @@ export class CodexTurnDriver {
     encodedId: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined {
     const parked = this.session.parked.get(encodedId);
     const id = decodeRequestId(encodedId);
@@ -811,7 +816,13 @@ export class CodexTurnDriver {
     this.session.parked.delete(encodedId);
     return encodeResult(
       id,
-      encodeCodexReply(parked.method, parked.params, allow, updatedInput),
+      encodeCodexReply(
+        parked.method,
+        parked.params,
+        allow,
+        updatedInput,
+        option,
+      ),
     );
   }
 

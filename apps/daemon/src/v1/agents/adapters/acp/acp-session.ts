@@ -5,6 +5,7 @@ import {
 import type {
   AgentEvent,
   AgentTurnInput,
+  ApprovalOption,
   BackgroundUnitOutcome,
   FollowUpMessage,
   TurnDriver,
@@ -460,8 +461,9 @@ export class AcpSession implements TurnDriver {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined {
-    return this.turn.buildApprovalResponse(id, allow, updatedInput);
+    return this.turn.buildApprovalResponse(id, allow, updatedInput, option);
   }
 
   sendFollowUp(message: FollowUpMessage): boolean {

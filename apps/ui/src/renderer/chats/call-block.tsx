@@ -39,6 +39,7 @@ import { ContextMeter } from './context-meter';
 import { jumpAnchorProps } from './jump-target';
 import { liveRowKind } from './live-row';
 import { THINKING_WORDS, useLiveWord } from './live-words';
+import { MessageBubble } from './message-bubble';
 import { NestedThreadContext } from './subagent-context';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import type { AgentTaskRow } from './task-payload';
@@ -56,6 +57,8 @@ import {
   entryEndSeq,
   entryStartSeq,
   isCallContinuation,
+  isCardEntry,
+  type TranscriptEntry,
 } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
 import { payloadString } from './transcript-payload';
@@ -73,6 +76,16 @@ function blockStatusOf(status: CallBlockEntry['status']): BlockStatus {
     default:
       return 'running';
   }
+}
+
+function containsRow(entry: TranscriptEntry, seq: number): boolean {
+  if (entry.type === 'item') {
+    return entry.item.seq === seq;
+  }
+  if (entry.type === 'tools' || isCardEntry(entry)) {
+    return false;
+  }
+  return entry.entries.some((child) => containsRow(child, seq));
 }
 
 /** Geniro web's AgentAvatars pair (caller → callee) for the block header. */
@@ -409,7 +422,21 @@ export const CallBlock = memo(function CallBlock({
   const calleeKind = calleeAgentOf(block, nodes);
   const calleeAgent =
     calleeKind === null ? null : agentShortName(identities, calleeKind);
-  const agentBadge = calleeAgent === callee ? null : calleeAgent;
+  const poolTotal =
+    (block.calleeNodeId === null
+      ? undefined
+      : nodes?.get(block.calleeNodeId)?.pool?.length) ?? 0;
+  const poolMember = poolTotal > 1 ? (block.member ?? null) : null;
+  const poolTitle =
+    poolMember === null
+      ? undefined
+      : `Pool member ${poolMember} of ${poolTotal}`;
+  const agentBadge =
+    poolMember !== null
+      ? `${calleeAgent ?? 'agent'} · ${poolMember}/${poolTotal}`
+      : calleeAgent === callee
+        ? null
+        : calleeAgent;
   // A callee carrying on by itself after the call settled is working IN this
   // card — its live row is drawn inside it — so the card's mark spins with it.
   // The call itself stays settled: `callRunning` below still reads the call.
@@ -586,6 +613,16 @@ export const CallBlock = memo(function CallBlock({
   const conversation = block.conversationCallIds[0] ?? block.callId;
   const pages = useContext(CallConversationContext)?.stateOf(conversation);
   const drawnFrom = pages?.hasOlder === true ? (pages.oldestSeq ?? null) : null;
+  const handOff = block.poolHandOff;
+  const handOffRowDrawn =
+    handOff !== undefined &&
+    block.entries.some((entry) => {
+      const endSeq = entryEndSeq(entry);
+      return (
+        !(drawnFrom !== null && endSeq !== null && endSeq < drawnFrom) &&
+        containsRow(entry, handOff.seq)
+      );
+    });
   const mark = useContext(JumpMarkContext);
   const hasSummary =
     summaryText !== null ||
@@ -623,8 +660,17 @@ export const CallBlock = memo(function CallBlock({
                 /* The words give way — the figures and the chip beside them are a
                  fixed handful of characters, while a callee's last message is a
                  paragraph. */
-                <span className="min-w-0 flex-1 truncate">
-                  {summaryText ?? ''}
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate">{summaryText ?? ''}</span>
+                  {block.poolHandOff !== undefined &&
+                  block.poolHandOff.message !== summaryText ? (
+                    <span
+                      data-slot="call-pool-handoff"
+                      title={block.poolHandOff.message}
+                      className="truncate text-xs text-muted-foreground">
+                      {block.poolHandOff.message}
+                    </span>
+                  ) : null}
                 </span>
               )}
               {/* GONE QUIET — its own marker rather than a variation on the
@@ -692,7 +738,11 @@ export const CallBlock = memo(function CallBlock({
                 at all when the graph does not say — an unstated agent is not a
                 fact about the agent. */}
             {agentBadge ? (
-              <Badge variant="muted" className="shrink-0">
+              <Badge
+                variant="muted"
+                className="shrink-0"
+                title={poolTitle}
+                aria-label={poolTitle}>
                 {agentBadge}
               </Badge>
             ) : null}
@@ -706,6 +756,9 @@ export const CallBlock = memo(function CallBlock({
           />
         ) : null}
         <CallConversationPager conversation={conversation} />
+        {handOff !== undefined && !handOffRowDrawn ? (
+          <MessageBubble variant="note">{handOff.message}</MessageBubble>
+        ) : null}
         {/*
           The card's header IS the callee's identity, so its rows carry none of
           their own — the same rule, and the same context, the sub-agent block

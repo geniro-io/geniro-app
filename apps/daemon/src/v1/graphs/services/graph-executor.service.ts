@@ -183,6 +183,7 @@ import type {
 } from '../graphs.types';
 import { CALL_START_BRIEF_MAX } from '../graphs.types';
 import {
+  callPoolHandOffPrompt,
   fallsThroughPool,
   nodePoolHandOffPrompt,
   poolAttempts,
@@ -6012,6 +6013,8 @@ export class GraphExecutorService
         // Given back while the call is HELD and taken again for its wake — a
         // held call runs nothing, and its own calls may need the slot.
         let releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
+        let callWakes = 0;
+        let currentMessage = message;
         /**
          * The HELD loop: the call waits for the calls its callee made, and is
          * continued inside itself until a turn ends with none of them
@@ -6023,10 +6026,11 @@ export class GraphExecutorService
           first: CalleeTurnOutcome,
           firstHold: Promise<CallHoldRelease> | null,
           asReported: (outcome: CalleeTurnOutcome) => CalleeTurnOutcome,
-        ): Promise<CalleeTurnOutcome> => {
+          handsOn: Parameters<typeof runAttempt>[5],
+        ): Promise<{ outcome: CalleeTurnOutcome; handedOn: boolean }> => {
           let reported = first;
           let pending = firstHold;
-          for (let wakes = 1; pending !== null; wakes += 1) {
+          while (pending !== null) {
             const waiting = { node, messages: [] as string[] };
             waitingCalls.set(callId, waiting);
             releaseSlot?.();
@@ -6041,30 +6045,43 @@ export class GraphExecutorService
             if (release.kind === 'settle' && !callStopped()) {
               // Read again: a command can end while the call is held, and
               // the caller is told what is running when it actually settles.
-              return settleHeldCall(
-                node,
-                callId,
-                reported.status === 'completed'
-                  ? {
-                      ...reported,
-                      shellsStillOut: await shellsOutOfConversation(
-                        node.id,
-                        callId,
-                        conversationId,
-                      ),
-                    }
-                  : reported,
-                waiting.messages,
-              );
+              return {
+                outcome: await settleHeldCall(
+                  node,
+                  callId,
+                  reported.status === 'completed'
+                    ? {
+                        ...reported,
+                        shellsStillOut: await shellsOutOfConversation(
+                          node.id,
+                          callId,
+                          conversationId,
+                        ),
+                      }
+                    : reported,
+                  waiting.messages,
+                ),
+                handedOn: false,
+              };
             }
             if (release.kind !== 'wake' || callStopped()) {
-              return settleHeldCall(
-                node,
-                callId,
-                stoppedOutcome(reported.sessionId),
-                waiting.messages,
-              );
+              return {
+                outcome: await settleHeldCall(
+                  node,
+                  callId,
+                  stoppedOutcome(reported.sessionId),
+                  waiting.messages,
+                ),
+                handedOn: false,
+              };
             }
+            callWakes += 1;
+            currentMessage = [
+              release.prompt,
+              ...this.callBroker.takeQueuedMessages(runId, callId),
+              ...waiting.messages,
+              release.note,
+            ].join('\n\n');
             const woken = await runAttempt(
               node,
               member,
@@ -6072,23 +6089,21 @@ export class GraphExecutorService
               // What was sent while the wake waited for its slot — the
               // caller's queued messages first, as a held wake orders them —
               // and the note that the reply is the result, said last.
-              [
-                release.prompt,
-                ...this.callBroker.takeQueuedMessages(runId, callId),
-                ...waiting.messages,
-                release.note,
-              ].join('\n\n'),
+              currentMessage,
               reported.sessionId,
-              null,
-              wakes < MAX_CALL_WAKES,
+              handsOn,
+              callWakes < MAX_CALL_WAKES,
             );
+            if (woken.handedOn) {
+              return { outcome: woken.outcome, handedOn: true };
+            }
             reported = asReported({
               ...woken.outcome,
               sessionId: woken.outcome.sessionId ?? reported.sessionId,
             });
             pending = woken.hold;
           }
-          return reported;
+          return { outcome: reported, handedOn: false };
         };
         try {
           if (cancelRequested || (runFinished && !reopened)) {
@@ -6107,6 +6122,7 @@ export class GraphExecutorService
             ...(pool?.fallbacks ?? []),
           ];
           const skipped: PoolSkip[] = [];
+          let attemptPrompt = message;
           for (let index = 0; ; index += 1) {
             const attempt = attempts[index]!;
             const isLast = index === attempts.length - 1;
@@ -6121,26 +6137,25 @@ export class GraphExecutorService
                     member: attempt.member,
                     ...(skipped.length > 0 ? { poolSkipped: skipped } : {}),
                   };
-            const { outcome, handedOn, hold } = await runAttempt(
+            const handsOn: Parameters<typeof runAttempt>[5] = isLast
+              ? null
+              : (result, madeToolCalls) =>
+                  !callStopped() && fallsThroughPool(result, madeToolCalls);
+            const attempted = await runAttempt(
               attempt.node,
               member,
               index === 0,
-              index === 0
-                ? message
-                : poolHandOffPrompt(message, callMessages.get(callId) ?? []),
+              attemptPrompt,
               // Only the first attempt continues a session: a fallback is
               // another account, which holds none of this conversation.
               index === 0 ? resumeSessionId : null,
-              isLast
-                ? null
-                : (result, madeToolCalls) =>
-                    !cancelRequested &&
-                    !cancelledCalls.has(callId) &&
-                    fallsThroughPool(result, madeToolCalls),
-              true,
+              handsOn,
+              callWakes < MAX_CALL_WAKES,
             );
+            let { outcome } = attempted;
+            const { handedOn, hold } = attempted;
             if (!handedOn) {
-              const reported = await followHold(
+              const followed = await followHold(
                 attempt.node,
                 member,
                 // Held on the session this turn RESUMED when it reported none
@@ -6157,10 +6172,14 @@ export class GraphExecutorService
                 ),
                 hold,
                 asReported,
+                handsOn,
               );
-              callMessages.delete(callId);
-              forgetCallDeliveries(callId);
-              return reported;
+              if (!followed.handedOn) {
+                callMessages.delete(callId);
+                forgetCallDeliveries(callId);
+                return followed.outcome;
+              }
+              outcome = followed.outcome;
             }
             const next = attempts[index + 1]!;
             skipped.push({
@@ -6194,6 +6213,29 @@ export class GraphExecutorService
                 ),
               }).catch(() => {});
             });
+            await drained();
+            const calls = [
+              callId,
+              ...this.callBroker.recordedCallsOf(runId, conversationId),
+            ];
+            const [recent, briefs] = await Promise.all([
+              this.itemDao.getByRun(
+                runId,
+                -1,
+                em,
+                { limit: 200, take: 'newest' },
+                calls,
+              ),
+              this.itemDao.callRowsOf(runId, calls, em),
+            ]);
+            attemptPrompt = callPoolHandOffPrompt(
+              poolHandOffPrompt(currentMessage, callMessages.get(callId) ?? []),
+              [
+                ...new Map(
+                  [...briefs, ...recent].map((row) => [row.id, row]),
+                ).values(),
+              ].sort((a, b) => a.seq - b.seq),
+            );
           }
         } finally {
           releaseSlot?.();

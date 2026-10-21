@@ -9,6 +9,7 @@ import {
   CODEX_STEER_ANSWER_GRACE_MS,
   CODEX_STOP_CLOSE_GRACE_MS,
   CODEX_STOPPED_TOOL_RESULT,
+  CODEX_WAIT_GAP_GRACE_MS,
 } from './codex.const';
 import { CodexSession } from './codex-session';
 import type { CodexTurnOptions } from './codex-turn.driver';
@@ -2377,6 +2378,94 @@ describe('sub-agents', () => {
         },
       }),
     ).toEqual([]);
+  });
+});
+
+describe('a wait on sub-agents', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const waitItem = (id: string, status: string) => ({
+    method: status === 'inProgress' ? 'item/started' : 'item/completed',
+    params: {
+      threadId: THREAD,
+      turnId: TURN,
+      item: {
+        type: 'collabAgentToolCall',
+        id,
+        tool: 'wait',
+        status,
+        receiverThreadIds: ['sub-1', 'sub-2'],
+        agentsStates: {},
+      },
+    },
+  });
+  const holds = (events: AgentEvent[]) =>
+    events.filter((event) => event.type === 'turn_held');
+
+  it('holds the turn while codex waits on its sub-agents, and ends the hold once the gap after the last wait has passed', () => {
+    const session = openSession();
+    // The agent produces nothing until a sub-agent reports: announced like
+    // claude's hold, so the composer sends a message straight in.
+    expect(holds(feed(session, waitItem('w1', 'inProgress')))).toEqual([
+      { type: 'turn_held', open: 2 },
+    ]);
+    expect(holds(feed(session, waitItem('w1', 'completed')))).toEqual([]);
+    emitted = [];
+    vi.advanceTimersByTime(CODEX_WAIT_GAP_GRACE_MS);
+    expect(holds(emitted)).toEqual([{ type: 'turn_held', open: 0 }]);
+  });
+
+  it('keeps the hold through the gap when the agent waits again', () => {
+    const session = openSession();
+    expect(holds(feed(session, waitItem('w1', 'inProgress')))).toHaveLength(1);
+    feed(session, waitItem('w1', 'completed'));
+    vi.advanceTimersByTime(CODEX_WAIT_GAP_GRACE_MS - 1);
+    expect(holds(feed(session, waitItem('w2', 'inProgress')))).toEqual([]);
+    emitted = [];
+    vi.advanceTimersByTime(CODEX_WAIT_GAP_GRACE_MS);
+    expect(holds(emitted)).toEqual([]);
+  });
+
+  it('ends the hold at once when the agent starts writing its reply in the gap', () => {
+    const session = openSession();
+    feed(session, waitItem('w1', 'inProgress'));
+    feed(session, waitItem('w1', 'completed'));
+    const writing = feed(session, {
+      method: 'item/agentMessage/delta',
+      params: { threadId: THREAD, turnId: TURN, delta: 'All done' },
+    });
+    expect(holds(writing)).toEqual([{ type: 'turn_held', open: 0 }]);
+  });
+
+  it('ends the hold at once when the agent takes a message in the gap, or the turn ends', () => {
+    const session = openSession();
+    feed(session, waitItem('w1', 'inProgress'));
+    feed(session, waitItem('w1', 'completed'));
+    const took = feed(session, {
+      method: 'item/started',
+      params: {
+        threadId: THREAD,
+        turnId: TURN,
+        item: { type: 'userMessage', id: 'u1', content: [] },
+      },
+    });
+    expect(holds(took)).toEqual([{ type: 'turn_held', open: 0 }]);
+
+    feed(session, waitItem('w2', 'inProgress'));
+    const ended = feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+    });
+    expect(holds(ended)).toEqual([{ type: 'turn_held', open: 0 }]);
+    emitted = [];
+    vi.advanceTimersByTime(CODEX_WAIT_GAP_GRACE_MS);
+    expect(holds(emitted)).toEqual([]);
   });
 });
 

@@ -2749,8 +2749,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // every engineer it briefed. Only an explicit count moves this — an
       // activity-only announce says nothing about it — and unlike the hold, a
       // STATUS transition does not clear it either: the broker announces `0`
-      // itself on the way out of every wait AND at the run's teardown, so there
-      // is no stretch this could be left latched over.
+      // itself once a wait's gap has passed (or the agent replies, takes a
+      // message or ends its turn) AND at the run's teardown, so there is no
+      // stretch this could be left latched over.
       if (event.awaitingCalls !== undefined) {
         const waiting = event.awaitingCalls > 0;
         const wasWaiting = awaitingCallsRef.current.has(event.runId);

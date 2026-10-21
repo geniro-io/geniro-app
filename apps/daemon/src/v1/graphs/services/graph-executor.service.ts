@@ -3983,6 +3983,13 @@ export class GraphExecutorService
         if (promptTaken && callContext !== undefined && !extras.compaction) {
           this.callBroker.confirmWakingMessages(runId, callContext.callId);
         }
+        // Writing its reply: no longer in the gap between two waits.
+        if (
+          event.parentToolUseId === undefined &&
+          (event.type === 'text' || event.type === 'text_delta')
+        ) {
+          this.callBroker.noteOwnerReplying(runId, caller);
+        }
         const arrived = terminalStatus(event);
         const ended =
           arrived === 'completed' ||
@@ -6774,6 +6781,7 @@ export class GraphExecutorService
         runId,
         {
           calleesOf,
+          messageTargets: triggerFed,
           launchCalleeTurn,
           persistItem: (nodeId, kind, role, payload) => {
             enqueue(async () => {

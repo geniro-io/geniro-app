@@ -35,6 +35,7 @@ import {
   CODEX_STOPPED_COMMAND_PREVIEW_MAX_CHARS,
   CODEX_STOPPED_TOOL_RESULT,
   CODEX_TERMINAL_LIST_MAX_PAGES,
+  CODEX_WAIT_GAP_GRACE_MS,
 } from './codex.const';
 import type {
   CodexItem,
@@ -60,6 +61,7 @@ import {
   subAgentActivityOf,
   subagentOutcomeOf,
   subagentState,
+  waitsOnSubagents,
 } from './utils/codex-items.utils';
 import { codexTurnMcpOverrides } from './utils/codex-mcp.utils';
 import { userMessageText } from './utils/codex-threads.utils';
@@ -209,6 +211,20 @@ export class CodexTurnDriver {
   private heldEnding: AgentEvent[] | null = null;
   /** The ending has gone out: a refusal now is no longer this turn's. */
   private endingReleased = false;
+  /**
+   * This turn's open `wait` calls on its sub-agents. While any is open the
+   * turn is announced HELD (`turn_held`), as spawn-cli announces claude's
+   * hold: the agent produces nothing until a sub-agent reports, so the
+   * composer sends a message straight in.
+   */
+  private readonly openWaits = new Set<string>();
+  /** Whether the turn is announced held for {@link openWaits}. */
+  private waitHeld = false;
+  /** The sub-agent count the hold last announced. */
+  private waitHeldFor = 0;
+  /** The pending end of the hold after the last wait returned, voided by a
+   *  next wait, a message the agent took, or the turn's ending. */
+  private waitGap: symbol | null = null;
   /**
    * The thread config that leaves this node's switched-off MCP servers out,
    * once codex's own config has been read — null until then (and for good on a
@@ -896,7 +912,9 @@ export class CodexTurnDriver {
       }
       case CODEX_NOTIFICATIONS.agentMessageDelta: {
         const delta = asString(record.delta);
-        return delta ? [{ type: 'text_delta', text: delta }] : [];
+        return delta
+          ? [...this.endWaitGap(), { type: 'text_delta', text: delta }]
+          : [];
       }
       case CODEX_NOTIFICATIONS.reasoningSummaryDelta:
       case CODEX_NOTIFICATIONS.reasoningTextDelta: {
@@ -933,6 +951,12 @@ export class CodexTurnDriver {
       return [];
     }
     this.session.items.set(item.id, item);
+    // The agent took a message or is writing its reply: it is busy, not
+    // between two waits.
+    const released =
+      item.type === 'userMessage' || item.type === 'agentMessage'
+        ? this.endWaitGap()
+        : [];
     if (item.type === 'userMessage') {
       this.noteUserMessage(userMessageText(item.record));
     }
@@ -948,7 +972,7 @@ export class CodexTurnDriver {
         },
       ];
     }
-    const events = itemStartedEvents(item);
+    const events = [...released, ...itemStartedEvents(item)];
     // Not a delegate launch (either shape): its delegate's block is keyed by
     // this call, an `isError` close outranks every later ending the renderer
     // reads for it, and the real ending arrives through sub-agent tracking.
@@ -973,7 +997,60 @@ export class CodexTurnDriver {
         }),
       );
     }
+    events.push(...this.beginSubagentWait(item));
     return events;
+  }
+
+  /** A `wait` on sub-agents opened: the turn is held, if it was not yet. */
+  private beginSubagentWait(item: CodexItem): AgentEvent[] {
+    if (!waitsOnSubagents(item)) {
+      return [];
+    }
+    this.openWaits.add(item.id);
+    this.waitGap = null;
+    const open = Math.max(1, receiverThreadsOf(item).length);
+    if (this.waitHeld && open === this.waitHeldFor) {
+      return [];
+    }
+    this.waitHeld = true;
+    this.waitHeldFor = open;
+    return [{ type: 'turn_held', open }];
+  }
+
+  /** A `wait` returned: the hold ends after the gap, unless voided first. */
+  private endSubagentWait(item: CodexItem): void {
+    if (
+      !this.openWaits.delete(item.id) ||
+      this.openWaits.size > 0 ||
+      !this.waitHeld
+    ) {
+      return;
+    }
+    const gap = Symbol('wait-gap');
+    this.waitGap = gap;
+    this.session.schedule(this, CODEX_WAIT_GAP_GRACE_MS, (events) => {
+      if (this.waitGap === gap && !this.settled) {
+        events.push(...this.releaseWaitHold());
+      }
+    });
+  }
+
+  /** End the hold now if it stands only for the gap after a wait. */
+  private endWaitGap(): AgentEvent[] {
+    return this.waitGap !== null && this.openWaits.size === 0
+      ? this.releaseWaitHold()
+      : [];
+  }
+
+  /** End the hold {@link beginSubagentWait} announced, if it stands. */
+  private releaseWaitHold(): AgentEvent[] {
+    this.waitGap = null;
+    if (!this.waitHeld) {
+      return [];
+    }
+    this.waitHeld = false;
+    this.waitHeldFor = 0;
+    return [{ type: 'turn_held', open: 0 }];
   }
 
   private onItemCompleted(item: CodexItem | null): AgentEvent[] {
@@ -1004,6 +1081,7 @@ export class CodexTurnDriver {
     if (item.type === 'collabAgentToolCall') {
       events.push(...this.trackSubagents(item));
     }
+    this.endSubagentWait(item);
     return events;
   }
 
@@ -1670,6 +1748,8 @@ export class CodexTurnDriver {
       return [];
     }
     this.settled = true;
+    this.openWaits.clear();
+    const released = this.releaseWaitHold();
     const modelEvents = this.onReportedModel(asString(turn?.model));
     const status = asString(turn?.status);
     // Every ending carries what the turn spent: a stopped or failed codex turn
@@ -1678,7 +1758,7 @@ export class CodexTurnDriver {
     // chat 00ffe314 had spent $0.48 that no row carried). The live figure is
     // zeroed FIRST, because from the next event on that money is durable.
     const usage = this.settleUsage(asNumber(turn?.durationMs));
-    const events = [...modelEvents, ...this.retireLiveCost()];
+    const events = [...released, ...modelEvents, ...this.retireLiveCost()];
     // A command still running at the turn's end runs on: codex ends a turn
     // without waiting on a backgrounded command. A Stop ends this turn's own
     // ({@link endStoppedCommands}); any other ending leaves them running.

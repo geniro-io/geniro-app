@@ -6019,6 +6019,39 @@ describe('GraphExecutorService — agent calls', () => {
     expect(ofRun()).toEqual([1, 0, 1, 0]);
   });
 
+  it('keeps a manager counted as waiting in the gap after await_agent, until it writes its reply', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    await drain();
+    const collecting = callBroker.awaitAgent(run.id, 'orch', {
+      call_id: 'call-1',
+    });
+    completeTurn(claude.starts[1]!, 'the work');
+    await collecting;
+    await drain();
+    // Between two waits the manager still takes a message at once.
+    expect(callBroker.awaitingCalls(run.id)).toBe(1);
+
+    claude.starts[0]!.emit({ type: 'text_delta', text: 'Here is ' });
+    await drain();
+    expect(callBroker.awaitingCalls(run.id)).toBe(0);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('announces no idle root when a HELD root is stopped', async () => {
     const { service, claude, rootsEvents } = setup();
     const run = await service.startRun({

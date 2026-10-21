@@ -1626,6 +1626,11 @@ export interface RunCallCapability {
   /** Callees each caller may invoke: caller node id → callee agent nodes. */
   readonly calleesOf: ReadonlyMap<string, readonly WorkflowAgentNode[]>;
   /**
+   * The agents a user's message goes to (the trigger-fed ones) — the only
+   * nodes whose waits `awaitingCalls` counts.
+   */
+  readonly messageTargets: ReadonlySet<string>;
+  /**
    * Spawn one callee turn; resolves once the turn fully settles.
    * `depth` is the call's chain depth (1 = a top-level caller's callee): the
    * executor bounds only depth-1 turns with its sub-turn slot pool, so a

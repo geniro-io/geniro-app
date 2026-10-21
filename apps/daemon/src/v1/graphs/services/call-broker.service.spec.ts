@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import type { RunCallSeed } from '../../agents/chat.types';
@@ -18,7 +18,7 @@ import {
   PUBLISHED_PAGES_NOTE,
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
-import { CallBroker } from './call-broker.service';
+import { AWAIT_GAP_GRACE_MS, CallBroker } from './call-broker.service';
 
 const HELPER: WorkflowAgentNode = {
   id: 'helper',
@@ -60,6 +60,8 @@ function harness(options?: {
   wakeNode?: (nodeId: string, prompt: string) => boolean;
   /** Whether a working caller takes a message; default: never. */
   tellLiveNode?: RunCallCapability['tellLiveNode'];
+  /** The agents a user's message goes to — `orch` unless named. */
+  messageTargets?: string[];
   /** What an earlier daemon's pass of the run left in the transcript. */
   seed?: RunCallSeed;
   /** Whether a running callee takes a message; default: yes, joining its turn. */
@@ -141,6 +143,7 @@ function harness(options?: {
     },
     isCancelled: () => options?.cancelled ?? false,
     isSuperseded: () => false,
+    messageTargets: new Set(options?.messageTargets ?? ['orch']),
     toolCallDeadlineMs: options?.toolCallDeadlineMs ?? (() => null),
     // Modelled on the executor's own: a LIVE turn is cancelled and settles
     // `cancelled`, and the answer says whether one was signalled. A stub merely
@@ -3041,7 +3044,25 @@ describe('CallBroker — a caller waiting on its own calls', () => {
     return { broker, deferred, waits };
   }
 
-  it('announces the wait when a collection starts, and its end when the callee answers', async () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A callee's answer. */
+  const done = {
+    status: 'completed' as const,
+    finalText: 'done',
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: null,
+  };
+
+  it('announces the wait when a collection starts, and its end once the gap after the answer has passed', async () => {
     const { broker, deferred, waits } = busBroker({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
       title: 'why',
@@ -3061,18 +3082,67 @@ describe('CallBroker — a caller waiting on its own calls', () => {
     expect(broker.awaitingCalls('run-1')).toBe(1);
     expect(waits).toEqual([1]);
 
-    deferred[0]!.resolve({
-      status: 'completed',
-      finalText: 'done',
-      error: null,
-      failureClass: null,
-      resetsAt: null,
-      sessionId: null,
-    });
+    deferred[0]!.resolve(done);
     await collecting;
+    // The gap before a next wait still counts as waiting.
+    expect(broker.awaitingCalls('run-1')).toBe(1);
+    expect(waits).toEqual([1]);
 
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
     expect(broker.awaitingCalls('run-1')).toBe(0);
     expect(waits).toEqual([1, 0]);
+  });
+
+  it('announces NOTHING when the next wait starts inside the gap', async () => {
+    // A manager polling its callees: await, read, await again. Reported as
+    // sending "working one time in two" while the gap read as busy.
+    const { broker, deferred, waits } = busBroker({ launch: 'defer' });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    const first = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve(done);
+    await first;
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS - 1);
+    const second = broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
+    expect(waits).toEqual([1]);
+
+    deferred[1]!.resolve(done);
+    await second;
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
+    expect(waits).toEqual([1, 0]);
+  });
+
+  it('ends the wait AT ONCE when a user message released it, or the agent took one in the gap', async () => {
+    const { broker, deferred, waits } = busBroker({ launch: 'defer' });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    // Released for the user's message: the agent has work now.
+    const released = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    expect(broker.interruptWaits('run-1', 'orch')).toBe(true);
+    await released;
+    expect(waits).toEqual([1, 0]);
+
+    // In the gap, the agent took a message (or its turn ended).
+    const second = broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
+    deferred[1]!.resolve(done);
+    await second;
+    expect(waits).toEqual([1, 0, 1]);
+    broker.forgetUserMessage('run-1', 'orch');
+    expect(waits).toEqual([1, 0, 1, 0]);
+    expect(broker.awaitingCalls('run-1')).toBe(0);
   });
 
   it('announces once per RUN, not once per wait a caller opens', async () => {
@@ -3093,16 +3163,10 @@ describe('CallBroker — a caller waiting on its own calls', () => {
     expect(waits).toEqual([1]);
 
     for (const entry of deferred) {
-      entry.resolve({
-        status: 'completed',
-        finalText: 'done',
-        error: null,
-        failureClass: null,
-        resetsAt: null,
-        sessionId: null,
-      });
+      entry.resolve(done);
     }
     await Promise.all([first, second]);
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
 
     // And the END is announced only once the LAST of them has returned.
     expect(waits).toEqual([1, 0]);
@@ -3120,13 +3184,99 @@ describe('CallBroker — a caller waiting on its own calls', () => {
       message: 'm',
       mode: 'async',
     });
-    const pending = await broker.awaitAgent('run-1', 'orch', {
+    const collecting = broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
       timeout_ms: 1,
     });
-
+    vi.advanceTimersByTime(1);
+    const pending = await collecting;
     expect(pending.status).toBe('pending');
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
+
     expect(waits).toEqual([1, 0]);
+    expect(broker.awaitingCalls('run-1')).toBe(0);
+  });
+
+  it('ends the gap when the agent starts writing its reply', async () => {
+    const { broker, deferred, waits } = busBroker({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const collecting = broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    deferred[0]!.resolve(done);
+    await collecting;
+    expect(waits).toEqual([1]);
+
+    broker.noteOwnerReplying('run-1', 'orch');
+    expect(waits).toEqual([1, 0]);
+  });
+
+  it('opens no gap after a wait the CLI abandoned', async () => {
+    const { broker, waits } = busBroker({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const gone = new AbortController();
+    const awaiting = broker.awaitAgent(
+      'run-1',
+      'orch',
+      { call_id: 'call-1' },
+      gone.signal,
+    );
+    gone.abort();
+    await awaiting;
+    expect(waits).toEqual([1, 0]);
+  });
+
+  it('still tells a caller in the GAP that a call finished — the gap is not a wait', async () => {
+    const told: string[] = [];
+    const { broker, deferred } = busBroker({
+      launch: 'defer',
+      tellLiveNode: (_nodeId, prompt) => {
+        told.push(prompt);
+        return true;
+      },
+    });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    const first = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve(done);
+    await first;
+    expect(broker.awaitingCalls('run-1')).toBe(1);
+
+    broker.noteCalleeSettling('run-1', 'call-2');
+    expect(told.some((prompt) => prompt.includes('has finished call-2'))).toBe(
+      true,
+    );
+  });
+
+  it('counts only the waits of the agents a message goes to', async () => {
+    const { broker, waits } = busBroker({
+      launch: 'defer',
+      messageTargets: [],
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    void broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    expect(waits).toEqual([]);
     expect(broker.awaitingCalls('run-1')).toBe(0);
   });
 

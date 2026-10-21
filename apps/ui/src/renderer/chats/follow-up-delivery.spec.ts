@@ -22,8 +22,7 @@ const IDLE: FollowUpFacts = {
 /** A turn in flight with nothing parked — the agent producing its answer. */
 const WORKING: FollowUpFacts = { ...IDLE, streaming: true };
 
-// One case per row of the table in apps/ui/AGENTS.md → "When a message queues".
-describe('followUpDelivery — the table', () => {
+describe('followUpDelivery', () => {
   it('sends to an idle thread, which starts a turn', () => {
     expect(followUpDelivery(IDLE)).toEqual({ action: 'send' });
   });
@@ -43,8 +42,6 @@ describe('followUpDelivery — the table', () => {
     ['held', { held: true }],
     ['awaiting-calls', { awaitingCalls: true }],
     ['roots-idle', { rootsIdle: true }],
-    ['background-subagents', { subagentsOut: true }],
-    ['background-shells', { shellsOut: true }],
   ] as const)(
     'sends into a running thread whose agent is parked: %s',
     (_, parked) => {
@@ -54,15 +51,42 @@ describe('followUpDelivery — the table', () => {
     },
   );
 
+  it.each([
+    ['background sub-agents', { subagentsOut: true }],
+    ['a background command', { shellsOut: true }],
+    ['both', { subagentsOut: true, shellsOut: true }],
+  ] as const)(
+    'queues while the agent is still producing its reply, with %s out',
+    (_, out) => {
+      // Background work never decides a send mid-reply.
+      expect(followUpDelivery({ ...WORKING, ...out })).toEqual({
+        action: 'queue',
+        rule: 'agent-working',
+        kickDrain: false,
+      });
+    },
+  );
+
+  it.each([
+    ['background sub-agents', { subagentsOut: true }],
+    ['a background command', { shellsOut: true }],
+  ] as const)('sends once the reply is over, with only %s out', (_, out) => {
+    expect(followUpDelivery({ ...IDLE, ...out })).toEqual({
+      action: 'send',
+    });
+  });
+
   it('queues behind an earlier message, whatever the agent is doing, and drives the drain', () => {
     expect(followUpDelivery({ ...IDLE, queued: true })).toEqual({
       action: 'queue',
       rule: 'behind-queue',
       kickDrain: true,
     });
-    expect(
-      followUpDelivery({ ...WORKING, subagentsOut: true, queued: true }),
-    ).toEqual({ action: 'queue', rule: 'behind-queue', kickDrain: true });
+    expect(followUpDelivery({ ...WORKING, held: true, queued: true })).toEqual({
+      action: 'queue',
+      rule: 'behind-queue',
+      kickDrain: true,
+    });
   });
 
   it('never kicks the drain behind a WORKING agent — its turn ending does', () => {
@@ -108,6 +132,18 @@ describe('followUpButton — what the button says about the press', () => {
       'Queue',
     );
   });
+
+  it('says Queue mid-reply with a background command out, and Send — with the reason — once the reply is over', () => {
+    expect(button({ ...WORKING, shellsOut: true })).toEqual({
+      label: 'Queue',
+      title:
+        'Queue — goes out when the turn ends, or send it now from the queue above',
+    });
+    expect(button({ ...IDLE, shellsOut: true })).toEqual({
+      label: 'Send',
+      title: PARKED_SEND_TITLE['background-shells'],
+    });
+  });
 });
 
 describe('parkedReason', () => {
@@ -115,10 +151,21 @@ describe('parkedReason', () => {
     expect(parkedReason(IDLE)).toBeNull();
   });
 
-  it('names the first matching state, in the table order', () => {
+  it('names the first matching state, in order', () => {
     expect(parkedReason({ ...IDLE, held: true, shellsOut: true })).toBe('held');
     expect(parkedReason({ ...IDLE, subagentsOut: true, shellsOut: true })).toBe(
       'background-subagents',
+    );
+  });
+
+  it('parks nothing on background work while the reply is in progress', () => {
+    expect(
+      parkedReason({ ...WORKING, subagentsOut: true, shellsOut: true }),
+    ).toBeNull();
+    // A hold still parks a streaming run: the reply is over, the turn is kept
+    // open for the sub-agents.
+    expect(parkedReason({ ...WORKING, held: true, shellsOut: true })).toBe(
+      'held',
     );
   });
 

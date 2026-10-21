@@ -3137,6 +3137,9 @@ export class AcpTurnDriver {
       severity: 'info',
       message: `Waiting for ${out} background sub-agent${out === 1 ? '' : 's'} to finish — the agent is told when ${out === 1 ? 'it does' : 'they do'}, and this turn ends on its answer.`,
     });
+    // The same fact spawn-cli announces for its own holds: the reply is over,
+    // so the composer sends a message straight in, which ends this hold.
+    events.push({ type: 'turn_held', open: out });
     this.session.awaitDelegates(() => this.onDelegatesEnded());
     this.armHoldTimer();
     return true;
@@ -3157,7 +3160,10 @@ export class AcpTurnDriver {
     }
     // Something moved, so the idle bound starts over.
     this.armHoldTimer();
-    if (this.session.watchedDelegatesOut(this.launchedHere) > 0) {
+    const remaining = this.session.watchedDelegatesOut(this.launchedHere);
+    if (remaining > 0) {
+      // Still held, by fewer: re-announced so the badge counts down.
+      this.session.emit({ type: 'turn_held', open: remaining });
       return;
     }
     this.endHold();
@@ -3244,6 +3250,7 @@ export class AcpTurnDriver {
   /** Leave the hold — the delegates ended, or a Stop or a message ended it. */
   private endHold(): void {
     this.awaitingDelegates = false;
+    this.session.emit({ type: 'turn_held', open: 0 });
     if (this.holdTimer !== null) {
       this.holdTimer.clear();
       this.holdTimer = null;

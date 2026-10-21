@@ -173,6 +173,7 @@ import { FolderSelect } from './folder-select';
 import {
   followUpButton,
   followUpDelivery,
+  type ParkedFacts,
   parkedReason,
   steerReadiness,
 } from './follow-up-delivery';
@@ -1301,10 +1302,9 @@ export function Chats({
     rootsIdleRef.current = rootsIdle;
   }, [rootsIdle]);
   /**
-   * The runs whose `running` comes from BACKGROUND work — sub-agents still out,
-   * or a detached command still up. The other two halves of the same question,
-   * read on the send path beside the two refs above; see {@link activeRunHeld}
-   * for why all four answer it and what that trades away.
+   * The runs with BACKGROUND work out — sub-agents still out, or a detached
+   * command still up. Read on the send path beside the refs above; they park
+   * the agent only once its reply is over (see {@link activeRunHeld}).
    */
   const delegatesOutRef = useRef<ReadonlySet<string>>(delegatesOut);
   useEffect(() => {
@@ -4297,19 +4297,16 @@ export function Chats({
     // message delivered it fine — which is what proves the wait is not a busy
     // agent. REPORTED as "если менеджер просто ждет в бэкграунде каких-то своих
     // агентов, он должен принимать сообщения по default".
-    // A run left `running` by background work alone is the same fact again,
-    // arriving from the two counters that outlive a turn: sub-agents still out
-    // and a detached command still up. Claude Code ends the turn outright in
-    // that state and keeps its prompt live; geniro holds the turn for its own
-    // bookkeeping, and holding the USER's message back for it buys nobody
-    // anything. See {@link activeRunHeld}, which the button's label reads, so
-    // the two cannot say different things about one press.
+    // Background work the run carries — sub-agents still out, a detached
+    // command still up — parks nothing while the agent is still producing its
+    // reply: a message typed then queues, whatever is out. Once the reply is
+    // over it is read at once. See {@link activeRunHeld}, which the button's
+    // label reads, so the two cannot say different things about one press.
     //
     // The WHOLE decision is `followUpDelivery` (chats/follow-up-delivery.ts),
-    // and the table it implements is in apps/ui/AGENTS.md → "When a message
-    // queues". A SYNC sub-agent is not among the parked states: the daemon
-    // announces a sub-agent as background work only once its launching call is
-    // no longer waiting on it, so a message typed during one queues.
+    // summed up in apps/ui/AGENTS.md → "Sending and the queue". A SYNC
+    // sub-agent is the agent's own tool call, so a message typed during one
+    // queues.
     //
     // Is something the user wrote EARLIER still waiting? Then this goes behind
     // it, whatever the run is doing — a queue the composer can jump is not a
@@ -6585,49 +6582,32 @@ export function Chats({
    * This run's agent is parked rather than working — the run reads `running`
    * because of work that is NOT the agent producing a reply.
    *
-   * FIVE facts; the last is a WORKFLOW whose trigger-fed agents have all ended
-   * their turns ({@link rootsIdle}) while calls they started run on. Of the
-   * first four, the last two were the reported gap. A turn held for its
-   * delegates ({@link holding}) and a manager inside a wait on its own callees
-   * ({@link awaitingCalls}) were already here; a run whose `running` comes from
-   * background sub-agents ({@link delegatesOut}) or a detached command
-   * ({@link shellsOut}) was not, and reads exactly the same to a user — so the
-   * composer said Queue about an agent that had finished. MEASURED on a live
-   * workflow run: `awaitingCalls` flickered 1→0→1 as its manager alternated
-   * between `await_agent` and its own tool calls, while `subagentsOut` stood at
-   * 8 for the whole stretch — so whether a typed message went out or queued
-   * depended on which instant it was typed in. REPORTED as "отправка сообщений
-   * без очереди… работает через раз".
+   * A turn held for its delegates ({@link holding}), a manager inside a wait on
+   * its own callees ({@link awaitingCalls}), and a WORKFLOW whose trigger-fed
+   * agents have all ended their turns ({@link rootsIdle}) park it outright.
+   * Background sub-agents ({@link delegatesOut}) and a detached command
+   * ({@link shellsOut}) park it only once its reply is over: the daemon counts
+   * them across turn boundaries, so mid-reply they say nothing about whether
+   * the agent will read a message soon, and a message typed then queues.
    *
-   * The line this draws is Claude Code's own, arrived at independently and then
-   * checked against its 2.1.276 bundle: there the turn ENDS while background
-   * agents are still out (its completion line counts them —
-   * `pendingBackgroundAgentCount` / `backgroundWaitStartTime`), so the prompt is
-   * live and typed input goes straight to the agent. geniro instead HOLDS the
-   * turn open for that work, which is bookkeeping its own continuation needs
-   * and never a statement that the agent is busy.
-   *
-   * The trade-off is deliberate and was asked for twice ("фон = тоже отправлять
-   * сразу"): a chat with a long-lived background command — a dev server left
-   * running — keeps sending rather than queueing for as long as it is up, even
-   * while its agent works. Queueing still covers the ordinary case, which is an
-   * agent mid-answer with nothing out behind it.
-   *
-   * ONE flag over the five, because every surface that reads it asks the same
-   * question: does a message typed now go straight out, and does the button say
-   * Send or Queue. The composer's own send path reads the refs for the same
-   * reason — see `sendFollowUp`.
+   * ONE reading, because every surface that reads it asks the same question:
+   * does a message typed now go straight out, and does the button say Send or
+   * Queue. The composer's own send path reads the refs for the same reason —
+   * see `sendFollowUp`.
    */
-  const activeParkedReason =
+  const activeFacts: ParkedFacts | null =
     activeRunId === null
       ? null
-      : parkedReason({
+      : {
+          streaming,
           held: holding.has(activeRunId),
           awaitingCalls: awaitingCalls.has(activeRunId),
           rootsIdle: rootsIdle.has(activeRunId),
           subagentsOut: delegatesOut.has(activeRunId),
           shellsOut: shellsOut.has(activeRunId),
-        });
+        };
+  const activeParkedReason =
+    activeFacts === null ? null : parkedReason(activeFacts);
   const activeRunHeld = activeParkedReason !== null;
   /**
    * What the composer's button says a press will do — the SAME decision
@@ -6637,19 +6617,11 @@ export function Chats({
    * asked only whether a turn was streaming.
    */
   const composerButton =
-    activeRunId === null
+    activeRunId === null || activeFacts === null
       ? null
       : followUpButton(
-          followUpDelivery({
-            streaming,
-            queued: queued.length > 0,
-            held: holding.has(activeRunId),
-            awaitingCalls: awaitingCalls.has(activeRunId),
-            rootsIdle: rootsIdle.has(activeRunId),
-            subagentsOut: delegatesOut.has(activeRunId),
-            shellsOut: shellsOut.has(activeRunId),
-          }),
-          streaming ? activeParkedReason : null,
+          followUpDelivery({ ...activeFacts, queued: queued.length > 0 }),
+          activeParkedReason,
           pausedQueues.has(activeRunId),
         );
   /**

@@ -1907,6 +1907,26 @@ describe('useChatRun', () => {
     expect(harness.drain).toHaveBeenCalledWith('r1');
   });
 
+  it('keeps the queue of a run still mid-reply on opening it, whatever background work is out', async () => {
+    // Background sub-agents and a detached command do not end the reply; a
+    // drain here would send the queued message into the turn in flight.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, subagentsOut: 2, shellsOpen: 1 },
+      run2,
+    ]);
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 1, 'user', 'go'),
+      msg('r1', 2, 'assistant', 'started the server, now reading the logs'),
+    ]);
+    const { client } = makeClient();
+    const harness = await mount(client);
+    harness.queued.add('r1');
+
+    await open(harness, 'r1');
+
+    expect(harness.drain).not.toHaveBeenCalled();
+  });
+
   it('fetches only the delta past the last rendered seq after a reconnect', async () => {
     const { client, emitItem, fireDisconnect, fireReconnect } = makeClient();
     const harness = await mount(client);

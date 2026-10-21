@@ -3991,6 +3991,26 @@ export class GraphExecutorService
         if (ended) {
           outcome = arrived;
         }
+        // A trigger-fed agent whose turn is HELD has finished its reply and
+        // waits only on its background sub-agents; a message delivered into it
+        // ends the hold, so it stops counting in `rootsWorking` until the hold
+        // ends. A hold can also end with no `open: 0` (the silence deadline, an
+        // idle with units unreported), so the terminal counts it again: the
+        // compaction that may follow is work, and the walk's own idle mark is
+        // what announces the end. Only the agents a message goes to, and not
+        // their compaction turns: a held downstream node is still a step of
+        // the walk, and a compacting agent refuses messages.
+        if (
+          callContext === undefined &&
+          !extras.compaction &&
+          triggerFed.has(node.id)
+        ) {
+          if (event.type === 'turn_held') {
+            markRootWorking(node.id, event.open === 0);
+          } else if (ended) {
+            markRootWorking(node.id, true);
+          }
+        }
         enqueue(async () => {
           if (ended && callContext === undefined) {
             // On the chain, so a drop this turn reported ahead of its terminal

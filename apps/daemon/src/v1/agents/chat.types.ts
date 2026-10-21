@@ -4158,7 +4158,9 @@ export interface RunStatusEvent {
    * the trigger-fed ones a user's message goes to, compacting included, and
    * any node the walk has reached downstream of them — or `undefined` when
    * this event says nothing about it. CALLS are never counted: they are what
-   * runs on past an idle Manager.
+   * runs on past an idle Manager. Nor is a trigger-fed agent whose turn is
+   * HELD for its background sub-agents: its reply is over, and a message
+   * delivered into it ends the hold.
    *
    * What decides whether a workflow message queues. The run's own status
    * cannot: a run stays `running` for as long as any call it started is out,
@@ -4994,7 +4996,8 @@ export const RunWireSchema = z.object({
     ),
   /**
    * How many of a WORKFLOW run's DAG agents (never its calls) are inside a
-   * turn — 0 for every chat run. On the snapshot for {@link awaitingCalls}'s reason: the
+   * turn, a trigger-fed agent whose turn is held for its background
+   * sub-agents not counted — 0 for every chat run. On the snapshot for {@link awaitingCalls}'s reason: the
    * composer acts on it, and a window opened while a call runs has no other
    * way to learn that the Manager itself is idle.
    */

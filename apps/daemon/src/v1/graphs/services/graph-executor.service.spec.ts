@@ -5961,6 +5961,113 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
+  it('reports a root idle while its turn is HELD for background sub-agents, and working again once the hold ends', async () => {
+    // A held root has finished its reply; a message delivered into it ends the
+    // hold, so the composer must be able to send it at once.
+    const { service, claude, rootsEvents } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const ofRun = () =>
+      rootsEvents
+        .filter((event) => event.runId === run.id)
+        .map((event) => event.rootsWorking);
+    expect(ofRun()).toEqual([1]);
+
+    claude.starts[0]!.emit({ type: 'turn_held', open: 2 });
+    await drain();
+    expect(ofRun()).toEqual([1, 0]);
+    // The hold counting down is still a hold.
+    claude.starts[0]!.emit({ type: 'turn_held', open: 1 });
+    await drain();
+    expect(ofRun()).toEqual([1, 0]);
+    // The agent speaks again (or took a message): it is working.
+    claude.starts[0]!.emit({ type: 'turn_held', open: 0 });
+    await drain();
+    expect(ofRun()).toEqual([1, 0, 1]);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(ofRun()).toEqual([1, 0, 1, 0]);
+  });
+
+  it('counts a held root again when its turn ends without the hold being released, so the end is announced', async () => {
+    // The silence deadline and an idle with units unreported end a held turn
+    // with no `open: 0`; the walk's own idle mark must still be an announce.
+    const { service, claude, rootsEvents } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const ofRun = () =>
+      rootsEvents
+        .filter((event) => event.runId === run.id)
+        .map((event) => event.rootsWorking);
+
+    claude.starts[0]!.emit({ type: 'turn_held', open: 1 });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    expect(ofRun()).toEqual([1, 0, 1, 0]);
+  });
+
+  it('announces no idle root when a HELD root is stopped', async () => {
+    const { service, claude, rootsEvents } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const ofRun = () =>
+      rootsEvents
+        .filter((event) => event.runId === run.id)
+        .map((event) => event.rootsWorking);
+    claude.starts[0]!.emit({ type: 'turn_held', open: 1 });
+    await drain();
+    expect(ofRun()).toEqual([1, 0]);
+
+    await service.cancel(run.id);
+    await drain();
+
+    // The Stop's own ending announces no idle root: nothing after it reads 0.
+    expect(ofRun().slice(2)).not.toContain(0);
+  });
+
+  it('keeps a run with one root HELD and another still replying counted as working', async () => {
+    const { service, claude, rootsEvents } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const ofRun = () =>
+      rootsEvents
+        .filter((event) => event.runId === run.id)
+        .map((event) => event.rootsWorking);
+    expect(ofRun().at(-1)).toBe(2);
+
+    turnsOf(claude, 'role-a')[0]!.emit({ type: 'turn_held', open: 1 });
+    await drain();
+    // A message goes to both roots, and `b` is still producing its reply.
+    expect(ofRun().at(-1)).toBe(1);
+
+    turnsOf(claude, 'role-b')[0]!.emit({ type: 'turn_held', open: 2 });
+    await drain();
+    expect(ofRun().at(-1)).toBe(0);
+  });
+
   it('announces NO idle root when the run is stopped — Stop must not release the queue', async () => {
     const { service, rootsEvents } = setup();
     const run = await service.startRun({
@@ -13634,6 +13741,38 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     completeTurn(b[0]!, 'B done');
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('keeps a root that is COMPACTING counted as working, even if the compaction turn is held', async () => {
+    const { service, claude, rootsEvents } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const ofRun = () =>
+      rootsEvents
+        .filter((event) => event.runId === run.id)
+        .map((event) => event.rootsWorking);
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A done');
+    await drain();
+    const compaction = turnsOf(claude, 'role-a')[1]!;
+    expect(compaction.input.prompt).toBe('/compact');
+    const before = ofRun();
+
+    // A background unit left out by the work turn holds the compaction's end;
+    // a compacting agent still refuses messages, so it must not read idle.
+    compaction.emit({ type: 'turn_held', open: 1 });
+    await drain();
+    expect(ofRun()).toEqual(before);
+    expect(before.at(-1)).toBe(1);
+
+    fillAndComplete(compaction, 20_000, 'compacted.');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
   });
 
   it('keeps delivery notices out of an automatic compact command and carries them to the next work turn', async () => {

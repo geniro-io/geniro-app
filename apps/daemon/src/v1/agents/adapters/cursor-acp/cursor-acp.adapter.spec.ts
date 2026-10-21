@@ -2273,10 +2273,12 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       expect(events.some((event) => event.type === 'turn_complete')).toBe(
         false,
       );
-      expect(events.at(-1)).toMatchObject({
+      expect(events.at(-2)).toMatchObject({
         type: 'notice',
         message: expect.stringContaining('Waiting for 1 background sub-agent'),
       });
+      // Announced as a hold, so the composer sends a message straight in.
+      expect(events.at(-1)).toEqual({ type: 'turn_held', open: 1 });
       expect(wakes(child)).toEqual([]);
     });
 
@@ -2297,6 +2299,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
         expect(wakes(child)).toHaveLength(1);
       });
 
+      expect(events).toContainEqual({ type: 'turn_held', open: 0 });
       const text = wakeText(wakes(child)[0]);
       // What the delegate said, under its own description — the parent has no
       // other way to receive it — and where the rest of it can be read.
@@ -2458,7 +2461,10 @@ ${RESUMED}
       await vi.advanceTimersByTimeAsync(5_000);
       endTurn(child);
 
+      expect(events.at(-1)).toEqual({ type: 'turn_held', open: 1 });
       expect(handle?.sendUserMessage({ text: 'status?' })).toBe(true);
+      // The hold is over the moment the message is written.
+      expect(events).toContainEqual({ type: 'turn_held', open: 0 });
       const sent = wakes(child);
       expect(sent).toHaveLength(1);
       expect(wakeText(sent[0])).toBe('status?');
@@ -2710,12 +2716,13 @@ ${RESUMED}
         expect(events.some((event) => event.type === 'turn_complete')).toBe(
           false,
         );
-        expect(events.at(-1)).toMatchObject({
+        expect(events.at(-2)).toMatchObject({
           type: 'notice',
           message: expect.stringContaining(
             'Waiting for 1 background sub-agent',
           ),
         });
+        expect(events.at(-1)).toEqual({ type: 'turn_held', open: 1 });
 
         // …and its report reaches the agent once its own record says it ended.
         writeTranscript('agent-wrap', [

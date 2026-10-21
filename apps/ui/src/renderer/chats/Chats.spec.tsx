@@ -24,6 +24,7 @@ import type {
 import type { SettingsSection } from '../settings/Settings';
 import { Chats } from './Chats';
 import { COMPOSER_MAX_LINES } from './composer-card';
+import { PARKED_SEND_TITLE } from './follow-up-delivery';
 import type { LiveTextEvent } from './live-text';
 import { RUN_LIST_PAGE } from './run-list-pages';
 import { HISTORY_PAGE } from './use-chat-run';
@@ -8495,37 +8496,58 @@ describe('Chats queued messages', () => {
     ).toBeNull();
   });
 
-  it('SENDS while the run is only carrying background sub-agents', async () => {
-    // The gap that made the rule above read as "works one time in two": a
-    // manager alternates between `await_agent` and its own tool calls, so the
-    // count it announces flickers 1→0→1 while the background work behind it
-    // stands. MEASURED on a live workflow run — `awaitingCalls` moved through
-    // both values over three minutes with `subagentsOut` at 8 throughout — so
-    // whether a typed message went out depended on the instant it was typed.
-    //
-    // Claude Code's own answer is stronger: it ENDS the turn while background
-    // agents are out and keeps its prompt live. geniro holds the turn for its
-    // own bookkeeping, which is not a statement that the agent is busy.
+  it.each([
+    ['a background command', { shellsOpen: 1 }],
+    ['background sub-agents', { subagentsOut: 8 }],
+  ] as const)(
+    'QUEUES a message typed mid-reply with %s out',
+    async (_, out) => {
+      // Background work never decides a send mid-reply: the agent is still
+      // producing its answer, whatever it has running behind it.
+      const { client, emitRunStatus } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      expect(composerButton(container, 'Stop')).not.toBeNull();
+
+      await act(async () => {
+        emitRunStatus({ runId: 'r1', status: null, ...out });
+      });
+      expect(container.querySelector('textarea')!.placeholder).toBe(
+        'Agent is working — your message will queue…',
+      );
+
+      await type(container, 'one more thing');
+      await clickButton(container, 'Queue');
+
+      expect(api.sendChatMessage).not.toHaveBeenCalled();
+      expect(
+        container.querySelector('[aria-label="Queued messages"]')?.textContent,
+      ).toContain('one more thing');
+    },
+  );
+
+  it('SENDS once the reply is over with only a background command out', async () => {
     api.sendChatMessage.mockResolvedValue(msg(11, 'user', 'one more thing'));
-    const { client, emitRunStatus } = makeClient();
+    const { client, emitItem, emitRunStatus } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await act(async () => {
-      emitRunStatus({
-        runId: 'r1',
-        status: null,
-        // Nothing is waiting on a CALL — this is the instant the old rule
-        // queued in.
-        awaitingCalls: 0,
-        subagentsOut: 8,
-      });
+      emitRunStatus({ runId: 'r1', status: null, shellsOpen: 1 });
     });
-    expect(container.querySelector('textarea')!.placeholder).toBe(
-      'Message the agent…',
+    await type(container, 'one more thing');
+    expect(
+      container.querySelector('button[aria-label="Queue"]'),
+    ).not.toBeNull();
+    // A backgrounded command never holds the turn: its reply ends on the
+    // terminal row, and the command runs on.
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+    expect(composerButton(container, 'Send')?.title).toBe(
+      PARKED_SEND_TITLE['background-shells'],
     );
 
-    await type(container, 'one more thing');
     await clickButton(container, 'Send');
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({

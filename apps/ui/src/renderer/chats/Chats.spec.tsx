@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type GeniroApi, HISTORY_PAGE_SIZES } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { RECORDED_NEW_PROPOSAL } from '../__fixtures__/workflow-proposals';
 import { afterPopstate } from '../__tests__/after-popstate';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import { NO_TOTALS, totals } from '../__tests__/chat-totals';
@@ -4245,6 +4246,97 @@ describe('Chats — an answered question keeps the answer on screen', () => {
 
     expect(container.textContent).toContain('✓ answered');
     expect(container.textContent).toContain('and move MAN-4177 with it');
+  });
+
+  it("reads a workflow proposal's save back onto its card, and opens the saved workflow", async () => {
+    // The card's own spec hands it the outcome; this pins the wire from the
+    // stored verdict row through `collectVerdicts` to it.
+    api.listRunItems.mockResolvedValue([
+      {
+        id: 'r1-proposal-0',
+        runId: 'r1',
+        nodeId: null,
+        seq: 0,
+        kind: 'approval_request' as const,
+        role: null,
+        payload: {
+          id: 'req-w',
+          toolName: 'propose_workflow',
+          input: RECORDED_NEW_PROPOSAL,
+        },
+        createdAt: 'now',
+      },
+      {
+        id: 'r1-verdict-1',
+        runId: 'r1',
+        nodeId: null,
+        seq: 1,
+        kind: 'approval_verdict' as const,
+        role: null,
+        payload: {
+          id: 'req-w',
+          allow: true,
+          outcome: { kind: 'saved', slug: 'review-pair' },
+        },
+        createdAt: 'now',
+      },
+    ]);
+    const onOpenWorkflow = vi.fn();
+    const { client } = makeClient();
+    const container = await mount(client, undefined, { onOpenWorkflow });
+    await clickRun(container, 'My chat');
+
+    expect(container.textContent).toContain('✓ Saved as “review-pair”');
+    const open = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Open in canvas',
+    )!;
+    await act(async () => {
+      open.click();
+    });
+    expect(onOpenWorkflow).toHaveBeenCalledWith('review-pair');
+  });
+});
+
+describe('Chats — a standing workflow proposal', () => {
+  const proposal = (runId: string): ChatItem => ({
+    id: `${runId}-proposal-0`,
+    runId,
+    nodeId: null,
+    seq: 0,
+    kind: 'approval_request',
+    role: null,
+    payload: {
+      id: 'req-w',
+      toolName: 'propose_workflow',
+      input: RECORDED_NEW_PROPOSAL,
+    },
+    createdAt: 'now',
+  });
+
+  it('reads a turn running beside it as working, not as waiting on the card', async () => {
+    api.listChats.mockResolvedValue([{ ...run1, status: 'running' }]);
+    api.listRunItems.mockResolvedValue([proposal('r1')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.textContent).not.toContain('needs more info');
+    // Still answerable meanwhile: the card stands across the turn.
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (button) => button.textContent === 'Approve',
+      ),
+    ).toBe(true);
+  });
+
+  it('waits on the card once no turn runs', async () => {
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    api.listRunItems.mockResolvedValue([proposal('r1')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.textContent).toContain('needs more info');
   });
 });
 

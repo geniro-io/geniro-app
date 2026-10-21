@@ -245,6 +245,7 @@ async function paint(
   active: boolean,
   firstLaunch?: TeamLaunch,
   onFirstLaunchHandled?: () => void,
+  open?: { request: string | null; onHandled: () => void },
 ): Promise<void> {
   await act(async () => {
     root.render(
@@ -254,6 +255,8 @@ async function paint(
         active={active}
         firstLaunch={firstLaunch}
         onFirstLaunchHandled={onFirstLaunchHandled}
+        openRequest={open?.request ?? null}
+        onOpenRequestHandled={open?.onHandled}
       />,
     );
   });
@@ -1152,6 +1155,157 @@ describe('first team from onboarding', () => {
       },
     });
     expect(openWorkflowChat).not.toHaveBeenCalled();
+  });
+});
+
+describe('Workflows — a workflow another screen asked to open', () => {
+  const SAVED = {
+    slug: 'review-pair',
+    name: 'Review Pair',
+    description: null,
+    nodeCount: 3,
+    edgeCount: 2,
+    agentCounts: [],
+    updatedAt: '2026-10-21T10:00:00.000Z',
+  };
+
+  it('opens it once the screen is on view, and hands the request back', async () => {
+    listWorkflows.mockImplementation(async () => [SAVED]);
+    const onHandled = vi.fn();
+    await paint(false, undefined, undefined, {
+      request: 'review-pair',
+      onHandled,
+    });
+    expect(getWorkflow).not.toHaveBeenCalled();
+
+    await paint(true, undefined, undefined, {
+      request: 'review-pair',
+      onHandled,
+    });
+
+    expect(getWorkflow).toHaveBeenCalledWith({ slug: 'review-pair' });
+    expect(onHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks before discarding edits it could not write, then opens the request', async () => {
+    saveWorkflow.mockImplementation(async () => {
+      throw new Error(
+        'daemon PUT /v1/workflows/dev-team failed (409): {"code":"WORKFLOW_CHANGED","message":"changed since this copy was read"}',
+      );
+    });
+    await openBuilder();
+    await addFromPalette('Manual');
+    await wait(900);
+    const nodesBefore = canvasNodeIds();
+    listWorkflows.mockImplementation(async () => [
+      summary('dev-team', 'Dev Team'),
+      SAVED,
+    ]);
+    const onHandled = vi.fn();
+
+    await paint(true, undefined, undefined, {
+      request: 'review-pair',
+      onHandled,
+    });
+
+    // The held edit is still on the canvas, behind the leave question.
+    expect(document.body.textContent).toContain('Leave without saving?');
+    expect(canvasNodeIds()).toEqual(nodesBefore);
+    expect(getWorkflow).not.toHaveBeenCalledWith({ slug: 'review-pair' });
+
+    await press('Discard changes');
+
+    expect(getWorkflow).toHaveBeenCalledWith({ slug: 'review-pair' });
+    expect(onHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('says a request is gone when it was deleted while the leave question was open', async () => {
+    saveWorkflow.mockImplementation(async () => {
+      throw new Error(
+        'daemon PUT /v1/workflows/dev-team failed (409): {"code":"WORKFLOW_CHANGED","message":"changed since this copy was read"}',
+      );
+    });
+    await openBuilder();
+    await addFromPalette('Manual');
+    await wait(900);
+    listWorkflows.mockImplementation(async () => [
+      summary('dev-team', 'Dev Team'),
+    ]);
+    await paint(true, undefined, undefined, {
+      request: 'review-pair',
+      onHandled: vi.fn(),
+    });
+
+    await press('Discard changes');
+
+    expect(getWorkflow).not.toHaveBeenCalledWith({ slug: 'review-pair' });
+    expect(document.body.textContent).toContain(
+      '“review-pair” is no longer in the workflow library.',
+    );
+  });
+
+  it('opens a request once, however often the screen renders while it loads', async () => {
+    // Every read held, then all released together: a second read the guard
+    // let through would open the workflow a second time.
+    const releases: ((value: (typeof SAVED)[]) => void)[] = [];
+    listWorkflows.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const first = vi.fn();
+    const second = vi.fn();
+    await paint(true, undefined, undefined, {
+      request: 'review-pair',
+      onHandled: first,
+    });
+    // App hands a fresh callback on every render.
+    await paint(true, undefined, undefined, {
+      request: 'review-pair',
+      onHandled: second,
+    });
+    await act(async () => {
+      for (const release of releases) {
+        release([SAVED]);
+      }
+    });
+
+    expect(
+      getWorkflow.mock.calls.filter(
+        ([request]) => request.slug === 'review-pair',
+      ),
+    ).toHaveLength(1);
+    expect(first.mock.calls.length + second.mock.calls.length).toBe(1);
+  });
+
+  it('hands a request back when the library cannot be read', async () => {
+    listWorkflows.mockImplementation(async () => {
+      throw new Error('daemon GET /v1/workflows failed (503): down');
+    });
+    const onHandled = vi.fn();
+    await paint(true, undefined, undefined, {
+      request: 'review-pair',
+      onHandled,
+    });
+
+    expect(getWorkflow).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain('failed (503)');
+    expect(onHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('says it is gone rather than opening nothing', async () => {
+    const onHandled = vi.fn();
+    await paint(true, undefined, undefined, {
+      request: 'review-pair',
+      onHandled,
+    });
+
+    expect(getWorkflow).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain(
+      '“review-pair” is no longer in the workflow library.',
+    );
+    expect(onHandled).toHaveBeenCalledTimes(1);
   });
 });
 

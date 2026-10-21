@@ -1,11 +1,14 @@
 import { ListChecks } from 'lucide-react';
-import { useState } from 'react';
 
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
-import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
 import { useOneShotVerdict } from './use-one-shot-verdict';
+import {
+  useVerdictNote,
+  VerdictNoteEcho,
+  VerdictNoteField,
+} from './verdict-note';
 
 /**
  * geniro's OWN plan-proposal tool.
@@ -16,15 +19,6 @@ import { useOneShotVerdict } from './use-one-shot-verdict';
  * `approval_request` payload, which is `z.unknown()` on the wire by design.
  */
 export const PROPOSE_PLAN = 'propose_plan';
-
-/**
- * TWIN LIMIT: `MAX_ANSWER_LENGTH` in the daemon's chat types — the note rides
- * the same `answer` field a question's does, so it is bounded by the same cap.
- * Enforced here rather than only counted: the send would be refused at the
- * daemon edge, and a card that let the user type past it would lose their words
- * to a failure they were given no warning about.
- */
-const MAX_NOTE_LENGTH = 32_768;
 
 /** One parsed step of a proposed plan. */
 export interface ParsedPlanStep {
@@ -112,22 +106,7 @@ export function PlanCard({
   onRespond: (allow: boolean, answer?: string) => void;
 }): React.JSX.Element {
   const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
-  const [draft, setDraft] = useState('');
-  const trimmed = draft.trim();
-  const tooLong = trimmed.length > MAX_NOTE_LENGTH;
-  const send = (allow: boolean): void => {
-    if (tooLong) {
-      return;
-    }
-    // Arity preserved: a plan answered with nothing typed sends the same
-    // one-argument verdict every other permission card sends, so the daemon's
-    // note branch is never entered with an empty string.
-    if (trimmed.length === 0) {
-      respond(allow);
-    } else {
-      respond(allow, trimmed);
-    }
-  };
+  const { draft, setDraft, tooLong, send } = useVerdictNote(respond);
   return (
     <Card className="flex flex-col gap-2.5 border-primary/40 p-3">
       <div className="flex items-center gap-2">
@@ -170,19 +149,12 @@ export function PlanCard({
         <p className="m-0 text-xs text-muted-foreground">Sending…</p>
       ) : verdict === null ? (
         <div className="flex flex-col gap-2">
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            rows={2}
-            className="min-h-0 text-sm"
-            aria-label="Note to the agent"
+          <VerdictNoteField
+            draft={draft}
+            onChange={setDraft}
+            tooLong={tooLong}
             placeholder="Optional — anything to change, or to keep in mind"
           />
-          {tooLong ? (
-            <p className="m-0 text-xs text-destructive">
-              That note is too long to send.
-            </p>
-          ) : null}
           <div className="flex gap-2">
             <Button type="button" onClick={() => send(true)} disabled={tooLong}>
               Approve
@@ -205,15 +177,7 @@ export function PlanCard({
             )}>
             {verdict ? '✓ approved' : '✗ rejected'}
           </p>
-          {/* The note is shown back for the reason the question card shows an
-              answer: it went to the agent, so what the agent is working from
-              has to be readable in the transcript rather than only in the box
-              it was typed into. */}
-          {note !== null && note.trim() !== '' ? (
-            <p className="m-0 max-h-40 overflow-auto rounded-md border border-primary/20 bg-primary/10 px-2.5 py-1.5 text-sm break-words whitespace-pre-wrap">
-              {note}
-            </p>
-          ) : null}
+          <VerdictNoteEcho note={note} />
         </div>
       )}
     </Card>

@@ -65,6 +65,7 @@ describe('workflowVerdictMessage', () => {
     expect(
       workflowVerdictMessage({
         kind: 'not-saved',
+        cause: 'write-failed',
         reason: 'the file could not be written',
         note: 'go',
       }),

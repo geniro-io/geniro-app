@@ -2829,7 +2829,9 @@ describe('ChatService', () => {
         newString: 'const timeout = 60;',
         summary: 'Raise the timeout',
       });
-      await drain();
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
 
       const card = itemDao.items.find(
         (item) => item.kind === 'approval_request',
@@ -2869,7 +2871,9 @@ describe('ChatService', () => {
         oldString: 'keep me',
         newString: 'gone',
       });
-      await drain();
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
       const pending = approvals.listByRun(run.id);
       expect(approvals.resolve(run.id, pending[0]!.requestId, false)).toBe(
         true,
@@ -2894,7 +2898,9 @@ describe('ChatService', () => {
         oldString: 'const timeout = 30;',
         newString: 'const timeout = 60;',
       });
-      await drain();
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
       const pending = approvals.listByRun(run.id);
       approvals.resolve(run.id, pending[0]!.requestId, true);
       await drain();
@@ -2942,7 +2948,7 @@ describe('ChatService', () => {
     it('sweeps a parked patch with its OWN sentence when the turn ends', async () => {
       // Its own set, and its own wording: "the question was answered" is the
       // wrong thing to tell an agent that proposed a patch.
-      const { service, claude, patches } = setup();
+      const { service, claude, patches, approvals } = setup();
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
       await service.sendMessage(run.id, 'hello');
 
@@ -2950,7 +2956,9 @@ describe('ChatService', () => {
         filePath: 'd.ts',
         newString: 'export const x = 1;\n',
       });
-      await drain();
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
       await settle(claude);
 
       await expect(proposed).resolves.toEqual({
@@ -3633,26 +3641,44 @@ describe('ChatService', () => {
       };
 
       /**
-       * The call against a sentinel that resolves on the next flush.
+       * The call against a sentinel that resolves once its card is on screen.
        *
        * A blocking plan or patch never settles until the user answers, so
        * awaiting it hangs the suite. Racing it makes the missing `posted`
-       * arm fail as an assertion (`still-pending`) instead.
+       * arm fail as an assertion (`still-pending`) instead. The sentinel waits
+       * for the card's row rather than a fixed flush: a patch reads its file
+       * before the row is written (`captureHostPatchFingerprint`), and real
+       * I/O can outlast any count of ticks on a loaded machine.
        */
       function postedOrPending<T>(
+        itemDao: FakeItemDao,
         call: Promise<T>,
       ): Promise<T | 'still-pending'> {
-        return Promise.race([
-          call,
-          drain().then(() => 'still-pending' as const),
-        ]);
+        const cards = (): number =>
+          itemDao.items.filter((item) => item.kind === 'approval_request')
+            .length;
+        const before = cards();
+        let settled = false;
+        const done = (): void => {
+          settled = true;
+        };
+        call.then(done, done);
+        const raised = (async () => {
+          while (!settled && cards() === before) {
+            await tick();
+          }
+          await drain();
+          return 'still-pending' as const;
+        })();
+        return Promise.race([call, raised]);
       }
 
       it('answers a deferred plan at once instead of parking the call', async () => {
-        const { service, plans } = setup();
+        const { service, plans, itemDao } = setup();
         const run = await asking(service);
 
         const outcome = await postedOrPending(
+          itemDao,
           plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
         );
 
@@ -3669,6 +3695,7 @@ describe('ChatService', () => {
         const run = await asking(service);
 
         const outcome = await postedOrPending(
+          itemDao,
           plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
         );
         expect(outcome).toEqual({ status: 'posted' });
@@ -3696,6 +3723,7 @@ describe('ChatService', () => {
         const { service, cursor, plans, approvals, itemDao } = setup();
         const run = await asking(service);
         const outcome = await postedOrPending(
+          itemDao,
           plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
         );
         expect(outcome).toEqual({ status: 'posted' });
@@ -3727,6 +3755,7 @@ describe('ChatService', () => {
         writeFileSync(join(dir, 'a.ts'), 'const timeout = 30;\n', 'utf8');
 
         const outcome = await postedOrPending(
+          itemDao,
           patches.propose(run.id, SINGLE_AGENT_NODE, {
             filePath: 'a.ts',
             oldString: 'const timeout = 30;',
@@ -3762,6 +3791,7 @@ describe('ChatService', () => {
         writeFileSync(join(dir, 'c.ts'), 'const timeout = 30;\n', 'utf8');
 
         const outcome = await postedOrPending(
+          itemDao,
           patches.propose(run.id, SINGLE_AGENT_NODE, {
             filePath: 'c.ts',
             oldString: 'const timeout = 30;',
@@ -3855,6 +3885,7 @@ describe('ChatService', () => {
         const ctx = setup();
         const run = await asking(ctx.service);
         const outcome = await postedOrPending(
+          ctx.itemDao,
           ctx.patches.propose(run.id, SINGLE_AGENT_NODE, {
             filePath: 'src/x.ts',
             newString: 'x\n',
@@ -3928,6 +3959,7 @@ describe('ChatService', () => {
         const run = await asking(ctx.service);
         writeFileSync(join(dir, file), 'const timeout = 30;\n', 'utf8');
         const outcome = await postedOrPending(
+          ctx.itemDao,
           ctx.patches.propose(run.id, SINGLE_AGENT_NODE, {
             filePath: file,
             oldString: 'const timeout = 30;',
@@ -4065,6 +4097,7 @@ describe('ChatService', () => {
         await drain();
 
         const outcome = await postedOrPending(
+          itemDao,
           plans.propose(run.id, SINGLE_AGENT_NODE, PLAN),
         );
 
@@ -4234,6 +4267,40 @@ describe('ChatService', () => {
         expect(retired.map((item) => JSON.parse(item.payload))).toEqual([
           { id: 'card-1', toolName: 'propose_workflow' },
         ]);
+      });
+
+      it('keeps the outcome and the note on the verdict row, readable while the message is held', async () => {
+        const { service, cursor, itemDao } = setup();
+        const run = await chat(service, cursor);
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        await service.sendMessage(run.id, 'meanwhile, rename the reviewer');
+
+        await service.deliverOwnedCardVerdict(
+          run.id,
+          'card-1',
+          true,
+          'Not saved',
+          'go',
+          { kind: 'not-saved', cause: 'changed' },
+        );
+
+        const verdicts = itemDao.items.filter(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(verdicts.map((item) => JSON.parse(item.payload))).toEqual([
+          {
+            id: 'card-1',
+            allow: true,
+            answer: 'go',
+            outcome: { kind: 'not-saved', cause: 'changed' },
+          },
+        ]);
+        expect(
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'message' && item.payload.includes('Not saved'),
+          ),
+        ).toBe(false);
       });
 
       it('holds a verdict pressed during a turn until that turn ends', async () => {

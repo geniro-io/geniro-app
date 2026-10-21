@@ -809,6 +809,12 @@ export interface RecordedVerdict {
    * thing on a rejection.
    */
   answer: string | null;
+  /**
+   * What the card's owner did with an approval, as the row carries it — the
+   * `propose_workflow` card's saved/not-saved reading, unread here; the card
+   * that knows its shape reads it (`readProposalOutcome`).
+   */
+  outcome: unknown;
 }
 
 /** All persisted verdicts of a transcript, keyed by approval request id. */
@@ -820,10 +826,14 @@ export function collectVerdicts(
     if (item.kind === 'approval_verdict') {
       const id = payloadString(item.payload, 'id');
       if (id) {
-        const allow = (item.payload as { allow?: unknown }).allow;
+        const { allow, outcome } = item.payload as {
+          allow?: unknown;
+          outcome?: unknown;
+        };
         verdicts.set(id, {
           allow: allow === true,
           answer: payloadString(item.payload, 'answer'),
+          outcome: outcome ?? null,
         });
       }
     }

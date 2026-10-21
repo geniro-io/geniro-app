@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   DeferredCard,
   DeferredCardResponder,
+  WorkflowProposalOutcome,
 } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
@@ -144,6 +145,7 @@ function fakeChats(approvals: ApprovalRegistry) {
         _allow: boolean,
         _message: string,
         _answer?: string,
+        _outcome?: WorkflowProposalOutcome,
       ) => Promise.resolve(),
     ),
   };
@@ -192,13 +194,14 @@ describe('WorkflowProposalService', () => {
     allow: boolean;
     message: string;
     answer: string | undefined;
+    outcome: WorkflowProposalOutcome | undefined;
   }> {
     await vi.waitFor(() =>
       expect(chats.deliverOwnedCardVerdict).toHaveBeenCalled(),
     );
-    const [, , allow, message, answer] =
+    const [, , allow, message, answer, outcome] =
       chats.deliverOwnedCardVerdict.mock.calls.at(-1)!;
-    return { allow, message, answer };
+    return { allow, message, answer, outcome };
   }
 
   function standingCard(runId: string): string {
@@ -670,6 +673,7 @@ describe('WorkflowProposalService', () => {
         allow: true,
         message: "(Approved — saved as 'review-team' in the workflow library.)",
         answer: undefined,
+        outcome: { kind: 'saved', slug: 'review-team' },
       });
       expect(fileAtClear).toBeNull();
       expect(runs.column.get('run-1')).toBeNull();
@@ -689,6 +693,7 @@ describe('WorkflowProposalService', () => {
         message:
           "(Declined — nothing was saved. The user's note: only one reviewer)",
         answer: 'only one reviewer',
+        outcome: undefined,
       });
       expect(runs.column.get('run-1')).toBeNull();
       await expect(readdir(dir)).resolves.toEqual([]);
@@ -701,12 +706,36 @@ describe('WorkflowProposalService', () => {
 
       approvals.resolve('run-1', standingCard('run-1'), true);
 
-      expect((await verdictAfterPress()).message).toContain(
+      const { message, outcome } = await verdictAfterPress();
+      expect(message).toContain(
         "Not saved — the workflow 'team' changed after you proposed replacing it",
       );
+      expect(outcome).toEqual({ kind: 'not-saved', cause: 'changed' });
       expect((await store.get('team')).workflow.description).toBe(
         'edited meanwhile',
       );
+    });
+
+    it('records on the verdict why an approval wrote nothing: the slug was taken, or the file deleted', async () => {
+      await service.propose('run-1', { workflow: TEAM });
+      await store.create(FASTER, 'review-team');
+      approvals.resolve('run-1', standingCard('run-1'), true);
+      expect((await verdictAfterPress()).outcome).toEqual({
+        kind: 'not-saved',
+        cause: 'exists',
+      });
+
+      await store.create(TEAM, 'team');
+      await service.propose('run-2', { workflow: FASTER, replaces: 'team' });
+      await store.delete('team');
+      approvals.resolve('run-2', standingCard('run-2'), true);
+      await vi.waitFor(() =>
+        expect(chats.deliverOwnedCardVerdict).toHaveBeenCalledTimes(2),
+      );
+      expect((await verdictAfterPress()).outcome).toEqual({
+        kind: 'not-saved',
+        cause: 'gone',
+      });
     });
 
     it('passes the note typed on Approve to the agent', async () => {
@@ -727,9 +756,11 @@ describe('WorkflowProposalService', () => {
 
       approvals.resolve('run-1', standingCard('run-1'), true);
 
-      expect((await verdictAfterPress()).message).toBe(
+      const { message, outcome } = await verdictAfterPress();
+      expect(message).toBe(
         '(Not saved — the card could not be closed, so nothing was written. Read the library again with read_workflows before proposing again.)',
       );
+      expect(outcome).toEqual({ kind: 'not-saved', cause: 'not-closed' });
       await expect(readdir(dir)).resolves.toEqual([]);
     });
 
@@ -741,9 +772,10 @@ describe('WorkflowProposalService', () => {
 
       approvals.resolve('run-1', standingCard('run-1'), true);
 
-      const { message } = await verdictAfterPress();
+      const { message, outcome } = await verdictAfterPress();
       expect(message).toContain('Not saved — the file could not be written');
       expect(message).not.toContain('/Users/');
+      expect(outcome).toEqual({ kind: 'not-saved', cause: 'write-failed' });
     });
 
     it('refuses without a path, and leaves the standing card, when the card cannot be written', async () => {

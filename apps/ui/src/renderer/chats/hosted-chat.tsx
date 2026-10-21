@@ -1153,6 +1153,7 @@ function ApprovalRow({
       requestId={requestId}
       verdict={settled?.allow ?? null}
       answer={settled?.answer ?? null}
+      outcome={settled?.outcome ?? null}
       expired={unanswerable.has(requestId)}
       onRespond={(allow, answer) => onRespond(requestId, allow, answer)}
     />

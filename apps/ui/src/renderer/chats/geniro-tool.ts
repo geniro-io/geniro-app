@@ -40,7 +40,8 @@ export type GeniroCardKind =
   | 'gallery'
   | 'artifact'
   | 'patch'
-  | 'plan';
+  | 'plan'
+  | 'workflow';
 
 /**
  * The tools geniro publishes on its own server that tell their story ELSEWHERE
@@ -65,6 +66,9 @@ export type GeniroCardKind =
  * `adapters/adapter.types.ts`. A tool added there that draws its own card
  * belongs here; one that draws nothing does not.
  */
+/** `propose_workflow` — its card stands across turns ({@link standsAcrossTurns}). */
+export const PROPOSE_WORKFLOW = 'propose_workflow';
+
 const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   call_agent: null,
   await_agent: null,
@@ -84,9 +88,9 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   // daemon writes, so these calls need no loader of their own.
   publish_action: null,
   remove_action: null,
-  // The proposal is drawn from the `approval_request` row the daemon writes,
-  // which outlives the call; `read_workflows` draws nothing and stays visible.
-  propose_workflow: null,
+  // The card is the `approval_request` row the daemon writes, which outlives
+  // the call; `read_workflows` draws nothing and stays visible.
+  [PROPOSE_WORKFLOW]: 'workflow',
 };
 
 /** The bare tool names, for the matching below. */
@@ -159,4 +163,17 @@ export function geniroCardKindOf(
 ): GeniroCardKind | null {
   const tool = geniroToolOf(name, runId);
   return tool === null ? null : (GENIRO_TOOLS[tool] ?? null);
+}
+
+/**
+ * Whether an approval card for this tool stands ACROSS turns — `propose_workflow`
+ * alone — so it waits on the user only while no turn runs, the daemon's
+ * `awaitingOf` rule.
+ *
+ * TWIN PARSER: `PendingApproval.standing` in
+ * `apps/daemon/src/v1/agents/services/approval-registry.ts`, set for every card
+ * `ChatService.raiseOwnedCard` raises.
+ */
+export function standsAcrossTurns(toolName: string | null): boolean {
+  return toolName === PROPOSE_WORKFLOW;
 }

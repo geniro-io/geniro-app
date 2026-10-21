@@ -210,6 +210,43 @@ function PortsSide({
   );
 }
 
+/**
+ * Every rule handle of a node, unpainted and out of reach, at the middle of
+ * the card's two sides — what a read-only preview draws in place of the ports
+ * block, so its wires still attach while nothing invites a drag.
+ */
+export function PreviewPorts({ kind }: { kind: NodeKind }): React.JSX.Element {
+  const rules = NODE_CONNECTION_RULES[kind] ?? { inputs: [], outputs: [] };
+  const handles = [
+    ...rules.inputs.map((rule) => ({ rule, dir: 'target' as const })),
+    ...rules.outputs.map((rule) => ({ rule, dir: 'source' as const })),
+  ];
+  return (
+    <>
+      {handles.map(({ rule, dir }) => (
+        <Handle
+          key={`${dir}-${rule.edge}-${rule.kind}`}
+          type={dir}
+          id={makeHandleId(dir, rule.edge, rule.kind)}
+          position={dir === 'target' ? Position.Left : Position.Right}
+          isConnectable={false}
+          style={{
+            opacity: 0,
+            pointerEvents: 'none',
+            width: 1,
+            height: 1,
+            minWidth: 0,
+            minHeight: 0,
+            border: 'none',
+            top: '50%',
+            ...(dir === 'target' ? { left: 0 } : { right: 0 }),
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
 export function NodePorts({
   nodeId,
   kind,

@@ -7,6 +7,7 @@ import { BaseException, ConflictException } from '@packages/common';
 import {
   type DeferredCardResponder,
   HOST_PROPOSE_WORKFLOW_TOOL,
+  type WorkflowProposalOutcome,
   type WorkflowProposalVerdict,
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
@@ -362,6 +363,7 @@ export class WorkflowProposalService {
       // write now could be followed by a second one.
       verdict = {
         kind: 'not-saved',
+        cause: 'not-closed',
         reason: 'the card could not be closed, so nothing was written',
         note,
       };
@@ -374,6 +376,7 @@ export class WorkflowProposalService {
         );
         verdict = {
           kind: 'not-saved',
+          cause: 'write-failed',
           reason: 'the file could not be written',
           note,
         };
@@ -385,6 +388,7 @@ export class WorkflowProposalService {
       allow,
       workflowVerdictMessage(verdict),
       answer,
+      outcomeOf(verdict),
     );
   }
 
@@ -536,21 +540,38 @@ function verdictOf(
     case 'changed':
       return {
         kind: 'not-saved',
+        cause: 'changed',
         reason: `the workflow '${proposal.slug}' changed after you proposed replacing it`,
         note,
       };
     case 'exists':
       return {
         kind: 'not-saved',
+        cause: 'exists',
         reason: `a workflow was saved as '${proposal.slug}' after you proposed this one`,
         note,
       };
     case 'gone':
       return {
         kind: 'not-saved',
+        cause: 'gone',
         reason: `the workflow '${proposal.slug}' was deleted after you proposed replacing it`,
         note,
       };
+  }
+}
+
+/** What the card shows of an approval; a decline needs nothing beyond `allow`. */
+function outcomeOf(
+  verdict: WorkflowProposalVerdict,
+): WorkflowProposalOutcome | undefined {
+  switch (verdict.kind) {
+    case 'saved':
+      return { kind: 'saved', slug: verdict.slug };
+    case 'not-saved':
+      return { kind: 'not-saved', cause: verdict.cause };
+    case 'declined':
+      return undefined;
   }
 }
 

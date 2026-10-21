@@ -1,5 +1,5 @@
 import type { NodeProps } from '@xyflow/react';
-import { ShieldQuestion } from 'lucide-react';
+import { ShieldAlert, ShieldQuestion } from 'lucide-react';
 import { useContext } from 'react';
 
 import {
@@ -10,9 +10,12 @@ import {
 import { AgentGlyph } from '../components/agent-glyph';
 import { AgentPoolLabel } from '../components/agent-pool-label';
 import { Badge } from '../components/ui/badge';
+import { cn } from '../components/ui/utils';
 import { AgentAvatar } from './agent-avatar';
 import type { AgentFlowNode } from './graph-doc';
+import { GraphPreviewContext } from './graph-preview-context';
 import { NodeCard } from './node-card';
+import { RUNS_UNASKED_LABEL, runsUnasked } from './node-schema';
 
 /**
  * Canvas card for one agent node — the kind-specific header (avatar chip,
@@ -33,8 +36,24 @@ export function AgentNode({
   // two, so it is the better card blurb; a node with only a role still shows
   // something rather than going blank.
   const blurb = node.description ?? node.role;
+  // On a proposal's preview an agent that would run tools unasked is the one
+  // thing the reader must not miss, so it is ringed and named, never only
+  // coloured. The builder's canvas keeps its quieter icon-only reading.
+  const unasked = useContext(GraphPreviewContext) !== null && runsUnasked(node);
   return (
-    <NodeCard node={node} selected={selected} className="w-[240px]">
+    <NodeCard
+      node={node}
+      selected={selected}
+      className={cn(
+        'w-[240px]',
+        unasked && 'border-warning/60 ring-2 ring-warning/40',
+      )}>
+      {unasked ? (
+        <Badge variant="warning" className="mb-2">
+          <ShieldAlert aria-hidden="true" />
+          {RUNS_UNASKED_LABEL}
+        </Badge>
+      ) : null}
       <div className="mb-2 flex items-center gap-2">
         <AgentAvatar label={label} />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">

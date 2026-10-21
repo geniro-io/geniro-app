@@ -122,6 +122,8 @@ export function App(): React.JSX.Element {
   const [guideOpen, setGuideOpen] = useState(false);
   const [chatLaunch, setChatLaunch] = useState<CliKind | null>(null);
   const [teamLaunch, setTeamLaunch] = useState<TeamLaunch | null>(null);
+  // A library workflow the chat screen asked the builder to open.
+  const [workflowRequest, setWorkflowRequest] = useState<string | null>(null);
   const [view, setView] = useState<AppView>(
     () => initialRoute?.view ?? 'chats',
   );
@@ -686,6 +688,10 @@ export function App(): React.JSX.Element {
                       setSettingsSectionOpen(true);
                       setView('settings');
                     }}
+                    onOpenWorkflow={(slug) => {
+                      setWorkflowRequest(slug);
+                      setView('workflows');
+                    }}
                     onPhoneDetailChange={setChatsPhoneDetail}
                     phoneHomeSignal={chatsHomeSignal}
                     openRunId={threadRequest}
@@ -712,6 +718,8 @@ export function App(): React.JSX.Element {
                       active={view === 'workflows'}
                       firstLaunch={teamLaunch}
                       onFirstLaunchHandled={() => setTeamLaunch(null)}
+                      openRequest={workflowRequest}
+                      onOpenRequestHandled={() => setWorkflowRequest(null)}
                     />
                   ) : null}
                 </div>

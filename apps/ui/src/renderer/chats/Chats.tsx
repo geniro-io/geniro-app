@@ -176,6 +176,7 @@ import {
   parkedReason,
   steerReadiness,
 } from './follow-up-delivery';
+import { standsAcrossTurns } from './geniro-tool';
 import { GitNoticeOffers } from './git-notice-offers';
 import { GlobalChatSearchDialog } from './global-chat-search-dialog';
 import { type GroupCommand, GroupHeader } from './group-header';
@@ -698,6 +699,7 @@ export function Chats({
   onActiveRunChange,
   onTitleChange,
   onOpenSettings,
+  onOpenWorkflow,
   onOpenTerminal,
   onFolderChange,
   onPhoneDetailChange,
@@ -718,6 +720,11 @@ export function Chats({
    * callback rather than a dialog of its own.
    */
   onOpenSettings?: (section: SettingsSection) => void;
+  /**
+   * Take the app to the Workflows screen with this library workflow open — a
+   * saved proposal card's "Open in canvas". Absent, the card offers none.
+   */
+  onOpenWorkflow?: (slug: string) => void;
   /**
    * A thread another screen has asked to have opened, or null.
    *
@@ -4574,12 +4581,22 @@ export function Chats({
   const awaitingAnswer = useMemo(() => {
     const keys = new Set<string>();
     for (const item of requestRows) {
-      if (openRequestId(item) !== null) {
-        keys.add(liveTextKey(item.nodeId));
+      if (openRequestId(item) === null) {
+        continue;
       }
+      // A workflow proposal's card stands across turns, so while one runs the
+      // agent is working, not waiting on it — the daemon's `awaiting` reads it
+      // the same way. Counted here, every turn beside it read as blocked.
+      if (
+        streaming &&
+        standsAcrossTurns(payloadString(item.payload, 'toolName'))
+      ) {
+        continue;
+      }
+      keys.add(liveTextKey(item.nodeId));
     }
     return keys;
-  }, [requestRows, openRequestId]);
+  }, [requestRows, openRequestId, streaming]);
   /**
    * EVERY open request, oldest first — lifted OUT of the transcript so none of
    * them can scroll away.
@@ -4636,6 +4653,8 @@ export function Chats({
           // card — so a card can never show an answer the transcript does not
           // hold, and a replayed transcript reads exactly like the live one.
           answer={settled?.answer ?? null}
+          outcome={settled?.outcome ?? null}
+          onOpenWorkflow={onOpenWorkflow}
           expired={
             requestId !== null &&
             (unanswerableIds.has(requestId) ||
@@ -4650,7 +4669,13 @@ export function Chats({
         />
       );
     },
-    [verdicts, unanswerableIds, deadRequestKeys, respondApproval],
+    [
+      verdicts,
+      unanswerableIds,
+      deadRequestKeys,
+      respondApproval,
+      onOpenWorkflow,
+    ],
   );
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;

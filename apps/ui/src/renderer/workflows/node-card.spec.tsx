@@ -26,7 +26,9 @@ vi.mock('@xyflow/react', () => ({
     selector({ nodes: mocks.nodes }),
 }));
 
+import { GraphPreviewContext, type PreviewMark } from './graph-preview-context';
 import { NodeCard } from './node-card';
+import { makeHandleId, NODE_CONNECTION_RULES } from './node-schema';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -79,6 +81,52 @@ function card(): HTMLElement {
 }
 
 describe('NodeCard', () => {
+  it('drops delete, the ports toggle and validation in a preview, keeping every handle', () => {
+    // Nothing feeds the agent: on the canvas this is the red strip above.
+    canvas(AGENT);
+    act(() => {
+      root.render(
+        <GraphPreviewContext.Provider value={{ marks: new Map() }}>
+          <NodeCard node={AGENT} selected={false}>
+            <span>header-content</span>
+          </NodeCard>
+        </GraphPreviewContext.Provider>,
+      );
+    });
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(card().className).not.toContain('border-destructive');
+    expect(container.querySelector('[aria-label="Delete a1"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Expand ports"]')).toBeNull();
+    const ids = [...container.querySelectorAll('[data-testid="handle"]')].map(
+      (handle) => handle.getAttribute('data-handle-id'),
+    );
+    // The wires a preview draws attach by these ids, so all of them stay.
+    const rules = NODE_CONNECTION_RULES.agent;
+    expect(ids).toEqual([
+      ...rules.inputs.map((rule) =>
+        makeHandleId('target', rule.edge, rule.kind),
+      ),
+      ...rules.outputs.map((rule) =>
+        makeHandleId('source', rule.edge, rule.kind),
+      ),
+    ]);
+    expect(ids.length).toBeGreaterThan(2);
+  });
+
+  it("shows a previewed node's mark against the workflow it replaces", () => {
+    const marks = new Map<string, PreviewMark>([['a1', 'added']]);
+    act(() => {
+      root.render(
+        <GraphPreviewContext.Provider value={{ marks }}>
+          <NodeCard node={AGENT} selected={false}>
+            <span>header-content</span>
+          </NodeCard>
+        </GraphPreviewContext.Provider>,
+      );
+    });
+    expect(container.textContent).toContain('+ new');
+  });
+
   it('turns red with the error message when nothing feeds an agent', () => {
     canvas(AGENT);
     render(AGENT, true);

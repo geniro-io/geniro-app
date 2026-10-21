@@ -154,8 +154,8 @@ export const AgentOptionSpecSchema = z
   .meta({ id: 'AgentOptionSpec' });
 
 /**
- * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
- * MAX_ANSWER_LENGTH.
+ * TWIN LIMIT: apps/ui/src/renderer/chats/verdict-note.tsx
+ * MAX_ANSWER_LENGTH (the question card's answer and the proposal cards' note).
  *
  * Sanity cap on a question answer (M4) — it travels as ONE stdin control
  * line into the paused CLI turn. Enforced at BOTH ingress points of the
@@ -405,7 +405,28 @@ export type DeferredCardResponder = (allow: boolean, answer?: string) => void;
 export type WorkflowProposalVerdict =
   | { kind: 'saved'; slug: string; backup: string | null; note: string | null }
   | { kind: 'declined'; note: string | null }
-  | { kind: 'not-saved'; reason: string; note: string | null };
+  | {
+      kind: 'not-saved';
+      cause: WorkflowNotSavedCause;
+      reason: string;
+      note: string | null;
+    };
+
+/** Why an approved `propose_workflow` card wrote nothing. */
+export type WorkflowNotSavedCause =
+  'changed' | 'exists' | 'gone' | 'not-closed' | 'write-failed';
+
+/**
+ * What became of an APPROVED `propose_workflow` card, on its verdict row: the
+ * card shows it at once, while the message telling the agent may wait for a
+ * running turn to end. A declined card carries none.
+ *
+ * TWIN PARSER: `readProposalOutcome` in
+ * `apps/ui/src/renderer/chats/workflow-proposal-payload.ts`.
+ */
+export type WorkflowProposalOutcome =
+  | { kind: 'saved'; slug: string }
+  | { kind: 'not-saved'; cause: WorkflowNotSavedCause };
 
 export const ANALYSIS_VIEWS = [
   'overview',

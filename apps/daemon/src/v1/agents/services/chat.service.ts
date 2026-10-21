@@ -82,6 +82,7 @@ import {
   SINGLE_AGENT_NODE,
   type StandingHostQuestion,
   type UnanswerableWire,
+  type WorkflowProposalOutcome,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -1402,6 +1403,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * `RUN_BUSY`, losing the verdict after its file was written). It is held too
    * while a deferred question, plan or patch stands: the turn the verdict
    * starts would write that card off before the user answered it.
+   *
+   * `outcome` is what the owner did with an approval, kept on the row so the
+   * card can say it before the agent hears it.
    */
   async deliverOwnedCardVerdict(
     runId: string,
@@ -1409,6 +1413,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     allow: boolean,
     message: string,
     answer?: string,
+    outcome?: WorkflowProposalOutcome,
   ): Promise<void> {
     try {
       await this.persist(
@@ -1417,7 +1422,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         await this.seqs.reserve(runId),
         'approval_verdict',
         null,
-        { id: requestId, allow, ...(answer === undefined ? {} : { answer }) },
+        {
+          id: requestId,
+          allow,
+          ...(answer === undefined ? {} : { answer }),
+          ...(outcome === undefined ? {} : { outcome }),
+        },
       );
       if (!this.registry.has(runId)) {
         this.announceAwaiting(runId);

@@ -697,6 +697,9 @@ const WorkflowProposalBaseSchema = z.object({
  *
  * A replacement quotes the hash the file was read at, so an approval pressed
  * after the file changed is refused rather than written over the newer copy.
+ *
+ * TWIN PARSER: `readWorkflowProposal` in
+ * `apps/ui/src/renderer/chats/workflow-proposal-payload.ts`.
  */
 export const WorkflowProposalSchema = z.discriminatedUnion('mode', [
   WorkflowProposalBaseSchema.extend({ mode: z.literal('create') }),

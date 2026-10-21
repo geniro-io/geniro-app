@@ -37,6 +37,9 @@ export function nodesThatAsk(workflow: Workflow): string[] {
  * the node's unique id (its name beside it when it has one), and a pool member
  * by its number. The inverse reading of {@link nodesThatAsk}, over the same
  * pool helpers, so the two can never disagree about a member.
+ *
+ * TWIN PARSER: `runsUnasked` in `apps/ui/src/renderer/workflows/node-schema.ts`
+ * reads the same rule per node for the proposal card.
  */
 export function agentsThatRunAuto(workflow: Workflow): string[] {
   return workflow.nodes.flatMap((node) => {

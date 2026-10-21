@@ -14,6 +14,7 @@ const meta = {
         'secondary',
         'destructive',
         'success',
+        'warning',
         'outline',
         'muted',
       ],
@@ -33,6 +34,7 @@ export const Variants: Story = {
       <Badge {...args} variant="secondary" />
       <Badge {...args} variant="destructive" />
       <Badge {...args} variant="success" />
+      <Badge {...args} variant="warning" />
       <Badge {...args} variant="outline" />
       <Badge {...args} variant="muted" />
     </div>

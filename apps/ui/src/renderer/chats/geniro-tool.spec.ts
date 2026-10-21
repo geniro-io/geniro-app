@@ -41,6 +41,9 @@ describe('which of them draw a card', () => {
     );
     expect(geniroCardKindOf(`mcp__${SERVER}__show_chart`, RUN)).toBe('chart');
     expect(geniroCardKindOf(`mcp__${SERVER}__propose_plan`, RUN)).toBe('plan');
+    expect(geniroCardKindOf(`mcp__${SERVER}__propose_workflow`, RUN)).toBe(
+      'workflow',
+    );
   });
 
   it('answers null for one of geniro’s tools that draws NOTHING', () => {

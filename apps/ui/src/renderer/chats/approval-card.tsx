@@ -2,7 +2,6 @@ import {
   ChevronDown,
   MessageCircleQuestion,
   ShieldQuestion,
-  TriangleAlert,
 } from 'lucide-react';
 import { useId, useMemo, useRef, useState } from 'react';
 
@@ -12,25 +11,26 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
 import { type OptionArity, OptionList } from '../components/ui/option-list';
-import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { plainMarkdownText } from './brief-text';
 import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
+import { PROPOSE_WORKFLOW } from './geniro-tool';
 import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
 import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
-import {
-  type HazardClass,
-  type HazardHit,
-  scanTextHazards,
-} from './text-hazards';
+import { HazardAck, HazardWarning, useHazardGate } from './text-hazard-gate';
 import { useThreadFlag } from './thread-ui-memory';
 import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useOneShotVerdict } from './use-one-shot-verdict';
+import { MAX_ANSWER_LENGTH } from './verdict-note';
+import { WorkflowProposalCard } from './workflow-proposal-card';
+import {
+  readProposalOutcome,
+  readWorkflowProposal,
+} from './workflow-proposal-payload';
 
 /** One question of the card (defensive — bad shapes are dropped). */
 interface ParsedQuestion {
@@ -60,9 +60,6 @@ interface ParsedQuestion {
    */
   secret: boolean;
 }
-
-/** TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts MAX_ANSWER_LENGTH. */
-const MAX_ANSWER_LENGTH = 32_768;
 
 /**
  * TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts
@@ -976,19 +973,6 @@ function QuestionCard({
   );
 }
 
-/** A short, human-readable name for a hazard class — never the character itself. */
-const HAZARD_CLASS_LABEL: Record<HazardClass, string> = {
-  bidi: 'Bidirectional override',
-  invisible: 'Invisible character',
-  mixedScript: 'Look-alike character from another script',
-};
-
-/** `Bidirectional override — U+202E` — the codepoint, never the character. */
-function hazardHitLabel(hit: HazardHit): string {
-  const hex = hit.codePoint.toString(16).toUpperCase().padStart(4, '0');
-  return `${HAZARD_CLASS_LABEL[hit.class]} — U+${hex}`;
-}
-
 /**
  * A paused tool call under review: Approve/Deny over the tool's input, with a
  * file edit rendered as the same red/green diff the tool-group rows use.
@@ -1077,25 +1061,7 @@ function PermissionCard({
   // an invisible hit of the separator's own making, gating every card ever
   // drawn. A space is `\p{Zs}` and is in none of the classes.
   const hazardScanText = `${toolName} ${inputScanText} ${diffScanText}`;
-  const hazards = useMemo(
-    () => scanTextHazards(hazardScanText),
-    [hazardScanText],
-  );
-  // Net-new pre-send state: `useOneShotVerdict` freezes only AFTER an answer
-  // is sent, so it cannot gate the Approve press itself. The reset runs
-  // DURING render, keyed on the scanned TEXT rather than on `input`'s object
-  // identity (a parent that reconstructs that object every render must not
-  // un-tick this the instant it is ticked), so there is no committed frame
-  // where a stale tick still gates a new, unreviewed call.
-  const [acknowledged, setAcknowledged] = useState(false);
-  const acknowledgedForRef = useRef(hazardScanText);
-  if (acknowledgedForRef.current !== hazardScanText) {
-    acknowledgedForRef.current = hazardScanText;
-    if (acknowledged) {
-      setAcknowledged(false);
-    }
-  }
-  const hazardAckId = useId();
+  const gate = useHazardGate(hazardScanText);
   return (
     <Card className="flex flex-col gap-2.5 border-primary/40 p-3">
       <div className="flex items-center gap-2">
@@ -1119,47 +1085,7 @@ function PermissionCard({
       {/* Sits OUTSIDE the diff/pre ternary below on purpose: both arms are one
           call's input under review, and a hazard hiding in either one must
           not depend on which arm happened to render. */}
-      {hazards.hits.length > 0 ? (
-        <div
-          data-slot="hazard-warning"
-          className={cn(
-            'flex flex-col gap-1 rounded-md border px-2.5 py-2 text-xs',
-            hazards.gates
-              ? 'border-destructive/30 bg-destructive/10 text-destructive'
-              : 'border-warning/30 bg-warning/10 text-warning',
-          )}>
-          <div className="flex items-center gap-1.5 font-medium">
-            <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" />
-            <span>
-              {hazards.gates
-                ? 'Hidden or reordering characters in this input'
-                : 'Look-alike characters in this input'}
-            </span>
-          </div>
-          {/* Named by CLASS and CODEPOINT alone — never the character, which
-              for a bidi hit would reorder this very warning around it. */}
-          {/* One row per DISTINCT hazard, not per hit. The scanned text
-              deliberately overlaps — a patch's `new_string` is read once inside
-              the input's JSON and again from the diff body — so a single
-              character yields two hits at two offsets. The row carries no
-              offset, so both would render as the identical sentence and read
-              as two separate hazards. */}
-          <div className="flex flex-col gap-0.5 pl-5">
-            {[
-              ...new Map(
-                hazards.hits.map((hit) => [
-                  `${hit.class}-${hit.codePoint}`,
-                  hit,
-                ]),
-              ).values(),
-            ].map((hit) => (
-              <span key={`${hit.class}-${hit.codePoint}`}>
-                {hazardHitLabel(hit)}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      <HazardWarning hazards={gate.hazards} subject="this input" />
       {diff ? (
         <div className="flex flex-col gap-1.5">
           {filePath ? (
@@ -1187,26 +1113,17 @@ function PermissionCard({
           {/* Deny is never gated here — refusing a suspicious call must stay
               one click, on the same rule the question card's arity warning
               follows: only the button that COMMITS needs a second thought. */}
-          {hazards.gates ? (
-            <div className="flex items-center gap-2">
-              <Switch
-                id={hazardAckId}
-                size="sm"
-                checked={acknowledged}
-                onCheckedChange={setAcknowledged}
-              />
-              <Label
-                htmlFor={hazardAckId}
-                className="cursor-pointer text-xs font-normal text-muted-foreground">
-                I&apos;ve reviewed the characters above and want to approve
-                anyway
-              </Label>
-            </div>
+          {gate.hazards.gates ? (
+            <HazardAck
+              id={gate.ackId}
+              checked={gate.acknowledged}
+              onCheckedChange={gate.setAcknowledged}
+            />
           ) : null}
           <div className="flex gap-2">
             <Button
               type="button"
-              disabled={hazards.gates && !acknowledged}
+              disabled={gate.blocksApprove}
               onClick={() => respond(true)}>
               Approve
             </Button>
@@ -1250,9 +1167,11 @@ export function ApprovalCard({
   questions: card,
   verdict,
   answer = null,
+  outcome = null,
   expired = false,
   requestId,
   onRespond,
+  onOpenWorkflow,
 }: {
   toolName: string;
   input: unknown;
@@ -1277,8 +1196,15 @@ export function ApprovalCard({
    * card still pending — need not pass it.
    */
   answer?: string | null;
+  /**
+   * What the card's owner did with an approval, read back from the same verdict
+   * item — only the workflow proposal card reads it.
+   */
+  outcome?: unknown;
   /** The turn ended before an answer — no verdict can apply anymore. */
   expired?: boolean;
+  /** Open a saved library workflow on its canvas; absent, nothing offers to. */
+  onOpenWorkflow?: (slug: string) => void;
   /**
    * `images` arrive only from the QUESTION body, and only as a SEPARATE
    * delivery — see its `onRespond` note. A permission card never sends any:
@@ -1291,6 +1217,26 @@ export function ApprovalCard({
   ) => void;
 }): React.JSX.Element {
   const questions = readQuestions(card);
+  // geniro's own workflow proposal, read once per row: its graph and diff are
+  // the largest payload any card parses.
+  const workflowProposal = useMemo(
+    () => (toolName === PROPOSE_WORKFLOW ? readWorkflowProposal(input) : null),
+    [toolName, input],
+  );
+  if (workflowProposal !== null) {
+    return (
+      <WorkflowProposalCard
+        proposal={workflowProposal}
+        verdict={verdict}
+        note={answer}
+        outcome={readProposalOutcome(outcome)}
+        expired={expired}
+        memoryKey={requestId ?? undefined}
+        onRespond={onRespond}
+        onOpenWorkflow={onOpenWorkflow}
+      />
+    );
+  }
   // geniro's own plan proposal — geniro's tool, so its name is this app's to
   // key on — falling back to the permission body when nothing readable is
   // there, as a question with no card does, so a malformed call is still

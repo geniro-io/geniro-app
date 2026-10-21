@@ -37,6 +37,7 @@ const KINDS: GeniroCardKind[] = [
   'findings',
   'patch',
   'plan',
+  'workflow',
 ];
 
 describe('ComposingCard', () => {

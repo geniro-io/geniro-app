@@ -14,8 +14,16 @@ import type {
 // hooks); stub it to a plain wrapper so this spec exercises only the agent
 // header — the approval chip in particular.
 vi.mock('./node-card', () => ({
-  NodeCard: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="node-card">{children}</div>
+  NodeCard: ({
+    children,
+    className,
+  }: {
+    children: React.ReactNode;
+    className?: string;
+  }) => (
+    <div data-testid="node-card" className={className}>
+      {children}
+    </div>
   ),
 }));
 vi.mock('./agent-avatar', () => ({
@@ -23,6 +31,7 @@ vi.mock('./agent-avatar', () => ({
 }));
 
 import { AgentNode } from './agent-node';
+import { GraphPreviewContext } from './graph-preview-context';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -36,6 +45,8 @@ function renderNode(
   patch: Partial<WorkflowAgentNode> = {},
   /** Default [] mirrors `AgentIdentityContext`'s own default — no Provider. */
   identities: readonly AgentIdentityCapability[] = [],
+  /** Drawn inside a proposal's read-only preview rather than the canvas. */
+  inPreview = false,
 ): HTMLDivElement {
   const node: WorkflowAgentNode = {
     id: 'a1',
@@ -56,7 +67,10 @@ function renderNode(
   act(() => {
     root!.render(
       <AgentIdentityContext.Provider value={identities}>
-        <AgentNode {...props} />
+        <GraphPreviewContext.Provider
+          value={inPreview ? { marks: new Map() } : null}>
+          <AgentNode {...props} />
+        </GraphPreviewContext.Provider>
       </AgentIdentityContext.Provider>,
     );
   });
@@ -70,6 +84,37 @@ afterEach(() => {
   container?.remove();
   root = null;
   container = null;
+});
+
+describe('AgentNode in a proposal preview', () => {
+  const unaskedChip = (el: HTMLElement): Element | null =>
+    [...el.querySelectorAll('[data-slot="badge"]')].find(
+      (badge) => badge.textContent === 'Runs without asking',
+    ) ?? null;
+
+  it('names and rings an agent that runs tools without asking', () => {
+    const el = renderNode('auto', {}, [], true);
+    expect(unaskedChip(el)).not.toBeNull();
+    expect(el.querySelector('[data-testid="node-card"]')?.className).toContain(
+      'ring-warning/40',
+    );
+  });
+
+  it('names one whose pool member runs unasked, though the node itself asks', () => {
+    const el = renderNode(
+      'ask',
+      { pool: [{ agent: 'codex', approval: 'auto' }] },
+      [],
+      true,
+    );
+    expect(unaskedChip(el)).not.toBeNull();
+  });
+
+  it('leaves an agent that asks unmarked, and the canvas without the chip', () => {
+    expect(unaskedChip(renderNode('ask', {}, [], true))).toBeNull();
+    act(() => root?.unmount());
+    expect(unaskedChip(renderNode('auto'))).toBeNull();
+  });
 });
 
 describe('AgentNode approval chip', () => {

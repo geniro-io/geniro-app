@@ -282,6 +282,8 @@ One home for each concern:
 - Dynamic workflow: the roster is taken whole. A launch is recognised by a `workflow_info` row, never by tool name.
 - `propose_patch` renders as an ordinary approval card (`diff-view.tsx` `editDiffOf`). Its tool-name literal is a twin.
 - A plan or question row that cannot be parsed falls back to the permission body.
+- `propose_workflow` draws `WorkflowProposalCard` from its `approval_request` row (`workflow-proposal-payload.ts`, twin of the daemon's `WorkflowProposalSchema` / `WorkflowDiff` / `WorkflowProposalOutcome`); an unreadable payload falls back to the permission body. Saved / not saved is the verdict row's `outcome`, never the agent-bound message. Its Approve gate scans every string the card can draw, raw (`proposalScanText`), the diff's old side included. The graph preview is `lazy()` (`workflows/workflow-preview.tsx` is the only chat-reachable importer of `@xyflow/react` and `elkjs`). The card stands across turns, so it counts as needs-input only while no turn streams (`standsAcrossTurns`, the daemon's `awaitingOf`).
+- The plan and workflow cards share their note field and its send rule (`chats/verdict-note.tsx`); the hazard gate is `chats/text-hazard-gate.tsx`, shared with the permission card.
 - A question card is drawn from the row's `questions`, never from a CLI's tool name. `secret` masks the field.
 - `useOneShotVerdict` is the one verdict-timing contract.
 - Only the latest task-list card shows its rows. Fold state derived from data takes a press override (`useThreadOverride`). Never seed derived open state into `useState`.
@@ -403,6 +405,8 @@ One home for each concern:
 - Library cards take activation from `NavListItem`. Never use a `div role="button"` with a nested delete button.
 - Port counts are edges actually attached (`useEdges`), never `rules.length`.
 - Every wire is drawn by `graph-edge.tsx`.
+- `NODE_TYPES` / `EDGE_TYPES` live in `flow-types.ts`, shared by the builder and the read-only preview. Inside `GraphPreviewContext` a node card drops delete, the ports toggle and live validation (its handles stay, hidden, so wires attach) and shows its added/changed mark; an agent that runs unasked is ringed and named.
+- `Workflows.openRequest` (a chat card's "Open in canvas") leaves an open canvas the way Back does: flushed first, and the "Leave without saving?" prompt when that fails, opening the request on Discard.
 - `flowEdgeKind` reads an absent type as `data`, for persisted edges. `EDGE_TYPES` is keyed by the whole `EdgeKind` union.
 - The palette has no folds. The agent is one tile whatever the CLI. Switching a node's CLI starts from that CLI's defaults.
 - Never pair `line-clamp-*` with a `display` utility.

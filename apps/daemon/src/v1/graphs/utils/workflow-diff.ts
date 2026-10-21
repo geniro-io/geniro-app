@@ -13,6 +13,10 @@ export interface ChangedNode {
  * What changed between two workflows, by node id and edge — structural rather
  * than a text diff of the YAML, which reports a reordered list as a rewrite
  * and says nothing about which node a changed line belongs to.
+ *
+ * TWIN PARSER: `readDiff` / `diffRows` in
+ * `apps/ui/src/renderer/chats/workflow-proposal-payload.ts`, which reads the
+ * quoted `before`/`after` values as display text only.
  */
 export interface WorkflowDiff {
   identical: boolean;

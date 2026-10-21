@@ -4155,6 +4155,40 @@ describe('ChatService', () => {
         ]);
       });
 
+      it('keeps the outcome and the note on the verdict row, readable while the message is held', async () => {
+        const { service, cursor, itemDao } = setup();
+        const run = await chat(service, cursor);
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        await service.sendMessage(run.id, 'meanwhile, rename the reviewer');
+
+        await service.deliverOwnedCardVerdict(
+          run.id,
+          'card-1',
+          true,
+          'Not saved',
+          'go',
+          { kind: 'not-saved', cause: 'changed' },
+        );
+
+        const verdicts = itemDao.items.filter(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(verdicts.map((item) => JSON.parse(item.payload))).toEqual([
+          {
+            id: 'card-1',
+            allow: true,
+            answer: 'go',
+            outcome: { kind: 'not-saved', cause: 'changed' },
+          },
+        ]);
+        expect(
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'message' && item.payload.includes('Not saved'),
+          ),
+        ).toBe(false);
+      });
+
       it('holds a verdict pressed during a turn until that turn ends', async () => {
         const { service, cursor, itemDao } = setup();
         const run = await chat(service, cursor);

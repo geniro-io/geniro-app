@@ -274,7 +274,7 @@ pnpm commit             # conventional commit via commitizen
 - Every child process the daemon spawns registers with `ProcessRegistry` (claim → register → auto-unregister on settle). Never spawn an unmanaged child.
 - Every detached child group is also recorded in the child journal (`v1/agents/utils/child-journal.ts` → `<userData>/children.json`) inside the spawn helper itself (`defaultSpawn`, `AgentAdapter.runAsProcessGroup`, `runManagedCommand`). The next boot reaps survivors (`services/stranded-child-reaper.service.ts`, first in `main.ts`).
 - The reaper never kills on a pid alone: it re-confirms identity through `utils/process-identity`, and leaves an unconfirmable entry alone. A plain short `execFile` utility child is not journaled.
-- Run-scoped CLIs carry a deliberate run tag (`GENIRO_RUN_ID` + `GENIRO_RUN_OWNER`, set after `buildChildEnv`'s strip). Archive, delete and the leftover sweep stop what a run's agents left running by that tag, with explicit pids only. The safety rules (never the daemon, pid 1, another uid, anything on an open terminal, system or installed-app executables, the container VM; cap; start-time check) are in `apps/daemon/AGENTS.md` → _Run processes_; never widen the kill past them.
+- Run-scoped CLIs carry a deliberate run tag (`GENIRO_RUN_ID` + `GENIRO_RUN_OWNER`, set after `buildChildEnv`'s strip). Archive, delete, the leftover sweep and a run sitting unused for the kept-session window stop what a run's agents left running by that tag, with explicit pids only. The safety rules (never the daemon, pid 1, another uid, anything on an open terminal, system or installed-app executables, the container VM; cap; start-time check) are in `apps/daemon/AGENTS.md` → _Run processes_; never widen the kill past them. The one recorded exception: what a CLI left running when it ended without stopping it is found by the process groups its session recorded while it lived, not by the tag, and is not fenced for being on a terminal (_Run processes_ → Left commands).
 - Workflow definitions are YAML; SQLite holds runtime/history only.
 - The daemon binds `127.0.0.1` only and gates every non-public route with the per-launch token.
 - No tmux or PTY scraping for graph execution. Inspection is a handoff to the user's own terminal (`v1/handoff/`).
@@ -357,7 +357,7 @@ Daemon side of the contract (`v1/*`):
 ### Storage split
 
 - **Workflow (graph) definitions → YAML.** Never in SQLite.
-  - Workflow backups → `<userData>/workflows/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written by `WorkflowChangeService` before every save an analysis applies. Never named `*.geniro.yaml`, so the library never lists them; restore by copying one over `<slug>.geniro.yaml`.
+  - Workflow backups → `<userData>/workflows/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written before every save an analysis applies (`WorkflowChangeService`) and before an approved `propose_workflow` replaces a file (`WorkflowProposalService`). Never named `*.geniro.yaml`, so the library never lists them; restore by copying one over `<slug>.geniro.yaml`.
 - **Settings → `settings.json`** in the Electron userData dir. The key list is `apps/ui/AGENTS.md` → **Settings keys (`settings.json`).**
   - Removing or renaming a schema key destroys what it held (`readSettings` keeps only known keys; `writeSettings` rewrites the file). Migrate or export the data first.
   - An unparseable file is copied aside to `settings.json.corrupt-<timestamp>` before any write; never write over a file that cannot be read.

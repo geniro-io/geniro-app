@@ -84,6 +84,9 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   // daemon writes, so these calls need no loader of their own.
   publish_action: null,
   remove_action: null,
+  // The proposal is drawn from the `approval_request` row the daemon writes,
+  // which outlives the call; `read_workflows` draws nothing and stays visible.
+  propose_workflow: null,
 };
 
 /** The bare tool names, for the matching below. */

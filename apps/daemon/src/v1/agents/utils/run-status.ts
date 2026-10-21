@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 
 import { isTerminalRunStatus, type RunStatus } from '../../runs/runs.types';
+import type { RunAwaiting } from '../chat.types';
 import type { RunDao } from '../dao/run.dao';
 import type { WallTurnDao } from '../dao/wall-turn.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
@@ -34,6 +35,12 @@ import { servedWorkedMs } from './wall-worked';
 export interface RunStatusAnnounce {
   /** What the run is doing right now, for a badge nobody is looking at. */
   activity?: string | null;
+  /**
+   * What the run is parked on, when a card outlives the turns around it — a
+   * standing workflow proposal (`ChatService.awaitingOf`). Absent reads as
+   * null, the answer for every other run; see the note in `writeRunStatus`.
+   */
+  awaiting?: RunAwaiting | null;
   /**
    * What the run has to SAY about this status — the agent's closing words, or
    * the failure's own message.
@@ -96,8 +103,10 @@ export async function writeRunStatus(
   // have gone on claiming the user was the blocker.
   //
   // A deferred card is the exception `sweepNode` leaves standing. The null
-  // here is still right — the status write does not know about that card —
-  // and the chat finalizer re-announces `awaiting` afterwards when one remains.
+  // here is still right for a question, plan or patch — the status write does
+  // not know about that card — and the chat finalizer re-announces `awaiting`
+  // afterwards when one remains. A standing workflow proposal, which outlives
+  // every turn, is said by its caller through `announce.awaiting`.
   // A TERMINAL status always carries `summary`, null included; a non-terminal
   // one never does. The two are different statements and the wire has to keep
   // them apart: the client holds the last sentence it was given, so omitting a
@@ -105,6 +114,7 @@ export async function writeRunStatus(
   // wordless turn announced them as its own — see `RunStatusEvent.summary`.
   const {
     activity = null,
+    awaiting = null,
     summary = null,
     housekeeping = false,
     restored = false,
@@ -157,7 +167,7 @@ export async function writeRunStatus(
     runId,
     status,
     activity,
-    awaiting: null,
+    awaiting,
     at,
     ...(work === null
       ? {}

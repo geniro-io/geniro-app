@@ -842,7 +842,9 @@ class FakeAdapter {
       retired: false,
       parked: false,
       shellsRunning: 0,
+      detachedRunning: 0,
       runningCommands: [],
+      recordedGroupsOf: () => [],
       endedRunning: null,
       pid: null,
       noteCloseCause: (cause: SessionCloseCause | null) => {
@@ -1949,6 +1951,27 @@ describe('GraphExecutorService', () => {
       code = (err as BadRequestException).errorCode;
     }
     expect(code).toBe('GRAPH_NO_TRIGGER');
+    expect(claude.starts).toHaveLength(0);
+    expect(runDao.runs.size).toBe(0);
+  });
+
+  it('judges a workflow runnable with the run-start checks, without starting a run', async () => {
+    const { service, claude, runDao } = setup();
+    const agent = {
+      id: 'a',
+      kind: 'agent',
+      agent: 'claude',
+      approval: 'auto',
+    } as const;
+
+    await expect(
+      service.assertRunnable({ name: 'bare', nodes: [agent], edges: [] }),
+    ).rejects.toMatchObject({ errorCode: 'GRAPH_NO_TRIGGER' });
+    await expect(
+      service.assertRunnable(
+        triggered({ name: 'ok', nodes: [agent], edges: [] }),
+      ),
+    ).resolves.toMatchObject({ dropped: [] });
     expect(claude.starts).toHaveLength(0);
     expect(runDao.runs.size).toBe(0);
   });

@@ -43,9 +43,12 @@ import {
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
   type ChatListScope,
+  type DeferredCard,
+  type DeferredCardResponder,
   type HistoryWindow,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PROPOSE_WORKFLOW_TOOL,
   HOST_QUESTION_TOOL,
   type HostArtifact,
   type HostArtifactOutcome,
@@ -69,6 +72,7 @@ import {
   type HostQuestionOutcome,
   type ItemWire,
   type RecommendationApply,
+  type RunAwaiting,
   type RunGroupColor,
   type RunListPage,
   type RunPreview,
@@ -77,6 +81,7 @@ import {
   type SendMessageImage,
   SINGLE_AGENT_NODE,
   type StandingHostQuestion,
+  type UnanswerableWire,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -128,6 +133,10 @@ import {
   hostMcpServerName,
   isHostQuestionCall,
 } from '../utils/host-question';
+import {
+  isHostWorkflowProposalCall,
+  standingProposalCardId,
+} from '../utils/host-workflows';
 import { itemToWire } from '../utils/item-wire';
 import { asArray, asRecord, asString } from '../utils/json-util';
 import {
@@ -171,7 +180,7 @@ import { AgentMcpService } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { AnalysisBroker } from './analysis.broker';
 import { AnalysisReportsService } from './analysis-reports.service';
-import { ApprovalRegistry } from './approval-registry';
+import { ApprovalRegistry, type PendingApproval } from './approval-registry';
 import { ArtifactBroker } from './artifact.broker';
 import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
@@ -199,6 +208,12 @@ import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
+import { WorkflowProposalBroker } from './workflow-proposal.broker';
+
+/** A deferred card another module raised — one that stands across turns. */
+function isStandingCard(entry: PendingApproval): boolean {
+  return entry.standing === true;
+}
 
 function parsePayload(raw: string): unknown {
   try {
@@ -469,6 +484,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   private readonly archiving = new Set<string>();
 
   /**
+   * Owned-card verdicts pressed while a turn ran, per run, sent when it ends
+   * ({@link deliverOwnedCardVerdict}). In memory only: the verdict row and
+   * the write are already durable, and a restart in between leaves the agent
+   * unaware of a verdict the transcript still shows.
+   */
+  private readonly heldVerdicts = new Map<string, string[]>();
+
+  /**
    * The deferred question each run is putting on screen RIGHT NOW, with the
    * key it asks under and the outcome the agent will be told — the per-run
    * claim {@link askUserDeferred} takes before its first await. The durable
@@ -723,6 +746,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly artifacts: ArtifactBroker,
     private readonly actionSinks: ActionBroker,
     private readonly actionPublisher: ActionPublishService,
+    private readonly workflowProposals: WorkflowProposalBroker,
     private readonly artifactStore: ArtifactStoreService,
     private readonly notices: NotifyBroker,
     private readonly callTokens: CallTokenRegistry,
@@ -788,9 +812,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         );
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
+        // Not a card that outlives its turn by design — the standing question,
+        // plan or patch, and the standing workflow proposal: each is put back
+        // at boot from its column, and closing it here would leave a card
+        // drawn expired that the registry still holds open.
+        const standing = new Set(
+          [
+            readPendingQuestion(run.pendingQuestion ?? null)?.requestId,
+            standingProposalCardId(run.pendingWorkflowProposal ?? null),
+          ].filter((id): id is string => typeof id === 'string'),
+        );
         for (const request of unansweredRequests(
           await this.itemDao.getByRun(run.id, -1, em),
-        )) {
+        ).filter((request) => !standing.has(request.payload.id))) {
           await this.persist(
             em,
             run.id,
@@ -842,7 +876,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           em,
           runId,
           status,
-          announce,
+          // Read when the write runs, not when it was queued: a turn claimed
+          // in between decides whether a standing card counts.
+          this.hasStandingCard(runId)
+            ? { awaiting: this.awaitingOf(runId), ...announce }
+            : announce,
         ),
       );
     this.statusWrites.set(runId, write);
@@ -925,13 +963,32 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     resumedActivity: string | null = null,
   ): void {
-    const awaiting = this.approvals.awaitingFor(runId);
+    const awaiting = this.awaitingOf(runId);
     this.bus.publishRunStatus({
       runId,
       status: null,
       activity: awaiting === null ? resumedActivity : null,
       awaiting,
     });
+  }
+
+  /**
+   * What the run is parked on, for the badge. A standing card another module
+   * owns (a workflow proposal) is not counted while a turn runs: the card
+   * stands across turns by design, and the agent working on the user's typed
+   * reply is working, not waiting. It counts again once the turn is over.
+   */
+  private awaitingOf(runId: string): RunAwaiting | null {
+    const turning = this.registry.has(runId);
+    return this.approvals.awaitingFor(
+      runId,
+      (entry) => turning && isStandingCard(entry),
+    );
+  }
+
+  /** Whether the run has a {@link awaitingOf} card whose count moves with its turns. */
+  private hasStandingCard(runId: string): boolean {
+    return this.approvals.listByRun(runId).some(isStandingCard);
   }
 
   /**
@@ -943,7 +1000,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * turn the card was built to outlive, and the banner never fires for it.
    */
   private restoreDeferredAwaiting(runId: string): void {
-    if (this.approvals.awaitingFor(runId) !== null) {
+    // `awaitingOf`, not the bare registry: a turn claimed in between leaves a
+    // standing card uncounted, and announcing that would blank its phrase.
+    if (this.awaitingOf(runId) !== null) {
       this.announceAwaiting(runId);
     }
   }
@@ -1184,7 +1243,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
   /**
    * Retire the deferred card a run is standing on, because a NEW turn has
-   * superseded it — the user typed something else instead of answering.
+   * superseded it — the user typed something else instead of answering. Never
+   * a standing card another module owns (a workflow proposal): only its owner
+   * retires that one.
    *
    * Written as `unanswerable` on `ApprovalRegistry.sweepDeferred`'s own
    * obligation: the card is on screen with live buttons, and dropping the entry
@@ -1196,7 +1257,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * card it points at.
    */
   private async retireDeferredQuestions(runId: string): Promise<void> {
-    const swept = this.approvals.sweepDeferred(runId);
+    const swept = this.approvals.sweepDeferred(
+      runId,
+      (entry) => !isStandingCard(entry),
+    );
     const em = this.em.fork();
     try {
       await this.runDao.setPendingQuestion(runId, null, em);
@@ -1253,6 +1317,259 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     } catch (err) {
       this.logger.error(
         `standing question rehydration failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // ── Deferred cards another module owns ──────────────────────────────────
+  //
+  // The same outliving card, raised for a module this one may not import (the
+  // workflow proposal, whose write lives in `v1/graphs`). The owner supplies
+  // the responder and keeps the durable half; this service writes the rows and
+  // delivers the verdict, because only it can start the run's next turn.
+
+  /**
+   * Put a deferred card on screen and in the registry, under the id its owner
+   * minted. Throws when the row cannot be written, and then tracks nothing.
+   */
+  async raiseOwnedCard(
+    runId: string,
+    requestId: string,
+    card: DeferredCard,
+    respond: DeferredCardResponder,
+  ): Promise<void> {
+    const em = this.em.fork();
+    // An archived chat never takes the verdict's message, and its card would
+    // stand with nobody able to act on it — refused, so the owner says so.
+    if (
+      this.archiving.has(runId) ||
+      ((await this.runDao.getById(runId, em))?.archivedAt ?? null) !== null
+    ) {
+      throw new ConflictException('RUN_ARCHIVED', 'this chat is archived');
+    }
+    await this.persist(
+      em,
+      runId,
+      await this.seqs.reserve(runId),
+      'approval_request',
+      null,
+      { id: requestId, toolName: card.toolName, input: card.input },
+    );
+    this.trackOwnedCard(runId, requestId, card, respond);
+    // Not into a running turn: the card does not count while one runs, and
+    // the announce would only blank the turn's own activity phrase.
+    if (!this.registry.has(runId)) {
+      this.announceAwaiting(runId);
+    }
+  }
+
+  /**
+   * Track a deferred card whose row already stands — the owner's boot
+   * rehydration. Its responder runs at most once, the registry dropping the
+   * entry before it calls it.
+   */
+  trackOwnedCard(
+    runId: string,
+    requestId: string,
+    card: DeferredCard,
+    respond: DeferredCardResponder,
+  ): void {
+    this.approvals.track({
+      runId,
+      nodeId: SINGLE_AGENT_NODE,
+      requestId,
+      toolName: card.toolName,
+      input: card.input,
+      question: false,
+      deferred: true,
+      standing: true,
+      respond: (allow, answer) => {
+        // `true` at once, for the reason `trackDeferredCard` gives.
+        respond(allow, answer);
+        return true;
+      },
+    });
+  }
+
+  /**
+   * Record the user's verdict on an owned card, then hand `message` to the
+   * agent as the run's next message. The note the user typed stays on the row
+   * whichever button they pressed.
+   *
+   * A press while a turn runs is HELD until that turn ends rather than sent
+   * into it: the card stands across turns, so this is the ordinary case, and
+   * a message delivered mid-turn interrupts an ACP agent's work (or is refused
+   * `RUN_BUSY`, losing the verdict after its file was written). It is held too
+   * while a deferred question, plan or patch stands: the turn the verdict
+   * starts would write that card off before the user answered it.
+   */
+  async deliverOwnedCardVerdict(
+    runId: string,
+    requestId: string,
+    allow: boolean,
+    message: string,
+    answer?: string,
+  ): Promise<void> {
+    try {
+      await this.persist(
+        this.em.fork(),
+        runId,
+        await this.seqs.reserve(runId),
+        'approval_verdict',
+        null,
+        { id: requestId, allow, ...(answer === undefined ? {} : { answer }) },
+      );
+      if (!this.registry.has(runId)) {
+        this.announceAwaiting(runId);
+      }
+    } catch (err) {
+      // The verdict row is the record of what the user chose, so a failure here
+      // is worth a log — but it must not stop the answer reaching the agent,
+      // which is the thing they actually pressed for.
+      this.logger.error(
+        `run ${runId} owned-card verdict write failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (this.mustHoldVerdict(runId)) {
+      this.holdVerdict(runId, message);
+      return;
+    }
+    await this.sendOwnedVerdict(runId, message);
+  }
+
+  /** Whether a verdict has to wait: a turn runs, or a question card stands. */
+  private mustHoldVerdict(runId: string): boolean {
+    return (
+      this.registry.has(runId) ||
+      this.approvals
+        .listByRun(runId)
+        .some((entry) => entry.deferred === true && !isStandingCard(entry))
+    );
+  }
+
+  /** Whether a chat is archived, or being archived now. */
+  async isArchived(runId: string): Promise<boolean> {
+    return (
+      this.archiving.has(runId) ||
+      ((await this.runDao.getById(runId, this.em.fork()))?.archivedAt ??
+        null) !== null
+    );
+  }
+
+  private holdVerdict(runId: string, message: string): void {
+    this.heldVerdicts.set(runId, [
+      ...(this.heldVerdicts.get(runId) ?? []),
+      message,
+    ]);
+  }
+
+  /**
+   * Send the verdicts held behind a turn, now that it has ended — decided now,
+   * not when they were held: a chat being deleted or archived drops them (it
+   * would refuse the message, after writing a row for it), and a question card
+   * still standing keeps them waiting for the turn its answer starts.
+   */
+  private releaseHeldVerdicts(runId: string): void {
+    const held = this.heldVerdicts.get(runId);
+    if (held === undefined) {
+      return;
+    }
+    if (this.deleting.has(runId) || this.archiving.has(runId)) {
+      this.heldVerdicts.delete(runId);
+      return;
+    }
+    if (this.mustHoldVerdict(runId)) {
+      return;
+    }
+    this.heldVerdicts.delete(runId);
+    void this.sendOwnedVerdict(runId, held.join('\n\n'));
+  }
+
+  private async sendOwnedVerdict(
+    runId: string,
+    message: string,
+  ): Promise<void> {
+    if (this.deleting.has(runId) || this.archiving.has(runId)) {
+      return;
+    }
+    try {
+      await this.sendMessage(runId, message, [], { ownTurn: true });
+    } catch (err) {
+      // Busy after all (a turn claimed in between, a compaction): held for that
+      // turn's end instead. An archived or deleted run refuses for good — the
+      // card is answered either way and the transcript says so, so this is the
+      // agent not hearing it rather than the answer being lost.
+      if (err instanceof ConflictException && err.errorCode === 'RUN_BUSY') {
+        this.holdVerdict(runId, message);
+        return;
+      }
+      this.logger.error(
+        `run ${runId} could not deliver an owned-card verdict: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Retire one owned card as `unanswerable` — its owner superseded it. A card
+   * the registry no longer holds is still closed (a boot whose rehydration
+   * never reached it leaves it on screen) unless the transcript already closes
+   * it: one card, one closing row, or an answered card would draw as expired.
+   */
+  async retireOwnedCard(
+    runId: string,
+    requestId: string,
+    toolName: string,
+  ): Promise<void> {
+    const em = this.em.fork();
+    if (
+      this.approvals.abandon(runId, requestId) === null &&
+      (
+        await this.itemDao.rowsByPayloadId(
+          runId,
+          ['approval_verdict', 'unanswerable'],
+          [requestId],
+          undefined,
+          em,
+        )
+      ).length > 0
+    ) {
+      return;
+    }
+    await this.persist(
+      em,
+      runId,
+      await this.seqs.reserve(runId),
+      'unanswerable',
+      null,
+      { id: requestId, toolName } satisfies UnanswerableWire,
+    );
+    if (!this.registry.has(runId)) {
+      this.announceAwaiting(runId);
+    }
+  }
+
+  /**
+   * Close the run's standing owned card and forget its column — an archived
+   * chat refuses messages, so a verdict pressed there could never reach the
+   * agent. Read from the column rather than the registry, which a boot may not
+   * have rehydrated.
+   */
+  private async retireStandingCard(runId: string): Promise<void> {
+    try {
+      // Read again, after the stop: a proposal raised while the turn was being
+      // cancelled is the one standing now.
+      const em = this.em.fork();
+      const cardId = standingProposalCardId(
+        (await this.runDao.getById(runId, em))?.pendingWorkflowProposal ?? null,
+      );
+      if (cardId === null) {
+        return;
+      }
+      await this.retireOwnedCard(runId, cardId, HOST_PROPOSE_WORKFLOW_TOOL);
+      await this.runDao.setPendingWorkflowProposal(runId, null, em);
+    } catch (err) {
+      this.logger.error(
+        `run ${runId} could not close its standing card on archive: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -2784,6 +3101,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // its agents started. The desk offers no delete, so for the user this
       // archive IS deleting the thread.
       this.teardown.endProcesses(runId);
+      await this.retireStandingCard(runId);
+      // An archived run refuses messages, so a verdict held for it would only
+      // be refused at release.
+      this.heldVerdicts.delete(runId);
       const archivedAt = new Date();
       // Shelving is not activity: the archive lists threads by when they were
       // last WORKED in, so this must not re-date the row to the moment it was
@@ -3011,6 +3332,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // every other sweep's obligation: the transcript it would be written
       // into has just been destroyed.
       this.approvals.sweepDeferred(runId);
+      this.heldVerdicts.delete(runId);
       // The run is gone, so its posture has nothing left to govern — and the
       // teardown has already closed the process that would have consulted it.
       this.runPosture.delete(runId);
@@ -4659,6 +4981,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * checks a write against. Refused while a turn runs.
        */
       apply?: RecommendationApply;
+      /**
+       * Start a turn of its own or be refused `RUN_BUSY` — never be delivered
+       * into a running one. An owned card's verdict, which must reach the
+       * agent between turns.
+       */
+      ownTurn?: boolean;
     } = {},
   ): Promise<ItemWire> {
     const em = this.em.fork();
@@ -4683,7 +5011,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     run: Run,
     text: string,
     images: SendMessageImage[],
-    options: { resumeOnly?: boolean; apply?: RecommendationApply },
+    options: {
+      resumeOnly?: boolean;
+      apply?: RecommendationApply;
+      ownTurn?: boolean;
+    },
   ): Promise<ItemWire> {
     const runId = run.id;
     if (!run.cwd || !run.agentKind) {
@@ -4763,6 +5095,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           'the analysis is still working — apply once it has finished',
         );
       }
+      if (options.ownTurn === true) {
+        throw new ConflictException('RUN_BUSY', 'a turn is running');
+      }
       return await this.deliverIntoRunningTurn(runId, text, images);
     }
     // The claim is ours, so a turn is about to start — and a turn supersedes a
@@ -4772,6 +5107,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // nothing swept) and, on the answer's own turn, has already been cleared by
     // `deliverDeferredAnswer` before it called in here.
     await this.retireDeferredQuestions(runId);
+    if (this.hasStandingCard(runId)) {
+      this.announceAwaiting(runId);
+    }
     /**
      * Take geniro's own host channels down, whatever ends the turn.
      *
@@ -4902,6 +5240,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // The action tools: a published button does nothing until the user
         // presses it, so the press is the gate — see `isHostActionCall`.
         isHostActionCall(hostServerName, toolName) ||
+        // A workflow proposal only raises its card — the file is written behind
+        // that card's Approve, never by the call. `read_workflows` is NOT here:
+        // like the history tools, a read of the user's data outside this chat
+        // is the user's to allow.
+        isHostWorkflowProposalCall(hostServerName, toolName) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited
@@ -6141,6 +6484,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               this.actionPublisher.remove(actionContext, actionId),
           })
         : null;
+      // Only an ORDINARY chat reads and proposes workflows: a builder chat
+      // edits its own workflow's file, and an analysis changes one through
+      // `save_workflow_change` — see `WorkflowProposalBroker`.
+      const disposeWorkflowProposals =
+        mcpEndpoint &&
+        run.editsWorkflowSlug === null &&
+        run.analysisSourceRunId === null
+          ? this.workflowProposals.register(runId, SINGLE_AGENT_NODE, {
+              runId,
+            })
+          : null;
       // Only an analysis chat reads another thread — see `AnalysisBroker`.
       const analysisSourceRunId = run.analysisSourceRunId;
       const analysisSourceSeq = run.analysisSourceSeq;
@@ -6189,6 +6543,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeGallerist?.();
         disposePublisher?.();
         disposeActions?.();
+        disposeWorkflowProposals?.();
         disposeAnalysis?.();
       };
       // ZERO the last turn's running bill before this one's first request can
@@ -7187,6 +7542,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       void (
         geniroCommand?.replacesSession === true ? finalized : handle.done
       ).finally(releaseCompaction);
+      // Every ending of the turn, failed finalizers included, and after the
+      // compaction claim is gone: a verdict held behind this turn starts the
+      // next one (`deliverOwnedCardVerdict`).
+      void finalized.finally(() => this.releaseHeldVerdicts(runId));
       // After the finalizer rather than inside it: the claim this turn held
       // must be gone before `/compact` can take the run. A compaction turn
       // never re-arms it, or a conversation that stays over the threshold
@@ -7234,7 +7593,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // mistaken for a Stop of the next turn.
       this.stopsRequested.delete(runId);
       this.registry.release(runId);
+      // The failed write above ran while the claim still held, so a standing
+      // card was left uncounted; nothing runs now.
+      if (this.hasStandingCard(runId)) {
+        this.announceAwaiting(runId);
+      }
       releaseCompaction();
+      this.releaseHeldVerdicts(runId);
       throw err;
     }
   }
@@ -7667,7 +8032,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     return runToWire(
       run,
       reads.preview,
-      this.approvals.awaitingFor(run.id),
+      this.awaitingOf(run.id),
       this.heldRuns.get(run.id) ?? 0,
       this.configDirPins.forRun(run.agentKind, run.cwd),
       this.backgroundWork.shellsOpen(run.id),

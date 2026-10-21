@@ -52,6 +52,7 @@ function scanned(
   return rows.map((r) => ({
     pid: r.pid,
     ppid: r.ppid,
+    pgid: r.pgid,
     uid: UID,
     tty: null,
     startedAt: 1_000,

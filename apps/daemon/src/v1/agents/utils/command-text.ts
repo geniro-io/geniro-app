@@ -1,3 +1,5 @@
+import { basename } from 'node:path';
+
 import { redactSecrets } from '../../diagnostics/utils/redact';
 
 /**
@@ -17,4 +19,12 @@ const ENV_ASSIGNMENT =
  */
 export function maskedCommand(command: string): string {
   return redactSecrets(command.replace(ENV_ASSIGNMENT, '$1$2=…'));
+}
+
+/**
+ * The executable a command line runs, alone — what a log line or a prompt may
+ * name of a process-table argv, which can carry a credential no one typed.
+ */
+export function executableOf(command: string): string {
+  return basename(command.split(/\s+/)[0] ?? '') || '?';
 }

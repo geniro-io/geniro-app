@@ -1549,7 +1549,7 @@ export function Settings({
                 <SettingsPanel>
                   <SettingsPanelRow
                     label="Keep an idle agent running for"
-                    description="Closing an agent sooner frees its memory, but the next message then starts it and its MCP servers cold, without its prompt cache.">
+                    description="Closing an agent sooner frees its memory, but the next message then starts it and its MCP servers cold, without its prompt cache. Dev servers and similar processes its agents left running stop at the same time; the next message can start them again.">
                     <Stepper
                       value={keptSessionIdleMinutes}
                       min={MIN_KEPT_SESSION_IDLE_MINUTES}

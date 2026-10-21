@@ -30,3 +30,27 @@ export function nodesThatAsk(workflow: Workflow): string[] {
     )
     .map((node) => node.name ?? node.id);
 }
+
+/**
+ * Every agent of a workflow that would run tools WITHOUT asking — a node or
+ * pool member whose approval mode, its own or inherited, is `auto` — named by
+ * the node's unique id (its name beside it when it has one), and a pool member
+ * by its number. The inverse reading of {@link nodesThatAsk}, over the same
+ * pool helpers, so the two can never disagree about a member.
+ */
+export function agentsThatRunAuto(workflow: Workflow): string[] {
+  return workflow.nodes.flatMap((node) => {
+    if (node.kind !== 'agent') {
+      return [];
+    }
+    const label =
+      node.name && node.name !== node.id
+        ? `${node.name} (${node.id})`
+        : node.id;
+    return Array.from({ length: poolSize(node) }, (_, i) => i + 1)
+      .filter((member) => poolMemberNode(node, member)!.approval === 'auto')
+      .map((member) =>
+        member === 1 ? label : `${label} — pool member ${member}`,
+      );
+  });
+}

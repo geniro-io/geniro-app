@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
+import type { Item } from '../../runs/entity/item.entity';
 import type { ChatShellsWire, OpenShell, ShellKillWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { asRecord, asString } from '../utils/json-util';
@@ -16,12 +17,17 @@ import {
   descendantsOf,
   listProcesses,
   pidsRunningCommand,
+  type ProcessRow,
 } from '../utils/process-descendants';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ChatService } from './chat.service';
 import { ItemCallIndexService } from './item-call-index.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
+
+/** A Stop's answer for a listed command that nothing on the machine runs. */
+const ALREADY_STOPPED =
+  'that command had already stopped — the list is now up to date';
 
 /**
  * What a run still has RUNNING in a terminal, over the whole conversation.
@@ -59,7 +65,8 @@ export class ChatShellsService {
     private readonly chats: ChatService,
     /**
      * The run's own CLI processes — the only place a FOREGROUND command is
-     * looked for. See {@link killForeground}.
+     * looked for ({@link killForeground}) — and where each command's session
+     * recorded it running, which narrows every Stop ({@link recordedScope}).
      */
     private readonly sessions: AgentSessionRegistry,
     private readonly calls: ItemCallIndexService,
@@ -185,10 +192,21 @@ export class ChatShellsService {
    * gives: a CLI wraps what it runs, so one command is routinely two rows, and
    * killing the leaf would leave the wrapper holding the terminal.
    *
+   * Matched among the processes the command's session recorded running it while
+   * that session lives ({@link recordedScope}): its written text alone cannot
+   * tell it from a command written alike — the agent's second `pnpm dev` in
+   * another folder, or the user's own.
+   *
    * It writes the CLOSE itself. Nothing else will — the row that would have
    * announced it is the CLI's own bracket, and the CLI is gone — so without it
    * the command would go on being listed as running by the very fold that just
    * killed it.
+   *
+   * A shell whose launching call is still unanswered is the exception: codex's
+   * background terminal, still the live CLI's own descendant, is stopped as a
+   * foreground command ({@link stopForeground}), and codex writes its end. One
+   * found nowhere among the agent's processes is closed here, as already
+   * stopped, once the agent no longer reports it running.
    */
   async kill(runId: string, callId: string): Promise<ShellKillWire> {
     const shell = (await this.fold(runId)).find((row) => row.id === callId);
@@ -196,6 +214,34 @@ export class ChatShellsService {
       // Not a DETACHED command. The panel also lists a foreground one — a
       // command call the CLI has not answered yet — so that is asked next.
       return this.killForeground(runId, callId);
+    }
+    const rows = await this.callRows(runId, callId);
+    if (
+      rows.some((row) => row.kind === 'tool_call') &&
+      !rows.some((row) => row.kind === 'tool_result')
+    ) {
+      // A shell whose call the CLI has not answered is still its own child:
+      // codex keeps a background terminal's call open until the command exits,
+      // and runs it through a shell that execs it, so its written text
+      // (`/bin/zsh -lc '…'`) is nowhere in the table for the match below.
+      const answer = await this.stopForeground(runId, callId, rows);
+      if (answer !== null) {
+        return answer;
+      }
+      if (this.sessions.recordedGroupsOf(runId, callId) !== null) {
+        // codex still reports it running, so the match missed it: a program
+        // that execs another under a new name (python3's framework launcher)
+        // leaves no row reading what the agent wrote. Not its end.
+        return {
+          killed: false,
+          reason:
+            'geniro could not tell which of the agent’s processes runs this command — ask the agent to stop it',
+        };
+      }
+      // Nothing of it runs, and the agent no longer reports it running: its
+      // close is owed, as a detached command's is.
+      await this.close(runId, shell);
+      return { killed: false, reason: ALREADY_STOPPED };
     }
     if (shell.command === null) {
       // The list drew this row under its ID, because the call that started it
@@ -209,16 +255,17 @@ export class ChatShellsService {
           'geniro cannot tell which process this is — the call that started it is no longer readable',
       };
     }
-    const pids = pidsRunningCommand(await listProcesses(), shell.command);
+    const table = await listProcesses();
+    const pids = pidsRunningCommand(
+      this.recordedScope(runId, callId, table, table),
+      shell.command,
+    );
     if (pids.length === 0) {
       // The transcript says open and the machine says otherwise — a command
       // that died with no one to write its close. Recording it is the useful
       // answer, and it is what takes the row off the list.
       await this.close(runId, shell);
-      return {
-        killed: false,
-        reason: 'that command had already stopped — the list is now up to date',
-      };
+      return { killed: false, reason: ALREADY_STOPPED };
     }
     for (const pid of pids) {
       killProcessGroup(pid, 'SIGTERM', () => process.kill(pid, 'SIGTERM'));
@@ -260,13 +307,29 @@ export class ChatShellsService {
     runId: string,
     callId: string,
   ): Promise<ShellKillWire> {
-    const rows = await this.itemDao.rowsByPayloadId(
-      runId,
-      ['tool_call', 'tool_result'],
-      [callId],
-      undefined,
-      this.em.fork(),
+    return (
+      (await this.stopForeground(
+        runId,
+        callId,
+        await this.callRows(runId, callId),
+      )) ?? {
+        killed: false,
+        reason:
+          'geniro could not find this command among the agent’s processes — stop the turn to end it',
+      }
     );
+  }
+
+  /**
+   * {@link killForeground}'s search and signal, answering null when nothing
+   * among the agent's processes runs the command — the one outcome
+   * {@link kill} answers differently for a listed shell.
+   */
+  private async stopForeground(
+    runId: string,
+    callId: string,
+    rows: Item[],
+  ): Promise<ShellKillWire | null> {
     const call = rows.find((row) => row.kind === 'tool_call');
     if (call === undefined || rows.some((row) => row.kind === 'tool_result')) {
       // Answered already, or never this run's. Not an error: the list a user
@@ -295,13 +358,12 @@ export class ChatShellsService {
     }
     const table = await listProcesses();
     const owned = roots.flatMap((root) => descendantsOf(table, root.pid));
-    const targets = commandTargets(owned, command);
+    const targets = commandTargets(
+      this.recordedScope(runId, callId, table, owned),
+      command,
+    );
     if (targets.length === 0) {
-      return {
-        killed: false,
-        reason:
-          'geniro could not find this command among the agent’s processes — stop the turn to end it',
-      };
+      return null;
     }
     const pids = [
       ...new Set(
@@ -320,6 +382,49 @@ export class ChatShellsService {
       }
     }, GROUP_KILL_GRACE_MS).unref();
     return { killed: true, reason: null };
+  }
+
+  /**
+   * Of `rows`, the processes the call's live session recorded running its
+   * command, with everything they started since — or `rows` whole when none it
+   * recorded still runs (a CLI that is gone, or a command not read yet). Its
+   * written text alone cannot tell two commands written alike apart: two
+   * `pnpm dev` the agent started in different folders. So while a recorded one
+   * runs, even outside `rows`, nothing else in `rows` is searched in its stead.
+   */
+  private recordedScope(
+    runId: string,
+    callId: string,
+    table: readonly ProcessRow[],
+    rows: readonly ProcessRow[],
+  ): readonly ProcessRow[] {
+    const recorded = new Set(
+      this.sessions
+        .recordedGroupsOf(runId, callId)
+        ?.flatMap((group) => group.members.map(({ pid }) => pid)),
+    );
+    const alive = table.filter((row) => recorded.has(row.pid));
+    if (alive.length === 0) {
+      return rows;
+    }
+    const scope = new Set(
+      alive.flatMap((row) => [
+        row.pid,
+        ...descendantsOf(table, row.pid).map(({ pid }) => pid),
+      ]),
+    );
+    return rows.filter((row) => scope.has(row.pid));
+  }
+
+  /** The call that started a command, and its result once answered. */
+  private callRows(runId: string, callId: string): Promise<Item[]> {
+    return this.itemDao.rowsByPayloadId(
+      runId,
+      ['tool_call', 'tool_result'],
+      [callId],
+      undefined,
+      this.em.fork(),
+    );
   }
 
   /**

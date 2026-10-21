@@ -20,6 +20,7 @@ const RUN = 'run-1111';
 const proc = (pid: number, args: string): ScannedProcess => ({
   pid,
   ppid: 1,
+  pgid: pid,
   uid: 501,
   tty: null,
   startedAt: 1_000,

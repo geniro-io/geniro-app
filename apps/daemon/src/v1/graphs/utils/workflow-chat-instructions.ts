@@ -61,7 +61,7 @@ const APPROVAL_MEANING: Record<ApprovalMode, string> = {
  * it, so a line is drawn only for a pair both sides agree on, with each side's
  * arity limit.
  */
-function connectionLines(): string[] {
+export function workflowConnectionLines(): string[] {
   const lines: string[] = [];
   for (const from of NODE_KINDS) {
     for (const out of NODE_CONNECTION_RULES[from].outputs) {
@@ -146,7 +146,7 @@ outranks an earlier one. No agent ever sees another agent's \`role\`.
 
 GRAPH RULES
 Allowed connections; every other pairing is refused:
-${connectionLines().join('\n')}
+${workflowConnectionLines().join('\n')}
 
 Always:
 - node ids are unique, and every edge names nodes that exist;

@@ -95,12 +95,16 @@ import { RecommendationsApplyService } from './services/recommendations-apply.se
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import { RunIdleReapService } from './services/run-idle-reap.service';
 import { RunNamedPathsService } from './services/run-named-paths.service';
 import {
   currentRunOwner,
   RunProcessAttribution,
 } from './services/run-process-attribution.service';
-import { RunProcessReaper } from './services/run-process-reaper.service';
+import {
+  createRunProcessReaper,
+  RunProcessReaper,
+} from './services/run-process-reaper.service';
 import { RunProcessSweep } from './services/run-process-sweep.service';
 import { RunProcessesService } from './services/run-processes.service';
 import { RunStateService } from './services/run-state.service';
@@ -119,6 +123,7 @@ import { ThreadTimelineService } from './services/thread-timeline.service';
 import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
 import { UserQuestionBroker } from './services/user-question.broker';
 import { WallWorkService } from './services/wall-work.service';
+import { WorkflowProposalBroker } from './services/workflow-proposal.broker';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 import { defaultSpawn } from './utils/spawn-cli';
 
@@ -199,6 +204,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     GalleryBroker,
     ArtifactBroker,
     ActionBroker,
+    WorkflowProposalBroker,
     ActionPublishService,
     ActionPressService,
     ActionStopService,
@@ -376,9 +382,7 @@ import { defaultSpawn } from './utils/spawn-cli';
         em: EntityManager,
         runDao: RunDao,
       ) =>
-        new RunProcessReaper(attribution, {
-          held: (runId) => sessions.processRoots(runId).length > 0,
-          processRoots: () => sessions.processRoots().map((root) => root.pid),
+        createRunProcessReaper(attribution, sessions, {
           stillGone: async (runIds) => {
             const live = await runDao.getAll(
               { id: { $in: runIds }, archivedAt: null },
@@ -401,18 +405,32 @@ import { defaultSpawn } from './utils/spawn-cli';
       useFactory: (
         em: EntityManager,
         runDao: RunDao,
+        itemDao: ItemDao,
         sessions: AgentSessionRegistry,
         reaper: RunProcessReaper,
         attribution: RunProcessAttribution,
-      ) => new RunProcessSweep(em, runDao, sessions, reaper, attribution),
+        idleReap: RunIdleReapService,
+      ) =>
+        new RunProcessSweep(
+          em,
+          runDao,
+          itemDao,
+          sessions,
+          reaper,
+          attribution,
+          idleReap,
+        ),
       inject: [
         EntityManager,
         RunDao,
+        ItemDao,
         AgentSessionRegistry,
         RunProcessReaper,
         RunProcessAttribution,
+        RunIdleReapService,
       ],
     },
+    RunIdleReapService,
     RunTeardownService,
     SessionTranscriptsService,
     RunGroupsService,
@@ -499,6 +517,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // press beside it.
     ActionPublishService,
     ActionPressService,
+    WorkflowProposalBroker,
     // And the store behind it: a WORKFLOW node publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,

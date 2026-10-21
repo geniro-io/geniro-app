@@ -12,9 +12,12 @@ import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import type { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
 import type { CallBroker } from '../../graphs/services/call-broker.service';
 import type { TaskBoardBroker } from '../../graphs/services/task-board.broker';
 import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
+import type { WorkflowProposalService } from '../../graphs/services/workflow-proposal.service';
+import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import type { ShareService } from '../../shares/services/share.service';
 import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
@@ -29,9 +32,11 @@ import { MessageAgentTool } from './message-agent/message-agent.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposePatchTool } from './propose-patch/propose-patch.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
+import { ProposeWorkflowTool } from './propose-workflow/propose-workflow.tool';
 import { PublishActionTool } from './publish-action/publish-action.tool';
 import { ReadAnalyzedThreadTool } from './read-analyzed-thread/read-analyzed-thread.tool';
 import { ReadChatContextTool } from './read-chat-context/read-chat-context.tool';
+import { ReadWorkflowsTool } from './read-workflows/read-workflows.tool';
 import { RemoveActionTool } from './remove-action/remove-action.tool';
 import { ReportFindingsTool } from './report-findings/report-findings.tool';
 import { ReportRecommendationsTool } from './report-recommendations/report-recommendations.tool';
@@ -65,6 +70,9 @@ export interface McpToolDeps {
   analysis: AnalysisBroker;
   threads: ThreadReaderService;
   workflowChanges: WorkflowChangeService;
+  workflowGate: WorkflowProposalBroker;
+  workflowStore: WorkflowStoreService;
+  workflowProposals: WorkflowProposalService;
   shares: ShareService;
 }
 
@@ -75,8 +83,8 @@ export interface McpToolDeps {
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
  * surface, then the question, the render family, the action buttons, the
- * board, the chat history, the analysis tools, and the agent's own
- * notification last.
+ * board, the chat history, the workflow library, the analysis tools, and the
+ * agent's own notification last.
  */
 export function createMcpTools(deps: McpToolDeps): McpTool[] {
   return [
@@ -100,6 +108,8 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new BoardTools(deps.board),
     new SearchChatsTool(deps.history),
     new ReadChatContextTool(deps.history),
+    new ReadWorkflowsTool(deps.workflowGate, deps.workflowStore),
+    new ProposeWorkflowTool(deps.workflowGate, deps.workflowProposals),
     new ReadAnalyzedThreadTool(
       deps.analysis,
       deps.threads,

@@ -50,6 +50,7 @@ import { createPinoSinkStream } from './v1/diagnostics/utils/pino-sink-stream';
 import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
+import { WorkflowProposalService } from './v1/graphs/services/workflow-proposal.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 
 installCrashGuards({
@@ -254,6 +255,8 @@ bootstrapper.addExtension(
       // answer that later" comes back. AFTER the schema sync for the same
       // reason as its neighbours; it reads the `runs` table.
       await app.get(ChatService).rehydrateDeferredQuestions();
+      // And every standing workflow proposal card, for the same reason.
+      await app.get(WorkflowProposalService).rehydrate();
 
       // Arm again every continue geniro PROMISED a workflow run at a
       // usage-limit reset. Its agents were told to wait for it rather than set

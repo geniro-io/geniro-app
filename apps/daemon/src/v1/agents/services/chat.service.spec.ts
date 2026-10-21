@@ -70,9 +70,11 @@ import {
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PROPOSE_WORKFLOW_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
   HOST_QUESTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_READ_WORKFLOWS_TOOL,
   HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
@@ -133,6 +135,7 @@ import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
+import { WorkflowProposalBroker } from './workflow-proposal.broker';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
 class FakeRunDao {
@@ -206,6 +209,15 @@ class FakeRunDao {
     }
     run.pendingQuestion = null;
     return true;
+  }
+  async setPendingWorkflowProposal(
+    id: string,
+    value: string | null,
+  ): Promise<void> {
+    const run = this.runs.get(id);
+    if (run) {
+      run.pendingWorkflowProposal = value;
+    }
   }
   async listRunsWithPendingQuestion(): Promise<Run[]> {
     return [...this.runs.values()].filter(
@@ -533,6 +545,25 @@ class FakeItemDao {
     return this.items
       .filter((i) => i.runId === runId && i.seq > afterSeq)
       .sort((a, b) => a.seq - b.seq);
+  }
+  /** The real one's contract: rows of `kinds` whose payload's `id` is in `ids`. */
+  async rowsByPayloadId(
+    runId: string,
+    kinds: readonly string[],
+    ids: readonly string[],
+  ): Promise<Item[]> {
+    return this.items.filter((i) => {
+      if (i.runId !== runId || !kinds.includes(i.kind)) {
+        return false;
+      }
+      try {
+        return ids.includes(
+          (JSON.parse(i.payload) as { id?: string }).id ?? '',
+        );
+      } catch {
+        return false;
+      }
+    });
   }
   async maxSeq(runId: string): Promise<number> {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
@@ -866,7 +897,9 @@ function fakeAdapter(
           return !record.closed;
         },
         shellsRunning: 0,
+        detachedRunning: 0,
         runningCommands: [],
+        recordedGroupsOf: () => [],
         endedRunning: null,
         close: () => {
           record.closed = true;
@@ -1104,6 +1137,7 @@ function setup(
   const galleries = new GalleryBroker();
   const artifacts = new ArtifactBroker();
   const actionSinks = new ActionBroker();
+  const workflowProposals = new WorkflowProposalBroker();
   // The REAL store, on the reasoning the patch broker's comment gives: what a
   // published artifact observably DOES is put a page on disk and hand back a
   // key that opens it, and a double would pin the double. One root shared by
@@ -1263,6 +1297,7 @@ function setup(
       NO_STOPS,
       NO_COMMANDS,
     ),
+    workflowProposals,
     artifactStore,
     notices,
     callTokens,
@@ -1312,6 +1347,7 @@ function setup(
     galleries,
     artifacts,
     actionSinks,
+    workflowProposals,
     artifactStore,
     statuses,
     deletedRuns,
@@ -2670,6 +2706,47 @@ describe('ChatService', () => {
       expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
     });
 
+    it('offers the workflow tools to an ordinary chat turn only', async () => {
+      const { service, claude, runDao, workflowProposals } = setup();
+      const ordinary = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+      });
+      await service.sendMessage(ordinary.id, 'hello');
+      expect(workflowProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
+        true,
+      );
+      await settle(claude);
+      expect(workflowProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
+
+      const builder = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+      });
+      runDao.runs.get(builder.id)!.editsWorkflowSlug = 'team';
+      await service.sendMessage(builder.id, 'hello');
+      expect(workflowProposals.canPropose(builder.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
+      await settle(claude);
+
+      const analysis = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+      });
+      Object.assign(runDao.runs.get(analysis.id)!, {
+        analysisSourceRunId: ordinary.id,
+        analysisSourceSeq: 0,
+      });
+      await service.sendMessage(analysis.id, 'hello');
+      expect(workflowProposals.canPropose(analysis.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
+      await settle(claude);
+    });
+
     it('stops accepting artifacts once the turn that could show them is over', async () => {
       // The disposer. Without it a settled turn goes on publishing into a
       // transcript nobody is producing any more.
@@ -3784,6 +3861,30 @@ describe('ChatService', () => {
         };
       }
 
+      it('a new turn retires a deferred patch but not a standing proposal beside it', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPatch(ctx, 'p.ts');
+        await ctx.service.raiseOwnedCard(
+          runId,
+          'proposal-1',
+          { toolName: 'propose_workflow', input: {} },
+          () => undefined,
+        );
+
+        await ctx.service.sendMessage(runId, 'do something else');
+        await drain();
+
+        expect(
+          ctx.itemDao.items
+            .filter((item) => item.kind === 'unanswerable')
+            .map((item) => JSON.parse(item.payload).id),
+        ).toEqual([requestId]);
+        expect(ctx.runDao.runs.get(runId)?.pendingQuestion).toBeNull();
+        expect(
+          ctx.approvals.listByRun(runId).map((entry) => entry.requestId),
+        ).toEqual(['proposal-1']);
+      });
+
       it('writes nothing on a Reject of a deferred patch, and says it was rejected', async () => {
         const ctx = setup();
         const { runId, requestId } = await deferredPatch(ctx, 'r.ts');
@@ -3954,6 +4055,354 @@ describe('ChatService', () => {
         // registers next is described from its own adapter.
         expect(plans.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(false);
         expect(patches.answersAtOnce(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      });
+    });
+
+    describe('deferred cards another module owns', () => {
+      const CARD = { toolName: 'propose_workflow', input: { slug: 'team' } };
+
+      async function chat(
+        service: ReturnType<typeof setup>['service'],
+        cursor: ReturnType<typeof setup>['cursor'],
+      ): Promise<{ id: string }> {
+        const run = await service.createChat({
+          agentKind: 'cursor-agent',
+          cwd: dir,
+        });
+        await service.sendMessage(run.id, 'hello');
+        await settle(cursor);
+        return run;
+      }
+
+      it('a typed message does not retire it, and its owner can', async () => {
+        const { service, cursor, approvals, itemDao } = setup();
+        const run = await chat(service, cursor);
+        const requestId = 'card-1';
+        await service.raiseOwnedCard(run.id, requestId, CARD, () => undefined);
+        expect(
+          itemDao.items.filter((item) => item.kind === 'approval_request'),
+        ).toHaveLength(1);
+
+        await service.sendMessage(run.id, 'something else meanwhile');
+        await drain();
+        expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+          false,
+        );
+        expect(approvals.listByRun(run.id)[0]?.requestId).toBe(requestId);
+
+        await service.retireOwnedCard(run.id, requestId, CARD.toolName);
+        expect(approvals.listByRun(run.id)).toEqual([]);
+        const retired = itemDao.items.find(
+          (item) => item.kind === 'unanswerable',
+        );
+        expect(JSON.parse(String(retired?.payload))).toEqual({
+          id: requestId,
+          toolName: 'propose_workflow',
+        });
+      });
+
+      it('counts the card as waiting on the user only while no turn runs', async () => {
+        const { service, cursor, statuses } = setup();
+        const run = await chat(service, cursor);
+        const lastAwaiting = (): unknown =>
+          statuses.filter((s) => s.runId === run.id && 'awaiting' in s).at(-1)
+            ?.awaiting;
+
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        expect(lastAwaiting()).toBe('approval');
+
+        await service.sendMessage(run.id, 'rename the reviewer first');
+        expect(lastAwaiting()).toBeNull();
+        expect((await service.rename(run.id, 'team')).awaiting).toBeNull();
+
+        await settle(cursor);
+        expect(lastAwaiting()).toBe('approval');
+      });
+
+      it('writes no second closing row for a card the transcript already closed', async () => {
+        const { service, cursor, approvals, itemDao } = setup();
+        const run = await chat(service, cursor);
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        approvals.resolve(run.id, 'card-1', true);
+        await service.deliverOwnedCardVerdict(run.id, 'card-1', true, 'saved');
+
+        await service.retireOwnedCard(run.id, 'card-1', CARD.toolName);
+
+        expect(
+          itemDao.items
+            .filter(
+              (item) =>
+                item.kind === 'approval_verdict' ||
+                item.kind === 'unanswerable',
+            )
+            .map((item) => item.kind),
+        ).toEqual(['approval_verdict']);
+      });
+
+      it('closes a card it no longer tracks — the row is what takes it off screen', async () => {
+        // A boot whose rehydration never reached the card leaves it on screen
+        // with no registry entry; superseding it must still close it.
+        const { service, cursor, itemDao } = setup();
+        const run = await chat(service, cursor);
+
+        await service.retireOwnedCard(run.id, 'card-1', CARD.toolName);
+
+        const retired = itemDao.items.filter(
+          (item) => item.kind === 'unanswerable',
+        );
+        expect(retired.map((item) => JSON.parse(item.payload))).toEqual([
+          { id: 'card-1', toolName: 'propose_workflow' },
+        ]);
+      });
+
+      it('holds a verdict pressed during a turn until that turn ends', async () => {
+        const { service, cursor, itemDao } = setup();
+        const run = await chat(service, cursor);
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        await service.sendMessage(run.id, 'meanwhile, rename the reviewer');
+        const turnsBefore = cursor.start.mock.calls.length;
+        const verdictMessage = (): boolean =>
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'message' && item.payload.includes('Approved —'),
+          );
+
+        await service.deliverOwnedCardVerdict(
+          run.id,
+          'card-1',
+          true,
+          'Approved — saved',
+        );
+        expect(itemDao.items.some((i) => i.kind === 'approval_verdict')).toBe(
+          true,
+        );
+        expect(verdictMessage()).toBe(false);
+        expect(cursor.start.mock.calls.length).toBe(turnsBefore);
+
+        await settle(cursor);
+        await vi.waitFor(() => expect(verdictMessage()).toBe(true));
+        expect(cursor.start.mock.calls.length).toBe(turnsBefore + 1);
+      });
+
+      it('releases a held verdict when the turn it waited behind fails to start', async () => {
+        const { service, cursor, itemDao } = setup();
+        const run = await chat(service, cursor);
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        let pressed!: Promise<void>;
+        cursor.start.mockImplementationOnce(() => {
+          // Pressed while the failing turn holds its claim.
+          pressed = service.deliverOwnedCardVerdict(
+            run.id,
+            'card-1',
+            true,
+            'Approved — saved',
+          );
+          throw new Error('spawn failed');
+        });
+
+        await expect(service.sendMessage(run.id, 'go')).rejects.toThrow(
+          'spawn failed',
+        );
+        await pressed;
+
+        await vi.waitFor(() =>
+          expect(
+            itemDao.items.some(
+              (item) =>
+                item.kind === 'message' && item.payload.includes('Approved —'),
+            ),
+          ).toBe(true),
+        );
+      });
+
+      it('never sends a verdict into a running turn, even one claimed just before', async () => {
+        const { service, cursor } = setup();
+        const run = await chat(service, cursor);
+        await service.sendMessage(run.id, 'working');
+
+        await expect(
+          service.sendMessage(run.id, 'Approved — saved', [], {
+            ownTurn: true,
+          }),
+        ).rejects.toMatchObject({ errorCode: 'RUN_BUSY' });
+      });
+
+      it('refuses to raise a card on an archived chat', async () => {
+        const { service, cursor, runDao, itemDao } = setup();
+        const run = await chat(service, cursor);
+        runDao.runs.get(run.id)!.archivedAt = new Date();
+
+        await expect(
+          service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined),
+        ).rejects.toMatchObject({ errorCode: 'RUN_ARCHIVED' });
+        expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+          false,
+        );
+      });
+
+      it('holds a verdict while a question card stands, and sends it after the answer', async () => {
+        const { service, cursor, itemDao, approvals, userQuestions } = setup();
+        const run = await chat(service, cursor);
+        await service.sendMessage(run.id, 'next');
+        await userQuestions.ask(
+          run.id,
+          SINGLE_AGENT_NODE,
+          [{ question: 'Which database?', options: [{ label: 'Postgres' }] }],
+          null,
+        );
+        await drain();
+        await settle(cursor);
+        const question = approvals
+          .listByRun(run.id)
+          .find((entry) => entry.question)!.requestId;
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        const verdictSent = (): boolean =>
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'message' && item.payload.includes('Approved —'),
+          );
+
+        await service.deliverOwnedCardVerdict(
+          run.id,
+          'card-1',
+          true,
+          'Approved — saved',
+        );
+        expect(verdictSent()).toBe(false);
+        expect(itemDao.items.some((i) => i.kind === 'unanswerable')).toBe(
+          false,
+        );
+
+        approvals.resolve(run.id, question, true, 'Postgres');
+        await drain();
+        await settle(cursor);
+        await vi.waitFor(() => expect(verdictSent()).toBe(true));
+      });
+
+      it('drops a held verdict when its chat is archived', async () => {
+        const { service, cursor, itemDao } = setup();
+        const run = await chat(service, cursor);
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        await service.sendMessage(run.id, 'working');
+        await service.deliverOwnedCardVerdict(
+          run.id,
+          'card-1',
+          true,
+          'Approved — saved',
+        );
+
+        await service.archive(run.id);
+        await drain();
+
+        expect(
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'message' && item.payload.includes('Approved —'),
+          ),
+        ).toBe(false);
+      });
+
+      it('keeps the verdict row when the chat refuses the message', async () => {
+        const { service, cursor, itemDao, runDao } = setup();
+        const run = await chat(service, cursor);
+        runDao.runs.get(run.id)!.archivedAt = new Date();
+
+        await service.deliverOwnedCardVerdict(run.id, 'card-1', false, 'no');
+
+        expect(
+          itemDao.items.filter((i) => i.kind === 'approval_verdict'),
+        ).toHaveLength(1);
+        expect(
+          itemDao.items.some(
+            (i) => i.kind === 'message' && i.payload.includes('no'),
+          ),
+        ).toBe(false);
+      });
+
+      it('closes the standing card when its chat is archived', async () => {
+        const { service, cursor, itemDao, runDao, approvals } = setup();
+        const run = await chat(service, cursor);
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        runDao.runs.get(run.id)!.pendingWorkflowProposal = JSON.stringify({
+          requestId: 'card-1',
+        });
+
+        await service.archive(run.id);
+
+        expect(
+          itemDao.items
+            .filter((i) => i.kind === 'unanswerable')
+            .map((i) => JSON.parse(i.payload).id),
+        ).toEqual(['card-1']);
+        expect(approvals.listByRun(run.id)).toEqual([]);
+        expect(runDao.runs.get(run.id)?.pendingWorkflowProposal).toBeNull();
+        expect((await service.rename(run.id, 'x')).awaiting).toBeNull();
+      });
+
+      it('counts the card again when a turn fails to start', async () => {
+        const { service, cursor, statuses } = setup();
+        const run = await chat(service, cursor);
+        await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
+        cursor.start.mockImplementationOnce(() => {
+          throw new Error('spawn failed');
+        });
+
+        await expect(service.sendMessage(run.id, 'go')).rejects.toThrow(
+          'spawn failed',
+        );
+
+        expect(
+          statuses
+            .filter((event) => event.runId === run.id && 'awaiting' in event)
+            .at(-1)?.awaiting,
+        ).toBe('approval');
+      });
+
+      it('hands the verdict to its responder once, however often it is pressed', async () => {
+        const { service, cursor, approvals } = setup();
+        const run = await chat(service, cursor);
+        const respond = vi.fn();
+        const requestId = 'card-1';
+        await service.raiseOwnedCard(run.id, requestId, CARD, respond);
+
+        expect(approvals.resolve(run.id, requestId, false, 'too big')).toBe(
+          true,
+        );
+        expect(approvals.resolve(run.id, requestId, true)).toBe(false);
+        expect(respond.mock.calls).toEqual([[false, 'too big']]);
+      });
+
+      it('carries the decline note to the verdict row, and the message to the next turn', async () => {
+        const { service, cursor, itemDao } = setup();
+        const run = await chat(service, cursor);
+        const turnsBefore = cursor.start.mock.calls.length;
+
+        await service.deliverOwnedCardVerdict(
+          run.id,
+          'card-1',
+          false,
+          'Declined — too big',
+          'too big',
+        );
+        await drain();
+
+        const verdict = itemDao.items.find(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(JSON.parse(String(verdict?.payload))).toEqual({
+          id: 'card-1',
+          allow: false,
+          answer: 'too big',
+        });
+        const message = itemDao.items.find(
+          (item) =>
+            item.kind === 'message' &&
+            item.payload.includes('Declined — too big'),
+        );
+        // The row first: the message starts a turn that must find the card
+        // already answered.
+        expect(verdict!.seq).toBeLessThan(message!.seq);
+        expect(cursor.start.mock.calls.length).toBe(turnsBefore + 1);
       });
     });
   });
@@ -7552,6 +8001,40 @@ describe('ChatService', () => {
     expect(dead).toEqual([{ id: 'req-open', toolName: 'Bash' }]);
   });
 
+  it('boot reconcile leaves the standing deferred cards open — they outlive their turn', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    for (const [seq, payload] of [
+      [0, { id: 'req-open', toolName: 'Bash' }],
+      [1, { id: 'card-1', toolName: 'propose_workflow' }],
+      [2, { id: 'q-1', toolName: HOST_QUESTION_TOOL }],
+    ] as const) {
+      await itemDao.create({
+        runId: run.id,
+        seq,
+        kind: 'approval_request',
+        payload: JSON.stringify(payload),
+      });
+    }
+    await runDao.updateById(run.id, {
+      status: 'running',
+      pendingWorkflowProposal: JSON.stringify({ requestId: 'card-1' }),
+      pendingQuestion: serializePendingQuestion({
+        kind: 'question',
+        requestId: 'q-1',
+        title: null,
+        questions: [{ question: 'Which?', options: [{ label: 'A' }] }],
+      }),
+    });
+
+    await service.reconcileOrphanedRuns('unknown');
+
+    const dead = (await itemDao.getByRun(run.id))
+      .filter((i) => i.kind === 'unanswerable')
+      .map((i) => JSON.parse(i.payload));
+    expect(dead).toEqual([{ id: 'req-open', toolName: 'Bash' }]);
+  });
+
   it('closes a stranded delegate UNDER the node that launched it', async () => {
     // REPORTED as "он пишет, что один из app-агентов активен, хотя он же должен
     // быть закончен", over a finished workflow run whose QA card read
@@ -9616,6 +10099,46 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toEqual([]);
   });
 
+  it('auto-approves propose_workflow but asks before read_workflows in an `ask` chat', async () => {
+    // Proposing only raises its own card; reading hands the user's library to
+    // the model, which is theirs to allow, like the history tools.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    for (const tool of [HOST_PROPOSE_WORKFLOW_TOOL, HOST_READ_WORKFLOWS_TOOL]) {
+      claude.emit({
+        type: 'approval_request',
+        id: `p-${tool}`,
+        toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
+        input: {},
+      });
+    }
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      `p-${HOST_PROPOSE_WORKFLOW_TOOL}`,
+      true,
+      {},
+    );
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalledWith(
+      `p-${HOST_READ_WORKFLOWS_TOOL}`,
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(
+      itemDao.items
+        .filter((i) => i.kind === 'approval_request')
+        .map((i) => JSON.parse(i.payload).toolName),
+    ).toEqual([
+      `mcp__${hostMcpServerName(run.id)}__${HOST_READ_WORKFLOWS_TOOL}`,
+    ]);
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+  });
+
   it('auto-approves the show_comparison CALL, like every drawing tool', async () => {
     const { service, claude, approvals, itemDao } = setup();
     const run = await service.createChat({
@@ -11624,6 +12147,28 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       expect(runDao.runs.get(runId)?.status).toBe('running');
     },
   );
+
+  it('keeps a standing proposal on the badge through an off-turn status write', async () => {
+    // Between turns no turn holds the run, so the card counts; the off-turn
+    // `running` write must say so itself rather than publish null over it.
+    const { service, claude, statuses, runId } = await chatInTurn();
+    await endTurn(claude);
+    await service.raiseOwnedCard(
+      runId,
+      'card-1',
+      { toolName: 'propose_workflow', input: {} },
+      () => undefined,
+    );
+    const emit = claude.sessions[0]!.onBetweenTurnEvent!;
+
+    emit({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+    await drain();
+
+    const running = statuses
+      .filter((event) => event.runId === runId && event.status === 'running')
+      .at(-1);
+    expect(running?.awaiting).toBe('approval');
+  });
 
   it('keeps a continuation settled when the price of its delegate lands after the settle', async () => {
     // claude prices a continuation's delegates on its `result` line; that row

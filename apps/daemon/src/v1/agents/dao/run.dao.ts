@@ -619,6 +619,31 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Record — or, with null, forget — the standing workflow proposal card
+   * (`Run.pendingWorkflowProposal`), on {@link setPendingQuestion}'s terms.
+   */
+  async setPendingWorkflowProposal(
+    runId: string,
+    value: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { pendingWorkflowProposal: value },
+    );
+  }
+
+  /** Every run standing on a workflow proposal card — the boot rehydration's read. */
+  async listRunsWithPendingWorkflowProposal(
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { pendingWorkflowProposal: { $ne: null } },
+      { disableIdentityMap: true },
+    );
+  }
+
+  /**
    * Move the row's `updatedAt` and nothing else — "the user just did something
    * in this thread".
    *

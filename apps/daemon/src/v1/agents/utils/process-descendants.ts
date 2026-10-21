@@ -1,4 +1,6 @@
+import { isSameProcess } from '../../../utils/process-identity';
 import { decodePsText } from './process-usage';
+import type { PlainProcess } from './run-process-scan';
 import { runPs } from './run-ps';
 
 /** One row of the process table, as `ps` reports it. */
@@ -63,6 +65,38 @@ export function parseProcessRows(stdout: string): ProcessRow[] {
 }
 
 /**
+ * A process group a detached command runs in, as recorded while the CLI that
+ * started it was alive: its members, each with its kernel start time.
+ */
+export interface RecordedGroup {
+  pgid: number;
+  members: readonly { pid: number; startedAt: number }[];
+}
+
+/**
+ * Whether `group` is still the group that was recorded: one of its recorded
+ * members is alive in it and is still the process recorded (its start time).
+ *
+ * A group id cannot be reused while any member of the group lives, so this is
+ * what makes the id safe to act on later; without it a recycled id could name a
+ * stranger's group.
+ */
+export function isGroupAnchored(
+  group: RecordedGroup,
+  rows: readonly PlainProcess[],
+): boolean {
+  const inGroup = new Map<number, number>();
+  for (const row of rows) {
+    if (row.pgid === group.pgid && row.startedAt !== null) {
+      inGroup.set(row.pid, row.startedAt);
+    }
+  }
+  return group.members.some((member) =>
+    isSameProcess(member.pid, member.startedAt, inGroup),
+  );
+}
+
+/**
  * Every process descending from `rootPid`, at any depth.
  *
  * Depth matters and is the reason this walks rather than filtering on `ppid`:
@@ -72,11 +106,11 @@ export function parseProcessRows(stdout: string): ProcessRow[] {
  *
  * The root itself is excluded: it is the agent, never one of its commands.
  */
-export function descendantsOf(
-  rows: readonly ProcessRow[],
+export function descendantsOf<T extends ProcessRow>(
+  rows: readonly T[],
   rootPid: number,
-): ProcessRow[] {
-  const byParent = new Map<number, ProcessRow[]>();
+): T[] {
+  const byParent = new Map<number, T[]>();
   for (const row of rows) {
     const siblings = byParent.get(row.ppid);
     if (siblings) {
@@ -85,7 +119,7 @@ export function descendantsOf(
       byParent.set(row.ppid, [row]);
     }
   }
-  const found: ProcessRow[] = [];
+  const found: T[] = [];
   // Iterative, and `seen` is not paranoia: `ps` takes no atomic snapshot, so a
   // process that exits mid-listing can leave a row whose parent has already
   // been reparented — a cycle in the table is rare and would otherwise hang the
@@ -204,6 +238,9 @@ export function commandNeedles(command: string): string[] {
  * Which of a run's processes ARE this command: the matches of the most specific
  * needle that matches anything, each kept only when no ancestor of it matched
  * too — the wrapper and what it wraps are one command, stopped through the top.
+ *
+ * `owned` must already be confined to one run's own process tree: the derived
+ * needles are looser than the command (see {@link commandNeedles}).
  */
 export function commandTargets(
   owned: readonly ProcessRow[],

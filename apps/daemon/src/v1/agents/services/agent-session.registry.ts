@@ -20,6 +20,7 @@ import {
   DEFAULT_KEPT_SESSION_IDLE_MINUTES,
   type KeptProcessRoot,
 } from '../chat.types';
+import type { RecordedGroup } from '../utils/process-descendants';
 import { runTagEnv } from '../utils/run-process-scan';
 import { runIdOfSessionKey, runSessionKeyPrefix } from '../utils/session-keys';
 import {
@@ -33,6 +34,7 @@ import type {
   BetweenTurnApproval,
   CliSessionOptions,
   SessionCloseOptions,
+  StoppedCommands,
 } from '../utils/spawn-cli';
 import { currentRunOwner } from './run-process-attribution.service';
 
@@ -341,7 +343,22 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * is not kept here: its process is already being signalled.
    */
   private readonly closing = new Map<SessionEntry, string>();
+  /**
+   * Processes closed for going unused whose exit {@link onIdleClosed} is still
+   * owed. A teardown or shutdown that escalates one withdraws it.
+   */
+  private readonly idleExits = new Set<SessionEntry>();
+  private readonly idleCloseListeners = new Set<(runId: string) => void>();
+  /**
+   * When any conversation of each run last started or settled a turn, or wrote
+   * a row off-turn — kept past its process, so a sibling whose CLI died a
+   * minute ago still counts when another of the run's processes idles out.
+   */
+  private readonly runUsedAt = new Map<string, number>();
   private shuttingDown = false;
+  private readonly leftCommandListeners = new Set<
+    (runId: string, left: StoppedCommands) => void
+  >();
   private readonly closeListeners = new Set<
     (
       runId: string,
@@ -369,6 +386,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
 
   /** The idle window every arm uses — see {@link setIdleMinutes}. */
   private idleWindowMs = SESSION_IDLE_MS;
+  private idleWindowPushed = false;
 
   constructor(@Optional() ceiling?: number) {
     this.ceiling = ceiling ?? MAX_LIVE_SESSIONS;
@@ -421,6 +439,21 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
+   * Told when a process has ended with commands still recorded as running in
+   * it, whatever ended it but shutdown, with where they ran
+   * ({@link StoppedCommands.groups}). After a graceful end the CLI has stopped
+   * them itself; after a crash, an OOM kill, or a close whose escalation cut
+   * the CLI's shutdown short, they are what it left running. A teardown's close
+   * is included: its reap finds a command by the run tag, which a system binary
+   * whose parent is gone no longer shows.
+   */
+  onLeftCommands(
+    listener: (runId: string, left: StoppedCommands) => void,
+  ): void {
+    this.leftCommandListeners.add(listener);
+  }
+
+  /**
    * The LAST moment this run's process can be asked anything — awaited before
    * an unused session is closed.
    *
@@ -444,6 +477,35 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   onIdleFarewell(listener: (runId: string) => Promise<void>): void {
     this.farewell = listener;
+  }
+
+  /**
+   * Told, with the RUN id, once a process this registry closed because it went
+   * unused for the idle window has exited — the moment the run's leftovers are
+   * no longer under a CLI the registry reports ({@link processRoots}).
+   *
+   * Only that close: an eviction, a stale replacement, a teardown (which reaps
+   * itself) and shutdown are not the user leaving the run, and a teardown or
+   * shutdown that escalates the close still under way withdraws it. A workflow
+   * run is told once per key; whatever listens decides whether the RUN is done.
+   */
+  onIdleClosed(listener: (runId: string) => void): void {
+    this.idleCloseListeners.add(listener);
+  }
+
+  /**
+   * Owe the next turn of any conversation under `runId` a prompt line — what
+   * was stopped while the run sat unused, which no single key's close stopped.
+   * A chat's key is its run id; in a workflow the first conversation to take a
+   * turn carries it.
+   */
+  oweRunNote(runId: string, prompt: string): void {
+    if (this.shuttingDown) {
+      return;
+    }
+    const owed = this.stopped.get(runId) ?? { rows: [], prompts: [] };
+    owed.prompts.push(prompt);
+    this.stopped.set(runId, owed);
   }
 
   /**
@@ -485,6 +547,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
      */
     onHeldApproval?: CliSessionOptions['onHeldApproval'],
   ): AgentTurnHandle {
+    this.noteUsed(runId);
     const existing = this.entries.get(runId);
     // Asked to work again, replaced or reused: a later close is not the Stop's.
     existing?.session.noteCloseCause?.(null);
@@ -663,6 +726,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         this.closeEntry(key, entry, 'its run was torn down', false);
       }
     }
+    this.runUsedAt.delete(runId);
     // Nothing will start a turn here again to be told.
     for (const key of [...this.stopped.keys()]) {
       if (key === runId || key.startsWith(prefix)) {
@@ -799,6 +863,11 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return this.idleWindowMs / 60_000;
   }
 
+  /** Whether {@link idleMinutes} is the user's, not the default before the first push. */
+  get hasUserIdleWindow(): boolean {
+    return this.idleWindowPushed;
+  }
+
   /**
    * Take the user's idle window (`Settings.keptSessionIdleMinutes`), pushed by
    * Electron main on every daemon start and after each change. Held in memory
@@ -813,6 +882,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   setIdleMinutes(minutes: number): void {
     this.idleWindowMs = minutes * 60_000;
+    this.idleWindowPushed = true;
     for (const entry of this.entries.values()) {
       entry.timer?.retime(this.idleWindowMs);
     }
@@ -903,6 +973,25 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       }
     }
     return roots;
+  }
+
+  /**
+   * Where a command one of this run's live processes launched runs, as its
+   * session recorded it — empty while it runs with nothing recorded, null when
+   * no live process of the run reports it running.
+   */
+  recordedGroupsOf(runId: string, callId: string): RecordedGroup[] | null {
+    const prefix = runSessionKeyPrefix(runId);
+    let groups: RecordedGroup[] | null = null;
+    for (const [key, entry] of this.entries) {
+      if ((key === runId || key.startsWith(prefix)) && entry.session.alive) {
+        const own = entry.session.recordedGroupsOf(callId);
+        if (own !== null) {
+          groups = [...(groups ?? []), ...own];
+        }
+      }
+    }
+    return groups;
   }
 
   /**
@@ -1002,7 +1091,8 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       this.disarm(entry);
       this.entries.delete(runId);
       this.logger.log(`the agent session for run ${runId} ended on its own`);
-      // Its detached commands died with its group, as a close's would have.
+      // A CLI that ended without its own shutdown left its detached commands
+      // running; what was recorded of them is handed on to be stopped.
       const ended = entry.session.endedRunning;
       if (ended !== null && ended.running > 0) {
         this.oweStopped(
@@ -1010,6 +1100,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
           endedCommandsNote(ended.commands, ended.running),
         );
       }
+      this.notifyLeftCommands(runId, ended);
       this.notifyClosed(
         runId,
         interrupted,
@@ -1033,6 +1124,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         return;
       }
       entry.lastUsedAt = Date.now();
+      this.noteUsed(runId);
       this.arm(runId, entry);
     });
     return handle;
@@ -1059,12 +1151,14 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     }
     entry.lastUsedAt = Date.now();
     entry.offTurnActiveAt = entry.lastUsedAt;
+    this.noteUsed(runId);
     entry.timer.refresh();
   }
 
   /**
    * Is the process doing something closing it would stop, with no turn of ours
-   * in flight — a parked question, off-turn work, or a detached command? What
+   * in flight — a parked question, off-turn work, or a command still running
+   * (`shellsRunning`: detached, or a delegate's)? What
    * eviction will not take and a deferrable stale mark waits for.
    */
   private holdsWork(entry: SessionEntry): boolean {
@@ -1112,7 +1206,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     deferred?: string,
   ): AgentTurnInput {
     const lines = [
-      ...(this.stopped.get(runId)?.prompts ?? []),
+      ...owedKeys(runId).flatMap((key) => this.stopped.get(key)?.prompts ?? []),
       ...(deferred === undefined ? [] : [deferred]),
     ];
     return lines.length === 0
@@ -1141,16 +1235,18 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     carried: boolean,
     onEvent: (event: AgentEvent) => void,
   ): void {
-    const owed = this.stopped.get(runId);
-    if (owed === undefined) {
-      return;
-    }
-    for (const message of owed.rows) {
-      onEvent({ type: 'notice', message, severity: 'warning' });
-    }
-    owed.rows = [];
-    if (carried || owed.prompts.length === 0) {
-      this.stopped.delete(runId);
+    for (const key of owedKeys(runId)) {
+      const owed = this.stopped.get(key);
+      if (owed === undefined) {
+        continue;
+      }
+      for (const message of owed.rows) {
+        onEvent({ type: 'notice', message, severity: 'warning' });
+      }
+      owed.rows = [];
+      if (carried || owed.prompts.length === 0) {
+        this.stopped.delete(key);
+      }
     }
   }
 
@@ -1296,6 +1392,31 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     this.closeEntry(runId, entry, 'it went unused', true, undefined, {
       graceful: true,
     });
+    this.idleExits.add(entry);
+    void entry.session.closed.then(() => {
+      const run = runIdOfSessionKey(runId);
+      // Wall time since this key's own last use is at least its awake-time
+      // window, so only another conversation of the run can fail this.
+      if (
+        this.idleExits.delete(entry) &&
+        Date.now() - (this.runUsedAt.get(run) ?? 0) >= this.idleWindowMs
+      ) {
+        // Unused for the window, so its last use blocks nothing any more.
+        this.runUsedAt.delete(run);
+        this.notifyIdleClosed(run);
+      }
+    });
+  }
+
+  private noteUsed(key: string): void {
+    const now = Date.now();
+    // A use older than the window blocks no idle reap; forget it.
+    for (const [run, at] of this.runUsedAt) {
+      if (now - at >= this.idleWindowMs) {
+        this.runUsedAt.delete(run);
+      }
+    }
+    this.runUsedAt.set(runIdOfSessionKey(key), now);
   }
 
   /**
@@ -1305,6 +1426,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   private escalate(key: string, entry: SessionEntry): void {
     this.closing.delete(entry);
+    this.idleExits.delete(entry);
     try {
       entry.session.close();
     } catch (err) {
@@ -1331,7 +1453,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     // Read BEFORE the entry is dropped and the timer disarmed — both are what
     // the answer is computed from.
     const interrupted = this.worksOffTurn(entry);
-    const running = entry.session.shellsRunning;
+    const running = entry.session.detachedRunning;
     if (tell && running > 0) {
       // Read before the close, which is what empties them.
       this.oweStopped(
@@ -1357,6 +1479,44 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     }
     this.logger.log(`closed the agent session for run ${runId} — ${reason}`);
     this.notifyClosed(runId, interrupted, false, cause ?? null);
+    // Once the process has ended: its own shutdown stops what it ran, and
+    // only what that left behind is still anchored by then.
+    void entry.session.closed.then(() =>
+      this.notifyLeftCommands(runId, entry.session.endedRunning),
+    );
+  }
+
+  private notifyIdleClosed(runId: string): void {
+    if (this.shuttingDown) {
+      return;
+    }
+    for (const listener of this.idleCloseListeners) {
+      try {
+        listener(runId);
+      } catch (err) {
+        this.logger.warn(
+          `an idle-close listener for run ${runId} threw: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  private notifyLeftCommands(
+    runId: string,
+    left: StoppedCommands | null,
+  ): void {
+    if (this.shuttingDown || left === null || left.groups.length === 0) {
+      return;
+    }
+    for (const listener of this.leftCommandListeners) {
+      try {
+        listener(runId, left);
+      } catch (err) {
+        this.logger.warn(
+          `a left-commands listener for run ${runId} threw: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   /**
@@ -1387,4 +1547,13 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       }
     }
   }
+}
+
+/**
+ * Where a turn on `key` finds what it owes its agent: the key's own notes,
+ * then its run's ({@link AgentSessionRegistry.oweRunNote}).
+ */
+function owedKeys(key: string): string[] {
+  const runId = runIdOfSessionKey(key);
+  return runId === key ? [key] : [key, runId];
 }

@@ -821,6 +821,20 @@ describe('restatesRunAsWorking', () => {
     expect(restatesRunAsWorking(announce(null, 0.0016))).toBe(false);
   });
 
+  it('is false for the result reporting a background command’s end, and true for any other result', () => {
+    const result = {
+      type: 'tool_result' as const,
+      id: 'exec-1',
+      name: 'shell',
+      result: { exitCode: 0 },
+      isError: false,
+    };
+    expect(restatesRunAsWorking({ ...result, endsBackgroundWork: true })).toBe(
+      false,
+    );
+    expect(restatesRunAsWorking(result)).toBe(true);
+  });
+
   it('is false for a notice, which describes the CLI rather than the agent working', () => {
     expect(
       restatesRunAsWorking({

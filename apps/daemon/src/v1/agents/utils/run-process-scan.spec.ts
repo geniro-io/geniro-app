@@ -33,6 +33,7 @@ function row(
   return {
     pid,
     ppid,
+    pgid: pid,
     uid: UID,
     tty: null,
     startedAt: 1_000,
@@ -91,8 +92,8 @@ describe('parseScan', () => {
   it('joins each row with its terminal and the environment that follows its arguments', () => {
     const rows = parseScan(
       [
-        '    1     0     0 ??       Mon Oct  5 17:34:22 2026     /sbin/launchd',
-        '35073 35000   501 s003     Tue Oct 13 18:44:11 2026     node -e setTimeout(()=>{},2e4)',
+        '    1     0     1     0 ??       Mon Oct  5 17:34:22 2026     /sbin/launchd',
+        '35073 35000 35073   501 s003     Tue Oct 13 18:44:11 2026     node -e setTimeout(()=>{},2e4)',
       ].join('\n'),
       [
         '    1 /sbin/launchd',
@@ -103,6 +104,7 @@ describe('parseScan', () => {
       {
         pid: 1,
         ppid: 0,
+        pgid: 1,
         uid: 0,
         tty: null,
         startedAt: Date.parse('Mon Oct 5 17:34:22 2026'),
@@ -112,6 +114,7 @@ describe('parseScan', () => {
       {
         pid: 35073,
         ppid: 35000,
+        pgid: 35073,
         uid: 501,
         tty: 's003',
         startedAt: Date.parse('Tue Oct 13 18:44:11 2026'),
@@ -124,7 +127,9 @@ describe('parseScan', () => {
   it('skips a line that does not open the way it was asked for', () => {
     expect(
       parseScan(
-        ['  PID  PPID   UID TT STARTED COMMAND', 'ps: some warning'].join('\n'),
+        ['  PID  PPID  PGID   UID TT STARTED COMMAND', 'ps: some warning'].join(
+          '\n',
+        ),
         '',
       ),
     ).toEqual([]);
@@ -132,7 +137,7 @@ describe('parseScan', () => {
 
   it('leaves the environment unknown for a row the second listing does not have', () => {
     const [only] = parseScan(
-      '  42     1   501 ??  Tue Oct 13 18:44:11 2026     node server.js',
+      '  42     1    42   501 ??  Tue Oct 13 18:44:11 2026     node server.js',
       '',
     );
     expect(only?.env).toBeNull();

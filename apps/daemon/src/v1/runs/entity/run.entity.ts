@@ -360,6 +360,20 @@ export class Run extends TimestampsEntity {
   pendingQuestion: string | null = null;
 
   /**
+   * The standing `propose_workflow` card, as JSON (`PendingWorkflowProposal`:
+   * the card's id and the workflow it would write), or null.
+   *
+   * Durable for the reason {@link pendingQuestion} is — the card waits on a
+   * person, and the daemon routinely exits before they answer — and a column of
+   * its own because the two cards stand independently: a typed message retires
+   * a question but not a proposal. Cleared BEFORE an approved proposal is
+   * written, so a crash between the press and the write reads as an expired
+   * card at the next boot, never as a second write.
+   */
+  @Property({ type: 'text', nullable: true })
+  pendingWorkflowProposal: string | null = null;
+
+  /**
    * The library workflow this chat EDITS — the slug of a `*.geniro.yaml` file
    * the builder's chat panel opened a conversation about; null for every other
    * run.

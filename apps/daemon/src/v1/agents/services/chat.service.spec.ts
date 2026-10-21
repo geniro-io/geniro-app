@@ -121,6 +121,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
+import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
@@ -1055,6 +1056,8 @@ function setup(
     >;
     /** The MCP service a turn's server report is checked against, when a test needs one. */
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
+    /** The monitor registry a Stop reaches, when a test drives one. */
+    monitors?: MonitorRegistry;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
     contextWindows?: Record<string, number>;
     /** What claude resolves each name to — see `fakeAdapter`'s `resolutions`. */
@@ -1327,6 +1330,7 @@ function setup(
       port: opts.port === undefined ? 4870 : opts.port,
     },
     opts.agentMcp as AgentMcpService | undefined,
+    opts.monitors,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -14707,5 +14711,148 @@ describe('ChatService — pointing an open chat at another account', () => {
     expect(updated.configDir).toBe(profileA);
     expect(published).toHaveLength(before);
     expect(claude.sessions[0]?.closed).toBe(false);
+  });
+});
+
+describe('ChatService — turns geniro starts for a monitor', () => {
+  let dir: string;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'geniro-chat-monitor-'));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const chat = (service: ReturnType<typeof setup>['service']) =>
+    service.createChat({ agentKind: 'cursor-agent', cwd: dir });
+
+  it('opens a host turn with the given system row, never a user message, and sends the text as the prompt', async () => {
+    const { service, cursor, itemDao } = setup();
+    const run = await chat(service);
+    const before = itemDao.items.length;
+    // What the delivery reads to know the row's ends are already recorded.
+    const written = vi.fn(() => itemDao.items.length);
+
+    await service.sendMessage(run.id, '<message from="CI · monitor">', [], {
+      ownTurn: true,
+      onHostRowWritten: written,
+      hostRow: {
+        severity: 'info',
+        message: 'CI · monitor m1: 1 line.',
+        monitors: [
+          {
+            id: 'm1',
+            description: 'CI',
+            event: 'batch',
+            lines: ['ok'],
+            omitted: 0,
+          },
+        ],
+        woke: true,
+      },
+    });
+
+    const opened = itemDao.items.slice(before);
+    expect(
+      opened.some((item) => item.kind === 'message' && item.role === 'user'),
+    ).toBe(false);
+    const row = opened.find((item) => item.kind === 'system');
+    expect(JSON.parse(row!.payload)).toMatchObject({
+      monitors: [{ id: 'm1' }],
+    });
+    expect(written).toHaveBeenCalledTimes(1);
+    // Told after the row was in the transcript, not before.
+    expect(written.mock.results[0]?.value).toBeGreaterThan(before);
+    expect(cursor.start.mock.calls.at(-1)?.[0].prompt).toContain(
+      '<message from="CI · monitor">',
+    );
+  });
+
+  it('announces a host turn that could not start as one too, so no banner is posted for it', async () => {
+    const { service, cursor, statuses } = setup();
+    const run = await chat(service);
+    cursor.start.mockImplementationOnce(() => {
+      throw new Error('spawn failed');
+    });
+    await expect(
+      service.sendMessage(run.id, 'CI output', [], {
+        ownTurn: true,
+        hostRow: {
+          severity: 'info',
+          message: 'CI · monitor m1: 1 line.',
+          monitors: [],
+          woke: true,
+        },
+      }),
+    ).rejects.toThrow('spawn failed');
+    const settle = statuses
+      .filter((event) => event.runId === run.id && event.status === 'failed')
+      .at(-1);
+    expect(settle?.hostTurn).toBe(true);
+  });
+
+  it('announces the settle of a host turn as one, so no banner is posted for it', async () => {
+    const { service, cursor, statuses } = setup();
+    const run = await chat(service);
+    await service.sendMessage(run.id, 'CI output', [], {
+      ownTurn: true,
+      hostRow: {
+        severity: 'info',
+        message: 'CI · monitor m1: 1 line.',
+        monitors: [],
+        woke: true,
+      },
+    });
+    cursor.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    cursor.finish();
+    await drain();
+    await drain();
+    const settle = statuses
+      .filter((event) => event.runId === run.id && event.status === 'completed')
+      .at(-1);
+    expect(settle?.hostTurn).toBe(true);
+  });
+
+  it('says a host turn must wait while a turn runs', async () => {
+    const { service } = setup();
+    const run = await chat(service);
+    expect(service.hostTurnHold(run.id)).toBeNull();
+    await service.sendMessage(run.id, 'working');
+    expect(service.hostTurnHold(run.id)).toBe('wait');
+  });
+
+  it("ends the thread's monitors on Stop, with no turn in flight, waking nobody", async () => {
+    const monitors = new MonitorRegistry(new ProcessRegistry());
+    const { service } = setup({ monitors });
+    const run = await chat(service);
+    const ends: boolean[] = [];
+    monitors.subscribe((event) => {
+      if (event.type === 'end') {
+        ends.push(event.wake);
+      }
+    });
+    monitors.start({
+      owner: {
+        runId: run.id,
+        nodeId: SINGLE_AGENT_NODE,
+        caller: SINGLE_AGENT_NODE,
+        conversationId: null,
+        callId: null,
+        target: 'chat',
+      },
+      command: 'while true; do sleep 1; done',
+      description: 'loop',
+      timeoutMs: 10_000,
+    });
+
+    await service.cancel(run.id);
+    await monitors.settled(run.id, 5000);
+
+    expect(monitors.isRunning(run.id)).toBe(false);
+    expect(ends).toEqual([false]);
   });
 });

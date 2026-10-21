@@ -409,6 +409,10 @@ export class CursorAcpAdapter extends AgentAdapter {
        */
       hostQuestionDeferredReason:
         'cursor-agent gives every MCP tool call a fixed 60-second deadline it offers no way to raise, so a question left open on screen is abandoned before most people have finished reading it',
+      // `ask`, the only other mode, asks about every permission request — an
+      // MCP call included (`isHostToolCall`'s measured title form) — and geniro
+      // starts cursor with no shell sandbox.
+      hostToolCallUngatedReason: null,
       subagents: {
         /**
          * True — and it read `false` here for two milestones on a measurement

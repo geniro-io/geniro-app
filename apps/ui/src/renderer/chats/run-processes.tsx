@@ -28,7 +28,9 @@ import { cn } from '../components/ui/utils';
 import { describeDaemonError } from '../daemon-api';
 import {
   groupDetached,
+  groupMonitors,
   groupProcesses,
+  type MonitorFacts,
   type ProcessGroup,
   ROLE_CAPTION,
   ROLE_ORDER,
@@ -71,15 +73,21 @@ export function treeLabel(tree: RunProcessTree, agentName: string): string {
 /**
  * A process's hover text. `detached` marks a process from the thread's
  * detached set, whose top was left running by an agent rather than started
- * by geniro.
+ * by geniro; `monitor` one that belongs to an agent's monitor.
  */
-function processTitle(process: RunProcess, detached = false): string {
+function processTitle(
+  process: RunProcess,
+  detached = false,
+  monitor = false,
+): string {
   const uptime = formatUptime(process.elapsedSeconds);
   const how =
     process.link === 'root'
-      ? detached
-        ? 'left running by this thread’s agents — no agent CLI holds it; stop it here or archive the thread'
-        : 'the agent CLI geniro started'
+      ? monitor
+        ? 'the shell of an agent’s monitor'
+        : detached
+          ? 'left running by this thread’s agents — no agent CLI holds it; stop it here or archive the thread'
+          : 'the agent CLI geniro started'
       : process.link === 'group'
         ? 'outlived the shell that started it — kept by the CLI’s process group'
         : `started under pid ${process.ppid}`;
@@ -89,8 +97,26 @@ function processTitle(process: RunProcess, detached = false): string {
   ].join('\n');
 }
 
+/** What a monitor's row hover says first: its id and how long it has left. */
+function monitorTitle(monitor: MonitorFacts): string {
+  const left = monitor.remainingSeconds;
+  const timeout =
+    left === null
+      ? null
+      : left <= 0
+        ? 'past its timeout'
+        : `${formatUptime(left)} left`;
+  return `monitor ${monitor.id}${timeout === null ? '' : ` · ${timeout}`}`;
+}
+
 /** The muted half of a group's row: what kind of thing it is, briefly. */
 function groupDetail(group: ProcessGroup): string | null {
+  if (group.monitor !== null) {
+    const uptime = formatUptime(group.elapsedSeconds);
+    return [uptime === null ? null : `up ${uptime}`, group.monitor.description]
+      .filter((part) => part !== null)
+      .join(' · ');
+  }
   if (group.role === 'cli') {
     return `pid ${group.processes[0]?.pid ?? '?'}`;
   }
@@ -102,15 +128,17 @@ function NestedProcess({
   process,
   baseDepth,
   detached,
+  monitor,
 }: {
   process: RunProcess;
   baseDepth: number;
   detached: boolean;
+  monitor: boolean;
 }): React.JSX.Element {
   return (
     <li
       className="flex items-baseline gap-1.5 text-[11px]"
-      title={processTitle(process, detached)}
+      title={processTitle(process, detached, monitor)}
       style={{
         paddingLeft: `${Math.min(process.depth - baseDepth, MAX_INDENT_DEPTH) * 10}px`,
       }}>
@@ -142,9 +170,14 @@ function GroupRow({
   const expandable = group.processes.length > 1;
   const [open, setOpen] = useThreadFlag(memoryKey, false);
   const detail = groupDetail(group);
-  const title = group.processes
-    .map((process) => processTitle(process, group.detached))
-    .join('\n\n');
+  const title = [
+    ...(group.monitor === null ? [] : [monitorTitle(group.monitor)]),
+    ...group.processes.map((process) =>
+      processTitle(process, group.detached, group.monitor !== null),
+    ),
+  ].join('\n\n');
+  const badge =
+    group.monitor !== null ? 'monitor' : group.detached ? 'detached' : null;
   // A command gets the whole first line for itself — it is the most telling
   // text in the section and the longest — and states how long it has run, and
   // whether it outlived its shell, on a second line under it.
@@ -196,19 +229,21 @@ function GroupRow({
           rssBytes={group.rssBytes}
         />
       </span>
-      {isCommand && (detail !== null || group.detached) ? (
+      {isCommand && (detail !== null || badge !== null) ? (
         <span
           data-slot="process-command-detail"
           className={cn(
             'flex items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums',
             colorClass === null ? 'pl-[18px]' : 'pl-[32px]',
           )}>
-          {detail}
-          {group.detached ? (
-            <span className="rounded border border-border px-1 py-px text-[10px]">
-              detached
+          {detail === null ? null : (
+            <span className="min-w-0 truncate">{detail}</span>
+          )}
+          {badge === null ? null : (
+            <span className="shrink-0 rounded border border-border px-1 py-px text-[10px]">
+              {badge}
             </span>
-          ) : null}
+          )}
         </span>
       ) : null}
     </>
@@ -247,6 +282,7 @@ function GroupRow({
               process={process}
               baseDepth={group.processes[0]?.depth ?? 0}
               detached={group.detached}
+              monitor={group.monitor !== null}
             />
           ))}
         </ul>
@@ -375,7 +411,8 @@ function AgentBlock({
 
 /**
  * What the thread's agents left running with no CLI of theirs above it — the
- * same set archiving the thread stops, so nothing it will end is hidden here.
+ * same set archiving the thread stops, so nothing it will end is hidden here —
+ * and the monitors they started, each one row.
  */
 function DetachedSection({
   groups,
@@ -427,7 +464,7 @@ function DetachedSection({
                   variant="ghost"
                   size="sm"
                   className="h-6 px-1.5 text-[11px]"
-                  aria-label={`Stop ${group.label}`}
+                  aria-label={`Stop ${group.monitor?.description ?? group.label}`}
                   onClick={() => onStop([group], false)}>
                   Stop
                 </Button>
@@ -438,6 +475,18 @@ function DetachedSection({
       </ul>
     </section>
   );
+}
+
+function stopTitle(all: boolean, processes: number, monitors: number): string {
+  if (!all) {
+    return monitors > 0 ? 'Stop this monitor?' : 'Stop this process group?';
+  }
+  if (monitors === 0) {
+    return 'Stop all detached processes?';
+  }
+  return processes === 0
+    ? 'Stop all monitors?'
+    : 'Stop all detached processes and monitors?';
 }
 
 /**
@@ -458,7 +507,8 @@ export function RunProcesses({
   data: RunProcessesDto | null;
   loading: boolean;
   error: string | null;
-  onStopDetached?: (pids: number[]) => Promise<void>;
+  /** Stops these detached pids and these monitors, by the id the agent knows them by. */
+  onStopDetached?: (pids: number[], monitorIds: string[]) => Promise<void>;
 }): React.JSX.Element | null {
   const identities = useContext(AgentIdentityContext);
   const [selection, setSelection] = useState<{
@@ -476,7 +526,12 @@ export function RunProcesses({
     try {
       await onStopDetached(
         selection.groups.flatMap((group) =>
-          group.processes.map((process) => process.pid),
+          group.monitor === null
+            ? group.processes.map((process) => process.pid)
+            : [],
+        ),
+        selection.groups.flatMap((group) =>
+          group.monitor === null ? [] : [group.monitor.id],
         ),
       );
       setSelection(null);
@@ -486,6 +541,9 @@ export function RunProcesses({
       setStopping(false);
     }
   };
+  const picked = selection?.groups ?? [];
+  const monitors = picked.filter((group) => group.monitor !== null);
+  const plain = picked.filter((group) => group.monitor === null);
   if (data === null) {
     if (error !== null) {
       return <p className="text-xs text-muted-foreground">{error}</p>;
@@ -494,7 +552,11 @@ export function RunProcesses({
       <p className="text-xs text-muted-foreground">reading processes…</p>
     ) : null;
   }
-  if (data.trees.length === 0 && data.detached.length === 0) {
+  if (
+    data.trees.length === 0 &&
+    data.detached.length === 0 &&
+    data.monitors.length === 0
+  ) {
     return (
       <div className="flex flex-col gap-1">
         <p className="text-xs text-muted-foreground">
@@ -512,7 +574,12 @@ export function RunProcesses({
   const single =
     data.trees.length === 1 ? (data.trees[0] as RunProcessTree) : null;
   const singleGroups = single === null ? [] : groupProcesses(single);
-  const detachedGroups = groupDetached(data.detached);
+  // A monitor stands in the detached section with what was left running: the
+  // agent started it, and no agent CLI holds it.
+  const detachedGroups = [
+    ...groupDetached(data.detached),
+    ...groupMonitors(data.monitors, data.sampledAt),
+  ];
   // One colour per part of the division, in the order the bar draws them:
   // the agents (or the one agent's groups), then what was left detached.
   const leading: ShareSegment[] = several
@@ -561,6 +628,9 @@ export function RunProcesses({
           {several ? ` · ${data.trees.length} agents` : ''}
           {data.detached.length > 0
             ? ` · ${data.detached.length} detached`
+            : ''}
+          {data.monitors.length > 0
+            ? ` · ${data.monitors.length} monitor${data.monitors.length === 1 ? '' : 's'}`
             : ''}
         </span>
         <span className="shrink-0 text-muted-foreground tabular-nums">
@@ -615,24 +685,37 @@ export function RunProcesses({
         open={selection !== null}
         busy={stopping}
         error={stopError}
-        title={
+        title={stopTitle(
+          selection?.all ?? false,
+          plain.length,
+          monitors.length,
+        )}
+        confirmLabel={
           selection?.all
-            ? 'Stop all detached processes?'
-            : 'Stop this process group?'
+            ? 'Stop all'
+            : monitors.length > 0
+              ? 'Stop monitor'
+              : 'Stop group'
         }
-        confirmLabel={selection?.all ? 'Stop all' : 'Stop group'}
         busyLabel="Stopping…"
         onCancel={() => setSelection(null)}
         onConfirm={() => void confirmStop()}>
-        <p>
-          This stops{' '}
-          {selection?.groups.reduce(
-            (sum, group) => sum + group.processes.length,
-            0,
-          ) ?? 0}{' '}
-          detached processes. Any dev server or preview they serve will become
-          unavailable. You can ask the agent to start them again.
-        </p>
+        {plain.length > 0 ? (
+          <p>
+            This stops{' '}
+            {plain.reduce((sum, group) => sum + group.processes.length, 0)}{' '}
+            detached processes. Any dev server or preview they serve will become
+            unavailable. You can ask the agent to start them again.
+          </p>
+        ) : null}
+        {monitors.length === 1 ? (
+          <p>This stops the monitor. The agent will be told it was stopped.</p>
+        ) : monitors.length > 1 ? (
+          <p>
+            This stops {monitors.length} monitors. The agent will be told they
+            were stopped.
+          </p>
+        ) : null}
         <ul className="mt-2 list-disc pl-4">
           {selection?.groups.map((group) => (
             <li key={group.key} className="break-all font-mono text-xs">

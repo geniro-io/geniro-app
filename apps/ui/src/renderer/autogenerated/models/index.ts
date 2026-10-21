@@ -5818,6 +5818,67 @@ export interface RunGroupDto {
 /**
  * 
  * @export
+ * @interface RunMonitor
+ */
+export interface RunMonitor {
+    /**
+     * the id the agent knows it by, e.g. `m1`
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    description: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    command: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    startedAt: string;
+    /**
+     * when its timeout stops it, ISO-8601
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    endsAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunMonitor
+     */
+    pid: number | null;
+    /**
+     * the shell first, then its group depth-first
+     * @type {Array<RunProcess>}
+     * @memberof RunMonitor
+     */
+    processes: Array<RunProcess>;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunMonitor
+     */
+    cpuPercent: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunMonitor
+     */
+    rssBytes: number;
+}
+/**
+ * 
+ * @export
  * @interface RunProcess
  */
 export interface RunProcess {
@@ -5976,7 +6037,13 @@ export interface RunProcessesDto {
      */
     detached: Array<RunProcess>;
     /**
-     * every process listed, the trees and `detached` together
+     * the run's agents' `monitor` commands, each with its process group — never listed again under `detached`
+     * @type {Array<RunMonitor>}
+     * @memberof RunProcessesDto
+     */
+    monitors: Array<RunMonitor>;
+    /**
+     * every process listed, the trees, `detached` and `monitors` together
      * @type {number}
      * @memberof RunProcessesDto
      */
@@ -7620,7 +7687,13 @@ export interface StopDetachedProcessesDto {
      * @type {Array<number>}
      * @memberof StopDetachedProcessesDto
      */
-    pids: Array<number>;
+    pids?: Array<number>;
+    /**
+     * monitors to stop; each ends `stopped` and wakes its agent
+     * @type {Array<string>}
+     * @memberof StopDetachedProcessesDto
+     */
+    monitorIds?: Array<string>;
 }
 /**
  * 
@@ -7634,6 +7707,12 @@ export interface StoppedDetachedProcessesDto {
      * @memberof StoppedDetachedProcessesDto
      */
     stoppedPids: Array<number>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof StoppedDetachedProcessesDto
+     */
+    stoppedMonitorIds: Array<string>;
 }
 /**
  * 

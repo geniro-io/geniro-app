@@ -8,7 +8,7 @@ export { PROCESS_POLL_MS } from '../use-polled-read';
 
 export type RunProcessesState = PolledReadState<RunProcessesDto> & {
   runId?: string | null;
-  stopDetached?: (pids: number[]) => Promise<void>;
+  stopDetached?: (pids: number[], monitorIds?: string[]) => Promise<void>;
 };
 
 /**
@@ -24,16 +24,22 @@ export function useRunProcesses(
 ): RunProcessesState {
   const [revision, setRevision] = useState(0);
   const stopDetached = useCallback(
-    async (pids: number[]): Promise<void> => {
+    async (pids: number[], monitorIds: string[] = []): Promise<void> => {
       if (apis === null || runId === null) {
         throw new Error('no thread is open');
       }
       const result = await apis.chats.stopDetachedProcesses({
         runId,
-        stopDetachedProcessesDto: { pids },
+        stopDetachedProcessesDto: {
+          ...(pids.length > 0 ? { pids } : {}),
+          ...(monitorIds.length > 0 ? { monitorIds } : {}),
+        },
       });
       setRevision((value) => value + 1);
-      if (pids.some((pid) => !result.stoppedPids.includes(pid))) {
+      if (
+        pids.some((pid) => !result.stoppedPids.includes(pid)) ||
+        monitorIds.some((id) => !result.stoppedMonitorIds.includes(id))
+      ) {
         throw new Error(
           'Some selected processes could not be confirmed or stopped. Refresh and try again.',
         );

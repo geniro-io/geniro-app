@@ -2335,6 +2335,8 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
 
     expect(captured.args).toEqual([
       ...CLAUDE_BASE_ARGS,
+      '--disallowedTools',
+      'Monitor',
       CLAUDE_MCP_CONFIG_FLAG,
       CLAUDE_EMPTY_MCP_CONFIG,
       CLAUDE_STRICT_MCP_CONFIG_FLAG,
@@ -2888,7 +2890,7 @@ describe('ClaudeAdapter — fast mode', () => {
     expect(session.startTurn({ ...input }, () => {})).not.toBeNull();
   });
 
-  it('withholds a node’s switched-off MCP servers with --disallowedTools, never geniro’s own', () => {
+  it('withholds claude’s own Monitor and a node’s switched-off MCP servers with one --disallowedTools, never geniro’s own', () => {
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       {
@@ -2906,10 +2908,12 @@ describe('ClaudeAdapter — fast mode', () => {
     const args = captured.args!;
     const at = args.indexOf('--disallowedTools');
     expect(at).toBeGreaterThan(-1);
-    expect(args.slice(at + 1, at + 3)).toEqual([
+    expect(args.slice(at + 1, at + 4)).toEqual([
+      'Monitor',
       'mcp__codegraph',
       'mcp__claude_ai_Gmail',
     ]);
+    expect(args.filter((arg) => arg === '--disallowedTools')).toHaveLength(1);
     expect(args).not.toContain('mcp__geniro-run-1');
 
     const none = fakeSpawn();
@@ -2917,7 +2921,10 @@ describe('ClaudeAdapter — fast mode', () => {
       { prompt: 'go', cwd: '/proj' },
       () => {},
     );
-    expect(none.captured.args).not.toContain('--disallowedTools');
+    const bare = none.captured.args!;
+    expect(bare.slice(bare.indexOf('--disallowedTools') + 1)[0]).toBe(
+      'Monitor',
+    );
   });
 
   it('respawns the kept process when the switched-off servers change, not when only their order does', async () => {

@@ -464,6 +464,12 @@ export interface RunStatusEvent {
    */
   restored?: boolean;
   /**
+   * True when geniro started the turn itself with a monitor's output — a settle
+   * that posts no banner (one per batch would be noise), though it still marks
+   * the thread unread.
+   */
+  hostTurn?: boolean;
+  /**
    * True when this settle has no terminal ROW behind it (an off-turn stretch
    * handing its badge back, a workflow woken by a call going quiet again, a
    * send that failed while a window showed the run working), so
@@ -593,6 +599,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     notify,
     preview,
     housekeeping,
+    hostTurn,
     restored,
     noTerminalItem,
     title,
@@ -743,6 +750,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // is — a skewed value leaves the line where it was.
     ...(typeof preview === 'string' && preview !== '' ? { preview } : {}),
     ...(housekeeping === true ? { housekeeping: true } : {}),
+    ...(hostTurn === true ? { hostTurn: true } : {}),
     ...(restored === true ? { restored: true } : {}),
     ...(noTerminalItem === true ? { noTerminalItem: true } : {}),
     // An empty string is dropped rather than applied: a blank title would

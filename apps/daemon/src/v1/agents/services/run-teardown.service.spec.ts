@@ -30,6 +30,7 @@ import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
 import type { ChatUploadStoreService } from './chat-upload-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
+import { MonitorRegistry } from './monitor.registry';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import type { RunProcessReaper } from './run-process-reaper.service';
@@ -58,6 +59,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   /** The run's CLIs closing and its detached processes being reaped, in order. */
   let processEnds: string[];
   let commands: ActionCommandRegistry;
+  let monitors: MonitorRegistry;
   /** Every CLI transcript the teardown asked an adapter to delete. */
   let deletedTranscripts: (DeleteSessionTranscriptInput & { agent: string })[];
   /**
@@ -97,6 +99,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     removedArtifactRuns = [];
     processEnds = [];
     commands = new ActionCommandRegistry();
+    monitors = new MonitorRegistry(new ProcessRegistry());
     referencedTexts = [];
     deletedTranscripts = [];
     const em = orm.em.fork();
@@ -156,6 +159,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       } as unknown as RunProcessReaper,
       wallTurnDao,
       commands,
+      monitors,
     );
   });
 
@@ -197,6 +201,41 @@ describe('RunTeardownService (in-memory sqlite)', () => {
 
     expect(commands.start('run-a').signal.aborted).toBe(true);
     expect(commands.start('run-b').signal.aborted).toBe(false);
+  });
+
+  it('stops the run’s monitors as teardown, waking nobody, and starts none until the run is back', async () => {
+    const ends: { stoppedBy: string | null; wake: boolean }[] = [];
+    monitors.subscribe((event) => {
+      if (event.type === 'end') {
+        ends.push({ stoppedBy: event.stoppedBy, wake: event.wake });
+      }
+    });
+    const owner = {
+      runId: 'run-a',
+      nodeId: 'agent',
+      caller: 'agent',
+      conversationId: null,
+      callId: null,
+      target: 'chat' as const,
+    };
+    const start = () =>
+      monitors.start({
+        owner,
+        command: 'while true; do sleep 1; done',
+        description: 'loop',
+        timeoutMs: 60_000,
+      });
+    expect(start().status).toBe('started');
+
+    teardown.endProcesses('run-a');
+    await monitors.settled('run-a', 5000);
+
+    expect(ends).toEqual([{ stoppedBy: 'teardown', wake: false }]);
+    expect(start().status).toBe('refused');
+    teardown.resumeProcesses('run-a');
+    expect(start().status).toBe('started');
+    monitors.stopRun('run-a', 'teardown');
+    await monitors.settled('run-a', 5000);
   });
 
   it('a run back from the archive starts its commands normally again', () => {

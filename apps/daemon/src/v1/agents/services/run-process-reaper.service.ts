@@ -29,7 +29,6 @@ import {
   type StopCandidate,
 } from '../utils/run-process-scan';
 import { runPs } from '../utils/run-ps';
-import type { ActionCommandRegistry } from './action-command.registry';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import type { RunProcessAttribution } from './run-process-attribution.service';
 
@@ -677,18 +676,20 @@ async function readStartTimes(
  * The reaper as the agents module provides it: it asks the registry which
  * processes are a live agent's, and is handed what a run's CLI left running
  * whenever a process ends ({@link AgentSessionRegistry.onLeftCommands}). A
- * run with a command action running is held too; archive and delete end
- * those commands first, so they still reap the run.
+ * run with work running that the user started through it — a command action
+ * (`ActionCommandRegistry`), a monitor (`MonitorRegistry`) — is held too;
+ * archive and delete end that work first, so they still reap the run.
  */
 export function createRunProcessReaper(
   attribution: RunProcessAttribution,
   sessions: AgentSessionRegistry,
-  commands: ActionCommandRegistry,
+  heldWork: readonly { isRunning(runId: string): boolean }[],
   options: RunProcessReaperOptions = {},
 ): RunProcessReaper {
   const reaper = new RunProcessReaper(attribution, {
     held: (runId) =>
-      sessions.processRoots(runId).length > 0 || commands.isRunning(runId),
+      sessions.processRoots(runId).length > 0 ||
+      heldWork.some((work) => work.isRunning(runId)),
     processRoots: () => sessions.processRoots().map((root) => root.pid),
     ...options,
   });

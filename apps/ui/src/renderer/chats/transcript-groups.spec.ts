@@ -583,6 +583,28 @@ describe('groupTranscript', () => {
     expect(pairs.every((pair) => pair.result !== null)).toBe(true);
   });
 
+  it('SHOWS the monitor tools as ordinary tool rows', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__monitor', 't1', { command: 'tail -f log' }),
+      result('t1', 'monitor m1 started'),
+      call('mcp__geniro-run-1__stop_monitor', 't2', { id: 'm1' }),
+      result('t2', 'stopped'),
+      call('geniro-run-1: list_monitors', 't3', {}),
+      result('t3', 'none'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(
+      pairs.map((pair) => payloadString(pair.call.payload, 'name')),
+    ).toEqual([
+      'mcp__geniro-run-1__monitor',
+      'mcp__geniro-run-1__stop_monitor',
+      'geniro-run-1: list_monitors',
+    ]);
+    expect(pairs.every((pair) => pair.result !== null)).toBe(true);
+  });
+
   it('still hides a card-drawing tool on the per-run server, in both spellings', () => {
     const entries = groupTranscript([
       call('mcp__geniro-run-1__propose_plan', 't1', { steps: [] }),

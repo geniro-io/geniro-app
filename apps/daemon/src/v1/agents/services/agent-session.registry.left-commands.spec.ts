@@ -83,11 +83,9 @@ describe('a CLI that dies without stopping its background commands', () => {
   it('has the commands it reported stopped, and its MCP servers left running', async () => {
     const registry = new AgentSessionRegistry();
     // Wired as production wires it: the registry tells the reaper.
-    createRunProcessReaper(
-      new RunProcessAttribution('test-owner'),
-      registry,
+    createRunProcessReaper(new RunProcessAttribution('test-owner'), registry, [
       new ActionCommandRegistry(),
-    );
+    ]);
     // The real table, read as production reads it; noted once a reading has
     // seen the command, so the CLI is killed only after a recording exists.
     let readTheCommand = false;

@@ -1095,7 +1095,13 @@ export interface CalleeTurnOutcome {
  * - `cancelled` — the call, or the run, was stopped while it waited.
  */
 export type CallHoldRelease =
-  | { kind: 'wake'; prompt: string; note: string }
+  | {
+      kind: 'wake';
+      prompt: string;
+      note: string;
+      /** Woken by its monitors' output — counted against their own budget. */
+      monitor?: true;
+    }
   | { kind: 'settle' }
   | { kind: 'cancelled' };
 
@@ -1746,6 +1752,17 @@ export interface RunCallCapability {
    * TTL; one owned by a fire-and-forget caller is orphaned at once.
    */
   isNodeLive(caller: string): boolean;
+  /**
+   * Whether a conversation's monitors still owe it output — one running, or
+   * output held until it can be delivered. A callee turn ending while this
+   * holds is held in its call, as for a call of its own still running.
+   * Absent for a capability with no monitor tools.
+   */
+  monitorsOwed?(caller: string): boolean;
+  /** Stop a conversation's monitors — its call is being cancelled. */
+  stopMonitors?(caller: string): void;
+  /** A callee conversation's call is now held — output waiting for it can go. */
+  callHeld?(caller: string): void;
   /**
    * Start another turn of a node's OWN conversation whose turns have all
    * ended, carrying `prompt` — how a question or a result that arrives after

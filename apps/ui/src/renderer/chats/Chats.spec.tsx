@@ -826,6 +826,7 @@ beforeEach(() => {
     sampledAt: '2026-09-07T12:00:00.000Z',
     trees: [],
     detached: [],
+    monitors: [],
     processes: 0,
     cpuPercent: 0,
     rssBytes: 0,
@@ -3183,6 +3184,27 @@ describe('Chats — the system notifications a thread earns', () => {
         activity: null,
         summary: null,
         housekeeping: true,
+      });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('posts no banner for a background turn geniro started for a monitor’s output', async () => {
+    // A watch reporting step after step would otherwise post one per batch.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: 'CI is green',
+        hostTurn: true,
       });
     });
 

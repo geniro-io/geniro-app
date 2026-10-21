@@ -36,6 +36,7 @@ import {
   type HostArtifactOutcome,
   type HostArtifactRow,
   type ItemWire,
+  type MonitorRowWire,
   type PersistedResetWake,
   type RunCallSeed,
   type RunListPage,
@@ -67,6 +68,8 @@ import { ItemCallIndexService } from '../../agents/services/item-call-index.serv
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
+import { MonitorBroker } from '../../agents/services/monitor.broker';
+import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import {
   partialOwnerKey,
   PartialStreamService,
@@ -106,6 +109,7 @@ import { firstTurnWindow } from '../../agents/utils/first-turn-window';
 import { hostMcpServerName } from '../../agents/utils/host-question';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
+import { offersMonitorTools } from '../../agents/utils/monitor-offer';
 import { readNodePoolMembers } from '../../agents/utils/node-pool-members';
 import {
   delegateCloseEvent,
@@ -193,6 +197,7 @@ import {
   poolMemberNode,
   poolMembersOf,
   poolMoveNotice,
+  poolSize,
 } from '../utils/agent-pool';
 import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
 import {
@@ -268,6 +273,17 @@ const INSTRUCTION_BLOCK_SEPARATOR = '\n\n';
  * a cursor turn's delegate wakes are (`MAX_DELEGATE_WAKES`).
  */
 const MAX_CALL_WAKES = 10;
+
+/**
+ * How many times one call may be continued inside itself with its callee's
+ * monitor output — a budget of its own, so a CI watch reporting step after
+ * step does not spend the waits its delegations are owed. Past it the
+ * callee's monitors are stopped and the call settles on the answer it has.
+ */
+const MAX_MONITOR_WAKES = 50;
+
+/** How a workflow conversation took a monitor's output. */
+export type MonitorWake = 'woken' | 'busy' | 'refused';
 
 export interface StartWorkflowRunInput {
   /** Library slug — persisted as `Run.workflowId`. */
@@ -764,6 +780,9 @@ export class GraphExecutorService
     /** The button tools (`publish_action`), optional on `artifacts`' terms. */
     @Optional() private readonly actionSinks?: ActionBroker,
     @Optional() private readonly actionPublisher?: ActionPublishService,
+    /** The monitor tools, optional on `artifacts`' terms. */
+    @Optional() private readonly monitors?: MonitorRegistry,
+    @Optional() private readonly monitorSinks?: MonitorBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -791,6 +810,37 @@ export class GraphExecutorService
 
   /** Each run's button publishers, on the same terms. */
   private readonly actionDisposers = new Map<string, (() => void)[]>();
+
+  /** Each run's monitor sinks, on the same terms. */
+  private readonly monitorDisposers = new Map<string, (() => void)[]>();
+
+  /**
+   * How a monitor's output reaches one of a run's conversations — installed by
+   * each pass over that pass's own turn machinery, whether or not the workflow
+   * can call (`wakeNode` exists only where it can).
+   */
+  private readonly monitorWakers = new Map<
+    string,
+    (
+      caller: string,
+      prompt: string,
+      row: MonitorRowWire,
+      onDropped: (requeue: boolean) => void,
+    ) => MonitorWake
+  >();
+
+  /** Told whenever one of a run's conversations ends its turn. */
+  private readonly conversationTurnEndListeners = new Set<
+    (runId: string, caller: string) => void
+  >();
+
+  /**
+   * Whether output waits to be delivered to a conversation — the monitor
+   * delivery's answer, installed by it, so a held call is not let go while it
+   * still owes its callee a message.
+   */
+  private monitorOutputHeld: (runId: string, caller: string) => boolean = () =>
+    false;
 
   /**
    * What to do when one of a LIVE run's sessions is closed by something other
@@ -1399,7 +1449,68 @@ export class GraphExecutorService
     // run's processes from here — that, or a later close, since they are kept
     // past the Stop — says it was the Stop's.
     this.sessions.noteUserStop(runId);
+    // The run's monitors end with it, waking nobody.
+    this.monitors?.stopRun(runId, 'thread-stop');
     return { cancelled: this.registry.cancel(runId) };
+  }
+
+  /**
+   * Wake one of a run's conversations with a monitor's output, as a turn of
+   * its own after the one it is in: `busy` while that conversation's turn
+   * runs (the caller holds the output for {@link onConversationTurnEnded}),
+   * `refused` when no pass of the run can take it — stopped, deleted, or a
+   * callee conversation whose call has already settled. `onDropped` is told
+   * when a wake answered `woken` is dropped after all, before its turn could
+   * start: `requeue` true when a user's message started the run's next pass
+   * meanwhile (the caller holds the output again for that conversation's next
+   * turn end), false when the run was stopped (the caller records what it
+   * carried).
+   */
+  wakeConversation(
+    runId: string,
+    caller: string,
+    prompt: string,
+    row: MonitorRowWire,
+    onDropped: (requeue: boolean) => void = () => undefined,
+  ): MonitorWake {
+    return (
+      this.monitorWakers.get(runId)?.(caller, prompt, row, onDropped) ??
+      'refused'
+    );
+  }
+
+  /** Be told whenever one of a run's conversations ends its turn. */
+  onConversationTurnEnded(
+    listener: (runId: string, caller: string) => void,
+  ): () => void {
+    this.conversationTurnEndListeners.add(listener);
+    return () => {
+      this.conversationTurnEndListeners.delete(listener);
+    };
+  }
+
+  private notifyConversationTurnEnded(runId: string, caller: string): void {
+    for (const listener of this.conversationTurnEndListeners) {
+      try {
+        listener(runId, caller);
+      } catch (err) {
+        this.logger.error(
+          `workflow run ${runId} conversation ${caller}: a turn-end listener failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /** Installed by the monitor delivery — see {@link monitorOutputHeld}. */
+  setMonitorOutputHeld(
+    check: (runId: string, caller: string) => boolean,
+  ): void {
+    this.monitorOutputHeld = check;
+  }
+
+  /** A callee's monitor ended unannounced: its held call may settle now. */
+  reviewMonitorHold(runId: string, caller: string): void {
+    this.callBroker.reviewHeldCallee(runId, caller);
   }
 
   /**
@@ -1711,12 +1822,17 @@ export class GraphExecutorService
    * calls this.
    */
   private disposeHostPublishers(runId: string): void {
-    for (const disposers of [this.artifactDisposers, this.actionDisposers]) {
+    for (const disposers of [
+      this.artifactDisposers,
+      this.actionDisposers,
+      this.monitorDisposers,
+    ]) {
       for (const dispose of disposers.get(runId) ?? []) {
         dispose();
       }
       disposers.delete(runId);
     }
+    this.monitorWakers.delete(runId);
   }
 
   /**
@@ -1881,6 +1997,63 @@ export class GraphExecutorService
       );
     }
     this.actionDisposers.set(runId, disposers);
+  }
+
+  /**
+   * Give each agent node of this pass the monitor tools, on
+   * {@link registerActionPublishers}' terms: a monitor belongs to the
+   * conversation that started it, and one started inside a call is filed
+   * under that call. Offered only where calling a geniro tool is put to the
+   * user first, or the node runs unattended anyway — the command runs in no
+   * sandbox of its own (`AdapterConfig.hostToolCallUngatedReason`).
+   */
+  private registerMonitorSinks(
+    runId: string,
+    nodes: readonly WorkflowAgentNode[],
+    cwd: string,
+    approvalOf: (node: WorkflowAgentNode) => string,
+  ): void {
+    const broker = this.monitorSinks;
+    if (broker === undefined) {
+      return;
+    }
+    for (const dispose of this.monitorDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    const disposers: (() => void)[] = [];
+    for (const node of nodes) {
+      // Every pool member must pass, on the mode it actually runs: a call
+      // may land on any of them.
+      const offered = Array.from({ length: poolSize(node) }, (_, index) =>
+        index === 0 ? node : poolMemberNode(node, index + 1),
+      ).every(
+        (member) =>
+          member !== null &&
+          offersMonitorTools(
+            this.adapterFor(member.agent).getConfig(),
+            approvalOf(member),
+          ),
+      );
+      if (!offered) {
+        continue;
+      }
+      disposers.push(
+        broker.register(runId, node.id, {
+          ownerOf: (caller) => ({
+            owner: {
+              runId,
+              nodeId: node.id,
+              caller,
+              conversationId: callerConversationOf(caller),
+              callId: this.callBroker.callAnsweredBy(runId, caller),
+              target: 'workflow',
+            },
+            cwd,
+          }),
+        }),
+      );
+    }
+    this.monitorDisposers.set(runId, disposers);
   }
 
   /** Drop every per-key fact of one run — its keys are `<runId>::…`. */
@@ -2788,6 +2961,7 @@ export class GraphExecutorService
       for (const redeliver of dropped) {
         redeliver();
       }
+      this.notifyConversationTurnEnded(runId, caller);
     };
     let cancelRequested = false;
     /**
@@ -2808,6 +2982,13 @@ export class GraphExecutorService
     const endedByShutdown = (status: RunStatus): boolean =>
       status !== 'completed' && this.shuttingDown && !stoppedByUser;
     let runFinished = false;
+    /**
+     * Whether the run's current reopened stretch was started by a monitor's
+     * output alone — its settle is then a host turn's (`hostTurn`), which
+     * posts no banner. Set only by the wake that reopens the run; any other
+     * turn or user message in the stretch clears it for the rest of it.
+     */
+    let wokenOnlyByMonitors = false;
     let persistenceFailed = false;
 
     // One serialized write chain for the whole pass: persist-then-emit ordering
@@ -3098,7 +3279,12 @@ export class GraphExecutorService
      * ({@link supersededByNextPass}) — decided in the same synchronous stretch
      * as the registration, since the claim lands during the awaits above it.
      */
-    const reopenRun = async (): Promise<'awake' | 'stopped' | 'superseded'> => {
+    const reopenRun = async (
+      opener: 'monitor' | 'other' = 'other',
+    ): Promise<'awake' | 'stopped' | 'superseded'> => {
+      if (opener !== 'monitor') {
+        wokenOnlyByMonitors = false;
+      }
       // The roll-up writes this run's terminal status; waking ahead of it puts
       // `running` on the row and has it overwritten a moment later.
       await finalizing;
@@ -3139,6 +3325,7 @@ export class GraphExecutorService
         return 'superseded';
       }
       reopened = true;
+      wokenOnlyByMonitors = opener === 'monitor';
       registerAggregate();
       // A user's message reaches an AWAKE run through the same control a live
       // pass offers — the wake holds the run's claim, so the walk a settled run
@@ -3187,7 +3374,9 @@ export class GraphExecutorService
           // working state is this announce's to end.
           await this.setRunStatus(em, runId, status, {
             noTerminalItem: true,
+            ...(wokenOnlyByMonitors ? { hostTurn: true } : {}),
           });
+          wokenOnlyByMonitors = false;
         }
       } finally {
         // The handle settles even if the write failed, as the pass's own does
@@ -6042,6 +6231,9 @@ export class GraphExecutorService
                   return;
                 }
               }
+              // Not held: the call settles now, and a monitor its callee
+              // started has nobody left to wake.
+              this.monitors?.stopConversation(runId, calleeCaller, 'teardown');
               // Stopped while its turn was ending with work of its own still
               // out: that work is being cancelled with it, so the call ends
               // cancelled rather than handing over an answer it never finished.
@@ -6121,6 +6313,7 @@ export class GraphExecutorService
         // held call runs nothing, and its own calls may need the slot.
         let releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
         let callWakes = 0;
+        let monitorWakes = 0;
         let currentMessage = message;
         /**
          * The HELD loop: the call waits for the calls its callee made, and is
@@ -6182,7 +6375,20 @@ export class GraphExecutorService
                 handedOn: false,
               };
             }
-            callWakes += 1;
+            if (release.monitor === true) {
+              monitorWakes += 1;
+              if (monitorWakes >= MAX_MONITOR_WAKES) {
+                // The last wake it is given: the turn it starts settles the
+                // call, so nothing may be left running to wake it again.
+                this.monitors?.stopConversation(
+                  runId,
+                  callerKey(node.id, conversationId),
+                  'teardown',
+                );
+              }
+            } else {
+              callWakes += 1;
+            }
             currentMessage = [
               release.prompt,
               ...this.callBroker.takeQueuedMessages(runId, callId),
@@ -6199,7 +6405,7 @@ export class GraphExecutorService
               currentMessage,
               reported.sessionId,
               handsOn,
-              callWakes < MAX_CALL_WAKES,
+              callWakes < MAX_CALL_WAKES && monitorWakes < MAX_MONITOR_WAKES,
             );
             if (woken.handedOn) {
               return { outcome: woken.outcome, handedOn: true };
@@ -6388,7 +6594,11 @@ export class GraphExecutorService
       node: WorkflowAgentNode,
       prompt: string,
       images: TurnImage[],
+      opener: 'monitor' | 'other' = 'other',
     ): Promise<void> => {
+      if (opener !== 'monitor') {
+        wokenOnlyByMonitors = false;
+      }
       const starting = reserveContinuation(node.id);
       markRootWorking(node.id, true);
       liveSubTurns += 1;
@@ -6618,6 +6828,8 @@ export class GraphExecutorService
         took: 0,
         dropped: [],
       };
+      // The user drives this stretch now: its settle is theirs to hear about.
+      wokenOnlyByMonitors = false;
       const told: string[] = [];
       for (const root of roots) {
         const running =
@@ -6756,6 +6968,7 @@ export class GraphExecutorService
       // TWIN PARSER: the renderer reads it back off the row
       // (`chats/not-sent-messages.ts`).
       const deliveryId = randomUUID();
+      wokenOnlyByMonitors = false;
       // Told FIRST, recorded after, for `deliverFollowUp`'s reason.
       if (!handle.sendUserMessage({ text, images: turnImages, deliveryId })) {
         throw new ConflictException(
@@ -6886,6 +7099,101 @@ export class GraphExecutorService
       persistItem,
     );
     this.registerActionPublishers(runId, hostToolNodes, triggerFed);
+    this.registerMonitorSinks(
+      runId,
+      hostToolNodes,
+      cwd,
+      (node) => resolveApproval(node).mode,
+    );
+    /**
+     * Open a turn of a node's OWN conversation on the write chain — what a
+     * wake (`wakeNode`) and a monitor's output share: counted live from now
+     * rather than from when the turn begins (the turn starts on the write
+     * chain, and a finalizer queued ahead of it would otherwise see nothing
+     * live and close the run under it), after any continuation still being
+     * reserved, waking a finished run first. `onStopped` runs when the run was
+     * cancelled meanwhile or refuses to wake — `stopped` (stopped, archived,
+     * being deleted) or `superseded` (a user's message claimed the run for its
+     * next pass meanwhile); `onBusy` when the conversation is working again,
+     * handed what opens this turn once more; `start` opens it.
+     */
+    const scheduleOwnTurn = (
+      nodeId: string,
+      caller: string,
+      opener: 'monitor' | 'other',
+      steps: {
+        onStopped: (why: 'stopped' | 'superseded') => void;
+        onBusy: (rewake: () => void) => void;
+        start: () => Promise<void> | void;
+      },
+    ): void => {
+      liveSubTurns += 1;
+      const deliver = async (): Promise<void> => {
+        const starting = startingContinuations.get(nodeId);
+        if (starting) {
+          // The reservation may depend on a later write in this chain.
+          void starting.ready.then(() => enqueue(deliver));
+          return;
+        }
+        liveSubTurns -= 1;
+        const woke = cancelRequested
+          ? 'stopped'
+          : runFinished
+            ? await reopenRun(opener)
+            : 'awake';
+        if (woke !== 'awake') {
+          steps.onStopped(woke);
+          await finishRunIfSettled();
+          return;
+        }
+        if (liveConversations.has(caller)) {
+          steps.onBusy(() => {
+            liveSubTurns += 1;
+            enqueue(deliver);
+          });
+          // This path opens NO turn, so nothing else would put a run that
+          // woke for it back to sleep.
+          await finishRunIfSettled();
+          return;
+        }
+        await steps.start();
+      };
+      enqueue(deliver);
+    };
+    // A monitor's output reaches a node's OWN conversation as a turn of its
+    // own once the one it is in has ended — `wakeNode`'s path, which exists
+    // only where the workflow can call — and a callee conversation inside the
+    // call it holds open.
+    this.monitorWakers.set(runId, (caller, prompt, row, onDropped) => {
+      if (cancelRequested) {
+        return 'refused';
+      }
+      if (liveConversations.has(caller)) {
+        return 'busy';
+      }
+      if (callerConversationOf(caller) !== null) {
+        const woke = this.callBroker.wakeHeldCallee(runId, caller, prompt, row);
+        return woke === 'pending' ? 'busy' : woke;
+      }
+      const nodeId = callerNodeOf(caller);
+      const node = nodesById.get(nodeId);
+      if (node?.kind !== 'agent') {
+        return 'refused';
+      }
+      scheduleOwnTurn(nodeId, caller, 'monitor', {
+        // Its delivery already let the output go: handed back, it holds it
+        // for the next pass's turn of this conversation, or records what
+        // ended when the run is stopped.
+        onStopped: (why) => onDropped(why === 'superseded'),
+        // A follow-up took the conversation meanwhile: never into its turn.
+        onBusy: (rewake) => redeliverWhenEnded(caller, rewake),
+        start: async () => {
+          await persistItem(nodeId, 'system', null, row);
+          void continueNode(node, prompt, [], 'monitor');
+        },
+      });
+      return 'woken';
+    });
     /** The node a caller conversation runs as — its pool member, once known. */
     const agentNodeOfConversation = (
       caller: string,
@@ -6931,6 +7239,12 @@ export class GraphExecutorService
           },
           isCancelled: () => cancelRequested,
           isSuperseded: supersededByNextPass,
+          monitorsOwed: (caller) =>
+            this.monitors?.isRunningFor(runId, caller) === true ||
+            this.monitorOutputHeld(runId, caller),
+          stopMonitors: (caller) =>
+            this.monitors?.stopConversation(runId, caller, 'thread-stop'),
+          callHeld: (caller) => this.notifyConversationTurnEnded(runId, caller),
           toolCallDeadlineMs: (caller) => {
             const node = agentNodeOfConversation(caller);
             return node !== null
@@ -7018,43 +7332,20 @@ export class GraphExecutorService
             if (node?.kind !== 'agent' || cancelRequested) {
               return false;
             }
-            // Counted as live from NOW rather than from when the turn begins:
-            // the turn starts on the write chain, and a finalizer queued ahead
-            // of it would otherwise see nothing live and close the run under
-            // the wake.
-            liveSubTurns += 1;
-            const deliverWake = async (): Promise<void> => {
-              const starting = startingContinuations.get(nodeId);
-              if (starting) {
-                // The reservation may depend on a later write in this chain.
-                void starting.ready.then(() => enqueue(deliverWake));
-                return;
-              }
-              liveSubTurns -= 1;
-              // Cancelled meanwhile — every callee dies with the run, so there
-              // is nothing left for this turn to answer or collect — or the
-              // walk is over and the run refuses to wake (stopped, archived,
-              // being deleted).
-              if (
-                cancelRequested ||
-                (runFinished && (await reopenRun()) !== 'awake')
-              ) {
-                await finishRunIfSettled();
-                return;
-              }
-              if (liveConversations.has(caller)) {
-                // A follow-up raced the wake and the conversation is working
-                // again: hand it the message inside that turn rather than
-                // opening a second one on it. Asked of the CONVERSATION: a node
-                // "live" only through a callee turn has no handle here, and the
-                // prompt its wake was already counted as told went nowhere.
-                // A turn that drops it — or is already ending and refuses it —
-                // has it woken for again once that turn has ended.
+            // Cancelled meanwhile — every callee dies with the run, so there
+            // is nothing left for this turn to answer or collect — or a run
+            // that refuses to wake: nothing to do.
+            scheduleOwnTurn(nodeId, caller, 'other', {
+              onStopped: () => undefined,
+              // A follow-up raced the wake and the conversation is working
+              // again: hand it the message inside that turn rather than
+              // opening a second one on it. Asked of the CONVERSATION: a node
+              // "live" only through a callee turn has no handle here, and the
+              // prompt its wake was already counted as told went nowhere.
+              // A turn that drops it — or is already ending and refuses it —
+              // has it woken for again once that turn has ended.
+              onBusy: (rewake) => {
                 const deliveryId = randomUUID();
-                const rewake = (): void => {
-                  liveSubTurns += 1;
-                  enqueue(deliverWake);
-                };
                 if (
                   conversationHandle(caller)?.sendUserMessage({
                     text: prompt,
@@ -7069,14 +7360,11 @@ export class GraphExecutorService
                 } else {
                   redeliverWhenEnded(caller, rewake);
                 }
-                // This path opens NO turn, so nothing else would put a run that
-                // woke for this wake back to sleep.
-                await finishRunIfSettled();
-                return;
-              }
-              continueNode(node, prompt, []);
-            };
-            enqueue(deliverWake);
+              },
+              start: () => {
+                void continueNode(node, prompt, []);
+              },
+            });
             return true;
           },
         },

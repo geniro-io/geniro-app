@@ -56,6 +56,10 @@ export type GeniroCardKind =
  * the call and its result both in the transcript, and nothing on screen
  * between the user's message and the answer.
  *
+ * `monitor`, `stop_monitor` and `list_monitors` are deliberately absent: any key
+ * here hides a tool's raw rows, and a monitor call has no card, so its call
+ * renders as an ordinary tool row.
+ *
  * The VALUE is the card that tool draws, or null for one whose story is told by
  * the dedicated call kinds instead. Keeping both facts in one table is what
  * stops the hide list and the loader's list from drifting: a drawing tool added
@@ -143,6 +147,25 @@ const GENIRO_CARD_KINDS = new Set<string>(
     (kind): kind is GeniroCardKind => kind !== null,
   ),
 );
+
+/**
+ * Whether a tool call names geniro's `monitor` — kept out of
+ * {@link GENIRO_TOOLS} so its row stays visible, so matched here on its own,
+ * in the two spellings {@link geniroToolOf} reads (`mcp__<server>__<tool>`, and
+ * cursor's `<server>-<tool>: <tool>`) for a server named `geniro-<runId8>` —
+ * and the bare `mcp__<server>` codex names a call it cannot pin to one tool,
+ * which may be a monitor.
+ *
+ * TWIN PARSER: the exact spellings of the daemon's `isHostToolCall`
+ * (`apps/daemon/src/v1/agents/utils/host-tool.ts`), and codex's bare
+ * `mcp__<server>` card name (`mcpToolApprovalCard` in
+ * `apps/daemon/src/v1/agents/adapters/codex/utils/codex-approval.utils.ts`).
+ */
+export function namesGeniroMonitor(name: string): boolean {
+  return /^(?:mcp__geniro-[0-9a-f]{8}(?:__monitor)?|geniro-[0-9a-f]{8}-monitor: monitor)$/.test(
+    name,
+  );
+}
 
 /** Whether a tool call is one of geniro's own on geniro's own server. */
 export function isGeniroToolName(name: string, runId: string): boolean {

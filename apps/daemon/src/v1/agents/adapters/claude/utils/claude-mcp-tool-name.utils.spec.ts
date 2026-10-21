@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  claudeDisallowedMcpArgs,
+  claudeDisallowedToolArgs,
   claudeMcpServerRule,
   claudeMcpServerSegment,
 } from './claude-mcp-tool-name.utils';
@@ -38,25 +38,39 @@ describe('claudeMcpServerRule', () => {
   });
 });
 
-describe('claudeDisallowedMcpArgs', () => {
-  it('adds nothing when nothing is switched off', () => {
-    expect(claudeDisallowedMcpArgs(undefined, null)).toEqual([]);
-    expect(claudeDisallowedMcpArgs([], 'geniro-run')).toEqual([]);
+describe('claudeDisallowedToolArgs', () => {
+  it('withholds claude’s own Monitor even when nothing is switched off', () => {
+    expect(claudeDisallowedToolArgs(undefined, null)).toEqual([
+      '--disallowedTools',
+      'Monitor',
+    ]);
+    expect(claudeDisallowedToolArgs([], 'geniro-run')).toEqual([
+      '--disallowedTools',
+      'Monitor',
+    ]);
   });
 
   it('is ONE flag followed by every rule, de-duplicated', () => {
     expect(
-      claudeDisallowedMcpArgs(
+      claudeDisallowedToolArgs(
         ['codegraph', 'claude.ai Gmail', 'codegraph'],
         null,
       ),
-    ).toEqual(['--disallowedTools', 'mcp__codegraph', 'mcp__claude_ai_Gmail']);
+    ).toEqual([
+      '--disallowedTools',
+      'Monitor',
+      'mcp__codegraph',
+      'mcp__claude_ai_Gmail',
+    ]);
   });
 
   it('never withholds geniro’s own server', () => {
     expect(
-      claudeDisallowedMcpArgs(['geniro-abc', 'codegraph'], 'geniro-abc'),
-    ).toEqual(['--disallowedTools', 'mcp__codegraph']);
-    expect(claudeDisallowedMcpArgs(['geniro-abc'], 'geniro-abc')).toEqual([]);
+      claudeDisallowedToolArgs(['geniro-abc', 'codegraph'], 'geniro-abc'),
+    ).toEqual(['--disallowedTools', 'Monitor', 'mcp__codegraph']);
+    expect(claudeDisallowedToolArgs(['geniro-abc'], 'geniro-abc')).toEqual([
+      '--disallowedTools',
+      'Monitor',
+    ]);
   });
 });

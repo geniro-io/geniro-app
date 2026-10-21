@@ -6,6 +6,7 @@ import { StopDetachedProcessesSchema } from '../chat.types';
 import type { RunDao } from '../dao/run.dao';
 import { listChatsQuerySchema } from '../dto/chat.dto';
 import type { AgentSessionRegistry } from '../services/agent-session.registry';
+import type { MonitorRegistry } from '../services/monitor.registry';
 import { RunProcessAttribution } from '../services/run-process-attribution.service';
 import { RunProcessReaper } from '../services/run-process-reaper.service';
 import { RunProcessesService } from '../services/run-processes.service';
@@ -68,6 +69,16 @@ function setup(
     uid: 501,
   });
   const signal = vi.fn();
+  const monitors = {
+    stop: vi.fn((_runId: string, id: string) =>
+      id === 'm1'
+        ? { status: 'stopped' as const }
+        : {
+            status: 'refused' as const,
+            reason: `no running monitor ${id} of yours`,
+          },
+    ),
+  } as unknown as MonitorRegistry;
   const reaper = new RunProcessReaper(attribution, {
     held: () => (options.roots?.length ?? 0) > 0,
     processRoots: () => [...(options.roots ?? [])],
@@ -89,13 +100,23 @@ function setup(
     {} as AgentSessionRegistry,
     attribution,
     reaper,
+    monitors,
   );
   const controller = Object.create(ChatController.prototype) as ChatController;
   Object.assign(controller, { processes: service });
-  return { controller, signal };
+  return { controller, signal, monitors };
 }
 
 describe('POST /v1/chats/:runId/processes/stop', () => {
+  it("stops a monitor by its id as the user's stop, and reports only the ones it stopped", async () => {
+    const { controller, signal, monitors } = setup();
+    expect(
+      await controller.stopDetachedProcesses(RUN, { monitorIds: ['m1', 'm9'] }),
+    ).toEqual({ stoppedPids: [], stoppedMonitorIds: ['m1'] });
+    expect(monitors.stop).toHaveBeenCalledWith(RUN, 'm1', 'user');
+    expect(signal).not.toHaveBeenCalled();
+  });
+
   it('checks the registry after the scans finish', async () => {
     const roots: number[] = [];
     const rows = [scanned(500)];
@@ -176,6 +197,7 @@ describe('POST /v1/chats/:runId/processes/stop', () => {
       const { controller, signal } = setup();
       expect(await controller.stopDetachedProcesses(RUN, { pids })).toEqual({
         stoppedPids: pids,
+        stoppedMonitorIds: [],
       });
       expect(signal.mock.calls).toEqual([
         ...pids.map((pid) => [pid, 'SIGTERM']),
@@ -208,7 +230,7 @@ describe('POST /v1/chats/:runId/processes/stop', () => {
     const { controller, signal } = setup({ rows, usage, roots: [100] });
     expect(
       await controller.stopDetachedProcesses(RUN, { pids: [500] }),
-    ).toEqual({ stoppedPids: [500] });
+    ).toEqual({ stoppedPids: [500], stoppedMonitorIds: [] });
     expect(signal.mock.calls).toEqual([
       [500, 'SIGTERM'],
       [500, 'SIGKILL'],
@@ -235,7 +257,7 @@ describe('POST /v1/chats/:runId/processes/stop', () => {
     });
     expect(
       await controller.stopDetachedProcesses(RUN, { pids: [500, 501] }),
-    ).toEqual({ stoppedPids: [500] });
+    ).toEqual({ stoppedPids: [500], stoppedMonitorIds: [] });
     expect(signal.mock.calls).toEqual([[500, 'SIGTERM']]);
   });
 

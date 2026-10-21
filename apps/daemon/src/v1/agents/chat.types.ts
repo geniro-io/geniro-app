@@ -2822,6 +2822,31 @@ export const RunProcessTreeSchema = z
 export type RunProcessTree = z.infer<typeof RunProcessTreeSchema>;
 
 /**
+ * One `monitor` tool command a run has running: what the agent said it
+ * watches, and its process group.
+ */
+export const RunMonitorSchema = z
+  .object({
+    id: z.string().describe('the id the agent knows it by, e.g. `m1`'),
+    description: z.string(),
+    command: z.string().max(MAX_PROCESS_ARGS_CHARS),
+    startedAt: z.string(),
+    endsAt: z.string().describe('when its timeout stops it, ISO-8601'),
+    pid: z
+      .number()
+      .int()
+      .nullable()
+      .describe("the shell's pid, which is also its process group's id"),
+    processes: z
+      .array(RunProcessSchema)
+      .describe('the shell first, then its group depth-first'),
+    cpuPercent: z.number(),
+    rssBytes: z.number().int(),
+  })
+  .meta({ id: 'RunMonitor' });
+export type RunMonitor = z.infer<typeof RunMonitorSchema>;
+
+/**
  * Every process a run has running RIGHT NOW, and what each costs.
  *
  * Attribution starts from the pids this daemon spawned for the run (the kept
@@ -2839,10 +2864,17 @@ export const RunProcessesWireSchema = z.object({
     .describe(
       "what the run's agents left running with no CLI of theirs above it — a `nohup` dev server, a watcher, a browser — found by the run's tag; each top process is `root`, depth-first under it. The same set archiving or deleting the run stops",
     ),
+  monitors: z
+    .array(RunMonitorSchema)
+    .describe(
+      "the run's agents' `monitor` commands, each with its process group — never listed again under `detached`",
+    ),
   processes: z
     .number()
     .int()
-    .describe('every process listed, the trees and `detached` together'),
+    .describe(
+      'every process listed, the trees, `detached` and `monitors` together',
+    ),
   cpuPercent: z.number(),
   rssBytes: z.number().int(),
   unavailableReason: z
@@ -2854,11 +2886,22 @@ export const RunProcessesWireSchema = z.object({
 });
 export type RunProcessesWire = z.infer<typeof RunProcessesWireSchema>;
 
-export const StopDetachedProcessesSchema = z.object({
-  pids: z.array(z.number().int().min(2)).min(1).max(RUN_PROCESS_CAP),
-});
+export const StopDetachedProcessesSchema = z
+  .object({
+    pids: z.array(z.number().int().min(2)).max(RUN_PROCESS_CAP).optional(),
+    monitorIds: z
+      .array(z.string().regex(/^m\d+$/))
+      .max(RUN_PROCESS_CAP)
+      .optional()
+      .describe('monitors to stop; each ends `stopped` and wakes its agent'),
+  })
+  .refine(
+    (body) => (body.pids?.length ?? 0) + (body.monitorIds?.length ?? 0) > 0,
+    { message: 'name at least one pid or monitor id' },
+  );
 export const StoppedDetachedProcessesSchema = z.object({
   stoppedPids: z.array(z.number().int()),
+  stoppedMonitorIds: z.array(z.string()),
 });
 export type StoppedDetachedProcesses = z.infer<
   typeof StoppedDetachedProcessesSchema
@@ -3061,6 +3104,151 @@ export const ACTION_COMMAND_TIMEOUT_MAX_MINUTES = 60;
 export const ACTION_OUTPUT_TAIL_MAX = 64 * 1024;
 /** The end of that output `notify_agent` hands the agent. */
 export const ACTION_NOTIFY_TAIL_MAX = 2 * 1024;
+
+/** geniro's own tools that run a command and wake the agent with its output. */
+export const HOST_MONITOR_TOOL = 'monitor';
+export const HOST_STOP_MONITOR_TOOL = 'stop_monitor';
+export const HOST_LIST_MONITORS_TOOL = 'list_monitors';
+
+/** Monitor limits. Out-of-range arguments are refused, never clamped. */
+export const MONITOR_RUN_MAX = 8;
+export const MONITOR_DESCRIPTION_MAX = 60;
+export const MONITOR_COMMAND_MAX = 4000;
+export const MONITOR_TIMEOUT_MIN_MS = 1000;
+export const MONITOR_TIMEOUT_DEFAULT_MS = 600_000;
+export const MONITOR_TIMEOUT_MAX_MS = 3_600_000;
+
+/** A `monitor` call as its reader hands it over. */
+export interface MonitorStartInput {
+  command: string;
+  description: string;
+  timeoutMs: number;
+}
+
+/** How a monitor ended. */
+export type MonitorEndKind =
+  'exit' | 'signal' | 'timeout' | 'stopped' | 'flooded' | 'interrupted';
+
+export interface MonitorEnd {
+  kind: MonitorEndKind;
+  /** `exit` only. */
+  code?: number;
+  /** `signal` only. */
+  signal?: string;
+}
+
+/**
+ * One entry of a monitor `system` row's `monitors` (see {@link MonitorRowWire}):
+ * one start, batch or end of a monitor, with the lines it delivered
+ * (`omitted` more were not sent).
+ *
+ * TWIN PARSER: read by the renderer's `readMonitorNotice` in
+ * `apps/ui/src/renderer/chats/monitor-payload.ts`.
+ */
+export interface MonitorRowPayload {
+  id: string;
+  description: string;
+  event: 'start' | 'batch' | 'end';
+  end?: MonitorEnd;
+  lines: string[];
+  omitted: number;
+}
+
+/**
+ * A `system` row about monitors: a start, a silent end, or the messages one
+ * turn was started with (`woke`). Filed under `callId` inside a call.
+ *
+ * TWIN PARSER: read by the renderer's `readMonitorNotice` in
+ * `apps/ui/src/renderer/chats/monitor-payload.ts`.
+ */
+export interface MonitorRowWire {
+  severity: 'info';
+  message: string;
+  monitors: MonitorRowPayload[];
+  woke: boolean;
+  callId?: string;
+  /** The callee conversation the monitor belongs to — what a restart's note is owed to. */
+  conversationId?: string;
+}
+
+/** One running monitor, as `list_monitors` and the process panel see it. */
+export interface MonitorListing {
+  id: string;
+  description: string;
+  command: string;
+  startedAt: string;
+  endsAt: string;
+  timeoutMs: number;
+  /** Batches delivered so far. */
+  events: number;
+  /** The shell's pid, which is also its process group's id. */
+  pid: number | null;
+}
+
+/** Lines for the agent, plus how many more there were that it is not sent. */
+export interface MonitorBatch {
+  lines: string[];
+  omitted: number;
+}
+
+/**
+ * Why a monitor was stopped before its command ended.
+ *
+ * - `user` — Stop in the process panel: the agent is woken with `stopped`.
+ * - `agent` — the agent's own `stop_monitor`: it already knows.
+ * - `thread-stop` — the thread's Stop: the user is stopping the agent too.
+ * - `teardown` — archive or delete.
+ */
+export type MonitorStopCause = 'user' | 'agent' | 'thread-stop' | 'teardown';
+
+/** Where a monitor's output goes: the conversation that started it. */
+export interface MonitorOwner {
+  runId: string;
+  nodeId: string;
+  /** The conversation's caller key (`callerKey(nodeId, conversationId)`). */
+  caller: string;
+  /** The callee conversation it speaks in, or null for the node's own. */
+  conversationId: string | null;
+  /** The call that conversation was answering when the monitor started — its rows are filed under it. */
+  callId: string | null;
+  /** Which kind of run delivers it — each delivery service takes its own. */
+  target: 'chat' | 'workflow';
+}
+
+export interface MonitorSnapshot extends MonitorListing {
+  owner: MonitorOwner;
+}
+
+export type MonitorEvent =
+  | { type: 'start'; monitor: MonitorSnapshot }
+  | { type: 'batch'; monitor: MonitorSnapshot; batch: MonitorBatch }
+  | {
+      type: 'end';
+      monitor: MonitorSnapshot;
+      end: MonitorEnd;
+      /** What the command printed since the last batch, if anything. */
+      batch: MonitorBatch | null;
+      /** Whether the agent is told: false for a stop it or the user already knows of. */
+      wake: boolean;
+      /** Who stopped it, or null when its command ended (or flooded) on its own. */
+      stoppedBy: MonitorStopCause | null;
+    };
+
+export interface MonitorStartRequest {
+  owner: MonitorOwner;
+  command: string;
+  description: string;
+  timeoutMs: number;
+  cwd?: string;
+}
+
+/** What a `monitor` call came to. */
+export type MonitorStartOutcome =
+  { status: 'started'; id: string } | { status: 'refused'; reason: string };
+
+/** What a `stop_monitor` call came to. */
+export type MonitorStopOutcome =
+  { status: 'stopped' } | { status: 'refused'; reason: string };
 
 /**
  * A `publish_action` call as its reader hands it over: the shape is checked,
@@ -4420,6 +4608,13 @@ export interface RunStatusEvent {
    * already gave the client standing instead of blanking it.
    */
   restored?: boolean;
+  /**
+   * True when the turn that reached this status was one geniro started itself,
+   * with a monitor's output (`sendMessage`'s `hostRow`). Not a banner: a watch
+   * reporting step after step would post one per batch. Still news for the
+   * sidebar's unread mark — the agent said something new.
+   */
+  hostTurn?: boolean;
   /**
    * True when this settle has no terminal ROW behind it — an off-turn stretch
    * handing its badge back, a workflow woken by a call going quiet again, or a

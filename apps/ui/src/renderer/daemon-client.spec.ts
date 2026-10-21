@@ -584,6 +584,25 @@ describe('parseRunStatus — the run_status twin', () => {
     ).not.toHaveProperty('noTerminalItem');
   });
 
+  it('reads the host-turn marker, and only when it is true', () => {
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        hostTurn: true,
+      }),
+    ).toMatchObject({ hostTurn: true });
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        hostTurn: 'yes',
+      }),
+    ).not.toHaveProperty('hostTurn');
+  });
+
   it('reads the restored marker, and only when it is true', () => {
     // A delegate lease expiring hands an already-settled status back. It has to
     // arrive distinguishable from a fresh ending, or the client fires a second

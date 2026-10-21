@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { BadRequestException, NotFoundException } from '@packages/common';
@@ -45,9 +46,12 @@ import { FindingsReportBroker } from '../../agents/services/findings-report.brok
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
+import { MonitorBroker } from '../../agents/services/monitor.broker';
+import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
+import { ProcessRegistry } from '../../agents/services/process-registry';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
@@ -159,6 +163,7 @@ function service(
   actions = new ActionBroker(),
   workflowGate = new WorkflowProposalBroker(),
   workflowStore = {} as WorkflowStoreService,
+  monitors = new MonitorBroker(new MonitorRegistry(new ProcessRegistry())),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -171,6 +176,7 @@ function service(
       galleries,
       artifacts,
       actions,
+      monitors,
       patches,
       plans,
       notices,
@@ -223,6 +229,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
   const notices = new NotifyBroker();
   const actions = new ActionBroker();
   const workflowGate = new WorkflowProposalBroker();
+  const monitors = monitorBroker();
   for (const broker of [
     questions,
     findings,
@@ -273,12 +280,34 @@ async function everyHostTool(): Promise<ToolListing[]> {
       undefined,
       actions,
       workflowGate,
+      undefined,
+      monitors.broker,
     ),
     'run-1',
     'agent',
     rpc('tools/list', {}),
   );
   return (json().result as { tools: ToolListing[] }).tools;
+}
+
+/** A monitor broker with run-1's `agent` node registered, over a real registry. */
+function monitorBroker(): { broker: MonitorBroker; registry: MonitorRegistry } {
+  const registry = new MonitorRegistry(new ProcessRegistry());
+  const broker = new MonitorBroker(registry);
+  broker.register('run-1', 'agent', {
+    ownerOf: (caller) => ({
+      owner: {
+        runId: 'run-1',
+        nodeId: 'agent',
+        caller,
+        conversationId: null,
+        callId: null,
+        target: 'chat',
+      },
+      cwd: tmpdir(),
+    }),
+  });
+  return { broker, registry };
 }
 
 /** A service whose only registered host sink is the action one. */
@@ -3977,5 +4006,132 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const description = find(await everyHostTool(), HOST_GALLERY_TOOL);
 
     expect(description).toContain('Do not paste');
+  });
+});
+
+describe('McpServerService — the monitor tools', () => {
+  const NAMES = ['monitor', 'stop_monitor', 'list_monitors'];
+
+  const call = async (
+    subject: McpServerService,
+    name: string,
+    args: Record<string, unknown>,
+  ) => {
+    const { json } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/call', { name, arguments: args }),
+    );
+    return json().result as { content: { text: string }[]; isError?: boolean };
+  };
+
+  const monitorService = (broker: MonitorBroker): McpServerService =>
+    service(
+      new CallBroker(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      broker,
+    );
+
+  it('withholds all three from a node whose turn registered no monitor sink', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const names = (json().result as { tools: { name: string }[] }).tools.map(
+      (tool) => tool.name,
+    );
+    for (const name of NAMES) {
+      expect(names).not.toContain(name);
+    }
+  });
+
+  it('lists the three together, right after the action tools, once a turn registered a sink', async () => {
+    const names = (await everyHostTool()).map((tool) => tool.name);
+    const at = names.indexOf('remove_action');
+    expect(names.slice(at + 1, at + 4)).toEqual(NAMES);
+  });
+
+  it('says when to monitor and when not to, and makes each tool name the other two', async () => {
+    const tools = await everyHostTool();
+    const text = (name: string) =>
+      tools.find((tool) => tool.name === name)!.description;
+    expect(text('monitor')).toMatch(/sleep-and-poll/);
+    expect(text('monitor')).toMatch(/Do not use it/);
+    expect(text('monitor')).toMatch(/end your turn rather than wait/);
+    expect(text('monitor')).toMatch(/grep --line-buffered/);
+    for (const name of NAMES) {
+      for (const other of NAMES.filter((n) => n !== name)) {
+        expect(text(name)).toContain(other);
+      }
+    }
+  });
+
+  it('starts, lists and stops a monitor for the calling conversation', async () => {
+    const { broker, registry } = monitorBroker();
+    const subject = monitorService(broker);
+    try {
+      const started = await call(subject, 'monitor', {
+        command: 'sleep 30',
+        description: 'nap',
+        timeout_ms: 60_000,
+      });
+      expect(started.isError).toBe(false);
+      expect(started.content[0]?.text).toMatch(/^Started monitor m1\./);
+
+      const listed = await call(subject, 'list_monitors', {});
+      expect(JSON.parse(listed.content[0]!.text)).toMatchObject([
+        {
+          id: 'm1',
+          description: 'nap',
+          command: 'sleep 30',
+          timeout_ms: 60_000,
+        },
+      ]);
+
+      const stopped = await call(subject, 'stop_monitor', { id: 'm1' });
+      expect(stopped.isError).toBe(false);
+      expect(registry.isRunning('run-1')).toBe(false);
+    } finally {
+      registry.stopRun('run-1', 'teardown');
+      await registry.settled('run-1', 5000);
+    }
+  });
+
+  it('refuses an empty command, an over-long description and a timeout out of range, starting nothing', async () => {
+    const { broker, registry } = monitorBroker();
+    const subject = monitorService(broker);
+    for (const args of [
+      { command: '   ', description: 'x' },
+      { command: 'true', description: 'y'.repeat(61) },
+      { command: 'true', description: 'x', timeout_ms: 999 },
+      { command: 'true', description: 'x', timeout_ms: 3_600_001 },
+      { command: 'true', description: 'x', timeout_ms: 1500.5 },
+    ]) {
+      const result = await call(subject, 'monitor', args);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toMatch(/^INVALID_ARGS/);
+    }
+    expect(registry.list('run-1')).toEqual([]);
   });
 });

@@ -7,6 +7,7 @@ import type { FindingsReportBroker } from '../../agents/services/findings-report
 import type { GalleryBroker } from '../../agents/services/gallery.broker';
 import type { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import type { MetricsBroker } from '../../agents/services/metrics.broker';
+import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
@@ -27,8 +28,10 @@ import { BoardTools } from './board/board.tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
 import { ListAgentThreadsTool } from './list-agent-threads/list-agent-threads.tool';
+import { ListMonitorsTool } from './list-monitors/list-monitors.tool';
 import { MarkRecommendationsTool } from './mark-recommendations/mark-recommendations.tool';
 import { MessageAgentTool } from './message-agent/message-agent.tool';
+import { MonitorTool } from './monitor/monitor.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposePatchTool } from './propose-patch/propose-patch.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
@@ -47,6 +50,7 @@ import { ShowChartTool } from './show-chart/show-chart.tool';
 import { ShowComparisonTool } from './show-comparison/show-comparison.tool';
 import { ShowGalleryTool } from './show-gallery/show-gallery.tool';
 import { ShowMetricsTool } from './show-metrics/show-metrics.tool';
+import { StopMonitorTool } from './stop-monitor/stop-monitor.tool';
 
 /** The DI token the ordered tool list is provided under. */
 export const MCP_TOOLS = Symbol('MCP_TOOLS');
@@ -62,6 +66,7 @@ export interface McpToolDeps {
   galleries: GalleryBroker;
   artifacts: ArtifactBroker;
   actions: ActionBroker;
+  monitors: MonitorBroker;
   patches: PatchBroker;
   plans: PlanBroker;
   notices: NotifyBroker;
@@ -83,7 +88,7 @@ export interface McpToolDeps {
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
  * surface, then the question, the render family, the action buttons, the
- * board, the chat history, the workflow library, the analysis tools, and the
+ * monitors, the board, the chat history, the workflow library, the analysis tools, and the
  * agent's own notification last.
  */
 export function createMcpTools(deps: McpToolDeps): McpTool[] {
@@ -105,6 +110,9 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new ProposePlanTool(deps.plans),
     new PublishActionTool(deps.actions),
     new RemoveActionTool(deps.actions),
+    new MonitorTool(deps.monitors),
+    new StopMonitorTool(deps.monitors),
+    new ListMonitorsTool(deps.monitors),
     new BoardTools(deps.board),
     new SearchChatsTool(deps.history),
     new ReadChatContextTool(deps.history),

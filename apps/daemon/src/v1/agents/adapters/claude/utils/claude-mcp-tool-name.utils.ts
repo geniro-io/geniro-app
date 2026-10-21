@@ -1,6 +1,7 @@
 import {
   CLAUDE_DISALLOWED_TOOLS_FLAG,
   CLAUDE_MCP_TOOL_PREFIX,
+  CLAUDE_WITHHELD_TOOLS,
 } from '../claude.const';
 
 /**
@@ -42,8 +43,9 @@ export function claudeMcpServerRule(server: string): string {
 }
 
 /**
- * The argv that withholds a workflow node's switched-off MCP servers from one
- * claude process — nothing when none are switched off.
+ * The argv that withholds claude's own replaced tools
+ * (`CLAUDE_WITHHELD_TOOLS`) and a workflow node's switched-off MCP servers
+ * from one claude process — always at least the replaced tools.
  *
  * MEASURED on 2.1.284 (`claude -p --output-format stream-json --verbose`, read
  * to `system/init`, in a folder loading codegraph and the playwright plugin):
@@ -57,7 +59,7 @@ export function claudeMcpServerRule(server: string): string {
  * whatever the node lists: a node switching it off would lose its call surface
  * while its instructions still told it to use it. Duplicates are dropped.
  */
-export function claudeDisallowedMcpArgs(
+export function claudeDisallowedToolArgs(
   servers: readonly string[] | undefined,
   ownServer: string | null,
 ): string[] {
@@ -70,5 +72,5 @@ export function claudeDisallowedMcpArgs(
         .map(claudeMcpServerRule),
     ),
   ];
-  return rules.length === 0 ? [] : [CLAUDE_DISALLOWED_TOOLS_FLAG, ...rules];
+  return [CLAUDE_DISALLOWED_TOOLS_FLAG, ...CLAUDE_WITHHELD_TOOLS, ...rules];
 }

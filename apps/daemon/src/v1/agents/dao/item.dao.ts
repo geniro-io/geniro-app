@@ -2122,6 +2122,24 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Every `system` row that records a monitor (`monitors` in its payload),
+   * oldest first per run — what the boot sweep reads a monitor's last word
+   * from. The payload match is a pre-filter; the sweep parses each row.
+   */
+  async allMonitorRows(
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'runId' | 'nodeId' | 'seq' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { kind: 'system', payload: { $like: '%"monitors":[%' } },
+      {
+        orderBy: { runId: 'asc', seq: 'asc' },
+        fields: ['runId', 'nodeId', 'seq', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * EVERY run's action rows, grouped by run and in seq order — the boot
    * sweep's one read, as {@link allShellRows} is for shells.
    */

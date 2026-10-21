@@ -16,7 +16,7 @@ import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { plainMarkdownText } from './brief-text';
 import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
-import { PROPOSE_WORKFLOW } from './geniro-tool';
+import { namesGeniroMonitor, PROPOSE_WORKFLOW } from './geniro-tool';
 import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
 import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
@@ -1236,6 +1236,15 @@ function PermissionCard({
               Deny
             </Button>
           </div>
+          {/* The CLI remembers the TOOL, not this command line: a remembered
+              answer lets every later monitor command run unasked. */}
+          {options.some((option) => option.allow) &&
+          namesGeniroMonitor(toolName) ? (
+            <p className="text-xs text-muted-foreground">
+              Remembering this approves every command a monitor runs from now
+              on, not only this one.
+            </p>
+          ) : null}
         </div>
       ) : (
         <p

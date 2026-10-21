@@ -23,6 +23,8 @@ import { ComposingRow, liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { MonitorNoticeRow } from './monitor-divider';
+import { readMonitorNotice } from './monitor-payload';
 import { callFollowUpId, NotSentMessagesContext } from './not-sent-messages';
 import { NotSentNotice } from './not-sent-notice';
 import { RetryContext } from './retry-context';
@@ -474,6 +476,18 @@ export const TranscriptItem = memo(function TranscriptItem({
       const wake = readWakeNotice(item.payload);
       if (wake !== null) {
         return <WakeDivider caller={nodeName(item.nodeId)} reasons={wake} />;
+      }
+      // A monitor's output, or its end: a divider where it started a turn of the
+      // agent's own, a quiet note where it did not.
+      const monitor = readMonitorNotice(item.payload);
+      if (monitor !== null) {
+        return (
+          <MonitorNoticeRow
+            notice={monitor}
+            agent={nodeName(item.nodeId)}
+            memoryKey={`monitor:${item.id}`}
+          />
+        );
       }
       // A compaction, whoever wrote the row. A compaction summary is ~10 000
       // characters of the CLI describing a conversation the user just had, and

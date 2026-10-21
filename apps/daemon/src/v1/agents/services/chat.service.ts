@@ -72,6 +72,7 @@ import {
   type HostQuestion,
   type HostQuestionOutcome,
   type ItemWire,
+  type MonitorRowWire,
   type RecommendationApply,
   type RunAwaiting,
   type RunGroupColor,
@@ -148,6 +149,7 @@ import {
   readModelParameters,
   writeModelParameters,
 } from '../utils/model-parameters';
+import { offersMonitorTools } from '../utils/monitor-offer';
 import {
   delegateCloseEvent,
   openDelegateIds,
@@ -201,6 +203,8 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
+import { MonitorBroker } from './monitor.broker';
+import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
@@ -495,6 +499,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * unaware of a verdict the transcript still shows.
    */
   private readonly heldVerdicts = new Map<string, string[]>();
+  /** Told each time a chat's turn has ended — how held host turns are released. */
+  private readonly turnSettledListeners = new Set<(runId: string) => void>();
+  /** Told when the user stops a chat — how held host turns are dropped. */
+  private readonly stopListeners = new Set<(runId: string) => void>();
 
   /**
    * The deferred question each run is putting on screen RIGHT NOW, with the
@@ -762,6 +770,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly analysisReports: AnalysisReportsService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     @Optional() private readonly agentMcp?: AgentMcpService,
+    /** The `monitor` tool's commands, stopped with the thread. Optional for the positional specs. */
+    @Optional() private readonly monitors?: MonitorRegistry,
+    @Optional() private readonly monitorSinks?: MonitorBroker,
   ) {}
 
   /**
@@ -1449,6 +1460,55 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       return;
     }
     await this.sendOwnedVerdict(runId, message);
+  }
+
+  /** Be told each time a chat's turn has ended; returns the unsubscribe. */
+  onTurnSettled(listener: (runId: string) => void): () => void {
+    this.turnSettledListeners.add(listener);
+    return () => {
+      this.turnSettledListeners.delete(listener);
+    };
+  }
+
+  /** Be told when the user stops a chat; returns the unsubscribe. */
+  onStopped(listener: (runId: string) => void): () => void {
+    this.stopListeners.add(listener);
+    return () => {
+      this.stopListeners.delete(listener);
+    };
+  }
+
+  private notifyTurnSettled(runId: string): void {
+    this.notify(this.turnSettledListeners, runId, 'turn-settled');
+  }
+
+  private notify(
+    listeners: ReadonlySet<(runId: string) => void>,
+    runId: string,
+    what: string,
+  ): void {
+    for (const listener of listeners) {
+      try {
+        listener(runId);
+      } catch (err) {
+        this.logger.error(
+          `run ${runId} ${what} listener failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Whether a turn geniro starts on its own (a monitor's output) must wait —
+   * on the same terms as an owned card's verdict: a turn runs, or a question,
+   * plan or patch card waits for the user's answer, whose turn comes first.
+   * `closing` when the chat is being archived or deleted.
+   */
+  hostTurnHold(runId: string): 'wait' | 'closing' | null {
+    if (this.deleting.has(runId) || this.archiving.has(runId)) {
+      return 'closing';
+    }
+    return this.mustHoldVerdict(runId) ? 'wait' : null;
   }
 
   /** Whether a verdict has to wait: a turn runs, or a question card stands. */
@@ -3241,6 +3301,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // converge on the same registry key, so a wrong-endpoint call must 400
     // instead of silently cancelling the other kind's run.
     let run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    // Ahead of every early return below: a Stop ends the thread's monitors
+    // whether or not a turn was in flight, and wakes nobody — what they had
+    // already printed is dropped too.
+    this.monitors?.stopRun(runId, 'thread-stop');
+    this.notify(this.stopListeners, runId, 'stop');
     const cancelled = this.registry.cancel(runId);
     if (cancelled) {
       // Remembered for the turn's own terminal event, so this Stop still reads
@@ -5019,6 +5084,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * agent between turns.
        */
       ownTurn?: boolean;
+      /**
+       * The turn is geniro's, not the user's: `text` is still the prompt, but
+       * the opening row is this `system` payload rather than a user message —
+       * a monitor's output starting a turn must not read as something the user
+       * typed.
+       */
+      hostRow?: MonitorRowWire;
+      /** Told once `hostRow` is written — a send can still fail after it. */
+      onHostRowWritten?: () => void;
     } = {},
   ): Promise<ItemWire> {
     const em = this.em.fork();
@@ -5047,6 +5121,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       resumeOnly?: boolean;
       apply?: RecommendationApply;
       ownTurn?: boolean;
+      hostRow?: MonitorRowWire;
+      onHostRowWritten?: () => void;
     },
   ): Promise<ItemWire> {
     const runId = run.id;
@@ -5368,20 +5444,32 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                   'from here — nothing was sent again.',
               },
             )
-          : await this.persist(
-              em,
-              runId,
-              await this.seqs.reserve(runId),
-              'message',
-              'user',
-              {
-                text,
-                ...(attachments.length > 0 ? { images: attachments } : {}),
-                ...(options.apply === undefined
-                  ? {}
-                  : { apply: options.apply }),
-              },
-            );
+          : options.hostRow !== undefined
+            ? await this.persist(
+                em,
+                runId,
+                await this.seqs.reserve(runId),
+                'system',
+                null,
+                options.hostRow,
+              ).then((wire) => {
+                options.onHostRowWritten?.();
+                return wire;
+              })
+            : await this.persist(
+                em,
+                runId,
+                await this.seqs.reserve(runId),
+                'message',
+                'user',
+                {
+                  text,
+                  ...(attachments.length > 0 ? { images: attachments } : {}),
+                  ...(options.apply === undefined
+                    ? {}
+                    : { apply: options.apply }),
+                },
+              );
 
       const adapter: AgentAdapter = this.adapterFor(agentKind);
       await adapter.validateModel(model);
@@ -6517,6 +6605,27 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               this.actionPublisher.remove(actionContext, actionId),
           })
         : null;
+      // A monitor's command runs in no sandbox of its own, so the tools are
+      // offered only where calling one is put to the user first, or where the
+      // turn already runs unattended — see `hostToolCallUngatedReason`.
+      const disposeMonitors =
+        mcpEndpoint &&
+        this.monitorSinks !== undefined &&
+        offersMonitorTools(adapter.getConfig(), approvalMode)
+          ? this.monitorSinks.register(runId, SINGLE_AGENT_NODE, {
+              ownerOf: (caller) => ({
+                owner: {
+                  runId,
+                  nodeId: SINGLE_AGENT_NODE,
+                  caller,
+                  conversationId: null,
+                  callId: null,
+                  target: 'chat',
+                },
+                cwd,
+              }),
+            })
+          : null;
       // Only an ORDINARY chat reads and proposes workflows: a builder chat
       // edits its own workflow's file, and an analysis changes one through
       // `save_workflow_change` — see `WorkflowProposalBroker`.
@@ -6576,6 +6685,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeGallerist?.();
         disposePublisher?.();
         disposeActions?.();
+        disposeMonitors?.();
         disposeWorkflowProposals?.();
         disposeAnalysis?.();
       };
@@ -7323,6 +7433,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               await this.setRunStatus(em, runId, status, {
                 summary: event.type === 'error' ? event.message : lastAgentText,
                 housekeeping: compactionRows > 0 && workRows === 0,
+                hostTurn: options.hostRow !== undefined,
               });
               // Spent — the tally describes ONE turn, so anything arriving
               // after this ending is counted from zero rather than inheriting
@@ -7589,7 +7700,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // Every ending of the turn, failed finalizers included, and after the
       // compaction claim is gone: a verdict held behind this turn starts the
       // next one (`deliverOwnedCardVerdict`).
-      void finalized.finally(() => this.releaseHeldVerdicts(runId));
+      void finalized.finally(() => {
+        this.releaseHeldVerdicts(runId);
+        this.notifyTurnSettled(runId);
+      });
       // After the finalizer rather than inside it: the claim this turn held
       // must be gone before `/compact` can take the run. A compaction turn
       // never re-arms it, or a conversation that stays over the threshold
@@ -7622,12 +7736,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // run working, the flag is what ends that state in every window, not
       // only the one that sent; a send refused over a settled run changed no
       // window's state and is answered by its own error.
-      await this.setRunStatus(
-        em,
-        runId,
-        'failed',
-        shownWorking ? { noTerminalItem: true } : {},
-      ).catch((statusErr: unknown) => {
+      // A host turn that could not start is no news the user asked for: its
+      // delivery tries again, and names what it stopped if it gives up.
+      await this.setRunStatus(em, runId, 'failed', {
+        ...(shownWorking ? { noTerminalItem: true } : {}),
+        ...(options.hostRow !== undefined ? { hostTurn: true } : {}),
+      }).catch((statusErr: unknown) => {
         this.logger.error(
           `run ${runId} start-failure status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
         );
@@ -7644,6 +7758,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       }
       releaseCompaction();
       this.releaseHeldVerdicts(runId);
+      this.notifyTurnSettled(runId);
       throw err;
     }
   }

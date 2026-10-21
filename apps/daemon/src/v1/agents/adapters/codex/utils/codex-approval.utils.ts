@@ -233,6 +233,11 @@ export function fileChangeStaysIn(
  * that cannot be told apart from another keeps the bare server name and shows
  * codex's own sentence naming the tool: still answerable, and never labelled
  * with a tool it might not be.
+ *
+ * TWIN PARSER: the renderer's `namesGeniroMonitor`
+ * (`apps/ui/src/renderer/chats/geniro-tool.ts`) reads both names this writes —
+ * `mcp__<server>__<tool>`, and the bare `mcp__<server>` — to warn that
+ * remembering a monitor approves every later monitor command.
  */
 function mcpToolApprovalCard(
   record: Readonly<Record<string, unknown>>,

@@ -34,6 +34,8 @@ import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registr
 import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
 import { ItemCallIndexService } from './v1/agents/services/item-call-index.service';
+import { MonitorChatDelivery } from './v1/agents/services/monitor-chat-delivery.service';
+import { MonitorOutcomeSweep } from './v1/agents/services/monitor-outcome-sweep.service';
 import { PartialStreamService } from './v1/agents/services/partial-stream.service';
 import { PullRequestCaptureService } from './v1/agents/services/pull-request-capture.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
@@ -113,6 +115,7 @@ const bootstrapper = buildBootstrapper({
  * so this is always assigned by the time the listen callback fires.
  */
 let callIndex: ItemCallIndexService | null = null;
+let monitorChats: MonitorChatDelivery | null = null;
 let wallWork: WallWorkService | null = null;
 let pullRequests: PullRequestCaptureService | null = null;
 bootstrapper.addExtension(
@@ -171,6 +174,10 @@ bootstrapper.addExtension(
         // look hung on the first launch after an update. A run it has not
         // reached yet is stamped on its first read anyway.
         void callIndex?.indexAllQuietly();
+        // Only now can a woken chat turn be handed geniro's tools, and every
+        // boot reconcile it must not race has run — the interrupted-monitor
+        // wakes the boot sweep held go out from here.
+        monitorChats?.startDelivering();
         // Off the boot path too: it folds every agent of every run settled
         // before the wall ledger existed, and the ledger's per-turn key makes
         // it safe beside the live catch-up.
@@ -226,7 +233,7 @@ bootstrapper.addExtension(
       // (after the schema sync, before listen) — not via an OnApplicationBootstrap
       // hook, which fires before this sync and would hit not-yet-created tables on
       // a fresh install, so a logged reconcile error always means a real failure.
-      await closeInterruptedRuns({
+      const stopCause = await closeInterruptedRuns({
         readCause: () => consumeStopCause(environment.userDataDir),
         chats: app.get(ChatService),
         workflows: app.get(GraphExecutorService),
@@ -246,6 +253,8 @@ bootstrapper.addExtension(
       // And the command actions a prior daemon was running: their finish row
       // is written in-process, and their child died with it.
       await app.get(ActionOutcomeSweep).sweep();
+      // And the monitors: their end row is written in-process too.
+      await app.get(MonitorOutcomeSweep).sweep(stopCause);
 
       // Put every STANDING question card back in the approval registry. Unlike
       // the reconciles above this restores something rather than closing it:
@@ -274,6 +283,7 @@ bootstrapper.addExtension(
       // the only line of it that may run before the server is up, and it only
       // reads the container.
       callIndex = app.get(ItemCallIndexService);
+      monitorChats = app.get(MonitorChatDelivery);
       wallWork = app.get(WallWorkService);
       pullRequests = app.get(PullRequestCaptureService);
 

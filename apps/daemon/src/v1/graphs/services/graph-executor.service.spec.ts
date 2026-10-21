@@ -1088,6 +1088,8 @@ function setup(
   statusEvents: { runId: string; status: string | null }[];
   /** Runs whose settle announced that no terminal row stands behind it. */
   itemlessSettles: string[];
+  /** Settles announced as a host turn (`RunStatusEvent.hostTurn`). */
+  hostTurnSettles: string[];
   /** Every AWAITING announce (status null, `awaiting` set), in order. */
   awaitingEvents: { runId: string; awaiting: string | null }[];
   countEvents: { runId: string; shellsOpen?: number; subagentsOut?: number }[];
@@ -1174,6 +1176,7 @@ function setup(
   // be the defect worth seeing.
   const statusEvents: { runId: string; status: string | null }[] = [];
   const itemlessSettles: string[] = [];
+  const hostTurnSettles: string[] = [];
   const awaitingEvents: {
     runId: string;
     awaiting: string | null;
@@ -1225,6 +1228,9 @@ function setup(
     }
     if (event.noTerminalItem === true) {
       itemlessSettles.push(event.runId);
+    }
+    if (event.hostTurn === true) {
+      hostTurnSettles.push(event.runId);
     }
     statusEvents.push({ runId: event.runId, status: event.status });
   });
@@ -1452,6 +1458,7 @@ function setup(
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
   return {
+    hostTurnSettles,
     deltas,
     partials,
     spendStore,
@@ -4085,6 +4092,242 @@ describe('GraphExecutorService — follow-up messages', () => {
     completeTurn(again[1]!, 'A2');
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('wakes a node of a call-free workflow with monitor output as a turn of its own, never into a running turn', async () => {
+    const { service, claude, itemDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(a, 'A1');
+    await drain();
+
+    // b is still working: its output waits for that turn to end.
+    expect(
+      service.wakeConversation(run.id, 'b', 'later', {
+        severity: 'info',
+        message: '',
+        monitors: [],
+        woke: true,
+      }),
+    ).toBe('busy');
+
+    expect(
+      service.wakeConversation(run.id, 'a', 'CI output', {
+        message: 'CI · monitor m1: 1 line.',
+        severity: 'info',
+        monitors: [
+          {
+            id: 'm1',
+            description: 'CI',
+            event: 'batch',
+            lines: ['ok'],
+            omitted: 0,
+          },
+        ],
+        woke: true,
+      }),
+    ).toBe('woken');
+    await drain();
+    const again = turnsOf(claude, 'role-a');
+    expect(again).toHaveLength(2);
+    expect(again[1]!.input.prompt).toBe('CI output');
+    expect(again[1]!.input.resumeSessionId).toBe('sess-a');
+    const row = [...itemDao.items.values()]
+      .flat()
+      .find((item) => item.payload.includes('"monitors"'));
+    expect(row?.kind).toBe('system');
+    expect(row?.nodeId).toBe('a');
+    // No user row was written for it.
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+  });
+
+  it('settles a finished run reopened only by monitor output as a host turn, so no banner is posted', async () => {
+    const { service, claude, runDao, hostTurnSettles } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(a, 'A1');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B1');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(hostTurnSettles).toEqual([]);
+
+    expect(
+      service.wakeConversation(run.id, 'a', 'CI is green', {
+        severity: 'info',
+        message: '',
+        monitors: [],
+        woke: true,
+      }),
+    ).toBe('woken');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'noted');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(hostTurnSettles).toEqual([run.id]);
+  });
+
+  it('hands back a wake it took when the run turns out stopped, writing nothing itself', async () => {
+    const { service, claude, runDao, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A1');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B1');
+    await drain();
+    runDao.runs.get(run.id)!.archivedAt = new Date();
+    const dropped = vi.fn();
+    expect(
+      service.wakeConversation(
+        run.id,
+        'a',
+        'CI output',
+        { severity: 'info', message: '', monitors: [], woke: true },
+        dropped,
+      ),
+    ).toBe('woken');
+    await drain();
+    expect(dropped).toHaveBeenCalledExactlyOnceWith(false);
+    expect(turnsOf(claude, 'role-a')).toHaveLength(1);
+    expect(
+      [...itemDao.items.values()]
+        .flat()
+        .some((item) => item.payload.includes('"monitors"')),
+    ).toBe(false);
+  });
+
+  it("hands back a wake a user's message overtook with the run's next pass, to hold for it", async () => {
+    const { service, claude } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A1');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B1');
+    await drain();
+    const dropped = vi.fn();
+    expect(
+      service.wakeConversation(
+        run.id,
+        'a',
+        'CI output',
+        { severity: 'info', message: '', monitors: [], woke: true },
+        dropped,
+      ),
+    ).toBe('woken');
+    // The user writes before the wake's turn could start: a new pass.
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    expect(dropped).toHaveBeenCalledWith(true);
+    expect(
+      turnsOf(claude, 'role-a').some(
+        (turn) => turn.input.prompt === 'CI output',
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps a stretch that monitor output alone drives a host turn across a second wake', async () => {
+    const { service, claude, runDao, hostTurnSettles } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(a, 'A1');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B1');
+    await drain();
+    const output = {
+      severity: 'info' as const,
+      message: '',
+      monitors: [],
+      woke: true,
+    };
+    expect(service.wakeConversation(run.id, 'a', 'first', output)).toBe(
+      'woken',
+    );
+    await drain();
+    // More output arrived while the woken turn ran: it goes out at that
+    // turn's end, as the delivery does it.
+    expect(service.wakeConversation(run.id, 'a', 'second', output)).toBe(
+      'busy',
+    );
+    service.onConversationTurnEnded((runId, caller) => {
+      if (caller === 'a' && turnsOf(claude, 'role-a').length === 2) {
+        service.wakeConversation(runId, caller, 'second', output);
+      }
+    });
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'noted');
+    await drain();
+    expect(turnsOf(claude, 'role-a')[2]!.input.prompt).toBe('second');
+    completeTurn(turnsOf(claude, 'role-a')[2]!, 'noted again');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(hostTurnSettles).toEqual([run.id]);
+  });
+
+  it('announces a reopened stretch the user wrote into as an ordinary settle, banner and all', async () => {
+    const { service, claude, runDao, hostTurnSettles } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(
+      service.wakeConversation(run.id, 'a', 'CI is green', {
+        severity: 'info',
+        message: '',
+        monitors: [],
+        woke: true,
+      }),
+    ).toBe('woken');
+    await drain();
+    const woken = claude.starts[1]!;
+    // The user writes into the woken turn itself — no other turn starts.
+    await service.sendMessage(run.id, 'and deploy it');
+    expect(woken.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(claude.starts).toHaveLength(2);
+    completeTurn(woken, 'deployed');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(hostTurnSettles).toEqual([]);
   });
 
   it('refuses a follow-up a working agent cannot take mid-turn, and writes nothing', async () => {
@@ -7036,6 +7279,54 @@ describe('GraphExecutorService — agent calls', () => {
       expect(claude.starts.slice(before).map((t) => t.input.prompt)).toContain(
         'feature 5',
       );
+      await service.cancel(run.id);
+      await drain();
+    });
+
+    it('keeps continuing a callee held for its monitors past the call-wake budget, then settles once nothing is owed', async () => {
+      const { service, claude, callBroker } = setup();
+      let owed = true;
+      service.setMonitorOutputHeld(() => owed);
+      const run = await service.startRun({
+        slug: 'chain',
+        workflow: triggered(CHAIN),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'mgr', {
+        title: 'build',
+        agent: 'eng',
+        message: 'watch CI',
+        mode: 'async',
+      });
+      await drain();
+      const engineer = callerKey('eng', 'call-1');
+      const row = {
+        severity: 'info' as const,
+        message: '',
+        monitors: [],
+        woke: true,
+      };
+      let turn = claude.starts.at(-1)!;
+      turn.emit({ type: 'session', sessionId: 's-eng' });
+      // Twelve monitor wakes — past MAX_CALL_WAKES (10) — each continue the call.
+      for (let wake = 1; wake <= 12; wake += 1) {
+        completeTurn(turn, `step ${wake}`);
+        await drain();
+        expect(
+          service.wakeConversation(run.id, engineer, `CI batch ${wake}`, row),
+        ).toBe('woken');
+        await drain();
+        turn = claude.starts.at(-1)!;
+        expect(turn.input.prompt).toContain(`CI batch ${wake}`);
+      }
+      owed = false;
+      completeTurn(turn, 'CI is green');
+      await drain();
+      expect(
+        await callBroker.awaitAgent(run.id, 'mgr', { call_id: 'call-1' }),
+      ).toMatchObject({ status: 'ok', result: { text: 'CI is green' } });
       await service.cancel(run.id);
       await drain();
     });

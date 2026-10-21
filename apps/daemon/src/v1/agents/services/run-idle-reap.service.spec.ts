@@ -180,6 +180,8 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
   ) {
     const sessions = new AgentSessionRegistry(4);
     const commands = new ActionCommandRegistry();
+    const monitoring = new Set<string>();
+    const monitors = { isRunning: (runId: string) => monitoring.has(runId) };
     const signals: [number, NodeJS.Signals][] = [];
     const reaper = createRunProcessReaper(
       new RunProcessAttribution(OWNER, {
@@ -188,7 +190,7 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
         uid: UID,
       }),
       sessions,
-      commands,
+      [commands, monitors],
       {
         signal: (pid, sig) => signals.push([pid, sig]),
         startTimes: (pids) =>
@@ -218,7 +220,16 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
       },
       getConfig: () => ({ kind: 'claude' }),
     } as unknown as AgentAdapter;
-    return { sessions, commands, service, reaper, signals, kept, adapter };
+    return {
+      sessions,
+      commands,
+      monitoring,
+      service,
+      reaper,
+      signals,
+      kept,
+      adapter,
+    };
   }
 
   async function notes(runId: string): Promise<string[]> {
@@ -399,6 +410,27 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
     expect(slot.signal.aborted).toBe(true);
     await reaper.reap([run.id]);
     expect(signals).toContainEqual([10, 'SIGTERM']);
+  });
+
+  it('leaves a run alone while one of its monitors is running', async () => {
+    vi.useFakeTimers();
+    const run = await runDao.create({ status: 'completed' });
+    const { sessions, monitoring, reaper, kept, adapter, signals } = setup([
+      tagged(10, run.id, 'gh run watch 1'),
+    ]);
+    sessions.startTurn(
+      run.id,
+      adapter,
+      { prompt: 'p', cwd: '/p' },
+      () => undefined,
+    );
+    kept[0]?.endTurn();
+    monitoring.add(run.id);
+
+    await idleFor(sessions.idleMinutes * 60_000, reaper);
+
+    expect(signals).toEqual([]);
+    expect(await notes(run.id)).toEqual([]);
   });
 
   it('writes nothing when nothing was left running', async () => {

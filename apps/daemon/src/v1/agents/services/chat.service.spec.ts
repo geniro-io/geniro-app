@@ -2829,7 +2829,9 @@ describe('ChatService', () => {
         newString: 'const timeout = 60;',
         summary: 'Raise the timeout',
       });
-      await drain();
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
 
       const card = itemDao.items.find(
         (item) => item.kind === 'approval_request',
@@ -2869,7 +2871,9 @@ describe('ChatService', () => {
         oldString: 'keep me',
         newString: 'gone',
       });
-      await drain();
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
       const pending = approvals.listByRun(run.id);
       expect(approvals.resolve(run.id, pending[0]!.requestId, false)).toBe(
         true,
@@ -2894,7 +2898,9 @@ describe('ChatService', () => {
         oldString: 'const timeout = 30;',
         newString: 'const timeout = 60;',
       });
-      await drain();
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
       const pending = approvals.listByRun(run.id);
       approvals.resolve(run.id, pending[0]!.requestId, true);
       await drain();
@@ -2942,7 +2948,7 @@ describe('ChatService', () => {
     it('sweeps a parked patch with its OWN sentence when the turn ends', async () => {
       // Its own set, and its own wording: "the question was answered" is the
       // wrong thing to tell an agent that proposed a patch.
-      const { service, claude, patches } = setup();
+      const { service, claude, patches, approvals } = setup();
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
       await service.sendMessage(run.id, 'hello');
 
@@ -2950,7 +2956,9 @@ describe('ChatService', () => {
         filePath: 'd.ts',
         newString: 'export const x = 1;\n',
       });
-      await drain();
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
       await settle(claude);
 
       await expect(proposed).resolves.toEqual({

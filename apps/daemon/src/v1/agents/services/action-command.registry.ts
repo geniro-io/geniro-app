@@ -80,6 +80,17 @@ export class ActionCommandRegistry implements BeforeApplicationShutdown {
     }
   }
 
+  /**
+   * Whether the run has a command action running that nothing has ended: the
+   * user is using the run, so its idle reap must not take the command's
+   * tagged processes.
+   */
+  isRunning(runId: string): boolean {
+    return [...(this.running.get(runId) ?? [])].some(
+      (entry) => !entry.controller.signal.aborted,
+    );
+  }
+
   /** Whether a command started in the run now would start already ended. */
   isEnding(runId: string): boolean {
     const aborted = this.abortedAt.get(runId);

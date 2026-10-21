@@ -379,10 +379,11 @@ import { defaultSpawn } from './utils/spawn-cli';
       useFactory: (
         attribution: RunProcessAttribution,
         sessions: AgentSessionRegistry,
+        commands: ActionCommandRegistry,
         em: EntityManager,
         runDao: RunDao,
       ) =>
-        createRunProcessReaper(attribution, sessions, {
+        createRunProcessReaper(attribution, sessions, commands, {
           stillGone: async (runIds) => {
             const live = await runDao.getAll(
               { id: { $in: runIds }, archivedAt: null },
@@ -396,6 +397,7 @@ import { defaultSpawn } from './utils/spawn-cli';
       inject: [
         RunProcessAttribution,
         AgentSessionRegistry,
+        ActionCommandRegistry,
         EntityManager,
         RunDao,
       ],

@@ -9514,6 +9514,103 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toEqual([]);
   });
 
+  it("carries the CLI's remembering options onto the card, and a picked one to the CLI and the verdict row", async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const session = {
+      id: 'session',
+      label: 'Allow for this session',
+      allow: true,
+      scope: 'session' as const,
+      reply: [{ type: 'addRules', destination: 'session' }],
+    };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-1',
+      toolName: 'Bash',
+      input: { command: 'npm test' },
+      options: [session],
+    });
+    await drain();
+
+    // The row carries what the card draws, and never the adapter's `reply`.
+    const request = itemDao.items.find((i) => i.kind === 'approval_request');
+    expect(JSON.parse(request!.payload).options).toEqual([
+      {
+        id: 'session',
+        label: 'Allow for this session',
+        allow: true,
+        scope: 'session',
+      },
+    ]);
+
+    const card = cardIdFor(approvals, run.id, 'p-1');
+    expect(approvals.resolve(run.id, card, true, undefined, 'session')).toBe(
+      true,
+    );
+    // The option the CLI is answered with is the EVENT's own, `reply` and all.
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-1',
+      true,
+      { command: 'npm test' },
+      session,
+    );
+    await drain();
+    const verdict = itemDao.items.find((i) => i.kind === 'approval_verdict');
+    expect(JSON.parse(verdict!.payload)).toMatchObject({
+      id: card,
+      allow: true,
+      option: {
+        id: 'session',
+        label: 'Allow for this session',
+        scope: 'session',
+      },
+    });
+  });
+
+  it('answers an option id the card never offered as the one-time verdict it rode', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-2',
+      toolName: 'Bash',
+      input: { command: 'npm test' },
+      options: [
+        {
+          id: 'session',
+          label: 'Allow for this session',
+          allow: true,
+          scope: 'session',
+        },
+      ],
+    });
+    await drain();
+    const card = cardIdFor(approvals, run.id, 'p-2');
+    // An allow-option id on a Deny is a client bug, not a standing refusal.
+    expect(approvals.resolve(run.id, card, false, undefined, 'session')).toBe(
+      true,
+    );
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-2',
+      false,
+      { command: 'npm test' },
+    );
+    await drain();
+    const verdict = itemDao.items.find((i) => i.kind === 'approval_verdict');
+    expect(JSON.parse(verdict!.payload).option).toBeUndefined();
+  });
+
   it('draws the card for a question that arrives with NO turn in flight, and routes the verdict to the live process', async () => {
     // The incident this was written from, reconstructed off the user's own
     // database and daemon log: claude's process outlived its turn, asked an

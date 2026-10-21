@@ -16,6 +16,7 @@ import {
   HOST_CONTEXT_TAG,
   INTERRUPT_ACK_DEADLINE_MS,
   INTERRUPTED_TOOL_RESULT,
+  permissionAnswerOptionId,
   selectPermissionOption,
 } from './acp-driver';
 import { AcpSession } from './acp-session';
@@ -3825,6 +3826,60 @@ describe('AcpSession permissions', () => {
     });
   });
 
+  it("offers the agent's *_always option on the card, worded by the reach the adapter declares", () => {
+    const h = harness({ alwaysAnswerScope: 'session' });
+    expect(h.feed(permissionRequest(5))).toEqual([
+      {
+        type: 'approval_request',
+        id: 'n:5',
+        toolName: 'write_file',
+        input: { path: 'a.ts' },
+        // Under the agent's own id, so the verdict answers with it; never
+        // under the agent's own "Always" when geniro keeps it for a session.
+        options: [
+          {
+            id: 'o-always',
+            label: 'Allow for this session',
+            allow: true,
+            scope: 'session',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('answers a picked *_always option with that option, and a plain verdict with *_once', () => {
+    const picked = harness({ alwaysAnswerScope: 'session' });
+    const [card] = picked.feed(permissionRequest(5));
+    const option =
+      card?.type === 'approval_request' ? card.options?.[0] : undefined;
+    expect(option?.id).toBe('o-always');
+    expect(
+      JSON.parse(
+        picked.driver.buildApprovalResponse('n:5', true, undefined, option) ??
+          '',
+      ).result,
+    ).toEqual({ outcome: { outcome: 'selected', optionId: 'o-always' } });
+
+    const plain = harness({ alwaysAnswerScope: 'session' });
+    plain.feed(permissionRequest(5));
+    expect(
+      JSON.parse(plain.driver.buildApprovalResponse('n:5', true) ?? '').result,
+    ).toEqual({ outcome: { outcome: 'selected', optionId: 'o-allow' } });
+  });
+
+  it('auto-approves with *_once even where *_always is offered', () => {
+    // Nothing the daemon decides on its own may be remembered past the run.
+    const h = harness({
+      alwaysAnswerScope: 'session',
+      autoDecide: () => 'allow',
+    });
+    expect(h.feed(permissionRequest(5))).toEqual([]);
+    expect(h.sent.find((frame) => frame.id === 5)?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'o-allow' },
+    });
+  });
+
   it('refuses to answer an unknown or already-answered request', () => {
     const h = harness();
     h.feed(permissionRequest(5));
@@ -3854,6 +3909,33 @@ describe('selectPermissionOption', () => {
         false,
       ),
     ).toBeNull();
+  });
+});
+
+describe('permissionAnswerOptionId', () => {
+  const options = [
+    { optionId: 'a', name: 'Allow', kind: 'allow_once' as const },
+    { optionId: 'aa', name: 'Always', kind: 'allow_always' as const },
+    { optionId: 'r', name: 'Reject', kind: 'reject_once' as const },
+  ];
+  const always = {
+    id: 'aa',
+    label: 'Allow for this session',
+    allow: true,
+    scope: 'session' as const,
+  };
+
+  it('answers with the picked always option in its own direction', () => {
+    expect(permissionAnswerOptionId(options, true, always)).toBe('aa');
+  });
+
+  it('falls back to the once option for a pick pointing the other way or not offered', () => {
+    // An allow-always id riding a Deny is answered as the Deny it was pressed as.
+    expect(permissionAnswerOptionId(options, false, always)).toBe('r');
+    expect(
+      permissionAnswerOptionId(options, true, { ...always, id: 'gone' }),
+    ).toBe('a');
+    expect(permissionAnswerOptionId(options, true, undefined)).toBe('a');
   });
 });
 

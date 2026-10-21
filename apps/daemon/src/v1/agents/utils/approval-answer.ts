@@ -1,5 +1,5 @@
 import { maskWhile, registerSecret } from '../../diagnostics/utils/redact';
-import type { CardQuestion } from '../adapters/adapter.types';
+import type { ApprovalOption, CardQuestion } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { asksForSecret, secretAnswerParts } from './card-questions';
 
@@ -59,9 +59,39 @@ const SECRET_ANSWER_LABEL = 'secret answer';
  */
 const MIN_SECRET_ANSWER_LENGTH = 4;
 
+/** What a verdict row records about the remembering option the user picked. */
+export interface VerdictOptionRecord {
+  id: string;
+  label: string;
+  scope: ApprovalOption['scope'];
+}
+
+/**
+ * The request's own option a verdict names, or undefined for a one-time
+ * answer.
+ *
+ * Read off the REQUEST, never taken from the client: the card can only name an
+ * id the adapter offered, and an option must point the same way as the verdict
+ * it rides — an "always allow" id on a Deny is a client bug, answered as the
+ * plain Deny it was pressed as rather than as a standing permission.
+ */
+export function pickedApprovalOption(
+  options: readonly ApprovalOption[] | undefined,
+  allow: boolean,
+  optionId: string | undefined,
+): ApprovalOption | undefined {
+  if (optionId === undefined) {
+    return undefined;
+  }
+  return options?.find(
+    (option) => option.id === optionId && option.allow === allow,
+  );
+}
+
 /**
  * Deliver a card verdict to the CLI (`deliver` is handed the input it should
- * carry) and say what its `approval_verdict` row may record.
+ * carry, and the picked option when there is one) and say what its
+ * `approval_verdict` row may record.
  *
  * The answer folds ONLY into the CLI's question tool: every other tool echoes
  * its input unchanged, so the verdict channel can never rewrite an arbitrary
@@ -70,6 +100,10 @@ const MIN_SECRET_ANSWER_LENGTH = 4;
  * transcript never claims one the agent did not receive — and none of it when
  * the card marked a question secret: the row is SQLite and replays to every
  * client, while a secret belongs to the agent alone.
+ *
+ * `optionId` names one of the request's own `options` (see
+ * {@link pickedApprovalOption}); the row records the option the CLI was
+ * actually sent, so a settled card says how long the answer lasts.
  *
  * A secret answer is kept out of the debug log, whose raw stdio channel
  * records the frame that carries it. A value long enough to mask everywhere is
@@ -88,14 +122,28 @@ export function deliverApprovalAnswer(
     toolName: string;
     input: unknown;
     questions?: readonly CardQuestion[];
+    options?: readonly ApprovalOption[];
   },
   allow: boolean,
   answer: string | undefined,
-  deliver: (input: unknown) => boolean,
-): { delivered: boolean; record: { answer?: string } } {
+  deliver: (input: unknown, option?: ApprovalOption) => boolean,
+  optionId?: string,
+): {
+  delivered: boolean;
+  record: { answer?: string; option?: VerdictOptionRecord };
+} {
   const questionToolName = adapter.getConfig().questionToolName;
   if (!answerFoldsInto(questionToolName, request.toolName, allow, answer)) {
-    return { delivered: deliver(request.input), record: {} };
+    const option = pickedApprovalOption(request.options, allow, optionId);
+    if (option === undefined) {
+      return { delivered: deliver(request.input), record: {} };
+    }
+    return {
+      delivered: deliver(request.input, option),
+      record: {
+        option: { id: option.id, label: option.label, scope: option.scope },
+      },
+    };
   }
   const input = adapter.withAnswer(request.input, answer);
   if (!asksForSecret(request.questions)) {

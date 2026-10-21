@@ -165,6 +165,13 @@ export const AgentOptionSpecSchema = z
 export const MAX_ANSWER_LENGTH = 32_768;
 
 /**
+ * Sanity cap on a WS verdict's `optionId`. It only ever names one of the ids an
+ * adapter put on the card (a protocol option id, or a scope word), so anything
+ * past this is not a pick of ours and the verdict is refused `invalid`.
+ */
+export const MAX_OPTION_ID_LENGTH = 256;
+
+/**
  * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
  * MAX_QUESTION_HEADER_LENGTH.
  *

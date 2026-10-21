@@ -1137,6 +1137,68 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     child.emit('close', 0, null);
     await handle.done;
   });
+
+  it("sends a picked option's permission updates with the allow, and none without one", async () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'ask' },
+      (e) => events.push(e),
+    );
+    const request = (id: string): string =>
+      `${JSON.stringify({
+        type: 'control_request',
+        request_id: id,
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Bash',
+          input: { command: 'touch a' },
+          permission_suggestions: [
+            {
+              type: 'addRules',
+              rules: [{ toolName: 'Bash', ruleContent: 'touch a' }],
+              behavior: 'allow',
+              destination: 'localSettings',
+            },
+          ],
+        },
+      })}\n`;
+    const lastResponse = (): Record<string, unknown> =>
+      JSON.parse(child.stdin.written.split('\n').filter(Boolean).at(-1)!)
+        .response.response;
+
+    child.stdout.emitData(request('req-s'));
+    const card = events.at(-1);
+    const session =
+      card?.type === 'approval_request'
+        ? card.options?.find((option) => option.scope === 'session')
+        : undefined;
+    expect(session).toBeDefined();
+    handle.respondApproval('req-s', true, { command: 'touch a' }, session);
+    expect(lastResponse()).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'touch a' },
+      updatedPermissions: [
+        {
+          type: 'addRules',
+          rules: [{ toolName: 'Bash', ruleContent: 'touch a' }],
+          behavior: 'allow',
+          destination: 'session',
+        },
+      ],
+    });
+
+    // A one-time allow — which is all an auto-approval ever sends — teaches
+    // the CLI nothing.
+    child.stdout.emitData(request('req-o'));
+    handle.respondApproval('req-o', true, { command: 'touch a' });
+    expect(lastResponse()).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'touch a' },
+    });
+    child.emit('close', 0, null);
+    await handle.done;
+  });
 });
 
 describe('ClaudeAdapter binary override', () => {

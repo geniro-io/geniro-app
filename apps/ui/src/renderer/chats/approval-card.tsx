@@ -61,6 +61,80 @@ interface ParsedQuestion {
   secret: boolean;
 }
 
+/** TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts MAX_OPTION_ID_LENGTH. */
+const MAX_OPTION_ID_LENGTH = 256;
+
+/**
+ * The longest option label drawn as a button. The daemon writes short fixed
+ * phrases; anything longer is not one of them, and a button is no place for
+ * a sentence.
+ */
+const MAX_OPTION_LABEL_LENGTH = 80;
+
+/**
+ * One remembering answer a permission card offers beside Approve and Deny —
+ * "Allow for this session", "Always allow". The vocabulary is the row's: which
+ * options exist, their words and their reach all come from the daemon, which
+ * built them from what the agent's own CLI offered.
+ */
+interface ParsedApprovalOption {
+  id: string;
+  label: string;
+  allow: boolean;
+  scope: 'session' | 'always';
+}
+
+/**
+ * Read the `options` the daemon put on an `approval_request` row. Empty for a
+ * row without any, which leaves the card Approve/Deny alone.
+ *
+ * TWIN PARSER: apps/daemon/src/v1/agents/utils/event-to-item.ts
+ * `publicApprovalOptions` writes this shape (`ApprovalOption` in
+ * `adapters/adapter.types.ts`) — a drift fixed there must be mirrored here.
+ * Mirrored rules: `id` non-empty and ≤ MAX_OPTION_ID_LENGTH (the daemon
+ * refuses a longer one on the verdict), `allow` literally boolean, `scope`
+ * one of `session` / `always`. An entry failing any of them is dropped, never
+ * drawn with a guessed meaning.
+ */
+function readApprovalOptions(options: unknown): ParsedApprovalOption[] {
+  if (!Array.isArray(options)) {
+    return [];
+  }
+  const parsed: ParsedApprovalOption[] = [];
+  for (const entry of options) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const o = entry as {
+      id?: unknown;
+      label?: unknown;
+      allow?: unknown;
+      scope?: unknown;
+    };
+    if (
+      typeof o.id !== 'string' ||
+      o.id.length === 0 ||
+      o.id.length > MAX_OPTION_ID_LENGTH ||
+      typeof o.label !== 'string' ||
+      o.label.trim().length === 0 ||
+      o.label.length > MAX_OPTION_LABEL_LENGTH ||
+      typeof o.allow !== 'boolean' ||
+      (o.scope !== 'session' && o.scope !== 'always')
+    ) {
+      continue;
+    }
+    parsed.push({ id: o.id, label: o.label, allow: o.allow, scope: o.scope });
+  }
+  return parsed;
+}
+
+/** The hover sentence of an option's button, by how long the agent keeps it. */
+function optionScopeHint(option: ParsedApprovalOption): string {
+  return option.scope === 'session'
+    ? 'The agent remembers this until its conversation process ends.'
+    : 'The agent remembers this in its own settings, past this conversation.';
+}
+
 /**
  * TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts
  * MAX_QUESTION_HEADER_LENGTH. A header is rendered as a tab title, and the tab
@@ -980,15 +1054,26 @@ function QuestionCard({
 function PermissionCard({
   toolName,
   input,
+  options,
   verdict,
+  verdictOption,
   expired,
   onRespond,
 }: {
   toolName: string;
   input: unknown;
+  /** What the agent offers beside a one-time Approve and Deny. */
+  options: ParsedApprovalOption[];
   verdict: boolean | null;
+  /** The label of the option the settled verdict picked, or null. */
+  verdictOption: string | null;
   expired: boolean;
-  onRespond: (allow: boolean, answer?: string) => void;
+  onRespond: (
+    allow: boolean,
+    answer?: string,
+    images?: SendMessageDtoImagesInner[],
+    optionId?: string,
+  ) => void;
 }): React.JSX.Element {
   const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
   // A file edit under review reads as a diff, not as raw JSON — the same
@@ -1120,13 +1205,30 @@ function PermissionCard({
               onCheckedChange={gate.setAcknowledged}
             />
           ) : null}
-          <div className="flex gap-2">
+          {/* Approve and Deny stay first and last: a one-time answer is the
+              default, and what the agent would remember sits between them,
+              in its own words. An option that lets the call run is gated on
+              the hazard tick exactly as Approve is. */}
+          <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               disabled={gate.blocksApprove}
               onClick={() => respond(true)}>
               Approve
             </Button>
+            {options.map((option) => (
+              <Button
+                key={option.id}
+                type="button"
+                variant="outline"
+                title={optionScopeHint(option)}
+                disabled={option.allow && hazards.gates && !acknowledged}
+                onClick={() =>
+                  respond(option.allow, undefined, undefined, option.id)
+                }>
+                {option.label}
+              </Button>
+            ))}
             <Button
               type="button"
               variant="outline"
@@ -1142,6 +1244,7 @@ function PermissionCard({
             verdict ? 'text-success' : 'text-destructive',
           )}>
           {verdict ? '✓ approved' : '✗ denied'}
+          {verdictOption === null ? null : ` — ${verdictOption}`}
         </p>
       )}
     </Card>
@@ -1165,7 +1268,9 @@ export function ApprovalCard({
   toolName,
   input,
   questions: card,
+  options,
   verdict,
+  verdictOption = null,
   answer = null,
   outcome = null,
   expired = false,
@@ -1177,6 +1282,17 @@ export function ApprovalCard({
   input: unknown;
   /** The row's `questions` — the question card, when this is a question. */
   questions?: unknown;
+  /**
+   * The row's `options` — what the agent's CLI offers beside a one-time
+   * Approve and Deny ("Allow for this session"). Drawn on the permission body
+   * only: a question is answered, not remembered.
+   */
+  options?: unknown;
+  /**
+   * The label of the option a settled verdict picked, read back from the
+   * verdict item; null for a one-time answer or a card still pending.
+   */
+  verdictOption?: string | null;
   /**
    * The request this card answers — the key its fold is remembered under
    * within the thread. Absent, a fold is component state and forgets on
@@ -1209,11 +1325,14 @@ export function ApprovalCard({
    * `images` arrive only from the QUESTION body, and only as a SEPARATE
    * delivery — see its `onRespond` note. A permission card never sends any:
    * approving a tool call is a yes or a no, with nothing to attach to it.
+   * `optionId` arrives only from the PERMISSION body, naming the row option
+   * the user picked instead of a one-time Approve or Deny.
    */
   onRespond: (
     allow: boolean,
     answer?: string,
     images?: SendMessageDtoImagesInner[],
+    optionId?: string,
   ) => void;
 }): React.JSX.Element {
   const questions = readQuestions(card);
@@ -1266,7 +1385,9 @@ export function ApprovalCard({
     <PermissionCard
       toolName={toolName}
       input={input}
+      options={readApprovalOptions(options)}
       verdict={verdict}
+      verdictOption={verdictOption}
       expired={expired}
       onRespond={onRespond}
     />

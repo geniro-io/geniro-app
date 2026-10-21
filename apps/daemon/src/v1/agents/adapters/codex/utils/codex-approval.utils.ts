@@ -9,11 +9,16 @@ import {
   hasOtherHardLinks,
   writeContainment,
 } from '../../../utils/write-containment';
-import type { CardQuestion } from '../../adapter.types';
+import type { ApprovalOption, CardQuestion } from '../../adapter.types';
+import { approvalOption } from '../../utils/approval-options.utils';
 import {
+  CODEX_ACCEPT_FOR_SESSION_DECISION,
+  CODEX_MCP_APPROVAL_PERSIST_KEY,
   CODEX_MCP_TOOL_APPROVAL_KIND,
+  CODEX_PERMISSION_SESSION_SCOPE,
   CODEX_QUESTION_TOOL_NAME,
   CODEX_SERVER_REQUESTS,
+  CODEX_SESSION_APPROVAL_OPTION_ID,
   CODEX_TOOL_NAMES,
 } from '../codex.const';
 import type { CodexItem } from '../codex.types';
@@ -33,6 +38,28 @@ export interface CodexApprovalCard {
   question: boolean;
   /** The question card, for a question; absent for a permission. */
   questions?: CardQuestion[];
+  /** What codex would remember past this call, for a permission. */
+  options?: ApprovalOption[];
+}
+
+/** codex's session-long approval, as a card option (see `codex.const.ts`). */
+function sessionOption(): ApprovalOption[] {
+  return [approvalOption(CODEX_SESSION_APPROVAL_OPTION_ID, true, 'session')];
+}
+
+/**
+ * Whether an MCP tool approval accepts a session-long answer: its `_meta`
+ * lists the persistence it takes, and an answer it did not list is not one it
+ * promised to keep.
+ */
+function mcpPersistsForSession(
+  record: Readonly<Record<string, unknown>>,
+): boolean {
+  const persist = asRecord(record._meta)?.[CODEX_MCP_APPROVAL_PERSIST_KEY];
+  return (
+    persist === CODEX_SESSION_APPROVAL_OPTION_ID ||
+    asArray(persist).includes(CODEX_SESSION_APPROVAL_OPTION_ID)
+  );
 }
 
 /**
@@ -94,13 +121,13 @@ export function codexApprovalCard(
       const item = items.get(asString(record.itemId) ?? '');
       const network = asRecord(record.networkApprovalContext);
       const host = asString(network?.host);
+      const writesStdin = asString(record.kind) === 'writeStdin';
       return {
         // Input for a command already running is not a new command, and a card
         // drawing it as one would have the user approve something else.
-        toolName:
-          asString(record.kind) === 'writeStdin'
-            ? CODEX_TOOL_NAMES.writeStdin
-            : CODEX_TOOL_NAMES.command,
+        toolName: writesStdin
+          ? CODEX_TOOL_NAMES.writeStdin
+          : CODEX_TOOL_NAMES.command,
         input: {
           command:
             asString(record.command) ?? asString(item?.record.command) ?? '',
@@ -111,6 +138,9 @@ export function codexApprovalCard(
             : {}),
         },
         question: false,
+        // Not for input to a running command: what "this command for the
+        // session" means for a keystroke was never measured.
+        ...(writesStdin ? {} : { options: sessionOption() }),
       };
     }
     case CODEX_SERVER_REQUESTS.mcpElicitation:
@@ -127,6 +157,7 @@ export function codexApprovalCard(
             : {}),
         },
         question: false,
+        options: sessionOption(),
       };
     }
     case CODEX_SERVER_REQUESTS.permissionsApproval:
@@ -137,6 +168,7 @@ export function codexApprovalCard(
           ...(reason ? { reason } : {}),
         },
         question: false,
+        options: sessionOption(),
       };
     case CODEX_SERVER_REQUESTS.userInput: {
       const questions = codexCardQuestions(params);
@@ -215,13 +247,17 @@ function mcpToolApprovalCard(
   const tool = call ? asString(call.record.tool) : null;
   const args = meta?.tool_params ?? call?.record.arguments ?? {};
   const message = asString(record.message);
-  return tool
-    ? { toolName: `mcp__${server}__${tool}`, input: args, question: false }
-    : {
-        toolName: `mcp__${server}`,
-        input: message ? { message, arguments: args } : args,
-        question: false,
-      };
+  const options = mcpPersistsForSession(record) ? sessionOption() : [];
+  return {
+    ...(tool
+      ? { toolName: `mcp__${server}__${tool}`, input: args }
+      : {
+          toolName: `mcp__${server}`,
+          input: message ? { message, arguments: args } : args,
+        }),
+    question: false,
+    ...(options.length > 0 ? { options } : {}),
+  };
 }
 
 /**
@@ -280,23 +316,41 @@ export function withCodexAnswer(params: unknown, answer: string): unknown {
  *
  * `decline` rather than `cancel` for a refused approval: `cancel` also ends
  * the turn, where the user said no to one action and the agent may carry on.
+ *
+ * `option` is the card's session-long answer when the user picked it; every
+ * other verdict — and every auto-approval, which never passes one — is the
+ * one-time `accept`, `scope: "turn"` or unpersisted MCP accept.
  */
 export function encodeCodexReply(
   method: string,
   params: unknown,
   allow: boolean,
   updatedInput: unknown,
+  option?: ApprovalOption,
 ): unknown {
+  const forSession = allow && option?.id === CODEX_SESSION_APPROVAL_OPTION_ID;
   switch (method) {
     case CODEX_SERVER_REQUESTS.permissionsApproval:
       return allow
-        ? { permissions: asRecord(params)?.permissions ?? {}, scope: 'turn' }
+        ? {
+            permissions: asRecord(params)?.permissions ?? {},
+            scope: forSession ? CODEX_PERMISSION_SESSION_SCOPE : 'turn',
+          }
         : { permissions: {}, scope: 'turn' };
     case CODEX_SERVER_REQUESTS.mcpElicitation:
       // The approval's schema is an empty object, so an accept carries an
       // empty one back.
       return allow
-        ? { action: 'accept', content: {}, _meta: null }
+        ? {
+            action: 'accept',
+            content: {},
+            _meta: forSession
+              ? {
+                  [CODEX_MCP_APPROVAL_PERSIST_KEY]:
+                    CODEX_SESSION_APPROVAL_OPTION_ID,
+                }
+              : null,
+          }
         : { action: 'decline', content: null, _meta: null };
     case CODEX_SERVER_REQUESTS.userInput: {
       if (!allow) {
@@ -318,6 +372,12 @@ export function encodeCodexReply(
       return { answers };
     }
     default:
-      return { decision: allow ? 'accept' : 'decline' };
+      return {
+        decision: forSession
+          ? CODEX_ACCEPT_FOR_SESSION_DECISION
+          : allow
+            ? 'accept'
+            : 'decline',
+      };
   }
 }

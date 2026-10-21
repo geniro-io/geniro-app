@@ -1335,26 +1335,32 @@ export class DaemonClient {
    * the immediate `verdict_ack` reply only reports routing (`expired` means
    * already settled; `invalid` remains retryable).
    * `answer` carries the user's picked option / typed text for a question
-   * card (AskUserQuestion) — omitted for plain tool approvals.
+   * card (AskUserQuestion) — omitted for plain tool approvals. `optionId`
+   * names the remembering option picked off a permission card ("allow for this
+   * session") — one of the ids the card's own row offered; omitted for a
+   * one-time Approve or Deny.
    *
    * TWIN PARSER: the daemon parses this `verdict` envelope in
    * `extractVerdict`
    * (apps/daemon/src/v1/notifications/gateways/notifications.gateway.ts) —
-   * `{runId, requestId, allow, answer?}`, `answer` honored only as a
-   * non-empty string ≤ MAX_ANSWER_LENGTH. A shape change here must be
-   * mirrored there, and vice versa.
+   * `{runId, requestId, allow, answer?, optionId?}`, `answer` honored only as
+   * a non-empty string ≤ MAX_ANSWER_LENGTH, `optionId` only as a non-empty
+   * string ≤ MAX_OPTION_ID_LENGTH. A shape change here must be mirrored
+   * there, and vice versa.
    */
   sendVerdict(
     runId: string,
     requestId: string,
     allow: boolean,
     answer?: string,
+    optionId?: string,
   ): void {
     this.socket?.emit('verdict', {
       runId,
       requestId,
       allow,
       ...(answer !== undefined ? { answer } : {}),
+      ...(optionId !== undefined ? { optionId } : {}),
     });
   }
 

@@ -9,6 +9,7 @@ import {
   answerFoldsInto,
   deliverApprovalAnswer,
   isUserQuestion,
+  pickedApprovalOption,
 } from './approval-answer';
 
 // The SHIPPED adapters, not doubles: the fold's condition reads
@@ -147,6 +148,80 @@ describe('deliverApprovalAnswer — the fold', () => {
     const { sent, record } = deliverVia(cursor, questionRequest(), true, 'Red');
     expect(sent).toBe(QUESTION_INPUT);
     expect(record).toEqual({});
+  });
+});
+
+describe('deliverApprovalAnswer — a remembering option', () => {
+  const session = {
+    id: 'session',
+    label: 'Allow for this session',
+    allow: true,
+    scope: 'session' as const,
+    reply: ['update'],
+  };
+  const request = {
+    toolName: 'Bash',
+    input: { command: 'ls' },
+    options: [session],
+  };
+
+  it("hands the CLI the request's own option and records it on the verdict row", () => {
+    let delivered: unknown;
+    const { record } = deliverApprovalAnswer(
+      claude,
+      request,
+      true,
+      undefined,
+      (_input, option) => {
+        delivered = option;
+        return true;
+      },
+      'session',
+    );
+    // The REQUEST's object — `reply` included — never one built from the id.
+    expect(delivered).toBe(session);
+    expect(record).toEqual({
+      option: {
+        id: 'session',
+        label: 'Allow for this session',
+        scope: 'session',
+      },
+    });
+  });
+
+  it("reports an option verdict's own delivery outcome, which gates the row", () => {
+    expect(
+      deliverApprovalAnswer(
+        claude,
+        request,
+        true,
+        undefined,
+        () => false,
+        'session',
+      ).delivered,
+    ).toBe(false);
+  });
+});
+
+describe('pickedApprovalOption', () => {
+  const options = [
+    {
+      id: 'session',
+      label: 'Allow for this session',
+      allow: true,
+      scope: 'session' as const,
+    },
+  ];
+
+  it('finds the offered option in its own direction', () => {
+    expect(pickedApprovalOption(options, true, 'session')).toBe(options[0]);
+  });
+
+  it('finds nothing for no pick, an id not offered, or a pick riding the other verdict', () => {
+    expect(pickedApprovalOption(options, true, undefined)).toBeUndefined();
+    expect(pickedApprovalOption(options, true, 'always')).toBeUndefined();
+    expect(pickedApprovalOption(options, false, 'session')).toBeUndefined();
+    expect(pickedApprovalOption(undefined, true, 'session')).toBeUndefined();
   });
 });
 

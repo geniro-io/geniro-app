@@ -146,6 +146,40 @@ export const CODEX_SERVER_REQUESTS = {
  */
 export const CODEX_MCP_TOOL_APPROVAL_KIND = 'mcp_tool_call';
 
+// ── Remembered approvals ──────────────────────────────────────────────────────
+//
+// What codex keeps of an approval past the one call, by request kind, read off
+// `codex app-server generate-json-schema` on 0.162.0 and then MEASURED there
+// (2026-10-21): a thread answered twice with the same command or patch, under
+// `untrusted` + `read-only`.
+//
+// - command: `decision: "acceptForSession"` — asked once, the repeat ran with no
+//   request; `accept` asked twice.
+// - file change: `decision: "acceptForSession"` — asked once for two edits of
+//   the same file.
+// - MCP tool call: the elicitation's `_meta.persist` lists what it accepts
+//   (`["session","always"]` measured); answering `_meta: {persist: "session"}`
+//   asked once for two calls.
+// - permissions: `scope: "session"` instead of `"turn"` (schema only — no
+//   build was seen to raise this request).
+//
+// Only the SESSION scope is offered. codex's longer-lived answers
+// (`acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`, MCP
+// `persist: "always"`) write the user's own `~/.codex` rules and config, and
+// geniro has not measured one without changing that config for real.
+
+/** The card option id, and the scope, of codex's session-long approval. */
+export const CODEX_SESSION_APPROVAL_OPTION_ID = 'session';
+
+/** The command / file-change decision that remembers for the session. */
+export const CODEX_ACCEPT_FOR_SESSION_DECISION = 'acceptForSession';
+
+/** The permissions grant scope that lasts the session (`"turn"` otherwise). */
+export const CODEX_PERMISSION_SESSION_SCOPE = 'session';
+
+/** The MCP approval elicitation's `_meta` key listing / naming persistence. */
+export const CODEX_MCP_APPROVAL_PERSIST_KEY = 'persist';
+
 /**
  * codex's own question tool — what a card for `item/tool/requestUserInput` is
  * named. Also `AdapterConfig.questionToolName`.

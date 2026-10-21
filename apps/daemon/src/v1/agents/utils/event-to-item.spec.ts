@@ -248,6 +248,44 @@ describe('mapEventToItem', () => {
     ).toBe(false);
   });
 
+  it('persists the remembering options the card draws, without the adapter-private reply', () => {
+    const mapped = mapEventToItem({
+      type: 'approval_request',
+      id: 'req-o',
+      toolName: 'Bash',
+      input: { command: 'npm test' },
+      options: [
+        {
+          id: 'session',
+          label: 'Allow for this session',
+          allow: true,
+          scope: 'session',
+          reply: [{ type: 'addRules', destination: 'session' }],
+        },
+      ],
+    });
+    expect(mapped?.payload.options).toEqual([
+      {
+        id: 'session',
+        label: 'Allow for this session',
+        allow: true,
+        scope: 'session',
+      },
+    ]);
+    // No options, no key — an empty list would read as "offers nothing extra"
+    // on a row whose CLI was never asked.
+    expect(
+      'options' in
+        mapEventToItem({
+          type: 'approval_request',
+          id: 'req-p',
+          toolName: 'Bash',
+          input: {},
+          options: [],
+        })!.payload,
+    ).toBe(false);
+  });
+
   it('maps a flagged approval_request carrying requiresUserInteraction: true', () => {
     expect(
       mapEventToItem({

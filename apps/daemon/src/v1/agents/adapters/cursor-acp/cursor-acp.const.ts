@@ -1,4 +1,7 @@
-import type { BackgroundUnitOutcome } from '../adapter.types';
+import type {
+  ApprovalOptionScope,
+  BackgroundUnitOutcome,
+} from '../adapter.types';
 
 // ── `cursor-agent acp` ────────────────────────────────────────────────────
 
@@ -263,6 +266,26 @@ export const CURSOR_ASKING_APPROVAL_MODE = 'allowlist';
  * asking turn writes it `false` beside the approval mode.
  */
 export const CURSOR_WEB_SEARCH_AUTO_ACCEPT_CONFIG_KEY = 'autoAcceptWebSearch';
+
+/**
+ * How long cursor keeps an "Allow always" answer as geniro runs it: one
+ * SESSION.
+ *
+ * cursor offers `allow-once` / `allow-always` / `reject-once` on every
+ * `session/request_permission` it raises (the CLI's own handlers, 2026.10.19-
+ * 6bbf2c4), and `allow-always` adds the call's commands to the `permissions`
+ * allowlist of the `cli-config.json` in `CURSOR_CONFIG_DIR`. MEASURED over ACP
+ * on that build, under a profile seeded like `seedCursorProfile` and one
+ * process asked twice to run `mkdir -p probe-out && touch probe-out/marker.txt`:
+ * `allow-once` asked twice; `allow-always` asked ONCE and the profile's list
+ * gained `Shell(mkdir)` and `Shell(touch)`, while `~/.cursor/cli-config.json`
+ * was untouched.
+ *
+ * That profile is the conversation process's own — seeded when it spawns and
+ * removed when it closes (`prepareTurn`) — so the answer outlives neither, and
+ * the card offers it as "for this session" rather than under cursor's word.
+ */
+export const CURSOR_ALWAYS_ANSWER_SCOPE: ApprovalOptionScope = 'session';
 
 /**
  * The option id behind {@link CURSOR_MAX_MODE_CONFIG_KEY} — declared in

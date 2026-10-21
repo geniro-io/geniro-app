@@ -503,6 +503,54 @@ describe('verdict round-trip', () => {
     expect(respond).toHaveBeenCalledWith(true);
   });
 
+  it('forwards a picked option id, and refuses a malformed one without consuming the card', () => {
+    const approvals = new ApprovalRegistry();
+    const respond = vi.fn(() => true);
+    const track = (requestId: string): void =>
+      approvals.track({
+        runId: 'r1',
+        nodeId: 'n1',
+        requestId,
+        toolName: 'Bash',
+        input: {},
+        question: false,
+        respond,
+      });
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      approvals,
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+    );
+
+    track('req-o');
+    expect(
+      gw.verdict({
+        runId: 'r1',
+        requestId: 'req-o',
+        allow: true,
+        optionId: 'session',
+      }).data.status,
+    ).toBe('applied');
+    expect(respond).toHaveBeenLastCalledWith(true, undefined, 'session');
+
+    track('req-bad');
+    for (const optionId of ['', 7, 'x'.repeat(257)]) {
+      expect(
+        gw.verdict({ runId: 'r1', requestId: 'req-bad', allow: true, optionId })
+          .data.status,
+      ).toBe('invalid');
+    }
+    // Still open: a malformed pick is not a plain approve.
+    expect(approvals.listByRun('r1').map((p) => p.requestId)).toEqual([
+      'req-bad',
+    ]);
+  });
+
   it('distinguishes expired requests from malformed verdicts', () => {
     const gw = new NotificationsGateway(
       runtime,

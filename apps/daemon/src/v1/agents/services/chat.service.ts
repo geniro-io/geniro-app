@@ -34,6 +34,7 @@ import type {
   AgentMcpServer,
   AgentSession,
   AgentUsage,
+  ApprovalOption,
   SessionCloseCause,
   TurnAutoCompact,
 } from '../adapters/adapter.types';
@@ -3541,7 +3542,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     adapter: AgentAdapter,
     event: Extract<AgentEvent, { type: 'approval_request' }>,
-    respond: (allow: boolean, input?: unknown) => boolean,
+    respond: (
+      allow: boolean,
+      input?: unknown,
+      option?: ApprovalOption,
+    ) => boolean,
   ): boolean {
     const mapped = mapEventToItem(event);
     if (!mapped) {
@@ -3585,13 +3590,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         toolName: event.toolName,
         input: event.input,
         question: isQuestion,
-        respond: (allow, answer) => {
+        respond: (allow, answer, optionId) => {
           const { delivered, record } = deliverApprovalAnswer(
             adapter,
             event,
             allow,
             answer,
-            (input) => respond(allow, input),
+            // Arity-preserving, as `ApprovalRegistry.resolve` is: a one-time
+            // verdict keeps the two-argument call it always made.
+            (input, option) =>
+              option === undefined
+                ? respond(allow, input)
+                : respond(allow, input, option),
+            optionId,
           );
           this.announceAwaiting(runId);
           // Answering IS acting in this thread, and the sidebar orders by the
@@ -7147,13 +7158,24 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 toolName: event.toolName,
                 input: event.input,
                 question: isQuestion,
-                respond: (allow, answer) => {
+                respond: (allow, answer, optionId) => {
                   const { delivered, record } = deliverApprovalAnswer(
                     adapter,
                     event,
                     allow,
                     answer,
-                    (input) => handle.respondApproval(event.id, allow, input),
+                    // Arity-preserving: a one-time verdict keeps the
+                    // three-argument call it always made.
+                    (input, option) =>
+                      option === undefined
+                        ? handle.respondApproval(event.id, allow, input)
+                        : handle.respondApproval(
+                            event.id,
+                            allow,
+                            input,
+                            option,
+                          ),
+                    optionId,
                   );
                   // The entry is already out of the registry by the time this
                   // runs (resolve() deletes before responding), so re-reading it

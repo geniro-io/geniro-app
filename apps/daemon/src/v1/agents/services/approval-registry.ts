@@ -57,13 +57,15 @@ export interface PendingApproval {
    * Delivers the verdict to the owning turn (persisting the verdict item on
    * success). Returns whether the turn was still live to receive it.
    * `answer` carries the user's picked option / typed text for a question
-   * card (AskUserQuestion) — absent for plain tool approvals.
+   * card (AskUserQuestion) — absent for plain tool approvals. `optionId` names
+   * the remembering option the user picked off a permission card ("allow for
+   * this session") — absent for a one-time Approve or Deny.
    *
    * On a {@link deferred} entry there is no turn to be live: it persists the
    * verdict and starts a new one, and its `true` means the answer was accepted
    * rather than that anything received it synchronously.
    */
-  respond: (allow: boolean, answer?: string) => boolean;
+  respond: (allow: boolean, answer?: string, optionId?: string) => boolean;
 }
 
 /**
@@ -131,6 +133,7 @@ export class ApprovalRegistry {
     requestId: string,
     allow: boolean,
     answer?: string,
+    optionId?: string,
   ): boolean {
     const key = this.key(runId, requestId);
     const entry = this.pending.get(key);
@@ -141,6 +144,9 @@ export class ApprovalRegistry {
     // Arity-preserving: a plain approve/deny keeps the historical one-arg
     // call shape — responders can't observe the difference, but call-shape
     // assertions (spies) on the pre-M4 wire stay byte-identical.
+    if (optionId !== undefined) {
+      return entry.respond(allow, answer, optionId);
+    }
     return answer === undefined
       ? entry.respond(allow)
       : entry.respond(allow, answer);

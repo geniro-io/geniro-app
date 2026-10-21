@@ -1,5 +1,5 @@
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
-import type { AgentEvent } from '../adapters/adapter.types';
+import type { AgentEvent, ApprovalOption } from '../adapters/adapter.types';
 
 /**
  * Shared event→transcript mapping used by both the single-agent chat turn and
@@ -35,6 +35,22 @@ export function mapEventToItem(event: AgentEvent): MappedItem | null {
     ...item,
     payload: { ...item.payload, parentToolUseId: event.parentToolUseId },
   };
+}
+
+/**
+ * A request's options as the row keeps them: what the card draws and the
+ * verdict names, without the adapter-private `reply` — that rides the live
+ * event to the encoder and nowhere else.
+ */
+export function publicApprovalOptions(
+  options: readonly ApprovalOption[],
+): Omit<ApprovalOption, 'reply'>[] {
+  return options.map(({ id, label, allow, scope }) => ({
+    id,
+    label,
+    allow,
+    scope,
+  }));
 }
 
 function mapEventBody(event: AgentEvent): MappedItem | null {
@@ -374,6 +390,11 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           // nothing else (apps/ui/src/renderer/chats/approval-card.tsx).
           ...(event.questions && event.questions.length > 0
             ? { questions: event.questions }
+            : {}),
+          // TWIN PARSER: the renderer's permission card reads `options`
+          // (apps/ui/src/renderer/chats/approval-card.tsx).
+          ...(event.options && event.options.length > 0
+            ? { options: publicApprovalOptions(event.options) }
             : {}),
         },
       };

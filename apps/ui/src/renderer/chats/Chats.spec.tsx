@@ -4341,6 +4341,86 @@ describe('Chats — a standing workflow proposal', () => {
   });
 });
 
+describe("Chats — a permission card offers the agent's remembering answers", () => {
+  const request = {
+    id: 'r1-ask-0',
+    runId: 'r1',
+    nodeId: null,
+    seq: 0,
+    kind: 'approval_request' as const,
+    role: null,
+    payload: {
+      id: 'req-p',
+      toolName: 'Bash',
+      input: { command: 'npm test' },
+      options: [
+        {
+          id: 'session',
+          label: 'Allow for this session',
+          allow: true,
+          scope: 'session',
+        },
+      ],
+    },
+    createdAt: 'now',
+  };
+
+  it("sends the picked option's id with the verdict", async () => {
+    // From the stored row to the socket: the card's own spec passes with the
+    // row → card → client wiring here deleted.
+    api.listRunItems.mockResolvedValue([request]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const pick = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Allow for this session',
+    );
+    expect(pick).toBeDefined();
+    act(() => {
+      pick!.click();
+    });
+    expect(client.sendVerdict).toHaveBeenCalledWith(
+      'r1',
+      'req-p',
+      true,
+      undefined,
+      'session',
+    );
+  });
+
+  it('reads the picked option back onto the settled card', async () => {
+    api.listRunItems.mockResolvedValue([
+      request,
+      {
+        id: 'r1-verdict-1',
+        runId: 'r1',
+        nodeId: null,
+        seq: 1,
+        kind: 'approval_verdict' as const,
+        role: null,
+        payload: {
+          id: 'req-p',
+          allow: true,
+          option: {
+            id: 'session',
+            label: 'Allow for this session',
+            scope: 'session',
+          },
+        },
+        createdAt: 'now',
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.textContent).toContain(
+      '✓ approved — Allow for this session',
+    );
+  });
+});
+
 describe('Chats verdict acknowledgments', () => {
   it('keeps a second run actionable when a late expired ack reuses its request id', async () => {
     const run2: ChatRun = {

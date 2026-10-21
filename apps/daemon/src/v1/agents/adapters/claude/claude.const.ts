@@ -1715,6 +1715,43 @@ export const CLAUDE_TURN_ABORTED_MESSAGE =
 /** What the CLI is told when the user denies a permission request. */
 export const CLAUDE_DENY_MESSAGE = 'Denied by the user in Geniro';
 
+// ── Remembered approvals ──────────────────────────────────────────────────────
+//
+// A `can_use_tool` request carries `permission_suggestions`: the permission
+// updates claude's own terminal offers as "Yes, and don't ask again …". An
+// allow answer that echoes them as `updatedPermissions` applies them. MEASURED
+// on 2.1.295 (2026-10-21), `claude -p --permission-prompt-tool stdio`, one
+// process asked twice to run `touch probe-marker.txt`:
+//
+// - The request carried three suggestions: `addRules` (`Bash(touch …)`,
+//   `destination: "localSettings"`), `addDirectories` (the cwd, `"session"`)
+//   and `setMode` (`acceptEdits`, `"session"`).
+// - A plain allow asked twice.
+// - The rules and directories with `destination` rewritten to `"session"`
+//   asked ONCE, and wrote no file.
+// - The same two as given asked once and wrote `.claude/settings.local.json`
+//   in the cwd (`{"permissions":{"allow":["Bash(touch probe-marker.txt)"]}}`) —
+//   claude's own "always", kept in the project past the conversation.
+//
+// `setMode` is never echoed. It moves the whole session to another permission
+// mode behind geniro's back, so the chat's approval chip would say "ask" while
+// the CLI stopped asking about every edit — not an answer about THIS tool.
+
+/** The suggestion kinds an option may carry back (see the block above). */
+export const CLAUDE_REMEMBERED_SUGGESTION_TYPES: ReadonlySet<string> = new Set([
+  'addRules',
+  'addDirectories',
+]);
+
+/** The `destination` that keeps a permission update for the session only. */
+export const CLAUDE_SESSION_PERMISSION_DESTINATION = 'session';
+
+/** The card option ids of claude's two remembered answers. */
+export const CLAUDE_APPROVAL_OPTION_IDS = {
+  session: 'session',
+  always: 'always',
+} as const;
+
 /**
  * How the CLI reports that its own permission channel died under it.
  *

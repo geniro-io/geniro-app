@@ -1,4 +1,9 @@
-import type { HostPatch, HostPlanStep, HostQuestion } from '../chat.types';
+import type {
+  HostPatch,
+  HostPatchFingerprint,
+  HostPlanStep,
+  HostQuestion,
+} from '../chat.types';
 import { readHostPatch } from './host-patch';
 import { readHostPlan } from './host-plan';
 import { readHostQuestions } from './host-question';
@@ -41,6 +46,7 @@ export interface PendingPatchSnapshot {
   kind: 'patch';
   requestId: string;
   patch: HostPatch;
+  fingerprint: HostPatchFingerprint | null;
 }
 
 export type PendingCardSnapshot =
@@ -71,6 +77,7 @@ export function serializePendingQuestion(
         kind: 'patch',
         requestId: snapshot.requestId,
         file_path: patch.filePath,
+        fingerprint: snapshot.fingerprint,
         ...(patch.oldString === undefined
           ? {}
           : { old_string: patch.oldString }),
@@ -119,6 +126,7 @@ export function readPendingQuestion(
     old_string?: unknown;
     new_string?: unknown;
     summary?: unknown;
+    fingerprint?: unknown;
   };
   if (typeof record.requestId !== 'string' || record.requestId.length === 0) {
     return null;
@@ -136,6 +144,20 @@ export function readPendingQuestion(
     };
   }
   if (record.kind === 'patch') {
+    const stored = record.fingerprint;
+    let fingerprint: HostPatchFingerprint | null;
+    if (stored === null || stored === 'absent') {
+      fingerprint = stored;
+    } else if (
+      typeof stored === 'object' &&
+      'sha256' in stored &&
+      typeof stored.sha256 === 'string' &&
+      /^[a-f0-9]{64}$/.test(stored.sha256)
+    ) {
+      fingerprint = { sha256: stored.sha256 };
+    } else {
+      return null;
+    }
     const read = readHostPatch({
       file_path: record.file_path,
       old_string: record.old_string,
@@ -149,6 +171,7 @@ export function readPendingQuestion(
       kind: 'patch',
       requestId: record.requestId,
       patch: read.patch,
+      fingerprint,
     };
   }
   if (record.kind !== 'question') {

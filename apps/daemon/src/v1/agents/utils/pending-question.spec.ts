@@ -63,6 +63,7 @@ describe('pending question snapshots', () => {
     const patch = {
       kind: 'patch' as const,
       requestId: 'req-patch',
+      fingerprint: null,
       patch: {
         filePath: 'a.ts',
         oldString: 'const timeout = 30;',
@@ -80,6 +81,38 @@ describe('pending question snapshots', () => {
       kind: 'question',
     });
   });
+
+  it.each(['absent' as const, { sha256: 'a'.repeat(64) }, null])(
+    'round-trips a patch fingerprint %j',
+    (fingerprint) => {
+      const snapshot = {
+        kind: 'patch' as const,
+        requestId: 'req-patch',
+        patch: { filePath: 'a.ts', newString: 'replacement' },
+        fingerprint,
+      };
+      expect(readPendingQuestion(serializePendingQuestion(snapshot))).toEqual(
+        snapshot,
+      );
+    },
+  );
+
+  it.each([undefined, {}, { sha256: 'not a hash' }, 42])(
+    'refuses an unreadable patch fingerprint %j',
+    (fingerprint) => {
+      expect(
+        readPendingQuestion(
+          JSON.stringify({
+            kind: 'patch',
+            requestId: 'req-patch',
+            file_path: 'a.ts',
+            new_string: 'replacement',
+            fingerprint,
+          }),
+        ),
+      ).toBeNull();
+    },
+  );
 
   it.each([
     [
@@ -114,7 +147,7 @@ describe('pending question snapshots', () => {
     ],
     [
       'a patch over the size the live reader refuses',
-      `{"kind":"patch","requestId":"req-1","file_path":"a.ts","new_string":"${'x'.repeat(200_001)}"}`,
+      `{"kind":"patch","requestId":"req-1","fingerprint":null,"file_path":"a.ts","new_string":"${'x'.repeat(200_001)}"}`,
     ],
   ])('answers null for %s', (_name, stored) => {
     // The column is TEXT that outlives the process that wrote it, so a row from

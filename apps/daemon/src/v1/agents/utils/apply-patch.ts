@@ -1,9 +1,43 @@
+import { createHash } from 'node:crypto';
 import { constants, realpathSync } from 'node:fs';
 import { type FileHandle, mkdir, open, readFile, stat } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 
-import type { HostPatch, HostPatchOutcome } from '../chat.types';
+import type {
+  HostPatch,
+  HostPatchFingerprint,
+  HostPatchOutcome,
+} from '../chat.types';
 import { writeContainment } from './write-containment';
+
+/** Null means no fingerprint could be taken; a whole-file write must refuse it. */
+export async function captureHostPatchFingerprint(
+  cwd: string,
+  patch: HostPatch,
+): Promise<HostPatchFingerprint | null> {
+  const target = resolve(cwd, patch.filePath);
+  if (
+    patch.oldString !== undefined ||
+    containmentRefusal(cwd, target) !== null
+  ) {
+    return null;
+  }
+  let handle: FileHandle;
+  try {
+    handle = await open(realPathOrSelf(target), constants.O_RDONLY | NO_FOLLOW);
+  } catch (err) {
+    return codeOf(err) === 'ENOENT' ? 'absent' : null;
+  }
+  try {
+    return (await handle.stat()).isFile()
+      ? { sha256: await hashFile(handle) }
+      : null;
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
 
 /**
  * Write a patch the user has ACCEPTED, or say why it could not be written.
@@ -23,6 +57,8 @@ import { writeContainment } from './write-containment';
  * the file moved on since the agent read it. More than one means the agent
  * named a fragment that appears again elsewhere, and picking the first is a
  * coin flip on which of them the user actually saw in the diff. Both refuse.
+ * Whole-file writes instead require the byte fingerprint captured when the
+ * card was raised, checked through the opened handle before truncation.
  *
  * Never throws: every failure is an outcome, because the caller is answering a
  * model over MCP and a stack trace is not an answer. Filesystem errors are
@@ -33,6 +69,7 @@ import { writeContainment } from './write-containment';
 export async function applyHostPatch(
   cwd: string,
   patch: HostPatch,
+  fingerprint: HostPatchFingerprint | null = null,
 ): Promise<HostPatchOutcome> {
   const target = resolve(cwd, patch.filePath);
   const refused = containmentRefusal(cwd, target);
@@ -45,6 +82,12 @@ export async function applyHostPatch(
   }
 
   if (patch.oldString === undefined) {
+    if (fingerprint === null) {
+      return {
+        status: 'stale',
+        reason: 'the file’s original state could not be checked',
+      };
+    }
     // No search text: this is `Write`'s shape — a new file, or a deliberate
     // whole-file replacement. The user saw the entire body as additions.
     try {
@@ -55,7 +98,13 @@ export async function applyHostPatch(
         reason: `the file could not be written (${codeOf(err)})`,
       };
     }
-    return writeContained(cwd, target, patch.newString, patch.filePath);
+    return writeContained(
+      cwd,
+      target,
+      patch.newString,
+      patch.filePath,
+      fingerprint,
+    );
   }
 
   let current: string;
@@ -95,6 +144,7 @@ export async function applyHostPatch(
 }
 
 const LINK_OUT = 'the path resolves outside this chat’s folder through a link';
+const FILE_CHANGED = 'the file changed after the patch was shown';
 
 /**
  * Open flags shared by the read and the write. `O_NOFOLLOW` closes the window
@@ -170,6 +220,7 @@ async function writeContained(
   target: string,
   content: string,
   filePath: string,
+  fingerprint: HostPatchFingerprint | null = null,
 ): Promise<HostPatchOutcome> {
   const refused = containmentRefusal(cwd, target);
   if (refused !== null) {
@@ -179,10 +230,23 @@ async function writeContained(
   try {
     handle = await open(
       realPathOrSelf(target),
-      constants.O_WRONLY | constants.O_CREAT | NO_FOLLOW,
+      NO_FOLLOW |
+        (fingerprint === null
+          ? constants.O_WRONLY | constants.O_CREAT
+          : fingerprint === 'absent'
+            ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
+            : constants.O_RDWR),
       0o666,
     );
   } catch (err) {
+    if (
+      (fingerprint === 'absent' && codeOf(err) === 'EEXIST') ||
+      (fingerprint !== null &&
+        fingerprint !== 'absent' &&
+        codeOf(err) === 'ENOENT')
+    ) {
+      return { status: 'stale', reason: FILE_CHANGED };
+    }
     return {
       status: 'stale',
       reason:
@@ -204,6 +268,13 @@ async function writeContained(
           'the file has other hard links, so writing it could change a file outside this chat’s folder',
       };
     }
+    if (
+      fingerprint !== null &&
+      fingerprint !== 'absent' &&
+      (await hashFile(handle)) !== fingerprint.sha256
+    ) {
+      return { status: 'stale', reason: FILE_CHANGED };
+    }
     await handle.truncate(0);
     await handle.writeFile(content, 'utf8');
   } catch (err) {
@@ -215,6 +286,21 @@ async function writeContained(
     await handle.close().catch(() => undefined);
   }
   return { status: 'applied', path: relative(cwd, target) || filePath };
+}
+
+async function hashFile(handle: FileHandle): Promise<string> {
+  const hash = createHash('sha256');
+  const buffer = Buffer.alloc(64 * 1024);
+  let position = 0;
+  for (;;) {
+    // Positional reads leave the descriptor at zero for the subsequent write.
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) {
+      return hash.digest('hex');
+    }
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
 }
 
 /** An existing path with every link resolved, or the path itself for a new one. */

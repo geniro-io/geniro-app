@@ -12,6 +12,7 @@ import type {
   RunCallCapability,
   WorkflowAgentNode,
 } from '../graphs.types';
+import { poolMemberNode } from '../utils/agent-pool';
 import {
   LEFT_RUNNING_COMMAND_MAX,
   PUBLISHED_ACTIONS_NOTE,
@@ -19,6 +20,7 @@ import {
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { AWAIT_GAP_GRACE_MS, CallBroker } from './call-broker.service';
+import { PoolCooldowns } from './pool-cooldowns.store';
 
 const HELPER: WorkflowAgentNode = {
   id: 'helper',
@@ -70,6 +72,10 @@ function harness(options?: {
   instantOutcome?: Partial<CalleeTurnOutcome>;
   /** The caller CLI's tool-call deadline; default: none (unbounded waits). */
   toolCallDeadlineMs?: RunCallCapability['toolCallDeadlineMs'];
+  /** The run's folder; default: none. */
+  cwd?: string;
+  /** The daemon-wide record of spent pool members; default: an empty one. */
+  poolCooldowns?: PoolCooldowns;
 }): {
   broker: CallBroker;
   capability: RunCallCapability;
@@ -101,6 +107,7 @@ function harness(options?: {
   const mode = options?.launch ?? 'instant';
   const capability: RunCallCapability = {
     calleesOf: options?.calleesOf ?? new Map([['orch', [HELPER, WRITER]]]),
+    ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
     launchCalleeTurn: (
       callee,
       message,
@@ -178,7 +185,7 @@ function harness(options?: {
     wakeNode: options?.wakeNode ?? (() => false),
     tellLiveNode: options?.tellLiveNode ?? (() => false),
   };
-  const broker = new CallBroker();
+  const broker = new CallBroker(undefined, options?.poolCooldowns);
   broker.registerRun('run-1', capability, options?.seed ?? null);
   return {
     broker,
@@ -5241,18 +5248,6 @@ describe('CallBroker — agent pool', () => {
     node: WorkflowAgentNode = POOLED,
   ): Map<string, WorkflowAgentNode[]> => new Map([['orch', [node]]]);
 
-  function settled(patch: Partial<CalleeTurnOutcome>): CalleeTurnOutcome {
-    return {
-      status: 'completed',
-      finalText: 'ok',
-      error: null,
-      failureClass: null,
-      resetsAt: null,
-      sessionId: null,
-      ...patch,
-    };
-  }
-
   it('defaults to member 1 after an explicit selection and across run passes', async () => {
     const { broker, launches, capability } = harness({
       calleesOf: pooledCallees(),
@@ -5298,54 +5293,64 @@ describe('CallBroker — agent pool', () => {
     expect(launches).toHaveLength(1);
   });
 
-  it('tries a member signed out of its account last, and first again once it answers', async () => {
-    const { broker, launches, deferred } = harness({
+  it('starts a new call past a member the shared record holds spent, and on member 1 again once it answers', async () => {
+    const { broker, launches } = harness({
       calleesOf: pooledCallees({
         ...POOLED,
         pool: [{ agent: 'codex' }, { agent: 'cursor-agent' }],
       }),
-      launch: 'defer',
     });
+    const memberOne = poolMemberNode(POOLED, 1)!;
     const call = (title: string) =>
       broker.callAgent('run-1', 'orch', {
         title,
         agent: 'helper',
         message: title,
-        mode: 'async',
       });
 
-    // A: member 1 lapsed — no reset time named — and member 2 answered.
-    await call('a');
-    deferred[0]!.resolve(
-      settled({
-        member: 2,
-        poolSkipped: [
-          {
-            member: 1,
-            failureClass: 'auth_expired',
-            error: 'Not logged in',
-            resetsAt: null,
-          },
-        ],
-      }),
+    // Any run's attempt may have written it — the record is the daemon's.
+    broker.poolCooldowns.record(
+      memberOne,
+      { cwd: null, runId: 'run-1', nodeId: 'helper' },
+      { status: 'failed', failureClass: 'auth_expired', resetsAt: null },
+      true,
     );
-    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
-    // B and C use member 2 while higher-priority member 1 is cooling.
+    await call('a');
+    broker.poolCooldowns.record(
+      memberOne,
+      { cwd: null, runId: 'run-1', nodeId: 'helper' },
+      { status: 'completed', failureClass: null, resetsAt: null },
+      false,
+    );
     await call('b');
-    deferred[1]!.resolve(settled({ member: 2 }));
-    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
-    await call('c');
     expect(launches.map((launch) => launch.callee.agent)).toEqual([
+      'codex',
       'claude',
-      'codex',
-      'codex',
     ]);
-    // Member 1 is tried at C's fall-through and answers — no longer cooling,
-    // so D returns to the highest-priority member.
-    deferred[2]!.resolve(settled({ member: 1 }));
-    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-3' });
-    await call('d');
-    expect(launches[3]!.callee.agent).toBe('claude');
+  });
+
+  it('reads a member as the account its run’s folder pins', async () => {
+    const poolCooldowns = new PoolCooldowns((_agent, cwd) =>
+      cwd === '/work/pinned' ? '/profiles/pinned' : null,
+    );
+    const { broker, launches } = harness({
+      calleesOf: pooledCallees(),
+      cwd: '/work/pinned',
+      poolCooldowns,
+    });
+    // Spent under the pinned profile, as a member naming it outright ran.
+    poolCooldowns.record(
+      { ...poolMemberNode(POOLED, 1)!, configDir: '/profiles/pinned' },
+      { cwd: '/work/elsewhere', runId: 'run-0', nodeId: 'helper' },
+      { status: 'failed', failureClass: 'rate_limited', resetsAt: null },
+      false,
+    );
+    await broker.callAgent('run-1', 'orch', {
+      title: 'a',
+      agent: 'helper',
+      message: 'a',
+    });
+    expect(launches[0]!.callee.agent).toBe('codex');
   });
 
   it('a handed-on call’s silence watchdog is not held off by the failed attempt’s open tool call', async () => {

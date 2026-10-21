@@ -27,12 +27,7 @@ import type {
   RunCallCapability,
   WorkflowAgentNode,
 } from '../graphs.types';
-import {
-  poolAttemptOrder,
-  poolAttempts,
-  poolMemberNode,
-  poolSize,
-} from '../utils/agent-pool';
+import { poolAttempts, poolMemberNode, poolSize } from '../utils/agent-pool';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
 import {
   PUBLISHED_ACTIONS_NOTE,
@@ -56,6 +51,7 @@ import {
 } from '../utils/prompt-cache-standing';
 import { resetInstantFrom } from '../utils/reset-instant';
 import { resetWakePrompt } from '../utils/reset-wake-prompt';
+import { PoolCooldowns, type PoolSite } from './pool-cooldowns.store';
 
 /** The run has no live call surface — reused by call_agent and await_agent. */
 const RUN_NOT_ACTIVE: CallEnvelope = {
@@ -535,12 +531,6 @@ interface RunCallState {
    * pending, so a call ending meanwhile holds for it rather than settling.
    */
   pendingResetDeliveries: Map<string, PendingResetDelivery[]>;
-  /**
-   * Pool members that failed on a usage limit or a lapsed sign-in, keyed
-   * `<calleeId>#<member>`, until the instant they are expected to work again.
-   * A new conversation tries them last; nothing refuses them.
-   */
-  poolCooldowns: Map<string, number>;
 }
 
 /** A fired reset waiting for its owner's conversation — see `pendingResetDeliveries`. */
@@ -744,6 +734,13 @@ export class CallBroker implements OnModuleInit {
   private readonly runs = new Map<string, RunCallState>();
 
   /**
+   * Which pool members are spent, for every run. The executor records every
+   * attempt into it — a call's as well as a node's own turn — and reads it for
+   * node turns; the broker only reads it, to pick a new call's first member.
+   */
+  readonly poolCooldowns: PoolCooldowns;
+
+  /**
    * Promised continues read back off run rows at boot, for runs no pass has
    * registered since — adopted by the run's next `registerRun`, and otherwise
    * delivered through {@link ResetWakeHooks.wakeRestoredRun} when they fire.
@@ -760,7 +757,12 @@ export class CallBroker implements OnModuleInit {
    * subscription below simply never happens — which is the pre-existing
    * behaviour rather than a degraded one.
    */
-  constructor(@Optional() private readonly bus?: AgentEventBus) {}
+  constructor(
+    @Optional() private readonly bus?: AgentEventBus,
+    @Optional() poolCooldowns?: PoolCooldowns,
+  ) {
+    this.poolCooldowns = poolCooldowns ?? new PoolCooldowns();
+  }
 
   /**
    * Drop a run's call state when the run itself is DESTROYED.
@@ -872,7 +874,6 @@ export class CallBroker implements OnModuleInit {
       pendingResetDeliveries:
         previous?.pendingResetDeliveries ??
         new Map<string, PendingResetDelivery[]>(),
-      poolCooldowns: previous?.poolCooldowns ?? new Map<string, number>(),
     });
   }
 
@@ -1397,7 +1398,7 @@ export class CallBroker implements OnModuleInit {
       continuedMember = thread.member;
     }
     const selected = this.selectPoolMember(
-      state,
+      { cwd: state.capability.cwd ?? null, runId, nodeId: callee.id },
       callee,
       args.member ?? null,
       continuedMember,
@@ -1500,7 +1501,6 @@ export class CallBroker implements OnModuleInit {
         threadCache = cache;
         threadSessionId = outcome.sessionId;
         if (selected.plan !== null) {
-          recordPoolHealth(state, callee.id, outcome);
           threadMember = member;
         }
         const envelope = toEnvelope(callId, callee.id, outcome, call);
@@ -3928,7 +3928,7 @@ export class CallBroker implements OnModuleInit {
    * with no pool runs as itself, planless.
    */
   private selectPoolMember(
-    state: RunCallState,
+    site: PoolSite,
     callee: WorkflowAgentNode,
     requested: number | null,
     threadMember: number | null,
@@ -3974,13 +3974,7 @@ export class CallBroker implements OnModuleInit {
         plan: { member: requested, fallbacks: [] },
       };
     }
-    const now = Date.now();
-    const order = poolAttemptOrder(
-      size,
-      (member) =>
-        (state.poolCooldowns.get(poolCooldownKey(callee.id, member)) ?? 0) >
-        now,
-    );
+    const { order } = this.poolCooldowns.order(callee, site);
     const first = threadMember ?? order[0]!;
     return {
       node: poolMemberNode(callee, first)!,
@@ -5124,62 +5118,6 @@ function questionEnvelope(
     question: call.parked?.question ?? '',
     options: call.parked?.options ?? [],
   };
-}
-
-/**
- * How long a pool member that failed on a limit or a sign-in is tried last,
- * when its failure named no instant it reopens at. A guess either way, so it
- * only reorders — the member is still tried when the others fail.
- */
-const POOL_COOLDOWN_FALLBACK_MS = 30 * 60 * 1000;
-
-function poolCooldownKey(calleeId: string, member: number): string {
-  return `${calleeId}#${member}`;
-}
-
-/**
- * Remember which members of `calleeId`'s pool a settled call found spent, and
- * forget the cooldown of the member that answered.
- */
-function recordPoolHealth(
-  state: RunCallState,
-  calleeId: string,
-  outcome: CalleeTurnOutcome,
-): void {
-  const now = Date.now();
-  const spent = [
-    ...(outcome.poolSkipped ?? []),
-    ...(outcome.member !== undefined && outcome.status === 'failed'
-      ? [
-          {
-            member: outcome.member,
-            failureClass: outcome.failureClass,
-            resetsAt: outcome.resetsAt,
-          },
-        ]
-      : []),
-  ];
-  for (const skip of spent) {
-    if (
-      skip.failureClass !== 'rate_limited' &&
-      skip.failureClass !== 'auth_expired'
-    ) {
-      continue;
-    }
-    const reopens =
-      skip.resetsAt !== null
-        ? resetInstantFrom(skip.resetsAt, new Date(now))
-        : null;
-    state.poolCooldowns.set(
-      poolCooldownKey(calleeId, skip.member),
-      reopens !== null && reopens > now
-        ? reopens
-        : now + POOL_COOLDOWN_FALLBACK_MS,
-    );
-  }
-  if (outcome.member !== undefined && outcome.status === 'completed') {
-    state.poolCooldowns.delete(poolCooldownKey(calleeId, outcome.member));
-  }
 }
 
 /**

@@ -8042,6 +8042,402 @@ describe('GraphExecutorService — agent calls', () => {
       expect(runDao.runs.get(run.id)?.status).toBe('completed');
     });
 
+    const LIMIT = {
+      type: 'error' as const,
+      message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+    };
+
+    it("moves a root back to member 1 on its first turn after member 1's limit resets", async () => {
+      const { service, claude, cursor, itemDao, runDao } = setup();
+      const run = await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'first',
+      });
+      await drain();
+      claude.starts[0]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[0]!.finish();
+      await drain();
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'backup-session' });
+      completeTurn(cursor.starts[0]!, 'first done');
+      await drain();
+      await service.sendMessage(run.id, 'second');
+      await drain();
+      expect(claude.starts).toHaveLength(1);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('backup-session');
+      completeTurn(cursor.starts[1]!, 'second done');
+      await drain();
+
+      // A day on, the window has reopened whatever the clock read at the limit.
+      const later = Date.now() + 25 * 60 * 60 * 1000;
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+      onTestFinished(() => clock.mockRestore());
+      await service.sendMessage(run.id, 'third');
+      await drain();
+      expect(cursor.starts).toHaveLength(2);
+      expect(claude.starts).toHaveLength(2);
+      expect(claude.starts[1]!.input.resumeSessionId ?? null).toBeNull();
+      expect(claude.starts[1]!.input.prompt).toContain('second done');
+      const moves = itemDao.items
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+        .filter((payload) => payload.nodePoolHandOff === true);
+      expect(moves.at(-1)).toMatchObject({
+        member: 1,
+        fromMember: 2,
+        previousSessionId: 'backup-session',
+      });
+      completeTurn(claude.starts[1]!, 'third done');
+      await drain();
+      expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    });
+
+    it('starts a new run on member 2 while member 1 is still spent from another run', async () => {
+      const { service, claude, cursor, callBroker, itemDao } = setup();
+      const first = await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'first',
+      });
+      await drain();
+      claude.starts[0]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[0]!.finish();
+      await drain();
+      completeTurn(cursor.starts[0]!, 'first done');
+      await drain();
+
+      const second = await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'again',
+      });
+      await drain();
+      expect(claude.starts).toHaveLength(1);
+      expect(cursor.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId ?? null).toBeNull();
+      cursor.starts[1]!.emit({ type: 'session', sessionId: 'second-backup' });
+      completeTurn(cursor.starts[1]!, 'again done');
+      await drain();
+      const moved = itemDao.items
+        .filter((item) => item.runId === second.id)
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+        .find((payload) => payload.nodePoolHandOff === true);
+      expect(moved).toMatchObject({ member: 2, fromMember: 1 });
+
+      // The recorded member holds the session on the run's next pass.
+      callBroker.unregisterRun(second.id);
+      await service.sendMessage(second.id, 'more');
+      await drain();
+      expect(claude.starts).toHaveLength(1);
+      expect(cursor.starts[2]!.input.resumeSessionId).toBe('second-backup');
+      completeTurn(cursor.starts[2]!, 'more done');
+      await drain();
+      service.cancel(first.id);
+    });
+
+    /** The node hand-off rows a run wrote, in order. */
+    function moves(
+      itemDao: { items: { runId: string; payload: string }[] },
+      runId: string,
+    ): Record<string, unknown>[] {
+      return itemDao.items
+        .filter((item) => item.runId === runId)
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+        .filter(
+          (payload) =>
+            payload.nodePoolHandOff === true && payload.callId === undefined,
+        );
+    }
+
+    /** A root that hit member 1's limit and answered on cursor as `session`. */
+    async function rootOnBackup(
+      harness: ReturnType<typeof setup>,
+      session: string,
+    ): Promise<string> {
+      const run = await harness.service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'first',
+      });
+      await drain();
+      const claudeTurn = harness.claude.starts.at(-1)!;
+      claudeTurn.emit(LIMIT);
+      claudeTurn.finish();
+      await drain();
+      const cursorTurn = harness.cursor.starts.at(-1)!;
+      cursorTurn.emit({ type: 'session', sessionId: session });
+      completeTurn(cursorTurn, 'first done');
+      await drain();
+      return run.id;
+    }
+
+    it('goes back to the member it left, on that member’s own session, when member 1 refuses again', async () => {
+      const harness = setup();
+      const { service, claude, cursor, runDao } = harness;
+      const runId = await rootOnBackup(harness, 'backup-session');
+      const clock = vi
+        .spyOn(Date, 'now')
+        .mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
+      onTestFinished(() => clock.mockRestore());
+      await service.sendMessage(runId, 'second');
+      await drain();
+      expect(claude.starts).toHaveLength(2);
+      claude.starts[1]!.emit(LIMIT);
+      claude.starts[1]!.finish();
+      await drain();
+      expect(cursor.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('backup-session');
+      expect(cursor.starts[1]!.input.prompt).not.toContain('first done');
+      completeTurn(cursor.starts[1]!, 'second done');
+      await drain();
+      expect(runDao.runs.get(runId)?.status).toBe('completed');
+    });
+
+    it('carries what member 1 did before refusing into a fresh session on the member it left', async () => {
+      const harness = setup();
+      const { service, claude, cursor } = harness;
+      const runId = await rootOnBackup(harness, 'backup-session');
+      const clock = vi
+        .spyOn(Date, 'now')
+        .mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
+      onTestFinished(() => clock.mockRestore());
+      await service.sendMessage(runId, 'second');
+      await drain();
+      claude.starts[1]!.emit({
+        type: 'tool_call',
+        id: 'edit',
+        name: 'Write',
+        input: { file_path: 'probe-wrote-this.ts' },
+      });
+      claude.starts[1]!.emit(LIMIT);
+      claude.starts[1]!.finish();
+      await drain();
+      expect(cursor.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId ?? null).toBeNull();
+      expect(cursor.starts[1]!.input.prompt).toContain('probe-wrote-this.ts');
+      completeTurn(cursor.starts[1]!, 'second done');
+      await drain();
+    });
+
+    it('carries an earlier attempt’s work back to the member it left, however many attempts later', async () => {
+      const { service, claude, cursor } = setup();
+      const workflow: Workflow = {
+        ...ROOT_POOL_WF,
+        nodes: ROOT_POOL_WF.nodes.map((node) =>
+          node.id === 'orch' && node.kind === 'agent'
+            ? {
+                ...node,
+                pool: [
+                  { agent: 'cursor-agent' as const },
+                  { agent: 'claude' as const, configDir: dir },
+                ],
+              }
+            : node,
+        ),
+      };
+      const run = await service.startRun({
+        slug: 'root-three',
+        workflow: triggered(workflow),
+        cwd: dir,
+        prompt: 'first',
+      });
+      await drain();
+      claude.starts[0]!.emit(LIMIT);
+      claude.starts[0]!.finish();
+      await drain();
+      cursor.starts[0]!.emit({ type: 'error', message: 'Unexpected failure' });
+      cursor.starts[0]!.finish();
+      await drain();
+      expect(claude.starts[1]!.input.configDir).toBe(dir);
+      claude.starts[1]!.emit({ type: 'session', sessionId: 'third-session' });
+      completeTurn(claude.starts[1]!, 'first done');
+      await drain();
+
+      const clock = vi
+        .spyOn(Date, 'now')
+        .mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
+      onTestFinished(() => clock.mockRestore());
+      await service.sendMessage(run.id, 'second');
+      await drain();
+      // Member 1 works, then hits its limit; member 2 fails before any work.
+      claude.starts[2]!.emit({
+        type: 'tool_call',
+        id: 'edit',
+        name: 'Write',
+        input: { file_path: 'member-one-wrote-this.ts' },
+      });
+      claude.starts[2]!.emit(LIMIT);
+      claude.starts[2]!.finish();
+      await drain();
+      cursor.starts[1]!.emit({ type: 'error', message: 'Unexpected failure' });
+      cursor.starts[1]!.finish();
+      await drain();
+      const back = claude.starts[3]!;
+      expect(back.input.configDir).toBe(dir);
+      expect(back.input.resumeSessionId ?? null).toBeNull();
+      expect(back.input.prompt).toContain('member-one-wrote-this.ts');
+      completeTurn(back, 'second done');
+      await drain();
+    });
+
+    it('stays on the member it is on while that member still runs work of its own', async () => {
+      const harness = setup();
+      const { service, claude, cursor, sessions } = harness;
+      const runId = await rootOnBackup(harness, 'backup-session');
+      const clock = vi
+        .spyOn(Date, 'now')
+        .mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
+      onTestFinished(() => clock.mockRestore());
+      const busy = vi.spyOn(sessions, 'holdsWorkFor').mockReturnValue(true);
+      onTestFinished(() => busy.mockRestore());
+      await service.sendMessage(runId, 'second');
+      await drain();
+      expect(claude.starts).toHaveLength(1);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('backup-session');
+      completeTurn(cursor.starts[1]!, 'second done');
+      await drain();
+    });
+
+    it('stays where it is when every member is spent', async () => {
+      const harness = setup();
+      const { service, claude, cursor, callBroker, itemDao } = harness;
+      const runId = await rootOnBackup(harness, 'backup-session');
+      callBroker.poolCooldowns.record(
+        { agent: 'cursor-agent' },
+        { cwd: dir, runId: 'another-run', nodeId: 'orch' },
+        { status: 'failed', failureClass: 'rate_limited', resetsAt: null },
+        false,
+      );
+      const before = moves(itemDao, runId).length;
+      await service.sendMessage(runId, 'second');
+      await drain();
+      expect(claude.starts).toHaveLength(1);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('backup-session');
+      expect(moves(itemDao, runId)).toHaveLength(before);
+      completeTurn(cursor.starts[1]!, 'second done');
+      await drain();
+    });
+
+    it('keeps a healthy conversation on member 1 when another run only crashed there', async () => {
+      const harness = setup();
+      const { service, claude, cursor, itemDao } = harness;
+      const healthy = await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'first',
+      });
+      await drain();
+      claude.starts[0]!.emit({ type: 'session', sessionId: 'healthy-session' });
+      completeTurn(claude.starts[0]!, 'first done');
+      await drain();
+
+      await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'other',
+      });
+      await drain();
+      claude.starts[1]!.emit({ type: 'error', message: 'Unexpected failure' });
+      claude.starts[1]!.finish();
+      await drain();
+      expect(cursor.starts).toHaveLength(1);
+      completeTurn(cursor.starts[0]!, 'other done');
+      await drain();
+
+      await service.sendMessage(healthy.id, 'second');
+      await drain();
+      expect(cursor.starts).toHaveLength(1);
+      expect(claude.starts[2]!.input.resumeSessionId).toBe('healthy-session');
+      expect(moves(itemDao, healthy.id)).toHaveLength(0);
+      completeTurn(claude.starts[2]!, 'second done');
+      await drain();
+    });
+
+    it('moves a root back once member 1 answers in another run', async () => {
+      const harness = setup();
+      const { service, claude, cursor } = harness;
+      const runId = await rootOnBackup(harness, 'backup-session');
+
+      // A new run starts on cursor while member 1 is spent; cursor fails
+      // before any work, and member 1 answers.
+      await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'other',
+      });
+      await drain();
+      expect(claude.starts).toHaveLength(1);
+      cursor.starts[1]!.emit({ type: 'error', message: 'Unexpected failure' });
+      cursor.starts[1]!.finish();
+      await drain();
+      completeTurn(claude.starts[1]!, 'other done');
+      await drain();
+
+      await service.sendMessage(runId, 'second');
+      await drain();
+      expect(cursor.starts).toHaveLength(2);
+      expect(claude.starts[2]!.input.resumeSessionId ?? null).toBeNull();
+      expect(claude.starts[2]!.input.prompt).toContain('first done');
+      completeTurn(claude.starts[2]!, 'second done');
+      await drain();
+    });
+
+    it('starts a call into a root on the member its own turn left spent', async () => {
+      const { service, claude, cursor, callBroker } = setup();
+      const workflow = triggered(ROOT_POOL_WF);
+      const run = await service.startRun({
+        slug: 'callable-root-pool',
+        workflow: {
+          ...workflow,
+          edges: [
+            ...workflow.edges,
+            { from: 'helper', to: 'orch', kind: 'call' },
+          ],
+        },
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      claude.starts[0]!.emit(LIMIT);
+      claude.starts[0]!.finish();
+      await drain();
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'root-backup' });
+      await callBroker.callAgent(run.id, 'orch', {
+        title: 'help',
+        agent: 'helper',
+        message: 'help',
+        mode: 'async',
+      });
+      await drain();
+      const reply = callBroker.callAgent(
+        run.id,
+        callerKey('helper', 'call-1'),
+        { title: 'clarify', agent: 'orch', message: 'clarify this' },
+      );
+      await drain();
+      expect(claude.starts).toHaveLength(2);
+      expect(cursor.starts).toHaveLength(2);
+      completeTurn(cursor.starts[1]!, 'clarified');
+      await expect(reply).resolves.toMatchObject({
+        status: 'ok',
+        result: { member: 2 },
+      });
+      service.cancel(run.id);
+      await drain();
+    });
+
     it('keeps a pooled root session separate from a call into that same node', async () => {
       const { service, claude, cursor, callBroker, nodeDao } = setup();
       const workflow = triggered(ROOT_POOL_WF);
@@ -8084,6 +8480,9 @@ describe('GraphExecutorService — agent calls', () => {
           title: 'clarify',
           agent: 'orch',
           message: 'clarify this',
+          // Member 1 is cooling after the root's limit, so only a pinned
+          // member puts the call on the other CLI from the root's session.
+          member: 1,
         },
       );
       await drain();
@@ -8427,6 +8826,38 @@ describe('GraphExecutorService — agent calls', () => {
         );
       expect(starts).toHaveLength(1);
 
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('records a call’s spent member as it is handed on, before the call settles', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+      void callBroker.callAgent(run.id, 'orch', {
+        title: 'a',
+        agent: 'helper',
+        message: 'a',
+        mode: 'async',
+      });
+      await drain();
+      claude.starts[1]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[1]!.finish();
+      await drain();
+      expect(cursor.starts).toHaveLength(1);
+      // The first call still runs on member 2; a new one skips member 1.
+      await callBroker.callAgent(run.id, 'orch', {
+        title: 'b',
+        agent: 'helper',
+        message: 'b',
+        mode: 'async',
+      });
+      await drain();
+      expect(claude.starts).toHaveLength(2);
+      expect(cursor.starts).toHaveLength(2);
+      completeTurn(cursor.starts[0]!, 'a done');
+      completeTurn(cursor.starts[1]!, 'b done');
       completeTurn(claude.starts[0]!, 'done');
       await drain();
     });

@@ -1,6 +1,3 @@
-import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
@@ -32,7 +29,7 @@ import {
 import { parseJsonColumn } from '../utils/json-util';
 import { readNodePoolMembers } from '../utils/node-pool-members';
 import {
-  accountKeyOf,
+  effectiveAccountKey,
   PlanLimitsLedger,
   type PlanReading,
 } from '../utils/plan-limits-ledger';
@@ -1111,11 +1108,11 @@ export class ChatMetricsService implements OnModuleInit {
     if (agentKind === null) {
       return null;
     }
-    const pinned = this.configDirPins.forRun(agentKind, run.cwd)?.effective;
-    const dir = pinned ?? configDir;
-    return accountKeyOf(
+    return effectiveAccountKey(
       agentKind,
-      dir === null ? null : canonicalDir(dir, run.cwd),
+      configDir,
+      this.configDirPins.forRun(agentKind, run.cwd)?.effective ?? null,
+      run.cwd,
     );
   }
 
@@ -1258,21 +1255,6 @@ function planReadingIsCurrent(
 /** An ISO stamp as epoch milliseconds — NaN when it cannot be read. */
 function epochOf(iso: string): number {
   return Date.parse(iso);
-}
-
-/**
- * One directory in the form two spellings of it share, so a profile named
- * through a symlink by one chat and directly by another is ONE account. A
- * directory that cannot be resolved keeps its own spelling: two keys for one
- * account only costs the sharing, never mixes two accounts.
- */
-function canonicalDir(dir: string, cwd: string | null): string {
-  const absolute = resolve(cwd ?? '/', dir);
-  try {
-    return realpathSync(absolute);
-  } catch {
-    return absolute;
-  }
 }
 
 /** Which of the adapter's two declared readings to consult. */

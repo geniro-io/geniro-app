@@ -494,6 +494,9 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   exports: [
     AnalysisBroker,
+    // For the graphs module's pool cooldowns, which key a member by the account
+    // its folder pins, as the plan-limits readout does.
+    ConfigDirPinService,
     ThreadReaderService,
     GlobalChatSearchService,
     AgentEventBus,

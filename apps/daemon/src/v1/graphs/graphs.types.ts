@@ -1129,6 +1129,14 @@ export interface PoolSkipWire {
   error?: string;
 }
 
+/**
+ * Why a pool member is spent (`PoolCooldowns`). `limit` is its ACCOUNT's — a
+ * usage window or a lapsed sign-in, which reopens at a known instant or not
+ * soon — and is what moves a conversation off it; `unavailable` is any other
+ * failure it was handed past for, which only puts it later for new work.
+ */
+export type PoolStanding = 'limit' | 'unavailable';
+
 /** A pool member a call was handed past. */
 export interface PoolSkip {
   member: number;
@@ -1628,6 +1636,11 @@ export interface ResetWakeHooks {
 export interface RunCallCapability {
   /** Callees each caller may invoke: caller node id → callee agent nodes. */
   readonly calleesOf: ReadonlyMap<string, readonly WorkflowAgentNode[]>;
+  /**
+   * The run's folder, whose account pin decides which account a pool member
+   * runs on (`PoolCooldowns`). Absent: no folder, so nothing is pinned.
+   */
+  readonly cwd?: string;
   /**
    * The agents a user's message goes to (the trigger-fed ones) — the only
    * nodes whose waits `awaitingCalls` counts.

@@ -157,7 +157,7 @@ export function AgentPoolEditor({
       <p className="text-xs text-muted-foreground">
         {members.length === 0
           ? 'Add fallback accounts, models or CLIs. Calls and workflow turns, including the root agent, use the settings above first and try later members in order if they cannot run.'
-          : 'Member 1 is the settings above. Calls and workflow turns, including the root agent, fall back in pool order when a member cannot run. The root continues on the member that answered. A calling agent can select a specific member at your request.'}
+          : 'Member 1 is the settings above. Calls and workflow turns, including the root agent, fall back in pool order when a member cannot run. A member that hit a usage limit is skipped until it resets, then the root moves back to it. A calling agent can select a specific member at your request.'}
       </p>
       {members.map((member, index) => (
         <PoolMemberRow

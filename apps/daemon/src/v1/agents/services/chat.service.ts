@@ -92,7 +92,10 @@ import {
   readAgentOptions,
   writeAgentOptions,
 } from '../utils/agent-options';
-import { applyHostPatch } from '../utils/apply-patch';
+import {
+  applyHostPatch,
+  captureHostPatchFingerprint,
+} from '../utils/apply-patch';
 import {
   deliverApprovalAnswer,
   isUserQuestion,
@@ -1090,7 +1093,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         const outcome = await this.deferredPatchOutcome(
           runId,
           allow,
-          snapshot.patch,
+          snapshot,
           em,
         );
         return {
@@ -1122,7 +1125,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   private async deferredPatchOutcome(
     runId: string,
     allow: boolean,
-    patch: HostPatch,
+    snapshot: PendingPatchSnapshot,
     em: EntityManager,
   ): Promise<HostPatchOutcome> {
     if (!allow) {
@@ -1150,7 +1153,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       );
       return { status: 'stale', reason: 'the chat’s folder no longer exists' };
     }
-    return applyHostPatch(root, patch);
+    return applyHostPatch(root, snapshot.patch, snapshot.fingerprint);
   }
 
   /**
@@ -1611,10 +1614,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     em: EntityManager,
     runId: string,
     patch: HostPatch,
+    cwd: string,
   ): Promise<HostPatchOutcome> {
     const key = deferredPatchKey(patch);
     return this.withDeferredClaim(runId, key, () =>
-      this.raiseDeferredPatch(em, runId, key, patch),
+      this.raiseDeferredPatch(em, runId, key, patch, cwd),
     );
   }
 
@@ -1737,13 +1741,20 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     key: string,
     patch: HostPatch,
+    cwd: string,
   ): Promise<HostPatchOutcome> {
     const standing = await this.standingCard(em, runId, key);
     if (standing !== null) {
       return standing;
     }
     const requestId = randomUUID();
-    const snapshot: PendingPatchSnapshot = { kind: 'patch', requestId, patch };
+    const fingerprint = await captureHostPatchFingerprint(cwd, patch);
+    const snapshot: PendingPatchSnapshot = {
+      kind: 'patch',
+      requestId,
+      patch,
+      fingerprint,
+    };
     return this.commitDeferredCard(
       em,
       runId,
@@ -6191,8 +6202,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // card stands, and Apply writes the file when the verdict message
         // goes out — see the deferred-card block. Everything below parks.
         if (adapter.getConfig().hostQuestionDeferredReason !== null) {
-          return this.proposePatchDeferred(em, runId, patch);
+          return this.proposePatchDeferred(em, runId, patch, cwd);
         }
+        const fingerprint = await captureHostPatchFingerprint(cwd, patch);
         const requestId = randomUUID();
         const input = {
           file_path: patch.filePath,
@@ -6254,7 +6266,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               );
               enqueue(async () => {
                 const outcome: HostPatchOutcome = allow
-                  ? await applyHostPatch(cwd, patch)
+                  ? await applyHostPatch(cwd, patch, fingerprint)
                   : { status: 'declined' };
                 // Settled first, so the agent is released the moment the write
                 // is done rather than behind the row.

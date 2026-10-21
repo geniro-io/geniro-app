@@ -1049,6 +1049,184 @@ describe('AgentSessionRegistry — closing an idle process gracefully', () => {
   });
 });
 
+describe('AgentSessionRegistry — telling that a run went unused', () => {
+  it.each([
+    ['a chat or card run', 'run-1'],
+    ['a workflow node', nodeSessionKey('run-1', 'qa')],
+    ['a workflow callee conversation', callSessionKey('run-1', 'call-1')],
+  ])(
+    'tells the run once %s closed for going unused has exited',
+    async (_what, key) => {
+      vi.useFakeTimers();
+      const registry = new AgentSessionRegistry(CEILING);
+      const told: string[] = [];
+      registry.onIdleClosed((runId) => told.push(runId));
+      const { adapter, sessions } = fakeAdapter();
+      registry.startTurn(key, adapter, INPUT, noop);
+      const cli = at(sessions, 0);
+      cli.pid = 4242;
+      await cli.endTurn();
+      cli.lingers = true;
+
+      await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+      // Still finishing: the reaper would refuse the run as held.
+      expect(told).toEqual([]);
+
+      cli.exit();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(told).toEqual(['run-1']);
+      expect(registry.processRoots('run-1')).toEqual([]);
+    },
+  );
+
+  it('tells nothing for an eviction, a stale replacement, a teardown or shutdown', async () => {
+    const registry = new AgentSessionRegistry(2);
+    const told: string[] = [];
+    registry.onIdleClosed((runId) => told.push(runId));
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('evicted', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    registry.startTurn('stale', adapter, INPUT, noop);
+    await at(sessions, 1).endTurn();
+    registry.startTurn('third', adapter, INPUT, noop);
+    registry.retire('stale', 'its conversation was compacted');
+    registry.startTurn('stale', adapter, INPUT, noop);
+    registry.closeRun('third');
+    registry.closeAll();
+    await settleRegistry();
+
+    expect(sessions.slice(0, 3).map((session) => session.closes)).toEqual([
+      1, 1, 1,
+    ]);
+    expect(told).toEqual([]);
+  });
+
+  it('tells nothing when a teardown escalates the idle close still under way', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const told: string[] = [];
+    registry.onIdleClosed((runId) => told.push(runId));
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    const cli = at(sessions, 0);
+    await cli.endTurn();
+    cli.lingers = true;
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    registry.closeRun('run-1');
+    cli.exit();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(cli.closeOptions).toEqual([{ graceful: true }, undefined]);
+    expect(told).toEqual([]);
+  });
+
+  it('tells nothing while another conversation of the run was used within the window', async () => {
+    // Node b's CLI died a minute after its turn: nothing holds the run, yet it
+    // is in use, and what its agent started is not a leftover.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const told: string[] = [];
+    registry.onIdleClosed((runId) => told.push(runId));
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn(nodeSessionKey('run-1', 'a'), adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS - 60_000);
+    registry.startTurn(nodeSessionKey('run-1', 'b'), adapter, INPUT, noop);
+    await at(sessions, 1).endTurn();
+    at(sessions, 1).die();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(at(sessions, 0).closeOptions).toEqual([{ graceful: true }]);
+    expect(told).toEqual([]);
+  });
+
+  it('tells the other listeners when one throws', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const told: string[] = [];
+    registry.onIdleClosed(() => {
+      throw new Error('listener boom');
+    });
+    registry.onIdleClosed((runId) => told.push(runId));
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => {});
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    expect(told).toEqual(['run-1']);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('an idle-close listener for run run-1 threw'),
+    );
+    warn.mockRestore();
+  });
+});
+
+describe('AgentSessionRegistry.oweRunNote', () => {
+  it('carries a run’s note on the next turn of its chat, once', async () => {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.oweRunNote('run-1', 'geniro stopped `pnpm dev`');
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+
+    const prompts = at(sessions, 0).inputs.map((input) => input.prompt);
+    expect(at(prompts, 0)).toContain('geniro stopped `pnpm dev`');
+    expect(at(prompts, 1)).toBe('p');
+  });
+
+  it('carries a workflow run’s note on the first conversation’s next turn only', () => {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.oweRunNote('run-1', 'geniro stopped `pnpm dev`');
+
+    registry.startTurn(nodeSessionKey('run-1', 'a'), adapter, INPUT, noop);
+    registry.startTurn(nodeSessionKey('run-1', 'b'), adapter, INPUT, noop);
+
+    expect(at(at(sessions, 0).inputs, 0).prompt).toContain(
+      'geniro stopped `pnpm dev`',
+    );
+    expect(at(at(sessions, 1).inputs, 0).prompt).toBe('p');
+  });
+
+  it('owes nothing once the daemon is shutting down', () => {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.closeAll();
+    registry.oweRunNote('run-1', 'geniro stopped `pnpm dev`');
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+
+    expect(at(at(sessions, 0).inputs, 0).prompt).toBe('p');
+  });
+
+  it('keeps the note for a turn that carries no prompt', () => {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.oweRunNote('run-1', 'geniro stopped `pnpm dev`');
+
+    registry.startTurn(
+      nodeSessionKey('run-1', 'a'),
+      adapter,
+      { ...INPUT, resumeOnly: true },
+      noop,
+    );
+    registry.startTurn(nodeSessionKey('run-1', 'b'), adapter, INPUT, noop);
+
+    expect(at(at(sessions, 0).inputs, 0).prompt).toBe('p');
+    expect(at(at(sessions, 1).inputs, 0).prompt).toContain(
+      'geniro stopped `pnpm dev`',
+    );
+  });
+});
+
 describe('AgentSessionRegistry — work between turns', () => {
   // What `IdleShutdownLifecycle` reads, since `ProcessRegistry` counts only
   // TURNS: a process that settled its turn and carried on is working, and the

@@ -42,6 +42,7 @@ import {
   previewTextOf,
 } from './chat-preview';
 import { discardsContextReading } from './compaction-payload';
+import { parkedReason } from './follow-up-delivery';
 import { isCallRow, mergeAnchorRows } from './history-anchors';
 import type { LiveState } from './live-text';
 import {
@@ -234,20 +235,21 @@ function queueMayDrainAfterReplay(
   // a thread, or reconnecting to it, is the one moment its queue can be
   // released — the wait's own announce may have landed before this window
   // existed.
-  // Background work the run is merely CARRYING counts on the same terms, and
-  // for the same reason one more step on: sub-agents still out and a detached
-  // command still up each leave a run `running` with no turn to be redirected,
-  // so a queue opened in that state has nothing to wait for. The composer's own
-  // send path reads the same facts — see `Chats.tsx`'s
-  // `activeRunHeld`, which is where they are justified.
+  // Which of those parks the agent is the composer's own rule, asked of a run
+  // still mid-turn (no terminal tail): background work it merely carries is
+  // no such reason, and a message released into it then is the redirect the
+  // queue exists to prevent.
   return (
     endedOnTerminal ||
-    run.holdingFor > 0 ||
-    run.awaitingCalls > 0 ||
-    workflowRootsIdle(run) ||
-    run.subagentsOut > 0 ||
-    run.shellsOpen > 0 ||
-    run.status !== 'running'
+    run.status !== 'running' ||
+    parkedReason({
+      streaming: true,
+      held: run.holdingFor > 0,
+      awaitingCalls: run.awaitingCalls > 0,
+      rootsIdle: workflowRootsIdle(run),
+      subagentsOut: run.subagentsOut > 0,
+      shellsOut: run.shellsOpen > 0,
+    }) !== null
   );
 }
 
@@ -2747,8 +2749,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // every engineer it briefed. Only an explicit count moves this — an
       // activity-only announce says nothing about it — and unlike the hold, a
       // STATUS transition does not clear it either: the broker announces `0`
-      // itself on the way out of every wait AND at the run's teardown, so there
-      // is no stretch this could be left latched over.
+      // itself once a wait's gap has passed (or the agent replies, takes a
+      // message or ends its turn) AND at the run's teardown, so there is no
+      // stretch this could be left latched over.
       if (event.awaitingCalls !== undefined) {
         const waiting = event.awaitingCalls > 0;
         const wasWaiting = awaitingCallsRef.current.has(event.runId);

@@ -213,6 +213,15 @@ export const CODEX_STEER_PREVIEW_MAX_CHARS = 60;
 export const CODEX_STEER_ANSWER_GRACE_MS = 5000;
 
 /**
+ * How long a turn stays announced held after its last `wait` on sub-agents
+ * returns — the gap in which the agent reads what it got and waits again
+ * (its note tells it to, on a timeout). A message typed in that gap goes
+ * straight in rather than into the queue. The twin of the call broker's
+ * `AWAIT_GAP_GRACE_MS` for `await_agent`.
+ */
+export const CODEX_WAIT_GAP_GRACE_MS = 15_000;
+
+/**
  * How long closing a session waits for a STOPPED turn to finish before the
  * process is signalled, while a steer's fate is still unknown (see
  * `CodexTurnDriver.closeGraceMs`). PROBED on codex 0.162.0: allowed to finish,

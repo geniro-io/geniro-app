@@ -503,6 +503,12 @@ interface RunCallState {
    */
   waitReleases: Map<string, Set<() => void>>;
   /**
+   * Owners in the GAP after their last wait returned (caller key → the timer
+   * that ends it, {@link AWAIT_GAP_GRACE_MS}). Counted in `awaitingCalls`
+   * beside {@link waitingOwners}, but never read as "inside a wait".
+   */
+  waitGaps: Map<string, ReturnType<typeof setTimeout>>;
+  /**
    * Nodes the user wrote to while they had NO wait open, and whose CLI has not
    * yet said it took the message. The CLI takes a mid-turn message at its next
    * tool boundary, so a caller that goes on to start a wait would sit on the
@@ -603,6 +609,18 @@ const RESET_WAKE_GRACE_MS = 60_000;
  * again until it lands or the call ends — the caller is told it is queued.
  */
 const PENDING_MESSAGE_RETRY_MS = 500;
+
+/**
+ * How long a message target still counts as waiting after a wait on its calls
+ * returns — the gap in which a manager reads the result (or a `pending`) and
+ * starts its next wait. A message typed in that gap goes straight in rather
+ * than into the queue (the user's choice: a manager polling its callees is not
+ * busy). Ended early by the agent writing its reply
+ * ({@link CallBroker.noteOwnerReplying}), taking a message or ending its turn
+ * ({@link CallBroker.forgetUserMessage}); a wait a user message released or
+ * the CLI abandoned opens none. The twin of `CODEX_WAIT_GAP_GRACE_MS`.
+ */
+export const AWAIT_GAP_GRACE_MS = 15_000;
 
 /**
  * The furthest ahead a reset is waited for. A monthly spend limit can name a
@@ -845,6 +863,7 @@ export class CallBroker implements OnModuleInit {
       blockedOwners: new Map(),
       waitingOwners: new Map(),
       waitReleases: new Map(),
+      waitGaps: new Map(),
       unreadUserMessages: new Set(),
       deferredDrains: new Set(),
       resetWakes,
@@ -903,7 +922,28 @@ export class CallBroker implements OnModuleInit {
     /** The conversation that took it — a caller key. */
     caller: string,
   ): void {
-    this.runs.get(runId)?.unreadUserMessages.delete(caller);
+    const state = this.runs.get(runId);
+    if (!state) {
+      return;
+    }
+    state.unreadUserMessages.delete(caller);
+    // Busy with the message, or done: no longer between two waits.
+    this.endWaitGap(state, caller);
+  }
+
+  /**
+   * The conversation is writing its reply — main-thread text — so it is no
+   * longer between two waits.
+   */
+  noteOwnerReplying(
+    runId: string,
+    /** The conversation writing — a caller key. */
+    caller: string,
+  ): void {
+    const state = this.runs.get(runId);
+    if (state) {
+      this.endWaitGap(state, caller);
+    }
   }
 
   /**
@@ -915,7 +955,7 @@ export class CallBroker implements OnModuleInit {
    */
   awaitingCalls(runId: string): number {
     const state = this.runs.get(runId);
-    return state ? waitingNodes(state) : 0;
+    return state ? waitingTargets(state) : 0;
   }
 
   /**
@@ -927,32 +967,63 @@ export class CallBroker implements OnModuleInit {
    * changed, and re-announcing it would be a socket emission per await.
    */
   private beginOwnerWait(state: RunCallState, owner: string): void {
-    const before = waitingNodes(state);
+    const before = waitingTargets(state);
+    this.clearWaitGap(state, owner);
     state.waitingOwners.set(owner, (state.waitingOwners.get(owner) ?? 0) + 1);
-    if (waitingNodes(state) !== before) {
+    if (waitingTargets(state) !== before) {
       this.announceWaiting(state);
     }
   }
 
   /**
    * One node's wait has returned — by a result, a question, a timeout or an
-   * abandonment, all of which end the tool call it was parked in.
+   * abandonment, all of which end the tool call it was parked in. With `gap`,
+   * the last of them opens the gap before its next wait.
    *
    * Every call site pairs this with {@link beginOwnerWait} in a `finally`: a
    * wait that threw its way out would otherwise leave the node counted as
    * waiting for the life of the run, and the composer would go on sending
    * messages straight into turns that really are working.
    */
-  private endOwnerWait(state: RunCallState, owner: string): void {
+  private endOwnerWait(state: RunCallState, owner: string, gap: boolean): void {
     const open = state.waitingOwners.get(owner) ?? 0;
     if (open > 1) {
       state.waitingOwners.set(owner, open - 1);
       return;
     }
-    const before = waitingNodes(state);
+    const before = waitingTargets(state);
     state.waitingOwners.delete(owner);
-    if (waitingNodes(state) !== before) {
+    if (gap) {
+      const timer = setTimeout(() => {
+        if (state.waitGaps.get(owner) === timer) {
+          this.endWaitGap(state, owner);
+        }
+      }, AWAIT_GAP_GRACE_MS);
+      timer.unref?.();
+      state.waitGaps.set(owner, timer);
+    }
+    if (waitingTargets(state) !== before) {
       this.announceWaiting(state);
+    }
+  }
+
+  /** End `owner`'s gap, announcing if that changes the count. */
+  private endWaitGap(state: RunCallState, owner: string): void {
+    if (!state.waitGaps.has(owner)) {
+      return;
+    }
+    const before = waitingTargets(state);
+    this.clearWaitGap(state, owner);
+    if (waitingTargets(state) !== before) {
+      this.announceWaiting(state);
+    }
+  }
+
+  private clearWaitGap(state: RunCallState, owner: string): void {
+    const timer = state.waitGaps.get(owner);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      state.waitGaps.delete(owner);
     }
   }
 
@@ -981,14 +1052,19 @@ export class CallBroker implements OnModuleInit {
     releases.add(release);
     state.waitReleases.set(owner, releases);
     this.beginOwnerWait(state, owner);
+    // Only a wait that RETURNED to a polling agent opens a gap: one a user
+    // message released hands it work, one the CLI abandoned has no next wait.
+    let gap = false;
     try {
-      return await Promise.race([wait(), interrupted]);
+      const outcome = await Promise.race([wait(), interrupted]);
+      gap = outcome !== INTERRUPTED && outcome !== ABANDONED;
+      return outcome;
     } finally {
       releases.delete(release);
       if (releases.size === 0 && state.waitReleases.get(owner) === releases) {
         state.waitReleases.delete(owner);
       }
-      this.endOwnerWait(state, owner);
+      this.endOwnerWait(state, owner, gap);
     }
   }
 
@@ -996,7 +1072,7 @@ export class CallBroker implements OnModuleInit {
     this.bus?.publishRunStatus({
       runId: state.runId,
       status: null,
-      awaitingCalls: waitingNodes(state),
+      awaitingCalls: waitingTargets(state),
     });
   }
 
@@ -1042,8 +1118,13 @@ export class CallBroker implements OnModuleInit {
       // make goes to a run this map no longer holds — so it is made here, while
       // the state is still reachable, and the composer is not left believing a
       // destroyed run's agents are parked.
-      if (state.waitingOwners.size > 0) {
-        state.waitingOwners.clear();
+      for (const timer of state.waitGaps.values()) {
+        clearTimeout(timer);
+      }
+      const wasWaiting = waitingTargets(state) > 0;
+      state.waitGaps.clear();
+      state.waitingOwners.clear();
+      if (wasWaiting) {
         this.announceWaiting(state);
       }
     }
@@ -4812,13 +4893,20 @@ export class CallBroker implements OnModuleInit {
 }
 
 /**
- * How many NODES are inside a wait on their own calls — what the run's
- * `awaitingCalls` announces. Nodes rather than conversations, because the fact
- * the composer reads is whether an AGENT is merely waiting; one node waiting in
- * two conversations of its own is still one agent.
+ * How many of the run's MESSAGE TARGETS (`RunCallCapability.messageTargets`,
+ * in their own conversations) are inside a wait on their own calls or in the
+ * gap after one — what the run's `awaitingCalls` announces. Only they: the
+ * composer asks whether the agents a message goes to are merely waiting, and a
+ * callee polling its own callees says nothing about a manager still replying.
  */
-function waitingNodes(state: RunCallState): number {
-  return new Set([...state.waitingOwners.keys()].map(callerNodeOf)).size;
+function waitingTargets(state: RunCallState): number {
+  const targets = state.capability.messageTargets;
+  return new Set(
+    [...state.waitingOwners.keys(), ...state.waitGaps.keys()].filter(
+      (key) =>
+        callerConversationOf(key) === null && targets.has(callerNodeOf(key)),
+    ),
+  ).size;
 }
 
 /**

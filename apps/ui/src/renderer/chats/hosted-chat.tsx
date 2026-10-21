@@ -654,7 +654,7 @@ export function HostedChat({
   const paused = runId !== null && messageQueue.pausedQueues.has(runId);
   const composerButton = followUpButton(
     followUpDelivery(deliveryFacts),
-    working ? parkedReason(deliveryFacts) : null,
+    parkedReason(deliveryFacts),
     paused,
   );
   const steer = useMemo(
@@ -818,7 +818,7 @@ export function HostedChat({
       (attachment) => attachment.key,
     );
     // Queued or sent straight in by the chat screen's own rule — see
-    // `followUpDelivery` and the table in apps/ui/AGENTS.md.
+    // `followUpDelivery` and apps/ui/AGENTS.md → "Sending and the queue".
     const decision = followUpDelivery(deliveryFacts);
     if (decision.action === 'queue') {
       messageQueue.enqueue(runId, { text, images });

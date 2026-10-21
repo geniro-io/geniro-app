@@ -261,6 +261,16 @@ export function subagentOutcomeOf(
   }
 }
 
+/**
+ * The `wait` collab calls — codex's own blocking wait on its sub-agents
+ * (`CollabAgentTool` `wait`, 0.162.0), which the agent's note tells it to use.
+ */
+export function waitsOnSubagents(item: CodexItem): boolean {
+  return (
+    item.type === 'collabAgentToolCall' && asString(item.record.tool) === 'wait'
+  );
+}
+
 /** The `spawnAgent` collab calls — the ones that start a sub-agent. */
 export function spawnsSubagent(item: CodexItem): boolean {
   return (

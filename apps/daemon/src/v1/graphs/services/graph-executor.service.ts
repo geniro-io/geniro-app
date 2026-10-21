@@ -3984,6 +3984,13 @@ export class GraphExecutorService
         if (promptTaken && callContext !== undefined && !extras.compaction) {
           this.callBroker.confirmWakingMessages(runId, callContext.callId);
         }
+        // Writing its reply: no longer in the gap between two waits.
+        if (
+          event.parentToolUseId === undefined &&
+          (event.type === 'text' || event.type === 'text_delta')
+        ) {
+          this.callBroker.noteOwnerReplying(runId, caller);
+        }
         const arrived = terminalStatus(event);
         const ended =
           arrived === 'completed' ||
@@ -3991,6 +3998,26 @@ export class GraphExecutorService
           arrived === 'cancelled';
         if (ended) {
           outcome = arrived;
+        }
+        // A trigger-fed agent whose turn is HELD has finished its reply and
+        // waits only on its background sub-agents; a message delivered into it
+        // ends the hold, so it stops counting in `rootsWorking` until the hold
+        // ends. A hold can also end with no `open: 0` (the silence deadline, an
+        // idle with units unreported), so the terminal counts it again: the
+        // compaction that may follow is work, and the walk's own idle mark is
+        // what announces the end. Only the agents a message goes to, and not
+        // their compaction turns: a held downstream node is still a step of
+        // the walk, and a compacting agent refuses messages.
+        if (
+          callContext === undefined &&
+          !extras.compaction &&
+          triggerFed.has(node.id)
+        ) {
+          if (event.type === 'turn_held') {
+            markRootWorking(node.id, event.open === 0);
+          } else if (ended) {
+            markRootWorking(node.id, true);
+          }
         }
         enqueue(async () => {
           if (ended && callContext === undefined) {
@@ -6796,6 +6823,7 @@ export class GraphExecutorService
         runId,
         {
           calleesOf,
+          messageTargets: triggerFed,
           launchCalleeTurn,
           persistItem: (nodeId, kind, role, payload) => {
             enqueue(async () => {

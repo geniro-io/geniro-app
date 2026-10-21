@@ -83,6 +83,11 @@ import { ModelParametersService } from './services/model-parameters.service';
 import { ModelPriceCatalog } from './services/model-price-catalog.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
+import { MonitorBroker } from './services/monitor.broker';
+import { MonitorRegistry } from './services/monitor.registry';
+import { MonitorChatDelivery } from './services/monitor-chat-delivery.service';
+import { MonitorOutcomeSweep } from './services/monitor-outcome-sweep.service';
+import { MonitorRowWriter } from './services/monitor-row.writer';
 import { NotifyBroker } from './services/notify.broker';
 import { OllamaService } from './services/ollama.service';
 import { PartialStreamService } from './services/partial-stream.service';
@@ -180,13 +185,23 @@ import { defaultSpawn } from './utils/spawn-cli';
         sessions: AgentSessionRegistry,
         attribution: RunProcessAttribution,
         reaper: RunProcessReaper,
-      ) => new RunProcessesService(em, runDao, sessions, attribution, reaper),
+        monitors: MonitorRegistry,
+      ) =>
+        new RunProcessesService(
+          em,
+          runDao,
+          sessions,
+          attribution,
+          reaper,
+          monitors,
+        ),
       inject: [
         EntityManager,
         RunDao,
         AgentSessionRegistry,
         RunProcessAttribution,
         RunProcessReaper,
+        MonitorRegistry,
       ],
     },
     PullRequestCaptureService,
@@ -211,6 +226,11 @@ import { defaultSpawn } from './utils/spawn-cli';
     ActionCommandService,
     ActionCommandRegistry,
     ActionOutcomeSweep,
+    MonitorRegistry,
+    MonitorRowWriter,
+    MonitorChatDelivery,
+    MonitorOutcomeSweep,
+    MonitorBroker,
     ArtifactPageService,
     PlanBroker,
     NotifyBroker,
@@ -380,10 +400,11 @@ import { defaultSpawn } from './utils/spawn-cli';
         attribution: RunProcessAttribution,
         sessions: AgentSessionRegistry,
         commands: ActionCommandRegistry,
+        monitors: MonitorRegistry,
         em: EntityManager,
         runDao: RunDao,
       ) =>
-        createRunProcessReaper(attribution, sessions, commands, {
+        createRunProcessReaper(attribution, sessions, [commands, monitors], {
           stillGone: async (runIds) => {
             const live = await runDao.getAll(
               { id: { $in: runIds }, archivedAt: null },
@@ -398,6 +419,7 @@ import { defaultSpawn } from './utils/spawn-cli';
         RunProcessAttribution,
         AgentSessionRegistry,
         ActionCommandRegistry,
+        MonitorRegistry,
         EntityManager,
         RunDao,
       ],
@@ -517,6 +539,13 @@ import { defaultSpawn } from './utils/spawn-cli';
     GalleryBroker,
     ArtifactBroker,
     ActionBroker,
+    // For the MCP host's monitor tools and the graph executor, which registers
+    // each node's sink and delivers its monitors' output; for the run-process
+    // panel and teardown, which list and stop them.
+    MonitorBroker,
+    MonitorRegistry,
+    // For the workflow delivery, which records the end of output it drops.
+    MonitorRowWriter,
     // What a workflow node's button tools and the workflow press route reuse:
     // the publish (over `ChatActionsService`, the rows' one writer) and the
     // press beside it.

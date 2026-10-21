@@ -500,12 +500,20 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * turn carries it.
    */
   oweRunNote(runId: string, prompt: string): void {
+    this.oweKeyNote(runId, prompt);
+  }
+
+  /**
+   * Owe one conversation's next turn a prompt line: `key` is its session key
+   * (a workflow node's own, or a chat's run id).
+   */
+  oweKeyNote(key: string, prompt: string): void {
     if (this.shuttingDown) {
       return;
     }
-    const owed = this.stopped.get(runId) ?? { rows: [], prompts: [] };
+    const owed = this.stopped.get(key) ?? { rows: [], prompts: [] };
     owed.prompts.push(prompt);
-    this.stopped.set(runId, owed);
+    this.stopped.set(key, owed);
   }
 
   /**

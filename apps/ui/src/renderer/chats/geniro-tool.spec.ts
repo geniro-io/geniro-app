@@ -18,6 +18,15 @@ describe('geniro’s own tool calls', () => {
     expect(isGeniroToolName(`Geniro ${SERVER}: show_chart`, RUN)).toBe(true);
   });
 
+  it.each(['monitor', 'stop_monitor', 'list_monitors'])(
+    'does not claim the %s tool, so its call renders as an ordinary tool row',
+    (tool) => {
+      expect(isGeniroToolName(`mcp__${SERVER}__${tool}`, RUN)).toBe(false);
+      expect(isGeniroToolName(`Geniro ${SERVER}: ${tool}`, RUN)).toBe(false);
+      expect(geniroCardKindOf(`mcp__${SERVER}__${tool}`, RUN)).toBeNull();
+    },
+  );
+
   it('refuses a user’s OWN server that happens to be called geniro', () => {
     // Matching the prefix alone hid every call to their server too, so an agent
     // would work through it while the transcript showed nothing.

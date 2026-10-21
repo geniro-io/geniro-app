@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { CallContextDao } from '../dao/call-context.dao';
@@ -14,6 +14,7 @@ import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
 import { ChatUploadStoreService } from './chat-upload-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
+import { MonitorRegistry } from './monitor.registry';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunProcessReaper } from './run-process-reaper.service';
@@ -79,6 +80,8 @@ export class RunTeardownService {
     private readonly reaper: RunProcessReaper,
     private readonly wallTurns: WallTurnDao,
     private readonly commands: ActionCommandRegistry,
+    /** Optional for the positional specs. */
+    @Optional() private readonly monitors?: MonitorRegistry,
   ) {}
 
   /**
@@ -89,17 +92,20 @@ export class RunTeardownService {
    * agents started to outlive a turn: a detached dev server, a watcher, a
    * browser, which closing the CLI does not reach. The second half runs in the
    * background, so the caller's route never waits out its grace period. The
-   * command actions the user ran in it are ended here too.
+   * command actions the user ran in it, and its agents' monitors, are ended
+   * here too.
    */
   endProcesses(runId: string): void {
     this.commands.abortRun(runId);
+    this.monitors?.abortRun(runId);
     this.sessions.closeRun(runId);
     this.reaper.reapInBackground(runId);
   }
 
-  /** A run back from the archive: command actions pressed in it run again. */
+  /** A run back from the archive: its command actions and monitors run again. */
   resumeProcesses(runId: string): void {
     this.commands.allowRun(runId);
+    this.monitors?.allowRun(runId);
   }
 
   /**
@@ -133,6 +139,7 @@ export class RunTeardownService {
     // A command action ended above still writes its closing row; one landing
     // after the rows below are gone would belong to no run.
     await this.commands.settled(runId, COMMAND_SETTLE_MS);
+    await this.monitors?.settled(runId, COMMAND_SETTLE_MS);
 
     // The in-memory planes. Cleared next — pure bookkeeping, and a failure
     // here must not leave the durable rows half-deleted.

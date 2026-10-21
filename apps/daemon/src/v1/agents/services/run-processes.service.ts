@@ -4,12 +4,14 @@ import { NotFoundException } from '@packages/common';
 
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { type AgentKind, AgentKindSchema } from '../../runs/runs.types';
+import type { MonitorSnapshot } from '../chat.types';
 import {
   type AppProcessesWire,
   type AppProcessThread,
   type KeptProcessRoot,
   MAX_PROCESS_ARGS_CHARS,
   type ProcessFigures,
+  type RunMonitor,
   type RunProcess,
   type RunProcessesWire,
   type RunProcessTree,
@@ -29,6 +31,7 @@ import {
   runIdOfSessionKey,
 } from '../utils/session-keys';
 import { AgentSessionRegistry } from './agent-session.registry';
+import { MonitorRegistry } from './monitor.registry';
 import { RunProcessAttribution } from './run-process-attribution.service';
 import { RunProcessReaper } from './run-process-reaper.service';
 
@@ -62,6 +65,10 @@ export interface RunProcessesOptions {
  *
  * Kind-blind like the waterfall beside it: a workflow run's processes are
  * kept under `<runId>::…` keys and come back as one tree per node or call.
+ *
+ * A `monitor` command is the daemon's own child, found by its registry rather
+ * than its tag (a tagged `/bin/sh` is invisible to `ps -E`), and claimed with
+ * its whole process group, so it is one row and never also listed as detached.
  */
 @Injectable()
 export class RunProcessesService {
@@ -74,6 +81,7 @@ export class RunProcessesService {
     private readonly sessions: AgentSessionRegistry,
     private readonly attribution: RunProcessAttribution,
     private readonly reaper: RunProcessReaper,
+    private readonly monitors: MonitorRegistry,
     options: RunProcessesOptions = {},
   ) {
     this.listUsage = options.listUsage ?? listProcessUsage;
@@ -158,6 +166,16 @@ export class RunProcessesService {
       }
       thread.agents += 1;
       thread.owned.push(...owned);
+    }
+
+    for (const monitor of this.monitors.listAll()) {
+      const owned = monitorProcesses(rows, monitor).filter(
+        (row) => !claimed.has(row.pid),
+      );
+      owned.forEach((row) => claimed.add(row.pid));
+      const thread = threadOf(monitor.owner.runId);
+      thread.owned.push(...owned);
+      thread.detached += owned.length;
     }
 
     const runs = new Map<string, { title: string | null; live: boolean }>();
@@ -256,18 +274,29 @@ export class RunProcessesService {
     const trees = roots
       .map((root) => treeFor(root, processTreeOf(rows, root.pid)))
       .filter((tree): tree is RunProcessTree => tree !== null);
-    const inTrees = new Set(
-      trees.flatMap((tree) => tree.processes.map((proc) => proc.pid)),
-    );
+    const monitors = this.monitors
+      .list(runId)
+      .map((monitor) => monitorFor(monitor, monitorProcesses(rows, monitor)));
+    const inTrees = new Set([
+      ...trees.flatMap((tree) => tree.processes.map((proc) => proc.pid)),
+      ...monitors.flatMap((monitor) =>
+        monitor.processes.map((proc) => proc.pid),
+      ),
+    ]);
     const detachedPids = new Set(
       [...(tagged.get(runId) ?? [])].filter((pid) => !inTrees.has(pid)),
     );
     const detached = processSetTree(rows, detachedPids).map(toWire);
-    const all = [...trees.flatMap((tree) => tree.processes), ...detached];
+    const all = [
+      ...trees.flatMap((tree) => tree.processes),
+      ...detached,
+      ...monitors.flatMap((monitor) => monitor.processes),
+    ];
     return {
       sampledAt,
       trees,
       detached,
+      monitors,
       processes: all.length,
       cpuPercent: roundCpu(all.reduce((sum, proc) => sum + proc.cpuPercent, 0)),
       rssBytes: all.reduce((sum, proc) => sum + proc.rssBytes, 0),
@@ -275,14 +304,27 @@ export class RunProcessesService {
     };
   }
 
+  /**
+   * Stop what the user picked in the panel: detached processes through the
+   * reaper's checks, monitors through their registry — a monitor stopped here
+   * ends `stopped` and wakes its agent to say so.
+   */
   async stopDetached(
     runId: string,
-    pids: readonly number[],
-  ): Promise<{ stoppedPids: number[] }> {
+    selection: { pids?: readonly number[]; monitorIds?: readonly string[] },
+  ): Promise<{ stoppedPids: number[]; stoppedMonitorIds: string[] }> {
     if ((await this.runDao.getById(runId, this.em.fork())) === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    return { stoppedPids: await this.reaper.stopDetached(runId, pids) };
+    // The pids first: the reaper refuses a selection whole, and a refused
+    // request must not have stopped the monitors beside it.
+    const pids = selection.pids ?? [];
+    const stoppedPids =
+      pids.length === 0 ? [] : await this.reaper.stopDetached(runId, pids);
+    const stoppedMonitorIds = (selection.monitorIds ?? []).filter(
+      (id) => this.monitors.stop(runId, id, 'user').status === 'stopped',
+    );
+    return { stoppedPids, stoppedMonitorIds };
   }
 }
 
@@ -302,6 +344,7 @@ function emptyReading(
     sampledAt,
     trees: [],
     detached: [],
+    monitors: [],
     processes: 0,
     cpuPercent: 0,
     rssBytes: 0,
@@ -326,6 +369,32 @@ function treeFor(
     agentKind: kind.success ? kind.data : null,
     cwd: root.cwd,
     rootPid: root.pid,
+    processes,
+    cpuPercent: roundCpu(processes.reduce((sum, p) => sum + p.cpuPercent, 0)),
+    rssBytes: processes.reduce((sum, p) => sum + p.rssBytes, 0),
+  };
+}
+
+/** A monitor's shell and everything in its process group, or nothing once it has ended. */
+function monitorProcesses(
+  rows: readonly ProcessUsageRow[],
+  monitor: MonitorSnapshot,
+): OwnedProcess[] {
+  return monitor.pid === null ? [] : processTreeOf(rows, monitor.pid);
+}
+
+function monitorFor(
+  monitor: MonitorSnapshot,
+  owned: readonly OwnedProcess[],
+): RunMonitor {
+  const processes = owned.map(toWire);
+  return {
+    id: monitor.id,
+    description: monitor.description,
+    command: redactSecrets(monitor.command).slice(0, MAX_PROCESS_ARGS_CHARS),
+    startedAt: monitor.startedAt,
+    endsAt: monitor.endsAt,
+    pid: monitor.pid,
     processes,
     cpuPercent: roundCpu(processes.reduce((sum, p) => sum + p.cpuPercent, 0)),
     rssBytes: processes.reduce((sum, p) => sum + p.rssBytes, 0),

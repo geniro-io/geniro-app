@@ -191,7 +191,7 @@ import {
   readDisabledServers,
   withDisabledServer,
 } from './utils/claude-mcp-toggle.utils';
-import { claudeDisallowedMcpArgs } from './utils/claude-mcp-tool-name.utils';
+import { claudeDisallowedToolArgs } from './utils/claude-mcp-tool-name.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
 import {
@@ -368,6 +368,10 @@ export class ClaudeAdapter extends AgentAdapter {
        * PARKING host tool this CLI is handed, not only the question one.
        */
       hostQuestionDeferredReason: null,
+      // MEASURED on 2.1.295 (2026-10-21) against a stub MCP server: a call
+      // under `default` and `acceptEdits` is held for permission (answered on
+      // the stdio permission channel), and `plan` refuses it outright.
+      hostToolCallUngatedReason: null,
       subagents: {
         /**
          * The Task tool's delegates ride the SAME stream-json stream as the
@@ -595,7 +599,7 @@ export class ClaudeAdapter extends AgentAdapter {
         toggleUnavailableReason: null,
         /**
          * Null: a workflow node's switched-off servers ride
-         * `--disallowedTools mcp__<server>` (`claudeDisallowedMcpArgs`).
+         * `--disallowedTools mcp__<server>` (`claudeDisallowedToolArgs`).
          * MEASURED on 2.1.284: `--disallowedTools mcp__codegraph
          * mcp__plugin_playwright_playwright` took the turn's `system/init`
          * tool list from 125 to 96, every `mcp__codegraph__*` and
@@ -2174,11 +2178,11 @@ export class ClaudeAdapter extends AgentAdapter {
     } else if (input.approvalMode === 'auto') {
       args.push(CLAUDE_SKIP_PERMISSIONS_FLAG);
     }
-    // A workflow node's own switched-off servers: their tools are withheld for
-    // this process. The only `--disallowedTools` this adapter passes, so there
-    // is nothing to merge with; geniro's own server is filtered out inside.
+    // claude's own tools geniro replaces, and a workflow node's switched-off
+    // servers, ride one variadic `--disallowedTools`; geniro's own server is
+    // filtered out inside.
     args.push(
-      ...claudeDisallowedMcpArgs(
+      ...claudeDisallowedToolArgs(
         input.mcpDisabled,
         input.mcpEndpoint?.serverName ?? null,
       ),

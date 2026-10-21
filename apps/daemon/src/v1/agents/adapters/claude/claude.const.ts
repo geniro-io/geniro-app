@@ -307,13 +307,25 @@ export const CLAUDE_CONTROL_REQUEST_ID_PREFIX = 'geniro-';
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
 /**
- * Tools the CLI withholds from the model for this process — how a workflow
- * node's switched-off MCP servers are applied (`AgentTurnInput.mcpDisabled`).
- * Variadic: one flag followed by every rule. A rule naming a server alone
- * (`mcp__<server>`) is server-level and takes every tool of that server — see
- * `claudeDisallowedMcpArgs` for the bundle reading and the measurement.
+ * Tools the CLI withholds from the model for this process — claude's own
+ * tools geniro replaces ({@link CLAUDE_WITHHELD_TOOLS}) and a workflow node's
+ * switched-off MCP servers (`AgentTurnInput.mcpDisabled`). Variadic: one flag
+ * followed by every rule. A rule naming a server alone (`mcp__<server>`) is
+ * server-level and takes every tool of that server — see
+ * `claudeDisallowedToolArgs` for the bundle reading and the measurement.
  */
 export const CLAUDE_DISALLOWED_TOOLS_FLAG = '--disallowedTools';
+
+/**
+ * claude's own tools withheld from every geniro turn, because geniro serves
+ * the same capability on its MCP endpoint for every CLI.
+ *
+ * `Monitor` — geniro's `monitor` tool. MEASURED on 2.1.295 (2026-10-21),
+ * `claude -p --output-format stream-json --verbose`, read to `system/init`:
+ * 147 tools with `Monitor` without the flag; `--disallowedTools Monitor` →
+ * 146 and no `Monitor`, also with an `mcp__<server>` rule after it.
+ */
+export const CLAUDE_WITHHELD_TOOLS: readonly string[] = ['Monitor'];
 
 /** The prefix the CLI names every MCP tool under: `mcp__<server>__<tool>`. */
 export const CLAUDE_MCP_TOOL_PREFIX = 'mcp__';

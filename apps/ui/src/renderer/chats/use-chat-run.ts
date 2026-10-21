@@ -2249,7 +2249,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // an activity announce and must leave the reading alone, while a settle
       // that did real work clears the flag its predecessor may have set.
       if (event.status !== null && isSettledRunStatus(event.status)) {
-        const quiet = event.housekeeping === true || event.restored === true;
+        const quiet =
+          event.housekeeping === true ||
+          event.restored === true ||
+          event.hostTurn === true;
         setQuietSettles((prev) => {
           if (prev.has(event.runId) === quiet) {
             return prev;

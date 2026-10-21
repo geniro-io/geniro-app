@@ -68,6 +68,10 @@ const WEB_TOOLS = new Set(['WebFetch', 'WebSearch']);
  * Read off a live thread's own transcript, where a `Monitor` call summarised as
  * `Used 1 tool` — the catch-all for a call this cannot describe — directly
  * under a header reading `⌛ working` because of that very command.
+ *
+ * geniro now withholds claude's `Monitor` from the turns it starts (geniro's
+ * own `monitor` tool replaces it), so the name is kept for threads recorded
+ * before that and for sessions imported from the CLI.
  */
 const EXECUTE_TOOLS = new Set(['Bash', 'Monitor']);
 /**

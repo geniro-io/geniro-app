@@ -4,6 +4,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { KeptProcessRoot } from '../chat.types';
+import type { MonitorSnapshot } from '../chat.types';
 import type { RunDao } from '../dao/run.dao';
 import type { ProcessUsageRow } from '../utils/process-usage';
 import {
@@ -13,6 +14,7 @@ import {
 } from '../utils/run-process-scan';
 import { callSessionKey, nodeSessionKey } from '../utils/session-keys';
 import type { AgentSessionRegistry } from './agent-session.registry';
+import type { MonitorRegistry } from './monitor.registry';
 import { RunProcessAttribution } from './run-process-attribution.service';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunProcessesService } from './run-processes.service';
@@ -73,6 +75,8 @@ function build(
     /** The `ps -E` listing fails while the usage listing does not. */
     scanFails?: boolean;
     runs?: { id: string; title: string | null; archivedAt: Date | null }[];
+    /** Monitors the registry reports running. */
+    monitors?: MonitorSnapshot[];
   } = {},
 ): { service: RunProcessesService; listUsage: ReturnType<typeof vi.fn> } {
   const em = { fork: () => em } as unknown as EntityManager;
@@ -107,13 +111,77 @@ function build(
         uid: UID,
       }),
       {} as RunProcessReaper,
+      {
+        list: (runId: string) =>
+          (options.monitors ?? []).filter((m) => m.owner.runId === runId),
+        listAll: () => options.monitors ?? [],
+      } as unknown as MonitorRegistry,
       { listUsage, selfPid: DAEMON },
     ),
     listUsage,
   };
 }
 
+/** A monitor of run-1's whose shell is `pid`. */
+function monitorOf(pid: number): MonitorSnapshot {
+  return {
+    id: 'm1',
+    description: 'CI run 4812',
+    command: 'gh run watch 4812',
+    startedAt: '2026-10-21T00:00:00.000Z',
+    endsAt: '2026-10-21T00:10:00.000Z',
+    timeoutMs: 600_000,
+    events: 0,
+    pid,
+    owner: {
+      runId: 'run-1',
+      nodeId: 'agent',
+      caller: 'agent',
+      conversationId: null,
+      callId: null,
+      target: 'chat',
+    },
+  };
+}
+
 describe('RunProcessesService', () => {
+  it('lists a monitor with its whole process group as one row, never again under detached', async () => {
+    // The shell's own tag is invisible to `ps -E`; its child carries it.
+    const { service } = build(
+      [],
+      [
+        row(700, DAEMON, 700, { args: '/bin/sh -c gh run watch 4812' }),
+        row(701, 700, 700, { args: 'gh run watch 4812', rssBytes: 5_000 }),
+        row(500, 1, 500),
+      ],
+      true,
+      { tags: { 701: 'run-1', 500: 'run-1' }, monitors: [monitorOf(700)] },
+    );
+    const reading = await service.read('run-1');
+    expect(reading.monitors).toMatchObject([
+      { id: 'm1', description: 'CI run 4812', pid: 700, rssBytes: 6_000 },
+    ]);
+    expect(reading.monitors[0]?.processes.map((p) => p.pid)).toEqual([
+      700, 701,
+    ]);
+    expect(reading.detached.map((p) => p.pid)).toEqual([500]);
+    expect(reading.processes).toBe(3);
+  });
+
+  it('counts a monitor under its thread in the app-wide reading, never as leftover', async () => {
+    const { service } = build(
+      [],
+      [row(700, DAEMON, 700), row(701, 700, 700)],
+      true,
+      { tags: { 701: 'run-1' }, monitors: [monitorOf(700)] },
+    );
+    const reading = await service.readAll();
+    expect(
+      reading.threads.find((t) => t.runId === 'run-1')?.figures.processes,
+    ).toBe(2);
+    expect(reading.leftover?.processes).toBe(0);
+  });
+
   it('refuses a run that does not exist', async () => {
     const { service } = build([], [], false);
     await expect(service.read('nope')).rejects.toBeInstanceOf(

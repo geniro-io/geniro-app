@@ -475,7 +475,7 @@ export class ChatController {
     @Param('runId') runId: string,
     @Body() dto: StopDetachedProcessesDto,
   ): Promise<StoppedDetachedProcesses> {
-    return this.processes.stopDetached(runId, dto.pids);
+    return this.processes.stopDetached(runId, dto);
   }
 
   /**

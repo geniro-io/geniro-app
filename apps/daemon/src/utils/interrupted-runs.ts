@@ -24,7 +24,7 @@ export interface InterruptedRunsDeps {
  */
 export async function closeInterruptedRuns(
   deps: InterruptedRunsDeps,
-): Promise<void> {
+): Promise<InterruptCause> {
   const cause = deps.readCause();
   await deps.chats.reconcileOrphanedRuns(cause);
   await deps.workflows.reconcileOrphanedRuns(cause);
@@ -33,4 +33,7 @@ export async function closeInterruptedRuns(
       `boot settle of interrupted task cards failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   });
+  // Handed back because the note was removed as it was read: whatever else
+  // the boot reconciles from it takes this value, never a second read.
+  return cause;
 }

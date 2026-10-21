@@ -5875,6 +5875,94 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     expect(release()).toEqual({ kind: 'settle' });
   });
 
+  it('holds a call while its callee’s monitors run, wakes it with their output inside the call, and settles once they owe nothing', async () => {
+    const h = await engineerDelegated([]);
+    let owed = true;
+    const held: string[] = [];
+    h.capability.monitorsOwed = (caller) => caller === ENGINEER && owed;
+    h.capability.callHeld = (caller) => {
+      held.push(caller);
+    };
+    const hold = h.broker.holdCall('run-1', 'call-1');
+    expect(hold).not.toBeNull();
+    expect(held).toEqual([ENGINEER]);
+    const release = released(hold!);
+    // Its monitor still runs: reviewing the hold does not let it go.
+    h.broker.reviewHeldCallee('run-1', ENGINEER);
+    await flush();
+    expect(release()).toBeUndefined();
+
+    expect(
+      h.broker.wakeHeldCallee('run-1', ENGINEER, 'CI output', {
+        severity: 'info',
+        message: 'CI · monitor m1: 1 line.',
+        monitors: [
+          {
+            id: 'm1',
+            description: 'CI',
+            event: 'batch',
+            lines: ['ok'],
+            omitted: 0,
+          },
+        ],
+        woke: true,
+      }),
+    ).toBe('woken');
+    await flush();
+    expect(release()).toMatchObject({
+      kind: 'wake',
+      prompt: 'CI output',
+      monitor: true,
+      note: expect.stringContaining('while your monitors run'),
+    });
+    expect(
+      h.items.find((item) => Array.isArray(item.payload.monitors))?.payload,
+    ).toMatchObject({ callId: 'call-1', monitors: [{ id: 'm1' }] });
+
+    // The woken turn ends with nothing owed: the call settles.
+    owed = false;
+    const settled = released(
+      h.broker.holdCall('run-1', 'call-1') ?? Promise.resolve(null),
+    );
+    await flush();
+    expect(settled()).toBeNull();
+  });
+
+  const NO_ROW = {
+    severity: 'info' as const,
+    message: '',
+    monitors: [],
+    woke: true,
+  };
+
+  it('answers pending for a callee whose call is open but not yet held, and refuses a conversation with no call', async () => {
+    const h = await engineerDelegated([]);
+    expect(h.broker.wakeHeldCallee('run-1', ENGINEER, 'x', NO_ROW)).toBe(
+      'pending',
+    );
+    expect(
+      h.broker.wakeHeldCallee(
+        'run-1',
+        callerKey('helper', 'call-9'),
+        'x',
+        NO_ROW,
+      ),
+    ).toBe('refused');
+  });
+
+  it('stops the callee’s monitors with a cancelled call', async () => {
+    const h = await engineerDelegated([]);
+    const stopped: string[] = [];
+    h.capability.stopMonitors = (caller) => {
+      stopped.push(caller);
+    };
+    h.broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'not needed',
+    });
+    expect(stopped).toEqual([ENGINEER]);
+  });
+
   it('keeps holding for a usage-limit continue, and wakes INSIDE the call when the limit resets', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));

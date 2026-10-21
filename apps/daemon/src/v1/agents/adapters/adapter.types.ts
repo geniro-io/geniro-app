@@ -4253,6 +4253,17 @@ export interface AdapterConfig {
    * (`GENIRO_MCP_TOOL_TIMEOUT_MS`, a day).
    */
   readonly hostQuestionDeferredReason: string | null;
+  /**
+   * Why a call of one of geniro's own MCP tools could run outside `auto`
+   * without the user being asked first, or null when it cannot: every such
+   * call is put to the user, or refused, before it runs.
+   *
+   * `monitor` runs a shell command under no sandbox of its own, so a turn is
+   * offered it only where this is null or its mode is `auto` (whose own shell
+   * is unsandboxed on every CLI). A non-null reason keeps the tool from a mode
+   * that sandboxes the agent's shell.
+   */
+  readonly hostToolCallUngatedReason: string | null;
 
   // ── Background sub-agents ───────────────────────────────────────────────
   /**

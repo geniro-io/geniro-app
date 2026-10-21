@@ -7,6 +7,7 @@ import type {
   CallResultPayload,
   CallStartedPayload,
   MessageDeliveryFailure,
+  MonitorRowWire,
   PersistedResetWake,
   RunCallSeed,
 } from '../../agents/chat.types';
@@ -682,6 +683,12 @@ const HELD_RESULT_NOTE =
   "[geniro] You are still answering your caller's call: it stays open until the calls you made have finished. " +
   'The reply you end this turn with is the result your caller receives — write it in full, as the answer to the task you were given, not as a reply to this message. ' +
   'If you start more calls and end your turn while they run, you are continued here again when they finish.';
+
+/** Said last in a held callee's monitor wake — see `CallHoldRelease`. */
+const HELD_MONITOR_NOTE =
+  "[geniro] You are still answering your caller's call: it stays open while your monitors run. " +
+  'The reply you end this turn with is the result your caller receives — write it in full, as the answer to the task you were given, not as a reply to this message. ' +
+  'If a monitor is still running when you end this turn, you are continued here again with its output; stop one you no longer need with stop_monitor.';
 
 /**
  * The transcript's account of a wake, filed under the caller that was woken.
@@ -2120,6 +2127,8 @@ export class CallBroker implements OnModuleInit {
     }
     // Before the cascade below silences what it owed.
     call.cancelledOwing = owesHold(state, call);
+    // Its callee's monitors are part of the work being stopped.
+    state.capability.stopMonitors?.(calleeKeyOf(call));
     // The calls its callee made for it are part of the work being stopped.
     this.cancelSubCalls(state, call, args.call_id);
     if (call.hold !== null) {
@@ -2191,6 +2200,7 @@ export class CallBroker implements OnModuleInit {
       sub.failReason = `CALLEE_CANCELLED: ${agent} was stopped because the call it was working for ('${parentCallId}') was cancelled`;
       this.dropPendingMessages(state, subId, sub);
       sub.cancelledOwing = owesHold(state, sub);
+      state.capability.stopMonitors?.(calleeKeyOf(sub));
       if (this.unpark(state, subId, sub)) {
         state.capability.persistItem(
           callerNodeOf(sub.owner),
@@ -3738,6 +3748,10 @@ export class CallBroker implements OnModuleInit {
     if (call.hold !== null) {
       this.deliverPendingResets(runId, key);
     }
+    // Monitor output that waited for this turn to end can wake the hold now.
+    if (call.hold !== null) {
+      state.capability.callHeld?.(key);
+    }
     return released;
   }
 
@@ -3782,8 +3796,13 @@ export class CallBroker implements OnModuleInit {
     );
     if (asked.length === 0 && finished.length === 0) {
       // A call stopped by a usage limit is continued when the limit resets
-      // (`deliverResetWake`), which wakes this hold rather than settling it.
-      if (!hasPendingResetWake(state, key)) {
+      // (`deliverResetWake`), which wakes this hold rather than settling it;
+      // one whose monitors still run is woken by their output
+      // (`wakeHeldCallee`).
+      if (
+        !hasPendingResetWake(state, key) &&
+        state.capability.monitorsOwed?.(key) !== true
+      ) {
         this.releaseHold(call, { kind: 'settle' });
       }
       return;
@@ -3793,6 +3812,51 @@ export class CallBroker implements OnModuleInit {
       call,
       heldWake(asked, finished, open.length - asked.length),
     );
+  }
+
+  /**
+   * Continue a held callee inside its call with its monitors' output.
+   * `pending` while its call is still open but not yet held — its turn is
+   * ending, and the hold says so when it begins (`callHeld`); `refused` once
+   * the conversation answers no open call.
+   */
+  wakeHeldCallee(
+    runId: string,
+    caller: string,
+    prompt: string,
+    row: MonitorRowWire,
+  ): 'woken' | 'pending' | 'refused' {
+    const state = this.runs.get(runId);
+    if (state === undefined) {
+      return 'refused';
+    }
+    const held = heldCallOf(state, caller);
+    if (held === undefined) {
+      return callEntryInConversation(state, caller) === undefined
+        ? 'refused'
+        : 'pending';
+    }
+    const [callId, call] = held;
+    state.capability.persistItem(call.calleeId, 'system', null, {
+      ...row,
+      callId,
+    });
+    this.releaseHold(call, {
+      kind: 'wake',
+      prompt,
+      note: HELD_MONITOR_NOTE,
+      monitor: true,
+    });
+    return 'woken';
+  }
+
+  /** A held callee's monitor ended unannounced: settle the call if nothing else is owed. */
+  reviewHeldCallee(runId: string, caller: string): void {
+    const state = this.runs.get(runId);
+    const held = state === undefined ? undefined : heldCallOf(state, caller);
+    if (state !== undefined && held !== undefined) {
+      this.reviewHold(runId, state, held[0], held[1]);
+    }
   }
 
   /** Let a held call go — the ONE way out of a hold. */
@@ -4961,7 +5025,8 @@ function owesHold(state: RunCallState, call: ActiveCall): boolean {
   return (
     openSubCalls(state, key).length > 0 ||
     untoldResults(state, key).length > 0 ||
-    hasPendingResetWake(state, key)
+    hasPendingResetWake(state, key) ||
+    state.capability.monitorsOwed?.(key) === true
   );
 }
 

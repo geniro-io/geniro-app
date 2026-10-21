@@ -62,6 +62,8 @@ export interface RunStatusAnnounce {
    * a compaction that a working turn ran mid-flight is not what this names.
    */
   housekeeping?: boolean;
+  /** A turn geniro started for a monitor — see {@link RunStatusEvent.hostTurn}. */
+  hostTurn?: boolean;
   /**
    * True when this write hands a status BACK rather than reaching a new one —
    * see {@link RunStatusEvent.restored}. Keeps the announce out of the client's
@@ -117,6 +119,7 @@ export async function writeRunStatus(
     awaiting = null,
     summary = null,
     housekeeping = false,
+    hostTurn = false,
     restored = false,
     noTerminalItem = false,
   } = announce;
@@ -186,6 +189,7 @@ export async function writeRunStatus(
     ...(settled && !restored ? { summary } : {}),
     // Only ever said out loud, never as a `false` nobody reads.
     ...(settled && housekeeping ? { housekeeping } : {}),
+    ...(settled && hostTurn ? { hostTurn } : {}),
     ...(settled && restored ? { restored } : {}),
     ...(settled && noTerminalItem ? { noTerminalItem } : {}),
   });

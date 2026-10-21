@@ -20,6 +20,7 @@ function dto(processes: number): RunProcessesDto {
     sampledAt: '2026-10-04T12:00:00.000Z',
     trees: [],
     detached: [],
+    monitors: [],
     processes,
     cpuPercent: 0,
     rssBytes: 0,
@@ -82,9 +83,35 @@ afterEach(() => {
 });
 
 describe('useRunProcesses', () => {
+  it('reports a monitor the daemon did not stop as a partial stop', async () => {
+    const stop = vi.fn(async () => ({
+      stoppedPids: [500],
+      stoppedMonitorIds: [],
+    }));
+    render(
+      {
+        chats: {
+          readRunProcesses: vi.fn(async () => dto(1)),
+          stopDetachedProcesses: stop,
+        },
+      } as unknown as DaemonApis,
+      'run-1',
+      true,
+    );
+    await flush();
+    await act(async () => {
+      await expect(seen?.stopDetached?.([500], ['m1'])).rejects.toThrow(
+        'could not be confirmed or stopped',
+      );
+    });
+  });
+
   it('reports a partial stop and refreshes instead of treating it as success', async () => {
     const read = vi.fn(async () => dto(1));
-    const stop = vi.fn(async () => ({ stoppedPids: [500] }));
+    const stop = vi.fn(async () => ({
+      stoppedPids: [500],
+      stoppedMonitorIds: [],
+    }));
     render(
       {
         chats: { readRunProcesses: read, stopDetachedProcesses: stop },
@@ -106,7 +133,10 @@ describe('useRunProcesses', () => {
       .fn()
       .mockResolvedValueOnce(dto(2))
       .mockResolvedValue(dto(0));
-    const stop = vi.fn(async () => ({ stoppedPids: [500, 501] }));
+    const stop = vi.fn(async () => ({
+      stoppedPids: [500, 501],
+      stoppedMonitorIds: ['m1'],
+    }));
     render(
       {
         chats: { readRunProcesses: read, stopDetachedProcesses: stop },
@@ -125,6 +155,13 @@ describe('useRunProcesses', () => {
     });
     expect(read).toHaveBeenCalledTimes(2);
     expect(seen?.data?.processes).toBe(0);
+    await act(async () => {
+      await seen?.stopDetached?.([], ['m1']);
+    });
+    expect(stop).toHaveBeenLastCalledWith({
+      runId: 'run-1',
+      stopDetachedProcessesDto: { monitorIds: ['m1'] },
+    });
   });
   it('asks nothing while the panel is folded', () => {
     const read = vi.fn(() => Promise.resolve(dto(1)));

@@ -118,6 +118,13 @@ export interface HostedChatState {
    * sent off it too.
    */
   settledTurns: number;
+  /**
+   * How the turn last counted in {@link settledTurns} ended — `cancelled` for a
+   * Stop — or null before any has. Set in the same render as the count, so a
+   * reader of one sees the other: the message queue drains on a settle unless it
+   * was a Stop (`settleReleasesQueue`).
+   */
+  settledAs: RunDto['status'] | null;
   send: (
     text: string,
     images?: SendMessageDtoImagesInner[],
@@ -216,6 +223,13 @@ export function useHostedChat({
     [],
   );
   const [reconnectNonce, setReconnectNonce] = useState(0);
+  const [settledAs, setSettledAs] = useState<RunDto['status'] | null>(null);
+  /** Count one turn ending, and how it ended. */
+  const settle = useCallback((status: RunDto['status']): void => {
+    setWorking(false);
+    setSettledAs(status);
+    setSettledTurns((count) => count + 1);
+  }, []);
   // Bumped by `discard`, which is the one thing that ends a conversation
   // without the surface closing — the subject has not changed, so nothing
   // else would re-run the open effect and the surface would sit empty until
@@ -254,14 +268,16 @@ export function useHostedChat({
    * terminal row lowers a `working` that a stray `running` raised in between.
    */
   const liveTurnEndedRef = useRef(false);
-  const countTurnEnd = useCallback((row: ChatItem): void => {
-    if (countedEndsRef.current.has(row.id)) {
-      return;
-    }
-    countedEndsRef.current.add(row.id);
-    setWorking(false);
-    setSettledTurns((count) => count + 1);
-  }, []);
+  const countTurnEnd = useCallback(
+    (row: ChatItem, status: RunDto['status']): void => {
+      if (countedEndsRef.current.has(row.id)) {
+        return;
+      }
+      countedEndsRef.current.add(row.id);
+      settle(status);
+    },
+    [settle],
+  );
 
   /** File a reading onto the run row, on the positive-only rule of `runRowPatch`. */
   const rememberContext = useCallback(
@@ -350,8 +366,7 @@ export function useHostedChat({
               workingRef.current &&
               isSettledRunStatus(current.status)
             ) {
-              setWorking(false);
-              setSettledTurns((count) => count + 1);
+              settle(current.status);
             }
           }
         } catch (err) {
@@ -361,7 +376,7 @@ export function useHostedChat({
         }
       })();
     },
-    [apis, isCurrent],
+    [apis, isCurrent, settle],
   );
 
   const stream = useRunStream({
@@ -391,9 +406,10 @@ export function useHostedChat({
           current ? { ...current, contextTokens: null } : current,
         );
       }
-      if (settledRunStatus(item) !== null) {
+      const settledStatus = settledRunStatus(item);
+      if (settledStatus !== null) {
         liveTurnEndedRef.current = true;
-        countTurnEnd(item);
+        countTurnEnd(item, settledStatus);
       } else if (!isAfterTurnBookkeeping(item)) {
         liveTurnEndedRef.current = false;
       }
@@ -408,13 +424,14 @@ export function useHostedChat({
     },
     onMissed: (replayedRunId, rows) => {
       const last = replayTail(rows);
-      const ended = last !== undefined && settledRunStatus(last) !== null;
+      const settledStatus = last === undefined ? null : settledRunStatus(last);
+      const ended = settledStatus !== null;
       // What the replay ended on stands in for the live rows it replaced.
       if (last !== undefined && isCurrent(replayedRunId)) {
         liveTurnEndedRef.current = ended;
       }
-      if (last !== undefined && ended) {
-        countTurnEnd(last);
+      if (last !== undefined && settledStatus !== null) {
+        countTurnEnd(last, settledStatus);
       }
       reread(replayedRunId, ended);
     },
@@ -601,11 +618,10 @@ export function useHostedChat({
         status !== null &&
         isSettledRunStatus(status)
       ) {
-        setWorking(false);
-        setSettledTurns((count) => count + 1);
+        settle(status);
       }
     });
-  }, [client, runId]);
+  }, [client, runId, settle]);
 
   /** This conversation's own view of the shared expiry set: only its requests. */
   const deadRequestIds = useMemo((): ReadonlySet<string> => {
@@ -752,6 +768,7 @@ export function useHostedChat({
     activity,
     settledTurns,
     liveUnsent,
+    settledAs,
     send,
     post,
     patchSettings,

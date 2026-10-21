@@ -91,6 +91,7 @@ function chatState(overrides: Partial<HostedChatState>): HostedChatState {
     working: false,
     activity: null,
     settledTurns: 0,
+    settledAs: null,
     send: vi.fn(async () => true),
     post: vi.fn(async () => {}),
     patchSettings: vi.fn(async () => true),

@@ -15,7 +15,8 @@ on:
       - develop
 
 env:
-  # Project requires Node 24+ (see AGENTS.md / package.json "engines").
+  # Project requires Node 24.15+ (see AGENTS.md / package.json "engines");
+  # `24` installs the newest 24.x, which is always at least that.
   NODE_VERSION: 24
 
 jobs:

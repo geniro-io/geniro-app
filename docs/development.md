@@ -2,8 +2,10 @@
 
 [Back to the README](../README.md).
 
-You need Node ≥ 24, pnpm 11 (via `corepack`) and the Xcode Command Line
-Tools for the native `better-sqlite3` build.
+You need Node ≥ 24.15, pnpm 11 (via `corepack`) and the Xcode Command Line
+Tools for the native `better-sqlite3` build. 24.15 is the first Node 24 whose
+sockets have `setTypeOfService`, which `apps/ui/src/main/fetch-dispatcher.spec.ts`
+replaces to reproduce macOS refusing it; on an older one that spec fails.
 
 ## Setup
 

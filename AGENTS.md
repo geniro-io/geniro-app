@@ -77,7 +77,7 @@ geniro-app is a local-first macOS desktop app for composing and running a DAG of
 - Every fact about one CLI lives in its own adapter: `v1/agents/adapters/<cli>/` in the daemon, `main/agents/<cli>.ts` in Electron main. The renderer reads per-agent facts from `GET /v1/capabilities` and never spells an agent's name.
 - Scope and milestones live in `.geniro/planning/geniro-app-v1/` (local, gitignored).
 
-Stack: TypeScript 6, Node 24+, NestJS 12 (Fastify), MikroORM + better-sqlite3, React 19 + Tailwind v4 (electron-vite), pnpm 11 + Turbo, swc, Vitest, ESLint + Prettier.
+Stack: TypeScript 6, Node 24.15+, NestJS 12 (Fastify), MikroORM + better-sqlite3, React 19 + Tailwind v4 (electron-vite), pnpm 11 + Turbo, swc, Vitest, ESLint + Prettier.
 
 ---
 

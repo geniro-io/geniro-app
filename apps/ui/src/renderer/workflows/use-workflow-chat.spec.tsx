@@ -69,6 +69,10 @@ function turnComplete(id: string): ChatItem {
   return item({ id, kind: 'turn_complete', payload: {} });
 }
 
+function turnCancelled(id: string): ChatItem {
+  return item({ id, kind: 'turn_cancelled', payload: {} });
+}
+
 describe('useWorkflowChat', () => {
   let container: HTMLDivElement | null = null;
   let root: Root | null = null;
@@ -388,7 +392,22 @@ describe('useWorkflowChat', () => {
     await emitItem(turnComplete('done-1'));
 
     expect(state().settledTurns).toBe(1);
+    expect(state().settledAs).toBe('completed');
     expect(state().working).toBe(false);
+  });
+
+  // The dock's queue reads this: a Stop leaves it standing.
+  it('records a Stop as how the turn ended, and the next ending as its own', async () => {
+    await mount();
+    expect(state().settledAs).toBeNull();
+
+    await emitItem(turnCancelled('stop-1'));
+    expect(state().settledTurns).toBe(1);
+    expect(state().settledAs).toBe('cancelled');
+
+    await emitItem(turnComplete('done-2'));
+    expect(state().settledTurns).toBe(2);
+    expect(state().settledAs).toBe('completed');
   });
 
   it('reports the agent as working again on the next turn', async () => {
@@ -423,12 +442,13 @@ describe('useWorkflowChat', () => {
 
     await emitStatus({
       runId: 'run-1',
-      status: 'completed',
+      status: 'cancelled',
       noTerminalItem: true,
     } as RunStatusEvent);
 
     expect(state().working).toBe(false);
     expect(state().settledTurns).toBe(1);
+    expect(state().settledAs).toBe('cancelled');
   });
 
   it('lowers working on a settle that follows its turn’s terminal row past a stray running', async () => {
@@ -808,7 +828,7 @@ describe('useWorkflowChat', () => {
     expect(state().working).toBe(true);
     listRunItems.mockResolvedValueOnce([
       item({ id: 'offline-1', seq: 2 }),
-      { ...turnComplete('offline-end'), seq: 3 },
+      { ...turnCancelled('offline-end'), seq: 3 },
     ]);
 
     await act(async () => {
@@ -828,6 +848,7 @@ describe('useWorkflowChat', () => {
     ]);
     expect(state().working).toBe(false);
     expect(state().settledTurns).toBe(1);
+    expect(state().settledAs).toBe('cancelled');
   });
 
   const reconnect = async (error?: Error): Promise<void> => {
@@ -930,13 +951,14 @@ describe('useWorkflowChat', () => {
       await state().send('go');
     });
     listRunItems.mockResolvedValueOnce([]);
-    openWorkflowChat.mockResolvedValueOnce(runDto({ status: 'completed' }));
+    openWorkflowChat.mockResolvedValueOnce(runDto({ status: 'cancelled' }));
 
     await reconnect();
 
     expect(state().working).toBe(false);
     expect(state().settledTurns).toBe(1);
-    expect(state().run?.status).toBe('completed');
+    expect(state().settledAs).toBe('cancelled');
+    expect(state().run?.status).toBe('cancelled');
   });
 
   it('opens the new chat when the old one was discarded while the socket was down', async () => {

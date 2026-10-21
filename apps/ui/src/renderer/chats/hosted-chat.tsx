@@ -49,6 +49,7 @@ import {
   followUpButton,
   followUpDelivery,
   parkedReason,
+  settleReleasesQueue,
   steerReadiness,
 } from './follow-up-delivery';
 import { CHAT_LIVE_KEY } from './live-text';
@@ -410,7 +411,14 @@ export function HostedChat({
     }
     return artifactUrlBuilder(handle, runId);
   }, [handle, runId]);
-  const { run, working, settledTurns, patchSettings, rememberContext } = chat;
+  const {
+    run,
+    working,
+    settledTurns,
+    settledAs,
+    patchSettings,
+    rememberContext,
+  } = chat;
   // What the chips show: the open run's row once there is one — a save the daemon
   // answers is what the row then says — and the create's draft before that.
   const {
@@ -694,17 +702,22 @@ export function HostedChat({
   // The queue's next message goes out only once the canvas has re-read what the
   // turn wrote: its send flushes the canvas first, and a flush before the reload
   // would write the pre-turn graph over the agent's edit.
+  //
+  // A Stop re-reads the canvas — the turn may have written part of its edit —
+  // but leaves the queue standing, as the chat screen does: the next message
+  // goes when the user presses its Send (`settleReleasesQueue`).
   const settledSeen = useRef(settledTurns);
   useEffect(() => {
     if (settledTurns !== settledSeen.current) {
       settledSeen.current = settledTurns;
+      const releases = settleReleasesQueue(settledAs);
       void Promise.resolve(onTurnSettled?.()).finally(() => {
-        if (runId !== null) {
+        if (runId !== null && releases) {
           void drainQueue(runId);
         }
       });
     }
-  }, [settledTurns, onTurnSettled, runId, drainQueue]);
+  }, [settledTurns, settledAs, onTurnSettled, runId, drainQueue]);
   // A HELD turn has finished its reply and waits only for background
   // sub-agents, so it takes the queue's next message at once — as on the chat
   // screen, once per hold.

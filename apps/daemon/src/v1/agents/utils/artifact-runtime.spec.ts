@@ -122,6 +122,18 @@ describe('the component kit', () => {
     expect(kit).toContain(`@layer geniro {\n${ARTIFACT_KIT_STYLE}\n}`);
   });
 
+  it('holds only the edge margins inside its boxes against the page, nothing else', () => {
+    // A page's `h3 { margin: 24px 0 8px }` otherwise pushed a step's heading
+    // a line below its number; every other kit value stays the page's to beat.
+    const important = ARTIFACT_KIT_STYLE.split('\n').filter((line) =>
+      line.includes('!important'),
+    );
+    expect(important).toEqual([
+      ':where(.g-card, .g-callout, .g-step-body, .g-disclosure-body) > :where(:first-child) { margin-top: 0 !important; }',
+      ':where(.g-card, .g-callout, .g-step-body, .g-disclosure-body) > :where(:last-child) { margin-bottom: 0 !important; }',
+    ]);
+  });
+
   it('falls back to exactly the light theme’s value of the token each name maps to', () => {
     // A TWIN of the renderer's THEME_TOKENS and of light.css: a token renamed
     // or recoloured there would otherwise leave a hostless page on stale values.

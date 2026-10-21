@@ -251,6 +251,7 @@ const ARTIFACT_WRAPPER_SCRIPT = `
  * past the frame, as block layout never did. A page that styles `html` or
  * `body` itself still wins.
  *
+ * How a bare element looks is {@link ELEMENT_STYLE}'s, one layer lower.
  * Everything else about how a page LOOKS is the agent's, and is asked for where
  * the agent can act on it — the `show_artifact` tool's own description — rather
  * than legislated here, since a page's own CSS wins by construction and a floor
@@ -277,6 +278,87 @@ body {
 :root { color-scheme: light dark; }
 a { color: ${themeVar('primary')}; }
 `.trim();
+
+/**
+ * What a bare HTML element looks like before the page styles it — headings,
+ * lists, tables, inline code, disclosures, form controls, focus — in the app's
+ * tokens instead of the browser's defaults.
+ *
+ * MEASURED, not imagined: a survey of the agents' own pages found browser
+ * defaults leaking through wherever a page's CSS stopped short — the native ▶
+ * marker on 22 of 23 pages with a `<details>`, the system checkbox and select,
+ * a table with no cell padding. Every page sets SOME of these and not others,
+ * so a floor that answers each element on its own is what makes the rest
+ * consistent.
+ *
+ * It sits in `geniro-elements`, the LOWEST layer ({@link ARTIFACT_LAYER_ORDER}):
+ * below Tailwind's preflight, so a Tailwind page gets the reset its utilities
+ * are written against (`ul` without bullets, `h1` at the body size), and below
+ * every rule the page writes, so a page that styles an element keeps its own
+ * look. It only fills what nothing else set.
+ *
+ * The GUARDS at the end are the exception, and are deliberately few:
+ * `!important` in the lowest layer outranks every normal rule anywhere, so they
+ * hold even against the page's own CSS. Each one undoes a rule the survey found
+ * agents writing, and which has no right use on the element it guards:
+ *  - `list-style-position: outside` on a `summary` hangs the marker into the
+ *    box's padding, on top of its border (the screenshot that opened this);
+ *  - `word-break: break-all` reaching a `code` breaks an id or a hash in the
+ *    middle ("cw_case_switch_selecti | on") even where it fits its line.
+ *    `overflow-wrap` is left to the page: forcing `break-word` stopped a
+ *    table column shrinking below its longest token, which overflows a
+ *    narrow frame.
+ *
+ * Controls get the app's chrome only when they carry no class: a page that
+ * classed its own tabs or segmented buttons drew them, and a radius or a
+ * ground leaking into them bent their underlines and corners.
+ */
+const ELEMENT_STYLE = `
+:root { accent-color: ${themeVar('primary')}; }
+h1, h2, h3, h4, h5, h6 { margin: 1.5em 0 0.5em; line-height: 1.3; font-weight: 600; text-wrap: pretty; }
+h1 { font-size: 1.6em; margin-top: 0; }
+h2 { font-size: 1.3em; }
+h3 { font-size: 1.1em; }
+h4, h5, h6 { font-size: 1em; }
+ul, ol { padding-left: 1.5em; }
+li::marker { color: ${themeVar('muted')}; }
+hr { border: 0; border-top: 1px solid ${themeVar('border')}; margin: 1.5em 0; }
+blockquote { margin: 0 0 1em; padding: 0.5em 1em; border-left: 3px solid ${themeVar('border')}; }
+mark { background: color-mix(in srgb, ${themeVar('warning')} 30%, transparent); color: inherit; border-radius: 2px; }
+kbd { padding: 0 0.4em; border: 1px solid ${themeVar('border')}; border-bottom-width: 2px; border-radius: 4px; font-size: 0.85em; }
+dd { margin: 0 0 0.5em; }
+figure { margin: 0 0 1em; }
+figcaption { margin-top: 4px; font-size: 0.9em; color: ${themeVar('muted')}; }
+img, video { height: auto; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 10px; text-align: left; vertical-align: top; border-top: 1px solid ${themeVar('border')}; }
+table > :first-child > tr:first-child > *, table > tr:first-child > * { border-top: 0; }
+th { font-weight: 600; }
+summary { cursor: pointer; }
+summary::marker { color: ${themeVar('muted')}; font-size: 0.8em; }
+button, input, select, textarea { font: inherit; color: inherit; }
+input:not([class], [type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"]), select:not([class]), textarea:not([class]) {
+  padding: 5px 8px;
+  background-color: ${themeVar('surface')};
+  border: 1px solid ${themeVar('border')};
+  border-radius: calc(${themeVar('radius')} - 2px);
+}
+button:not([class]), input:not([class]):is([type="button"], [type="submit"], [type="reset"]) {
+  padding: 5px 12px;
+  background-color: ${themeVar('surface')};
+  border: 1px solid ${themeVar('border')};
+  border-radius: calc(${themeVar('radius')} - 2px);
+  cursor: pointer;
+}
+:disabled { opacity: 0.55; cursor: default; }
+::placeholder { color: ${themeVar('muted')}; opacity: 1; }
+:focus-visible { outline: 2px solid ${themeVar('primary')}; outline-offset: 2px; }
+summary { list-style-position: inside !important; }
+code { word-break: normal !important; }
+`.trim();
+
+/** {@link ELEMENT_STYLE} as the `<style>` that carries it. */
+const ELEMENT_STYLE_BLOCK = `<style data-geniro="elements">@layer geniro-elements {\n${ELEMENT_STYLE}\n}</style>`;
 
 /**
  * The framed page's ground: transparent rather than white, which is the one
@@ -308,11 +390,12 @@ const BODY_CLOSE = /<\/body\s*>(?![\s\S]*<\/body\s*>)/i;
  * The base style as a `<style>` in the `geniro-base` layer
  * (ARTIFACT_LAYER_ORDER): above Tailwind's reset, below the kit and Tailwind's
  * utilities, so both outrank this floor and the page's own unlayered CSS
- * outranks all of it.
+ * outranks all of it. The element floor ({@link ELEMENT_STYLE}) travels with
+ * it; its layer, not its place in the document, is what ranks it.
  */
 function baseStyleBlock(ground: string | null): string {
   const css = ground === null ? BASE_STYLE : `${ground}\n${BASE_STYLE}`;
-  return `<style data-geniro="base">@layer geniro-base {\n${css}\n}</style>`;
+  return `${ELEMENT_STYLE_BLOCK}<style data-geniro="base">@layer geniro-base {\n${css}\n}</style>`;
 }
 
 /** `block` spliced in just before the document's last `</body>`, or appended. */

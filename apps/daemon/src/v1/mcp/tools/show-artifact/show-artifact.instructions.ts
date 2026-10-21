@@ -82,9 +82,14 @@ export function showArtifactInstructions(
     'Other packages from cdnjs, cdn.jsdelivr.net/npm or unpkg load too, and Google Fonts stylesheets. ' +
     'Everything else is blocked without an error: the page has no network of its own, so fetch(), XHR ' +
     'and WebSockets silently fail — put the data in the page. ' +
-    'Optional building blocks, not a mandatory layout or visual identity: g-card (+ g-card-title), g-grid of g-stat tiles ' +
+    'BUILDING BLOCKS in the app’s own look — use them for these standard parts rather than writing CSS ' +
+    'for a card, badge, step, callout or table of your own; they are not a mandatory layout: g-card ' +
+    '(+ g-card-title), g-grid of g-stat tiles ' +
     '(g-stat-label, g-stat-value, g-delta with g-delta-good / g-delta-bad), g-badge (+ -success, ' +
-    '-warning, -danger, -info), g-table inside a g-table-wrap (g-num on numeric cells), g-kanban > ' +
+    '-warning, -danger, -info) for a status or pill, g-table inside a g-table-wrap (g-num on numeric ' +
+    'cells and their header), numbered steps as g-step > g-step-num + g-step-body, a note as g-callout ' +
+    '(+ -success, -warning, -danger), a folded section as details.g-disclosure > summary + ' +
+    'g-disclosure-body, label/value pairs as dl.g-kv, g-nowrap, g-kanban > ' +
     'g-kanban-col > g-kanban-head + g-kanban-list > g-kanban-card, g-btn (+ g-btn-secondary), g-row, ' +
     "g-muted. Your own rules always win over them — except CSS you put in Tailwind's @layer base, which " +
     "ranks below geniro's base styles (body padding, link colour); write those rules unlayered. " +

@@ -9,7 +9,7 @@ import {
   renderArtifactPage,
   withInlineImages,
 } from './artifact-page';
-import { ARTIFACT_THEME_EVENT } from './artifact-runtime';
+import { ARTIFACT_LAYER_ORDER, ARTIFACT_THEME_EVENT } from './artifact-runtime';
 
 describe('ARTIFACT_PAGE_CSP', () => {
   const directive = (name: string): string | undefined =>
@@ -211,6 +211,64 @@ describe('renderArtifactPage', () => {
     expect(page.indexOf('data-geniro="runtime"')).toBeGreaterThan(-1);
     expect(page.indexOf('data-geniro="runtime"')).toBeLessThan(
       page.indexOf('geniro.chart("#a"'),
+    );
+  });
+});
+
+describe('the element floor', () => {
+  const elementsOf = (page: string): string =>
+    /<style data-geniro="elements">@layer geniro-elements \{\n([\s\S]*?)\n\}<\/style>/.exec(
+      page,
+    )?.[1] ?? '';
+
+  it('sits in the LOWEST layer, under Tailwind’s preflight and every rule the page writes', () => {
+    // Above `base`, it would undo the reset a Tailwind page's utilities are
+    // written against (`ul` with bullets back, `h1` sized up again).
+    expect(elementsOf(renderArtifactPage('<p>x</p>'))).toContain('h2 {');
+    const order = ARTIFACT_LAYER_ORDER.replace(/^@layer |;$/g, '').split(', ');
+    expect(order[0]).toBe('geniro-elements');
+    expect(order.indexOf('geniro-elements')).toBeLessThan(
+      order.indexOf('base'),
+    );
+  });
+
+  it('gives a bare details, table, control and focus ring the app’s look', () => {
+    const css = elementsOf(renderArtifactPage('<p>x</p>'));
+    expect(css).toMatch(/summary::marker \{ color: var\(--geniro-muted, /);
+    expect(css).toMatch(/th, td \{ padding: 6px 10px;/);
+    expect(css).toMatch(/:root \{ accent-color: var\(--geniro-primary, /);
+    expect(css).toMatch(
+      /:focus-visible \{ outline: 2px solid var\(--geniro-primary, /,
+    );
+    expect(css).toMatch(
+      /select:not\(\[class\]\), textarea:not\(\[class\]\) \{[^}]*background-color: var\(--geniro-surface, /,
+    );
+  });
+
+  it('GUARDS a hanging disclosure marker and a mid-token break, even against the page’s own CSS', () => {
+    // `!important` in the lowest layer outranks every normal declaration
+    // anywhere — the only way a floor holds against an agent's
+    // `list-style-position: outside` or `word-break: break-all`.
+    const css = elementsOf(renderArtifactPage('<p>x</p>'));
+    expect(css).toContain(
+      'summary { list-style-position: inside !important; }',
+    );
+    expect(css).toContain('code { word-break: normal !important; }');
+    // Every other rule stays a default the page can override.
+    expect(css.match(/!important/g)).toHaveLength(2);
+  });
+
+  it('reads every token with a fallback, so the floor holds before the theme lands', () => {
+    const css = elementsOf(renderArtifactPage('<p>x</p>'));
+    expect(css).toContain('var(--geniro-border, ');
+    expect(css).not.toMatch(/var\(--geniro-[a-z0-9-]+\)/);
+  });
+
+  it('travels into a saved page unchanged', () => {
+    const framed = elementsOf(renderArtifactPage('<body><p>x</p></body>'));
+    expect(framed.length).toBeGreaterThan(0);
+    expect(elementsOf(renderArtifactDocument('<body><p>x</p></body>'))).toBe(
+      framed,
     );
   });
 });

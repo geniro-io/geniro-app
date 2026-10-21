@@ -3078,20 +3078,23 @@ describe('McpServerService — what the descriptions tell a model', () => {
         new RegExp(`\\.${name}(?![a-z-])`),
       );
     }
-    // The badge variants are written as suffixes (`g-badge (+ -success, …)`),
-    // which the class scan above cannot see — so they are read out of the
-    // description too, rather than checked against a list written here.
-    const badgeVariants = (
-      /g-badge \(\+ ([^)]*)\)/.exec(description)?.[1] ?? ''
-    )
-      .split(/,\s*/)
-      .map((v) => v.replace(/^-/, '').trim())
-      .filter(Boolean);
-    expect(badgeVariants.length).toBeGreaterThan(2);
-    for (const variant of badgeVariants) {
-      expect(ARTIFACT_KIT_STYLE, `.g-badge-${variant}`).toContain(
-        `.g-badge-${variant})`,
-      );
+    // Variants are written as suffixes (`g-badge (+ -success, …)`), which the
+    // class scan above cannot see — so they are read out of the description
+    // too, for every class that lists them, rather than checked against a list
+    // written here.
+    const variants = [
+      ...description.matchAll(/\b(g-[a-z-]+) \(\+ ([^)]*)\)/g),
+    ].flatMap(([, base, list]) =>
+      list!
+        .split(/,\s*/)
+        .map((v) => v.trim())
+        .filter((v) => v.startsWith('-'))
+        .map((v) => `${base}${v}`),
+    );
+    expect(variants).toContain('g-badge-success');
+    expect(variants).toContain('g-callout-danger');
+    for (const variant of variants) {
+      expect(ARTIFACT_KIT_STYLE, `.${variant}`).toContain(`.${variant})`);
     }
 
     const tailwind = description.slice(

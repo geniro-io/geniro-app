@@ -34,6 +34,7 @@ import { AgentKind } from '../../runs/runs.types';
 import { fakeSpawn } from '../__tests__/fake-child';
 import { FakeWallTurnDao } from '../__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../__tests__/no-call-index';
+import { NO_COMMANDS } from '../__tests__/no-commands';
 import { NO_STOPS } from '../__tests__/no-stops';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
@@ -94,6 +95,7 @@ import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import { UnknownAgentVersion } from './__tests__/unknown-agent-version';
 import { ActionBroker } from './action.broker';
+import { ActionCommandRegistry } from './action-command.registry';
 import { ActionPublishService } from './action-publish.service';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -1206,6 +1208,7 @@ function setup(
       reapInBackground: (runId: string) => reapedRuns.push(runId),
     } as unknown as RunProcessReaper,
     wallTurns as unknown as WallTurnDao,
+    new ActionCommandRegistry(),
   );
   // A double rather than the real service: what THIS spec pins is that the
   // group the rule names lands on the created run, not how the rule reads a
@@ -1292,6 +1295,7 @@ function setup(
         seqs,
       ),
       NO_STOPS,
+      NO_COMMANDS,
     ),
     workflowProposals,
     artifactStore,
@@ -2905,6 +2909,36 @@ describe('ChatService', () => {
       await settle(claude);
     });
 
+    it('refuses a blocking whole-file patch changed after its card was shown', async () => {
+      const { service, claude, patches, approvals } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const file = join(dir, 'whole.ts');
+      writeFileSync(file, 'original');
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'whole.ts',
+        newString: 'replacement',
+      });
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
+      writeFileSync(file, 'user edits');
+
+      expect(
+        approvals.resolve(
+          run.id,
+          approvals.listByRun(run.id)[0]!.requestId,
+          true,
+        ),
+      ).toBe(true);
+      await expect(proposed).resolves.toEqual({
+        status: 'stale',
+        reason: 'the file changed after the patch was shown',
+      });
+      expect(readFileSync(file, 'utf8')).toBe('user edits');
+      await settle(claude);
+    });
+
     it('sweeps a parked patch with its OWN sentence when the turn ends', async () => {
       // Its own set, and its own wording: "the question was answered" is the
       // wrong thing to tell an agent that proposed a patch.
@@ -3760,6 +3794,57 @@ describe('ChatService', () => {
         expect(readFileSync(join(dir, 'c.ts'), 'utf8')).toBe(
           'somebody else changed this\n',
         );
+      });
+
+      it('refuses a deferred whole-file patch changed before a simulated restart', async () => {
+        const { service, cursor, patches, approvals, itemDao, runDao } =
+          setup();
+        const run = await asking(service);
+        const file = join(dir, 'whole.ts');
+        writeFileSync(file, 'original');
+        expect(
+          await patches.propose(run.id, SINGLE_AGENT_NODE, {
+            filePath: 'whole.ts',
+            newString: 'replacement',
+          }),
+        ).toEqual({ status: 'posted' });
+        await settle(cursor);
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+        const stored = runDao.runs.get(run.id)!.pendingQuestion;
+        approvals.sweepDeferred(run.id);
+        writeFileSync(file, 'user edits');
+
+        await service.rehydrateDeferredQuestions();
+        expect(runDao.runs.get(run.id)!.pendingQuestion).toBe(stored);
+        expect(approvals.resolve(run.id, requestId, true)).toBe(true);
+        await vi.waitFor(() =>
+          expect(
+            itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes(
+                  'the file changed after the patch was shown',
+                ),
+            ),
+          ).toBe(true),
+        );
+        expect(readFileSync(file, 'utf8')).toBe('user edits');
+      });
+
+      it('clears a stored patch card without a fingerprint at boot', async () => {
+        const { service, approvals, runDao } = setup();
+        const run = await asking(service);
+        runDao.runs.get(run.id)!.pendingQuestion = JSON.stringify({
+          kind: 'patch',
+          requestId: 'old-patch',
+          file_path: 'a.ts',
+          new_string: 'replacement',
+        });
+
+        await service.rehydrateDeferredQuestions();
+
+        expect(runDao.runs.get(run.id)!.pendingQuestion).toBeNull();
+        expect(approvals.listByRun(run.id)).toEqual([]);
       });
 
       it('reports a deferred patch stale when the chat’s folder is gone, and does not recreate it', async () => {

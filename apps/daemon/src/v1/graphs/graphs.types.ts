@@ -452,10 +452,10 @@ export const WorkflowAgentNodeSchema = z
      * A call that opens a new conversation uses member 1 first, trying later
      * members in priority order when earlier ones are unavailable or fail on a
      * usage limit, a lapsed sign-in, or before doing any work. A caller may
-     * also name a member at the user's request. A continued thread stays on
-     * the member that holds its session, since a CLI session cannot move
-     * between CLIs or accounts. The node's own conversation — including a
-     * trigger-fed root — also falls through the pool and continues on the
+     * also pin a member at the user's request. A continued thread starts on
+     * the member holding its latest session; fallback carries its original
+     * task and recent conversation into a fresh session. The node's own
+     * conversation — including a trigger-fed root — also falls through the pool and continues on the
      * member that answered. A hand-off opens a fresh CLI session with the
      * recent workflow transcript and keeps the node's outstanding calls.
      * See `utils/agent-pool.ts`.
@@ -1113,7 +1113,7 @@ export interface CalleePoolPlan {
   /**
    * The members to hand the call to, in order, when an attempt fails in a way
    * another account could get past (`fallsThroughPool`). Empty for a call
-   * pinned to one member — a continued thread, or a member the caller named.
+   * pinned to a member the caller explicitly named.
    */
   fallbacks: readonly CalleePoolAttempt[];
 }

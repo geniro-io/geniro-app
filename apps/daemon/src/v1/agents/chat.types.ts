@@ -1446,6 +1446,9 @@ export interface HostPatch {
   summary?: string;
 }
 
+/** The whole-file target's byte state when its patch card was raised. */
+export type HostPatchFingerprint = 'absent' | { sha256: string };
+
 /**
  * What a proposed patch resolves to.
  *
@@ -3022,6 +3025,14 @@ export const ACTION_ID_MAX = 40;
 export const ACTION_DESCRIPTION_MAX = 200;
 export const ACTION_MESSAGE_MAX = 4000;
 export const ACTION_LIVE_MAX = 20;
+/** A command's argv, all tokens together — what its confirm dialog shows in full. */
+export const ACTION_COMMAND_MAX = 4000;
+export const ACTION_COMMAND_TIMEOUT_DEFAULT_MINUTES = 10;
+export const ACTION_COMMAND_TIMEOUT_MAX_MINUTES = 60;
+/** The end of a command's output its outcome row keeps. */
+export const ACTION_OUTPUT_TAIL_MAX = 64 * 1024;
+/** The end of that output `notify_agent` hands the agent. */
+export const ACTION_NOTIFY_TAIL_MAX = 2 * 1024;
 
 /**
  * A `publish_action` call as its reader hands it over: the shape is checked,
@@ -3034,7 +3045,15 @@ export interface ActionPublishInput {
   once?: boolean;
   message?: string;
   stop?: ActionStopInput;
-  command?: unknown;
+  command?: ActionCommandInput;
+}
+
+/** What a command action names when it is published. */
+export interface ActionCommandInput {
+  argv: string[];
+  cwd?: string;
+  timeoutMinutes?: number;
+  notifyAgent?: boolean;
 }
 
 /**
@@ -3094,6 +3113,14 @@ export type ActionSpec = z.infer<typeof ActionSpecSchema>;
 
 /** What a stop action records about the processes it will stop. */
 export type ActionStopSpec = Pick<ActionSpec, 'shellId' | 'targets'>;
+
+/** What a command action records: always every field, `cwd` resolved. */
+export interface ActionCommandSpec {
+  argv: [string, ...string[]];
+  cwd: string;
+  timeoutMs: number;
+  notifyAgent: boolean;
+}
 
 /** Who published an action — which conversation its id is scoped to. */
 export const ActionPublisherSchema = z
@@ -3172,7 +3199,7 @@ export type ActionOutcomePayload = z.infer<typeof ActionOutcomePayloadSchema>;
 /** What a press decided, for its `action_outcome` row. */
 export type ActionPressResult = Pick<
   ActionOutcomePayload,
-  'state' | 'alreadyStopped' | 'error'
+  'state' | 'alreadyStopped' | 'error' | 'exitCode' | 'outputTail'
 >;
 
 /** One button still pressable, as `ChatActionsService` folds it. */

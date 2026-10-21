@@ -20,8 +20,10 @@ const entry = (
     text?: string;
     agentLabel?: string;
     callId?: string;
-    kind?: 'message' | 'stop';
+    kind?: 'message' | 'stop' | 'command';
     targets?: { pid: number; command: string }[];
+    argv?: string[];
+    cwd?: string;
   } = {},
 ): ActionEntry => ({
   type: 'action',
@@ -35,8 +37,13 @@ const entry = (
     label: 'Merged',
     description: null,
     kind: extra.kind ?? 'message',
-    text: extra.kind === 'stop' ? null : (extra.text ?? 'continue'),
+    text:
+      extra.kind === 'stop' || extra.kind === 'command'
+        ? null
+        : (extra.text ?? 'continue'),
     targets: extra.targets ?? [],
+    argv: extra.argv ?? [],
+    cwd: extra.cwd ?? null,
     once: extra.once ?? true,
     nodeId: 'agent',
     conversationId: '',
@@ -73,6 +80,9 @@ function render(card: ActionEntry, chat: Partial<ChatActions>): HTMLElement {
     phases: new Map(),
     press: vi.fn(),
     dismiss: vi.fn(),
+    confirming: null,
+    confirmCommand: vi.fn(),
+    cancelCommand: vi.fn(),
     ...chat,
   };
   act(() =>
@@ -114,6 +124,7 @@ describe('ActionCard', () => {
             state: 'succeeded',
             exitCode: null,
             error: null,
+            outputTail: null,
             alreadyStopped: false,
             at,
           }),
@@ -138,6 +149,7 @@ describe('ActionCard', () => {
             state,
             exitCode: null,
             error: 'boom',
+            outputTail: null,
             alreadyStopped: false,
             at,
           }),
@@ -158,6 +170,7 @@ describe('ActionCard', () => {
       state,
       exitCode: null,
       error: null,
+      outputTail: null,
       alreadyStopped: false,
       at,
     });
@@ -216,6 +229,7 @@ describe('ActionCard', () => {
           state: 'stopped',
           exitCode: null,
           error: null,
+          outputTail: null,
           alreadyStopped,
           at,
         },
@@ -225,6 +239,129 @@ describe('ActionCard', () => {
     expect(status(render(stopped(true), {}))).toBe(
       'Pressed 00:00 · already stopped',
     );
+  });
+
+  it('shows the command a press runs, in full, before and after the press', () => {
+    const argv = ['pnpm', 'test', '--grep', 'checkout flow'];
+    const cwd = '/Users/dev/projects/geniro-app';
+    const block = (container: HTMLElement): string | null =>
+      container.querySelector('[data-slot="action-command"]')?.textContent ??
+      null;
+
+    const before = render(entry(5, null, { kind: 'command', argv, cwd }), {
+      actions: [live(5)],
+    });
+    expect(block(before)).toBe(
+      `Runs:pnpm test --grep 'checkout flow'in ${cwd}`,
+    );
+    expect(before.querySelector('[data-slot="action-message"]')).toBeNull();
+
+    const after = render(
+      entry(
+        5,
+        {
+          actionSeq: 5,
+          state: 'succeeded',
+          exitCode: 0,
+          error: null,
+          outputTail: null,
+          alreadyStopped: false,
+          at: new Date(2026, 9, 18, 0, 0).toISOString(),
+        },
+        { kind: 'command', argv, cwd },
+      ),
+      {},
+    );
+    expect(block(after)).toBe(`Runs:pnpm test --grep 'checkout flow'in ${cwd}`);
+    expect(status(after)).toBe('Pressed 00:00 · ran, exit 0');
+  });
+
+  it('keeps a command output tail folded until the reader opens it', () => {
+    const outcome = (outputTail: string | null): ActionEntry['outcome'] => ({
+      actionSeq: 5,
+      state: 'failed',
+      exitCode: 1,
+      error: 'exit 1',
+      outputTail,
+      alreadyStopped: false,
+      at: new Date(2026, 9, 18, 0, 0).toISOString(),
+    });
+    const card = (tail: string | null): ActionEntry =>
+      entry(5, outcome(tail), {
+        kind: 'command',
+        argv: ['make'],
+        cwd: '/repo',
+      });
+
+    const container = render(card('1 failed\nboom'), {});
+    const toggle = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Output',
+    );
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('[data-slot="action-output"]')).toBeNull();
+
+    act(() => toggle!.click());
+
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
+    expect(
+      container.querySelector('[data-slot="action-output"]')?.textContent,
+    ).toBe('1 failed\nboom');
+    expect(status(container)).toBe('Failed 00:00 · exit 1');
+
+    expect(
+      [...render(card(null), {}).querySelectorAll('button')].some(
+        (button) => button.textContent === 'Output',
+      ),
+    ).toBe(false);
+  });
+
+  it('reports a command’s exit code even after the agent republished its button', () => {
+    const card = entry(
+      5,
+      {
+        actionSeq: 5,
+        state: 'failed',
+        exitCode: 2,
+        error: 'exit 2',
+        outputTail: null,
+        alreadyStopped: false,
+        at: new Date(2026, 9, 18, 0, 0).toISOString(),
+      },
+      { kind: 'command', argv: ['make'], cwd: '/repo' },
+    );
+
+    expect(status(render(card, { actions: [live(9)] }))).toBe(
+      'Failed 00:00 · exit 2',
+    );
+  });
+
+  it('reports a command’s last run while its button stays, and nothing while it runs', () => {
+    const failed: ActionEntry['outcome'] = {
+      actionSeq: 5,
+      state: 'failed',
+      exitCode: 3,
+      error: 'exit 3',
+      outputTail: null,
+      alreadyStopped: false,
+      at: new Date(2026, 9, 18, 0, 0).toISOString(),
+    };
+    const command = (pending: boolean): LiveAction => ({
+      ...live(5),
+      spec: { kind: 'command', argv: ['make'], cwd: '/repo' },
+      pending,
+    });
+    const card = entry(5, failed, {
+      kind: 'command',
+      argv: ['make'],
+      cwd: '/repo',
+    });
+
+    const idle = render(card, { actions: [command(false)] });
+    expect(idle.querySelector('[data-slot="action-chip"]')).not.toBeNull();
+    expect(status(idle)).toBe('Failed 00:00 · exit 3');
+
+    expect(status(render(card, { actions: [command(true)] }))).toBeNull();
+    expect(status(render(entry(5, failed), { actions: [live(5)] }))).toBeNull();
   });
 
   it('shows the exact text a press sends', () => {
@@ -251,6 +388,7 @@ describe('ActionCard', () => {
             state: 'dismissed',
             exitCode: null,
             error: null,
+            outputTail: null,
             alreadyStopped: false,
             at: 'now',
           })}

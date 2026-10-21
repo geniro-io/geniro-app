@@ -1,3 +1,8 @@
+import {
+  asRecord,
+  asString,
+  parseJsonColumn,
+} from '../../agents/utils/json-util';
 import type {
   CalleePoolAttempt,
   CalleeTurnOutcome,
@@ -207,18 +212,45 @@ export function nodePoolHandOffPrompt(
     payload: string;
   }[],
 ): string {
-  const history = rows
-    .filter(
+  return poolTranscriptPrompt(
+    prompt,
+    rows.filter(
       (row) =>
-        (row.nodeId === nodeId ||
-          (row.nodeId === null && row.role === 'user')) &&
-        [
-          'message',
-          'tool_call',
-          'tool_result',
-          'call_started',
-          'call_result',
-        ].includes(row.kind),
+        row.nodeId === nodeId || (row.nodeId === null && row.role === 'user'),
+    ),
+  );
+}
+
+/** Rows are scoped to this call's conversation by the caller, including its original brief. */
+export function callPoolHandOffPrompt(
+  prompt: string,
+  rows: readonly { kind: string; role: string | null; payload: string }[],
+): string {
+  const firstAsk = rows.find((row) => row.kind === 'call_started');
+  const original = asString(
+    asRecord(parseJsonColumn(firstAsk?.payload))?.message,
+  );
+  return poolTranscriptPrompt(
+    original === null
+      ? prompt
+      : `${prompt}\n\nOriginal task:\n${original.slice(0, 8_000)}`,
+    rows,
+  );
+}
+
+function poolTranscriptPrompt(
+  prompt: string,
+  rows: readonly { kind: string; role: string | null; payload: string }[],
+): string {
+  const history = rows
+    .filter((row) =>
+      [
+        'message',
+        'tool_call',
+        'tool_result',
+        'call_started',
+        'call_result',
+      ].includes(row.kind),
     )
     .map((row) => {
       const payload =

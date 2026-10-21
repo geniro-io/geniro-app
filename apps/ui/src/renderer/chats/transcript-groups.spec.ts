@@ -484,6 +484,56 @@ describe('groupTranscript', () => {
     ).toBeUndefined();
   });
 
+  it('summarizes the newest pool handoff until the next assistant message, including anchored reloads', () => {
+    const started = item('call_started', {
+      callId: 'call-1',
+      calleeNodeId: 'poet',
+      member: 1,
+    });
+    const earlier = item(
+      'message',
+      { callId: 'call-1', text: 'Checking the metre.' },
+      'poet',
+    );
+    const message =
+      'Poet: pool member 1 hit a usage limit — handing the call to member 2.';
+    const handOff = item(
+      'system',
+      { callId: 'call-1', member: 2, message },
+      'poet',
+    );
+    const fold = (rows: ChatItem[], anchorIds?: Set<string>): CallBlockEntry =>
+      groupTranscript(rows, { anchorIds })[0] as CallBlockEntry;
+    const live = fold([started, earlier, handOff]);
+    expect(callBlockSummary(live)).toBe(message);
+
+    const anchored = fold([started, earlier, handOff], new Set([handOff.id]));
+    expect(callBlockSummary(anchored)).toBe(message);
+    expect(anchored.poolHandOff).toEqual({ message, seq: handOff.seq });
+    expect(JSON.stringify(anchored.entries)).not.toContain(handOff.id);
+
+    const spoken = item(
+      'message',
+      { callId: 'call-1', text: 'The second member is checking the metre.' },
+      'poet',
+    );
+    const continued = fold([started, earlier, handOff, spoken]);
+    expect(callBlockSummary(continued)).toBe(
+      'The second member is checking the metre.',
+    );
+    expect(continued.poolHandOff).toEqual({ message, seq: handOff.seq });
+    expect(
+      fold([
+        started,
+        item(
+          'system',
+          { callId: 'call-1', message: 'Ordinary notice' },
+          'poet',
+        ),
+      ]).poolHandOff,
+    ).toBeUndefined();
+  });
+
   it('drops the host tools’ own rows too — each already draws its own card', () => {
     const entries = groupTranscript([
       call('mcp__geniro-run-1__report_findings', 't1', { findings: [] }),
@@ -1450,6 +1500,56 @@ describe('groupTranscript', () => {
         outcome: { state: 'stopped', alreadyStopped: true },
       },
     ]);
+  });
+
+  it('reads a command action’s argv and folder and its outcome’s output tail', () => {
+    const run = item('action', {
+      actionId: 'run-tests',
+      label: 'Run tests',
+      once: false,
+      spec: {
+        kind: 'command',
+        argv: ['pnpm', 'test', 7, 'a b'],
+        cwd: '/Users/dev/repo',
+        timeoutMs: 600000,
+      },
+      publisher: { nodeId: 'agent', conversationId: '' },
+    });
+    const entries = groupTranscript([
+      run,
+      item('action_outcome', {
+        actionSeq: run.seq,
+        actionId: 'run-tests',
+        nodeId: 'agent',
+        conversationId: '',
+        state: 'failed',
+        exitCode: 1,
+        error: 'exit 1',
+        outputTail: '1 failed',
+      }),
+    ]);
+
+    expect(entries).toMatchObject([
+      {
+        type: 'action',
+        action: {
+          kind: 'command',
+          argv: ['pnpm', 'test', 'a b'],
+          cwd: '/Users/dev/repo',
+        },
+        outcome: { state: 'failed', exitCode: 1, outputTail: '1 failed' },
+      },
+    ]);
+    expect(
+      groupTranscript([
+        item('action', {
+          actionId: 'm',
+          label: 'M',
+          spec: { kind: 'message', text: 'go' },
+          publisher: { nodeId: 'agent', conversationId: '' },
+        }),
+      ]),
+    ).toMatchObject([{ action: { argv: [], cwd: null } }]);
   });
 
   it('drops an action row that does not parse', () => {

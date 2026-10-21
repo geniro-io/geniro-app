@@ -338,6 +338,8 @@ export interface CallBlockEntry {
    * for a callee with no pool.
    */
   member?: number;
+  /** Latest pool handoff, retained even when its row is only an anchor. */
+  poolHandOff?: { message: string; seq: number };
   /**
    * Every call's sub-turn in order, each continuation's preceded by its own
    * `call_started` row (see {@link isCallContinuation}).
@@ -1398,7 +1400,17 @@ export function subagentNamed(block: SubagentBlockEntry): boolean {
  * answer to the previous one would report it as already done.
  */
 export function callBlockSummary(block: CallBlockEntry): string | null {
-  return block.result ?? lastSpokenIn(latestCallTurn(block));
+  if (block.result !== null) {
+    return block.result;
+  }
+  const spoken = lastSpokenIn(latestCallTurn(block));
+  if (
+    block.poolHandOff !== undefined &&
+    (spoken === null || block.poolHandOff.seq > spoken.seq)
+  ) {
+    return block.poolHandOff.message;
+  }
+  return spoken?.text ?? null;
 }
 
 /**
@@ -1440,7 +1452,9 @@ function latestCallTurn(block: CallBlockEntry): readonly TranscriptEntry[] {
   return segments[segments.length - 1]!;
 }
 
-function lastSpokenIn(entries: readonly TranscriptEntry[]): string | null {
+function lastSpokenIn(
+  entries: readonly TranscriptEntry[],
+): { text: string; seq: number } | null {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i]!;
     if (entry.type === 'item') {
@@ -1451,7 +1465,7 @@ function lastSpokenIn(entries: readonly TranscriptEntry[]): string | null {
       if (entry.item.kind === 'message' && entry.item.role !== 'user') {
         const text = payloadString(entry.item.payload, 'text');
         if (text !== null && text.trim().length > 0) {
-          return text;
+          return { text, seq: entry.item.seq };
         }
       }
       continue;
@@ -3409,16 +3423,8 @@ function callEnvelopeText(payload: unknown): string | null {
 function callMemberOf(
   shell: CallShell,
   settle: ChatItem | null,
+  handOff: ChatItem | null,
 ): number | null {
-  let handOff: ChatItem | undefined;
-  for (const item of [...shell.handOffs, ...shell.bucket]) {
-    if (
-      isPoolHandOff(item) &&
-      (handOff === undefined || item.seq > handOff.seq)
-    ) {
-      handOff = item;
-    }
-  }
   for (const payload of [
     settle?.payload,
     handOff?.payload,
@@ -3432,6 +3438,16 @@ function callMemberOf(
     }
   }
   return null;
+}
+
+function latestPoolHandOff(shell: CallShell): ChatItem | null {
+  let handOff: ChatItem | null = null;
+  for (const item of [...shell.handOffs, ...shell.bucket]) {
+    if (isPoolHandOff(item) && (handOff === null || item.seq > handOff.seq)) {
+      handOff = item;
+    }
+  }
+  return handOff;
 }
 
 /**
@@ -3565,7 +3581,9 @@ function buildCallBlock(
         payloadString(item.payload, 'status') === 'ok'
       ),
   );
-  const member = callMemberOf(shell, settle);
+  const handOff = latestPoolHandOff(shell);
+  const handOffMessage = payloadString(handOff?.payload, 'message');
+  const member = callMemberOf(shell, settle, handOff);
   return {
     type: 'call-block',
     id: shell.started.id,
@@ -3586,6 +3604,9 @@ function buildCallBlock(
     ...(heldOn !== null && OPEN_CALL_STATUSES.has(status) ? { heldOn } : {}),
     calleeWorking,
     ...(member !== null ? { member } : {}),
+    ...(handOff !== null && handOffMessage !== null
+      ? { poolHandOff: { message: handOffMessage, seq: handOff.seq } }
+      : {}),
     // A callee runs its own delegates, so its sub-turn gets the same fold the
     // main flow gets. Without this a workflow callee's `Task` work spilled
     // loose into the call block, invisible to the panel and to the run badge —
@@ -3879,8 +3900,12 @@ function buildConversationBlock(
   const heldOn = heldOfOpen(open);
   const first = blocks[0]!;
   const latest = blocks[last]!;
+  const poolHandOff = blocks.findLast(
+    (block) => block.poolHandOff !== undefined,
+  )?.poolHandOff;
   return {
     ...latest,
+    ...(poolHandOff !== undefined ? { poolHandOff } : {}),
     id: first.id,
     message: first.message,
     callIds: [...callIds],

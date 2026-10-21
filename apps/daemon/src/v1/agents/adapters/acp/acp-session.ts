@@ -155,14 +155,17 @@ export class AcpSession implements TurnDriver {
   /**
    * The `session/new` | `session/load` reply, verbatim.
    *
-   * Kept because it is the ONLY statement of what this agent offers — its
-   * modes, its models, and each model's config options with their current
-   * values — and no later frame restates any of it. A second turn re-applying
-   * its own mode and parameters reads them from here; without it a kept process
-   * could only ever re-send blind, or skip the re-application and run every
-   * later message under the first turn's settings.
+   * Keeps the opening mode/model vocabulary for later turns. Config replies
+   * can restate the current model's options; `lastConfigReply` holds those for
+   * agents that opt into comparing current parameter values.
    */
   lastSessionReply: Record<string, unknown> | null = null;
+  /**
+   * The latest session/config reply, including its current option values.
+   * Replaced even when a config reply lists nothing: an accepted change with
+   * no current values must invalidate the earlier snapshot for skipping.
+   */
+  lastConfigReply: unknown = null;
   /**
    * The instruction block this conversation holds most recently, verbatim, or
    * null when it holds none this client can vouch for.

@@ -26,20 +26,24 @@ const PENDING_STATES: ReadonlySet<ActionOutcomeState> = new Set([
   'running',
 ]);
 /**
- * Gone whatever `once` says.
+ * Gone whatever `once` says; nothing after them brings the publish back.
  *
  * TWIN PARSER: apps/ui/src/renderer/chats/action-card.tsx (`RETIRING_STATES` /
- * `SUCCESS_STATES`), which reads the same states for the card's status line.
+ * `ONE_SHOT_END_STATES`), which reads the same states for the card's status line.
  */
 const RETIRING_STATES: ReadonlySet<ActionOutcomeState> = new Set([
   'removed',
   'dismissed',
-  'interrupted',
 ]);
-/** A press that did what it promised — the end of a one-shot button. Same twin as above. */
-const SUCCESS_STATES: ReadonlySet<ActionOutcomeState> = new Set([
+/**
+ * The end of a one-shot button: a press that did what it promised, or a
+ * command cut off by its chat's archive or the app stopping — a reusable one
+ * stays, to be run again. Same twin as above.
+ */
+const ONE_SHOT_END_STATES: ReadonlySet<ActionOutcomeState> = new Set([
   'succeeded',
   'stopped',
+  'interrupted',
 ]);
 
 export interface ActionFold {
@@ -108,8 +112,9 @@ export function foldActions(
     entry.lastOutcome = outcome;
     entry.pending = PENDING_STATES.has(outcome.state);
     entry.retired =
+      entry.retired ||
       RETIRING_STATES.has(outcome.state) ||
-      (entry.once && SUCCESS_STATES.has(outcome.state));
+      (entry.once && ONE_SHOT_END_STATES.has(outcome.state));
   }
   const live: LiveAction[] = [];
   for (const { retired, ...action } of byKey.values()) {

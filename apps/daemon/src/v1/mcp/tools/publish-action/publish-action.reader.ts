@@ -7,12 +7,7 @@ import type {
 import type { HostSinkUnavailable } from '../../../agents/services/host-sink.broker';
 import { readToolArgs } from '../tool-args';
 
-/**
- * Strict on the names (a misspelt `mesage` must not publish a button that
- * sends nothing) and loose on `command`, read whatever its shape so the service
- * can answer that it is not available yet, rather than the call failing on a
- * schema it was never shown.
- */
+/** Strict on the names: a misspelt `mesage` must not publish a button that sends nothing. */
 const PublishActionArgsSchema = z
   .object({
     label: z.string(),
@@ -27,7 +22,15 @@ const PublishActionArgsSchema = z
       })
       .strict()
       .optional(),
-    command: z.unknown().optional(),
+    command: z
+      .object({
+        argv: z.array(z.string()),
+        cwd: z.string().optional(),
+        timeout_minutes: z.number().int().optional(),
+        notify_agent: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -58,7 +61,22 @@ export function readPublishAction(
             ...(query.stop.pid === undefined ? {} : { pid: query.stop.pid }),
           },
         }),
-    ...(query.command === undefined ? {} : { command: query.command }),
+    ...(query.command === undefined
+      ? {}
+      : {
+          command: {
+            argv: query.command.argv,
+            ...(query.command.cwd === undefined
+              ? {}
+              : { cwd: query.command.cwd }),
+            ...(query.command.timeout_minutes === undefined
+              ? {}
+              : { timeoutMinutes: query.command.timeout_minutes }),
+            ...(query.command.notify_agent === undefined
+              ? {}
+              : { notifyAgent: query.command.notify_agent }),
+          },
+        }),
   };
 }
 

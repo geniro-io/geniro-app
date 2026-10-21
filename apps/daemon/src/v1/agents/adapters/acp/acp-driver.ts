@@ -625,6 +625,12 @@ export interface AcpSessionOptions {
    * answered one does.
    */
   promptAwaitsConfig?: boolean;
+  /**
+   * Trust the current values in config replies and omit a parameter frame
+   * whose resolved option already has the requested value. Opt-in because a
+   * CLI's reported value must first be verified against the turn it runs.
+   */
+  skipUnchangedParameters?: boolean;
 }
 
 /**
@@ -1389,9 +1395,9 @@ export class AcpTurnDriver {
    * between two messages would otherwise silently keep the first turn's value
    * for the life of the conversation.
    *
-   * The stored session reply is what it reads them against. Modes, models and
-   * config options are properties of the SESSION, restated by no later frame,
-   * so turn 1's reply is still the agent's own answer about what it offers.
+   * The stored session reply supplies the opening vocabulary. An agent that
+   * opts into comparing current parameters uses the latest config reply for
+   * those, since a previous turn can have changed them.
    */
   openOnLiveSession(): AgentEvent[] {
     const events: AgentEvent[] = [];
@@ -1482,9 +1488,11 @@ export class AcpTurnDriver {
         // The NEW model's option list, which the parameters queued behind this
         // frame are resolved and checked against when they go out.
         this.modelReply = result;
+        this.session.lastConfigReply = result;
         return this.onConfigAnswered(id);
       case 'set_model_parameter':
         // Silent too — but the next frame, or the prompt, waits on it.
+        this.session.lastConfigReply = result;
         return this.onConfigAnswered(id);
       case 'prompt':
         return this.onPromptComplete(result, id);
@@ -1809,11 +1817,10 @@ export class AcpTurnDriver {
     const openedIn = asString(asRecord(root?.modes)?.currentModeId);
     this.session.defaultModeId = openedIn;
     this.session.currentModeId = openedIn;
-    // KEPT for the turns after this one. Modes, models and config options are
-    // properties of the session and are restated by no later frame, so this
-    // reply stays the agent's own answer about what it offers for as long as
-    // the process lives — see {@link openOnLiveSession}.
+    // Keep the opening vocabulary and seed the current parameter snapshot;
+    // config acceptances replace the latter — see `openOnLiveSession`.
     this.session.lastSessionReply = root;
+    this.session.lastConfigReply = root;
     if (this.options.input.resumeOnly === true) {
       // The load reply IS the settle for this turn — the in-repo precedent is
       // `acpSessionLoadSettled` (`acp-sessions.ts`), which ends its spawned
@@ -2682,6 +2689,13 @@ export class AcpTurnDriver {
           ) {
             return null;
           }
+          if (
+            this.session.options.skipUnchangedParameters === true &&
+            readAcpConfigOption(describing, configId)?.currentValue ===
+              parameter.value
+          ) {
+            return null;
+          }
           this.requestedParameter = `${configId}=${parameter.value}`;
           return this.session.sendRequest(
             ACP_AGENT_METHODS.sessionSetConfigOption,
@@ -2696,13 +2710,20 @@ export class AcpTurnDriver {
 
   /**
    * The option list that describes the model this turn's parameters land on,
-   * or null when none on hand does: the model frame's own reply when it listed
-   * options, else the session reply when the turn is not switching models.
+   * or null when none on hand does. Agents that compare current values use
+   * the latest reply, including parameter replies and earlier live turns.
    */
   private optionsDescribingTurnModel(
     sessionResult: unknown,
     describesTurnModel: boolean,
   ): unknown {
+    if (this.session.options.skipUnchangedParameters === true) {
+      // Only a confirmed model reply can replace the old model's list during
+      // a switch. After that, each parameter reply is the newest snapshot.
+      return describesTurnModel || this.modelReply !== null
+        ? this.session.lastConfigReply
+        : null;
+    }
     if (readAcpConfigOptions(this.modelReply).length > 0) {
       return this.modelReply;
     }

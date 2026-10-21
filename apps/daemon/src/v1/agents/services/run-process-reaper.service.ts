@@ -1,4 +1,3 @@
-import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { Injectable, Logger } from '@nestjs/common';
@@ -8,6 +7,7 @@ import {
   isSameProcess,
   parseStartTimes,
 } from '../../../utils/process-identity';
+import { executableOf } from '../utils/command-text';
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
 import { descendantsOf } from '../utils/process-descendants';
 import {
@@ -29,6 +29,7 @@ import {
   type StopCandidate,
 } from '../utils/run-process-scan';
 import { runPs } from '../utils/run-ps';
+import type { ActionCommandRegistry } from './action-command.registry';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import type { RunProcessAttribution } from './run-process-attribution.service';
 
@@ -38,9 +39,9 @@ import type { RunProcessAttribution } from './run-process-attribution.service';
  */
 export interface RunProcessReaperOptions {
   /**
-   * Whether the registry holds a live agent process under the run right now.
-   * Such a run was reopened after its reap was queued, and its processes are
-   * a working agent's, not leftovers.
+   * Whether the registry holds a live agent process under the run right now,
+   * or the user is running one of its command actions. Such a run was used
+   * after its reap was queued, and its processes are working, not leftovers.
    */
   held?: (runId: string) => boolean;
   processRoots?: () => readonly number[];
@@ -69,6 +70,12 @@ interface Target {
   runId: string;
 }
 
+/** A run waiting for the next reap, and who is waiting to hear what it stopped. */
+interface QueuedReap {
+  onlyIfStillGone: boolean;
+  waiters: ((stopped: ScannedProcess[]) => void)[];
+}
+
 /**
  * Whether a pid may never be signalled, whatever selected it: launchd, the
  * whole-session `-1`, and the daemon itself.
@@ -79,7 +86,8 @@ export function isUnsignallable(pid: number, selfPid: number): boolean {
 
 /**
  * Stop every process a run's agents left behind, once the run is archived or
- * deleted — or, through the sweep, once it turns out to be gone.
+ * deleted — or, through the sweep, once it turns out to be gone — and once it
+ * has sat unused for the kept-session window ({@link reapIdle}).
  *
  * Closing the run's sessions ends the agent CLIs, but not what they started
  * DETACHED to outlive a turn — `nohup pnpm dev`, a watcher, a headless browser.
@@ -110,11 +118,8 @@ export class RunProcessReaper {
   private readonly listUsage: () => Promise<ProcessUsageRow[] | null>;
   private readonly listGroups: () => Promise<PlainProcess[] | null>;
   private readonly uid: number | null;
-  /**
-   * Runs waiting for the next reap, each with whether it is reaped only if
-   * still gone; one reap runs at a time, over one scan.
-   */
-  private readonly queued = new Map<string, boolean>();
+  /** Runs waiting for the next reap; one reap runs at a time, over one scan. */
+  private readonly queued = new Map<string, QueuedReap>();
   private draining: Promise<void> | null = null;
 
   constructor(
@@ -145,15 +150,50 @@ export class RunProcessReaper {
    * queued while a reap ran is reaped together, over one scan.
    */
   reapInBackground(runId: string, onlyIfStillGone = false): void {
+    this.enqueue(runId, onlyIfStillGone, null);
+  }
+
+  /**
+   * Stop what a run that went unused for the kept-session window left running,
+   * resolving with the processes stopped for it — empty when nothing was, or
+   * the reap was refused or failed. Never rejects. Two asking for one run in
+   * the same reap: the first is handed what it stopped, the rest nothing, so
+   * the run is told once.
+   *
+   * Unconditional, unlike the sweep's reap of a gone run: a run is used again
+   * only through a kept CLI process or a command action the user ran, and
+   * {@link held}, asked after the scan, sees both.
+   */
+  reapIdle(runId: string): Promise<ScannedProcess[]> {
+    return new Promise((resolve) => {
+      if (!this.enqueue(runId, false, resolve)) {
+        resolve([]);
+      }
+    });
+  }
+
+  private enqueue(
+    runId: string,
+    onlyIfStillGone: boolean,
+    waiter: QueuedReap['waiters'][number] | null,
+  ): boolean {
     if (runId.trim() === '') {
-      return;
+      return false;
     }
-    // An unconditional request wins: an archive is not undone by a sweep's
-    // stale verdict queued beside it.
-    this.queued.set(runId, onlyIfStillGone && (this.queued.get(runId) ?? true));
+    const prior = this.queued.get(runId);
+    this.queued.set(runId, {
+      // An unconditional request wins: an archive is not undone by a sweep's
+      // stale verdict queued beside it.
+      onlyIfStillGone: onlyIfStillGone && (prior?.onlyIfStillGone ?? true),
+      waiters: [
+        ...(prior?.waiters ?? []),
+        ...(waiter === null ? [] : [waiter]),
+      ],
+    });
     this.draining ??= this.drain().finally(() => {
       this.draining = null;
     });
+    return true;
   }
 
   /** Resolves once every queued reap has finished. For the sweep and specs. */
@@ -165,19 +205,27 @@ export class RunProcessReaper {
 
   private async drain(): Promise<void> {
     while (this.queued.size > 0) {
-      const runIds = [...this.queued.keys()];
-      const conditional = new Set(
-        [...this.queued].filter(([, onlyIf]) => onlyIf).map(([id]) => id),
-      );
+      const batch = [...this.queued];
       this.queued.clear();
+      const runIds = batch.map(([id]) => id);
+      const conditional = new Set(
+        batch.filter(([, queued]) => queued.onlyIfStillGone).map(([id]) => id),
+      );
+      let stopped: Target[] = [];
       try {
-        await this.reap(runIds, conditional);
+        stopped = await this.reapTargets(runIds, conditional);
       } catch (err: unknown) {
         this.logger.warn(
           `could not stop the processes of run(s) ${runIds.join(', ')}: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
+      }
+      for (const [runId, { waiters }] of batch) {
+        const rows = stopped
+          .filter((target) => target.runId === runId)
+          .map((target) => target.row);
+        waiters.forEach((waiter, index) => waiter(index === 0 ? rows : []));
       }
     }
   }
@@ -187,6 +235,13 @@ export class RunProcessReaper {
     runIds: readonly string[],
     onlyIfStillGone: ReadonlySet<string> = new Set(),
   ): Promise<number[]> {
+    return pidsOf(await this.reapTargets(runIds, onlyIfStillGone));
+  }
+
+  private async reapTargets(
+    runIds: readonly string[],
+    onlyIfStillGone: ReadonlySet<string>,
+  ): Promise<Target[]> {
     const wanted = runIds.filter((runId) => runId.trim() !== '');
     if (wanted.length === 0) {
       return [];
@@ -265,13 +320,15 @@ export class RunProcessReaper {
         'a selected process changed while reading; refresh and try again',
       );
     }
-    return this.stopTargets(
-      selected.map((pid) => ({
-        row: detached.get(pid) as ScannedProcess,
-        runId,
-      })),
-      [runId],
-      true,
+    return pidsOf(
+      await this.stopTargets(
+        selected.map((pid) => ({
+          row: detached.get(pid) as ScannedProcess,
+          runId,
+        })),
+        [runId],
+        true,
+      ),
     );
   }
 
@@ -352,9 +409,11 @@ export class RunProcessReaper {
         );
         return [];
       }
-      return await this.stopTargets(
-        targets.map((row) => ({ row, runId })),
-        [runId],
+      return pidsOf(
+        await this.stopTargets(
+          targets.map((row) => ({ row, runId })),
+          [runId],
+        ),
       );
     } catch (err: unknown) {
       this.logger.warn(
@@ -447,7 +506,7 @@ export class RunProcessReaper {
         }
       }
     }
-    const stopped = await this.stopTargets(live, [runId], true);
+    const stopped = pidsOf(await this.stopTargets(live, [runId], true));
     return {
       stopped,
       gone: targets
@@ -495,11 +554,12 @@ export class RunProcessReaper {
     return { targets, usage, roots };
   }
 
+  /** Returns the targets that took the SIGTERM. */
   private async stopTargets(
     targets: readonly Target[],
     wanted: readonly string[],
     reportFailure = false,
-  ): Promise<number[]> {
+  ): Promise<Target[]> {
     const terminated = await this.signalConfirmed(
       targets,
       'SIGTERM',
@@ -526,7 +586,7 @@ export class RunProcessReaper {
     this.logger.log(
       `stopped ${terminated.length} process(es) of run(s) ${wanted.join(', ')}; ${killed.length} needed SIGKILL`,
     );
-    return terminated.map((target) => target.row.pid);
+    return terminated;
   }
 
   /**
@@ -588,8 +648,12 @@ export class RunProcessReaper {
   }
 }
 
+function pidsOf(targets: readonly Target[]): number[] {
+  return targets.map((target) => target.row.pid);
+}
+
 function nameOf(row: ScannedProcess): string {
-  return basename(row.args.split(/\s+/)[0] ?? '') || '?';
+  return executableOf(row.args);
 }
 
 /**
@@ -612,15 +676,19 @@ async function readStartTimes(
 /**
  * The reaper as the agents module provides it: it asks the registry which
  * processes are a live agent's, and is handed what a run's CLI left running
- * whenever a process ends ({@link AgentSessionRegistry.onLeftCommands}).
+ * whenever a process ends ({@link AgentSessionRegistry.onLeftCommands}). A
+ * run with a command action running is held too; archive and delete end
+ * those commands first, so they still reap the run.
  */
 export function createRunProcessReaper(
   attribution: RunProcessAttribution,
   sessions: AgentSessionRegistry,
+  commands: ActionCommandRegistry,
   options: RunProcessReaperOptions = {},
 ): RunProcessReaper {
   const reaper = new RunProcessReaper(attribution, {
-    held: (runId) => sessions.processRoots(runId).length > 0,
+    held: (runId) =>
+      sessions.processRoots(runId).length > 0 || commands.isRunning(runId),
     processRoots: () => sessions.processRoots().map((root) => root.pid),
     ...options,
   });

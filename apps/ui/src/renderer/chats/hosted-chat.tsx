@@ -96,7 +96,11 @@ import { useAgentEfforts } from './use-agent-efforts';
 import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { readAsBase64, useAttachments } from './use-attachments';
-import { type PressHooks, useChatActions } from './use-chat-actions';
+import {
+  type PressHooks,
+  pressStartsTurn,
+  useChatActions,
+} from './use-chat-actions';
 import {
   appendPaths,
   CHAT_UPLOAD_TIMEOUT_MS,
@@ -279,8 +283,8 @@ export function HostedChat({
     runId,
     chat.reconnectNonce,
   );
-  // A press starts a turn like a typed send, so it takes the send's steps:
-  // flush the canvas first, and raise `working` before the request.
+  // Every press flushes the canvas first; one that starts a turn also raises
+  // `working` before the request, as a typed send does.
   // Lowered only by the press that raised it: a press into a running turn
   // must not take down the turn's own flag when it fails.
   const { markWorking } = chat;
@@ -291,14 +295,18 @@ export function HostedChat({
   const raisedByPressRef = useRef(false);
   const pressHooks = useMemo<PressHooks>(
     () => ({
-      beforePress: async () => {
+      beforePress: async (action) => {
         await onBeforeSend?.();
-        if (!pressWorkingRef.current) {
+        if (pressStartsTurn(action) && !pressWorkingRef.current) {
           raisedByPressRef.current = true;
           markWorking(true);
         }
       },
-      onPressSettled: (taken) => {
+      onPressSettled: (taken, action) => {
+        // A stop or command settling must not touch a message press's flag.
+        if (!pressStartsTurn(action)) {
+          return;
+        }
         if (raisedByPressRef.current && !taken) {
           markWorking(false);
         }

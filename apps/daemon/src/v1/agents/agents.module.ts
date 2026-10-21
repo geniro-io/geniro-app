@@ -27,6 +27,9 @@ import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
 import { WallTurnDao } from './dao/wall-turn.dao';
 import { ActionBroker } from './services/action.broker';
+import { ActionCommandRegistry } from './services/action-command.registry';
+import { ActionCommandService } from './services/action-command.service';
+import { ActionOutcomeSweep } from './services/action-outcome-sweep.service';
 import { ActionPressService } from './services/action-press.service';
 import { ActionPublishService } from './services/action-publish.service';
 import { ActionStopService } from './services/action-stop.service';
@@ -92,6 +95,7 @@ import { RecommendationsApplyService } from './services/recommendations-apply.se
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import { RunIdleReapService } from './services/run-idle-reap.service';
 import { RunNamedPathsService } from './services/run-named-paths.service';
 import {
   currentRunOwner,
@@ -204,6 +208,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     ActionPublishService,
     ActionPressService,
     ActionStopService,
+    ActionCommandService,
+    ActionCommandRegistry,
+    ActionOutcomeSweep,
     ArtifactPageService,
     PlanBroker,
     NotifyBroker,
@@ -372,10 +379,11 @@ import { defaultSpawn } from './utils/spawn-cli';
       useFactory: (
         attribution: RunProcessAttribution,
         sessions: AgentSessionRegistry,
+        commands: ActionCommandRegistry,
         em: EntityManager,
         runDao: RunDao,
       ) =>
-        createRunProcessReaper(attribution, sessions, {
+        createRunProcessReaper(attribution, sessions, commands, {
           stillGone: async (runIds) => {
             const live = await runDao.getAll(
               { id: { $in: runIds }, archivedAt: null },
@@ -389,6 +397,7 @@ import { defaultSpawn } from './utils/spawn-cli';
       inject: [
         RunProcessAttribution,
         AgentSessionRegistry,
+        ActionCommandRegistry,
         EntityManager,
         RunDao,
       ],
@@ -398,18 +407,32 @@ import { defaultSpawn } from './utils/spawn-cli';
       useFactory: (
         em: EntityManager,
         runDao: RunDao,
+        itemDao: ItemDao,
         sessions: AgentSessionRegistry,
         reaper: RunProcessReaper,
         attribution: RunProcessAttribution,
-      ) => new RunProcessSweep(em, runDao, sessions, reaper, attribution),
+        idleReap: RunIdleReapService,
+      ) =>
+        new RunProcessSweep(
+          em,
+          runDao,
+          itemDao,
+          sessions,
+          reaper,
+          attribution,
+          idleReap,
+        ),
       inject: [
         EntityManager,
         RunDao,
+        ItemDao,
         AgentSessionRegistry,
         RunProcessReaper,
         RunProcessAttribution,
+        RunIdleReapService,
       ],
     },
+    RunIdleReapService,
     RunTeardownService,
     SessionTranscriptsService,
     RunGroupsService,

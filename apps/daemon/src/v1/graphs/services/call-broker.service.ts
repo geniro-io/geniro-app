@@ -1348,7 +1348,7 @@ export class CallBroker implements OnModuleInit {
     let conversationId: string | null = null;
     let continuedMember: number | null = null;
     if (args.thread !== undefined) {
-      const thread = state.threads.get(args.thread);
+      let thread = state.threads.get(args.thread);
       if (!thread || thread.owner !== caller) {
         return refuse(
           `UNKNOWN_THREAD: no settled call '${args.thread}' started by you`,
@@ -1359,6 +1359,11 @@ export class CallBroker implements OnModuleInit {
           `THREAD_AGENT_MISMATCH: call '${args.thread}' was a conversation with '${thread.calleeId}', not '${callee.id}'`,
         );
       }
+      // Earlier call IDs still name this conversation after a pool handoff.
+      thread =
+        callsOfConversation(state, thread.conversationId).findLast(
+          (record) => record.sessionId !== null,
+        ) ?? thread;
       if (!thread.sessionId) {
         return refuse(
           `THREAD_UNAVAILABLE: call '${args.thread}' recorded no resumable session`,
@@ -3914,9 +3919,9 @@ export class CallBroker implements OnModuleInit {
   /**
    * Which pool member a call runs on, and the members it may be handed to.
    *
-   * A continued thread stays on the member holding its session, and a member
-   * the caller named is used as named — neither is handed on, since the first
-   * would lose the conversation and the second overrules the caller. A NEW
+   * A continued thread starts on the member holding its session; a fallback
+   * carries its history into a fresh session. An explicitly named member is
+   * pinned, since handing it on would overrule the caller. A new
    * conversation starts with the first available member in pool order, with
    * members that recently failed on a limit or a sign-in moved to the back,
    * and may fall through to every member after the one it starts on. A callee
@@ -3963,11 +3968,10 @@ export class CallBroker implements OnModuleInit {
     if (size === 1) {
       return { node: callee, plan: null };
     }
-    const pinned = threadMember ?? requested;
-    if (pinned !== null) {
+    if (requested !== null) {
       return {
-        node: poolMemberNode(callee, pinned)!,
-        plan: { member: pinned, fallbacks: [] },
+        node: poolMemberNode(callee, requested)!,
+        plan: { member: requested, fallbacks: [] },
       };
     }
     const now = Date.now();
@@ -3977,10 +3981,16 @@ export class CallBroker implements OnModuleInit {
         (state.poolCooldowns.get(poolCooldownKey(callee.id, member)) ?? 0) >
         now,
     );
-    const first = order[0]!;
+    const first = threadMember ?? order[0]!;
     return {
       node: poolMemberNode(callee, first)!,
-      plan: { member: first, fallbacks: poolAttempts(callee, order.slice(1)) },
+      plan: {
+        member: first,
+        fallbacks: poolAttempts(
+          callee,
+          order.filter((member) => member !== first),
+        ),
+      },
     };
   }
 

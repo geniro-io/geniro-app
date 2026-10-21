@@ -104,7 +104,30 @@ describe('foldActions', () => {
     expect(failed[0]).toMatchObject({ lastOutcome: { state: 'failed' } });
   });
 
-  it.each(['removed', 'dismissed', 'interrupted'] as const)(
+  it('retires a one-shot on interrupted but keeps a reusable one to run again', () => {
+    expect(
+      foldActions([publish(1, 'a'), outcome(2, 1, 'a', 'interrupted')]).live,
+    ).toEqual([]);
+    expect(
+      foldActions([
+        publish(1, 'a', { once: false }),
+        outcome(2, 1, 'a', 'interrupted'),
+      ]).live,
+    ).toMatchObject([{ seq: 1, lastOutcome: { state: 'interrupted' } }]);
+  });
+
+  it('never revives a removed publish, whatever outcome follows', () => {
+    expect(
+      foldActions([
+        publish(1, 'a', { once: false }),
+        outcome(2, 1, 'a', 'running'),
+        outcome(3, 1, 'a', 'removed'),
+        outcome(4, 1, 'a', 'failed'),
+      ]).live,
+    ).toEqual([]);
+  });
+
+  it.each(['removed', 'dismissed'] as const)(
     'retires a reusable action on %s',
     (state) => {
       expect(

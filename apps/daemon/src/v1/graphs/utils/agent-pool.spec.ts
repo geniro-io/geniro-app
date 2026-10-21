@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CalleeTurnOutcome, WorkflowAgentNode } from '../graphs.types';
 import {
+  callPoolHandOffPrompt,
   fallsThroughPool,
   poolAttemptOrder,
   poolAttempts,
@@ -193,5 +194,26 @@ describe('poolHandOffPrompt', () => {
     expect(poolHandOffPrompt('build it', ['use red', 'skip tests'])).toBe(
       'build it\n\nMessages sent about this task after it was handed out, in order:\n- use red\n- skip tests',
     );
+  });
+});
+
+describe('callPoolHandOffPrompt', () => {
+  it('keeps the original task when recent tool output fills the history budget', () => {
+    const prompt = callPoolHandOffPrompt('Finish the checks.', [
+      {
+        kind: 'call_started',
+        role: null,
+        payload: JSON.stringify({ message: 'Build in /work/letters.' }),
+      },
+      ...Array.from({ length: 200 }, () => ({
+        kind: 'tool_result',
+        role: null,
+        payload: 'x'.repeat(20_000),
+      })),
+    ]);
+    expect(prompt).toContain('Build in /work/letters.');
+    expect(prompt).toContain('Finish the checks.');
+    expect(prompt).toContain('[transcript item truncated]');
+    expect(prompt.length).toBeLessThan(57_000);
   });
 });

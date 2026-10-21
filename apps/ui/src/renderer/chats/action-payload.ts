@@ -21,6 +21,10 @@ export interface ActionCardView {
   text: string | null;
   /** What a stop press stops — shown, like `text`, before it is pressed. */
   targets: StopTargetView[];
+  /** What a command press runs — one entry per argument, never a shell line. */
+  argv: string[];
+  /** Where a command runs: the resolved absolute folder the daemon filled in. */
+  cwd: string | null;
   once: boolean;
   nodeId: string;
   conversationId: string;
@@ -42,6 +46,8 @@ export interface ActionOutcomeView {
   state: ActionOutcomeState;
   exitCode: number | null;
   error: string | null;
+  /** The last of a command's stdout and stderr, once it has ended. */
+  outputTail: string | null;
   /** A stop whose processes had all exited before the press. */
   alreadyStopped: boolean;
   at: string;
@@ -98,6 +104,12 @@ export function readActionPayload(item: ChatItem): ActionCardView | null {
             : [];
         })
       : [],
+    argv: Array.isArray(spec?.argv)
+      ? spec.argv.filter(
+          (value: unknown): value is string => typeof value === 'string',
+        )
+      : [],
+    cwd: text(spec?.cwd),
     once: payload?.once !== false,
     nodeId,
     conversationId,
@@ -127,6 +139,7 @@ export function readActionOutcome(item: ChatItem): ActionOutcomeView | null {
     state: state as ActionOutcomeState,
     exitCode: typeof exitCode === 'number' ? exitCode : null,
     error: text(payload?.error),
+    outputTail: text(payload?.outputTail),
     alreadyStopped: payload?.alreadyStopped === true,
     at: item.createdAt,
   };

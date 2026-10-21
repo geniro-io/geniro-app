@@ -25,6 +25,7 @@ import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { type FakeChild, fakeSpawn } from '../../agents/__tests__/fake-child';
 import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
+import { NO_COMMANDS } from '../../agents/__tests__/no-commands';
 import { NO_STOPS } from '../../agents/__tests__/no-stops';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import type {
@@ -46,6 +47,7 @@ import type {
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import {
   ChatApprovalModeSchema,
+  type HistoryWindow,
   type RunCreatedEvent,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
@@ -57,6 +59,7 @@ import type { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
 import { ActionBroker } from '../../agents/services/action.broker';
+import { ActionCommandRegistry } from '../../agents/services/action-command.registry';
 import { ActionPublishService } from '../../agents/services/action-publish.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -302,10 +305,38 @@ class FakeItemDao {
     this.items.push(item);
     return item;
   }
-  async getByRun(runId: string, afterSeq = -1): Promise<Item[]> {
-    return this.items
-      .filter((i) => i.runId === runId && i.seq > afterSeq)
+  async getByRun(
+    runId: string,
+    afterSeq = -1,
+    _txEm?: EntityManager,
+    window?: HistoryWindow,
+    inCalls?: readonly string[],
+  ): Promise<Item[]> {
+    const rows = this.items
+      .filter((i) => {
+        const callId =
+          i.inCall || (JSON.parse(i.payload) as { callId?: string }).callId;
+        return (
+          i.runId === runId &&
+          i.seq > afterSeq &&
+          (inCalls === undefined ||
+            (callId !== undefined && inCalls.includes(callId)))
+        );
+      })
       .sort((a, b) => a.seq - b.seq);
+    return window === undefined
+      ? rows
+      : window.take === 'oldest'
+        ? rows.slice(0, window.limit)
+        : rows.slice(-window.limit);
+  }
+  async callRowsOf(runId: string, callIds: readonly string[]): Promise<Item[]> {
+    return this.ofKinds(runId, ['call_started', 'call_result']).filter(
+      (row) => {
+        const payload = JSON.parse(row.payload) as { callId?: string };
+        return payload.callId !== undefined && callIds.includes(payload.callId);
+      },
+    );
   }
   async maxSeq(runId: string): Promise<number> {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
@@ -1324,6 +1355,7 @@ function setup(
     // table from a unit test. Reaping is `run-teardown.service.spec.ts`'s.
     { reapInBackground: () => undefined } as unknown as RunProcessReaper,
     wallTurns as unknown as WallTurnDao,
+    new ActionCommandRegistry(),
   );
   const service = new GraphExecutorService(
     em,
@@ -1415,7 +1447,7 @@ function setup(
     4,
     opts.agentMcp as AgentMcpService | undefined,
     actions,
-    new ActionPublishService(chatActions, NO_STOPS),
+    new ActionPublishService(chatActions, NO_STOPS, NO_COMMANDS),
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -6804,12 +6836,23 @@ describe('GraphExecutorService — agent calls', () => {
     };
     const engIn = callerKey('eng', 'call-1');
 
-    async function engineerDelegating() {
+    async function engineerDelegating(pooled = false) {
       const harness = setup();
       const { service, claude, callBroker } = harness;
       const run = await service.startRun({
         slug: 'chain',
-        workflow: triggered(CHAIN),
+        workflow: triggered(
+          pooled
+            ? {
+                ...CHAIN,
+                nodes: CHAIN.nodes.map((node) =>
+                  node.id === 'eng'
+                    ? { ...node, pool: [{ agent: 'cursor-agent' as const }] }
+                    : node,
+                ),
+              }
+            : CHAIN,
+        ),
         cwd: dir,
         prompt: 'go',
       });
@@ -6835,6 +6878,45 @@ describe('GraphExecutorService — agent calls', () => {
       await drain();
       return { ...harness, run, eng, res: claude.starts[2]! };
     }
+
+    it('hands a held call to its next pool member when its wake hits a usage limit', async () => {
+      const { claude, cursor, callBroker, run, eng, res } =
+        await engineerDelegating(true);
+      completeTurn(eng, 'Research is still running.');
+      await drain();
+      completeTurn(res, 'Use the red theme.');
+      await drain();
+      const resumed = claude.starts[3]!;
+      expect(resumed.input.resumeSessionId).toBe('s-eng');
+      resumed.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      resumed.finish();
+      await drain();
+      expect(cursor.starts).toHaveLength(1);
+      expect(cursor.starts[0]!.input.resumeSessionId ?? null).toBeNull();
+      expect(cursor.starts[0]!.input.prompt).toContain('build feature A');
+      expect(cursor.starts[0]!.input.prompt).toContain(
+        'await_agent(call_id: "call-2")',
+      );
+      await expect(
+        callBroker.awaitAgent(run.id, engIn, { call_id: 'call-2' }),
+      ).resolves.toMatchObject({
+        status: 'ok',
+        result: { text: 'Use the red theme.' },
+      });
+      completeTurn(cursor.starts[0]!, 'Built it.');
+      await drain();
+      await expect(
+        callBroker.awaitAgent(run.id, 'mgr', { call_id: 'call-1' }),
+      ).resolves.toMatchObject({
+        status: 'ok',
+        result: { member: 2, text: 'Built it.' },
+      });
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
 
     it('tells a callee with no callees of its own where its answer goes', async () => {
       // The Researcher can call nobody, so it gets no "May call" block; the
@@ -7311,53 +7393,70 @@ describe('GraphExecutorService — agent calls', () => {
       await drain();
     });
 
-    it('settles past its wake limit, telling the caller what is still running', async () => {
-      const { claude, callBroker, run, eng } = await engineerDelegating();
-      let turn = eng;
-      let research = claude.starts[2]!;
-      // Every turn delegates once more and ends: ten wakes are allowed.
-      for (let wake = 0; wake < 10; wake += 1) {
-        completeTurn(turn, `waiting ${wake}`);
+    it.each([false, true])(
+      'settles past its wake limit, including across a pool handoff (%s)',
+      async (pooled) => {
+        const { claude, cursor, callBroker, run, eng } =
+          await engineerDelegating(pooled);
+        let turn = eng;
+        let research = claude.starts[2]!;
+        // Every turn delegates once more and ends: ten wakes are allowed.
+        for (let wake = 0; wake < 10; wake += 1) {
+          completeTurn(turn, `waiting ${wake}`);
+          await drain();
+          completeTurn(research, `research ${wake}`);
+          await drain();
+          turn =
+            pooled && wake > 5 ? cursor.starts.at(-1)! : claude.starts.at(-1)!;
+          if (pooled && wake === 5) {
+            turn.emit({
+              type: 'error',
+              message:
+                "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+            });
+            turn.finish();
+            await drain();
+            turn = cursor.starts.at(-1)!;
+            turn.emit({ type: 'session', sessionId: 's-backup' });
+          }
+          expect(turn.input.systemPrompt).toBe('You engineer.');
+          await callBroker.callAgent(run.id, engIn, {
+            title: 'research',
+            agent: 'res',
+            message: 'look again',
+            mode: 'async',
+          });
+          await drain();
+          research = claude.starts.at(-1)!;
+        }
+        completeTurn(turn, 'out of patience');
         await drain();
-        completeTurn(research, `research ${wake}`);
-        await drain();
-        turn = claude.starts.at(-1)!;
-        expect(turn.input.systemPrompt).toBe('You engineer.');
-        await callBroker.callAgent(run.id, engIn, {
-          title: 'research',
-          agent: 'res',
-          message: 'look again',
-          mode: 'async',
-        });
-        await drain();
-        research = claude.starts.at(-1)!;
-      }
-      completeTurn(turn, 'out of patience');
-      await drain();
 
-      expect(
-        await callBroker.awaitAgent(run.id, 'mgr', { call_id: 'call-1' }),
-      ).toMatchObject({
-        status: 'ok',
-        result: { text: 'out of patience', calls_still_running: 1 },
-      });
-      // What is still out is delivered as before: the conversation is picked
-      // back up as a call the Manager is owed.
-      const before = claude.starts.length;
-      completeTurn(research, 'late');
-      await drain();
-      const picked = claude.starts.at(-1)!;
-      expect(claude.starts.length).toBe(before + 1);
-      expect(picked.input.systemPrompt).toBe('You engineer.');
-      expect(picked.input.mcpEndpoint?.url).toMatch(/\/eng\/call-1$/);
-      completeTurn(picked, 'late report');
-      await drain();
-      expect(
-        await callBroker.awaitAgent(run.id, 'mgr', { timeout_ms: 50 }),
-      ).toMatchObject({ status: 'ok', result: { text: 'late report' } });
-      completeTurn(claude.starts[0]!, 'done');
-      await drain();
-    });
+        expect(
+          await callBroker.awaitAgent(run.id, 'mgr', { call_id: 'call-1' }),
+        ).toMatchObject({
+          status: 'ok',
+          result: { text: 'out of patience', calls_still_running: 1 },
+        });
+        // What is still out is delivered as before: the conversation is picked
+        // back up as a call the Manager is owed.
+        const starts = pooled ? cursor.starts : claude.starts;
+        const before = starts.length;
+        completeTurn(research, 'late');
+        await drain();
+        const picked = starts.at(-1)!;
+        expect(starts.length).toBe(before + 1);
+        expect(picked.input.systemPrompt).toBe('You engineer.');
+        expect(picked.input.mcpEndpoint?.url).toMatch(/\/eng\/call-1$/);
+        completeTurn(picked, 'late report');
+        await drain();
+        expect(
+          await callBroker.awaitAgent(run.id, 'mgr', { timeout_ms: 50 }),
+        ).toMatchObject({ status: 'ok', result: { text: 'late report' } });
+        completeTurn(claude.starts[0]!, 'done');
+        await drain();
+      },
+    );
 
     it('hands a question to the Engineer’s RUNNING call turn', async () => {
       // A node busy only in a call has no DAG handle for the node-wide lookup
@@ -8328,6 +8427,91 @@ describe('GraphExecutorService — agent calls', () => {
         );
       expect(starts).toHaveLength(1);
 
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('hands a usage-limited continuation to the next member with its conversation history', async () => {
+      const { claude, cursor, callBroker, itemDao, run } = await startPoolRun();
+      const opened = callBroker.callAgent(run.id, 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'Build the letters in /tmp/letter-worktree',
+      });
+      await drain();
+      claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-claude' });
+      completeTurn(claude.starts[1]!, 'The letters are committed as abc123.');
+      await opened;
+
+      const unrelated = callBroker.callAgent(run.id, 'orch', {
+        title: 'other work',
+        agent: 'helper',
+        message: 'UNRELATED_PRIVATE_TASK',
+      });
+      await drain();
+      completeTurn(claude.starts[2]!, 'UNRELATED_PRIVATE_RESULT');
+      await unrelated;
+
+      const continued = callBroker.callAgent(run.id, 'orch', {
+        title: 'finish',
+        agent: 'helper',
+        message: 'Finish the checks and report.',
+        thread: 'call-1',
+      });
+      await drain();
+      expect(claude.starts[3]!.input.resumeSessionId).toBe('sess-claude');
+      for (let i = 0; i < 205; i += 1) {
+        claude.starts[3]!.emit({ type: 'text', text: `Checking item ${i}.` });
+      }
+      claude.starts[3]!.emit({
+        type: 'text',
+        text: 'Checks written to FINAL2_LOG.',
+      });
+      claude.starts[3]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[3]!.finish();
+      await drain();
+
+      expect(cursor.starts).toHaveLength(1);
+      expect(cursor.starts[0]!.input.resumeSessionId ?? null).toBeNull();
+      expect(cursor.starts[0]!.input.prompt).toContain('/tmp/letter-worktree');
+      expect(cursor.starts[0]!.input.prompt).toContain('abc123');
+      expect(cursor.starts[0]!.input.prompt).toContain(
+        'Finish the checks and report.',
+      );
+      expect(cursor.starts[0]!.input.prompt).not.toContain('UNRELATED_PRIVATE');
+      expect(cursor.starts[0]!.input.prompt).toContain('FINAL2_LOG');
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'sess-cursor' });
+      completeTurn(cursor.starts[0]!, 'Checks pass.');
+      await expect(continued).resolves.toMatchObject({
+        status: 'ok',
+        result: { member: 2, text: 'Checks pass.' },
+      });
+      const rows = [...itemDao.items.values()].flat();
+      expect(
+        rows
+          .filter((row) => row.kind === 'status')
+          .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
+          .filter((payload) => payload.callId === 'call-3')
+          .map((payload) => payload.status),
+      ).toEqual(['running', 'completed']);
+      expect(rows.some((row) => row.payload.includes('"resetWake"'))).toBe(
+        false,
+      );
+
+      const next = callBroker.callAgent(run.id, 'orch', {
+        title: 'more',
+        agent: 'helper',
+        message: 'Summarize.',
+        thread: 'call-1',
+      });
+      await drain();
+      expect(cursor.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('sess-cursor');
+      completeTurn(cursor.starts[1]!, 'Summary.');
+      await next;
       completeTurn(claude.starts[0]!, 'done');
       await drain();
     });

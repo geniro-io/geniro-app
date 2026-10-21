@@ -42,7 +42,7 @@ import {
   previewTextOf,
 } from './chat-preview';
 import { discardsContextReading } from './compaction-payload';
-import { parkedReason } from './follow-up-delivery';
+import { parkedReason, settleReleasesQueue } from './follow-up-delivery';
 import { isCallRow, mergeAnchorRows } from './history-anchors';
 import type { LiveState } from './live-text';
 import {
@@ -218,7 +218,7 @@ function queueMayDrainAfterReplay(
   }
   const tailSettledAs =
     lastItem === undefined ? null : settledRunStatus(lastItem);
-  if (tailSettledAs === 'cancelled' || run.status === 'cancelled') {
+  if (!settleReleasesQueue(tailSettledAs) || !settleReleasesQueue(run.status)) {
     return false;
   }
   const endedOnTerminal = tailSettledAs !== null;
@@ -994,7 +994,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // out through the door the user just closed.
         if (
           live &&
-          settledStatus !== 'cancelled' &&
+          settleReleasesQueue(settledStatus) &&
           hasQueuedMessages(item.runId)
         ) {
           drainQueueRef.current(item.runId);
@@ -2548,7 +2548,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         isSettledRunStatus(status)
       ) {
         setStreaming(false);
-        if (status !== 'cancelled' && hasQueuedMessages(event.runId)) {
+        if (settleReleasesQueue(status) && hasQueuedMessages(event.runId)) {
           drainQueueRef.current(event.runId);
         }
       }
@@ -2573,7 +2573,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // the user closing the door, not a cue to open a fresh turn behind it.
       if (
         status !== null &&
-        status !== 'cancelled' &&
+        settleReleasesQueue(status) &&
         isSettledRunStatus(status) &&
         event.runId !== activeRunIdRef.current &&
         hasQueuedMessages(event.runId)
@@ -2822,7 +2822,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       if (
         event.status !== null &&
         event.status !== 'running' &&
-        event.status !== 'cancelled' &&
+        settleReleasesQueue(event.status) &&
         runsRef.current.find((row) => row.id === event.runId)?.workflowId &&
         hasQueuedMessages(event.runId)
       ) {

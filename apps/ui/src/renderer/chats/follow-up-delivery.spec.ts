@@ -6,6 +6,7 @@ import {
   type FollowUpFacts,
   PARKED_SEND_TITLE,
   parkedReason,
+  settleReleasesQueue,
   steerReadiness,
 } from './follow-up-delivery';
 
@@ -95,6 +96,15 @@ describe('followUpDelivery', () => {
       rule: 'agent-working',
       kickDrain: false,
     });
+  });
+});
+
+describe('settleReleasesQueue — which endings let the queue out', () => {
+  it('lets the next message out on every ending but a Stop', () => {
+    expect(settleReleasesQueue('completed')).toBe(true);
+    expect(settleReleasesQueue('failed')).toBe(true);
+    expect(settleReleasesQueue(null)).toBe(true);
+    expect(settleReleasesQueue('cancelled')).toBe(false);
   });
 });
 

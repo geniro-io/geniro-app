@@ -94,6 +94,7 @@ function chatState(overrides: Partial<WorkflowChatState>): WorkflowChatState {
     working: false,
     activity: null,
     settledTurns: 0,
+    settledAs: null,
     send: vi.fn(async () => true),
     post: vi.fn(async () => {}),
     patchSettings: vi.fn(async () => true),
@@ -423,7 +424,12 @@ describe('WorkflowChatPanel', () => {
     expect(post).not.toHaveBeenCalled();
     expect(container.textContent).toContain('add a reviewer');
 
-    chat.current = chatState({ working: false, settledTurns: 1, post });
+    chat.current = chatState({
+      working: false,
+      settledTurns: 1,
+      settledAs: 'completed',
+      post,
+    });
     await paint();
 
     expect(onTurnSettled).toHaveBeenCalledTimes(1);
@@ -454,6 +460,73 @@ describe('WorkflowChatPanel', () => {
       container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')
         ?.title,
     ).toBe(PARKED_SEND_TITLE['background-shells']);
+  });
+
+  const queueWhileWorking = async (
+    text: string,
+    post: WorkflowChatState['post'],
+  ): Promise<void> => {
+    chat.current = chatState({ working: true, post });
+    await paint();
+    await type(text);
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="Queue"]')
+        ?.click();
+    });
+  };
+
+  // Stop means stop, as on the chat screen: the queued message went out ~50 ms
+  // after the user pressed Stop, as a fresh turn nobody asked for.
+  it('leaves a queued message standing after a Stop until its Send is pressed', async () => {
+    const post = vi.fn(async () => {});
+    await queueWhileWorking('add a reviewer', post);
+
+    chat.current = chatState({
+      working: false,
+      settledTurns: 1,
+      settledAs: 'cancelled',
+      post,
+    });
+    await paint();
+
+    // The canvas still re-reads what the stopped turn wrote.
+    expect(onTurnSettled).toHaveBeenCalledTimes(1);
+    expect(post).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(
+      'nothing is running, so the next waits for you to send it',
+    );
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Send queued message 1 now"]',
+        )
+        ?.click();
+    });
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith('add a reviewer', [], expect.any(String));
+    expect(onBeforeSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands a queued message to a held turn at once', async () => {
+    const post = vi.fn(async () => {});
+    await queueWhileWorking('add a reviewer', post);
+    expect(post).not.toHaveBeenCalled();
+
+    chat.current = chatState({
+      run: {
+        id: 'run-1',
+        status: 'running',
+        holdingFor: 1,
+      } as WorkflowChatState['run'],
+      working: true,
+      post,
+    });
+    await paint();
+
+    expect(post).toHaveBeenCalledWith('add a reviewer', [], expect.any(String));
   });
 
   it('keeps the queued message when the daemon refuses it, and says why', async () => {

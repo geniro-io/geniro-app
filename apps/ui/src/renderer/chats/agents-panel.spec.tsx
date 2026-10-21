@@ -626,6 +626,54 @@ describe('AgentsPanel', () => {
     expect(statusRow.querySelector('svg.animate-spin')).toBeNull();
   });
 
+  it('leads with the card waiting on the user, then a failed one, then the working ones', () => {
+    const cards = (list: AgentDisplay[]): string[] => {
+      const el = render(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={list}
+          onOpenThread={vi.fn()}
+        />,
+      );
+      return [...el.querySelectorAll('[data-slot="agent-cards"] > li')].map(
+        (card) =>
+          ['Orchestrator', 'Worker', 'Reviewer', 'Tester'].find((name) =>
+            card.textContent?.includes(name),
+          ),
+      ) as string[];
+    };
+    const done: AgentDisplay = {
+      ...agents[0]!,
+      id: 'orchestrator',
+      status: 'completed',
+    };
+    const working: AgentDisplay = {
+      ...agents[1]!,
+      id: 'worker',
+      status: 'running',
+    };
+    const failed: AgentDisplay = {
+      ...agents[0]!,
+      id: 'reviewer',
+      name: 'Reviewer',
+      status: 'failed',
+      threads: [],
+    };
+    const asking: AgentDisplay = {
+      ...agents[0]!,
+      id: 'tester',
+      name: 'Tester',
+      status: 'needs-input',
+      threads: [],
+    };
+    expect(cards([done, working, failed, asking])).toEqual([
+      'Tester',
+      'Reviewer',
+      'Worker',
+      'Orchestrator',
+    ]);
+  });
+
   it('lists an agent’s threads with nothing to open first; per-thread terminals need claude + a session', () => {
     const onOpenThread = vi.fn();
     const el = render(

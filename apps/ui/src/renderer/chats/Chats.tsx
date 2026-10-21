@@ -381,6 +381,7 @@ import {
 } from './use-transcript-jump';
 import { useUnseenRuns, useWindowWatched } from './use-unseen-runs';
 import { useWorktreeOrigin } from './use-worktree-origin';
+import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
 import { rootAgentOf, triggerFedAgentIds } from './workflow-root';
 
 /**
@@ -704,6 +705,7 @@ export function Chats({
   onOpenTerminal,
   onFolderChange,
   onPhoneDetailChange,
+  onWaitingChange,
   phoneHomeSignal = 0,
   firstLaunchAgent = null,
   onFirstLaunchHandled,
@@ -775,6 +777,12 @@ export function Chats({
    * Always false at wider widths, where there are no pages.
    */
   onPhoneDetailChange?: (detail: boolean) => void;
+  /**
+   * Report every unarchived thread's wait, ranked (`waitReadings`) — the
+   * title bar's status line, the jump chord and the board's card marks are
+   * the shell's, and this component is the one holding the rows they read.
+   */
+  onWaitingChange?: (readings: readonly WaitReading[]) => void;
   /**
    * Bumped by the shell when the Chats tab is pressed while it is on show —
    * the phone's way back from a detail page to the chat list.
@@ -8408,6 +8416,14 @@ export function Chats({
   );
 
   /**
+   * Whether the thread on show is the one this screen was last asked to open.
+   * Another screen's request (⌘J, a board card, a link) and the switch to this
+   * view land in one render, and for that render the thread on show is the one
+   * being LEFT — both surfaces below must not count it as watched, or it is
+   * reported read without ever being drawn.
+   */
+  const showsRequestedThread = openRunId === null || openRunId === activeRunId;
+  /**
    * Every thread the two notification surfaces follow: the listing on show
    * AND the rows the archive filter is hiding. Whether a thread finished is not
    * a question about the scope on screen — fed `runs` alone, both hooks forgot
@@ -8448,7 +8464,7 @@ export function Chats({
     // open there — so passing it regardless read a user in Settings on a
     // focused window as watching that thread, and its banners were withheld
     // from the one person not looking at it.
-    activeRunId: active ? activeRunId : null,
+    activeRunId: active && showsRequestedThread ? activeRunId : null,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on
   // a Mac that is sharing its screen macOS drops every app's silently — so the
@@ -8458,13 +8474,43 @@ export function Chats({
   // screen on show and the window visible and focused. Every way into a thread
   // — a sidebar row, a clicked banner, the session picker — reports the look
   // through that one condition, and none of them has to remember to.
+  //
   const windowWatched = useWindowWatched();
   const unseen = useUnseenRuns({
     runs: notifiedRuns,
     activeRunId,
-    watching: active && windowWatched,
+    watching: active && windowWatched && showsRequestedThread,
     markSeen: markRunSeen,
   });
+  // Read with the UNFOCUSED status for every run, the open one included, so
+  // focusing a thread cannot change its status reading — the sidebar order's
+  // rule. (Opening an unread one still sees it, which is the point.)
+  const waiting = useMemo(
+    () =>
+      waitReadings(
+        notifiedRuns.filter((run) => run.archivedAt == null),
+        { statusOf: unfocusedRunStatus, unseen },
+      ),
+    [notifiedRuns, unfocusedRunStatus, unseen],
+  );
+  // Reported only when a wait actually changed: the rows are rewritten on
+  // every announce, and each report re-renders the whole shell. A working
+  // thread's `since` is its last activity, which moves with every row it
+  // writes and which nothing downstream reads, so it stays out of the key.
+  const waitingKey = waiting
+    .map(
+      ({ runId, state, since }) =>
+        `${runId}:${state}:${waitsOnUser(state) ? since : ''}`,
+    )
+    .join('|');
+  const waitingRef = useRef(waiting);
+  waitingRef.current = waiting;
+  useEffect(() => {
+    onWaitingChange?.(waitingRef.current);
+  }, [waitingKey, onWaitingChange]);
+  // This screen unmounts while no daemon answers; what it last reported must
+  // not stand in the title bar, or be jumped to, meanwhile.
+  useEffect(() => () => onWaitingChange?.([]), [onWaitingChange]);
   // Each finished turn's line totals, posted to the daemon for the Stats page.
   // Here rather than in the shell because a thread's folder and start commit
   // are on the run rows this screen holds — see use-line-snapshots.

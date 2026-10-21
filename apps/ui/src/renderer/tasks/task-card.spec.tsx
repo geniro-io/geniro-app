@@ -364,3 +364,31 @@ describe('TaskCard — the pull request', () => {
     expect(card().querySelector('[data-slot="task-chip"]')).toBeNull();
   });
 });
+
+describe('TaskCard — its thread waiting on the user', () => {
+  it('marks a card whose thread asks, and says so on the accessible name', () => {
+    const el = card({ number: 7 }, { wait: 'asking' });
+    expect(
+      el
+        .querySelector('[data-slot="wait-mark"]')
+        ?.getAttribute('data-wait-state'),
+    ).toBe('asking');
+    expect(el.getAttribute('aria-label')).toContain(
+      'its thread: waiting on you',
+    );
+  });
+
+  it('marks an unread reply on a card at rest — the run settling does not clear it', () => {
+    const el = card({ status: 'in_review' }, { wait: 'unseen' });
+    expect(
+      el
+        .querySelector('[data-slot="wait-mark"]')
+        ?.getAttribute('data-wait-state'),
+    ).toBe('unseen');
+  });
+
+  it('draws no mark for a thread that is only working', () => {
+    const el = card({ number: 7 }, { wait: 'working' });
+    expect(el.querySelector('[data-slot="wait-mark"]')).toBeNull();
+  });
+});

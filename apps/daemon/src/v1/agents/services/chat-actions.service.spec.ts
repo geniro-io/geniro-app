@@ -9,6 +9,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { NO_CALL_INDEX } from '../__tests__/no-call-index';
+import { NO_COMMANDS } from '../__tests__/no-commands';
 import { NO_STOPS } from '../__tests__/no-stops';
 import { ACTION_LIVE_MAX, SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
@@ -76,7 +77,7 @@ describe('ChatActionsService (in-memory sqlite)', () => {
       NO_CALL_INDEX,
       seqs,
     );
-    publisher = new ActionPublishService(actions, NO_STOPS);
+    publisher = new ActionPublishService(actions, NO_STOPS, NO_COMMANDS);
     state = new RunStateService(
       orm.em,
       runs,
@@ -313,6 +314,7 @@ describe('ChatActionsService (in-memory sqlite)', () => {
           Promise.reject(new Error('SQLITE_IOERR: /Users/x/geniro.db')),
       } as unknown as ChatActionsService,
       NO_STOPS,
+      NO_COMMANDS,
     );
 
     expect(await failing.publish(ctx, { label: 'x', message: 'go' })).toEqual({
@@ -357,6 +359,7 @@ describe('ChatActionsService (in-memory sqlite)', () => {
         appendAction: () => Promise.reject(new Error('SQLITE_IOERR')),
       } as unknown as ChatActionsService,
       NO_STOPS,
+      NO_COMMANDS,
     );
     await failing.publish(noted, { label: 'Lost', message: 'go' });
 
@@ -393,21 +396,25 @@ describe('ChatActionsService (in-memory sqlite)', () => {
 
   it('publishes a stop action against the targets resolved for it, always one-shot', async () => {
     const asked: unknown[][] = [];
-    const stopping = new ActionPublishService(actions, {
-      resolve: (...args: unknown[]) => {
-        asked.push(args);
-        return Promise.resolve({
-          shellId: 'bg1',
-          targets: [
-            {
-              pid: 48211,
-              startedAt: '2026-10-20T10:00:00.000Z',
-              command: 'python3 -m http.server 8765',
-            },
-          ],
-        });
-      },
-    } as unknown as ActionStopService);
+    const stopping = new ActionPublishService(
+      actions,
+      {
+        resolve: (...args: unknown[]) => {
+          asked.push(args);
+          return Promise.resolve({
+            shellId: 'bg1',
+            targets: [
+              {
+                pid: 48211,
+                startedAt: '2026-10-20T10:00:00.000Z',
+                command: 'python3 -m http.server 8765',
+              },
+            ],
+          });
+        },
+      } as unknown as ActionStopService,
+      NO_COMMANDS,
+    );
 
     const outcome = await stopping.publish(ctx, {
       label: 'Stop preview',
@@ -436,15 +443,19 @@ describe('ChatActionsService (in-memory sqlite)', () => {
   });
 
   it('names a pid stop by its pids in the receipt', async () => {
-    const stopping = new ActionPublishService(actions, {
-      resolve: () =>
-        Promise.resolve({
-          targets: [
-            { pid: 7, startedAt: '2026-10-20T10:00:00.000Z', command: 'a' },
-            { pid: 8, startedAt: '2026-10-20T10:00:01.000Z', command: 'b' },
-          ],
-        }),
-    } as unknown as ActionStopService);
+    const stopping = new ActionPublishService(
+      actions,
+      {
+        resolve: () =>
+          Promise.resolve({
+            targets: [
+              { pid: 7, startedAt: '2026-10-20T10:00:00.000Z', command: 'a' },
+              { pid: 8, startedAt: '2026-10-20T10:00:01.000Z', command: 'b' },
+            ],
+          }),
+      } as unknown as ActionStopService,
+      NO_COMMANDS,
+    );
 
     expect(
       await stopping.publish(ctx, { label: 'Stop', stop: { pid: 7 } }),
@@ -456,12 +467,16 @@ describe('ChatActionsService (in-memory sqlite)', () => {
   });
 
   it('relays why a stop could not be resolved, and writes nothing', async () => {
-    const stopping = new ActionPublishService(actions, {
-      resolve: () =>
-        Promise.resolve({
-          reason: 'pid 7 is not a running process of this chat',
-        }),
-    } as unknown as ActionStopService);
+    const stopping = new ActionPublishService(
+      actions,
+      {
+        resolve: () =>
+          Promise.resolve({
+            reason: 'pid 7 is not a running process of this chat',
+          }),
+      } as unknown as ActionStopService,
+      NO_COMMANDS,
+    );
 
     expect(
       await stopping.publish(ctx, { label: 'Stop', stop: { pid: 7 } }),
@@ -490,15 +505,6 @@ describe('ChatActionsService (in-memory sqlite)', () => {
         }),
       ).toEqual({ status: 'refused', reason });
     }
-  });
-
-  it('answers command as not available yet', async () => {
-    expect(
-      await publisher.publish(ctx, { label: 'Run', command: { argv: ['ls'] } }),
-    ).toMatchObject({
-      reason:
-        'command actions are not available yet; publish a message or stop action instead',
-    });
   });
 
   it('slugs a label in any script into a default id', async () => {

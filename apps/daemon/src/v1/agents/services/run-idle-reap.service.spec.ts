@@ -35,6 +35,7 @@ import {
 } from '../utils/run-process-scan';
 import { nodeSessionKey } from '../utils/session-keys';
 import type { StoppedCommands } from '../utils/spawn-cli';
+import { ActionCommandRegistry } from './action-command.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ItemCallIndexService } from './item-call-index.service';
@@ -178,6 +179,7 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
     ),
   ) {
     const sessions = new AgentSessionRegistry(4);
+    const commands = new ActionCommandRegistry();
     const signals: [number, NodeJS.Signals][] = [];
     const reaper = createRunProcessReaper(
       new RunProcessAttribution(OWNER, {
@@ -186,6 +188,7 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
         uid: UID,
       }),
       sessions,
+      commands,
       {
         signal: (pid, sig) => signals.push([pid, sig]),
         startTimes: (pids) =>
@@ -215,7 +218,7 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
       },
       getConfig: () => ({ kind: 'claude' }),
     } as unknown as AgentAdapter;
-    return { sessions, service, reaper, signals, kept, adapter };
+    return { sessions, commands, service, reaper, signals, kept, adapter };
   }
 
   async function notes(runId: string): Promise<string[]> {
@@ -367,6 +370,35 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
 
     expect(service.awaitingGrace(run.id)).toBe(false);
     expect(signals).toEqual([]);
+  });
+
+  it('leaves a run alone while a command action the user ran is still running', async () => {
+    // The command is tagged with the run, so without the hold it would read
+    // as something the agents left; an archive ends the command first.
+    vi.useFakeTimers();
+    const run = await runDao.create({ status: 'completed' });
+    const { sessions, commands, reaper, kept, adapter, signals } = setup([
+      tagged(10, run.id, 'pnpm test'),
+    ]);
+    sessions.startTurn(
+      run.id,
+      adapter,
+      { prompt: 'p', cwd: '/p' },
+      () => undefined,
+    );
+    kept[0]?.endTurn();
+    const slot = commands.start(run.id);
+
+    await idleFor(sessions.idleMinutes * 60_000, reaper);
+
+    expect(kept[0]?.alive).toBe(false);
+    expect(signals).toEqual([]);
+    expect(await notes(run.id)).toEqual([]);
+
+    commands.abortRun(run.id);
+    expect(slot.signal.aborted).toBe(true);
+    await reaper.reap([run.id]);
+    expect(signals).toContainEqual([10, 'SIGTERM']);
   });
 
   it('writes nothing when nothing was left running', async () => {

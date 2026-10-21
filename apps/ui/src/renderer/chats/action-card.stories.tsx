@@ -12,6 +12,7 @@ function entry(
   description: string | null = 'Tell the agent the pull request landed',
   agentLabel: string | null = null,
   targets: { pid: number; command: string }[] = [],
+  command: { argv: string[]; cwd: string } | null = null,
 ): ActionEntry {
   return {
     type: 'action',
@@ -24,9 +25,13 @@ function entry(
       actionId: label.toLowerCase(),
       label,
       description,
-      kind: targets.length > 0 ? 'stop' : 'message',
-      text: targets.length > 0 ? null : 'PR merged — continue',
+      kind:
+        command !== null ? 'command' : targets.length > 0 ? 'stop' : 'message',
+      text:
+        targets.length > 0 || command !== null ? null : 'PR merged — continue',
       targets,
+      argv: command?.argv ?? [],
+      cwd: command?.cwd ?? null,
       once: true,
       nodeId: 'agent',
       conversationId: '',
@@ -37,7 +42,26 @@ function entry(
   };
 }
 
+const E2E = {
+  argv: ['pnpm', 'test:e2e', '--grep', 'checkout flow'],
+  cwd: '/Users/dev/projects/geniro-app',
+};
+
 const PREVIEW = [{ pid: 48211, command: 'python3 -m http.server 8765' }];
+
+function liveCommand(seq: number, label: string): LiveAction {
+  return {
+    seq,
+    actionId: label.toLowerCase(),
+    nodeId: 'agent',
+    conversationId: '',
+    label,
+    once: false,
+    spec: { kind: 'command', ...E2E, timeoutMs: 600_000, notifyAgent: true },
+    publisher: { nodeId: 'agent', conversationId: '' },
+    pending: false,
+  };
+}
 
 function live(seq: number, label: string, agentLabel?: string): LiveAction {
   return {
@@ -67,11 +91,18 @@ function live(seq: number, label: string, agentLabel?: string): LiveAction {
 }
 
 const chat: ChatActions = {
-  actions: [live(10, 'PR merged'), live(11, 'Stop preview', 'Engineer')],
+  actions: [
+    live(10, 'PR merged'),
+    live(11, 'Stop preview', 'Engineer'),
+    liveCommand(12, 'Run e2e'),
+  ],
   throughSeq: 50,
   phases: new Map(),
   press: () => undefined,
   dismiss: () => undefined,
+  confirming: null,
+  confirmCommand: () => undefined,
+  cancelCommand: () => undefined,
   openCall: () => undefined,
 };
 
@@ -89,6 +120,7 @@ function Cards(): React.JSX.Element {
             state: 'succeeded',
             exitCode: null,
             error: null,
+            outputTail: null,
             alreadyStopped: false,
             at: '2026-10-18T14:32:00Z',
           })}
@@ -102,6 +134,7 @@ function Cards(): React.JSX.Element {
               state: 'stopped',
               exitCode: null,
               error: null,
+              outputTail: null,
               alreadyStopped: true,
               at: '2026-10-18T14:32:30Z',
             },
@@ -116,11 +149,71 @@ function Cards(): React.JSX.Element {
             state: 'removed',
             exitCode: null,
             error: null,
+            outputTail: null,
             alreadyStopped: false,
             at: '2026-10-18T14:33:00Z',
           })}
         />
         <ActionCard entry={entry(2, 'Retry build', null, null)} />
+        <ActionCard entry={entry(12, 'Run e2e', null, null, null, [], E2E)} />
+        <ActionCard
+          entry={entry(
+            13,
+            'Run e2e',
+            {
+              actionSeq: 13,
+              state: 'running',
+              exitCode: null,
+              error: null,
+              outputTail: null,
+              alreadyStopped: false,
+              at: '2026-10-18T14:34:00Z',
+            },
+            null,
+            null,
+            [],
+            E2E,
+          )}
+        />
+        <ActionCard
+          entry={entry(
+            14,
+            'Run e2e',
+            {
+              actionSeq: 14,
+              state: 'succeeded',
+              exitCode: 0,
+              error: null,
+              outputTail: '12 passed (41s)\n',
+              alreadyStopped: false,
+              at: '2026-10-18T14:35:00Z',
+            },
+            null,
+            null,
+            [],
+            E2E,
+          )}
+        />
+        <ActionCard
+          entry={entry(
+            15,
+            'Run e2e',
+            {
+              actionSeq: 15,
+              state: 'failed',
+              exitCode: 1,
+              error: 'exit 1',
+              outputTail:
+                '1 failed\n  checkout flow > pays by card\n    expected 200, got 500\n',
+              alreadyStopped: false,
+              at: '2026-10-18T14:36:00Z',
+            },
+            null,
+            null,
+            [],
+            E2E,
+          )}
+        />
       </div>
     </ChatActionsContext.Provider>
   );
@@ -144,6 +237,7 @@ type Story = StoryObj<typeof meta>;
 /**
  * Live (with its button and Dismiss), a workflow callee's stop (from its agent,
  * linking to its call, listing what it stops), pressed, a stop whose process
- * had already exited, removed by the agent, gone.
+ * had already exited, removed by the agent, gone, and a command: published,
+ * running, ran with output, failed with output.
  */
 export const States: Story = {};

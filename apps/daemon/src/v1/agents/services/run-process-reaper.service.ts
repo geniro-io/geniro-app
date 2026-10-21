@@ -29,6 +29,7 @@ import {
   type StopCandidate,
 } from '../utils/run-process-scan';
 import { runPs } from '../utils/run-ps';
+import type { ActionCommandRegistry } from './action-command.registry';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import type { RunProcessAttribution } from './run-process-attribution.service';
 
@@ -38,9 +39,9 @@ import type { RunProcessAttribution } from './run-process-attribution.service';
  */
 export interface RunProcessReaperOptions {
   /**
-   * Whether the registry holds a live agent process under the run right now.
-   * Such a run was reopened after its reap was queued, and its processes are
-   * a working agent's, not leftovers.
+   * Whether the registry holds a live agent process under the run right now,
+   * or the user is running one of its command actions. Such a run was used
+   * after its reap was queued, and its processes are working, not leftovers.
    */
   held?: (runId: string) => boolean;
   processRoots?: () => readonly number[];
@@ -160,8 +161,8 @@ export class RunProcessReaper {
    * the run is told once.
    *
    * Unconditional, unlike the sweep's reap of a gone run: a run is used again
-   * only through a kept CLI process, and {@link held}, asked after the scan,
-   * sees that one.
+   * only through a kept CLI process or a command action the user ran, and
+   * {@link held}, asked after the scan, sees both.
    */
   reapIdle(runId: string): Promise<ScannedProcess[]> {
     return new Promise((resolve) => {
@@ -675,15 +676,19 @@ async function readStartTimes(
 /**
  * The reaper as the agents module provides it: it asks the registry which
  * processes are a live agent's, and is handed what a run's CLI left running
- * whenever a process ends ({@link AgentSessionRegistry.onLeftCommands}).
+ * whenever a process ends ({@link AgentSessionRegistry.onLeftCommands}). A
+ * run with a command action running is held too; archive and delete end
+ * those commands first, so they still reap the run.
  */
 export function createRunProcessReaper(
   attribution: RunProcessAttribution,
   sessions: AgentSessionRegistry,
+  commands: ActionCommandRegistry,
   options: RunProcessReaperOptions = {},
 ): RunProcessReaper {
   const reaper = new RunProcessReaper(attribution, {
-    held: (runId) => sessions.processRoots(runId).length > 0,
+    held: (runId) =>
+      sessions.processRoots(runId).length > 0 || commands.isRunning(runId),
     processRoots: () => sessions.processRoots().map((root) => root.pid),
     ...options,
   });

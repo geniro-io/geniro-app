@@ -34,6 +34,7 @@ import { AgentKind } from '../../runs/runs.types';
 import { fakeSpawn } from '../__tests__/fake-child';
 import { FakeWallTurnDao } from '../__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../__tests__/no-call-index';
+import { NO_COMMANDS } from '../__tests__/no-commands';
 import { NO_STOPS } from '../__tests__/no-stops';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
@@ -94,6 +95,7 @@ import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import { UnknownAgentVersion } from './__tests__/unknown-agent-version';
 import { ActionBroker } from './action.broker';
+import { ActionCommandRegistry } from './action-command.registry';
 import { ActionPublishService } from './action-publish.service';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -1206,6 +1208,7 @@ function setup(
       reapInBackground: (runId: string) => reapedRuns.push(runId),
     } as unknown as RunProcessReaper,
     wallTurns as unknown as WallTurnDao,
+    new ActionCommandRegistry(),
   );
   // A double rather than the real service: what THIS spec pins is that the
   // group the rule names lands on the created run, not how the rule reads a
@@ -1292,6 +1295,7 @@ function setup(
         seqs,
       ),
       NO_STOPS,
+      NO_COMMANDS,
     ),
     workflowProposals,
     artifactStore,

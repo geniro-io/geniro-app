@@ -3,6 +3,8 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { shellQuote as quote } from '../shared/shell-quote';
+
 /**
  * Open the user's terminal on a command — the handoff out of geniro.
  *
@@ -86,11 +88,4 @@ async function runInTerminal(cwd: string, body: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     execFile('open', [script], (error) => (error ? reject(error) : resolve()));
   });
-}
-
-/** Single-quote anything a shell would otherwise act on. */
-function quote(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) && value.length > 0
-    ? value
-    : `'${value.split("'").join(`'\\''`)}'`;
 }

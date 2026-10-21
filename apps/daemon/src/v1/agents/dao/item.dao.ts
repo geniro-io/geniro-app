@@ -2122,6 +2122,23 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * EVERY run's action rows, grouped by run and in seq order — the boot
+   * sweep's one read, as {@link allShellRows} is for shells.
+   */
+  async allActionRows(
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'runId' | 'kind' | 'seq' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { kind: { $in: ['action', 'action_outcome'] } },
+      {
+        orderBy: { runId: 'asc', seq: 'asc' },
+        fields: ['runId', 'kind', 'seq', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * The tool calls a conversation's OPEN turn has made and not had answered —
    * the commands it is running in the foreground right now, whatever page of
    * the transcript a client holds. A conversation is a node and the call it

@@ -19,7 +19,15 @@ function action(
     label,
     ...(description === undefined ? {} : { description }),
     once: true,
-    spec: { kind, text: `${label} — continue` },
+    spec:
+      kind === 'command'
+        ? {
+            kind,
+            argv: ['pnpm', 'test:e2e', '--grep', 'checkout flow'],
+            cwd: '/Users/dev/projects/geniro-app',
+            timeoutMs: 600_000,
+          }
+        : { kind, text: `${label} — continue` },
     publisher: { nodeId: 'agent', conversationId: '' },
     pending: false,
   };
@@ -86,6 +94,9 @@ type Story = StoryObj<typeof meta>;
 export const Overflowing: Story = {};
 
 export const Single: Story = { args: { initial: [LIVE[0]!] } };
+
+/** A command: its tooltip names the argv and folder; a press opens the confirmation. */
+export const Command: Story = { args: { initial: [LIVE[2]!] } };
 
 /** A workflow run: the manager's own button, and a callee's that says who it is. */
 export const FromAnotherAgent: Story = {

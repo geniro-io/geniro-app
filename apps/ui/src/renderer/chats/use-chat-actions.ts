@@ -46,8 +46,16 @@ export interface ChatActions {
   throughSeq: number;
   /** This device's press state, by publish seq. */
   phases: ReadonlyMap<number, ActionPressPhase>;
+  /**
+   * A command's press only opens its confirmation (`confirming`); nothing is
+   * sent until `confirmCommand`. Every other kind sends at once.
+   */
   press: (action: LiveAction) => void;
   dismiss: (action: LiveAction) => void;
+  /** The command awaiting the user's "Run command", or null. */
+  confirming: LiveAction | null;
+  confirmCommand: () => void;
+  cancelCommand: () => void;
   /**
    * Open a call's card and bring it into view, paging the window to it first
    * when it is not drawn — where a callee's button card links to the thread
@@ -67,16 +75,16 @@ export const ChatActionsContext = createContext<ChatActions | null>(null);
 export interface PressHooks {
   /**
    * Run before every press reaches the daemon, a retry included — the builder
-   * dock's canvas flush and its working flag: a press starts a turn that reads
-   * the file.
+   * dock's canvas flush, and its working flag for a press that starts a turn
+   * ({@link pressStartsTurn}).
    */
-  beforePress?: () => Promise<unknown>;
+  beforePress?: (action: LiveAction) => Promise<unknown>;
   /**
-   * How a press ended: `true` when the daemon took it (a turn started or the
-   * text went into the running one), `false` for anything else — a refusal,
-   * a RUN_BUSY the hook will retry, a flush that threw.
+   * How a press ended: `true` when the daemon accepted it, `false` for
+   * anything else — a refusal, a RUN_BUSY the hook will retry, a flush that
+   * threw.
    */
-  onPressSettled?: (taken: boolean) => void;
+  onPressSettled?: (taken: boolean, action: LiveAction) => void;
 }
 
 /**
@@ -108,6 +116,15 @@ function dismissVia(
   return 'dismissWorkflowAction' in api
     ? api.dismissWorkflowAction({ runId, seq })
     : api.dismissChatAction({ runId, seq });
+}
+
+/**
+ * Whether a press starts a turn of the agent, as a typed send does: a message
+ * press only. A stop or a command runs beside the conversation, and a surface
+ * that raised its working flag for one would have nothing to lower it.
+ */
+export function pressStartsTurn(action: LiveAction): boolean {
+  return action.spec.kind === 'message';
 }
 
 /** Whether a button can be pressed now — what every surface drawing one asks. */
@@ -150,9 +167,11 @@ export function useChatActions(
   );
   // Which run an answer may still land on: one for a thread since left is dropped.
   const runRef = useRef(runId);
+  const [confirming, setConfirming] = useState<LiveAction | null>(null);
   useEffect(() => {
     runRef.current = runId;
     setPhases(new Map());
+    setConfirming(null);
   }, [runId]);
 
   const setPhase = useCallback(
@@ -176,11 +195,11 @@ export function useChatActions(
         return;
       }
       setPhase(action.seq, { kind: 'pressing' });
-      Promise.resolve(hooksRef.current.beforePress?.())
+      Promise.resolve(hooksRef.current.beforePress?.(action))
         .then(() => pressVia(api, runId, action.seq, clientMessageId))
         .then(
           () => {
-            hooksRef.current.onPressSettled?.(true);
+            hooksRef.current.onPressSettled?.(true, action);
             if (runRef.current === runId) {
               // A one-shot leaves with the re-read; a reusable one stays and says it went.
               setPhase(action.seq, action.once ? null : { kind: 'done' });
@@ -201,7 +220,7 @@ export function useChatActions(
             }
           },
           (err: unknown) => {
-            hooksRef.current.onPressSettled?.(false);
+            hooksRef.current.onPressSettled?.(false, action);
             if (runRef.current !== runId) {
               return;
             }
@@ -228,10 +247,24 @@ export function useChatActions(
       if (isActionBusy(action, phases.get(action.seq))) {
         return;
       }
+      if (action.spec.kind === 'command') {
+        setConfirming(action);
+        return;
+      }
       send(action, randomId());
     },
     [phases, send],
   );
+
+  const confirmCommand = useCallback((): void => {
+    if (confirming === null) {
+      return;
+    }
+    setConfirming(null);
+    send(confirming, randomId());
+  }, [confirming, send]);
+
+  const cancelCommand = useCallback((): void => setConfirming(null), []);
 
   const dismiss = useCallback(
     (action: LiveAction): void => {
@@ -305,7 +338,19 @@ export function useChatActions(
       phases,
       press,
       dismiss,
+      confirming,
+      confirmCommand,
+      cancelCommand,
     }),
-    [state.actions, state.throughSeq, phases, press, dismiss],
+    [
+      state.actions,
+      state.throughSeq,
+      phases,
+      press,
+      dismiss,
+      confirming,
+      confirmCommand,
+      cancelCommand,
+    ],
   );
 }

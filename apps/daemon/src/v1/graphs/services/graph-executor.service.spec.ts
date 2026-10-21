@@ -25,6 +25,7 @@ import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { type FakeChild, fakeSpawn } from '../../agents/__tests__/fake-child';
 import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
+import { NO_COMMANDS } from '../../agents/__tests__/no-commands';
 import { NO_STOPS } from '../../agents/__tests__/no-stops';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import type {
@@ -57,6 +58,7 @@ import type { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
 import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
 import { ActionBroker } from '../../agents/services/action.broker';
+import { ActionCommandRegistry } from '../../agents/services/action-command.registry';
 import { ActionPublishService } from '../../agents/services/action-publish.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -1324,6 +1326,7 @@ function setup(
     // table from a unit test. Reaping is `run-teardown.service.spec.ts`'s.
     { reapInBackground: () => undefined } as unknown as RunProcessReaper,
     wallTurns as unknown as WallTurnDao,
+    new ActionCommandRegistry(),
   );
   const service = new GraphExecutorService(
     em,
@@ -1415,7 +1418,7 @@ function setup(
     4,
     opts.agentMcp as AgentMcpService | undefined,
     actions,
-    new ActionPublishService(chatActions, NO_STOPS),
+    new ActionPublishService(chatActions, NO_STOPS, NO_COMMANDS),
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();

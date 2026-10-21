@@ -1,4 +1,8 @@
-import { ACTION_LIVE_MAX } from '../../../agents/chat.types';
+import {
+  ACTION_COMMAND_TIMEOUT_DEFAULT_MINUTES,
+  ACTION_COMMAND_TIMEOUT_MAX_MINUTES,
+  ACTION_LIVE_MAX,
+} from '../../../agents/chat.types';
 
 /** What a model reads about `publish_action`. */
 export function publishActionInstructions(): string {
@@ -20,6 +24,13 @@ export function publishActionInstructions(): string {
     'matches more than one running process is refused — name the pid then. A press stops the ' +
     'processes listed in the receipt and whatever they have started since; a stop button is always ' +
     'one-shot. ' +
+    'Give `command` for a button that runs a command once the user confirms it — e.g. "Run the migration": ' +
+    '`command: {argv: ["pnpm", "db:migrate"]}`. It runs without a shell (use `["/bin/sh", "-c", "<line>"]` ' +
+    "for one), in this chat's folder unless you give `cwd`, and is stopped after `timeout_minutes` (default " +
+    `${ACTION_COMMAND_TIMEOUT_DEFAULT_MINUTES}, at most ${ACTION_COMMAND_TIMEOUT_MAX_MINUTES}). The user sees ` +
+    'its exact argv and folder before it runs; its exit code and the end of its output land in the chat. ' +
+    'Set `notify_agent: true` to have them sent too, as a message, when it finishes (in a workflow, to the ' +
+    "agent the user's messages go to). " +
     "In a workflow the press goes to the agent the user's messages go to — not back to you unless you " +
     'are that agent — prefixed with your name, and a call you are answering lists the button in its ' +
     'result; so word `message` for whoever reads it next. ' +

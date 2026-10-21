@@ -8,6 +8,7 @@ import { ActionRow, ChatActionChips } from './action-chip';
 import {
   ACTION_DONE_MS,
   ACTION_RETRY_MS,
+  pressStartsTurn,
   useChatActions,
 } from './use-chat-actions';
 
@@ -50,7 +51,10 @@ afterEach(() => {
  * The shelf over the real hook, with run state held here the way `useRunState`
  * holds it: `refresh` re-reads `server`, which the fake press route edits.
  */
-function harness(initial: LiveAction[], beforePress?: () => Promise<unknown>) {
+function harness(
+  initial: LiveAction[],
+  beforePress?: (action: LiveAction) => Promise<unknown>,
+) {
   const hooks = beforePress === undefined ? undefined : { beforePress };
   const server = {
     actions: initial,
@@ -272,6 +276,9 @@ describe('ChatActionChips', () => {
 
     await shelf.press('Merged');
     expect(flush).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledWith(
+      expect.objectContaining({ seq: 1, label: 'Merged' }),
+    );
     expect(shelf.api.pressChatAction).not.toHaveBeenCalled();
 
     await act(async () => flushed());
@@ -331,6 +338,38 @@ describe('ActionChip stop', () => {
     );
     expect(chip?.getAttribute('title')).toBe(
       'Stop preview\nStops: python3 -m http.server 8765 (pid 48211), with what these start',
+    );
+  });
+});
+
+describe('ActionChip command', () => {
+  it('shows the quoted argv and the folder in the tooltip before it is pressed', async () => {
+    const run: LiveAction = {
+      ...action(4, 'Run report'),
+      spec: {
+        kind: 'command',
+        argv: ['node', 'build report.mjs', "it's"],
+        cwd: '/Users/dev/repo',
+        timeoutMs: 600_000,
+      },
+    };
+    const container = document.createElement('div');
+    root = createRoot(container);
+    await act(async () =>
+      root!.render(
+        <ChatActionChips
+          actions={[run]}
+          phases={new Map()}
+          onPress={() => {}}
+          onDismiss={() => {}}
+        />,
+      ),
+    );
+
+    const chip = container.querySelector('[data-slot="action-chip"]');
+    expect(chip?.getAttribute('aria-label')).toBe('Run report, runs a command');
+    expect(chip?.getAttribute('title')).toBe(
+      "Run report\nRuns: node 'build report.mjs' 'it'\\''s'\nin /Users/dev/repo",
     );
   });
 });
@@ -440,5 +479,16 @@ describe('useChatActions on a workflow run', () => {
       runId: 'run',
       seq: 1,
     });
+  });
+
+  it('counts only a message press as starting a turn', () => {
+    const of = (kind: 'message' | 'stop' | 'command'): LiveAction => ({
+      ...action(1, 'X'),
+      spec: { kind },
+    });
+
+    expect(pressStartsTurn(of('message'))).toBe(true);
+    expect(pressStartsTurn(of('stop'))).toBe(false);
+    expect(pressStartsTurn(of('command'))).toBe(false);
   });
 });

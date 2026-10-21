@@ -132,6 +132,7 @@ Smaller rules:
   - The title bar is the only drag region (`.app-drag`). Any control inside it needs `.app-no-drag`.
   - The title is centred on the window. Never put a flex `gap` on the bar row. Do not reintroduce per-column header rows, a divider, or a `leadingWidth` centring prop.
   - The debug log is ⌥⌘L only.
+  - `chats/waiting-status.tsx` counts what waits on the user (asking, failed, unread); a press or ⌘J (`chats/use-next-waiting-shortcut.ts`) opens the next one. Window-wide chords go through `components/use-global-chord.ts`.
 - A Settings note under a control is one line: what flipping it does, plus the one consequence nobody would guess.
 
 **Board (`tasks/`):**
@@ -540,6 +541,7 @@ Appearance:
 
 - The unread mark is the daemon's: `attentionAt` later than `seenAt`. Both timestamps only move forward. Never compute it per window.
 - Report "seen" only while the thread is actually watched (`useWindowWatched`).
+- What a thread waits on the user for (`chats/waiting.ts`: asking > failed > unread > working, longest wait first) is read from the unfocused status and `useUnseenRuns`. It drives ⌘J, the title-bar count, board-card marks and the agents panel's card order, and never the sidebar order: a waiting thread does not move itself (user decision). ⌘J continues from the reading it last opened, because opening an unread thread drops it from the queue.
 - Drafts, the queue and turn-end banners stay per device.
 - Archive is the row action. Permanent delete exists only inside the archive. Workflow rows archive too.
 - `refreshRuns` drops a stale generation, and runs one listing per scope at a time plus one queued; only a scope switch supersedes one in flight.

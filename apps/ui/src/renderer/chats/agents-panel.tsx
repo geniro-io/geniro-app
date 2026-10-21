@@ -93,6 +93,7 @@ import { type AgentMcpScope, mcpScopeKey } from './use-agent-mcp';
 import type { RunProcessesState } from './use-run-processes';
 import type { RunWaterfallState } from './use-run-waterfall';
 import type { ThreadAnalysisMark } from './use-thread-analysis';
+import { rankByUrgency, type WaitState, waitStateOf } from './waiting';
 import { WorkflowPanelRow } from './workflow-block';
 
 /**
@@ -436,6 +437,16 @@ function SearchChatButton({
       <Search className="size-4" />
     </Button>
   );
+}
+
+/**
+ * A node's wait. No unread mark: a node's reply is seen by opening its thread,
+ * so `unseen` and a seen-versus-unseen `failed` are the thread's to say.
+ */
+function nodeWaitState(agent: AgentDisplay): WaitState | null {
+  return agent.status === 'failed'
+    ? 'failed'
+    : waitStateOf({ status: agent.status, unseen: false });
 }
 
 /**
@@ -2353,7 +2364,10 @@ export function AgentsPanel({
               No agents in this run
             </li>
           ) : (
-            agents.map((agent) => {
+            // Most urgent first — a card waiting on the user, then a failed
+            // one, then the working ones — each tier in the workflow's own
+            // order, since a node carries no moment its wait began.
+            rankByUrgency(agents, nodeWaitState).map((agent) => {
               // Bound here so the toggle closure below carries a NARROWED kind
               // rather than a non-null assertion on a field re-read at call time.
               // Every member of the agent's pool, member 1 (the node's own

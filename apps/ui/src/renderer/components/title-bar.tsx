@@ -3,6 +3,13 @@ import type { FooterUpdate } from '../updates/update-status';
 import { UpdateControl } from './update-control';
 
 /**
+ * The look every pressable control in the bar shares: out of the drag region,
+ * quiet until hovered, ringed on keyboard focus. Callers add their own size.
+ */
+export const TITLE_BAR_CONTROL =
+  'app-no-drag rounded-md text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/50';
+
+/**
  * The window's title bar — ONE band across the whole window, above the columns.
  *
  * It used to be three: the rail's top row, the chat list's header and the
@@ -54,6 +61,7 @@ export function TitleBar({
   onInstallUpdate,
   onRelaunchUpdate,
   usage,
+  waiting,
 }: {
   /** What this window is showing right now — the open chat, or the view. */
   title: string;
@@ -74,6 +82,8 @@ export function TitleBar({
    * how to do.
    */
   usage?: React.ReactNode;
+  /** What is waiting on the user (`WaitingStatus`), handed in already wired. */
+  waiting?: React.ReactNode;
 }): React.JSX.Element {
   return (
     <header
@@ -111,6 +121,7 @@ export function TitleBar({
       </span>
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        {waiting}
         {usage}
         <UpdateControl
           update={update}

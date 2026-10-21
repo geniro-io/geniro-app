@@ -30,6 +30,7 @@ import type { LiveTextEvent } from './live-text';
 import { RUN_LIST_PAGE } from './run-list-pages';
 import { HISTORY_PAGE } from './use-chat-run';
 import { REREAD_DELAY_MS } from './use-run-state';
+import type { WaitReading } from './waiting';
 
 // Tell React this is an act()-aware environment (testing-library sets this for
 // you; with raw react-dom/client + react's act we set it ourselves).
@@ -16869,6 +16870,40 @@ describe('Chats — a thread that reported while you were elsewhere stays marked
     hasFocus.mockRestore();
   });
 
+  it('reports no look at the thread being left when another view opens a different one', async () => {
+    // ⌘J, a board card and a clicked banner all switch to this screen AND ask
+    // for a thread in one render; the thread on show for that render is the one
+    // being left, and it must stay unread.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    api.listChats.mockResolvedValue([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const render = async (
+      props: Partial<Parameters<typeof Chats>[0]>,
+    ): Promise<void> => {
+      await act(async () => {
+        roots
+          .at(-1)!
+          .render(<Chats client={client} handle={handle} {...props} />);
+      });
+    };
+    await render({ active: false });
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, attentionAt: T1 });
+      emitRunStatus({ runId: 'r2', status: null, attentionAt: T1 });
+    });
+    api.markRunSeen.mockClear();
+
+    await render({ active: true, openRunId: 'r2', onRunOpened: () => {} });
+    await render({ active: true, openRunId: null });
+
+    expect(api.markRunSeen).not.toHaveBeenCalledWith({ runId: 'r1' });
+    expect(api.markRunSeen).toHaveBeenCalledWith({ runId: 'r2' });
+    expect(marked(container, 'My chat')).toBe(true);
+    hasFocus.mockRestore();
+  });
+
   it('keeps the open chat unread while nobody is at the window, until they come back', async () => {
     // A thread left open on a desktop nobody is at must stay unread on the
     // phone: only a look somebody could actually have taken is reported.
@@ -18253,6 +18288,71 @@ describe('Chats — reporting which thread is open', () => {
     // Without this the address would go on naming a conversation that no
     // longer exists, and the copied link would open nothing.
     expect(seen.at(-1)).toBeNull();
+  });
+});
+
+describe('Chats — reporting what waits on the user', () => {
+  it('reports asking and unread threads, longest wait first, and never an archived one', async () => {
+    api.listChats.mockResolvedValue([
+      {
+        ...run1,
+        id: 'reply',
+        title: 'Reply',
+        status: 'completed',
+        attentionAt: '2026-10-21T10:05:00.000Z',
+        seenAt: '2026-10-21T10:00:00.000Z',
+      },
+      {
+        ...run1,
+        id: 'approval',
+        title: 'Approval',
+        awaiting: 'approval',
+        attentionAt: '2026-10-21T10:01:00.000Z',
+      },
+      {
+        ...run1,
+        id: 'archived',
+        title: 'Archived',
+        awaiting: 'approval',
+        attentionAt: '2026-10-21T09:00:00.000Z',
+        archivedAt: '2026-10-21T09:30:00.000Z',
+      },
+    ]);
+    const { client } = makeClient();
+    const reports: (readonly WaitReading[])[] = [];
+    await mount(client, undefined, {
+      onWaitingChange: (readings) => {
+        reports.push(readings);
+      },
+    });
+
+    expect(
+      reports.at(-1)?.map(({ runId, state }) => `${runId}:${state}`),
+    ).toEqual(['approval:asking', 'reply:unseen']);
+  });
+
+  it('reports nothing waiting once it unmounts, so the shell holds no stale count', async () => {
+    api.listChats.mockResolvedValue([
+      {
+        ...run1,
+        awaiting: 'approval',
+        attentionAt: '2026-10-21T10:01:00.000Z',
+      },
+    ]);
+    const { client } = makeClient();
+    const reports: (readonly WaitReading[])[] = [];
+    await mount(client, undefined, {
+      onWaitingChange: (readings) => {
+        reports.push(readings);
+      },
+    });
+    expect(reports.at(-1)?.length).toBe(1);
+
+    act(() => {
+      roots.at(-1)!.unmount();
+    });
+
+    expect(reports.at(-1)).toEqual([]);
   });
 });
 

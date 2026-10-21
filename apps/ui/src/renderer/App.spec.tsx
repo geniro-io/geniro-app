@@ -15,28 +15,67 @@ import {
 // The shell's heavy children are not what this spec is about. Chats is a
 // stand-in whose buttons fire the callbacks the shell hands it, so the shell's
 // own reaction to them is what a spec observes.
-vi.mock('./chats/Chats', () => ({
-  Chats: (props: {
-    phoneHomeSignal?: number;
-    onPhoneDetailChange?: (detail: boolean) => void;
-    onOpenSettings?: (section: 'fast-actions') => void;
-  }) => (
-    <>
-      <output data-slot="home-signal">{props.phoneHomeSignal ?? 0}</output>
-      <button type="button" onClick={() => props.onPhoneDetailChange?.(true)}>
-        open a thread
-      </button>
-      <button type="button" onClick={() => props.onPhoneDetailChange?.(false)}>
-        back to the list
-      </button>
-      <button
-        type="button"
-        onClick={() => props.onOpenSettings?.('fast-actions')}>
-        manage fast actions
-      </button>
-    </>
-  ),
+const chatsMock = vi.hoisted(() => ({
+  waits: [] as readonly WaitReading[],
+  opened: [] as string[],
+  /** The thread the stand-in's "open by hand" button opens, as a sidebar click would. */
+  byHand: '',
 }));
+vi.mock('./chats/Chats', async () => {
+  const { useEffect } = await import('react');
+  return {
+    Chats: (props: {
+      phoneHomeSignal?: number;
+      onPhoneDetailChange?: (detail: boolean) => void;
+      onOpenSettings?: (section: 'fast-actions') => void;
+      openRunId?: string | null;
+      onRunOpened?: () => void;
+      onActiveRunChange?: (runId: string | null) => void;
+      onWaitingChange?: (readings: readonly WaitReading[]) => void;
+    }) => {
+      // Honours a thread request the way the real screen does: opens it,
+      // reports it open, and clears the request.
+      const { openRunId, onActiveRunChange, onRunOpened } = props;
+      useEffect(() => {
+        if (openRunId) {
+          chatsMock.opened.push(openRunId);
+          onActiveRunChange?.(openRunId);
+          onRunOpened?.();
+        }
+      }, [openRunId, onActiveRunChange, onRunOpened]);
+      return (
+        <>
+          <output data-slot="home-signal">{props.phoneHomeSignal ?? 0}</output>
+          <button
+            type="button"
+            onClick={() => props.onPhoneDetailChange?.(true)}>
+            open a thread
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onPhoneDetailChange?.(false)}>
+            back to the list
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onOpenSettings?.('fast-actions')}>
+            manage fast actions
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onWaitingChange?.(chatsMock.waits)}>
+            report waits
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onActiveRunChange?.(chatsMock.byHand)}>
+            open by hand
+          </button>
+        </>
+      );
+    },
+  };
+});
 vi.mock('./daemon-client', () => ({
   DaemonClient: class {
     connect(): void {}
@@ -54,6 +93,7 @@ import type { DaemonHandle } from '../shared/contracts';
 import { createPreloadStub } from './__fixtures__/preload-stub';
 import { afterPopstate } from './__tests__/after-popstate';
 import { App } from './App';
+import type { WaitReading } from './chats/waiting';
 import { DaemonClient } from './daemon-client';
 
 (
@@ -560,5 +600,136 @@ describe('App — phone pages and the tab bar', () => {
     expect(sectionOpen()).toBe(false);
     expect(sectionsNav()).not.toBeNull();
     expect(location.hash).toBe('#/settings');
+  });
+});
+
+describe('App — ⌘J to what waits on the user', () => {
+  const approval: WaitReading = {
+    runId: 'approval',
+    state: 'asking',
+    since: '2026-10-21T10:01:00.000Z',
+  };
+  const reply: WaitReading = {
+    runId: 'reply',
+    state: 'unseen',
+    since: '2026-10-21T10:02:00.000Z',
+  };
+
+  async function boot(): Promise<void> {
+    chatsMock.opened = [];
+    window.geniro = createPreloadStub({
+      ensureDaemon: () => Promise.resolve(HANDLE),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('no daemon in this spec'))),
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    await act(async () => {
+      root.render(<App />);
+    });
+    await flush();
+  }
+
+  async function report(waits: readonly WaitReading[]): Promise<void> {
+    chatsMock.waits = waits;
+    await act(async () => {
+      buttonNamed('report waits')!.click();
+    });
+  }
+
+  async function pressJump(): Promise<void> {
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          metaKey: true,
+          code: 'KeyJ',
+          key: 'j',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await flush();
+  }
+
+  it('opens the approval first, then the unread reply, and counts both in the title bar', async () => {
+    await boot();
+    await report([approval, reply]);
+
+    expect(
+      container
+        .querySelector('[data-slot="waiting-status"]')
+        ?.getAttribute('aria-label'),
+    ).toContain('1 asking, 1 unread');
+
+    await pressJump();
+    expect(chatsMock.opened).toEqual(['approval']);
+
+    await pressJump();
+    expect(chatsMock.opened).toEqual(['approval', 'reply']);
+
+    // Opening the reply saw it, so the screen reports it gone; the next press
+    // wraps to the approval rather than standing still.
+    await report([approval]);
+    await pressJump();
+    expect(chatsMock.opened).toEqual(['approval', 'reply', 'approval']);
+  });
+
+  it('carries on down the queue past a thread the jump opened and the user then dealt with', async () => {
+    const second: WaitReading = {
+      runId: 'second',
+      state: 'asking',
+      since: '2026-10-21T10:01:30.000Z',
+    };
+    await boot();
+    await report([approval, second, reply]);
+
+    await pressJump();
+    await pressJump();
+    expect(chatsMock.opened).toEqual(['approval', 'second']);
+
+    // Answered: the thread on show is working now, and leaves the queue.
+    await report([approval, reply, { ...second, state: 'working' }]);
+    await pressJump();
+    expect(chatsMock.opened).toEqual(['approval', 'second', 'reply']);
+  });
+
+  it('starts again at the longest wait once a thread was opened some other way', async () => {
+    const later: WaitReading = {
+      runId: 'later',
+      state: 'unseen',
+      since: '2026-10-21T10:03:00.000Z',
+    };
+    await boot();
+    await report([approval, reply, later]);
+    await pressJump();
+    await pressJump();
+    expect(chatsMock.opened).toEqual(['approval', 'reply']);
+    await report([approval, later]);
+
+    const openByHand = async (runId: string): Promise<void> => {
+      chatsMock.byHand = runId;
+      await act(async () => {
+        buttonNamed('open by hand')!.click();
+      });
+    };
+    await openByHand('elsewhere');
+    await openByHand('reply');
+    await pressJump();
+
+    expect(chatsMock.opened).toEqual(['approval', 'reply', 'approval']);
+  });
+
+  it('does not re-open the thread on show when it is the only wait', async () => {
+    await boot();
+    await report([approval]);
+
+    await pressJump();
+    await pressJump();
+
+    expect(chatsMock.opened).toEqual(['approval']);
   });
 });

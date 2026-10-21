@@ -5267,3 +5267,155 @@ describe('AcpSession — whether the process can serve another turn', () => {
     expect(h.driver.canOpenTurn()).toBe(true);
   });
 });
+
+describe('AcpSession — skipping unchanged parameters', () => {
+  const selection = {
+    model: 'gpt-5.6-sol',
+    parameters: [{ id: 'effort', alternateIds: ['reasoning'], value: 'high' }],
+  };
+  function options(
+    model: string,
+    currentValue: string | null,
+  ): Record<string, unknown> {
+    return {
+      sessionId: 's-1',
+      configOptions: [
+        {
+          id: 'model',
+          category: 'model',
+          currentValue: model,
+          options: [{ value: 'gpt-5.6-sol' }, { value: 'other-model' }],
+        },
+        {
+          id: 'reasoning',
+          category: 'thought_level',
+          currentValue,
+          options: [{ value: 'medium' }, { value: 'high' }],
+        },
+      ],
+    };
+  }
+  function open(
+    currentValue: string | null,
+    overrides: Partial<AcpDriverOptions> = {},
+  ): Harness {
+    const h = harness({
+      promptAwaitsConfig: true,
+      skipUnchangedParameters: true,
+      modelSelection: selection,
+      ...overrides,
+    });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: options('gpt-5.6-sol', currentValue) });
+    return h;
+  }
+
+  it('skips the resolved option when it already matches, even when prompts await config', () => {
+    const h = open('high');
+    expect(h.sentAll('session/set_config_option')).toEqual([]);
+    expect(h.sentAll('session/prompt')).toHaveLength(1);
+  });
+
+  it('sends a differing value, holds the prompt, and skips it on the next live turn after confirmation', () => {
+    const h = open('medium');
+    expect(h.sentMethod('session/set_config_option')?.params).toEqual({
+      sessionId: 's-1',
+      configId: 'reasoning',
+      value: 'high',
+    });
+    expect(h.sentAll('session/prompt')).toEqual([]);
+    h.feed({ id: 3, result: options('gpt-5.6-sol', 'high') });
+    const prompt = h.sentMethod('session/prompt')!;
+    h.feed({ id: prompt.id, result: { stopReason: 'end_turn' } });
+    h.openTurn(BASE_INPUT);
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+    expect(h.sentAll('session/prompt')).toHaveLength(2);
+  });
+
+  it('uses the model frame reply at send time in both directions, rather than the session reply', () => {
+    for (const [before, after] of [
+      ['medium', 'high'],
+      ['high', 'medium'],
+    ] as const) {
+      const h = open(before, {
+        modelSelection: { ...selection, model: 'other-model' },
+      });
+      expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+      expect(h.sentAll('session/prompt')).toEqual([]);
+      h.feed({ id: 3, result: options('other-model', after) });
+      if (after === 'high') {
+        expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+        expect(h.sentAll('session/prompt')).toHaveLength(1);
+      } else {
+        expect(h.sentAll('session/set_config_option')).toHaveLength(2);
+        expect(h.sentAll('session/prompt')).toEqual([]);
+        h.feed({ id: 4, result: options('other-model', 'high') });
+        expect(h.sentAll('session/prompt')).toHaveLength(1);
+      }
+    }
+  });
+
+  it('sends again when a parameter reply describes no current values', () => {
+    const h = open('high', {
+      modelSelection: {
+        ...selection,
+        parameters: [
+          ...selection.parameters,
+          { id: 'reasoning', value: 'medium' },
+        ],
+      },
+    });
+    // The first frame is skipped. The second frame's reply says nothing about
+    // current values, so a later turn must send again rather than reuse high.
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+    expect(h.sentMethod('session/set_config_option')?.params).toEqual({
+      sessionId: 's-1',
+      configId: 'reasoning',
+      value: 'medium',
+    });
+    h.feed({ id: 3, result: {} });
+    const prompt = h.sentMethod('session/prompt')!;
+    h.feed({ id: prompt.id, result: { stopReason: 'end_turn' } });
+    h.openTurn(BASE_INPUT, { modelSelection: selection });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(2);
+    expect(h.sentAll('session/prompt')).toHaveLength(1);
+  });
+
+  it('uses each parameter reply for the next queued comparison', () => {
+    const h = open('high', {
+      modelSelection: {
+        ...selection,
+        parameters: [
+          ...selection.parameters,
+          { id: 'reasoning', value: 'medium' },
+          { id: 'reasoning', value: 'high' },
+        ],
+      },
+    });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+    h.feed({ id: 3, result: options('gpt-5.6-sol', 'medium') });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(2);
+    expect(h.sentAll('session/prompt')).toEqual([]);
+    h.feed({ id: 4, result: options('gpt-5.6-sol', 'high') });
+    expect(h.sentAll('session/prompt')).toHaveLength(1);
+  });
+
+  it('keeps sending equal values for an agent that has not opted in', () => {
+    expect(open('high').sentAll('session/set_config_option')).toEqual([]);
+    const h = open('high', { skipUnchangedParameters: false });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+    expect(h.sentAll('session/prompt')).toEqual([]);
+  });
+
+  it('skips only a known match, still sending an option with no current value', () => {
+    const known = open('high');
+    expect(known.sentAll('session/set_config_option')).toEqual([]);
+    const unknown = open(null);
+    expect(unknown.sentMethod('session/set_config_option')?.params).toEqual({
+      sessionId: 's-1',
+      configId: 'reasoning',
+      value: 'high',
+    });
+    expect(unknown.sentAll('session/prompt')).toEqual([]);
+  });
+});

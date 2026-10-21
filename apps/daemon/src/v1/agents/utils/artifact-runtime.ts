@@ -454,6 +454,13 @@ export const ARTIFACT_RUNTIME_SCRIPT = `
  * {@link withArtifactRuntime} puts the whole kit in a cascade layer of its own,
  * so the page's own CSS wins whatever order the two arrive in — and so do
  * Tailwind's utilities, which live in a layer declared after it.
+ *
+ * The ONE exception is the edge margins inside a kit box (`g-card`,
+ * `g-callout`, `g-step-body`, `g-disclosure-body`): those are `!important`, so
+ * a page's own `h3 { margin: 24px 0 8px }` cannot push the first heading away
+ * from its box's top or its step number — the misalignment a survey of agents'
+ * pages found where a heading came first in a padded box. A page opts in to it
+ * only by using the class.
  */
 export const ARTIFACT_KIT_STYLE = `
 :where(.g-card) { background: ${themeVar('surface')}; border: 1px solid ${themeVar('border')}; border-radius: ${themeVar('radius')}; padding: 16px; min-width: 0; }
@@ -484,12 +491,31 @@ export const ARTIFACT_KIT_STYLE = `
 :where(.g-kanban-list) { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
 :where(.g-kanban-card) { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px; font-size: 13px; background: ${themeVar('surface')}; border: 1px solid ${themeVar('border')}; border-radius: calc(${themeVar('radius')} - 2px); cursor: grab; }
 :where(.sortable-ghost) { opacity: 0.4; }
+:where(.g-callout) { padding: 12px 14px; background: ${themeVar('surface')}; border: 1px solid ${themeVar('border')}; border-left: 3px solid ${themeVar('primary')}; border-radius: ${themeVar('radius')}; min-width: 0; }
+:where(.g-callout-success) { border-left-color: ${themeVar('success')}; }
+:where(.g-callout-warning) { border-left-color: ${themeVar('warning')}; }
+:where(.g-callout-danger) { border-left-color: ${themeVar('danger')}; }
+:where(.g-step) { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; align-items: baseline; }
+:where(.g-step + .g-step) { margin-top: 24px; }
+:where(.g-step-num) { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 999px; background: ${themeVar('primary')}; color: ${themeVar('primary-fg')}; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+:where(.g-step-body) { min-width: 0; }
+:where(.g-disclosure) { background: ${themeVar('surface')}; border: 1px solid ${themeVar('border')}; border-radius: ${themeVar('radius')}; min-width: 0; }
+:where(.g-disclosure + .g-disclosure) { margin-top: 8px; }
+:where(.g-disclosure > summary) { padding: 10px 14px; font-weight: 600; }
+:where(.g-disclosure[open] > summary) { border-bottom: 1px solid ${themeVar('border')}; }
+:where(.g-disclosure-body) { padding: 12px 14px; }
+:where(.g-card, .g-callout, .g-step-body, .g-disclosure-body) > :where(:first-child) { margin-top: 0 !important; }
+:where(.g-card, .g-callout, .g-step-body, .g-disclosure-body) > :where(:last-child) { margin-bottom: 0 !important; }
+:where(.g-kv) { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); gap: 6px 16px; margin: 0; }
+:where(.g-kv dt) { color: ${themeVar('muted')}; font-weight: 400; }
+:where(.g-kv dd) { margin: 0; min-width: 0; }
+:where(.g-nowrap) { white-space: nowrap; }
 :where(.g-btn) { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font: inherit; font-size: 13px; font-weight: 500; border-radius: calc(${themeVar('radius')} - 2px); border: 1px solid transparent; background: ${themeVar('primary')}; color: ${themeVar('primary-fg')}; cursor: pointer; }
 :where(.g-btn-secondary) { background: ${themeVar('surface')}; color: ${themeVar('fg')}; border-color: ${themeVar('border')}; }
 :where(.g-btn:focus-visible, .g-kanban-card:focus-visible) { outline: 2px solid ${themeVar('primary')}; outline-offset: 2px; }
 :where(svg.lucide) { width: 1em; height: 1em; flex: none; }
 :where(code, kbd, pre:not(.mermaid)) { font-family: ${themeVar('font-mono')}; }
-:where(:not(pre) > code) { font-size: 0.92em; padding: 1px 4px; border-radius: 4px; background: ${themeVar('subtle')}; }
+:where(:not(pre) > code) { font-size: 0.92em; padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, ${themeVar('fg')} 10%, transparent); }
 :where(pre:not(.mermaid)) { padding: 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; background: ${themeVar('subtle')}; border-radius: ${themeVar('radius')}; }
 :where(pre.mermaid) { margin: 0; overflow-x: auto; background: transparent; }
 :where(.hljs-comment, .hljs-quote) { color: ${themeVar('muted')}; font-style: italic; }
@@ -507,15 +533,17 @@ export const ARTIFACT_KIT_STYLE = `
  * above Tailwind's reset and below its utilities, so `class="g-card p-2"` takes
  * the `p-2`. `geniro-base` is the frame wrapper's own floor (body padding, the
  * link colour), BELOW the kit, so `<a class="g-btn">` keeps the button's text
- * colour. Without Tailwind its layers are simply empty, and any
- * CSS the page writes outside a layer outranks all of them.
+ * colour. `geniro-elements` (how a bare `h2`, `table` or `summary` looks) is
+ * the lowest of all, under Tailwind's preflight, so a Tailwind page keeps the
+ * reset its utilities assume. Without Tailwind its layers are simply empty, and
+ * any CSS the page writes outside a layer outranks all of them.
  *
  * TWIN PARSER: `ARTIFACT_LAYER_ORDER` in
  * `apps/ui/src/renderer/chats/artifact-export.ts` restates this for the saved
  * file, whose theme block comes first; its spec reads this file.
  */
 export const ARTIFACT_LAYER_ORDER =
-  '@layer theme, base, geniro-base, geniro, components, utilities;';
+  '@layer geniro-elements, theme, base, geniro-base, geniro, components, utilities;';
 
 /**
  * Tailwind v4's browser build reads every `<style type="text/tailwindcss">` in

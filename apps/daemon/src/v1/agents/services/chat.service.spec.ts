@@ -2909,6 +2909,36 @@ describe('ChatService', () => {
       await settle(claude);
     });
 
+    it('refuses a blocking whole-file patch changed after its card was shown', async () => {
+      const { service, claude, patches, approvals } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const file = join(dir, 'whole.ts');
+      writeFileSync(file, 'original');
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'whole.ts',
+        newString: 'replacement',
+      });
+      await vi.waitFor(() =>
+        expect(approvals.listByRun(run.id)).toHaveLength(1),
+      );
+      writeFileSync(file, 'user edits');
+
+      expect(
+        approvals.resolve(
+          run.id,
+          approvals.listByRun(run.id)[0]!.requestId,
+          true,
+        ),
+      ).toBe(true);
+      await expect(proposed).resolves.toEqual({
+        status: 'stale',
+        reason: 'the file changed after the patch was shown',
+      });
+      expect(readFileSync(file, 'utf8')).toBe('user edits');
+      await settle(claude);
+    });
+
     it('sweeps a parked patch with its OWN sentence when the turn ends', async () => {
       // Its own set, and its own wording: "the question was answered" is the
       // wrong thing to tell an agent that proposed a patch.
@@ -3764,6 +3794,57 @@ describe('ChatService', () => {
         expect(readFileSync(join(dir, 'c.ts'), 'utf8')).toBe(
           'somebody else changed this\n',
         );
+      });
+
+      it('refuses a deferred whole-file patch changed before a simulated restart', async () => {
+        const { service, cursor, patches, approvals, itemDao, runDao } =
+          setup();
+        const run = await asking(service);
+        const file = join(dir, 'whole.ts');
+        writeFileSync(file, 'original');
+        expect(
+          await patches.propose(run.id, SINGLE_AGENT_NODE, {
+            filePath: 'whole.ts',
+            newString: 'replacement',
+          }),
+        ).toEqual({ status: 'posted' });
+        await settle(cursor);
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+        const stored = runDao.runs.get(run.id)!.pendingQuestion;
+        approvals.sweepDeferred(run.id);
+        writeFileSync(file, 'user edits');
+
+        await service.rehydrateDeferredQuestions();
+        expect(runDao.runs.get(run.id)!.pendingQuestion).toBe(stored);
+        expect(approvals.resolve(run.id, requestId, true)).toBe(true);
+        await vi.waitFor(() =>
+          expect(
+            itemDao.items.some(
+              (item) =>
+                item.kind === 'message' &&
+                item.payload.includes(
+                  'the file changed after the patch was shown',
+                ),
+            ),
+          ).toBe(true),
+        );
+        expect(readFileSync(file, 'utf8')).toBe('user edits');
+      });
+
+      it('clears a stored patch card without a fingerprint at boot', async () => {
+        const { service, approvals, runDao } = setup();
+        const run = await asking(service);
+        runDao.runs.get(run.id)!.pendingQuestion = JSON.stringify({
+          kind: 'patch',
+          requestId: 'old-patch',
+          file_path: 'a.ts',
+          new_string: 'replacement',
+        });
+
+        await service.rehydrateDeferredQuestions();
+
+        expect(runDao.runs.get(run.id)!.pendingQuestion).toBeNull();
+        expect(approvals.listByRun(run.id)).toEqual([]);
       });
 
       it('reports a deferred patch stale when the chat’s folder is gone, and does not recreate it', async () => {

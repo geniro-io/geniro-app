@@ -1,5 +1,7 @@
-import { realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import {
+  type FileHandle,
   link,
   lstat,
   mkdir,
@@ -13,17 +15,18 @@ import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyHostPatch } from './apply-patch';
+import { applyHostPatch, captureHostPatchFingerprint } from './apply-patch';
 
 /**
  * Something to do to the disk at one moment of a write — just after the writer
  * READ a file, or just before it OPENS one: the gaps between its checks and its
  * write that a background command could use. Only the timing is intercepted;
- * every call still reaches the real filesystem.
+ * the filesystem answers remain real unless a test injects an I/O failure.
  */
 const race = vi.hoisted(() => ({
   afterRead: null as { path: string; run: () => void } | null,
   beforeOpen: null as { path: string; run: () => void } | null,
+  afterOpen: null as ((handle: FileHandle) => void) | null,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -43,10 +46,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (race.beforeOpen !== null && path === race.beforeOpen.path) {
         race.beforeOpen.run();
       }
-      return (actual.open as (...args: unknown[]) => Promise<unknown>)(
-        path,
-        ...rest,
-      );
+      const handle = await (
+        actual.open as (...args: unknown[]) => Promise<FileHandle>
+      )(path, ...rest);
+      race.afterOpen?.(handle);
+      return handle;
     },
   };
 });
@@ -71,6 +75,7 @@ afterEach(() => {
   made.length = 0;
   race.afterRead = null;
   race.beforeOpen = null;
+  race.afterOpen = null;
 });
 
 describe('applyHostPatch — the ordinary path', () => {
@@ -92,11 +97,14 @@ describe('applyHostPatch — the ordinary path', () => {
 
   it('writes the whole file when no old_string was given', async () => {
     const cwd = await workspace();
-
-    const outcome = await applyHostPatch(cwd, {
+    const patch = {
       filePath: 'src/deep/new.ts',
       newString: 'export const x = 1;\n',
-    });
+    };
+    const fingerprint = await captureHostPatchFingerprint(cwd, patch);
+    expect(fingerprint).toBe('absent');
+
+    const outcome = await applyHostPatch(cwd, patch, fingerprint);
 
     expect(outcome).toEqual({ status: 'applied', path: 'src/deep/new.ts' });
     expect(await readFile(join(cwd, 'src/deep/new.ts'), 'utf8')).toBe(
@@ -131,6 +139,168 @@ describe('applyHostPatch — the ordinary path', () => {
     });
 
     expect(outcome).toEqual({ status: 'applied', path: 'a.ts' });
+  });
+});
+
+describe('applyHostPatch — whole-file fingerprints', () => {
+  it.each(['open', 'stat', 'read', 'directory'] as const)(
+    'returns no fingerprint on %s failure without throwing',
+    async (failure) => {
+      const cwd = await workspace();
+      const file = join(cwd, 'a.ts');
+      if (failure === 'directory') {
+        await mkdir(file);
+      } else {
+        await writeFile(file, 'original');
+      }
+      const error = Object.assign(new Error('I/O failure'), { code: 'EACCES' });
+      if (failure === 'open') {
+        race.beforeOpen = {
+          path: realpathSync(file),
+          run: () => {
+            throw error;
+          },
+        };
+      } else if (failure !== 'directory') {
+        race.afterOpen = (handle) => {
+          vi.spyOn(handle, failure).mockRejectedValueOnce(error);
+        };
+      }
+
+      await expect(
+        captureHostPatchFingerprint(cwd, {
+          filePath: 'a.ts',
+          newString: 'replacement',
+        }),
+      ).resolves.toBeNull();
+      if (failure !== 'directory') {
+        expect(await readFile(file, 'utf8')).toBe('original');
+      }
+    },
+  );
+
+  it('takes no fingerprint and opens nothing for paths outside containment', async () => {
+    const cwd = await workspace();
+    const other = await workspace();
+    const outside = join(other, 'secret');
+    await writeFile(outside, 'secret');
+    await symlink(other, join(cwd, 'link'), 'dir');
+    const opened = vi.fn();
+    race.beforeOpen = { path: realpathSync(outside), run: opened };
+
+    for (const filePath of [outside, 'link/secret']) {
+      expect(
+        await captureHostPatchFingerprint(cwd, {
+          filePath,
+          newString: 'replacement',
+        }),
+      ).toBeNull();
+    }
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it('refuses a whole-file write when its fingerprint could not be taken', async () => {
+    const cwd = await workspace();
+    const file = join(cwd, 'a.ts');
+    await writeFile(file, 'original');
+
+    expect(
+      await applyHostPatch(
+        cwd,
+        { filePath: 'a.ts', newString: 'replacement' },
+        null,
+      ),
+    ).toEqual({
+      status: 'stale',
+      reason: 'the file’s original state could not be checked',
+    });
+    expect(await readFile(file, 'utf8')).toBe('original');
+  });
+
+  it('fingerprints raw bytes and replaces an unchanged file from its beginning', async () => {
+    const cwd = await workspace();
+    const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x61]);
+    await writeFile(join(cwd, 'a.ts'), bytes);
+    const patch = { filePath: 'a.ts', newString: 'new body' };
+
+    const fingerprint = await captureHostPatchFingerprint(cwd, patch);
+
+    expect(fingerprint).toEqual({
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    });
+    expect(await applyHostPatch(cwd, patch, fingerprint)).toEqual({
+      status: 'applied',
+      path: 'a.ts',
+    });
+    expect(await readFile(join(cwd, 'a.ts'), 'utf8')).toBe('new body');
+  });
+
+  it('refuses a file edited after the fingerprint without overwriting it', async () => {
+    const cwd = await workspace();
+    const fingerprint = {
+      sha256: createHash('sha256').update('original').digest('hex'),
+    };
+    const file = join(cwd, 'a.ts');
+    await writeFile(file, 'original');
+    race.beforeOpen = {
+      path: realpathSync(file),
+      run: () => writeFileSync(file, 'changed'),
+    };
+
+    expect(
+      await applyHostPatch(
+        cwd,
+        { filePath: 'a.ts', newString: 'replacement' },
+        fingerprint,
+      ),
+    ).toEqual({
+      status: 'stale',
+      reason: 'the file changed after the patch was shown',
+    });
+    expect(await readFile(join(cwd, 'a.ts'), 'utf8')).toBe('changed');
+  });
+
+  it('refuses an absent target created at open time without overwriting it', async () => {
+    const cwd = await workspace();
+    const file = join(cwd, 'a.ts');
+    race.beforeOpen = {
+      path: file,
+      run: () => writeFileSync(file, 'created meanwhile'),
+    };
+
+    expect(
+      await applyHostPatch(
+        cwd,
+        { filePath: 'a.ts', newString: 'replacement' },
+        'absent',
+      ),
+    ).toEqual({
+      status: 'stale',
+      reason: 'the file changed after the patch was shown',
+    });
+    expect(await readFile(file, 'utf8')).toBe('created meanwhile');
+  });
+
+  it('refuses a fingerprinted target deleted at open time without recreating it', async () => {
+    const cwd = await workspace();
+    const file = join(cwd, 'a.ts');
+    await writeFile(file, 'original');
+    const fingerprint = {
+      sha256: createHash('sha256').update('original').digest('hex'),
+    };
+    race.beforeOpen = { path: realpathSync(file), run: () => rmSync(file) };
+
+    expect(
+      await applyHostPatch(
+        cwd,
+        { filePath: 'a.ts', newString: 'replacement' },
+        fingerprint,
+      ),
+    ).toEqual({
+      status: 'stale',
+      reason: 'the file changed after the patch was shown',
+    });
+    await expect(readFile(file)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 
@@ -189,12 +359,19 @@ describe('applyHostPatch — containment', () => {
     const other = await workspace();
     await symlink(other, join(cwd, 'link'), 'dir');
 
-    const outcome = await applyHostPatch(cwd, {
-      filePath: 'link/planted.ts',
-      newString: 'export const owned = true;\n',
-    });
+    const outcome = await applyHostPatch(
+      cwd,
+      {
+        filePath: 'link/planted.ts',
+        newString: 'export const owned = true;\n',
+      },
+      'absent',
+    );
 
-    expect(outcome.status).toBe('stale');
+    expect(outcome).toEqual({
+      status: 'stale',
+      reason: 'the path resolves outside this chat’s folder through a link',
+    });
     await expect(readFile(join(other, 'planted.ts'), 'utf8')).rejects.toThrow();
   });
 
@@ -229,10 +406,14 @@ describe('applyHostPatch — containment', () => {
     await mkdir(join(other, 'deeper'));
     await symlink(join(other, 'deeper'), join(cwd, 'link'), 'dir');
 
-    const outcome = await applyHostPatch(cwd, {
-      filePath: 'link/../x.ts',
-      newString: 'export const x = 1;\n',
-    });
+    const outcome = await applyHostPatch(
+      cwd,
+      {
+        filePath: 'link/../x.ts',
+        newString: 'export const x = 1;\n',
+      },
+      'absent',
+    );
 
     expect(outcome).toEqual({ status: 'applied', path: 'x.ts' });
     expect(await readFile(join(cwd, 'x.ts'), 'utf8')).toBe(
@@ -304,12 +485,21 @@ describe('applyHostPatch — containment', () => {
     await writeFile(join(other, 'authorized_keys'), 'ssh-ed25519 AAAA', 'utf8');
     await link(join(other, 'authorized_keys'), join(cwd, 'keys.txt'));
 
-    const outcome = await applyHostPatch(cwd, {
+    const patch = {
       filePath: 'keys.txt',
       newString: 'ssh-ed25519 attacker',
-    });
+    };
+    const outcome = await applyHostPatch(
+      cwd,
+      patch,
+      await captureHostPatchFingerprint(cwd, patch),
+    );
 
-    expect(outcome.status).toBe('stale');
+    expect(outcome).toEqual({
+      status: 'stale',
+      reason:
+        'the file has other hard links, so writing it could change a file outside this chat’s folder',
+    });
     expect(await readFile(join(other, 'authorized_keys'), 'utf8')).toBe(
       'ssh-ed25519 AAAA',
     );
@@ -325,12 +515,19 @@ describe('applyHostPatch — containment', () => {
     await writeFile(join(other, 'target.txt'), 'original', 'utf8');
     await symlink(join(other, 'target.txt'), join(cwd, 'notes.md'));
 
-    const outcome = await applyHostPatch(cwd, {
-      filePath: 'notes.md',
-      newString: 'PWNED\n',
-    });
+    const outcome = await applyHostPatch(
+      cwd,
+      {
+        filePath: 'notes.md',
+        newString: 'PWNED\n',
+      },
+      { sha256: createHash('sha256').update('original').digest('hex') },
+    );
 
-    expect(outcome.status).toBe('stale');
+    expect(outcome).toEqual({
+      status: 'stale',
+      reason: 'the path resolves outside this chat’s folder through a link',
+    });
     expect(await readFile(join(other, 'target.txt'), 'utf8')).toBe('original');
   });
 
@@ -342,12 +539,19 @@ describe('applyHostPatch — containment', () => {
     const other = await workspace();
     await symlink(join(other, 'planted.ts'), join(cwd, 'notes.md'));
 
-    const outcome = await applyHostPatch(cwd, {
-      filePath: 'notes.md',
-      newString: 'export const owned = true;\n',
-    });
+    const outcome = await applyHostPatch(
+      cwd,
+      {
+        filePath: 'notes.md',
+        newString: 'export const owned = true;\n',
+      },
+      'absent',
+    );
 
-    expect(outcome.status).toBe('stale');
+    expect(outcome).toEqual({
+      status: 'stale',
+      reason: 'the path resolves outside this chat’s folder through a link',
+    });
     await expect(readFile(join(other, 'planted.ts'), 'utf8')).rejects.toThrow();
   });
 

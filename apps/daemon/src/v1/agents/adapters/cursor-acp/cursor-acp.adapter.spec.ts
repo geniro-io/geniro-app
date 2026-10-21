@@ -1066,6 +1066,49 @@ describe('CursorAcpAdapter turn shaping', () => {
         .filter((frame) => frame.method === 'session/set_config_option')
         .at(-1)?.id;
 
+    it('sends a resumed prompt at once when the load reply already reports the requested effort', () => {
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start(
+        { ...BASE, resumeSessionId: 's', model: 'gpt-5.6-sol', effort: 'high' },
+        () => {},
+      );
+      child.stdout.emitData(
+        stdoutLine({
+          id: 1,
+          result: {
+            protocolVersion: 1,
+            agentCapabilities: { loadSession: true },
+          },
+        }),
+      );
+      expect(methodsOn(child)).toContain('session/load');
+      child.stdout.emitData(
+        stdoutLine({
+          id: 2,
+          result: modelOptions([
+            {
+              id: 'model',
+              category: 'model',
+              current: 'gpt-5.6-sol',
+              values: ['gpt-5.6-sol'],
+            },
+            {
+              id: 'reasoning',
+              category: 'thought_level',
+              current: 'high',
+              values: ['medium', 'high'],
+            },
+          ]),
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([]);
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
+
     it('holds a card’s prompt until its effort frame is answered', () => {
       const { spawn, child } = fakeSpawn();
       new CursorAcpAdapter({

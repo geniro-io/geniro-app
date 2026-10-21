@@ -3164,6 +3164,12 @@ export class CursorAcpAdapter extends AgentAdapter {
         // It costs one `set_config_option` round trip per turn that sends a
         // frame, ~1.7–2.0s on that build.
         promptAwaitsConfig: true,
+        // Verified against billing on 2026.10.19-6bbf2c4: a load reporting
+        // reasoning=high ran at gpt-5.6-sol-high without any config frame.
+        // Skipping that frame saved 2.23s. A fresh turn profile seeded with
+        // default parameters instead loaded medium and billed medium — trust
+        // THIS reply, never the value requested by the preceding turn.
+        skipUnchangedParameters: true,
         turnOptions: (turnInput) => this.acpTurnOptions(turnInput),
         declinedWithoutNotice: CURSOR_SILENTLY_DECLINED_METHODS,
         question: {

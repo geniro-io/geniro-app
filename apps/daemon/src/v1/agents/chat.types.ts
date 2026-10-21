@@ -1467,6 +1467,9 @@ export interface HostPatch {
   summary?: string;
 }
 
+/** The whole-file target's byte state when its patch card was raised. */
+export type HostPatchFingerprint = 'absent' | { sha256: string };
+
 /**
  * What a proposed patch resolves to.
  *

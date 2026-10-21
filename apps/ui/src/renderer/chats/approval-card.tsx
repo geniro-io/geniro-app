@@ -1222,7 +1222,7 @@ function PermissionCard({
                 type="button"
                 variant="outline"
                 title={optionScopeHint(option)}
-                disabled={option.allow && hazards.gates && !acknowledged}
+                disabled={option.allow && gate.blocksApprove}
                 onClick={() =>
                   respond(option.allow, undefined, undefined, option.id)
                 }>

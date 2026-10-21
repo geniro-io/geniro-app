@@ -525,6 +525,7 @@ describe('verdict round-trip', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
     );
 
     track('req-o');

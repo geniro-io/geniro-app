@@ -1526,8 +1526,131 @@ describe('CallBlock', () => {
       ),
     );
     expect(container.querySelector('[data-slot="badge"]')?.textContent).toBe(
-      'cursor',
+      'cursor · 2/2',
     );
+    expect(
+      container.querySelector('[data-slot="badge"]')?.getAttribute('title'),
+    ).toBe('Pool member 2 of 2');
+  });
+
+  it('shows a same-CLI pool switch and its reason on the collapsed card after an anchored reload', () => {
+    const pooled: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
+      ['orch', { name: 'Orchestrator', kind: 'agent', agent: 'claude' }],
+      [
+        'poet',
+        {
+          name: 'Poet',
+          kind: 'agent',
+          agent: 'claude',
+          pool: ['claude', 'claude', 'cursor-agent'],
+        },
+      ],
+    ]);
+    const started = item(
+      'call_started',
+      {
+        callId: 'call-1',
+        calleeNodeId: 'poet',
+        member: 1,
+      },
+      'orch',
+    );
+    const previous = item(
+      'message',
+      {
+        callId: 'call-1',
+        text: 'Checking the metre.',
+      },
+      'poet',
+    );
+    const reason =
+      'Poet: pool member 1 hit a usage limit — handing the call to member 2.';
+    const handOff = item(
+      'system',
+      {
+        callId: 'call-1',
+        member: 2,
+        message: reason,
+      },
+      'poet',
+    );
+    const renderRows = (rows: ChatItem[], anchorIds?: Set<string>): void => {
+      const block = groupTranscript(rows, { anchorIds })[0] as CallBlockEntry;
+      act(() => root.render(<CallBlock block={block} nodes={pooled} />));
+    };
+    renderRows([started, previous]);
+    expect(container.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'claude · 1/3',
+    );
+
+    renderRows([started, previous, handOff]);
+    expect(container.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'claude · 2/3',
+    );
+    expect(
+      container.querySelector('[data-slot="badge"]')?.getAttribute('title'),
+    ).toBe('Pool member 2 of 3');
+    expect(container.textContent).toContain(reason);
+    expect(container.textContent).not.toContain('Checking the metre.');
+    expect(container.querySelector('[aria-expanded="false"]')).not.toBeNull();
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    renderRows([started, previous, handOff], new Set([handOff.id]));
+    expect(container.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'claude · 2/3',
+    );
+    expect(container.textContent).toContain(reason);
+
+    const spoken = item(
+      'message',
+      {
+        callId: 'call-1',
+        text: 'The second member is checking the metre.',
+      },
+      'poet',
+    );
+    renderRows([started, previous, handOff, spoken], new Set([handOff.id]));
+    expect(container.textContent).toContain(
+      'The second member is checking the metre.',
+    );
+    expect(
+      container.querySelector('[data-slot="call-pool-handoff"]')?.textContent,
+    ).toBe(reason);
+  });
+
+  it('keeps an anchored handoff reason visible when opened without duplicating a loaded notice', () => {
+    const started = item(
+      'call_started',
+      { callId: 'call-1', calleeNodeId: 'poet', member: 1 },
+      'orch',
+    );
+    const reason =
+      'Poet: pool member 1 hit a usage limit — handing the call to member 2.';
+    const handOff = item(
+      'system',
+      { callId: 'call-1', member: 2, severity: 'info', message: reason },
+      'poet',
+    );
+    const renderRows = (anchorIds?: Set<string>): void => {
+      const block = groupTranscript([started, handOff], {
+        anchorIds,
+      })[0] as CallBlockEntry;
+      act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    };
+    renderRows(new Set([handOff.id]));
+    expect(container.textContent).toContain(reason);
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-expanded="false"]',
+    )!;
+    act(() => toggle.click());
+    expect(
+      container.querySelector('button[aria-expanded="true"]'),
+    ).not.toBeNull();
+    expect(container.textContent?.split(reason)).toHaveLength(2);
+
+    renderRows();
+    expect(container.textContent?.split(reason)).toHaveLength(2);
   });
 
   it('a COMPLETED call ends with the "Result from X" section', () => {

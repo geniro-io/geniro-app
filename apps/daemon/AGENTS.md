@@ -210,8 +210,9 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - claude question-capable turns (callees and callers) spawn in ask mode with the daemon auto-approving plain permissions (bypass mode strips AskUserQuestion) — only for an `auto` node; an explicit `ask` node keeps the human card.
 - cursor `cursor/ask_question` must never be declined `-32601` (cursor would replay it as permissions that `auto` approves). A free-text answer naming no option is sent as `skipped`.
 - Waits: `await_agent` / sync `call_agent` are bounded at 80% of `mcp.toolCallDeadlineMs` and by `DEFAULT_AWAIT_TIMEOUT_MS`; never unbounded. A user message releases waits (`interruptWaits`). Unknown arguments are refused. Call tools carry `ALWAYS_LOADED_TOOL_META`.
-- **Agent pool** (`WorkflowAgentNode.pool`): only calls use the pool, and the node's own conversation is member 1.
-  - Hand-on only on a limit, a lapsed sign-in, or a failure before any tool call; never on cancel or mid-work.
+- **Agent pool** (`WorkflowAgentNode.pool`): calls and DAG node turns can hand work to another member.
+  - Hand-on only on a limit, a lapsed sign-in, or a failure before any tool call; never on cancel or an unclassified failure mid-work.
+  - A continued call starts on its session's member. On hand-on, recent history from that conversation and its original brief go into a fresh session; another conversation's rows never do. An explicit `member` selection disables fallback.
   - A handed-on attempt writes no terminal row and retires the kept process.
   - `node_state` belongs to member 1; spend rows name their own member's agent and model.
   - `calleeSummary` never names a member's config directory (it goes to the caller's provider).

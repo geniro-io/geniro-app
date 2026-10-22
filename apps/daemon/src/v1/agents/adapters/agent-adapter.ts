@@ -565,7 +565,8 @@ export abstract class AgentAdapter {
    * The pull requests this CLI's own record says one conversation touched, in
    * the order it recorded them; empty for a CLI that keeps no such record.
    * Shown beside the ones the transcript capture saw the thread open
-   * (`Run.touchedPullRequests`), never counted as opened. Must NEVER throw —
+   * (`Run.touchedPullRequests`), never counted as opened, and kept only when
+   * the thread names the pull request (`textNamesPullRequest`). Must NEVER throw —
    * an unreadable record costs its chips, not the chat list.
    */
   readSessionPullRequests(

@@ -102,7 +102,13 @@ function result(
  * count is the only way to say that.
  */
 function daos(rows: Row[]) {
-  const counts = { max: 0, candidates: 0, placed: 0 };
+  const counts = {
+    max: 0,
+    candidates: 0,
+    placed: 0,
+    /** Each `(afterSeq, throughSeq]` the thread was read over for a pull request. */
+    named: [] as [number, number][],
+  };
   const itemDao = {
     maxSeq: async () => {
       counts.max += 1;
@@ -177,6 +183,20 @@ function daos(rows: Row[]) {
             : [[seq, row.createdAt ?? WRITTEN_AT] as const];
         }),
       ),
+    // Every row in `(afterSeq, throughSeq]` as a candidate: the real DAO only
+    // narrows them (pinned in item.dao.spec.ts), and the service's own
+    // `textNamesPullRequest` decides, so it runs here as in production.
+    pullRequestNamingCandidates: async (
+      _runId: string,
+      _pullRequest: unknown,
+      afterSeq: number,
+      throughSeq: number,
+    ) => {
+      counts.named.push([afterSeq, throughSeq]);
+      return rows
+        .filter((row) => row.seq > afterSeq && row.seq <= throughSeq)
+        .map((row) => row.payload);
+    },
   } as unknown as ItemDao;
   return { itemDao, counts };
 }
@@ -552,7 +572,7 @@ describe('PullRequestCaptureService', () => {
       const { itemDao } = daos([
         call(1, 'toolu_1', 'gh pr checkout 7', '2026-10-13T20:36:00.000Z'),
         result(2, 'toolu_1', 'ok', '2026-10-13T20:36:40.000Z'),
-        call(3, 'toolu_2', 'ls', '2026-10-13T20:38:00.000Z'),
+        call(3, 'toolu_2', 'gh pr checkout 8', '2026-10-13T20:38:00.000Z'),
         result(4, 'toolu_2', 'a', '2026-10-13T20:38:01.000Z'),
       ]);
       const { dao, writes } = runDao();
@@ -675,13 +695,21 @@ describe('PullRequestCaptureService', () => {
         runId: 'run-1',
         status: null,
         pullRequests: [
-          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: CREATED,
+            seq: 2,
+            opened: true,
+          },
           {
             owner: 'acme',
             repo: 'platform',
             number: 6841,
             url: 'https://github.com/acme/platform/pull/6841',
             seq: 4,
+            opened: false,
           },
         ],
       },
@@ -720,6 +748,7 @@ describe('PullRequestCaptureService', () => {
             number: 6841,
             url: 'https://github.com/acme/platform/pull/6841',
             seq: 2,
+            opened: false,
           },
         ],
       },
@@ -802,6 +831,214 @@ describe('PullRequestCaptureService', () => {
     expect(readRunPullRequests(writes[0]?.touchedPullRequests ?? null)).toEqual(
       [carried],
     );
+  });
+
+  it('keeps only the touched pull requests the thread itself names, never one claude read off the branch its folder had checked out', async () => {
+    // A workflow node pushes a worktree's branch with `git -C`, from a shared
+    // checkout that sits on ANOTHER pull request's head branch. claude 2.1.295
+    // answers every push with `gh pr view --json url` in its own folder, so its
+    // record names that other pull request (#7207) — which nothing in this
+    // thread mentions. The pull request the thread was sent to review (#6502)
+    // is named in its transcript and stays.
+    const { itemDao } = daos([
+      result(
+        1,
+        'toolu_0',
+        'Review PR https://github.com/acme/platform/pull/6502 and give me visuals',
+        '2026-10-22T09:50:00.000Z',
+      ),
+      call(
+        2,
+        'toolu_1',
+        'git -C "$WT" push origin "$REFSPEC"',
+        '2026-10-22T09:54:00.000Z',
+      ),
+      result(
+        3,
+        'toolu_1',
+        'To github.com:acme/platform.git\n * [new branch]  assets/pr-6502',
+        '2026-10-22T09:54:05.000Z',
+      ),
+    ]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...sessionRecords([
+        touchedRecord(6502, '2026-10-22T09:51:00.000Z'),
+        touchedRecord(7207, '2026-10-22T09:54:06.358Z'),
+      ]).deps,
+    ).sync([chatRun()], em);
+
+    expect(
+      readRunPullRequests(writes[0]?.touchedPullRequests ?? null).map(
+        (row) => row.number,
+      ),
+    ).toEqual([6502]);
+  });
+
+  it('reads the thread again for a record it left unnamed only over the rows written since, and keeps it once they name it', async () => {
+    const rows = [
+      call(1, 'toolu_1', 'git -C "$WT" push', '2026-10-22T09:54:00.000Z'),
+      result(2, 'toolu_1', 'Everything up-to-date', '2026-10-22T09:54:05.000Z'),
+    ];
+    const { itemDao, counts } = daos(rows);
+    const { dao, writes } = runDao();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...sessionRecords([touchedRecord(7207, '2026-10-22T09:54:06.000Z')]).deps,
+    );
+    const run = chatRun();
+
+    await service.sync([run], em);
+    rows.push(
+      call(
+        3,
+        'toolu_2',
+        'gh pr view 7207 --json url',
+        '2026-10-22T10:00:00.000Z',
+      ),
+      result(4, 'toolu_2', 'ok', '2026-10-22T10:00:01.000Z'),
+    );
+    await service.sync([run], em);
+
+    expect(writes[0]?.touchedPullRequests).toBeNull();
+    expect(counts.named).toEqual([
+      [-1, 2],
+      [2, 4],
+    ]);
+    expect(
+      readRunPullRequests(writes[1]?.touchedPullRequests ?? null).map(
+        (row) => row.number,
+      ),
+    ).toEqual([7207]);
+  });
+
+  it('keeps a touched pull request it carried from an older rule when the thread names it', async () => {
+    const { itemDao } = daos([
+      call(
+        1,
+        'toolu_1',
+        'gh pr view 7207 --json url',
+        '2026-10-22T09:54:00.000Z',
+      ),
+      result(2, 'toolu_1', 'ok', '2026-10-22T09:54:05.000Z'),
+    ]);
+    const { dao, writes } = runDao();
+    const carried = {
+      owner: 'acme',
+      repo: 'platform',
+      number: 7207,
+      url: 'https://github.com/acme/platform/pull/7207',
+      seq: 2,
+    };
+    const run = chatRun({
+      pullRequestsScannedSeq: 2,
+      pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION - 1,
+      touchedPullRequests: JSON.stringify([carried]),
+    });
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () =>
+          run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION
+            ? []
+            : [run],
+      }),
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+
+    await service.rescanOutdatedQuietly();
+
+    expect(readRunPullRequests(writes[0]?.touchedPullRequests ?? null)).toEqual(
+      [carried],
+    );
+  });
+
+  it('announces the emptied list when a rescan drops the only pull request a run showed', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'git -C "$WT" push', '2026-10-22T09:54:00.000Z'),
+      result(2, 'toolu_1', 'Everything up-to-date', '2026-10-22T09:54:05.000Z'),
+    ]);
+    const { dao } = runDao();
+    const deps = settleDeps();
+    const run = chatRun({
+      pullRequestsScannedSeq: 2,
+      pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION - 1,
+      touchedPullRequests: JSON.stringify([
+        {
+          owner: 'acme',
+          repo: 'platform',
+          number: 7207,
+          url: 'https://github.com/acme/platform/pull/7207',
+          seq: 2,
+        },
+      ]),
+    });
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () =>
+          run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION
+            ? []
+            : [run],
+      }),
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+
+    await service.rescanOutdatedQuietly();
+
+    expect(deps.published).toEqual([
+      { runId: 'run-1', status: null, pullRequests: [] },
+    ]);
+  });
+
+  it('drops a touched pull request it carried from an older rule when the thread never names it', async () => {
+    // The rows a rescan finds already stored: records taken before the thread
+    // was checked for naming them must not outlive the rule that rejects them.
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'git -C "$WT" push', '2026-10-22T09:54:00.000Z'),
+      result(2, 'toolu_1', 'Everything up-to-date', '2026-10-22T09:54:05.000Z'),
+    ]);
+    const { dao, writes } = runDao();
+    const carried = {
+      owner: 'acme',
+      repo: 'platform',
+      number: 7207,
+      url: 'https://github.com/acme/platform/pull/7207',
+      seq: 2,
+    };
+    const run = chatRun({
+      pullRequestsScannedSeq: 2,
+      pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION - 1,
+      touchedPullRequests: JSON.stringify([carried]),
+    });
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () =>
+          run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION
+            ? []
+            : [run],
+      }),
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+
+    await service.rescanOutdatedQuietly();
+
+    expect(writes[0]?.touchedPullRequests).toBeNull();
   });
 
   it('still captures the transcript when the conversations cannot be listed', async () => {
@@ -1692,7 +1929,14 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
         // read the run must not assert whether it is still going.
         status: null,
         pullRequests: [
-          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: CREATED,
+            seq: 2,
+            opened: true,
+          },
         ],
       },
     ]);
@@ -1768,7 +2012,14 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
         runId: 'run-1',
         status: null,
         pullRequests: [
-          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: CREATED,
+            seq: 2,
+            opened: true,
+          },
         ],
       },
     ]);
@@ -1834,7 +2085,14 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
         runId: 'run-1',
         status: null,
         pullRequests: [
-          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: CREATED,
+            seq: 2,
+            opened: true,
+          },
         ],
       },
     ]);

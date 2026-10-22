@@ -1,4 +1,5 @@
-import type { RunPullRequest } from '../chat.types';
+import type { ItemKind } from '../../runs/runs.types';
+import type { DisplayedPullRequest, RunPullRequest } from '../chat.types';
 
 /**
  * Reading the pull requests a run OPENED out of the transcript it already
@@ -298,8 +299,127 @@ export function readPullRequestUrls(
  *
  * 2: a URL that ends its line after a label, and the CLI's own record of the
  * pull requests a session touched (`AgentAdapter.readSessionPullRequests`).
+ * 3: a CLI's record is kept only when the run opened that pull request or its
+ * thread names it ({@link textNamesPullRequest}); a record stored before is
+ * checked again on the re-read and dropped when the thread does not.
  */
-export const PULL_REQUEST_SCAN_VERSION = 2;
+export const PULL_REQUEST_SCAN_VERSION = 3;
+
+/**
+ * The rows a thread names a pull request in: what the agent ran and was
+ * answered, what it said, and the briefs and answers of its agent-to-agent
+ * calls. A user's own message is a `message` row too.
+ */
+export const PULL_REQUEST_NAMING_KINDS: readonly ItemKind[] = [
+  'tool_call',
+  'tool_result',
+  'message',
+  'call_started',
+  'call_result',
+];
+
+/**
+ * What a row must contain to name `pullRequest` ({@link textNamesPullRequest}):
+ * the number, and either the repository's pull path or a `gh pr` command. The
+ * database's prefilter is built from these, so it can never be narrower than
+ * the rule. `repoPath` is lower-cased, for a lower-cased payload: GitHub names
+ * a repository in any case.
+ */
+export function pullRequestNamingNeedles(pullRequest: {
+  owner: string;
+  repo: string;
+  number: number;
+}): { number: string; repoPath: string; command: string } {
+  return {
+    number: String(pullRequest.number),
+    repoPath: `${pullRequest.owner}/${pullRequest.repo}/pull`.toLowerCase(),
+    command: GH_PR,
+  };
+}
+
+const GH_PR = 'gh pr ';
+
+/** A `gh pr <verb> ` at one index (sticky), its arguments following. */
+const GH_PR_VERB = /\bgh pr [a-z-]+ /y;
+
+/**
+ * One piece of a command's arguments (sticky), read from a row's stored JSON,
+ * so quotes arrive as `\"` and a newline as the two characters `\n`. Groups:
+ * 1 a `\"…\"` span, 2 a `'…'` span — each ONE argument, whatever separators
+ * it holds; 3 the end of the command — a separator outside any span, or a `"`
+ * with no backslash, which ends the JSON string holding the command; 4 a bare
+ * word; 5 any other single character (a `)` or backtick closing a
+ * substitution, an unclosed quote).
+ */
+const ARGUMENT =
+  /\s*(?:\\"((?:[^\\"]|\\[^"])*?)\\"|'([^'"]*)'|(\\n|[\n;&|]|")|((?:[^\s\\;&|"'`()]|\\(?![n"]))+)|(\\"|[^]))/y;
+
+/** Prose punctuation a bare word may end in (`Use gh pr checkout 7207.`). */
+const TRAILING_PUNCTUATION = /[.,:!?]+$/;
+
+/**
+ * Whether `payload` — a row's stored JSON — names this pull request: its
+ * address (the web URL, or the API's `repos/<owner>/<repo>/pulls/<n>`), or a
+ * `gh pr <verb>` command with an argument that IS its number (bare,
+ * `#`-prefixed, or quoted). A longer number is another pull request, and so is
+ * one inside a longer argument such as a quoted `--body`.
+ *
+ * What makes a CLI's own record of a pull request the thread's: claude answers
+ * every push with `gh pr view` in its own folder, so it also records the pull
+ * request of whatever branch that folder has checked out — in a shared
+ * checkout, another thread's.
+ *
+ * Linear in `payload`: a row can be a large tool result, and a pattern that
+ * backtracked over it would hold the daemon's event loop.
+ */
+export function textNamesPullRequest(
+  payload: string,
+  pullRequest: { owner: string; repo: string; number: number },
+): boolean {
+  // Owner and repository are `[\w.-]` by the capture's own URL rule, so a dot
+  // is the one character that needs escaping.
+  const path = `${pullRequest.owner}/${pullRequest.repo}`.replaceAll(
+    '.',
+    '\\.',
+  );
+  const address = new RegExp(
+    `(?:github\\.com|repos)/${path}/pulls?/${pullRequest.number}(?!\\d)`,
+    'i',
+  );
+  if (address.test(payload)) {
+    return true;
+  }
+  const number = `${pullRequest.number}`;
+  for (
+    let at = payload.indexOf(GH_PR);
+    at !== -1;
+    at = payload.indexOf(GH_PR, at + 1)
+  ) {
+    GH_PR_VERB.lastIndex = at;
+    if (!GH_PR_VERB.test(payload)) {
+      continue;
+    }
+    ARGUMENT.lastIndex = GH_PR_VERB.lastIndex;
+    for (
+      let token = ARGUMENT.exec(payload);
+      token !== null;
+      token = ARGUMENT.exec(payload)
+    ) {
+      // Resume the search past what this command consumed, so a `gh pr`
+      // inside its arguments is never read as a command of its own.
+      at = token.index + token[0].length - 1;
+      if (token[3] !== undefined) {
+        break;
+      }
+      const word =
+        token[1] ?? token[2] ?? token[4]?.replace(TRAILING_PUNCTUATION, '');
+      if (word === number || word === `#${number}`) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 /** The identity two captures of the same pull request share. */
 export function pullRequestKey(pullRequest: {
@@ -355,14 +475,16 @@ export function mergePullRequests(
 export function readDisplayedPullRequests(
   opened: string | null | undefined,
   touched: string | null | undefined,
-): RunPullRequest[] {
+): DisplayedPullRequest[] {
+  const openedRows = readRunPullRequests(opened);
+  const openedKeys = new Set(openedRows.map(pullRequestKey));
   // Each column is capped on its own; capping the union again would let
   // touched pull requests push opened ones off the list.
   return mergePullRequests(
-    readRunPullRequests(opened),
+    openedRows,
     readRunPullRequests(touched),
     Number.POSITIVE_INFINITY,
-  );
+  ).map((row) => ({ ...row, opened: openedKeys.has(pullRequestKey(row)) }));
 }
 
 /**

@@ -336,6 +336,43 @@ describe('parseRunStatus — the run_status twin', () => {
     expect(skewed).not.toHaveProperty('seenAt');
   });
 
+  it('carries which announced pull requests the run opened, reading a missing mark as touched', () => {
+    const ref = (number: number) => ({
+      owner: 'o',
+      repo: 'r',
+      number,
+      url: `https://github.com/o/r/pull/${number}`,
+      seq: number,
+    });
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        pullRequests: [{ ...ref(1), opened: true }, ref(2)],
+      })?.pullRequests?.map((row) => ({
+        number: row.number,
+        opened: row.opened,
+      })),
+    ).toEqual([
+      { number: 1, opened: true },
+      { number: 2, opened: false },
+    ]);
+  });
+
+  it('admits an announced empty list, and drops one holding nothing usable', () => {
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, pullRequests: [] })
+        ?.pullRequests,
+    ).toEqual([]);
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        pullRequests: [{ url: '' }],
+      }),
+    ).not.toHaveProperty('pullRequests');
+  });
+
   it('carries whether the stamped context count is geniro’s stand-in', () => {
     expect(
       parseRunStatus({

@@ -15,6 +15,10 @@ import type {
 import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
 import { parseJsonColumn, payloadString } from '../utils/json-util';
 import { messagePreview, messageText } from '../utils/message-preview';
+import {
+  PULL_REQUEST_NAMING_KINDS,
+  pullRequestNamingNeedles,
+} from '../utils/pull-request-capture';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
 import {
@@ -884,6 +888,58 @@ export class ItemDao extends BaseDao<Item> {
       { orderBy: { seq: 'asc' }, fields: ['seq'], disableIdentityMap: true },
     );
     return after?.seq ?? null;
+  }
+
+  /**
+   * The payloads of the run's rows in `(afterSeq, throughSeq]` that may name
+   * this pull request — the prefilter of `textNamesPullRequest`, which decides.
+   * Read over a seq range so a caller can window a long history, as with
+   * {@link pullRequestCandidates}.
+   */
+  async pullRequestNamingCandidates(
+    runId: string,
+    pullRequest: { owner: string; repo: string; number: number },
+    afterSeq: number,
+    throughSeq: number,
+    txEm?: EntityManager,
+  ): Promise<string[]> {
+    const em = txEm ?? this.em.fork();
+    const needles = pullRequestNamingNeedles(pullRequest);
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('payload')
+      .where('run_id', '=', runId)
+      .where('kind', 'in', PULL_REQUEST_NAMING_KINDS)
+      .where('deleted_at', 'is', null)
+      .where('seq', '>', afterSeq)
+      .where('seq', '<=', throughSeq)
+      .where((eb) =>
+        eb.and([
+          eb(
+            eb.fn('instr', [eb.ref('payload'), eb.val(needles.number)]),
+            '>',
+            0,
+          ),
+          eb.or([
+            eb(
+              eb.fn('instr', [
+                eb.fn('lower', [eb.ref('payload')]),
+                eb.val(needles.repoPath),
+              ]),
+              '>',
+              0,
+            ),
+            eb(
+              eb.fn('instr', [eb.ref('payload'), eb.val(needles.command)]),
+              '>',
+              0,
+            ),
+          ]),
+        ]),
+      )
+      .execute();
+    return rows.map((row) => String(row.payload));
   }
 
   /**

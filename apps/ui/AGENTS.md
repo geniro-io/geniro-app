@@ -343,7 +343,8 @@ One home for each concern:
 
 **Pull requests and changes:**
 
-- A thread's pull requests are only those it opened or its CLI recorded it touching (the run wire's `pullRequests`; a task card shows only the opened ones), addressed by URL (`use-thread-pull-requests.ts` over `readPullRequestsByRef`). That hook is the only source for the panel, the sidebar and the shelf.
+- A thread's pull requests are only those it opened or its CLI recorded it touching (the run wire's `pullRequests`, each marked `opened`; a task card shows only the opened ones), addressed by URL (`use-thread-pull-requests.ts` over `readPullRequestsByRef`). That hook is the only source for the panel, the sidebar and the shelf.
+- A sidebar row names the thread's newest resolved pull request among those it opened, and a touched one only for a thread that opened none — never in place of an opened one that did not resolve (`rowPullRequestOf`).
 - A ref GitHub could not answer still draws a row.
 - The renderer replaces the run's list wholesale on each announce.
 - Do not reintroduce a branch-scoped pull-request list.

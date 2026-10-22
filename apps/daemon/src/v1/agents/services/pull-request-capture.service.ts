@@ -7,6 +7,7 @@ import type { Run } from '../../runs/entity/run.entity';
 import type { SessionPullRequest } from '../adapters/adapter.types';
 import type {
   CapturedPullRequest,
+  DisplayedPullRequest,
   RunPullRequest,
   SessionTranscriptTarget,
 } from '../chat.types';
@@ -21,6 +22,7 @@ import {
   readDisplayedPullRequests,
   readPullRequestUrls,
   readRunPullRequests,
+  textNamesPullRequest,
 } from '../utils/pull-request-capture';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -135,6 +137,14 @@ export class PullRequestCaptureService implements OnModuleInit {
   /** Runs deleted in this process, so a pass still in flight remembers nothing for them. */
   private readonly deleted = new Set<string>();
 
+  /**
+   * Per run, the CLI-recorded pull requests its thread did not name, keyed by
+   * {@link pullRequestKey}, with the seq the thread was read through for each:
+   * a later pass reads only the rows after it. In memory, so each launch reads
+   * a thread once for each record it still holds unnamed.
+   */
+  private readonly unnamed = new Map<string, Map<string, number>>();
+
   constructor(
     private readonly itemDao: ItemDao,
     private readonly runDao: RunDao,
@@ -194,6 +204,7 @@ export class PullRequestCaptureService implements OnModuleInit {
     this.bus.allDeleted().subscribe((runId) => {
       this.deleted.add(runId);
       this.written.delete(runId);
+      this.unnamed.delete(runId);
     });
   }
 
@@ -369,16 +380,37 @@ export class PullRequestCaptureService implements OnModuleInit {
       run.id,
       await this.itemDao.maxSeq(run.id, em),
     );
+    if (fromStart) {
+      this.unnamed.delete(run.id);
+    }
+    const carriedTouched = readRunPullRequests(run.touchedPullRequests);
+    // A from-start pass reads under a rule the stored records may predate, so
+    // a carried record the thread does not name is dropped as a new one is.
+    // The list can shrink, then, so every change is announced — an empty one
+    // too, or a window would keep showing what was dropped.
+    const keptTouched = fromStart
+      ? await this.namedByThread(run.id, carriedTouched, maxSeq, em)
+      : carriedTouched;
     if (maxSeq <= scanned) {
       // A run with nothing to read is read under this rule all the same; left
       // unmarked, every launch's sweep would list it again.
       if (fromStart && run.pullRequestsScanVersion !== version) {
+        const touchedPullRequests =
+          keptTouched.length > 0 ? JSON.stringify(keptTouched) : null;
+        const changed =
+          touchedPullRequests !== (run.touchedPullRequests ?? null);
         await this.remember(run, em, {
           pullRequests: run.pullRequests,
-          touchedPullRequests: run.touchedPullRequests,
+          touchedPullRequests,
           pullRequestsScannedSeq: maxSeq,
           pullRequestsScanVersion: version,
         });
+        if (changed) {
+          this.announce(
+            run.id,
+            readDisplayedPullRequests(run.pullRequests, touchedPullRequests),
+          );
+        }
       }
       return;
     }
@@ -399,12 +431,13 @@ export class PullRequestCaptureService implements OnModuleInit {
     const captured = await this.capturedFrom(run.id, rows, em);
     const carried = readRunPullRequests(run.pullRequests);
     const merged = mergePullRequests(carried, captured);
-    const carriedTouched = readRunPullRequests(run.touchedPullRequests);
     const touched = mergePullRequests(
-      carriedTouched,
+      keptTouched,
       await this.sessionPullRequests(
         run,
-        new Set(carriedTouched.map(pullRequestKey)),
+        new Set(keptTouched.map(pullRequestKey)),
+        new Set(merged.map(pullRequestKey)),
+        maxSeq,
         em,
       ),
     );
@@ -414,9 +447,11 @@ export class PullRequestCaptureService implements OnModuleInit {
     const pullRequests = merged.length > 0 ? JSON.stringify(merged) : null;
     const touchedPullRequests =
       touched.length > 0 ? JSON.stringify(touched) : null;
+    // `?? null`: a row built by hand may omit a column, which holds nothing
+    // just as null does, and must not read as a change to announce.
     const changed =
-      pullRequests !== run.pullRequests ||
-      touchedPullRequests !== run.touchedPullRequests;
+      pullRequests !== (run.pullRequests ?? null) ||
+      touchedPullRequests !== (run.touchedPullRequests ?? null);
     // Bookkeeping, not activity: this pass runs over every run a chat list
     // returns, so stamping `updatedAt` here re-dated a whole archive to the
     // moment it was opened (see `RunDao.updateWithoutActivity`).
@@ -427,7 +462,7 @@ export class PullRequestCaptureService implements OnModuleInit {
       pullRequestsScanVersion: version,
     };
     await this.remember(run, em, state);
-    if (changed && (pullRequests !== null || touchedPullRequests !== null)) {
+    if (changed) {
       this.announce(
         run.id,
         readDisplayedPullRequests(pullRequests, touchedPullRequests),
@@ -444,12 +479,17 @@ export class PullRequestCaptureService implements OnModuleInit {
    * One the run already carries (`known`) keeps its place: its CLI's earliest
    * record of it does not move, so it is not placed again.
    *
+   * A record is kept only when the run opened that pull request or its thread
+   * names it ({@link namedByThread}).
+   *
    * Never throws: a conversation whose record cannot be read costs its own
    * chips, never the transcript capture beside it.
    */
   private async sessionPullRequests(
     run: Run,
     known: ReadonlySet<string>,
+    opened: ReadonlySet<string>,
+    throughSeq: number,
     em: EntityManager,
   ): Promise<RunPullRequest[]> {
     const earliest = new Map<string, SessionPullRequest>();
@@ -484,8 +524,23 @@ export class PullRequestCaptureService implements OnModuleInit {
         }
       }
     }
+    const records = [...earliest.values()];
+    const named = new Set(
+      (
+        await this.namedByThread(
+          run.id,
+          records.filter((record) => !opened.has(pullRequestKey(record))),
+          throughSeq,
+          em,
+        )
+      ).map(pullRequestKey),
+    );
     const found: RunPullRequest[] = [];
-    for (const record of earliest.values()) {
+    for (const record of records) {
+      const key = pullRequestKey(record);
+      if (!opened.has(key) && !named.has(key)) {
+        continue;
+      }
       const seq = await this.itemDao.toolResultSeqAt(
         run.id,
         record.at ?? new Date(),
@@ -502,6 +557,55 @@ export class PullRequestCaptureService implements OnModuleInit {
       }
     }
     return found;
+  }
+
+  /**
+   * The `pullRequests` the run's rows through `throughSeq` name
+   * ({@link textNamesPullRequest}), read in windows with a yield between them
+   * as the candidate read is. One found unnamed is remembered with `throughSeq`
+   * in {@link unnamed}, so a later pass reads only the rows written since.
+   */
+  private async namedByThread<
+    PullRequest extends { owner: string; repo: string; number: number },
+  >(
+    runId: string,
+    pullRequests: readonly PullRequest[],
+    throughSeq: number,
+    em: EntityManager,
+  ): Promise<PullRequest[]> {
+    const named: PullRequest[] = [];
+    for (const pullRequest of pullRequests) {
+      const key = pullRequestKey(pullRequest);
+      const readThrough = this.unnamed.get(runId)?.get(key) ?? -1;
+      let found = false;
+      for (
+        let from = readThrough;
+        from < throughSeq && !found;
+        from += CANDIDATE_WINDOW_SEQS
+      ) {
+        if (from > readThrough) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        found = (
+          await this.itemDao.pullRequestNamingCandidates(
+            runId,
+            pullRequest,
+            from,
+            Math.min(throughSeq, from + CANDIDATE_WINDOW_SEQS),
+            em,
+          )
+        ).some((payload) => textNamesPullRequest(payload, pullRequest));
+      }
+      if (found) {
+        this.unnamed.get(runId)?.delete(key);
+        named.push(pullRequest);
+      } else if (!this.deleted.has(runId)) {
+        const unnamed = this.unnamed.get(runId) ?? new Map<string, number>();
+        unnamed.set(key, Math.max(readThrough, throughSeq));
+        this.unnamed.set(runId, unnamed);
+      }
+    }
+    return named;
   }
 
   /** The run's conversations, or none when they cannot be listed. */
@@ -544,7 +648,7 @@ export class PullRequestCaptureService implements OnModuleInit {
    * requests is the common case and would otherwise broadcast an empty array
    * to every window on every turn and every listing.
    */
-  private announce(runId: string, pullRequests: RunPullRequest[]): void {
+  private announce(runId: string, pullRequests: DisplayedPullRequest[]): void {
     this.bus.publishRunStatus({ runId, status: null, pullRequests });
   }
 

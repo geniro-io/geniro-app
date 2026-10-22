@@ -374,6 +374,7 @@ import { useRunWaterfall } from './use-run-waterfall';
 import { useRunWorkFolders } from './use-run-work-folders';
 import { useThreadAnalysis } from './use-thread-analysis';
 import {
+  rowPullRequestOf,
   threadPullRequestsOf,
   useThreadPullRequests,
 } from './use-thread-pull-requests';
@@ -5031,20 +5032,13 @@ export function Chats({
     () => threadPullRequestsOf(activeRun ?? null, resolvedThreadPullRequests),
     [activeRun, resolvedThreadPullRequests],
   );
-  /**
-   * The ONE pull request each sidebar row names.
-   *
-   * The thread's own newest, and only a RESOLVED one — the row draws a title
-   * and a state, which an unresolved ref does not have — so a machine with no
-   * `gh` names none.
-   */
+  /** The ONE pull request each sidebar row names ({@link rowPullRequestOf}). */
   const rowPullRequestByRun = useMemo(() => {
     const byRun = new Map<string, PullRequestInfo>();
     for (const run of runs) {
-      const opened = threadPullRequestsOf(run, resolvedThreadPullRequests);
-      const resolved = opened.find((row) => row.pullRequest !== null);
-      if (resolved?.pullRequest != null) {
-        byRun.set(run.id, resolved.pullRequest);
+      const pullRequest = rowPullRequestOf(run, resolvedThreadPullRequests);
+      if (pullRequest !== null) {
+        byRun.set(run.id, pullRequest);
       }
     }
     return byRun;

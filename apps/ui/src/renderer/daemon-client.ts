@@ -2,11 +2,11 @@ import { io, type Socket } from 'socket.io-client';
 
 import { type DaemonHandle } from '../shared/contracts';
 import {
+  type DisplayedPullRequest,
   type ItemDto as ChatItem,
   PromptCacheTtlReason,
   RunAwaiting,
   type RunDto,
-  type RunPullRequest,
   type RunResetWake,
   RunStatus,
   type RunTaskGroup,
@@ -144,13 +144,16 @@ function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
  * a half-ref renders as a chip pointing nowhere — and this is the one place the
  * shapes arrive untyped, the generated client covering every other route.
  */
-function readPullRequestRefs(rows: readonly unknown[]): RunPullRequest[] {
-  const refs: RunPullRequest[] = [];
+function readPullRequestRefs(rows: readonly unknown[]): DisplayedPullRequest[] {
+  const refs: DisplayedPullRequest[] = [];
   for (const row of rows) {
     if (row === null || typeof row !== 'object') {
       continue;
     }
-    const { owner, repo, number, url, seq } = row as Record<string, unknown>;
+    const { owner, repo, number, url, seq, opened } = row as Record<
+      string,
+      unknown
+    >;
     if (
       typeof owner === 'string' &&
       owner !== '' &&
@@ -172,6 +175,9 @@ function readPullRequestRefs(rows: readonly unknown[]): RunPullRequest[] {
         url,
         seq:
           typeof seq === 'number' && Number.isFinite(seq) ? seq : refs.length,
+        // Only a stated `true` claims the run opened it: a row that cannot say
+        // so is drawn as touched, which names nothing as the thread's own work.
+        opened: opened === true,
       });
     }
   }
@@ -351,7 +357,7 @@ export interface RunStatusEvent {
    * alone, which is one fetch per window: a thread that opened a pull request
    * during the session it was opened in never showed a chip for it.
    */
-  pullRequests?: RunPullRequest[];
+  pullRequests?: DisplayedPullRequest[];
   /**
    * Each agent's own task list as the DAEMON folded it, over the whole
    * transcript.
@@ -690,18 +696,17 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
       : {}),
     // Every entry checked, not merely the array: this arrives as a socket
     // payload rather than through the generated client, and a half-shaped ref
-    // reaches `gh pr view` as a URL. An array that is present but holds nothing
-    // usable is dropped whole rather than admitted empty, which would blank a
-    // thread's chips on a turn that simply had nothing to say.
-    ...(Array.isArray(pullRequests) && readPullRequestRefs(pullRequests).length
+    // reaches `gh pr view` as a URL. An EMPTY array is the daemon's reading
+    // that the run holds none now (a pass dropped a record it no longer keeps);
+    // one holding entries of which none is usable is a malformed payload, and
+    // is dropped whole rather than blanking the thread's chips.
+    ...(Array.isArray(pullRequests) &&
+    (pullRequests.length === 0 || readPullRequestRefs(pullRequests).length > 0)
       ? { pullRequests: readPullRequestRefs(pullRequests) }
       : {}),
-    // Admitted whenever it is an ARRAY, including an empty one — unlike the
-    // pull requests above, where empty is dropped. The two differ because the
-    // daemon announces this only when the fold MOVED, and a list moving to
-    // nothing (a snapshot that cleared it) is a real reading the chip has to
-    // act on; a pull-request announce carrying nothing usable is only ever a
-    // malformed payload, since a run that opened none is never announced.
+    // Admitted whenever it is an ARRAY, including an empty one: the daemon
+    // announces this only when the fold MOVED, and a list moving to nothing (a
+    // snapshot that cleared it) is a real reading the chip has to act on.
     ...(Array.isArray(taskList) ? { taskList: readTaskGroups(taskList) } : {}),
     // An array whatever it holds, the empty one included — see the field.
     ...(Array.isArray(resetWakes)

@@ -15,6 +15,7 @@ import type { Workflow } from '../graphs.types';
 import { backUpWorkflow, readWorkflowSource } from '../utils/workflow-backup';
 import { checkWorkflow } from '../utils/workflow-check';
 import { diffWorkflows } from '../utils/workflow-diff';
+import { applyWorkflowEdits, type WorkflowEdit } from '../utils/workflow-edits';
 import { parseWorkflowSnapshot } from '../utils/workflow-snapshot';
 import { parseWorkflowYaml } from '../utils/workflow-yaml';
 import { WorkflowStoreService } from './workflow-store.service';
@@ -24,7 +25,8 @@ export interface WorkflowChange {
   /** The analysis chat asking; its latest Apply is what may be written. */
   analysisRunId: string;
   slug: string;
-  workflow: unknown;
+  /** What to change, applied in order to the library copy read at {@link baseHash}. */
+  edits: WorkflowEdit[];
   /** The hash the agent read the workflow at (`read_analyzed_thread` view=workflow). */
   baseHash: string;
   /** The recommendation ids this save carries out. */
@@ -139,7 +141,11 @@ export class WorkflowChangeService {
         currentHash: current.hash,
       };
     }
-    const checked = checkWorkflow(change.workflow);
+    const edited = applyWorkflowEdits(current.workflow, change.edits);
+    if (!edited.ok) {
+      return refuse('INVALID_EDIT', edited.message);
+    }
+    const checked = checkWorkflow(edited.workflow);
     if (!checked.ok) {
       return refuse('INVALID_WORKFLOW', checked.message);
     }

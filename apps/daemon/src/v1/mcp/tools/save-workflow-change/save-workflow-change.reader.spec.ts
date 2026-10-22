@@ -58,7 +58,11 @@ describe('SaveWorkflowChangeTool', () => {
 
     const result = await save.call(
       'save_workflow_change',
-      { workflow: { name: 'Dev Team' }, baseHash: 'abc', ids: ['W-1'] },
+      {
+        edits: [{ find: 'old', replace: 'new' }],
+        baseHash: 'abc',
+        ids: ['W-1'],
+      },
       CONTEXT,
     );
 
@@ -67,7 +71,7 @@ describe('SaveWorkflowChangeTool', () => {
       {
         analysisRunId: 'analysis',
         slug: 'dev-team',
-        workflow: { name: 'Dev Team' },
+        edits: [{ find: 'old', replace: 'new' }],
         baseHash: 'abc',
         ids: ['W-1'],
         dryRun: false,
@@ -80,7 +84,7 @@ describe('SaveWorkflowChangeTool', () => {
 
     const result = await save.call(
       'save_workflow_change',
-      { workflow: {}, baseHash: 'abc', ids: ['W-1'] },
+      { edits: [{ path: 'name', value: 'x' }], baseHash: 'abc', ids: ['W-1'] },
       CONTEXT,
     );
 
@@ -92,13 +96,41 @@ describe('SaveWorkflowChangeTool', () => {
 describe('readSaveWorkflowChangeArgs', () => {
   it('refuses a call naming no recommendation, a malformed id, or a repo id', () => {
     const ids = (value: string[]) =>
-      readSaveWorkflowChangeArgs({ workflow: {}, baseHash: 'a', ids: value })
-        .ok;
+      readSaveWorkflowChangeArgs({
+        edits: [{ path: 'name', value: 'x' }],
+        baseHash: 'a',
+        ids: value,
+      }).ok;
 
     expect(ids([])).toBe(false);
     expect(ids(['x'])).toBe(false);
     expect(ids(['R-1'])).toBe(false);
     expect(ids(['W-1'])).toBe(true);
+  });
+});
+
+describe('readSaveWorkflowChangeArgs edits', () => {
+  const edits = (value: unknown) =>
+    readSaveWorkflowChangeArgs({ edits: value, baseHash: 'a', ids: ['W-1'] })
+      .ok;
+
+  it('reads each edit shape', () => {
+    expect(edits([{ find: 'a', replace: 'b' }])).toBe(true);
+    expect(edits([{ path: 'nodes/x/model', value: 'sonnet' }])).toBe(true);
+    expect(edits([{ path: 'nodes/x/model', remove: true }])).toBe(true);
+  });
+
+  it('refuses the whole workflow, no edits, an empty find, and a mixed edit', () => {
+    expect(
+      readSaveWorkflowChangeArgs({
+        workflow: { name: 'Dev Team' },
+        baseHash: 'a',
+        ids: ['W-1'],
+      }).ok,
+    ).toBe(false);
+    expect(edits([])).toBe(false);
+    expect(edits([{ find: '', replace: 'b' }])).toBe(false);
+    expect(edits([{ find: 'a', replace: 'b', path: 'name' }])).toBe(false);
   });
 });
 

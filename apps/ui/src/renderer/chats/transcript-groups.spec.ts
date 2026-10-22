@@ -6039,6 +6039,47 @@ describe('withLiveText — a card being WRITTEN', () => {
     ]);
   });
 
+  it('names a large call that draws no card on the WORKING row, with its bytes', () => {
+    // An analysis re-emitting a whole workflow as `save_workflow_change`
+    // arguments streamed for ten minutes under a looping word. Its byte count
+    // was arriving the whole time; nothing put it on screen.
+    const entries = withLiveText(
+      [],
+      new Map([
+        [
+          CHAT_LIVE_KEY,
+          live({
+            composingTool: 'mcp__geniro-abc12345__save_workflow_change',
+            composingBytes: 86_016,
+          }),
+        ],
+      ]),
+      new Set([CHAT_LIVE_KEY]),
+      RUN,
+    );
+    expect(liveRows(entries)).toEqual([
+      {
+        live: 'working',
+        writingTool: 'Geniro-abc12345: Save workflow change',
+        writingBytes: 86_016,
+      },
+    ]);
+  });
+
+  it('leaves the working row alone while a small call is written', () => {
+    // A `Bash` is written in well under a second; naming it would swap the
+    // row's phrase for a blink on every ordinary call.
+    const entries = withLiveText(
+      [],
+      new Map([
+        [CHAT_LIVE_KEY, live({ composingTool: 'Bash', composingBytes: 300 })],
+      ]),
+      new Set([CHAT_LIVE_KEY]),
+      RUN,
+    );
+    expect(liveRows(entries)).toEqual([{ live: 'working' }]);
+  });
+
   it('suppresses the working fallback for an agent that is composing', () => {
     // The agent has been spoken for — a `Working…` row beside the skeleton
     // would be two rows narrating one wait, which is the defect the live plane

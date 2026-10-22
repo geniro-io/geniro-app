@@ -3,7 +3,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type OnApplicationShutdown,
+  type OnModuleInit,
+} from '@nestjs/common';
 import {
   BadRequestException,
   InternalException,
@@ -21,6 +27,7 @@ import type { ArtifactShare } from '../entity/artifact-share.entity';
 import {
   type AgentShareOutcome,
   type DestinationCommand,
+  type RevokeManyOutcome,
   type RevokeOutcome,
   type Share,
   SHARE_COMMAND_RUNNER,
@@ -56,6 +63,9 @@ import { ShareKeychain } from './share-keychain.service';
 
 const UPLOAD_TIMEOUT_MS = 120_000;
 const PROBE_TIMEOUT_MS = 30_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const AUTO_REVOKE_FIRST_CHECK_MS = 60 * 1000;
+const AUTO_REVOKE_CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 
 const KEY_MISSING =
   'the key for this link is no longer in the Keychain — revoke it and share the page again';
@@ -98,10 +108,13 @@ type Attempt =
  * only. Until the first push nothing can be shared, by anyone.
  */
 @Injectable()
-export class ShareService implements OnModuleInit {
+export class ShareService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(ShareService.name);
   private config: ShareConfig | null = null;
   private configReceivedAt: Date | null = null;
+  private autoRevokeFirst: ReturnType<typeof setTimeout> | null = null;
+  private autoRevokeTimer: ReturnType<typeof setInterval> | null = null;
+  private autoRevoking: Promise<RevokeManyOutcome> | null = null;
   /**
    * The theme of the last press, reused for an agent's share: the daemon has
    * no window to read a theme from, and the last one the user looked at is the
@@ -136,6 +149,29 @@ export class ShareService implements OnModuleInit {
         }
       }
     });
+
+    // Once a minute after the start, so an app never left open for a whole
+    // interval still sweeps, then on the interval. Never on a settings push:
+    // picking a shorter window revokes nothing in the same gesture.
+    this.autoRevokeFirst = setTimeout(() => {
+      void this.revokeExpired();
+    }, AUTO_REVOKE_FIRST_CHECK_MS);
+    this.autoRevokeFirst.unref?.();
+    this.autoRevokeTimer = setInterval(() => {
+      void this.revokeExpired();
+    }, AUTO_REVOKE_CHECK_EVERY_MS);
+    this.autoRevokeTimer.unref?.();
+  }
+
+  onApplicationShutdown(): void {
+    if (this.autoRevokeFirst !== null) {
+      clearTimeout(this.autoRevokeFirst);
+      this.autoRevokeFirst = null;
+    }
+    if (this.autoRevokeTimer !== null) {
+      clearInterval(this.autoRevokeTimer);
+      this.autoRevokeTimer = null;
+    }
   }
 
   setConfig(config: ShareConfig): { receivedAt: string } {
@@ -357,6 +393,97 @@ export class ShareService implements OnModuleInit {
       detail: failureOf(result),
       signIn,
     };
+  }
+
+  /** Revoke these pages, carrying on past a failure; one already gone counts as neither. */
+  revokeAll(shareIds: string[]): Promise<RevokeManyOutcome> {
+    return this.revokeEach(shareIds, () => true);
+  }
+
+  /**
+   * Revoke the pages shared longer ago than the user's `autoRevokeAfterDays`;
+   * nothing when it is null. Never rejects, and one sweep runs at a time: a
+   * call while one runs joins it, and its `now` is not used.
+   */
+  revokeExpired(now: number = Date.now()): Promise<RevokeManyOutcome> {
+    this.autoRevoking ??= this.sweepExpired(now).finally(() => {
+      this.autoRevoking = null;
+    });
+    return this.autoRevoking;
+  }
+
+  private async sweepExpired(now: number): Promise<RevokeManyOutcome> {
+    const cutoff = this.autoRevokeCutoff(now);
+    if (cutoff === null) {
+      return { revoked: 0, failed: 0, detail: null };
+    }
+    try {
+      // Asked again per page: each revoke waits on the user's CLI, and the
+      // setting may be lengthened or switched off while the sweep runs.
+      const sharedAt = new Map(
+        (await this.dao.sharedBefore(cutoff)).map((row) => [
+          row.id,
+          row.createdAt,
+        ]),
+      );
+      const outcome = await this.revokeEach([...sharedAt.keys()], (id) => {
+        const current = this.autoRevokeCutoff(now);
+        const at = sharedAt.get(id);
+        return current !== null && at !== undefined && at < current;
+      });
+      if (outcome.revoked > 0) {
+        this.logger.log(`revoked ${outcome.revoked} expired shared page(s)`);
+      }
+      if (outcome.failed > 0) {
+        this.logger.warn(
+          `could not revoke ${outcome.failed} expired shared page(s): ${outcome.detail ?? ''}`,
+        );
+      }
+      return outcome;
+    } catch (error) {
+      this.logger.warn(
+        `could not sweep expired shared pages: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return { revoked: 0, failed: 0, detail: null };
+    }
+  }
+
+  private autoRevokeCutoff(now: number): Date | null {
+    const days = this.config?.autoRevokeAfterDays ?? null;
+    return days === null ? null : new Date(now - days * DAY_MS);
+  }
+
+  private async revokeEach(
+    shareIds: string[],
+    stillWanted: (id: string) => boolean,
+  ): Promise<RevokeManyOutcome> {
+    let revoked = 0;
+    let failed = 0;
+    let detail: string | null = null;
+    for (const id of new Set(shareIds)) {
+      if (!stillWanted(id)) {
+        continue;
+      }
+      try {
+        const outcome = await this.revoke(id);
+        if (outcome.status === 'revoked') {
+          revoked += 1;
+        } else {
+          failed += 1;
+          detail ??= outcome.detail;
+        }
+      } catch (error) {
+        // Already revoked, by another press or before this list was read.
+        if (error instanceof NotFoundException) {
+          continue;
+        }
+        failed += 1;
+        detail ??= error instanceof Error ? error.message : String(error);
+      }
+    }
+    return { revoked, failed, detail };
   }
 
   /**

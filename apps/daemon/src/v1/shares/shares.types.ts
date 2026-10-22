@@ -134,6 +134,9 @@ export const ShareDestinationSchema = z
   .meta({ id: 'ShareDestination' });
 export type ShareDestination = z.infer<typeof ShareDestinationSchema>;
 
+/** Twin of `MAX_AUTO_REVOKE_DAYS` in `apps/ui/src/main/ipc-schemas.ts`. */
+export const MAX_AUTO_REVOKE_DAYS = 3650;
+
 /**
  * TWIN PARSER: the body `apps/ui/src/main/share-config-push.ts` sends, built
  * from `Settings.sharing` (`sharingSchema` in `apps/ui/src/main/ipc-schemas.ts`).
@@ -143,6 +146,13 @@ export const ShareConfigSchema = z
     destinations: z.array(ShareDestinationSchema).max(20),
     defaultDestinationId: z.string().nullable(),
     agentsMayShare: z.boolean(),
+    /** Revoke a page this many days after it was first shared; null never does. */
+    autoRevokeAfterDays: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_AUTO_REVOKE_DAYS)
+      .nullable(),
   })
   .meta({ id: 'ShareConfig' });
 export type ShareConfig = z.infer<typeof ShareConfigSchema>;
@@ -311,6 +321,14 @@ export type AgentShareOutcome =
 
 export type RevokeOutcome =
   { status: 'revoked' } | { status: 'revoke-failed'; detail: string };
+
+/** Many revokes at once. `detail` is the first failure's reason, null when none failed. */
+export const RevokeManyOutcomeSchema = z.object({
+  revoked: z.number().int(),
+  failed: z.number().int(),
+  detail: z.string().nullable(),
+});
+export type RevokeManyOutcome = z.infer<typeof RevokeManyOutcomeSchema>;
 
 /** One destination CLI invocation, as argv. */
 export interface DestinationCommand {

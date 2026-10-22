@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     },
   };
   return {

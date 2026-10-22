@@ -16,7 +16,9 @@ import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
 import {
   CheckShareDestinationDto,
   CreateShareDto,
+  RevokeAllSharesDto,
   RevokeShareDto,
+  RevokeSharesDto,
   ShareCheckResultDto,
   ShareConfigAckDto,
   ShareConfigDto,
@@ -30,6 +32,7 @@ import {
 import { ShareService } from '../services/share.service';
 import { ShareSignInService } from '../services/share-sign-in.service';
 import type {
+  RevokeManyOutcome,
   RevokeOutcome,
   Share,
   ShareCheckResult,
@@ -105,6 +108,13 @@ export class SharesController {
     @Body() body: CreateShareDto,
   ): Promise<{ share: Share; url: string | null }> {
     return this.shares.share({ ...body, by: 'user' });
+  }
+
+  @Post('revoke-all')
+  @ApiOperation({ operationId: 'revokeAllShares' })
+  @ZodResponse({ status: 201, type: RevokeAllSharesDto })
+  revokeAll(@Body() body: RevokeSharesDto): Promise<RevokeManyOutcome> {
+    return this.shares.revokeAll(body.shareIds);
   }
 
   @Get(':shareId/link')

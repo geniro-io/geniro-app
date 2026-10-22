@@ -10,6 +10,7 @@ import { BadRequestException } from '@packages/common';
 import { Subject } from 'rxjs';
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -38,6 +39,7 @@ import { ShareEventBus } from './share-events.bus';
 import type { ShareKeychain } from './share-keychain.service';
 
 const RUN = '11111111-2222-4333-8444-555555555555';
+const DAY = 24 * 60 * 60 * 1000;
 const GCS: ShareDestination = {
   kind: 'gcs',
   id: 'company',
@@ -50,6 +52,7 @@ const CONFIG: ShareConfig = {
   destinations: [GCS],
   defaultDestinationId: 'company',
   agentsMayShare: true,
+  autoRevokeAfterDays: null,
 };
 
 function ok(partial: Partial<ManagedCommandResult> = {}): ManagedCommandResult {
@@ -217,6 +220,26 @@ describe('ShareService', () => {
   const share = (by: 'user' | 'agent' = 'user') =>
     service.share({ runId: RUN, artifactId: 'report', title: 'Report', by });
 
+  /** A live share row first made at `createdAt`, with its key in the Keychain. */
+  const seedShare = async (
+    artifactId: string,
+    createdAt: number,
+  ): Promise<ArtifactShare> => {
+    const row = await dao.create({
+      runId: RUN,
+      artifactId,
+      title: artifactId,
+      destination: JSON.stringify(GCS),
+      objectId: `object-${artifactId}`,
+      linkBase: GCS.linkBase,
+      sharedVersion: 1,
+      sharedBy: 'agent',
+      createdAt: new Date(createdAt),
+    });
+    keys.set(row.id, `key-${artifactId}`);
+    return row;
+  };
+
   it('shares nothing before Electron main has pushed the settings', async () => {
     await expect(share()).rejects.toThrow(/have not reached the daemon/);
     expect(commands).toHaveLength(0);
@@ -372,6 +395,7 @@ describe('ShareService', () => {
           destinations: [own],
           defaultDestinationId: 'own',
           agentsMayShare: true,
+          autoRevokeAfterDays: null,
         });
         const { share: row } = await share();
         nextResult = () => ok({ code: 1, stderr: 'ERROR: No URLs matched' });
@@ -418,6 +442,206 @@ describe('ShareService', () => {
       expect(nth(commands, 1).args).toContain(
         nth(commands, 0).args.at(-1) ?? 'missing',
       );
+    });
+  });
+
+  describe('revokeAll', () => {
+    it('revokes the pages named and carries on past one that fails', async () => {
+      service.setConfig(CONFIG);
+      const first = await seedShare('first', DAY);
+      const failing = await seedShare('failing', DAY);
+      const last = await seedShare('last', DAY);
+      nextResult = (args) =>
+        args.some((arg) => arg.includes(failing.objectId))
+          ? ok({ code: 1, stderr: 'ERROR: permission denied' })
+          : ok();
+
+      expect(await service.revokeAll([first.id, failing.id, last.id])).toEqual({
+        revoked: 2,
+        failed: 1,
+        detail: 'ERROR: permission denied',
+      });
+
+      expect(keys.has(first.id)).toBe(false);
+      expect(keys.has(last.id)).toBe(false);
+      expect(keys.has(failing.id)).toBe(true);
+      expect(await service.list()).toEqual([
+        expect.objectContaining({ id: failing.id, status: 'revoke-failed' }),
+      ]);
+    });
+
+    it('leaves a page shared after the list was read alone', async () => {
+      service.setConfig(CONFIG);
+      const listed = await seedShare('listed', DAY);
+      const newer = await seedShare('newer', DAY);
+
+      expect(await service.revokeAll([listed.id])).toMatchObject({
+        revoked: 1,
+      });
+
+      expect((await service.list()).map((s) => s.id)).toEqual([newer.id]);
+      expect(keys.has(newer.id)).toBe(true);
+    });
+
+    it('counts a page already revoked as neither revoked nor failed', async () => {
+      service.setConfig(CONFIG);
+      const gone = await seedShare('gone', DAY);
+      const live = await seedShare('live', DAY);
+      await service.revoke(gone.id);
+
+      expect(await service.revokeAll([gone.id, live.id])).toEqual({
+        revoked: 1,
+        failed: 0,
+        detail: null,
+      });
+    });
+
+    it('counts a revoke that throws as failed and goes on to the next page', async () => {
+      service.setConfig(CONFIG);
+      const unreadable = await seedShare('unreadable', DAY);
+      await dao.updateById(unreadable.id, { destination: 'not json' });
+      const live = await seedShare('live', DAY);
+
+      expect(await service.revokeAll([unreadable.id, live.id])).toEqual({
+        revoked: 1,
+        failed: 1,
+        detail: 'the destination this page was shared to could not be read',
+      });
+      expect(keys.has(live.id)).toBe(false);
+    });
+  });
+
+  describe('revokeExpired', () => {
+    const NOW = Date.parse('2026-10-22T12:00:00Z');
+
+    const turnOn = (days: number | null): void => {
+      service.setConfig({ ...CONFIG, autoRevokeAfterDays: days });
+    };
+
+    it('revokes only the pages first shared longer ago than the setting', async () => {
+      const old = await seedShare('old', NOW - 31 * DAY);
+      const recent = await seedShare('recent', NOW - 29 * DAY);
+      turnOn(30);
+
+      expect(await service.revokeExpired(NOW)).toEqual({
+        revoked: 1,
+        failed: 0,
+        detail: null,
+      });
+
+      expect((await service.list()).map((s) => s.id)).toEqual([recent.id]);
+      expect(keys.has(old.id)).toBe(false);
+    });
+
+    it('revokes nothing while the setting is off', async () => {
+      await seedShare('old', NOW - 3650 * DAY);
+      turnOn(null);
+
+      expect(await service.revokeExpired(NOW)).toEqual({
+        revoked: 0,
+        failed: 0,
+        detail: null,
+      });
+      expect(commands).toHaveLength(0);
+    });
+
+    it('revokes oldest first and stops once the setting is switched off mid-sweep', async () => {
+      await seedShare('newer', NOW - 35 * DAY);
+      const oldest = await seedShare('oldest', NOW - 40 * DAY);
+      turnOn(30);
+      nextResult = () => {
+        service.setConfig({ ...CONFIG, autoRevokeAfterDays: null });
+        return ok();
+      };
+
+      expect(await service.revokeExpired(NOW)).toMatchObject({ revoked: 1 });
+      expect((await service.list()).map((s) => s.artifactId)).toEqual([
+        'newer',
+      ]);
+      expect(keys.has(oldest.id)).toBe(false);
+    });
+
+    it('keeps a page the setting was lengthened to cover mid-sweep', async () => {
+      await seedShare('a', NOW - 40 * DAY);
+      await seedShare('b', NOW - 35 * DAY);
+      turnOn(30);
+      nextResult = () => {
+        service.setConfig({ ...CONFIG, autoRevokeAfterDays: 38 });
+        return ok();
+      };
+
+      expect(await service.revokeExpired(NOW)).toMatchObject({ revoked: 1 });
+      expect((await service.list()).map((s) => s.artifactId)).toEqual(['b']);
+    });
+
+    it('resolves with nothing done when the shares cannot be read', async () => {
+      turnOn(30);
+      vi.spyOn(dao, 'sharedBefore').mockRejectedValueOnce(
+        new Error('SQLITE_BUSY'),
+      );
+
+      await expect(service.revokeExpired(NOW)).resolves.toEqual({
+        revoked: 0,
+        failed: 0,
+        detail: null,
+      });
+    });
+
+    it('never sweeps on a settings push, so a shorter window waits for the timer', async () => {
+      const old = await seedShare('old', Date.now() - 400 * DAY);
+      // A sweep reads the shares synchronously as it starts.
+      const sweeps = vi.spyOn(dao, 'sharedBefore');
+
+      turnOn(30);
+      turnOn(7);
+
+      expect(sweeps).not.toHaveBeenCalled();
+      expect((await service.list()).map((s) => s.id)).toEqual([old.id]);
+    });
+
+    describe('the timer', () => {
+      beforeEach(() => {
+        vi.useFakeTimers({
+          toFake: [
+            'setTimeout',
+            'clearTimeout',
+            'setInterval',
+            'clearInterval',
+          ],
+        });
+      });
+
+      afterEach(() => {
+        service.onApplicationShutdown();
+        vi.useRealTimers();
+      });
+
+      it('sweeps a minute after the start, then every six hours until shutdown', async () => {
+        turnOn(30);
+        const old = await seedShare('old', Date.now() - 400 * DAY);
+        const sweeps = vi.spyOn(dao, 'sharedBefore');
+        service.onModuleInit();
+
+        vi.advanceTimersByTime(60 * 1000 - 1);
+        expect(sweeps).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(sweeps).toHaveBeenCalledTimes(1);
+        await service.revokeExpired();
+        expect(keys.has(old.id)).toBe(false);
+
+        vi.advanceTimersByTime(6 * 60 * 60 * 1000 - 60 * 1000 - 1);
+        expect(sweeps).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(1);
+        expect(sweeps).toHaveBeenCalledTimes(2);
+        await service.revokeExpired();
+
+        service.onApplicationShutdown();
+        const after = await seedShare('after', Date.now() - 400 * DAY);
+        vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+
+        expect(sweeps).toHaveBeenCalledTimes(2);
+        expect(keys.has(after.id)).toBe(true);
+      });
     });
   });
 

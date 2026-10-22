@@ -528,6 +528,7 @@ describe('sharing settings', () => {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
   });
 
@@ -549,6 +550,7 @@ describe('sharing settings', () => {
         ],
         defaultDestinationId: 'company',
         agentsMayShare: true,
+        autoRevokeAfterDays: 30,
       },
     });
 
@@ -556,6 +558,7 @@ describe('sharing settings', () => {
       destinations: [GCS],
       defaultDestinationId: 'company',
       agentsMayShare: true,
+      autoRevokeAfterDays: 30,
     });
   });
 
@@ -604,8 +607,30 @@ describe('sharing settings', () => {
       destinations: [GCS],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
   });
+
+  it.each([0, 2.5, '30', 3651])(
+    'an auto-revoke window of %j reads as never, keeping the rest',
+    (days) => {
+      writeRaw({
+        sharing: {
+          destinations: [GCS],
+          defaultDestinationId: 'company',
+          agentsMayShare: true,
+          autoRevokeAfterDays: days,
+        },
+      });
+
+      expect(readSettings().sharing).toEqual({
+        destinations: [GCS],
+        defaultDestinationId: 'company',
+        agentsMayShare: true,
+        autoRevokeAfterDays: null,
+      });
+    },
+  );
 });
 
 describe('onSettingsWritten', () => {
@@ -620,6 +645,7 @@ describe('onSettingsWritten', () => {
         destinations: [],
         defaultDestinationId: null,
         agentsMayShare: true,
+        autoRevokeAfterDays: null,
       },
     });
     stop();

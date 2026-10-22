@@ -10,6 +10,7 @@ import {
 } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type {
+  RevokeAllSharesDto,
   Share,
   ShareCheckResultDto,
   ShareSignInSessionDto,
@@ -90,6 +91,13 @@ function fakeApi(
     cancelShareSignIn: vi.fn(() => Promise.resolve(SIGN_IN)),
     readShareLink: vi.fn(() => Promise.resolve({ url: 'https://x#k=K' })),
     revokeShare: vi.fn(() => Promise.resolve({ status: 'revoked' as const })),
+    revokeAllShares: vi.fn(
+      (
+        _request: { revokeSharesDto: { shareIds: string[] } },
+        _init?: RequestInit,
+      ): Promise<RevokeAllSharesDto> =>
+        Promise.resolve({ revoked: shares.length, failed: 0, detail: null }),
+    ),
   };
 }
 
@@ -140,6 +148,16 @@ function labelled(text: string): HTMLInputElement | null {
   return control instanceof HTMLInputElement ? control : null;
 }
 
+function optionNamed(label: string): HTMLElement {
+  const option = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((candidate) => (candidate.textContent ?? '').trim() === label);
+  if (!option) {
+    throw new Error(`no "${label}" option`);
+  }
+  return option;
+}
+
 async function type(label: string, value: string): Promise<void> {
   const input = labelled(label);
   if (!input) {
@@ -161,6 +179,7 @@ describe('Settings → Sharing', () => {
       destinations: [GCS],
       defaultDestinationId: 'company',
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     await render(fakeApi());
 
@@ -174,6 +193,7 @@ describe('Settings → Sharing', () => {
           destinations: [GCS],
           defaultDestinationId: 'company',
           agentsMayShare: true,
+          autoRevokeAfterDays: null,
         },
       },
     ]);
@@ -184,6 +204,7 @@ describe('Settings → Sharing', () => {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     await render(fakeApi());
 
@@ -212,6 +233,7 @@ describe('Settings → Sharing', () => {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     await render(fakeApi());
     await press(button('Add a place'));
@@ -239,6 +261,7 @@ describe('Settings → Sharing', () => {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     await render(fakeApi());
 
@@ -257,6 +280,7 @@ describe('Settings → Sharing', () => {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     window.geniro = {
       ...window.geniro,
@@ -280,6 +304,7 @@ describe('Settings → Sharing', () => {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     let finish: () => void = () => undefined;
     const pending: Partial<Settings>[] = [];
@@ -311,6 +336,7 @@ describe('Settings → Sharing', () => {
       destinations: [GCS],
       defaultDestinationId: 'company',
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     const api = fakeApi();
     await render(api);
@@ -331,6 +357,7 @@ describe('Settings → Sharing', () => {
       destinations: [GCS],
       defaultDestinationId: 'company',
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     const api = fakeApi([], {
       state: 'sign-in-required',
@@ -359,6 +386,7 @@ describe('Settings → Sharing', () => {
       destinations: [GCS],
       defaultDestinationId: 'company',
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     const api = fakeApi([], {
       state: 'check-failed',
@@ -379,6 +407,7 @@ describe('Settings → Sharing', () => {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
     await render(fakeApi());
     await press(button('Add a place'));
@@ -430,6 +459,7 @@ describe('Settings → Sharing', () => {
       destinations: [GCS],
       defaultDestinationId: 'company',
       agentsMayShare: true,
+      autoRevokeAfterDays: null,
     });
     const api = fakeApi([SHARED]);
     await render(api);
@@ -449,6 +479,7 @@ describe('Settings → Sharing', () => {
       destinations: [GCS],
       defaultDestinationId: 'company',
       agentsMayShare: true,
+      autoRevokeAfterDays: null,
     });
     await render(
       fakeApi([{ ...SHARED, status: 'awaiting-sign-in', sharedVersion: 0 }]),
@@ -463,11 +494,139 @@ describe('Settings → Sharing', () => {
     ).toBe(false);
   });
 
+  it('shows the date each page was first shared', async () => {
+    install({
+      destinations: [GCS],
+      defaultDestinationId: 'company',
+      agentsMayShare: true,
+      autoRevokeAfterDays: null,
+    });
+    await render(
+      fakeApi([{ ...SHARED, updatedAt: '2026-10-20T00:00:00.000Z' }]),
+    );
+
+    const time = container.querySelector('time');
+    expect(time?.dateTime).toBe('2026-10-15T00:00:00.000Z');
+    expect(time?.textContent).toMatch(/^Oct 1[45], 2026, \d\d:\d\d$/);
+  });
+
+  it('revokes exactly the listed pages after confirming, then lists what is left', async () => {
+    install({
+      destinations: [GCS],
+      defaultDestinationId: 'company',
+      agentsMayShare: true,
+      autoRevokeAfterDays: null,
+    });
+    const api = fakeApi([SHARED, { ...SHARED, id: 'share-2' }]);
+    await render(api);
+    const survivor = { ...SHARED, id: 'share-3', title: 'Shared meanwhile' };
+    api.listShares.mockResolvedValue({
+      shares: [survivor],
+      configReceivedAt: '2026-10-15T00:00:00Z',
+    });
+
+    await press(button('Revoke all'));
+    expect(api.revokeAllShares).not.toHaveBeenCalled();
+    await press(button('Revoke all 2?'));
+
+    expect(api.revokeAllShares).toHaveBeenCalledWith(
+      { revokeSharesDto: { shareIds: ['share-1', 'share-2'] } },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(api.revokeShare).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Shared meanwhile');
+    expect(container.textContent).not.toContain('Delivery report');
+  });
+
+  it('shows the daemon’s refusal of a Revoke all and reads the list again', async () => {
+    install({
+      destinations: [GCS],
+      defaultDestinationId: 'company',
+      agentsMayShare: true,
+      autoRevokeAfterDays: null,
+    });
+    const api = fakeApi([SHARED]);
+    api.revokeAllShares.mockRejectedValue(new Error('daemon unreachable'));
+    await render(api);
+
+    await press(button('Revoke all'));
+    await press(button('Revoke all 1?'));
+
+    expect(container.textContent).toContain('daemon unreachable');
+    expect(api.listShares).toHaveBeenCalledTimes(2);
+  });
+
+  it('says how many links survived a Revoke all, and why', async () => {
+    install({
+      destinations: [GCS],
+      defaultDestinationId: 'company',
+      agentsMayShare: true,
+      autoRevokeAfterDays: null,
+    });
+    const api = fakeApi([SHARED, { ...SHARED, id: 'share-2' }]);
+    api.revokeAllShares.mockResolvedValue({
+      revoked: 1,
+      failed: 1,
+      detail: 'ERROR: permission denied',
+    });
+    await render(api);
+
+    await press(button('Revoke all'));
+    await press(button('Revoke all 2?'));
+
+    expect(container.textContent).toContain(
+      '1 of 2 links could not be removed: ERROR: permission denied',
+    );
+  });
+
+  it('offers no Revoke all while nothing is shared', async () => {
+    install({
+      destinations: [GCS],
+      defaultDestinationId: 'company',
+      agentsMayShare: true,
+      autoRevokeAfterDays: null,
+    });
+    await render(fakeApi());
+
+    expect(() => button('Revoke all')).toThrow();
+  });
+
+  it('saves an auto-revoke window as a number of days, and Never as null', async () => {
+    install({
+      destinations: [GCS],
+      defaultDestinationId: 'company',
+      agentsMayShare: false,
+      autoRevokeAfterDays: null,
+    });
+    await render(fakeApi());
+    const picker = container.querySelector<HTMLButtonElement>(
+      '#settings-share-auto-revoke',
+    )!;
+    expect(picker.textContent).toContain('Never');
+
+    await press(picker);
+    await press(optionNamed('After 30 days'));
+    await press(picker);
+    await press(optionNamed('Never'));
+
+    expect(writes.map((w) => w.sharing?.autoRevokeAfterDays)).toEqual([
+      30,
+      null,
+    ]);
+    expect(writes[0]?.sharing).toEqual({
+      destinations: [GCS],
+      defaultDestinationId: 'company',
+      agentsMayShare: false,
+      autoRevokeAfterDays: 30,
+    });
+  });
+
   it('on a paired phone says sharing is set up on the Mac and offers nothing to change', async () => {
     install({
       destinations: [GCS],
       defaultDestinationId: 'company',
       agentsMayShare: true,
+      autoRevokeAfterDays: null,
     });
     const api = fakeApi([SHARED]);
     await render(api, true);

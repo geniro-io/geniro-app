@@ -620,7 +620,6 @@ function SignInStatus({
           destinationId={destination.id}
           label={label}
           onSettled={onSettled}
-          className="self-start"
         />
       )}
     </div>

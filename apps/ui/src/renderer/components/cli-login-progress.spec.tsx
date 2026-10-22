@@ -277,6 +277,44 @@ describe('CliLoginProgress', () => {
     expect(container.querySelector('.animate-spin')).toBeNull();
   });
 
+  it('keeps an inline ending on one line: the CLI’s line beside the headline, and none that only repeats it', () => {
+    render(
+      <CliLoginProgress
+        session={session({ status: 'failed', message: 'OAuth failed' })}
+        variant="inline"
+        error="daemon refused"
+        {...noop}
+      />,
+    );
+
+    const row = container.querySelector(
+      '[data-slot="cli-login-progress"] > div',
+    );
+    expect(row?.textContent).toContain('Sign-in did not complete');
+    expect(row?.textContent).toContain('— OAuth failed');
+    expect(row?.textContent).toContain('daemon refused');
+    expect(
+      container.querySelector('[data-slot="cli-login-progress"] > p'),
+    ).toBeNull();
+
+    render(
+      <CliLoginProgress
+        session={{
+          status: 'timed-out',
+          url: null,
+          message: 'Sign-in timed out.',
+        }}
+        scope="share"
+        variant="inline"
+        error={null}
+        {...noop}
+      />,
+    );
+
+    expect(container.textContent).toContain('Not shared — sign-in timed out');
+    expect(container.textContent).not.toContain('Sign-in timed out.');
+  });
+
   it.each([
     ['waiting', 'Waiting for you to finish in the browser…'],
     ['verifying', 'Signed in — sharing…'],

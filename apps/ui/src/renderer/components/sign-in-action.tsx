@@ -9,6 +9,7 @@ import {
 import { CliLoginProgress } from './cli-login-progress';
 import { ErrorText } from './error-text';
 import { Button } from './ui/button';
+import { cn } from './ui/utils';
 
 /**
  * "Sign in to <label>" for a share destination whose CLI is signed out, and
@@ -26,6 +27,7 @@ export function SignInAction({
   label,
   onSettled,
   variant = 'inline',
+  compact = false,
   className,
 }: {
   api: ShareSignInClient | null;
@@ -34,6 +36,12 @@ export function SignInAction({
   label: string;
   onSettled?: (session: ShareSignInSessionDto) => void;
   variant?: 'band' | 'inline';
+  /**
+   * One text line tall — the button and the sign-in's progress alike — so it
+   * sits in a one-line strip (the warning under an artifact card) without
+   * making the row taller than its message.
+   */
+  compact?: boolean;
   /** For the button, e.g. `w-full` in a narrow panel. */
   className?: string;
 }): React.JSX.Element {
@@ -58,7 +66,12 @@ export function SignInAction({
   if (session !== null) {
     const running = !isShareSignInOver(session.status);
     return (
-      <div role="status" aria-live="polite" data-slot="sign-in-action">
+      <div
+        role="status"
+        aria-live="polite"
+        data-slot="sign-in-action"
+        // Takes back the inline progress's own vertical padding.
+        className={cn(compact && '-my-1.5')}>
         <CliLoginProgress
           session={{
             status: session.status,
@@ -79,18 +92,24 @@ export function SignInAction({
     );
   }
   return (
-    <div className="flex flex-col gap-1" data-slot="sign-in-action">
+    // The error sits beside the button, wrapping under it only where the row
+    // has no room (a full-width button in a narrow panel).
+    <div
+      className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"
+      data-slot="sign-in-action">
       <Button
         ref={buttonRef}
         type="button"
         size="sm"
-        className={className}
+        className={cn(compact && '-my-0.5 h-5 px-2 text-xs', className)}
         disabled={api === null || signIn.starting}
         onClick={() => signIn.start(destinationId)}>
         {signIn.starting ? 'Starting sign-in…' : `Sign in to ${label}`}
       </Button>
       {signIn.error !== null && (
-        <ErrorText className="text-xs">{signIn.error}</ErrorText>
+        <ErrorText className="min-w-0 truncate text-xs" title={signIn.error}>
+          {signIn.error}
+        </ErrorText>
       )}
     </div>
   );

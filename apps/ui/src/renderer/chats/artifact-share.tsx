@@ -307,6 +307,7 @@ export function ArtifactShareStrip({
           api={sharing.signIn}
           destinationId={share.destinationId}
           label={signInLabel(share)}
+          compact
         />
       }
       onDismiss={() => setDismissed(share.updatedAt)}

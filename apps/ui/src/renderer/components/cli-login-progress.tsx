@@ -127,6 +127,16 @@ export function CliLoginProgress({
   // glyph small and leave the words large.
   const glyph = band ? 'size-4 shrink-0' : 'size-3.5 shrink-0';
   const control = band ? undefined : 'h-5 px-1.5 text-[11px]';
+  const title = headline(session, scope, remote);
+  // The CLI's own last line, when it says more than the headline ("Sign-in
+  // timed out." under "Not shared — sign-in timed out" says nothing). Held
+  // back while a code is asked for: the headline is already the instruction.
+  const message =
+    session.message !== null &&
+    session.status !== 'needs_code' &&
+    !restates(title, session.message)
+      ? session.message
+      : null;
 
   return (
     <div
@@ -159,13 +169,29 @@ export function CliLoginProgress({
         )}
         <span
           className={cn(
+            'shrink-0 whitespace-nowrap',
             session.status === 'succeeded'
               ? 'text-foreground'
               : 'text-muted-foreground',
           )}>
-          {headline(session, scope, remote)}
+          {title}
         </span>
-        <div className="ml-auto flex items-center gap-1">
+        {/* Inline, the CLI's line and an error stay on the headline's row,
+            cut to fit with the whole text on hover: a status among rows is
+            one line, never a block. */}
+        {!band && message !== null ? (
+          <span
+            className="min-w-0 truncate text-muted-foreground"
+            title={message}>
+            — {message}
+          </span>
+        ) : null}
+        {!band && error !== null ? (
+          <span className="min-w-0 truncate text-destructive" title={error}>
+            {error}
+          </span>
+        ) : null}
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           {/* Also while a SERVER sign-in is `verifying`: the CLI exited having
               opened the MAC's browser, so on a phone this link is the only way
               to the provider's page at all. */}
@@ -242,25 +268,22 @@ export function CliLoginProgress({
         </form>
       ) : null}
 
-      {/* The CLI's own last line, when it has one worth showing. Held back while
-          a code is being asked for, where the headline is already the
-          instruction and this would restate it. */}
-      {session.message !== null && session.status !== 'needs_code' ? (
-        <p
-          className={cn(
-            'text-muted-foreground',
-            band ? 'text-xs' : 'text-[11px]',
-          )}>
-          {session.message}
-        </p>
+      {band && message !== null ? (
+        <p className="text-xs text-muted-foreground">{message}</p>
       ) : null}
-      {error !== null ? (
-        <p className={cn('text-destructive', band ? 'text-xs' : 'text-[11px]')}>
-          {error}
-        </p>
+      {band && error !== null ? (
+        <p className="text-xs text-destructive">{error}</p>
       ) : null}
     </div>
   );
+}
+
+/** Whether the CLI's line only repeats what the headline already ends with. */
+function restates(title: string, message: string): boolean {
+  const letters = (text: string): string =>
+    text.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const said = letters(message);
+  return said !== '' && letters(title).endsWith(said);
 }
 
 function headline(

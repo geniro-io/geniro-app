@@ -81,7 +81,10 @@ import {
 import { DaemonClient } from '../daemon-client';
 import { reportRendererIssue } from '../debug/report-ui-errors';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
-import { useRunNotifications } from '../notifications/use-run-notifications';
+import {
+  useRunNotifications,
+  useShareSignInNotifications,
+} from '../notifications/use-run-notifications';
 import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { followTail } from '../scroll-to-bottom';
@@ -6526,6 +6529,7 @@ export function Chats({
     isRemoteRuntime() ? null : apis.shares,
     activeRunId,
     latestShowArtifactResult,
+    client,
   );
   /**
    * Stop one of this thread's running commands — ASKED FOR as "i wanna have an
@@ -8464,6 +8468,14 @@ export function Chats({
     // open there — so passing it regardless read a user in Settings on a
     // focused window as watching that thread, and its banners were withheld
     // from the one person not looking at it.
+    activeRunId: active && showsRequestedThread ? activeRunId : null,
+  });
+  // An agent's share waiting on the user signing in — desktop only, like the
+  // Share control that answers it.
+  useShareSignInNotifications({
+    client: isRemoteRuntime() ? null : client,
+    runs: notifiedRuns,
+    labelOf: notificationLabel,
     activeRunId: active && showsRequestedThread ? activeRunId : null,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on

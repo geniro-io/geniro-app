@@ -35,8 +35,9 @@ import {
   type HostArtifact,
   type HostArtifactOutcome,
   type HostArtifactRow,
+  type HostRowWire,
+  type HostWakeOpener,
   type ItemWire,
-  type MonitorRowWire,
   type PersistedResetWake,
   type RunCallSeed,
   type RunListPage,
@@ -824,8 +825,9 @@ export class GraphExecutorService
     (
       caller: string,
       prompt: string,
-      row: MonitorRowWire,
+      row: HostRowWire,
       onDropped: (requeue: boolean) => void,
+      opener: HostWakeOpener,
     ) => MonitorWake
   >();
 
@@ -1470,11 +1472,12 @@ export class GraphExecutorService
     runId: string,
     caller: string,
     prompt: string,
-    row: MonitorRowWire,
+    row: HostRowWire,
     onDropped: (requeue: boolean) => void = () => undefined,
+    opener: HostWakeOpener = 'monitor',
   ): MonitorWake {
     return (
-      this.monitorWakers.get(runId)?.(caller, prompt, row, onDropped) ??
+      this.monitorWakers.get(runId)?.(caller, prompt, row, onDropped, opener) ??
       'refused'
     );
   }
@@ -3280,9 +3283,9 @@ export class GraphExecutorService
      * as the registration, since the claim lands during the awaits above it.
      */
     const reopenRun = async (
-      opener: 'monitor' | 'other' = 'other',
+      opener: HostWakeOpener | 'other' = 'other',
     ): Promise<'awake' | 'stopped' | 'superseded'> => {
-      if (opener !== 'monitor') {
+      if (opener === 'other') {
         wokenOnlyByMonitors = false;
       }
       // The roll-up writes this run's terminal status; waking ahead of it puts
@@ -3325,7 +3328,7 @@ export class GraphExecutorService
         return 'superseded';
       }
       reopened = true;
-      wokenOnlyByMonitors = opener === 'monitor';
+      wokenOnlyByMonitors = opener !== 'other';
       registerAggregate();
       // A user's message reaches an AWAKE run through the same control a live
       // pass offers — the wake holds the run's claim, so the walk a settled run
@@ -6594,9 +6597,9 @@ export class GraphExecutorService
       node: WorkflowAgentNode,
       prompt: string,
       images: TurnImage[],
-      opener: 'monitor' | 'other' = 'other',
+      opener: HostWakeOpener | 'other' = 'other',
     ): Promise<void> => {
-      if (opener !== 'monitor') {
+      if (opener === 'other') {
         wokenOnlyByMonitors = false;
       }
       const starting = reserveContinuation(node.id);
@@ -7120,7 +7123,7 @@ export class GraphExecutorService
     const scheduleOwnTurn = (
       nodeId: string,
       caller: string,
-      opener: 'monitor' | 'other',
+      opener: HostWakeOpener | 'other',
       steps: {
         onStopped: (why: 'stopped' | 'superseded') => void;
         onBusy: (rewake: () => void) => void;
@@ -7164,7 +7167,7 @@ export class GraphExecutorService
     // own once the one it is in has ended — `wakeNode`'s path, which exists
     // only where the workflow can call — and a callee conversation inside the
     // call it holds open.
-    this.monitorWakers.set(runId, (caller, prompt, row, onDropped) => {
+    this.monitorWakers.set(runId, (caller, prompt, row, onDropped, opener) => {
       if (cancelRequested) {
         return 'refused';
       }
@@ -7172,6 +7175,11 @@ export class GraphExecutorService
         return 'busy';
       }
       if (callerConversationOf(caller) !== null) {
+        // Only a monitor's output reopens a call it holds; anything else
+        // geniro owes a callee waits for its next turn as a note.
+        if (opener !== 'monitor') {
+          return 'refused';
+        }
         const woke = this.callBroker.wakeHeldCallee(runId, caller, prompt, row);
         return woke === 'pending' ? 'busy' : woke;
       }
@@ -7180,7 +7188,7 @@ export class GraphExecutorService
       if (node?.kind !== 'agent') {
         return 'refused';
       }
-      scheduleOwnTurn(nodeId, caller, 'monitor', {
+      scheduleOwnTurn(nodeId, caller, opener, {
         // Its delivery already let the output go: handed back, it holds it
         // for the next pass's turn of this conversation, or records what
         // ended when the run is stopped.
@@ -7189,7 +7197,7 @@ export class GraphExecutorService
         onBusy: (rewake) => redeliverWhenEnded(caller, rewake),
         start: async () => {
           await persistItem(nodeId, 'system', null, row);
-          void continueNode(node, prompt, [], 'monitor');
+          void continueNode(node, prompt, [], opener);
         },
       });
       return 'woken';

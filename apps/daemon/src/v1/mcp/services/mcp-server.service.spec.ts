@@ -367,17 +367,19 @@ function fakeShares(
   },
 ) {
   const asked: { artifactId: string; title: string; remote: boolean }[] = [];
+  const askers: unknown[] = [];
   const service = {
     agentsMayShare: () => agentsMayShare,
     shareForAgent: (
-      input: { artifactId: string; title: string },
+      input: { artifactId: string; title: string; asker?: unknown },
       remote: boolean,
     ) => {
       asked.push({ artifactId: input.artifactId, title: input.title, remote });
+      askers.push(input.asker);
       return Promise.resolve(outcome);
     },
   } as unknown as ShareService;
-  return { service, asked };
+  return { service, asked, askers };
 }
 
 function artifactService(
@@ -2493,6 +2495,38 @@ describe('McpServerService', () => {
       expect(text).toContain(
         'Shared link: https://pages.example.com/x/index.html#k=KEY',
       );
+    });
+
+    it('names the asking conversation, so a share waiting on sign-in wakes the right agent', async () => {
+      const shares = fakeShares(true);
+      await post(
+        artifactService(publishing(), shares.service),
+        'run-1',
+        'agent',
+        shareCall(true),
+      );
+      expect(shares.askers).toEqual([
+        {
+          runId: 'run-1',
+          nodeId: 'agent',
+          conversationId: null,
+          caller: 'agent',
+          target: 'chat',
+        },
+      ]);
+
+      const workflow = publishing();
+      workflow.markWorkflowRun('run-1');
+      const inWorkflow = fakeShares(true);
+      await post(
+        artifactService(workflow, inWorkflow.service),
+        'run-1',
+        'agent',
+        shareCall(true),
+      );
+      expect(inWorkflow.askers).toEqual([
+        expect.objectContaining({ target: 'workflow', nodeId: 'agent' }),
+      ]);
     });
 
     it('tells the share a call came through the gateway from a paired device', async () => {

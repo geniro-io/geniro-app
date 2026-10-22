@@ -17,6 +17,29 @@ import { awaitingPhrase, isSettledRunStatus } from '../chats/run-status';
  * thin React binding over it.
  */
 
+/**
+ * The banner for an agent's share that began waiting on the user's sign-in —
+ * once, on the write that put it there (`signInRequested`), never for the
+ * user's own press (they are looking at the card) or a later write.
+ */
+export function shareSignInNotice(event: {
+  signInRequested: boolean;
+  askedByAgent: boolean;
+  title: string;
+  destinationName: string;
+}): { kind: 'share-sign-in'; body: string } | null {
+  if (!event.signInRequested || !event.askedByAgent) {
+    return null;
+  }
+  return {
+    kind: 'share-sign-in',
+    body:
+      oneLine(
+        `An agent's link to "${event.title}" is waiting — sign in to ${event.destinationName} to share it.`,
+      ) ?? '',
+  };
+}
+
 /** One run that just crossed into a state worth interrupting the user for. */
 export interface RunNotificationTrigger {
   runId: string;

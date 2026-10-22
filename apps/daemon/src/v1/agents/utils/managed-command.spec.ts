@@ -191,6 +191,53 @@ describe('runManagedCommand', () => {
     expect(result.output).toBe('one\ntwo\nthree\n');
   });
 
+  it('hands each line to onOutput as it arrives, per stream, with a partial last line at the end', async () => {
+    const seen: string[] = [];
+    let exited = false;
+    const run = runManagedCommand({
+      label: 'test:lines',
+      command: '/bin/sh',
+      args: [
+        '-c',
+        'printf "open https://x.example/a\\r\\n"; printf "code: AB" >&2; sleep 0.3; printf "CD\\n" >&2; printf "tail"',
+      ],
+      timeoutMs: 10_000,
+      processes: new ProcessRegistry(),
+      onOutput: (line, stream) => seen.push(`${stream}:${line}`),
+    }).then((result) => {
+      exited = true;
+      return result;
+    });
+    await expect.poll(() => seen.length).toBe(1);
+    // The first line came while the command was still running.
+    expect(exited).toBe(false);
+    await run;
+
+    expect(seen).toEqual([
+      'stdout:open https://x.example/a',
+      'stderr:code: ABCD',
+      'stdout:tail',
+    ]);
+  });
+
+  it('keeps no byte of stdout when told to discard it, and still reports how the command ended', async () => {
+    const seen: string[] = [];
+    const result = await runManagedCommand({
+      label: 'test:discard',
+      command: '/bin/sh',
+      args: ['-c', 'echo ya29.live-token; echo note >&2; exit 4'],
+      timeoutMs: 10_000,
+      processes: new ProcessRegistry(),
+      keepOutput: 'tail',
+      discardStdout: true,
+      onOutput: (line) => seen.push(line),
+    });
+
+    expect(result).toMatchObject({ code: 4, stdout: '', stderr: 'note\n' });
+    expect(result.output).toBe('note\n');
+    expect(seen).toEqual(['note']);
+  });
+
   it('ends what the command backgrounded at its exit, even with its output elsewhere', async () => {
     const result = await runManagedCommand({
       label: 'test:end-group',

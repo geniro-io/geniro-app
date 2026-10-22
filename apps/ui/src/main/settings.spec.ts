@@ -559,6 +559,38 @@ describe('sharing settings', () => {
     });
   });
 
+  it('a broken sign-in field costs only that field, never the destination agents share to', () => {
+    const COMMAND = {
+      kind: 'command',
+      id: 'team',
+      name: 'Team bucket',
+      linkBase: 'https://x.example',
+      upload: ['gcloud', 'storage', 'cp', '{file}', 'gs://b/{object}'],
+      remove: ['gcloud', 'storage', 'rm', 'gs://b/{object}'],
+    };
+    writeRaw({
+      sharing: {
+        destinations: [
+          {
+            ...COMMAND,
+            signIn: {
+              login: ['/bin/sh', '-c', 'login'],
+              patterns: ['expired'],
+            },
+          },
+          { ...COMMAND, id: 'whole', signIn: 'not an object' },
+        ],
+        defaultDestinationId: 'team',
+        agentsMayShare: true,
+      },
+    });
+
+    expect(readSettings().sharing.destinations).toEqual([
+      { ...COMMAND, signIn: { patterns: ['expired'] } },
+      { ...COMMAND, id: 'whole' },
+    ]);
+  });
+
   it('a default naming a dropped destination falls back to none', () => {
     writeRaw({
       sharing: {

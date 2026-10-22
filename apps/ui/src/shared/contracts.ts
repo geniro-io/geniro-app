@@ -296,6 +296,12 @@ export type ShareDestination =
       /** argv tokens; `{file}` and `{object}` are substituted, nothing runs through a shell. */
       upload: string[];
       remove: string[];
+      /**
+       * How to sign the CLI in again (argv) and which output means it is
+       * signed out (case-insensitive substrings). Without it a program named
+       * `gcloud` or `aws` borrows that CLI's own sign-in.
+       */
+      signIn?: { login?: string[]; patterns?: string[] };
     };
 
 export interface SharingSettings {
@@ -850,8 +856,10 @@ export const CHAT_LIST_WIDTH = 260;
  * the renderer never reads the toggle. That is what makes a flipped switch take
  * effect at once instead of whenever a screen last cached its settings, and it
  * keeps the one place that can post a banner the one place that gates it.
+ * `share-sign-in` is an agent's share waiting on the user signing in to the
+ * place it shares to.
  */
-export type RunNotificationKind = 'question' | 'turn-end';
+export type RunNotificationKind = 'question' | 'turn-end' | 'share-sign-in';
 
 /** One notification the renderer asks main to post. */
 export interface RunNotification {

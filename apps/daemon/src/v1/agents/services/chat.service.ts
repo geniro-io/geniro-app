@@ -71,8 +71,8 @@ import {
   type HostPlanOutcome,
   type HostQuestion,
   type HostQuestionOutcome,
+  type HostRowWire,
   type ItemWire,
-  type MonitorRowWire,
   type RecommendationApply,
   type RunAwaiting,
   type RunGroupColor,
@@ -5090,7 +5090,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * a monitor's output starting a turn must not read as something the user
        * typed.
        */
-      hostRow?: MonitorRowWire;
+      hostRow?: HostRowWire;
       /** Told once `hostRow` is written — a send can still fail after it. */
       onHostRowWritten?: () => void;
     } = {},
@@ -5121,7 +5121,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       resumeOnly?: boolean;
       apply?: RecommendationApply;
       ownTurn?: boolean;
-      hostRow?: MonitorRowWire;
+      hostRow?: HostRowWire;
       onHostRowWritten?: () => void;
     },
   ): Promise<ItemWire> {

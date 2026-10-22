@@ -57,7 +57,7 @@ import {
 } from './agent-instances';
 import { ArtifactDialog } from './artifact-dialog';
 import type { RunArtifact } from './artifact-payload';
-import { ArtifactShareContext } from './artifact-share';
+import { ArtifactShareContext, hasLink } from './artifact-share';
 import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
 import { ContextMeter } from './context-meter';
 import { ConversationTimeline } from './conversation-timeline';
@@ -2815,8 +2815,10 @@ export function AgentsPanel({
                       <PageMeta
                         version={artifact.version}
                         shared={
+                          // A link that works — not a share still waiting
+                          // on sign-in, which has none yet.
                           sharing !== null &&
-                          sharing.shareOf(artifact.artifactId) !== null
+                          hasLink(sharing.shareOf(artifact.artifactId))
                         }
                       />
                     }

@@ -105,7 +105,10 @@ function readEntry(value: unknown): MonitorEntry | null {
  *
  * TWIN PARSER: written by `monitorRowPayload` in
  * `apps/daemon/src/v1/agents/utils/monitor-text.ts`; its shape is
- * `MonitorRowPayload` in `apps/daemon/src/v1/agents/chat.types.ts`.
+ * `MonitorRowPayload` inside `HostRowWire` in
+ * `apps/daemon/src/v1/agents/chat.types.ts`. A host row with no `monitors`
+ * (a share the agent was woken about) is not a monitor notice: it reads null
+ * here and is drawn as the plain notice its `message` says.
  */
 export function readMonitorNotice(payload: unknown): MonitorNotice | null {
   if (!payload || typeof payload !== 'object') {

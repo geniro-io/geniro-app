@@ -2671,6 +2671,25 @@ export interface ChatUploadDto {
 /**
  * 
  * @export
+ * @interface CheckShareDestinationDto
+ */
+export interface CheckShareDestinationDto {
+    /**
+     * 
+     * @type {CheckShareDestinationDtoShareDestination}
+     * @memberof CheckShareDestinationDto
+     */
+    destination: CheckShareDestinationDtoShareDestination;
+}
+/**
+ * @type CheckShareDestinationDtoShareDestination
+ * 
+ * @export
+ */
+export type CheckShareDestinationDtoShareDestination = ShareConfigDtoShareDestinationOneOf | ShareConfigDtoShareDestinationOneOf1 | ShareConfigDtoShareDestinationOneOf2;
+/**
+ * 
+ * @export
  * @interface ConfigDirPin
  */
 export interface ConfigDirPin {
@@ -4684,25 +4703,6 @@ export interface PressActionDto {
      */
     clientMessageId: string;
 }
-/**
- * 
- * @export
- * @interface ProbeShareDestinationDto
- */
-export interface ProbeShareDestinationDto {
-    /**
-     * 
-     * @type {ProbeShareDestinationDtoShareDestination}
-     * @memberof ProbeShareDestinationDto
-     */
-    destination: ProbeShareDestinationDtoShareDestination;
-}
-/**
- * @type ProbeShareDestinationDtoShareDestination
- * 
- * @export
- */
-export type ProbeShareDestinationDtoShareDestination = ShareConfigDtoShareDestinationOneOf | ShareConfigDtoShareDestinationOneOf1 | ShareConfigDtoShareDestinationOneOf2;
 
 /**
  * 
@@ -7135,6 +7135,18 @@ export interface Share {
     lastError: string | null;
     /**
      * 
+     * @type {ShareSignInLabel}
+     * @memberof Share
+     */
+    signIn: ShareSignInLabel | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof Share
+     */
+    askedByAgent: boolean;
+    /**
+     * 
      * @type {string}
      * @memberof Share
      */
@@ -7158,6 +7170,46 @@ export const ShareActor = {
     Agent: 'agent'
 } as const;
 export type ShareActor = typeof ShareActor[keyof typeof ShareActor];
+
+/**
+ * 
+ * @export
+ * @interface ShareCheckResultDto
+ */
+export interface ShareCheckResultDto {
+    /**
+     * 
+     * @type {ShareCheckState}
+     * @memberof ShareCheckResultDto
+     */
+    state: ShareCheckState;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareCheckResultDto
+     */
+    detail?: string;
+    /**
+     * 
+     * @type {ShareSignInLabel}
+     * @memberof ShareCheckResultDto
+     */
+    signIn: ShareSignInLabel | null;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const ShareCheckState = {
+    SignedIn: 'signed-in',
+    SignInRequired: 'sign-in-required',
+    CheckFailed: 'check-failed',
+    NotSetUp: 'not-set-up'
+} as const;
+export type ShareCheckState = typeof ShareCheckState[keyof typeof ShareCheckState];
 
 /**
  * 
@@ -7363,6 +7415,12 @@ export interface ShareConfigDtoShareDestinationOneOf2 {
      * @memberof ShareConfigDtoShareDestinationOneOf2
      */
     remove: Array<string>;
+    /**
+     * 
+     * @type {ShareConfigDtoShareDestinationOneOf2SignIn}
+     * @memberof ShareConfigDtoShareDestinationOneOf2
+     */
+    signIn?: ShareConfigDtoShareDestinationOneOf2SignIn;
 }
 
 
@@ -7374,6 +7432,25 @@ export const ShareConfigDtoShareDestinationOneOf2KindEnum = {
 } as const;
 export type ShareConfigDtoShareDestinationOneOf2KindEnum = typeof ShareConfigDtoShareDestinationOneOf2KindEnum[keyof typeof ShareConfigDtoShareDestinationOneOf2KindEnum];
 
+/**
+ * 
+ * @export
+ * @interface ShareConfigDtoShareDestinationOneOf2SignIn
+ */
+export interface ShareConfigDtoShareDestinationOneOf2SignIn {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareConfigDtoShareDestinationOneOf2SignIn
+     */
+    login?: Array<string>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareConfigDtoShareDestinationOneOf2SignIn
+     */
+    patterns?: Array<string>;
+}
 /**
  * 
  * @export
@@ -7391,7 +7468,7 @@ export interface ShareCreatedDto {
      * @type {string}
      * @memberof ShareCreatedDto
      */
-    url: string;
+    url: string | null;
 }
 /**
  * 
@@ -7428,22 +7505,100 @@ export interface ShareListDto {
 /**
  * 
  * @export
- * @interface ShareProbeResultDto
+ * @interface ShareSignInLabel
  */
-export interface ShareProbeResultDto {
-    /**
-     * 
-     * @type {boolean}
-     * @memberof ShareProbeResultDto
-     */
-    ok: boolean;
+export interface ShareSignInLabel {
     /**
      * 
      * @type {string}
-     * @memberof ShareProbeResultDto
+     * @memberof ShareSignInLabel
      */
-    detail: string;
+    cli: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInLabel
+     */
+    label: string;
 }
+/**
+ * 
+ * @export
+ * @interface ShareSignInSessionDto
+ */
+export interface ShareSignInSessionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    destinationId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    label: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    cli: string;
+    /**
+     * 
+     * @type {ShareSignInStatus}
+     * @memberof ShareSignInSessionDto
+     */
+    status: ShareSignInStatus;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareSignInSessionDto
+     */
+    lines: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    url: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    message: string | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareSignInSessionDto
+     */
+    retried: Array<string>;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const ShareSignInStatus = {
+    Waiting: 'waiting',
+    Verifying: 'verifying',
+    Succeeded: 'succeeded',
+    Failed: 'failed',
+    Cancelled: 'cancelled',
+    TimedOut: 'timed-out'
+} as const;
+export type ShareSignInStatus = typeof ShareSignInStatus[keyof typeof ShareSignInStatus];
+
 
 /**
  * 
@@ -7451,7 +7606,9 @@ export interface ShareProbeResultDto {
  */
 export const ShareStatus = {
     Live: 'live',
-    RevokeFailed: 'revoke-failed'
+    RevokeFailed: 'revoke-failed',
+    AwaitingSignIn: 'awaiting-sign-in',
+    Failed: 'failed'
 } as const;
 export type ShareStatus = typeof ShareStatus[keyof typeof ShareStatus];
 
@@ -7498,6 +7655,19 @@ export interface ShellOutputDto {
      * @memberof ShellOutputDto
      */
     unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface StartShareSignInDto
+ */
+export interface StartShareSignInDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof StartShareSignInDto
+     */
+    destinationId: string;
 }
 /**
  * 

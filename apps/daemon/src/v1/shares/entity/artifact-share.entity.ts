@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { DateTimeType } from '@mikro-orm/core';
 import {
   Entity,
   PrimaryKey,
@@ -52,6 +53,12 @@ export class ArtifactShare extends TimestampsEntity {
   @Property({ type: 'text' })
   linkBase!: string;
 
+  /**
+   * The version the object holds; 0 while nothing was ever uploaded (a share
+   * waiting on the user's sign-in, or one that then failed). Kept NOT NULL on
+   * purpose: changing a column's nullability makes the boot schema sync
+   * rebuild the table, and this one is the only record of every live link.
+   */
   @Property({ type: 'integer' })
   sharedVersion!: number;
 
@@ -61,7 +68,22 @@ export class ArtifactShare extends TimestampsEntity {
   @Property({ type: 'string' })
   status: ShareStatus = 'live';
 
-  /** The last failed revoke's reason, shown beside a `revoke-failed` row. */
+  /** Why the last upload or revoke failed, shown beside the row. */
   @Property({ type: 'text', nullable: true })
   lastError: string | null = null;
+
+  /**
+   * The agent conversations that asked for this share while it could not be
+   * uploaded (a JSON array of `ShareAsker`), each woken with the outcome once
+   * the user signs in. Null for a share nobody is waiting on.
+   */
+  @Property({ type: 'text', nullable: true })
+  asker: string | null = null;
+
+  /**
+   * When every asker had been woken with the outcome (each leaves `asker` as
+   * its wake settles); null while one is still owed.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  agentToldAt: Date | null = null;
 }

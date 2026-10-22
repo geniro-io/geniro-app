@@ -276,4 +276,32 @@ describe('CliLoginProgress', () => {
     expect(container.textContent).toContain('OAuth failed');
     expect(container.querySelector('.animate-spin')).toBeNull();
   });
+
+  it.each([
+    ['waiting', 'Waiting for you to finish in the browser…'],
+    ['verifying', 'Signed in — sharing…'],
+    ['succeeded', 'Signed in'],
+    ['cancelled', 'Not shared — sign-in cancelled'],
+    ['timed-out', 'Not shared — sign-in timed out'],
+    ['failed', 'Not shared — sign-in did not complete'],
+  ] as const)(
+    'words a share destination’s %s sign-in for what it means to the share',
+    (status, headline) => {
+      render(
+        <CliLoginProgress
+          session={{ status, url: null, message: null }}
+          scope="share"
+          onSubmitCode={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+          error={null}
+        />,
+      );
+
+      expect(container.textContent).toContain(headline);
+      expect(container.textContent).toContain(
+        status === 'waiting' || status === 'verifying' ? 'Cancel' : 'Dismiss',
+      );
+    },
+  );
 });

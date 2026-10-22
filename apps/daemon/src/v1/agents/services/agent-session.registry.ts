@@ -505,15 +505,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
 
   /**
    * Owe one conversation's next turn a prompt line: `key` is its session key
-   * (a workflow node's own, or a chat's run id).
+   * (a workflow node's own, or a chat's run id). False when it was not kept —
+   * the daemon is shutting down, so no next turn will carry it.
    */
-  oweKeyNote(key: string, prompt: string): void {
+  oweKeyNote(key: string, prompt: string): boolean {
     if (this.shuttingDown) {
-      return;
+      return false;
     }
     const owed = this.stopped.get(key) ?? { rows: [], prompts: [] };
     owed.prompts.push(prompt);
     this.stopped.set(key, owed);
+    return true;
   }
 
   /**

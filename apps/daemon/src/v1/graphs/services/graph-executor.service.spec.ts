@@ -4182,6 +4182,48 @@ describe('GraphExecutorService — follow-up messages', () => {
     expect(hostTurnSettles).toEqual([run.id]);
   });
 
+  it('settles a finished run reopened by a host wake (a share the agent asked for) as a host turn too', async () => {
+    const { service, claude, itemDao, hostTurnSettles } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(a, 'A1');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B1');
+    await drain();
+
+    expect(
+      service.wakeConversation(
+        run.id,
+        'a',
+        'Shared link: https://x.example/p#k=KEY',
+        {
+          severity: 'info',
+          message: 'Shared "Report" once you signed in',
+          shares: [{ shareId: 's1', title: 'Report', outcome: 'shared' }],
+          woke: true,
+        },
+        () => undefined,
+        'host',
+      ),
+    ).toBe('woken');
+    await drain();
+    expect(turnsOf(claude, 'role-a')[1]!.input.prompt).toBe(
+      'Shared link: https://x.example/p#k=KEY',
+    );
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'posted');
+    await drain();
+
+    expect(hostTurnSettles).toEqual([run.id]);
+    // Its opening row is the share row, never a user row carrying the link.
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+  });
+
   it('hands back a wake it took when the run turns out stopped, writing nothing itself', async () => {
     const { service, claude, runDao, itemDao } = setup();
     const run = await service.startRun({
@@ -7327,6 +7369,53 @@ describe('GraphExecutorService — agent calls', () => {
       expect(
         await callBroker.awaitAgent(run.id, 'mgr', { call_id: 'call-1' }),
       ).toMatchObject({ status: 'ok', result: { text: 'CI is green' } });
+      await service.cancel(run.id);
+      await drain();
+    });
+
+    it('refuses a host wake for a callee conversation — only a monitor reopens a held call — and counts nothing', async () => {
+      const { service, claude, callBroker } = setup();
+      service.setMonitorOutputHeld(() => true);
+      const run = await service.startRun({
+        slug: 'chain',
+        workflow: triggered(CHAIN),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'mgr', {
+        title: 'build',
+        agent: 'eng',
+        message: 'watch CI',
+        mode: 'async',
+      });
+      await drain();
+      const turn = claude.starts.at(-1)!;
+      turn.emit({ type: 'session', sessionId: 's-eng' });
+      completeTurn(turn, 'waiting');
+      await drain();
+      const before = claude.starts.length;
+      const row = { severity: 'info' as const, message: '', woke: true };
+
+      expect(
+        service.wakeConversation(
+          run.id,
+          callerKey('eng', 'call-1'),
+          'Shared link: https://x.example/p#k=KEY',
+          row,
+          () => undefined,
+          'host',
+        ),
+      ).toBe('refused');
+      await drain();
+      expect(claude.starts).toHaveLength(before);
+      // The same conversation still takes a monitor's output.
+      expect(
+        service.wakeConversation(run.id, callerKey('eng', 'call-1'), 'CI', {
+          ...row,
+          monitors: [],
+        }),
+      ).toBe('woken');
       await service.cancel(run.id);
       await drain();
     });

@@ -6,8 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GeniroApi } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type { RunStatusKind } from '../chats/run-status';
+import type { SharesChangedEvent } from '../daemon-client';
 import type { AgentNotice } from './run-notifications';
-import { useRunNotifications } from './use-run-notifications';
+import {
+  useRunNotifications,
+  useShareSignInNotifications,
+} from './use-run-notifications';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -285,5 +289,85 @@ describe('useRunNotifications — an ending whose settle is still owed', () => {
     show('running', { settling: R1 });
     show('needs-input', { settling: R1 });
     expect(notify).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useShareSignInNotifications', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const notify = vi.fn<GeniroApi['notify']>(async () => {});
+  let listeners: Set<(event: SharesChangedEvent) => void>;
+  const client = {
+    onSharesChanged: (listener: (event: SharesChangedEvent) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const event: SharesChangedEvent = {
+    runId: 'r1',
+    shareId: 's1',
+    status: 'awaiting-sign-in',
+    title: 'Delivery report',
+    destinationName: 'Team bucket',
+    askedByAgent: true,
+    signInRequested: true,
+  };
+
+  function SignInProbe({ activeRunId }: { activeRunId: string | null }): null {
+    useShareSignInNotifications({
+      client,
+      runs: [{ id: 'r1' }],
+      labelOf: () => 'Ship the report',
+      activeRunId,
+    });
+    return null;
+  }
+
+  beforeEach(() => {
+    notify.mockClear();
+    listeners = new Set();
+    window.geniro = createPreloadStub({ notify });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  const announce = (next: SharesChangedEvent): void => {
+    act(() => {
+      for (const listener of listeners) {
+        listener(next);
+      }
+    });
+  };
+
+  it('posts one share-sign-in banner, titled with the thread, when an agent’s share starts waiting', () => {
+    act(() => root.render(<SignInProbe activeRunId={null} />));
+
+    announce(event);
+    announce({ ...event, signInRequested: false });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'share-sign-in',
+      runId: 'r1',
+      title: 'Ship the report',
+      body: expect.stringContaining('sign in to Team bucket'),
+    });
+    expect(JSON.stringify(notify.mock.calls)).not.toContain('#k=');
+  });
+
+  it('stays quiet while the user is looking at that chat', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    act(() => root.render(<SignInProbe activeRunId="r1" />));
+
+    announce(event);
+
+    expect(notify).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 });

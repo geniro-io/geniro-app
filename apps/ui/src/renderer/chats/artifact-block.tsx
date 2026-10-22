@@ -6,7 +6,7 @@ import { Button } from '../components/ui/button';
 import { ArtifactDialog } from './artifact-dialog';
 import { ArtifactFrame } from './artifact-frame';
 import { ArtifactSaveButton, useArtifactSaver } from './artifact-save';
-import { ArtifactShareButton } from './artifact-share';
+import { ArtifactShareButton, ArtifactShareStrip } from './artifact-share';
 import { SectionLabel } from './block-shell';
 import type { PublishedArtifact } from './published-artifact';
 import { useThreadOverride } from './thread-ui-memory';
@@ -119,6 +119,7 @@ export function ArtifactCard({
       {saver.error !== null && (
         <ErrorText className="mb-1.5 text-xs">{saver.error}</ErrorText>
       )}
+      <ArtifactShareStrip artifact={artifact} />
       {open && (
         /* The frame's own top-right CORNER, inside its border.
            REPORTED as "i wanna move icons for open and download artifact to

@@ -186,6 +186,12 @@ const objectPrefixSchema = z
 
 const bucketSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/);
 
+/** A custom destination's sign-in: login argv and the output that means "signed out". */
+export const shareSignInSchema = z.strictObject({
+  login: shareArgvSchema.optional(),
+  patterns: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+});
+
 const destinationBase = {
   id: z.string().min(1).max(64),
   name: z.string().trim().min(1).max(80),
@@ -231,6 +237,7 @@ export const shareDestinationSchema = z.discriminatedUnion('kind', [
     ...destinationBase,
     upload: shareArgvSchema,
     remove: shareArgvSchema,
+    signIn: shareSignInSchema.optional(),
   }),
 ]);
 
@@ -613,7 +620,7 @@ export const artifactSaveSchema = z.strictObject({
  * tampered with cannot hand the window server a megabyte.
  */
 export const notificationSchema = z.strictObject({
-  kind: z.enum(['question', 'turn-end']),
+  kind: z.enum(['question', 'turn-end', 'share-sign-in']),
   runId: z.string().min(1).max(128),
   title: z.string().min(1).max(120),
   body: z.string().max(240),

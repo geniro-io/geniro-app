@@ -389,6 +389,7 @@ function makeClient(): {
         groupsChangedListener = null;
       };
     },
+    onSharesChanged: () => () => undefined,
     onVerdictAck: (l: (ack: VerdictAck) => void) => {
       verdictAckListener = l;
       return () => {

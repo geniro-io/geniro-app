@@ -128,4 +128,5 @@ const SHARING =
   'user set up, and the receipt carries "Shared link: <url>" — a link anyone holding it can open, so ' +
   'put it only where the user asked for it (a pull request, a message they named), never in a file ' +
   'committed to a repository. Share only when asked to. When the receipt says "Not shared", say so ' +
-  'and why; never invent a link.';
+  'and why; never invent a link. When it says "Not shared yet" the user was asked to sign in: do not ' +
+  'retry — a message with "Shared link: <url>" (or why it failed) starts your next turn once they have.';

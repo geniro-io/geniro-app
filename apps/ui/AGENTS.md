@@ -306,7 +306,7 @@ One home for each concern:
 - A saved file bakes in the theme and restates the CSP as `ARTIFACT_FILE_CSP`, a twin of the daemon's `artifact-page.ts`. Insert them into a parsed `<head>` (`DOMParser`), never by text splice.
 - A saved file must look like the framed page. The daemon's raw reading (`renderArtifactDocument`) carries the frame's base style (font, padding, box-sizing, centring) but not its transparent ground, and the export supplies the ground.
 - Links are opened by the host, only for `http:`, `https:` and `mailto:` (`shared/link-schemes.ts`). Main's `guardArtifactFrameNavigations` cancels any frame navigation away from the artifact route.
-- Share (`artifact-share.tsx` over `use-artifact-sharing.ts`, provided as `ArtifactShareContext` by `Chats`): beside Save on the card and in the dialog header; null on a paired phone, which draws nothing. A press sends the current `themeVars()`. The link (key in its `#fragment`) is read from the daemon when the panel opens, never kept in the list. Settings → Sharing (`settings/sharing.tsx`) edits the places and the agents switch, and lists every shared page with Copy link and Revoke.
+- Share (`artifact-share.tsx` over `use-artifact-sharing.ts`, provided as `ArtifactShareContext` by `Chats`): beside Save on the card and in the dialog header; null on a paired phone, which draws nothing. A press sends the current `themeVars()`. The link (key in its `#fragment`) is read from the daemon when the panel opens, never kept in the list — and only for a share that was uploaded (`sharedVersion > 0`). A share waiting on sign-in (`awaiting-sign-in`) tints the icon `text-warning` and shows "Sign-in required (<cli>)" with `SignInAction` (`components/sign-in-action.tsx` over `use-share-sign-in.ts`, polling like `use-cli-login.ts` but never sharing its wire) in the panel and as a strip under the card; the daemon retries after the sign-in and announces `shares_changed`, which re-reads the list (`daemon-client.ts` `onSharesChanged`). Settings → Sharing checks a place only on Check, never on open. Settings → Sharing (`settings/sharing.tsx`) edits the places and the agents switch, and lists every shared page with Copy link and Revoke.
 
 **Shells** (`chats/shell-activity.ts`):
 
@@ -448,13 +448,13 @@ One home for each concern:
   - Nothing adds or evicts an entry, and order is preserved.
   - `readSettings` salvages each list entry by entry (`salvageList`, twin of `salvageCliRecord`) and re-applies the cap.
 - `agentOptions`: `{<cli>: {<optionId>: on}}`, from capabilities `options[]`. It is snapshotted onto the run.
-- `notificationsEnabled`: one switch for both notification kinds.
+- `notificationsEnabled`: one switch for every notification kind.
 - `archiveRetentionDays`: `null` by default. It arms a permanent deletion sweep (`POST /v1/chats/sweep-archived`), and the daemon learns the window from the client.
 - `customInstructions`: see below.
 - `theme`: read by main before any window exists, and enumerated in `settingsPatchSchema`. An unknown value falls back to `'system'`.
 - `historyPageSize`, `checkForUpdates`, `remoteAccessEnabled`, `daemonInspect`, `cliPaths`.
 - `keptSessionIdleMinutes`: how long a run's CLI and its MCP servers are kept after the last turn, 5–180, default 60 (a subscription's prompt-cache TTL), the same for chats and cards. The same window ends what the run's agents left running outside the CLI that attribution can reach (dev servers, watchers; not an orphaned system binary), with a note in the transcript (`apps/daemon/AGENTS.md` → Run processes → Idle). The bounds are twins of the daemon's (`chat.types.ts`). Every write that changes it is pushed to the daemon (`kept-session-config-push.ts`, through `onSettingsWritten`), as is every daemon start; the daemon holds it in memory.
-- `sharing`: `{destinations, defaultDestinationId, agentsMayShare}` — where pages are shared to and whether agents may share (off by default). Salvaged destination by destination (`salvageSharing`); the shape is a twin of the daemon's `ShareDestinationSchema` (`ipc-schemas.ts` restates its limits). Every write that changes it is pushed to the daemon (`share-config-push.ts` over `daemon-config-push.ts`, through `onSettingsWritten`), as is every daemon start. Desktop only.
+- `sharing`: `{destinations, defaultDestinationId, agentsMayShare}` — where pages are shared to and whether agents may share (off by default). A custom (`command`) destination may carry `signIn: {login?, patterns?}` (login argv, and output phrases meaning signed out). Salvaged destination by destination (`salvageSharing`), and a broken `signIn` field by field, never costing the destination; the shape is a twin of the daemon's `ShareDestinationSchema` (`ipc-schemas.ts` restates its limits). Every write that changes it is pushed to the daemon (`share-config-push.ts` over `daemon-config-push.ts`, through `onSettingsWritten`), as is every daemon start. Desktop only.
 
 Data-loss rules:
 
@@ -464,7 +464,7 @@ Data-loss rules:
 
 Sign-in:
 
-- `use-cli-login.ts` is the one controller, and `components/cli-login-progress.tsx` is the one panel. Signing in never opens a terminal.
+- `use-cli-login.ts` is the one controller for an agent CLI's sign-in (a share destination's is `use-share-sign-in.ts`, kept apart from that wire on purpose), and `components/cli-login-progress.tsx` is the one panel for both. Signing in never opens a terminal.
 - `CliLoginController.starting` is set synchronously before the await and cleared in `finally`.
 - Sign-in buttons are disabled while starting, because a second press invalidates the first challenge.
 - The flag belongs to the caller. `Chats` holds one controller for both flows.
@@ -534,6 +534,7 @@ Appearance:
 - `notifier.ts` is the only file that touches a notification API. It uses Electron's `Notification`, never `node-notifier`.
 - A turn ending with a command still running is announced provisionally and withdrawn (`retractNotification`) if the run goes back to work. Never guess with a timer.
 - `notify_user` arrives as `RunStatusEvent.notify` and is posted once (`AgentNotice` id).
+- `share-sign-in` is posted once per agent share that starts waiting on the user's sign-in (`shares_changed` with `signInRequested`, `useShareSignInNotifications`), never for the user's own press and never carrying the link.
 - An open thread's ending is held (`settleOwed`) until its settle arrives, then posted or dropped by that settle's own flag.
 - The rules read `runs + offScopeRuns`, because "absent" reads as deleted.
 

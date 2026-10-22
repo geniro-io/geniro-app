@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { HostWakeOwner } from '../agents/chat.types';
 import type { ManagedCommandResult } from '../agents/utils/managed-command';
 
 /**
@@ -84,6 +85,17 @@ const commandArgvSchema = z
     message: 'a destination command may not be a shell',
   });
 
+/**
+ * How a custom destination's CLI is signed in to again: `login` is argv run on
+ * the user's press (never a shell), and `patterns` are case-insensitive
+ * substrings whose presence in a failed command's output means the login has
+ * lapsed rather than the upload failing for another reason.
+ */
+const SignInSchema = z.object({
+  login: commandArgvSchema.optional(),
+  patterns: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+});
+
 export const ShareDestinationSchema = z
   .discriminatedUnion('kind', [
     z.object({
@@ -116,6 +128,7 @@ export const ShareDestinationSchema = z
       upload: commandArgvSchema,
       /** argv for a revoke; `{object}` substitutes as above. */
       remove: commandArgvSchema,
+      signIn: SignInSchema.optional(),
     }),
   ])
   .meta({ id: 'ShareDestination' });
@@ -140,14 +153,31 @@ export const ShareActorSchema = z
 export type ShareActor = z.infer<typeof ShareActorSchema>;
 
 /**
- * `revoke-failed`: the remote delete did not succeed, so the object (and the
- * link) may still work. The row and the Keychain key are kept so a retry can
- * delete it.
+ * - `live`: the object holds the page (`sharedVersion`), and the link works.
+ * - `revoke-failed`: the remote delete did not succeed, so the object (and
+ *   the link) may still work. The row and the Keychain key are kept so a
+ *   retry can delete it.
+ * - `awaiting-sign-in`: the last upload failed because the destination's CLI
+ *   is signed out; it is tried again once, after the user signs in. With
+ *   `sharedVersion` 0 nothing was ever uploaded and no link works yet.
+ * - `failed`: a share that waited on sign-in then failed for another reason;
+ *   nothing was ever uploaded (`lastError` says why).
  */
 export const ShareStatusSchema = z
-  .enum(['live', 'revoke-failed'])
+  .enum(['live', 'revoke-failed', 'awaiting-sign-in', 'failed'])
   .meta({ id: 'ShareStatus' });
 export type ShareStatus = z.infer<typeof ShareStatusSchema>;
+
+/** How a destination's CLI is signed in to again: what the button and the reason name. */
+export const ShareSignInLabelSchema = z
+  .object({
+    /** The CLI's own name: "sign-in required (gcloud)". */
+    cli: z.string(),
+    /** "Sign in to <label>". */
+    label: z.string(),
+  })
+  .meta({ id: 'ShareSignInLabel' });
+export type ShareSignInLabel = z.infer<typeof ShareSignInLabelSchema>;
 
 /** One shared page on the wire. Never carries the key or the link. */
 export const ShareSchema = z
@@ -162,11 +192,101 @@ export const ShareSchema = z
     sharedBy: ShareActorSchema,
     status: ShareStatusSchema,
     lastError: z.string().nullable(),
+    /** The sign-in its destination's CLI has, or null when it has none. */
+    signIn: ShareSignInLabelSchema.nullable(),
+    /** Whether an agent is waiting on this share's outcome. */
+    askedByAgent: z.boolean(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
   .meta({ id: 'Share' });
 export type Share = z.infer<typeof ShareSchema>;
+
+/**
+ * Whether a destination's CLI is signed in, as `POST /v1/shares/check` and
+ * Settings → Sharing say it: `not-set-up` for a custom command with no sign-in.
+ */
+export const ShareCheckStateSchema = z
+  .enum(['signed-in', 'sign-in-required', 'check-failed', 'not-set-up'])
+  .meta({ id: 'ShareCheckState' });
+export type ShareCheckState = z.infer<typeof ShareCheckStateSchema>;
+
+/** No `.meta({ id })`: the root of a response DTO (`ShareCheckResultDto`). */
+export const ShareCheckResultSchema = z.object({
+  state: ShareCheckStateSchema,
+  detail: z.string().optional(),
+  signIn: ShareSignInLabelSchema.nullable(),
+});
+export type ShareCheckResult = z.infer<typeof ShareCheckResultSchema>;
+
+/** How long a destination's sign-in may wait on the user before it ends `timed-out`. */
+export const SHARE_SIGN_IN_TIMEOUT_MS = 5 * 60_000;
+
+export const ShareSignInStatusSchema = z
+  .enum([
+    'waiting',
+    'verifying',
+    'succeeded',
+    'failed',
+    'cancelled',
+    'timed-out',
+  ])
+  .meta({ id: 'ShareSignInStatus' });
+export type ShareSignInStatus = z.infer<typeof ShareSignInStatusSchema>;
+
+/**
+ * One sign-in to a destination's CLI, run by the daemon on the user's press.
+ *
+ * `lines` are what the CLI printed, minus every line carrying a link (the
+ * link is `url`) — enough to show a device code — with registered secrets
+ * masked. gcloud's and aws's logins print no credential, and the check runs
+ * with stdout discarded; a custom login command is the user's own.
+ *
+ * No `.meta({ id })`: it is the root of a response DTO (see
+ * `LoginSessionSchema` in `v1/auth/auth.types.ts` for why that matters).
+ */
+export const ShareSignInSessionSchema = z.object({
+  id: z.string(),
+  destinationId: z.string(),
+  /** "Sign in to <label>". */
+  label: z.string(),
+  /** The CLI's own name. */
+  cli: z.string(),
+  status: ShareSignInStatusSchema,
+  lines: z.array(z.string()),
+  /** The sign-in link the CLI printed, or null before it has printed one. */
+  url: z.string().nullable(),
+  /** Why it failed, or the CLI's last line. */
+  message: z.string().nullable(),
+  /** The waiting shares tried again once it succeeded. */
+  retried: z.array(z.string()),
+});
+export type ShareSignInSession = z.infer<typeof ShareSignInSessionSchema>;
+
+/** The agent conversation waiting on a share (stored as JSON on the row). */
+export type ShareAsker = HostWakeOwner;
+
+/**
+ * One share row written or removed, broadcast to every desktop client as
+ * `shares_changed` so an open card and Settings → Sharing re-read. Never the
+ * link: a socket payload is no place for a key.
+ *
+ * TWIN PARSER: `parseSharesChanged` in `apps/ui/src/renderer/daemon-client.ts`.
+ */
+export interface ShareChangedEvent {
+  runId: string;
+  shareId: string;
+  status: ShareStatus | 'removed';
+  title: string;
+  destinationName: string;
+  askedByAgent: boolean;
+  /**
+   * True only on the write that put an agent's share into
+   * `awaiting-sign-in` from any other state — the one moment the user is
+   * notified that a share waits on them.
+   */
+  signInRequested: boolean;
+}
 
 /**
  * CSS custom properties (`--geniro-*`) the renderer computed for its current
@@ -184,7 +304,10 @@ export type ShareThemeVars = z.infer<typeof ShareThemeVarsSchema>;
  * a link.
  */
 export type AgentShareOutcome =
-  { kind: 'shared'; url: string } | { kind: 'not-shared'; reason: string };
+  | { kind: 'shared'; url: string }
+  | { kind: 'not-shared'; reason: string }
+  /** The destination's CLI is signed out; the user was asked to sign in to `label`. */
+  | { kind: 'awaiting-sign-in'; label: string };
 
 export type RevokeOutcome =
   { status: 'revoked' } | { status: 'revoke-failed'; detail: string };
@@ -204,5 +327,8 @@ export type ShareCommandRunner = (
     label: string;
     timeoutMs: number;
     stdin?: string;
+    signal?: AbortSignal;
+    onOutput?: (line: string, stream: 'stdout' | 'stderr') => void;
+    discardStdout?: boolean;
   },
 ) => Promise<ManagedCommandResult>;

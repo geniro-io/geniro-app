@@ -9,6 +9,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import { PULL_REQUEST_NAMING_KINDS } from '../utils/pull-request-capture';
 import { ItemDao } from './item.dao';
 
 /**
@@ -1524,6 +1525,75 @@ describe('ItemDao (in-memory sqlite)', () => {
       // Both edges: the window opens after its first seq and closes on its last.
       expect(window.map((row) => row.seq)).toEqual([5, 6]);
       expect(open.map((row) => row.seq)).toEqual([5, 6, 9]);
+    });
+  });
+
+  describe('pullRequestNamingCandidates', () => {
+    const pr = { owner: 'acme', repo: 'web', number: 7207 };
+    const url = JSON.stringify({
+      text: 'Review https://github.com/Acme/Web/pull/7207',
+    });
+
+    it.each(PULL_REQUEST_NAMING_KINDS)(
+      'returns a %s row naming the pull request',
+      async (kind) => {
+        await insert(`run-${kind}`, 1, kind, url);
+        expect(
+          await dao.pullRequestNamingCandidates(`run-${kind}`, pr, -1, 9),
+        ).toEqual([url]);
+      },
+    );
+
+    it('returns only rows of this run, inside the seq range, of a kind a thread names pull requests in', async () => {
+      await insert('run-named', 3, 'tool_result', url);
+      await insert('run-named', 4, 'reasoning', url);
+      await insert('run-other', 9, 'message', url);
+
+      // Both edges: the range opens after its first seq and closes on its last.
+      expect(
+        await dao.pullRequestNamingCandidates('run-named', pr, 2, 3),
+      ).toEqual([url]);
+      expect(
+        await dao.pullRequestNamingCandidates('run-named', pr, 3, 99),
+      ).toEqual([]);
+      expect(
+        await dao.pullRequestNamingCandidates('run-named', pr, 0, 2),
+      ).toEqual([]);
+    });
+
+    it('returns a gh pr command carrying the number, and no row holding the number alone', async () => {
+      const command = JSON.stringify({
+        input: { command: 'gh pr comment 7207 --body ok' },
+      });
+      await insert('run-cmd', 1, 'tool_call', command);
+      await insert(
+        'run-cmd',
+        2,
+        'message',
+        JSON.stringify({ text: 'PR 7207' }),
+      );
+
+      expect(
+        await dao.pullRequestNamingCandidates('run-cmd', pr, -1, 9),
+      ).toEqual([command]);
+    });
+
+    it('skips a row once it is deleted', async () => {
+      const row = await insert('run-deleted', 1, 'message', url);
+      expect(
+        await dao.pullRequestNamingCandidates('run-deleted', pr, -1, 9),
+      ).toEqual([url]);
+
+      await orm.em
+        .fork()
+        .createQueryBuilder(Item)
+        .update({ deletedAt: new Date() })
+        .where({ id: row.id })
+        .execute();
+
+      expect(
+        await dao.pullRequestNamingCandidates('run-deleted', pr, -1, 9),
+      ).toEqual([]);
     });
   });
 

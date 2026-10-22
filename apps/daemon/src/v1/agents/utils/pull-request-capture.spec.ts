@@ -4,9 +4,11 @@ import {
   isPullRequestCreateCall,
   MAX_RUN_PULL_REQUESTS,
   mergePullRequests,
+  pullRequestNamingNeedles,
   readDisplayedPullRequests,
   readPullRequestUrls,
   readRunPullRequests,
+  textNamesPullRequest,
 } from './pull-request-capture';
 
 describe('readPullRequestUrls', () => {
@@ -276,6 +278,28 @@ describe('readDisplayedPullRequests', () => {
     expect(shown).toHaveLength(MAX_RUN_PULL_REQUESTS + 1);
     expect(shown.at(-1)?.number).toBe(87);
   });
+
+  it('marks which ones the run opened, also when its CLI recorded that one earlier', () => {
+    const pr = (number: number, seq: number) => ({
+      owner: 'acme',
+      repo: 'platform',
+      number,
+      url: `https://github.com/acme/platform/pull/${number}`,
+      seq,
+    });
+
+    const shown = readDisplayedPullRequests(
+      JSON.stringify([pr(87, 5)]),
+      JSON.stringify([pr(87, 2), pr(7207, 9)]),
+    );
+
+    expect(
+      shown.map((row) => ({ number: row.number, opened: row.opened })),
+    ).toEqual([
+      { number: 87, opened: true },
+      { number: 7207, opened: false },
+    ]);
+  });
 });
 
 describe('readRunPullRequests', () => {
@@ -304,5 +328,127 @@ describe('readRunPullRequests', () => {
       { owner: 'a', repo: 'b', url: 'u', seq: 1 },
     ]);
     expect(readRunPullRequests(raw).map((row) => row.number)).toEqual([1]);
+  });
+});
+
+describe('textNamesPullRequest', () => {
+  const pr = { owner: 'manifestlaw-labs', repo: 'ManifestOS', number: 7207 };
+  // Rows reach the check as their stored JSON, so every case is JSON text.
+  const row = (text: string) => JSON.stringify({ text });
+
+  it('finds the pull request by its URL, whatever case GitHub names the repository in', () => {
+    expect(
+      textNamesPullRequest(
+        row(
+          'Review https://github.com/Manifestlaw-Labs/manifestos/pull/7207 please',
+        ),
+        pr,
+      ),
+    ).toBe(true);
+  });
+
+  it('does not take a longer number, or the same number in another repository, for it', () => {
+    expect(
+      textNamesPullRequest(
+        row('https://github.com/manifestlaw-labs/ManifestOS/pull/72071'),
+        pr,
+      ),
+    ).toBe(false);
+    expect(
+      textNamesPullRequest(row('https://github.com/acme/web/pull/7207'), pr),
+    ).toBe(false);
+  });
+
+  it('finds a gh pr command naming its number, behind options or a hash', () => {
+    for (const command of [
+      'gh pr view 7207 --json url',
+      'gh pr comment 7207 --body "done"',
+      'gh pr view --repo manifestlaw-labs/ManifestOS 7207',
+      'cd wt && gh pr checkout #7207',
+      'gh pr comment "7207" --body "done"',
+      "gh pr view '#7207' --json url",
+      'S=$(gh pr view 7207)',
+      'S=`gh pr view 7207`',
+      'Use gh pr checkout 7207.',
+    ]) {
+      expect(textNamesPullRequest(row(command), pr)).toBe(true);
+    }
+  });
+
+  it('finds the API path of the pull request, and keeps a dot in the repository literal', () => {
+    expect(
+      textNamesPullRequest(
+        row('gh api repos/manifestlaw-labs/ManifestOS/pulls/7207/comments'),
+        pr,
+      ),
+    ).toBe(true);
+    const dotted = { owner: 'acme', repo: 'web.app', number: 5 };
+    expect(
+      textNamesPullRequest(
+        row('https://github.com/acme/web.app/pull/5'),
+        dotted,
+      ),
+    ).toBe(true);
+    expect(
+      textNamesPullRequest(
+        row('https://github.com/acme/webXapp/pull/5'),
+        dotted,
+      ),
+    ).toBe(false);
+  });
+
+  it('answers a megabyte of repeated gh pr text in linear time', () => {
+    const flood = row(`${'gh pr x '.repeat(130_000)} 72071`);
+    const started = performance.now();
+    expect(textNamesPullRequest(flood, pr)).toBe(false);
+    // A backtracking pattern took ~4 s on a quarter of this; linear is ~ms.
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it('never accepts text the database prefilter would not return', () => {
+    const needles = pullRequestNamingNeedles(pr);
+    for (const text of [
+      'Review https://github.com/Manifestlaw-Labs/manifestos/pull/7207 please',
+      'gh api repos/manifestlaw-labs/ManifestOS/pulls/7207/comments',
+      'gh pr comment "7207" --body "done"',
+      "gh pr view '#7207' --json url",
+    ]) {
+      const payload = row(text);
+      expect(textNamesPullRequest(payload, pr)).toBe(true);
+      expect(payload.includes(needles.number)).toBe(true);
+      expect(
+        payload.toLowerCase().includes(needles.repoPath) ||
+          payload.includes(needles.command),
+      ).toBe(true);
+    }
+  });
+
+  it('does not read a number on another line, a longer number, or prose as a command naming it', () => {
+    for (const text of [
+      'gh pr view --json url\necho 7207',
+      'gh pr view 17207',
+      'gh pr view 72071',
+      'PR #7207 is merged',
+      'git -C "$WT" push origin assets/pr-7207',
+      'gh pr create --title "Fix" --body "Follow-up to #7207"',
+      'gh pr create --title "Fix" --body "Follow-up\n\nto #7207"',
+      'gh pr create --title "A & B; see #7207" --fill',
+      'gh pr create --body="Follow-up to #7207"',
+      "gh pr comment 99 --body 'one; then #7207'",
+    ]) {
+      expect(textNamesPullRequest(row(text), pr)).toBe(false);
+    }
+    // Another field of the same tool input is not the command's text.
+    expect(
+      textNamesPullRequest(
+        JSON.stringify({
+          input: {
+            command: 'gh pr view --json url',
+            description: 'Check PR 7207 status',
+          },
+        }),
+        pr,
+      ),
+    ).toBe(false);
   });
 });

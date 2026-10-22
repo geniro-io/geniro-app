@@ -3642,6 +3642,49 @@ export interface DiagnosticsReportDtoRuns {
      */
     liveSessions: number;
 }
+/**
+ * 
+ * @export
+ * @interface DisplayedPullRequest
+ */
+export interface DisplayedPullRequest {
+    /**
+     * 
+     * @type {string}
+     * @memberof DisplayedPullRequest
+     */
+    owner: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DisplayedPullRequest
+     */
+    repo: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DisplayedPullRequest
+     */
+    number: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof DisplayedPullRequest
+     */
+    url: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DisplayedPullRequest
+     */
+    seq: number;
+    /**
+     * The run opened it, rather than only touching it
+     * @type {boolean}
+     * @memberof DisplayedPullRequest
+     */
+    opened: boolean;
+}
 
 /**
  * 
@@ -5693,10 +5736,10 @@ export interface RunDto {
     lastActivityAt: string | null;
     /**
      * Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first
-     * @type {Array<RunPullRequest>}
+     * @type {Array<DisplayedPullRequest>}
      * @memberof RunDto
      */
-    pullRequests: Array<RunPullRequest>;
+    pullRequests: Array<DisplayedPullRequest>;
     /**
      * Calls a usage limit stopped that geniro continues when the window reopens
      * @type {Array<RunResetWake>}
@@ -8557,10 +8600,10 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
     lastActivityAt: string | null;
     /**
      * Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first
-     * @type {Array<RunPullRequest>}
+     * @type {Array<DisplayedPullRequest>}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
-    pullRequests: Array<RunPullRequest>;
+    pullRequests: Array<DisplayedPullRequest>;
     /**
      * Calls a usage limit stopped that geniro continues when the window reopens
      * @type {Array<RunResetWake>}

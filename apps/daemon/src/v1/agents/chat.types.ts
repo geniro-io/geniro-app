@@ -4742,7 +4742,7 @@ export interface RunStatusEvent {
    * The same shape of problem as `title`, and it takes the same answer: the
    * broadcast that reaches every client for every run carries it.
    */
-  pullRequests?: RunPullRequest[];
+  pullRequests?: DisplayedPullRequest[];
   /**
    * The run's pending usage-limit continues as they stand now, announced when
    * one is scheduled, made or cancelled — the whole list, so the client
@@ -5164,6 +5164,18 @@ export const RunPullRequestSchema = z
 export type RunPullRequest = z.infer<typeof RunPullRequestSchema>;
 
 /**
+ * One pull request on a run's display list, which merges the ones the run
+ * opened with the ones its CLI recorded it touching — `opened` says which, so
+ * a surface naming ONE pull request for the thread can name its own work.
+ */
+export const DisplayedPullRequestSchema = RunPullRequestSchema.extend({
+  opened: z
+    .boolean()
+    .describe('The run opened it, rather than only touching it'),
+}).meta({ id: 'DisplayedPullRequest' });
+export type DisplayedPullRequest = z.infer<typeof DisplayedPullRequestSchema>;
+
+/**
  * A continue geniro has promised and not yet made: calls a usage limit stopped,
  * which it starts again when the window reopens.
  *
@@ -5543,7 +5555,7 @@ export const RunWireSchema = z.object({
    * the branch a folder happens to have checked out cannot answer this.
    */
   pullRequests: z
-    .array(RunPullRequestSchema)
+    .array(DisplayedPullRequestSchema)
     .describe(
       'Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first',
     ),

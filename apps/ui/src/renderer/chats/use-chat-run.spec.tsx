@@ -548,6 +548,7 @@ describe('useChatRun', () => {
               number: 1,
               url: 'https://github.com/o/r/pull/1',
               seq: 1,
+              opened: true,
             },
           ],
         });

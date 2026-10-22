@@ -17,7 +17,9 @@ import * as runtime from '../runtime';
 import type {
   CreateShareDto,
   ProbeShareDestinationDto,
+  RevokeAllSharesDto,
   RevokeShareDto,
+  RevokeSharesDto,
   ShareConfigAckDto,
   ShareConfigDto,
   ShareCreatedDto,
@@ -36,6 +38,10 @@ export interface SharesApiProbeShareDestinationRequest {
 
 export interface SharesApiReadShareLinkRequest {
     shareId: string;
+}
+
+export interface SharesApiRevokeAllSharesRequest {
+    revokeSharesDto: RevokeSharesDto;
 }
 
 export interface SharesApiRevokeShareRequest {
@@ -185,6 +191,53 @@ export class SharesApi extends runtime.BaseAPI {
      */
     async readShareLink(requestParameters: SharesApiReadShareLinkRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShareLinkDto> {
         const response = await this.readShareLinkRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async revokeAllSharesRaw(requestParameters: SharesApiRevokeAllSharesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RevokeAllSharesDto>> {
+        if (requestParameters['revokeSharesDto'] == null) {
+            throw new runtime.RequiredError(
+                'revokeSharesDto',
+                'Required parameter "revokeSharesDto" was null or undefined when calling revokeAllShares().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/shares/revoke-all`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['revokeSharesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async revokeAllShares(requestParameters: SharesApiRevokeAllSharesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RevokeAllSharesDto> {
+        const response = await this.revokeAllSharesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

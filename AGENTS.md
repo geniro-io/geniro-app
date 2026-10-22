@@ -248,6 +248,7 @@ pnpm commit             # conventional commit via commitizen
    - Only the AES-256-GCM envelope leaves the Mac; the page is encrypted in the daemon and the key travels in the link's `#fragment`, which no browser sends (and, for an agent's own share, in that agent's transcript — see *Storage split*). Never upload plaintext.
    - The destination is one the user added in Settings → Sharing (`gcloud`, `aws`, or their own program as argv, never a shell). geniro holds no credential and runs no host of its own.
    - Only on a press, or by an agent's `show_artifact(share: true)` while the user's "Let agents share pages" switch is on (off by default).
+   - A revoke (deleting the remote object through the same CLI) also runs unattended from the auto-revoke sweep, only while the user has set `Settings.sharing.autoRevokeAfterDays` (off by default): the daemon's own timer, a minute after it starts and every 6 h.
    - The share routes and settings are desktop only: the gateway stamps proxied requests `x-geniro-via: remote` (`main/remote/daemon-proxy.ts`), the daemon's `DesktopOnlyGuard` refuses them, and a paired device may not write `Settings.sharing`. Accepted by decision: while agents may share, a message sent from a paired device can still ask an agent to share, because the agent's own MCP call is loopback.
 
 **LAN gateway** (`apps/ui/src/main/remote/`, `Settings.remoteAccessEnabled`) is the one inbound exception: the Mac serves the app to the user's own devices on the same network.
@@ -363,6 +364,7 @@ Daemon side of the contract (`v1/*`):
   - An unparseable file is copied aside to `settings.json.corrupt-<timestamp>` before any write; never write over a file that cannot be read.
   - Hand-managed lists (`fastActions`, `runConfigs`, `configProfiles`) are salvaged entry by entry on read and keep the user's order.
   - `archiveRetentionDays` defaults to `null` because it arms a sweep that permanently deletes archived chats. The daemon only executes it (`POST /v1/chats/sweep-archived`).
+  - `sharing.autoRevokeAfterDays` defaults to `null` because it arms a sweep that revokes shared links. Unlike the archive sweep, the daemon owns its timer (`ShareService.revokeExpired`), so a paired device never runs it.
   - Values whose vocabulary belongs to the daemon stay opaque strings on the Electron side (`shared/contracts.ts` holds no daemon shapes).
 - **MCP config → each CLI's own config files**, the one exception to "geniro writes only its own files". Toggles and server definitions are written only on the user's press, through each CLI's own mechanism and lock, refusing an unparseable file and keeping no copy. Rules: `apps/daemon/AGENTS.md` → **MCP config writes**.
 - **Secrets → the Keychain only.** Every CLI authenticates from its own login. Share keys are the one secret geniro keeps (see _Constraints_).

@@ -5173,6 +5173,31 @@ export interface RetriedDto {
 /**
  * 
  * @export
+ * @interface RevokeAllSharesDto
+ */
+export interface RevokeAllSharesDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof RevokeAllSharesDto
+     */
+    revoked: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RevokeAllSharesDto
+     */
+    failed: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RevokeAllSharesDto
+     */
+    detail: string | null;
+}
+/**
+ * 
+ * @export
  * @interface RevokeShareDto
  */
 export interface RevokeShareDto {
@@ -5200,6 +5225,19 @@ export const RevokeShareDtoStatusEnum = {
 } as const;
 export type RevokeShareDtoStatusEnum = typeof RevokeShareDtoStatusEnum[keyof typeof RevokeShareDtoStatusEnum];
 
+/**
+ * 
+ * @export
+ * @interface RevokeSharesDto
+ */
+export interface RevokeSharesDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof RevokeSharesDto
+     */
+    shareIds: Array<string>;
+}
 /**
  * 
  * @export
@@ -7196,6 +7234,12 @@ export interface ShareConfigDto {
      * @memberof ShareConfigDto
      */
     agentsMayShare: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof ShareConfigDto
+     */
+    autoRevokeAfterDays: number | null;
 }
 /**
  * @type ShareConfigDtoShareDestination

@@ -236,10 +236,21 @@ export const shareDestinationSchema = z.discriminatedUnion('kind', [
 
 export const MAX_SHARE_DESTINATIONS = 20;
 
+/** Twin of `MAX_AUTO_REVOKE_DAYS` in `apps/daemon/src/v1/shares/shares.types.ts`. */
+export const MAX_AUTO_REVOKE_DAYS = 3650;
+
+export const autoRevokeAfterDaysSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_AUTO_REVOKE_DAYS)
+  .nullable();
+
 export const sharingSchema = z.strictObject({
   destinations: z.array(shareDestinationSchema).max(MAX_SHARE_DESTINATIONS),
   defaultDestinationId: z.string().min(1).max(64).nullable(),
   agentsMayShare: z.boolean(),
+  autoRevokeAfterDays: autoRevokeAfterDaysSchema,
 });
 
 /**

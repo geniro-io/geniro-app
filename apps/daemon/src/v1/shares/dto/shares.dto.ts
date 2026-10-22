@@ -7,6 +7,7 @@ import {
   MAX_ARTIFACT_TITLE_LENGTH,
 } from '../../agents/chat.types';
 import {
+  RevokeManyOutcomeSchema,
   ShareConfigSchema,
   ShareDestinationSchema,
   ShareSchema,
@@ -61,6 +62,15 @@ export class RevokeShareDto extends createZodDto(
     detail: z.string().optional(),
   }),
 ) {}
+
+/** The pages the user saw listed; one shared after the list was read is not among them. */
+export class RevokeSharesDto extends createZodDto(
+  z.object({
+    shareIds: z.array(z.string().min(1).max(64)).min(1),
+  }),
+) {}
+
+export class RevokeAllSharesDto extends createZodDto(RevokeManyOutcomeSchema) {}
 
 export class ProbeShareDestinationDto extends createZodDto(
   z.object({ destination: ShareDestinationSchema }),

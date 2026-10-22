@@ -16,7 +16,9 @@ import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
 import {
   CreateShareDto,
   ProbeShareDestinationDto,
+  RevokeAllSharesDto,
   RevokeShareDto,
+  RevokeSharesDto,
   ShareConfigAckDto,
   ShareConfigDto,
   ShareCreatedDto,
@@ -26,7 +28,7 @@ import {
   ShareProbeResultDto,
 } from '../dto/shares.dto';
 import { ShareService } from '../services/share.service';
-import type { RevokeOutcome, Share } from '../shares.types';
+import type { RevokeManyOutcome, RevokeOutcome, Share } from '../shares.types';
 
 /**
  * Encrypted share links for artifacts. Desktop only: every route acts with the
@@ -73,6 +75,13 @@ export class SharesController {
   @ZodResponse({ status: 201, type: ShareCreatedDto })
   share(@Body() body: CreateShareDto): Promise<{ share: Share; url: string }> {
     return this.shares.share({ ...body, by: 'user' });
+  }
+
+  @Post('revoke-all')
+  @ApiOperation({ operationId: 'revokeAllShares' })
+  @ZodResponse({ status: 201, type: RevokeAllSharesDto })
+  revokeAll(@Body() body: RevokeSharesDto): Promise<RevokeManyOutcome> {
+    return this.shares.revokeAll(body.shareIds);
   }
 
   @Get(':shareId/link')

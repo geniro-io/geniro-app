@@ -133,7 +133,12 @@ export function hostArtifactResultText(
   if (share === null) {
     return receipt;
   }
-  return share.kind === 'shared'
-    ? `${receipt}\nShared link: ${share.url}`
-    : `${receipt}\nNot shared: ${share.reason}.`;
+  switch (share.kind) {
+    case 'shared':
+      return `${receipt}\nShared link: ${share.url}`;
+    case 'awaiting-sign-in':
+      return `${receipt}\nNot shared yet — the user has been asked to sign in to ${share.label}. You will get a message with the link once they do; do not call show_artifact again to retry.`;
+    case 'not-shared':
+      return `${receipt}\nNot shared: ${share.reason}.`;
+  }
 }

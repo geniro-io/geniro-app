@@ -33,6 +33,7 @@ import { ActionOutcomeSweep } from './v1/agents/services/action-outcome-sweep.se
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
+import { HostWakeChatDelivery } from './v1/agents/services/host-wake-chat-delivery.service';
 import { ItemCallIndexService } from './v1/agents/services/item-call-index.service';
 import { MonitorChatDelivery } from './v1/agents/services/monitor-chat-delivery.service';
 import { MonitorOutcomeSweep } from './v1/agents/services/monitor-outcome-sweep.service';
@@ -53,6 +54,7 @@ import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 import { WorkflowProposalService } from './v1/graphs/services/workflow-proposal.service';
+import { ShareService } from './v1/shares/services/share.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 
 installCrashGuards({
@@ -116,6 +118,8 @@ const bootstrapper = buildBootstrapper({
  */
 let callIndex: ItemCallIndexService | null = null;
 let monitorChats: MonitorChatDelivery | null = null;
+let hostWakeChats: HostWakeChatDelivery | null = null;
+let shares: ShareService | null = null;
 let wallWork: WallWorkService | null = null;
 let pullRequests: PullRequestCaptureService | null = null;
 bootstrapper.addExtension(
@@ -178,6 +182,10 @@ bootstrapper.addExtension(
         // boot reconcile it must not race has run — the interrupted-monitor
         // wakes the boot sweep held go out from here.
         monitorChats?.startDelivering();
+        // On the same terms: an agent still owed the outcome of a share that
+        // waited on the user's sign-in is woken again, once per boot.
+        hostWakeChats?.startDelivering();
+        void shares?.republishOwedWakes();
         // Off the boot path too: it folds every agent of every run settled
         // before the wall ledger existed, and the ledger's per-turn key makes
         // it safe beside the live catch-up.
@@ -284,6 +292,8 @@ bootstrapper.addExtension(
       // reads the container.
       callIndex = app.get(ItemCallIndexService);
       monitorChats = app.get(MonitorChatDelivery);
+      hostWakeChats = app.get(HostWakeChatDelivery);
+      shares = app.get(ShareService);
       wallWork = app.get(WallWorkService);
       pullRequests = app.get(PullRequestCaptureService);
 

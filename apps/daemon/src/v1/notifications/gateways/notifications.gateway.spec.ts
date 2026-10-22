@@ -10,6 +10,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import type { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
@@ -91,6 +92,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -111,6 +113,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -134,6 +137,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       partials(),
       recovery,
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -184,6 +188,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       live,
       subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -220,6 +225,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -240,6 +246,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       partials(),
       recovery,
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -276,6 +283,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -298,6 +306,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -335,6 +344,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a usage event must never take it — the Stats page
@@ -371,6 +381,7 @@ describe('NotificationsGateway', () => {
       tasks,
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a task write must never take it — a board is not
@@ -391,6 +402,75 @@ describe('NotificationsGateway', () => {
     expect(emit).toHaveBeenCalledTimes(1);
   });
 
+  it('broadcasts a share write to EVERY client, and stops on destroy', () => {
+    const shares = new ShareEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      shares,
+    );
+    const emit = vi.fn();
+    const roomEmit = vi.fn();
+    const to = vi.fn(() => ({ emit: roomEmit }));
+    gw.afterInit({ emit, to } as unknown as Server);
+
+    const change = {
+      runId: 'r1',
+      shareId: 's1',
+      status: 'awaiting-sign-in' as const,
+      title: 'Report',
+      destinationName: 'Company',
+      askedByAgent: true,
+      signInRequested: true,
+    };
+    shares.publish(change);
+
+    // To the Mac's own windows only, never a broadcast a paired phone hears.
+    expect(to).toHaveBeenCalledWith('desktop');
+    expect(roomEmit).toHaveBeenCalledWith('shares_changed', change);
+    expect(emit).not.toHaveBeenCalled();
+
+    gw.onModuleDestroy();
+    shares.publish({ ...change, shareId: 's2' });
+    expect(roomEmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts the Mac’s own sockets in the desktop room and a paired device’s outside it', () => {
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+    );
+    const desktop = fakeSocket('good-token');
+    const phone = {
+      ...fakeSocket('good-token'),
+      handshake: {
+        auth: { token: 'good-token' },
+        headers: { 'x-geniro-via': 'remote' },
+      },
+    };
+
+    gw.handleConnection(desktop as unknown as Socket);
+    gw.handleConnection(phone as unknown as Socket);
+
+    expect(desktop.join).toHaveBeenCalledWith('desktop');
+    expect(phone.join).not.toHaveBeenCalledWith('desktop');
+  });
+
   it('broadcasts a deleted run to EVERY client, and stops on destroy', () => {
     const bus = new AgentEventBus();
     const gw = new NotificationsGateway(
@@ -403,6 +483,7 @@ describe('NotificationsGateway', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a deletion must never take it — every OTHER
@@ -444,6 +525,7 @@ describe('runs_changed broadcast', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -493,6 +575,7 @@ describe('verdict round-trip', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -526,6 +609,7 @@ describe('verdict round-trip', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
 
     track('req-o');
@@ -563,6 +647,7 @@ describe('verdict round-trip', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -597,6 +682,7 @@ describe('verdict round-trip', () => {
       new TaskEventBus(),
       partials(),
       subagents(),
+      new ShareEventBus(),
     );
 
     track('req-a');

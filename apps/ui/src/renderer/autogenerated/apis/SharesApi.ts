@@ -15,29 +15,39 @@
 
 import * as runtime from '../runtime';
 import type {
+  CheckShareDestinationDto,
   CreateShareDto,
-  ProbeShareDestinationDto,
   RevokeAllSharesDto,
   RevokeShareDto,
   RevokeSharesDto,
+  ShareCheckResultDto,
   ShareConfigAckDto,
   ShareConfigDto,
   ShareCreatedDto,
   ShareLinkDto,
   ShareListDto,
-  ShareProbeResultDto,
+  ShareSignInSessionDto,
+  StartShareSignInDto,
 } from '../models/index';
+
+export interface SharesApiCancelShareSignInRequest {
+    signInId: string;
+}
+
+export interface SharesApiCheckShareDestinationRequest {
+    checkShareDestinationDto: CheckShareDestinationDto;
+}
 
 export interface SharesApiListSharesRequest {
     runId?: string;
 }
 
-export interface SharesApiProbeShareDestinationRequest {
-    probeShareDestinationDto: ProbeShareDestinationDto;
-}
-
 export interface SharesApiReadShareLinkRequest {
     shareId: string;
+}
+
+export interface SharesApiReadShareSignInRequest {
+    signInId: string;
 }
 
 export interface SharesApiRevokeAllSharesRequest {
@@ -56,10 +66,106 @@ export interface SharesApiShareArtifactRequest {
     createShareDto: CreateShareDto;
 }
 
+export interface SharesApiStartShareSignInRequest {
+    startShareSignInDto: StartShareSignInDto;
+}
+
 /**
  * 
  */
 export class SharesApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async cancelShareSignInRaw(requestParameters: SharesApiCancelShareSignInRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ShareSignInSessionDto>> {
+        if (requestParameters['signInId'] == null) {
+            throw new runtime.RequiredError(
+                'signInId',
+                'Required parameter "signInId" was null or undefined when calling cancelShareSignIn().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/shares/sign-in/{signInId}`;
+        urlPath = urlPath.replace(`{${"signInId"}}`, encodeURIComponent(String(requestParameters['signInId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async cancelShareSignIn(requestParameters: SharesApiCancelShareSignInRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShareSignInSessionDto> {
+        const response = await this.cancelShareSignInRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async checkShareDestinationRaw(requestParameters: SharesApiCheckShareDestinationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ShareCheckResultDto>> {
+        if (requestParameters['checkShareDestinationDto'] == null) {
+            throw new runtime.RequiredError(
+                'checkShareDestinationDto',
+                'Required parameter "checkShareDestinationDto" was null or undefined when calling checkShareDestination().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/shares/check`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['checkShareDestinationDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async checkShareDestination(requestParameters: SharesApiCheckShareDestinationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShareCheckResultDto> {
+        const response = await this.checkShareDestinationRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -105,53 +211,6 @@ export class SharesApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async probeShareDestinationRaw(requestParameters: SharesApiProbeShareDestinationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ShareProbeResultDto>> {
-        if (requestParameters['probeShareDestinationDto'] == null) {
-            throw new runtime.RequiredError(
-                'probeShareDestinationDto',
-                'Required parameter "probeShareDestinationDto" was null or undefined when calling probeShareDestination().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        headerParameters['Content-Type'] = 'application/json';
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/shares/probe`;
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'POST',
-            headers: headerParameters,
-            query: queryParameters,
-            body: requestParameters['probeShareDestinationDto'],
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async probeShareDestination(requestParameters: SharesApiProbeShareDestinationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShareProbeResultDto> {
-        const response = await this.probeShareDestinationRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * 
-     */
     async readShareLinkRaw(requestParameters: SharesApiReadShareLinkRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ShareLinkDto>> {
         if (requestParameters['shareId'] == null) {
             throw new runtime.RequiredError(
@@ -191,6 +250,51 @@ export class SharesApi extends runtime.BaseAPI {
      */
     async readShareLink(requestParameters: SharesApiReadShareLinkRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShareLinkDto> {
         const response = await this.readShareLinkRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readShareSignInRaw(requestParameters: SharesApiReadShareSignInRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ShareSignInSessionDto>> {
+        if (requestParameters['signInId'] == null) {
+            throw new runtime.RequiredError(
+                'signInId',
+                'Required parameter "signInId" was null or undefined when calling readShareSignIn().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/shares/sign-in/{signInId}`;
+        urlPath = urlPath.replace(`{${"signInId"}}`, encodeURIComponent(String(requestParameters['signInId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readShareSignIn(requestParameters: SharesApiReadShareSignInRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShareSignInSessionDto> {
+        const response = await this.readShareSignInRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -377,6 +481,53 @@ export class SharesApi extends runtime.BaseAPI {
      */
     async shareArtifact(requestParameters: SharesApiShareArtifactRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShareCreatedDto> {
         const response = await this.shareArtifactRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async startShareSignInRaw(requestParameters: SharesApiStartShareSignInRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ShareSignInSessionDto>> {
+        if (requestParameters['startShareSignInDto'] == null) {
+            throw new runtime.RequiredError(
+                'startShareSignInDto',
+                'Required parameter "startShareSignInDto" was null or undefined when calling startShareSignIn().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/shares/sign-in`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['startShareSignInDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async startShareSignIn(requestParameters: SharesApiStartShareSignInRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShareSignInSessionDto> {
+        const response = await this.startShareSignInRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

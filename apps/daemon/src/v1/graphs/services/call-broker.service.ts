@@ -6,8 +6,8 @@ import { awakeTimeout, type AwakeTimer } from '../../../utils/sleep-watch';
 import type {
   CallResultPayload,
   CallStartedPayload,
+  HostRowWire,
   MessageDeliveryFailure,
-  MonitorRowWire,
   PersistedResetWake,
   RunCallSeed,
 } from '../../agents/chat.types';
@@ -3824,7 +3824,7 @@ export class CallBroker implements OnModuleInit {
     runId: string,
     caller: string,
     prompt: string,
-    row: MonitorRowWire,
+    row: HostRowWire,
   ): 'woken' | 'pending' | 'refused' {
     const state = this.runs.get(runId);
     if (state === undefined) {

@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { ArtifactShare } from '../entity/artifact-share.entity';
+import type { ShareStatus } from '../shares.types';
 
 @Injectable()
 export class ArtifactShareDao extends BaseDao<ArtifactShare> {
@@ -22,6 +23,22 @@ export class ArtifactShareDao extends BaseDao<ArtifactShare> {
     return this.getAll(runId === undefined ? {} : { runId }, {
       orderBy: { updatedAt: 'desc' },
     });
+  }
+
+  async listByStatus(status: ShareStatus): Promise<ArtifactShare[]> {
+    return this.getAll({ status }, { orderBy: { createdAt: 'asc' } });
+  }
+
+  /** Shares whose asking agents are still owed their outcome. */
+  async listOwedWakes(): Promise<ArtifactShare[]> {
+    return this.getAll(
+      {
+        asker: { $ne: null },
+        agentToldAt: null,
+        status: { $in: ['live', 'failed'] },
+      },
+      { orderBy: { createdAt: 'asc' } },
+    );
   }
 
   /** Shares first made before `cutoff`, oldest first. A re-share keeps `createdAt`. */

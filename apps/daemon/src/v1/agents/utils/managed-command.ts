@@ -55,6 +55,18 @@ export interface ManagedCommandOptions {
   endGroupOnExit?: boolean;
   /** Aborting kills the group as the deadline does; `timedOut` stays false. */
   signal?: AbortSignal;
+  /**
+   * Each complete output line as it arrives (a partial last line at the
+   * end), for a command whose progress is shown live — a sign-in's URL or
+   * device code. Called under the same cap as the kept output.
+   */
+  onOutput?: (line: string, stream: 'stdout' | 'stderr') => void;
+  /**
+   * Read stdout and throw it away: `stdout` comes back empty and `onOutput`
+   * never sees it. For a command whose stdout is a credential
+   * (`gcloud auth print-access-token`) and whose answer is its exit status.
+   */
+  discardStdout?: boolean;
   spawn?: ManagedSpawnFn;
 }
 
@@ -91,6 +103,10 @@ export function runManagedCommand(
     let drain: NodeJS.Timeout | undefined;
     let settled = false;
     let child: ChildProcess;
+    const lines =
+      options.onOutput === undefined
+        ? null
+        : lineSplitter(options.onOutput, maxChars);
     const settle = (
       result: Pick<ManagedCommandResult, 'code' | 'spawnError'>,
     ): void => {
@@ -98,6 +114,7 @@ export function runManagedCommand(
         return;
       }
       settled = true;
+      lines?.flush();
       clearTimeout(timer);
       clearTimeout(drain);
       options.signal?.removeEventListener('abort', abort);
@@ -149,10 +166,14 @@ export function runManagedCommand(
     child.stdout?.setEncoding('utf8');
     const tail = options.keepOutput === 'tail';
     child.stdout?.on('data', (chunk: string) => {
+      if (options.discardStdout) {
+        return;
+      }
       stdout = append(stdout, chunk);
       if (tail) {
         output = append(output, chunk);
       }
+      lines?.push(chunk, 'stdout');
     });
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (chunk: string) => {
@@ -160,6 +181,7 @@ export function runManagedCommand(
       if (tail) {
         output = append(output, chunk);
       }
+      lines?.push(chunk, 'stderr');
     });
     child.on('error', (err) => {
       createGroupTerminator(child, { isGone: () => settled }).terminate();
@@ -182,6 +204,49 @@ export function runManagedCommand(
     child.stdin?.on('error', () => undefined);
     child.stdin?.end(options.stdin ?? '');
   });
+}
+
+/**
+ * Cuts each stream into lines for `onOutput`, separately per stream so a
+ * stderr chunk never splits a stdout line. Stops calling once `maxChars`
+ * of output has been handed over, the kept output's own cap.
+ */
+function lineSplitter(
+  onOutput: (line: string, stream: 'stdout' | 'stderr') => void,
+  maxChars: number,
+): {
+  push: (chunk: string, stream: 'stdout' | 'stderr') => void;
+  flush: () => void;
+} {
+  const pending = { stdout: '', stderr: '' };
+  let handed = 0;
+  const emit = (line: string, stream: 'stdout' | 'stderr'): void => {
+    if (handed >= maxChars) {
+      return;
+    }
+    handed += line.length + 1;
+    onOutput(line.replace(/\r$/, ''), stream);
+  };
+  return {
+    push(chunk, stream) {
+      const parts = (pending[stream] + chunk).split('\n');
+      pending[stream] = parts.pop() ?? '';
+      if (pending[stream].length > maxChars) {
+        pending[stream] = pending[stream].slice(0, maxChars);
+      }
+      for (const line of parts) {
+        emit(line, stream);
+      }
+    },
+    flush() {
+      for (const stream of ['stdout', 'stderr'] as const) {
+        if (pending[stream] !== '') {
+          emit(pending[stream], stream);
+          pending[stream] = '';
+        }
+      }
+    },
+  };
 }
 
 function errorText(err: unknown): string {

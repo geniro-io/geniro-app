@@ -1,10 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type {
-  MonitorEnd,
-  MonitorRowPayload,
-  MonitorRowWire,
-} from '../chat.types';
+import type { HostRowWire, MonitorEnd, MonitorRowPayload } from '../chat.types';
 import type { MonitorEvent } from '../chat.types';
 import type { MonitorBatch } from '../chat.types';
 import {
@@ -86,6 +82,9 @@ export function monitorMessageText(message: MonitorMessage): string {
   ].join('\n');
 }
 
+/** A host row about monitors, which always names them. */
+export type MonitorRow = HostRowWire & { monitors: MonitorRowPayload[] };
+
 /** One monitor message as a row's `monitors` entry. */
 export function monitorRowEntry(
   message: MonitorMessage,
@@ -107,7 +106,7 @@ export function monitorRowPayload(
   callId: string | null,
   woke: boolean,
   conversationId: string | null = null,
-): MonitorRowWire {
+): MonitorRow {
   const said = entries.map((entry) => {
     const name = `${entry.description} · monitor ${entry.id}`;
     if (entry.event === 'start') {
@@ -132,7 +131,7 @@ export function monitorRowPayload(
 /** What held messages wake an agent with: the prompt, and the row its turn opens on. */
 export function monitorWake(messages: readonly MonitorMessage[]): {
   prompt: string;
-  row: MonitorRowWire;
+  row: MonitorRow;
 } {
   return {
     prompt: messages.map(monitorMessageText).join('\n\n'),

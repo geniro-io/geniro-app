@@ -73,6 +73,8 @@ import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
+import { HostWakeBus } from './services/host-wake.bus';
+import { HostWakeChatDelivery } from './services/host-wake-chat-delivery.service';
 import { ItemCallIndexService } from './services/item-call-index.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
@@ -231,6 +233,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     MonitorChatDelivery,
     MonitorOutcomeSweep,
     MonitorBroker,
+    HostWakeBus,
+    HostWakeChatDelivery,
     ArtifactPageService,
     PlanBroker,
     NotifyBroker,
@@ -546,6 +550,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     MonitorRegistry,
     // For the workflow delivery, which records the end of output it drops.
     MonitorRowWriter,
+    // For the share service, which wakes the agent that asked once a share
+    // waiting on the user's sign-in lands, and the workflow delivery of it.
+    HostWakeBus,
     // What a workflow node's button tools and the workflow press route reuse:
     // the publish (over `ChatActionsService`, the rows' one writer) and the
     // press beside it.

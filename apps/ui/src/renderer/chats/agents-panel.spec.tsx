@@ -247,29 +247,41 @@ describe('AgentsPanel — Pages', () => {
 
   it('marks a page with a live share link, named for a screen reader', () => {
     const sharing: ArtifactSharing = {
-      shareOf: (id) => (id === 'shared' ? ({ id: 's' } as Share) : null),
+      shareOf: (id) =>
+        id === 'shared'
+          ? ({ id: 's', sharedVersion: 1 } as Share)
+          : id === 'waiting'
+            ? ({ id: 'w', sharedVersion: 0 } as Share)
+            : null,
       share: vi.fn(),
       link: vi.fn(),
       revoke: vi.fn(),
+      signIn: {} as ArtifactSharing['signIn'],
     };
     const el = render(
       <ArtifactShareContext.Provider value={sharing}>
         <AgentsPanel
           terminalReasons={TERMINALS}
           agents={[]}
-          publishedArtifacts={[page('shared'), page('private')]}
+          publishedArtifacts={[
+            page('shared'),
+            page('private'),
+            page('waiting'),
+          ]}
           onOpenThread={vi.fn()}
         />
       </ArtifactShareContext.Provider>,
     );
     const rows = [...el.querySelectorAll('li')].filter((li) =>
-      ['shared', 'private'].includes(
+      ['shared', 'private', 'waiting'].includes(
         li.textContent?.replace('(shared)', '') ?? '',
       ),
     );
+    // A share waiting on sign-in has no link yet, so it is not marked.
     expect(rows.map((li) => li.textContent)).toEqual([
       'shared(shared)',
       'private',
+      'waiting',
     ]);
   });
 });

@@ -3138,7 +3138,7 @@ export interface MonitorEnd {
 }
 
 /**
- * One entry of a monitor `system` row's `monitors` (see {@link MonitorRowWire}):
+ * One entry of a monitor `system` row's `monitors` (see {@link HostRowWire}):
  * one start, batch or end of a monitor, with the lines it delivered
  * (`omitted` more were not sent).
  *
@@ -3155,20 +3155,86 @@ export interface MonitorRowPayload {
 }
 
 /**
- * A `system` row about monitors: a start, a silent end, or the messages one
- * turn was started with (`woke`). Filed under `callId` inside a call.
+ * One entry of a share wake's `shares` (see {@link HostRowWire}): a share an
+ * agent asked for that waited on the user's sign-in, and what became of it.
+ * Never the link — that goes to the agent in the turn's prompt only.
+ */
+export interface ShareRowPayload {
+  shareId: string;
+  title: string;
+  outcome: 'shared' | 'not-shared';
+  /** `not-shared` only. */
+  reason?: string;
+}
+
+/**
+ * A `system` row geniro writes about its own work: a monitor's start, a
+ * silent end, or the messages one turn was started with (`woke`) — a
+ * monitor's output (`monitors`) or a share the agent asked for (`shares`).
+ * Filed under `callId` inside a call.
  *
  * TWIN PARSER: read by the renderer's `readMonitorNotice` in
  * `apps/ui/src/renderer/chats/monitor-payload.ts`.
  */
-export interface MonitorRowWire {
+export interface HostRowWire {
   severity: 'info';
   message: string;
-  monitors: MonitorRowPayload[];
+  monitors?: MonitorRowPayload[];
+  shares?: ShareRowPayload[];
   woke: boolean;
   callId?: string;
   /** The callee conversation the monitor belongs to — what a restart's note is owed to. */
   conversationId?: string;
+}
+
+/**
+ * What woke a conversation for a turn of geniro's own: a monitor's output, or
+ * a host wake such as a share finished after the user signed in. Both settle
+ * as host turns (no turn-end banner); only a monitor reopens a held call.
+ */
+export type HostWakeOpener = 'monitor' | 'host';
+
+/** The conversation a host wake is for: the one whose agent asked. */
+export interface HostWakeOwner {
+  runId: string;
+  nodeId: string;
+  /** The callee conversation it speaks in, or null for the node's own. */
+  conversationId: string | null;
+  /** `callerKey(nodeId, conversationId)`. */
+  caller: string;
+  /** Which kind of run delivers it — each delivery service takes its own. */
+  target: 'chat' | 'workflow';
+}
+
+/**
+ * Something geniro owes an agent, delivered as a turn of its own once its
+ * conversation is free — never into a running turn (`HostWakeBus`).
+ */
+export interface HostWake {
+  /** One per thing woken about (`share:<id>`): a newer wake replaces a held one. */
+  key: string;
+  owner: HostWakeOwner;
+  /** What the agent reads. The only place a share's link goes. */
+  prompt: string;
+  /** The turn's opening row: what the transcript shows, never the link. */
+  row: HostRowWire;
+  /**
+   * What the conversation's next turn is owed instead when no turn can be
+   * started for it (an archived chat, a callee whose call has settled).
+   */
+  note: string;
+  /**
+   * Told once the wake is settled: a turn opened on it, or its note was owed
+   * to the conversation's next turn instead (held in memory, so lost if the
+   * daemon stops first — the share's card still carries the link).
+   */
+  onDelivered: () => void;
+  /**
+   * True once what the wake carries may no longer be sent (a share link after
+   * the user stopped letting agents share): it is dropped unsent — neither a
+   * turn nor a note — and never settled. Asked at every attempt.
+   */
+  withdrawn?: () => boolean;
 }
 
 /** One running monitor, as `list_monitors` and the process panel see it. */

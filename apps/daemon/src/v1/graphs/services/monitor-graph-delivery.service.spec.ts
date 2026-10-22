@@ -131,7 +131,7 @@ describe('MonitorGraphDelivery', () => {
     });
     await registry.settled(owner.runId, 5000);
     const call = fake.wakeConversation.mock.calls.find(([, , , row]) =>
-      row.monitors.some((entry) => entry.event === 'end'),
+      (row.monitors ?? []).some((entry) => entry.event === 'end'),
     );
     expect(writeEnds).not.toHaveBeenCalled();
     // The run was stopped before the turn could start.

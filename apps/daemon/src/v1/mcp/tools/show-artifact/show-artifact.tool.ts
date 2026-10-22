@@ -45,7 +45,7 @@ export class ShowArtifactTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId, caller } = context;
+    const { runId, nodeId, caller, conversationId } = context;
     const artifact = readHostArtifact(args);
     // Null is the reader saying there is no page here — no document, or no
     // title to list it under. A malformed call on the chart's rule: an
@@ -69,7 +69,22 @@ export class ShowArtifactTool extends BaseMcpTool {
     const share =
       outcome.status === 'published' && readShareRequested(args)
         ? await this.shares.shareForAgent(
-            { runId, artifactId: outcome.artifactId, title: artifact.title },
+            {
+              runId,
+              artifactId: outcome.artifactId,
+              title: artifact.title,
+              // Woken with the link if the share has to wait for the user
+              // to sign in.
+              asker: {
+                runId,
+                nodeId,
+                conversationId,
+                caller,
+                target: this.artifacts.inWorkflowRun(runId)
+                  ? 'workflow'
+                  : 'chat',
+              },
+            },
             context.remote,
           )
         : null;

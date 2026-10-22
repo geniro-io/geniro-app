@@ -94,7 +94,7 @@ export function destinationArgv(
 }
 
 /** `--profile` / `--region`, when the user chose them. */
-function awsScope(destination: {
+export function awsScope(destination: {
   profile?: string;
   region?: string;
 }): string[] {

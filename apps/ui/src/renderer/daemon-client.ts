@@ -950,6 +950,56 @@ export function parseTaskChanged(data: unknown): TaskChangedEvent | null {
   };
 }
 
+/** One share row written or removed — never its link. */
+export interface SharesChangedEvent {
+  runId: string;
+  shareId: string;
+  /** A `ShareStatus`, or `removed`; opaque here, the daemon owns it. */
+  status: string;
+  title: string;
+  destinationName: string;
+  askedByAgent: boolean;
+  /** The one write that put an agent's share into waiting on the user's sign-in. */
+  signInRequested: boolean;
+}
+
+/**
+ * Read a `shares_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `ShareChangedEvent`
+ * (`apps/daemon/src/v1/shares/shares.types.ts`). Change one and change the other.
+ */
+export function parseSharesChanged(data: unknown): SharesChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const {
+    runId,
+    shareId,
+    status,
+    title,
+    destinationName,
+    askedByAgent,
+    signInRequested,
+  } = data as Record<string, unknown>;
+  if (
+    typeof runId !== 'string' ||
+    typeof shareId !== 'string' ||
+    typeof status !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    runId,
+    shareId,
+    status,
+    title: typeof title === 'string' ? title : '',
+    destinationName: typeof destinationName === 'string' ? destinationName : '',
+    askedByAgent: askedByAgent === true,
+    signInRequested: signInRequested === true,
+  };
+}
+
 const JOIN_TIMEOUT_MS = 5_000;
 
 interface JoinWaiter {
@@ -992,6 +1042,9 @@ export class DaemonClient {
   private readonly groupsChangedListeners = new Set<() => void>();
   private readonly taskChangedListeners = new Set<
     (event: TaskChangedEvent) => void
+  >();
+  private readonly sharesChangedListeners = new Set<
+    (event: SharesChangedEvent) => void
   >();
   private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
   private readonly debugListeners = new Set<(entry: DebugLogEntry) => void>();
@@ -1157,6 +1210,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'shares_changed') {
+        const share = parseSharesChanged(data);
+        if (share) {
+          for (const listener of this.sharesChangedListeners) {
+            listener(share);
+          }
+        }
+      }
       if (event === 'debug') {
         const entry = parseDebugEntry(data);
         if (entry) {
@@ -1291,6 +1352,18 @@ export class DaemonClient {
     this.taskChangedListeners.add(listener);
     return () => {
       this.taskChangedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to every share written or removed, client-wide like
+   * {@link onTaskChanged}: an agent's share waiting on sign-in must reach the
+   * window that will ask the user, whichever thread it has open.
+   */
+  onSharesChanged(listener: (event: SharesChangedEvent) => void): () => void {
+    this.sharesChangedListeners.add(listener);
+    return () => {
+      this.sharesChangedListeners.delete(listener);
     };
   }
 

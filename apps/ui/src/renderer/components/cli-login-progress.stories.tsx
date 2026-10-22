@@ -144,6 +144,15 @@ export const Failed: Story = {
   },
 };
 
+/** A share destination's sign-in that ran out its five minutes: nothing was shared. */
+export const ShareTimedOut: Story = {
+  args: {
+    session: { status: 'timed-out', url: null, message: 'Sign-in timed out.' },
+    scope: 'share',
+    variant: 'inline',
+  },
+};
+
 export const InlineVariant: Story = {
   args: { session: session({ status: 'needs_code' }), variant: 'inline' },
 };

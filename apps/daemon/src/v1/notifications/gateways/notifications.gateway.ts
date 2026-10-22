@@ -12,6 +12,7 @@ import {
 import type { Subscription } from 'rxjs';
 import type { Server, Socket } from 'socket.io';
 
+import { cameViaRemote } from '../../../auth/remote-marker';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { enforceWsHandshakeAuth } from '../../../auth/ws-auth';
 import {
@@ -27,6 +28,7 @@ import {
   extractStringField,
 } from '../../agents/utils/ws-payload';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
@@ -106,6 +108,9 @@ function extractRunId(data: unknown): string | null {
   return extractStringField(data, 'runId');
 }
 
+/** The room every socket of the Mac's own windows joins — never a paired device's. */
+const DESKTOP_ROOM = 'desktop';
+
 /**
  * Loopback notifications gateway (Socket.IO). The renderer authenticates with
  * the per-launch loopback token via the handshake `auth` payload (browsers
@@ -137,6 +142,7 @@ export class NotificationsGateway
   private debugSubscription?: Subscription;
   private usageSubscription?: Subscription;
   private taskSubscription?: Subscription;
+  private shareSubscription?: Subscription;
   /**
    * Debug fan-out failures, counted rather than logged.
    *
@@ -157,6 +163,7 @@ export class NotificationsGateway
     private readonly tasks: TaskEventBus,
     private readonly partials: PartialStreamService,
     private readonly subagents: SubagentRecoveryService,
+    private readonly shares: ShareEventBus,
   ) {}
 
   afterInit(server: Server): void {
@@ -225,6 +232,23 @@ export class NotificationsGateway
       },
       error: (err: unknown) =>
         this.logger.error(`task event bus errored: ${String(err)}`),
+    });
+    // A share row written or removed goes to every DESKTOP client, whichever
+    // run it has open: an agent's share waiting on sign-in must reach the
+    // window that will ask the user. Never a paired device, which no share
+    // route serves; and the event never carries the link.
+    this.shareSubscription = this.shares.allChanges().subscribe({
+      next: (change) => {
+        try {
+          server.to(DESKTOP_ROOM).emit('shares_changed', change);
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast shares_changed for ${change.shareId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`share event bus errored: ${String(err)}`),
     });
     // A DESTROYED run goes to every client, and it is the one announcement
     // whose absence a client cannot recover from on its own.
@@ -347,6 +371,7 @@ export class NotificationsGateway
     this.deltaSubscription?.unsubscribe();
     this.statusSubscription?.unsubscribe();
     this.taskSubscription?.unsubscribe();
+    this.shareSubscription?.unsubscribe();
     this.deletedSubscription?.unsubscribe();
     this.changedSubscription?.unsubscribe();
     this.groupsSubscription?.unsubscribe();
@@ -384,6 +409,12 @@ export class NotificationsGateway
       return;
     }
     this.presence.opened(client.id);
+    // The Mac's own windows, apart from a paired device's socket (stamped by
+    // the LAN gateway): share changes go to these only, as every share route
+    // is desktop-only.
+    if (!cameViaRemote(client.handshake.headers ?? {})) {
+      void client.join(DESKTOP_ROOM);
+    }
     client.emit('hello', { version: this.runtime.version });
   }
 

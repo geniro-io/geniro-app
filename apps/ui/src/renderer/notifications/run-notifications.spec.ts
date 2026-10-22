@@ -10,6 +10,7 @@ import {
   diffRunNotifications,
   endingIsProvisional,
   notificationBody,
+  shareSignInNotice,
 } from './run-notifications';
 
 describe('endingIsProvisional', () => {
@@ -343,5 +344,26 @@ describe('notificationBody', () => {
         'some earlier answer',
       ),
     ).toBe('Waiting for you.');
+  });
+});
+
+describe('shareSignInNotice', () => {
+  const event = {
+    signInRequested: true,
+    askedByAgent: true,
+    title: 'Delivery report',
+    destinationName: 'Team bucket',
+  };
+
+  it('asks the user to sign in when an agent’s share starts waiting', () => {
+    expect(shareSignInNotice(event)).toEqual({
+      kind: 'share-sign-in',
+      body: 'An agent\'s link to "Delivery report" is waiting — sign in to Team bucket to share it.',
+    });
+  });
+
+  it('stays silent for any later write, and for the user’s own press', () => {
+    expect(shareSignInNotice({ ...event, signInRequested: false })).toBeNull();
+    expect(shareSignInNotice({ ...event, askedByAgent: false })).toBeNull();
   });
 });

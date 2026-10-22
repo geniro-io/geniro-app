@@ -246,4 +246,16 @@ describe('hostArtifactResultText with a share', () => {
       }),
     ).toContain('\nNot shared: the switch is off.');
   });
+
+  it('tells the agent a share waiting on sign-in will come to it, and not to retry', () => {
+    const text = hostArtifactResultText(published, {
+      kind: 'awaiting-sign-in',
+      label: 'Google Cloud',
+    });
+    expect(text).toContain(
+      '\nNot shared yet — the user has been asked to sign in to Google Cloud.',
+    );
+    expect(text).toContain('do not call show_artifact again to retry');
+    expect(text).not.toContain('Shared link:');
+  });
 });

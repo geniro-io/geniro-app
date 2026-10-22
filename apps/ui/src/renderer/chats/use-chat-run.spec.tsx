@@ -2157,6 +2157,89 @@ describe('useChatRun', () => {
     );
   });
 
+  it('takes what a run is parked on from a reconnect’s listing even when its own copy is fresher', async () => {
+    // REPORTED from a phone: workflow threads read `running · Working…` while
+    // each sat on a question. Safari slept through the question's announce, and
+    // the reconnect's listing that said so lost to the held copy, which a
+    // status announce had dated after the row's own write.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, updatedAt: '2026-09-27T10:00:00.000Z' },
+      run2,
+    ]);
+    const { client, emitRunStatus, fireDisconnect, fireReconnect } =
+      makeClient();
+    const harness = await mount(client);
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'running',
+        activity: null,
+        awaiting: null,
+        at: '2026-09-27T10:00:00.002Z',
+      });
+    });
+    chatApi.listChats.mockResolvedValue([
+      {
+        ...run1,
+        awaiting: 'question',
+        holdingFor: 1,
+        updatedAt: '2026-09-27T10:00:00.000Z',
+      },
+      run2,
+    ]);
+
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+    });
+
+    const row = harness.state().runs.find((r) => r.id === 'r1');
+    expect(row?.awaiting).toBe('question');
+    expect(row?.holdingFor).toBe(1);
+    expect(harness.state().holding.has('r1')).toBe(true);
+    // The rest of the fresher copy is still the one kept.
+    expect(row?.updatedAt).toBe('2026-09-27T10:00:00.002Z');
+  });
+
+  it('keeps what a run is parked on when it was announced while the listing was in flight', async () => {
+    // The listing's reading was taken before this announce went out, so
+    // taking it would put the badge back to `running` over an open question.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, updatedAt: '2026-09-27T10:00:00.000Z' },
+      run2,
+    ]);
+    const { client, emitRunStatus, fireDisconnect, fireReconnect } =
+      makeClient();
+    const harness = await mount(client);
+    let list: (runs: ChatRun[]) => void = () => undefined;
+    chatApi.listChats.mockReturnValue(
+      new Promise<ChatRun[]>((resolve) => {
+        list = resolve;
+      }),
+    );
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        awaiting: 'question',
+        at: '2026-09-27T10:00:05.000Z',
+      });
+    });
+
+    await act(async () => {
+      list([{ ...run1, updatedAt: '2026-09-27T10:00:00.000Z' }, run2]);
+      await Promise.resolve();
+    });
+
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.awaiting).toBe(
+      'question',
+    );
+  });
+
   it('takes a row’s pin, group and colour from the listing even when its own copy is fresher', async () => {
     // The daemon renumbers a band without moving `updatedAt`, so "fresher" says
     // nothing about the arrangement: keeping the held copy's stale pin beside

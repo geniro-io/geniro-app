@@ -347,7 +347,7 @@ One home for each concern:
 - A ref GitHub could not answer still draws a row.
 - The renderer replaces the run's list wholesale on each announce.
 - Do not reintroduce a branch-scoped pull-request list.
-- `keepFresherRows`: a pin, colour or pull-request list written without moving `updatedAt` is decided by the listing.
+- `keepFresherRows`: a pin, colour or pull-request list written without moving `updatedAt` is decided by the listing. So are the live readings (`awaiting`, `holdingFor`, the shell/sub-agent/call counts), unless an announce of them arrived while the listing was in flight: no write stamps them, and an announce's `at` always postdates the row's `updatedAt`.
 - "Changed since this chat started" uses `upstreamBaseSince` and excludes what a pull brought in. The header names the ref and claims no cause.
 - The changes chip and dialog also count the worktrees the thread's agents made (`use-run-work-folders.ts`). A worktree is the thread's only if all three hold: main lists it (`listWorktrees(cwd, startedAtMs)`: a linked worktree made after the thread started — birth of its `.git` link file — never the main checkout and never a geniro task worktree, the direct children of `worktreesRoot()`), and the run's own tool calls name it (`POST /v1/chats/:runId/named-paths`). Each is read as a work folder (`getChangesSince(…, true)`: from where its history meets the start, past what upstream already has). Found folders are only ever added; each lists in its own dialog section. Listings go through `worktree-list.ts` (see *Git*).
 

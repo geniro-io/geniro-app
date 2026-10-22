@@ -20,6 +20,7 @@ import {
   type SharingSettings,
 } from '../shared/contracts';
 import {
+  autoRevokeAfterDaysSchema,
   MAX_SHARE_DESTINATIONS,
   settingsPatchSchema,
   shareDestinationSchema,
@@ -238,6 +239,9 @@ function salvageSharing(value: unknown): SharingSettings {
         ? defaultId
         : null,
     agentsMayShare: record.agentsMayShare === true,
+    autoRevokeAfterDays: autoRevokeAfterDaysSchema
+      .catch(null)
+      .parse(record.autoRevokeAfterDays ?? null),
   };
 }
 

@@ -24,6 +24,14 @@ export class ArtifactShareDao extends BaseDao<ArtifactShare> {
     });
   }
 
+  /** Shares first made before `cutoff`, oldest first. A re-share keeps `createdAt`. */
+  async sharedBefore(cutoff: Date): Promise<ArtifactShare[]> {
+    return this.getAll(
+      { createdAt: { $lt: cutoff } },
+      { orderBy: { createdAt: 'asc' } },
+    );
+  }
+
   /**
    * A revoked share is GONE, soft-deleted rows included: the (runId,
    * artifactId) unique key would otherwise refuse sharing the page again.

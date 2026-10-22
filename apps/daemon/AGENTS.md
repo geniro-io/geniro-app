@@ -293,6 +293,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - Keys: `ShareKeychain` (`services/share-keychain.service.ts`) writes through `security -i` on stdin (never argv), confirms by reading back, and `registerSecret`s every key it mints or reads.
 - Destination CLIs run through `runManagedCommand` (`v1/agents/utils/managed-command.ts`): argv only, ProcessRegistry, child journal, group kill at the deadline. Custom command tokens refuse shell characters and a shell program, on both sides of the settings twin.
 - Revoke: remote delete first, then the key, then the row. A failed remote delete keeps both and marks the row `revoke-failed`; an object already gone counts as revoked only where the CLI says so plainly — gcloud's "matched no objects", or `aws s3 rm`'s exit 0; a custom command is judged by its exit status alone, and a timeout never counts as gone. Never touched by run teardown or the archive sweep.
+- Revoke all (`POST /v1/shares/revoke-all`, given the ids the user saw listed, never "everything now") and the auto-revoke sweep revoke one page at a time through `revoke`, carry on past a failure and report `{revoked, failed, detail}`. The sweep revokes pages whose `createdAt` (the first share; a re-share keeps it) is older than the pushed `autoRevokeAfterDays`, re-asking the setting before each page. It runs a minute after the daemon starts and every 6 h, never on a config push, so changing the setting revokes nothing in the same gesture.
 
 ### Stats
 
@@ -419,6 +420,7 @@ Rules when adding or changing routes:
 Destructive or irreversible routes (and one that only looks it — `DELETE /v1/tasks/:taskId/files/:attachmentId` drops a reference, never the file):
 
 - `DELETE /v1/chats/:runId` — hard-deletes a chat run through `RunTeardownService` (chat runs only; reached from the archive).
+- `POST /v1/shares/revoke-all` — deletes the named shared pages' remote objects, Keychain keys and rows (a failed remote delete keeps both).
 - `POST /v1/chats/sweep-archived` — deletes chats archived ≥ `olderThanDays` (1 day–10 years) from `archivedAt`; one at a time, failures logged and skipped. The policy is the client's.
 - `DELETE /v1/workflows/runs/:runId` — one workflow run's history (never the library workflow).
 - `DELETE /v1/workflows/:slug` — removes the library workflow's YAML file.

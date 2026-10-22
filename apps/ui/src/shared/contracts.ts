@@ -304,12 +304,15 @@ export interface SharingSettings {
   defaultDestinationId: string | null;
   /** Whether an agent's `show_artifact(share: true)` may upload. Off unless turned on. */
   agentsMayShare: boolean;
+  /** Revoke a page this many days after it was first shared; null never does. */
+  autoRevokeAfterDays: number | null;
 }
 
 export const DEFAULT_SHARING: SharingSettings = {
   destinations: [],
   defaultDestinationId: null,
   agentsMayShare: false,
+  autoRevokeAfterDays: null,
 };
 
 export interface Settings {

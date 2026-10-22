@@ -53,6 +53,14 @@ export const REQUEST_TIMEOUT_MS = 30_000;
  */
 export const MCP_ROUTE_TIMEOUT_MS = 60_000;
 
+/**
+ * The budget for revoking many shared pages at once. The daemon runs the
+ * user's CLI once per page, one after another, each bounded only by its own
+ * two-minute deadline, so the route has no ceiling of its own; past this one
+ * the daemon carries on and the list re-read shows what it got done.
+ */
+export const BULK_REVOKE_TIMEOUT_MS = 10 * 60_000;
+
 /** `/v1/chats/r1/items?afterSeq=3` — what the uniform error names. */
 const routeOf = (url: string): string => {
   try {

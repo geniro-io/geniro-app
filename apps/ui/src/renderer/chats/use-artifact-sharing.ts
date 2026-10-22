@@ -51,6 +51,15 @@ export function revokeFailedMessage(detail: string | undefined): string {
   return `The link could not be removed: ${detail ?? 'unknown error'}. It may still work — try again.`;
 }
 
+/** {@link revokeFailedMessage} for a revoke of many pages, `detail` being the first failure's. */
+export function revokeManyFailedMessage(
+  failed: number,
+  total: number,
+  detail: string | null,
+): string {
+  return `${failed} of ${total} links could not be removed: ${detail ?? 'unknown error'}. They may still work — try again.`;
+}
+
 /** What a page's Share control can do, for the run on screen. */
 export interface ArtifactSharing {
   /** This page's live share, or null when it has none. */

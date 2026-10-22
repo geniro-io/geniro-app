@@ -145,6 +145,21 @@ afterEach(() => {
   }
 });
 
+/**
+ * The signals a `process.kill` spy saw for ONE process group. The spy is
+ * process-wide, so it also catches a stray from another spec's real-time
+ * escalation timer landing in this one's window (seen on a slow CI runner) —
+ * counting only this group's pins what the test claims.
+ */
+function signalsTo(
+  killSpy: { mock: { calls: unknown[][] } },
+  pgid: number,
+): unknown[] {
+  return killSpy.mock.calls
+    .filter(([pid]) => pid === -pgid)
+    .map(([, signal]) => signal);
+}
+
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'adapter-probe-root-'));
   dirs.push(dir);
@@ -2231,8 +2246,7 @@ describe('AgentAdapter.runCommand spawn options', () => {
       await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' });
 
       // ONE reap, which is ONE escalation: SIGTERM now…
-      expect(killSpy).toHaveBeenCalledTimes(1);
-      expect(killSpy).toHaveBeenCalledWith(-4243, 'SIGTERM');
+      expect(signalsTo(killSpy, 4243)).toEqual(['SIGTERM']);
 
       await vi.advanceTimersByTimeAsync(60_000);
 
@@ -2240,8 +2254,7 @@ describe('AgentAdapter.runCommand spawn options', () => {
       // signals from one reap, not two reaps: the deadline was cleared rather
       // than merely outrun, and `exit`/`close` did not each arm their own
       // escalation.
-      expect(killSpy).toHaveBeenCalledTimes(2);
-      expect(killSpy).toHaveBeenNthCalledWith(2, -4243, 'SIGKILL');
+      expect(signalsTo(killSpy, 4243)).toEqual(['SIGTERM', 'SIGKILL']);
     } finally {
       killSpy.mockRestore();
       vi.useRealTimers();
@@ -2349,7 +2362,7 @@ describe('AgentAdapter.runCommand spawn options', () => {
       fake.close(0); // the child's own exit lands afterwards
       await pending;
 
-      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(signalsTo(killSpy, 4248)).toEqual(['SIGTERM']);
     } finally {
       killSpy.mockRestore();
       vi.useRealTimers();

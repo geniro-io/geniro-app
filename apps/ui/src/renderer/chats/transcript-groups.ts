@@ -56,6 +56,7 @@ import {
   toolOperationOf,
 } from './tool-kind';
 import {
+  formatToolName,
   resultDiffsOf,
   toolInputBody,
   toolResultBody,
@@ -4406,6 +4407,46 @@ function spendPayload(state: LiveState | null): { spend?: string } {
   return spend === null ? {} : { spend };
 }
 
+/**
+ * Argument bytes a tool call must reach before the working row names it.
+ *
+ * The daemon's first progress frame after the open (its `COMPOSE_PUBLISH_STEP`),
+ * so an ordinary call — a `Bash`, a `Read`, written in well under a second —
+ * never swaps the row's phrase for a blink.
+ */
+const WRITING_SHOWN_FROM_BYTES = 2048;
+
+/**
+ * The `writing` keys for a working row: the tool call the model is writing
+ * right now, and how much of it has arrived — or nothing at all.
+ *
+ * Every call that draws a card already has its own loader (the `composing`
+ * row); this is every OTHER call. Their arguments are usually tiny, but not
+ * always: a `Write` of a large file, or a host tool whose argument is a whole
+ * document, can stream for minutes. REPORTED as a chat that "just continues
+ * thinking but doesn't do anything" — an analysis re-emitting a 250KB workflow
+ * as `save_workflow_change` arguments for ten minutes under a looping
+ * `Sculpting…`, with the output count frozen, because nothing on the row
+ * moved while the call was being written.
+ */
+function writingPayload(state: LiveState | null): {
+  writingTool?: string;
+  writingBytes?: number;
+} {
+  if (
+    state === null ||
+    state.composingTool === null ||
+    state.composingBytes === null ||
+    state.composingBytes < WRITING_SHOWN_FROM_BYTES
+  ) {
+    return {};
+  }
+  return {
+    writingTool: formatToolName(state.composingTool),
+    writingBytes: state.composingBytes,
+  };
+}
+
 export function withLiveText(
   blocks: readonly TranscriptEntry[],
   liveText: ReadonlyMap<string, LiveState>,
@@ -4581,6 +4622,7 @@ export function withLiveText(
           // so the row's `payloadString` reads null and draws nothing rather
           // than an empty figure.
           ...spendPayload(liveText.get(key) ?? null),
+          ...writingPayload(liveText.get(key) ?? null),
         },
       }),
       enclosingCallees,

@@ -257,6 +257,29 @@ describe('WorkingRow', () => {
     expect(container.textContent).toContain('11s');
   });
 
+  it('names the call being WRITTEN, with its byte count, over the daemon’s activity', () => {
+    // Reported as a chat that "just continues thinking but doesn't do
+    // anything": a 250KB tool argument streamed for minutes under a looping
+    // word. The byte count is what shows the model is still producing, and the
+    // daemon's phrase names a tool that already ran, so the call wins.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <RunActivityContext.Provider value="running Bash">
+        <WorkingRow
+          writing={{ tool: 'Geniro: Save workflow change', bytes: 86_016 }}
+        />
+      </RunActivityContext.Provider>,
+    );
+
+    expect(container.textContent).toContain(
+      'Writing Geniro: Save workflow change',
+    );
+    expect(
+      container.querySelector('[data-slot="live-row-progress"]')?.textContent,
+    ).toBe('· 84.0 KB');
+    expect(container.textContent).not.toContain('running Bash');
+  });
+
   it('falls back to the bare state when the daemon has said nothing', () => {
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     const container = render(

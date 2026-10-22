@@ -96,7 +96,7 @@ Then stop. Change nothing until the user applies.`,
 A later message lists the items the user selected, in full. Apply exactly those and nothing else:
 ${
   workflow
-    ? `- Workflow items: read view=workflow, edit the JSON, and save it with \`${HOST_WORKFLOW_CHANGE_TOOL}\` passing the hash you read (dryRun first if unsure). Never write the workflow file yourself. If the save is refused because the hash changed, read it again and re-apply.\n`
+    ? `- Workflow items: read view=workflow, then save only your edits with \`${HOST_WORKFLOW_CHANGE_TOOL}\` passing the hash you read (dryRun first if unsure) — never re-send the whole workflow. Never write the workflow file yourself. If the save is refused because the hash changed, read it again and re-apply.\n`
     : ''
 }- Repo items: edit the files in your working folder with your own tools. Do not commit.
 - User items: edit exactly the file the item names — one listed under \`userInstructions\` — and nothing else outside your working folder.

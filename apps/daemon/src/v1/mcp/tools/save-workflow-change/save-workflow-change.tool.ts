@@ -71,7 +71,7 @@ export class SaveWorkflowChangeTool extends BaseMcpTool {
         await this.workflows.save({
           analysisRunId: turn.analysisRunId,
           slug: workflow.slug,
-          workflow: read.query.workflow,
+          edits: read.query.edits,
           baseHash: read.query.baseHash,
           ids: read.query.ids,
           dryRun: read.query.dryRun ?? false,

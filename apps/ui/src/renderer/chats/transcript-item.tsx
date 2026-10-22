@@ -62,6 +62,17 @@ import { WakeDivider } from './wake-divider';
 import { readWakeNotice } from './wake-payload';
 
 /**
+ * The tool call a working row says the agent is writing, or null — the pair
+ * `transcript-groups.ts` folds in together, so one without the other is a
+ * payload this build did not write and draws nothing.
+ */
+function writingOf(payload: unknown): { tool: string; bytes: number } | null {
+  const tool = payloadString(payload, 'writingTool');
+  const bytes = payloadNumber(payload, 'writingBytes');
+  return tool === null || bytes === null ? null : { tool, bytes };
+}
+
+/**
  * The API/own-work split, for the tooltip — only when the CLI reported both and
  * the subtraction is meaningful. The remainder is the CLI running tools and
  * reading files, which is what separates "the model was slow" from "the agent
@@ -237,6 +248,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           <WorkingRow
             since={payloadNumber(item.payload, 'workingSince')}
             spend={payloadString(item.payload, 'spend')}
+            writing={writingOf(item.payload)}
           />
         );
       }

@@ -17146,6 +17146,19 @@ describe('Chats — the archive filter does not hide a thread from its notificat
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
     await pickScope(container, 'Archived only');
+    // The listing that brings it back is the one read BEFORE the announce: it
+    // is still in flight when the announce lands. One asked afterwards would
+    // carry the daemon's own count, and is taken over the kept copy's.
+    let list: (runs: ChatRun[]) => void = () => undefined;
+    api.listChats.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        params?.scope === 'archived'
+          ? Promise.resolve([shelved])
+          : new Promise<ChatRun[]>((resolve) => {
+              list = resolve;
+            }),
+    );
+    await pickScope(container, 'Active chats');
 
     await act(async () => {
       emitRunStatus({
@@ -17155,7 +17168,10 @@ describe('Chats — the archive filter does not hide a thread from its notificat
         at: '2026-06-01T00:00:00.000Z',
       });
     });
-    await pickScope(container, 'Active chats');
+    await act(async () => {
+      list([run1, busy]);
+      await Promise.resolve();
+    });
 
     const row = [
       ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),

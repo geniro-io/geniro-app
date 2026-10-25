@@ -12,6 +12,7 @@ import {
   ModelParameterSelect,
   withModelParameter,
 } from '../chats/model-parameter-select';
+import { ModelSettingsPendingRow } from '../chats/model-settings-pending-row';
 import { SettingRow } from '../components/setting-row';
 
 /** The per-model settings one configuration holds — the node's own or a pool member's. */
@@ -30,11 +31,15 @@ type ModelSettings = Pick<
  * offers no such axis, and a labelled row around nothing is a label with a
  * hole under it. A parameter row is labelled with the CLI's own word for the
  * axis, so the chip does not name it a second time.
+ *
+ * While any of the three listings is still being asked of the CLI, the model's
+ * rows are replaced by ONE pending row — see `ModelSettingsPendingRow`.
  */
 export function ModelSettingsRows({
   efforts,
   windows,
   parameters,
+  loading,
   value,
   onPatch,
   afterContext,
@@ -42,11 +47,21 @@ export function ModelSettingsRows({
   efforts: AgentEffort[];
   windows: AgentContextWindow[];
   parameters: readonly AgentModelParameter[];
+  /** Any of the three listings is still being fetched for this model. */
+  loading: boolean;
   value: ModelSettings;
   onPatch: (patch: Partial<ModelSettings>) => void;
   /** A row the caller places between the window and the parameters. */
   afterContext?: ReactNode;
 }): React.JSX.Element {
+  if (loading) {
+    return (
+      <>
+        <ModelSettingsPendingRow width="compact" />
+        {afterContext}
+      </>
+    );
+  }
   return (
     <>
       {efforts.length === 0 ? null : (

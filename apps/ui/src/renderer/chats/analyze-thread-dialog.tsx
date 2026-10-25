@@ -25,6 +25,7 @@ import { ConfigDirSelect } from './config-dir-select';
 import { shortenPath } from './directory-select';
 import { EffortSelect } from './effort-select';
 import { ModelSelect } from './model-select';
+import { ModelSettingsPendingRow } from './model-settings-pending-row';
 import { TargetSelect } from './target-select';
 import { formatDuration } from './turn-duration';
 import { useAgentEfforts } from './use-agent-efforts';
@@ -264,7 +265,9 @@ export function AnalyzeThreadDialog({
               onChange={(model) => set({ model, effort: null })}
             />
           </SettingRow>
-          {efforts.efforts.length === 0 ? null : (
+          {efforts.loading ? (
+            <ModelSettingsPendingRow />
+          ) : efforts.efforts.length === 0 ? null : (
             <SettingRow label="Effort">
               <EffortSelect
                 efforts={efforts.efforts}

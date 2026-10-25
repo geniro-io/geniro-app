@@ -46,6 +46,7 @@ import {
   withModelParameter,
 } from './model-parameter-select';
 import { ModelSelect } from './model-select';
+import { ModelSettingsPendingRow } from './model-settings-pending-row';
 import type { RunConfigDraft } from './run-config';
 import { moveRunConfig } from './run-config';
 import type { TargetWorkflow } from './target-select';
@@ -849,7 +850,14 @@ function RunConfigEditor({
               {/* The ROW goes with the control, here and below. Both chips
                   render nothing when the model offers no choice, and a labelled
                   row around nothing is a label with a hole in it — which in a
-                  fixed label column is louder than the chip ever was. */}
+                  fixed label column is louder than the chip ever was.
+                  Until the CLI has answered, one pending row stands in for
+                  all of them — see `ModelSettingsPendingRow`. */}
+              {efforts.loading ||
+              contextWindows.loading ||
+              modelParameters.loading ? (
+                <ModelSettingsPendingRow />
+              ) : null}
               {efforts.efforts.length === 0 ? null : (
                 <SettingRow label="Effort">
                   <EffortSelect

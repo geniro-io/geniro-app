@@ -247,6 +247,51 @@ describe('AgentPoolEditor', () => {
     expect(labels).toContain('Fast');
   });
 
+  it('shows a pending row, not a bare card, while the model’s settings are still being read', async () => {
+    let answerEfforts: (listing: {
+      efforts: { id: string; label: string }[];
+      unavailableReason: null;
+    }) => void = () => {};
+    const agentsApi = withVocabulary({
+      listAgentModels: vi.fn(async () => []),
+      listAgentEfforts: vi.fn(
+        () =>
+          new Promise<{
+            efforts: { id: string; label: string }[];
+            unavailableReason: null;
+          }>((resolve) => {
+            answerEfforts = resolve;
+          }),
+      ),
+    }) as unknown as DaemonApis['agents'];
+
+    // A model no other spec asks about, so the vocabulary cache cannot answer.
+    renderEditor(
+      [{ agent: 'claude', model: 'pending-effort-model' }],
+      agentsApi,
+    );
+    const member = (): Element =>
+      document.querySelector('[data-slot="agent-pool-member"]')!;
+    const pending = (): Element | null =>
+      member().querySelector('[aria-label="Loading model options"]');
+    const effortChip = (): Element | null =>
+      member().querySelector('[aria-label="Reasoning effort"]');
+
+    expect(pending()).not.toBeNull();
+    expect(effortChip()).toBeNull();
+
+    await act(async () => {
+      answerEfforts({
+        efforts: [{ id: 'high', label: 'high' }],
+        unavailableReason: null,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(pending()).toBeNull();
+    expect(effortChip()).not.toBeNull();
+  });
+
   it('switching a member’s CLI drops the settings the old CLI offered, and keeps its threshold', () => {
     const onChange = renderEditor([
       {

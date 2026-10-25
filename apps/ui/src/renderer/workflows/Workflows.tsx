@@ -1852,6 +1852,11 @@ export function Workflows({
                             efforts={agentEfforts.efforts}
                             windows={agentContextWindows.windows}
                             parameters={agentModelParameters.parameters}
+                            loading={
+                              agentEfforts.loading ||
+                              agentContextWindows.loading ||
+                              agentModelParameters.loading
+                            }
                             value={selected}
                             onPatch={patchSelected}
                             afterContext={

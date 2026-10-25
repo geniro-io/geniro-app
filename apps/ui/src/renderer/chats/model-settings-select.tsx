@@ -37,6 +37,7 @@ import {
   modelLabel,
   withSelectedModel,
 } from './model-options';
+import { PENDING_MODEL_SETTINGS_TEXT } from './model-settings-pending-row';
 
 /**
  * The one row that means "send this axis no value at all" — a distinct token
@@ -116,7 +117,7 @@ const PARAMETER_ICONS: Record<string, React.ReactNode> = {
 const PENDING_AXES: MenuItem = {
   value: 'axis:pending:',
   icon: <Spinner />,
-  label: 'Reading what this model offers…',
+  label: PENDING_MODEL_SETTINGS_TEXT,
   disabled: true,
 };
 

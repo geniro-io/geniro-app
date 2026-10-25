@@ -26,6 +26,7 @@ function node(
   tokens: number | null,
   window: number | null,
   calls: NodeStateDto['calls'] = [],
+  callFigures: NodeStateDto['callFigures'] = [],
 ) {
   return {
     runId: 'run-1',
@@ -34,6 +35,7 @@ function node(
     contextTokens: tokens,
     contextWindowTokens: window,
     calls,
+    callFigures,
     totals: NO_TOTALS,
     mainTotals: NO_TOTALS,
     startedAt: null,
@@ -120,31 +122,47 @@ describe('useNodeDurableReadings', () => {
     // The reader hop of the wire field. The node figures collapse to whichever
     // call wrote last, so a node called twice needs both rows here or the
     // sidebar's per-call rings have no durable source to fall back on.
+    const call1Figures = {
+      callId: 'call-1',
+      totals: NO_TOTALS,
+      toolCalls: 0,
+      toolCallsThroughSeq: null,
+      promptCacheExpiresAt: null,
+    };
+    const call2Figures = {
+      callId: 'call-2',
+      totals: NO_TOTALS,
+      // The conversation's own tool count, which its call card draws.
+      toolCalls: 141,
+      toolCallsThroughSeq: 640,
+      // When this call's cache lapses — what its instance row counts down to.
+      promptCacheExpiresAt: '2026-10-11T11:00:00.000Z',
+    };
+    // A call older than the listing's cap: in the figures, not in `calls`.
+    const pastCapFigures = { ...call1Figures, callId: 'call-0', toolCalls: 7 };
     const listWorkflowRunNodes = vi.fn(async () => [
-      node('reviewer', 91_000, 200_000, [
-        {
-          promptCacheExpiresAt: null,
-          callId: 'call-1',
-          contextTokens: 10_000,
-          contextEstimated: false,
-          contextWindowTokens: 200_000,
-          totals: NO_TOTALS,
-          toolCalls: 0,
-          toolCallsThroughSeq: null,
-          start: null,
-        },
-        {
-          promptCacheExpiresAt: '2026-10-11T11:00:00.000Z',
-          callId: 'call-2',
-          contextTokens: 91_000,
-          contextEstimated: false,
-          contextWindowTokens: 200_000,
-          totals: NO_TOTALS,
-          toolCalls: 141,
-          toolCallsThroughSeq: 640,
-          start: null,
-        },
-      ]),
+      node(
+        'reviewer',
+        91_000,
+        200_000,
+        [
+          {
+            callId: 'call-1',
+            contextTokens: 10_000,
+            contextEstimated: false,
+            contextWindowTokens: 200_000,
+            start: null,
+          },
+          {
+            callId: 'call-2',
+            contextTokens: 91_000,
+            contextEstimated: false,
+            contextWindowTokens: 200_000,
+            start: null,
+          },
+        ],
+        [pastCapFigures, call1Figures, call2Figures],
+      ),
     ]);
     const { seen } = drive(
       { listWorkflowRunNodes } as unknown as WorkflowsApi,
@@ -158,25 +176,20 @@ describe('useNodeDurableReadings', () => {
         contextTokens: 10_000,
         contextEstimated: false,
         contextWindowTokens: 200_000,
-        totals: NO_TOTALS,
-        toolCalls: 0,
-        toolCallsThroughSeq: null,
         start: null,
-        promptCacheExpiresAt: null,
       },
       {
         callId: 'call-2',
         contextTokens: 91_000,
         contextEstimated: false,
         contextWindowTokens: 200_000,
-        totals: NO_TOTALS,
-        // The conversation's own tool count, which its call card draws.
-        toolCalls: 141,
-        toolCallsThroughSeq: 640,
         start: null,
-        // When this call's cache lapses — what its instance row counts down to.
-        promptCacheExpiresAt: '2026-10-11T11:00:00.000Z',
       },
+    ]);
+    expect(seen.readings.get('reviewer')?.callFigures).toEqual([
+      pastCapFigures,
+      call1Figures,
+      call2Figures,
     ]);
   });
 
@@ -220,6 +233,7 @@ describe('useNodeDurableReadings', () => {
       contextTokens: 42_000,
       contextWindowTokens: 200_000,
       calls: [],
+      callFigures: [],
       status: 'running',
       startedAt: 1_000,
       totals: NO_TOTALS,
@@ -231,6 +245,7 @@ describe('useNodeDurableReadings', () => {
       contextTokens: null,
       contextWindowTokens: null,
       calls: [],
+      callFigures: [],
       status: 'running',
       startedAt: null,
       totals: NO_TOTALS,

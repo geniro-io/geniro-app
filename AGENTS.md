@@ -28,6 +28,7 @@ The rules under `.claude/rules/` are part of this file's contract. Claude Code l
 | [`renderer-stories.md`](.claude/rules/renderer-stories.md) | `apps/ui/src/renderer/**/*.stories.tsx`, `apps/ui/.storybook/**` | How to write a component's Storybook story |
 | [`packaging-config.md`](.claude/rules/packaging-config.md) | `scripts/**`, `apps/ui/electron-builder.yml` | An env-signal branch owns every config value it controls |
 | [`testing.md`](.claude/rules/testing.md) | `**/*.spec.ts`, `**/*.spec.tsx` | No false pins: a claimed behaviour has an assertion that fails when it breaks |
+| [`run-statistics.md`](.claude/rules/run-statistics.md) | `apps/daemon/src/**`, `apps/ui/src/renderer/**` | Run, thread, conversation, agent and sub-agent statistics are counted by the daemon over every row, never folded from the loaded window or bounded by a listing cap |
 
 Add a new rule file to this table in the same change, with the paths its frontmatter declares, then run `pnpm sync:cursor-rules` and commit the `.cursor/rules/<name>.mdc` it writes; never edit a generated file by hand. A rule's frontmatter holds only a one-line `description:` and an optional `paths:` block list with no brace group (Cursor splits `globs:` on commas), and the script refuses anything else. `pnpm sync:cursor-rules --check` (in CI and `full-check`) fails on a missing, stale or extra file. The table is the only way a rule reaches Codex.
 

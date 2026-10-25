@@ -27,6 +27,7 @@ const delegate = (
   status: 'running',
   processEnded: false,
   launchSeq: 1,
+  toolCalls: 0,
   startedAt: '2026-10-01T00:00:00.000Z',
   ...extra,
 });

@@ -161,6 +161,7 @@ describe('useRunState', () => {
           status: 'running',
           processEnded: false,
           launchSeq: 1,
+          toolCalls: 0,
           startedAt: 'now',
         },
       ],
@@ -269,6 +270,7 @@ describe('useRunState', () => {
       status: 'completed' as const,
       processEnded: false,
       launchSeq: 1,
+      toolCalls: 0,
       startedAt: 'now',
     };
     h.api.readRunState.mockResolvedValue({
@@ -308,6 +310,7 @@ describe('useRunState', () => {
             status: 'running',
             processEnded: false,
             launchSeq: 1,
+            toolCalls: 0,
             startedAt: 'now',
           },
         ],

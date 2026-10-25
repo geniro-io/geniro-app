@@ -10,7 +10,7 @@ import type { Subscription } from 'rxjs';
 
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import type { SubagentRecoveryRef } from '../adapters/adapter.types';
-import type { RunDelegateState } from '../chat.types';
+import type { DelegateLifecycle } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { mapEventToItem } from '../utils/event-to-item';
@@ -43,11 +43,11 @@ const RECOVERY_GIVE_UP_COOLDOWN_MS = 10 * 60_000;
 const RECOVERY_RETIRED_RUNS_MAX = 500;
 
 /** The statuses a delegate leaves only through a newer row of its own. */
-const SETTLED_DELEGATE_STATUSES: ReadonlySet<RunDelegateState['status']> =
+const SETTLED_DELEGATE_STATUSES: ReadonlySet<DelegateLifecycle['status']> =
   new Set(['completed', 'failed', 'cancelled']);
 
 interface Candidate {
-  delegate: RunDelegateState;
+  delegate: DelegateLifecycle;
   ref: SubagentRecoveryRef;
   version: number;
 }

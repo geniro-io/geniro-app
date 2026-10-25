@@ -64,6 +64,35 @@ export type CalleeReading = CalleeContext & {
   toolCalls?: number | null;
 };
 
+type CallFigures = NodeDurableReading['callFigures'][number];
+
+/**
+ * A node's call figures by call id, built once per reading: the list is every
+ * call of the run, and each card and panel row looks several of them up.
+ */
+const figuresIndex = new WeakMap<
+  readonly CallFigures[],
+  ReadonlyMap<string, CallFigures>
+>();
+
+const EMPTY_FIGURES: ReadonlyMap<string, CallFigures> = new Map();
+
+function figuresOf(
+  nodeReadings: ReadonlyMap<string, NodeDurableReading>,
+  nodeId: string,
+): ReadonlyMap<string, CallFigures> {
+  const list = nodeReadings.get(nodeId)?.callFigures;
+  if (list === undefined) {
+    return EMPTY_FIGURES;
+  }
+  let index = figuresIndex.get(list);
+  if (index === undefined) {
+    index = new Map(list.map((figures) => [figures.callId, figures]));
+    figuresIndex.set(list, index);
+  }
+  return index;
+}
+
 /**
  * The seqs of each call's own tool calls among `rows` — rows filed under a
  * call (`inCall`), sub-agents' excluded — keyed by {@link callToolKey}.
@@ -106,8 +135,8 @@ function callToolKey(nodeId: string, callId: string): string {
  * the client holds that the count was read before (seq above its
  * `toolCallsThroughSeq`) — a turn in flight, or one settled since the read.
  *
- * A call the daemon has not listed — not read yet, or past the nodes route's
- * call cap — counts the rows the client holds of it.
+ * A call the daemon has not read yet (it started since the last read) counts
+ * the rows the client holds of it.
  *
  * Null when the conversation has neither a reading nor a row of its own, the
  * caller's cue to use its fold.
@@ -118,10 +147,10 @@ export function resolveConversationToolCalls(
   callIds: readonly string[],
   ownToolSeqs: ReadonlyMap<string, readonly number[]>,
 ): number | null {
-  const calls = nodeReadings.get(calleeNodeId)?.calls ?? [];
+  const figures = figuresOf(nodeReadings, calleeNodeId);
   let total: number | null = null;
   for (const callId of callIds) {
-    const call = calls.find((reading) => reading.callId === callId);
+    const call = figures.get(callId);
     const seqs = ownToolSeqs.get(callToolKey(calleeNodeId, callId)) ?? [];
     if (call === undefined) {
       if (seqs.length > 0) {
@@ -186,14 +215,12 @@ export function resolveConversationSpend(
   calleeNodeId: string,
   callIds: readonly string[],
 ): CallSpend | null {
-  const calls = nodeReadings.get(calleeNodeId)?.calls ?? [];
+  const figures = figuresOf(nodeReadings, calleeNodeId);
   const found: CallSpend = { tokens: null, costUsd: null };
   let estimated: number | null = null;
   let measured = false;
   for (const callId of callIds) {
-    const spend = spendOfTotals(
-      calls.find((call) => call.callId === callId)?.totals,
-    );
+    const spend = spendOfTotals(figures.get(callId)?.totals);
     if (spend === null) {
       continue;
     }
@@ -424,11 +451,9 @@ export function resolveConversationCacheExpiry(
   calleeNodeId: string,
   callIds: readonly string[],
 ): string | null {
-  const calls = nodeReadings.get(calleeNodeId)?.calls ?? [];
+  const figures = figuresOf(nodeReadings, calleeNodeId);
   for (let i = callIds.length - 1; i >= 0; i -= 1) {
-    const expiresAt = calls.find(
-      (call) => call.callId === callIds[i],
-    )?.promptCacheExpiresAt;
+    const expiresAt = figures.get(callIds[i]!)?.promptCacheExpiresAt;
     if (typeof expiresAt === 'string') {
       return expiresAt;
     }

@@ -169,7 +169,7 @@ The rules live in `.claude/rules/renderer-design-system.md` (tokens, themes, `da
 
 ### Chats
 
-**The transcript is a window.** A chat opens on its newest page (`Settings.historyPageSize`) and pages older through `beforeSeq`. Anything that describes the whole thread is read from the daemon, never folded from loaded `items`:
+**The transcript is a window.** A chat opens on its newest page (`Settings.historyPageSize`) and pages older through `beforeSeq`. Anything that describes the whole thread, a call conversation or an agent is read from the daemon, never folded from loaded `items` nor bounded by a capped listing (`.claude/rules/run-statistics.md`):
 
 - Run state (`useRunState`, `GET /v1/chats/:runId/state`).
 - Spend (`useChatTotals`, and the nodes route for workflows).
@@ -190,7 +190,7 @@ Anchors and run state:
 - Whatever replaces anchors calls `forget`. A page landing after a live answer merges.
 - Rows refused by `addItem`'s away-from-tail guard bring no anchors.
 - Never rebuild a call heuristically from its later rows: it draws ghost cards.
-- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window supplies details; the daemon decides what has ENDED: a shell, delegate or call the page reads as running that began at or before the read's `throughSeq` and that the read says is over, is over (`withoutDaemonEndedShells`, `applyDaemonReadings` in `durable-transcript.ts`, `callEndedPerDaemon`). The open turns' unanswered calls (`openToolCalls`) are folded in with the page, so a foreground command shows while the reader is elsewhere. Open requests off the tail are the daemon's too.
+- `useRunState` re-reads on open, reconnect, a structural row or a status announce, never on an activity phrase. The window supplies details; the daemon decides what has ENDED: a shell, delegate or call the page reads as running that began at or before the read's `throughSeq` and that the read says is over, is over (`withoutDaemonEndedShells`, `applyDaemonReadings` in `durable-transcript.ts`, `callEndedPerDaemon`). The same read carries each delegate's whole-run tool count, which `applyDaemonReadings` lays on its card with the delegate's rows above `throughSeq` added. The open turns' unanswered calls (`openToolCalls`) are folded in with the page, so a foreground command shows while the reader is elsewhere. Open requests off the tail are the daemon's too.
 
 Jumps (search, global search, timeline, the Agents chip) — `chats/use-transcript-jump.ts`, DOM contract in `chats/jump-target.ts`:
 

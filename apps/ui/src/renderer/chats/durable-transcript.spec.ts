@@ -215,6 +215,7 @@ describe('daemon subagent lifecycle', () => {
           status: 'untracked' as const,
           processEnded: false,
           launchSeq: 1,
+          toolCalls: 0,
           startedAt: launch.createdAt,
         },
       ],
@@ -263,6 +264,45 @@ describe('daemon subagent lifecycle', () => {
     );
     expect(block!.processEnded).toBe(true);
   });
+
+  it('counts a delegate’s tools from the daemon, plus only its rows written after the read', () => {
+    // The daemon counted 40 through seq 3 — most of them above the loaded
+    // page. Seq 3 is inside that count; seq 4 arrived after the read.
+    const launch = row(
+      'launch',
+      'tool_call',
+      { id: 'delegate', name: 'Task', input: { description: 'Review' } },
+      1,
+    );
+    const tool = (id: string, seq: number, parentToolUseId = 'delegate') =>
+      row(id, 'tool_call', { id, name: 'Read', parentToolUseId }, seq);
+    const rows = [
+      launch,
+      tool('counted', 3),
+      tool('since', 4),
+      tool('elsewhere', 5, 'other-delegate'),
+      // Its other rows carry its id too, and are not tool calls.
+      row(
+        'since-result',
+        'tool_result',
+        { id: 'since', parentToolUseId: 'delegate' },
+        6,
+      ),
+    ];
+    const [block] = collectSubagentBlocks(
+      applyDaemonReadings(
+        foldOf(rows, true),
+        daemonSubagentReadings(
+          {
+            throughSeq: 3,
+            delegates: [{ ...delegateState('running'), toolCalls: 40 }],
+          },
+          rows,
+        ),
+      ),
+    );
+    expect(block!.durableToolCalls).toBe(41);
+  });
 });
 
 function delegateState(
@@ -278,6 +318,7 @@ function delegateState(
     status,
     processEnded,
     launchSeq: 1,
+    toolCalls: 0,
     startedAt: '2026-09-14T10:00:00.000Z',
   };
 }

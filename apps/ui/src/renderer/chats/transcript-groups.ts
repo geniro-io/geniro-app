@@ -458,6 +458,11 @@ export interface SubagentBlockEntry {
   /** Status read from the daemon's whole-conversation snapshot. */
   daemonStatus?: 'running' | BackgroundOutcome;
   /**
+   * Its tool calls over the whole run, from the daemon's run-state read plus
+   * its rows written since. Absent until that read lists it.
+   */
+  durableToolCalls?: number;
+  /**
    * That result was an error — `isError` on the `tool_result` payload, which
    * `apps/daemon/src/v1/agents/utils/event-to-item.ts` persists verbatim.
    */
@@ -1388,8 +1393,7 @@ export function subagentNamed(block: SubagentBlockEntry): boolean {
  * {@link CallBlockEntry.entries} and is the callee's final answer — the block
  * pulls it out of those entries for exactly that reason. Otherwise the newest
  * assistant message, found by walking backwards and descending into nested
- * entries the way {@link countTools} does, since a callee's rows are routinely
- * folded into a turn block.
+ * entries, since a callee's rows are routinely folded into a turn block.
  *
  * Null when the callee has not spoken yet, and never the caller's own ask: that
  * is what the block was ASKED, not where it has got to, and the header already
@@ -1495,9 +1499,8 @@ function lastSpokenIn(
  * its first message routinely lands with the result — so a message-only band
  * says nothing for the whole of the work it is meant to describe.
  *
- * Tool invocations are read from `tools` groups alone, the same reading
- * {@link countTools} documents: a card entry hides the calls that produced it,
- * so counting those would name work with no row to open.
+ * Tool invocations are read from `tools` groups alone: a card entry hides the
+ * calls that produced it, and this band names only work with a row to open.
  *
  * The LATEST call's tools alone, on {@link callBlockSummary}'s rule: a tool an
  * earlier call finished is not what the callee is doing now.
@@ -1768,15 +1771,25 @@ function lastTaskListIn(
   return null;
 }
 
+/**
+ * The tools the agent a card is about called, as far as the loaded rows show —
+ * the fallback while the daemon has no figure. A nested sub-agent or call is
+ * another agent with a count of its own, so it is not added, as the daemon's
+ * figures do not add it.
+ */
 export function countTools(entries: readonly TranscriptEntry[]): number {
   return entries.reduce((sum, entry) => {
     if (entry.type === 'tools') {
       return sum + entry.pairs.length;
     }
+    if (entry.type === 'subagent-block' || entry.type === 'call-block') {
+      // Another agent's work, with a count of its own.
+      return sum;
+    }
     if (entry.type === 'item' || isCardEntry(entry)) {
-      // None of these cards holds tool invocations: the calls that produced
-      // them are hidden BY them, and counting those would report work with no
-      // row to open.
+      // A card hides the calls that produced it, so the loaded rows cannot
+      // show them; the daemon's figure counts them, and this reads low until
+      // it lands.
       return sum;
     }
     return sum + countTools(entry.entries);

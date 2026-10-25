@@ -1323,6 +1323,44 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * How many tool calls each delegate of one run made, up to `maxSeq`: the
+   * `tool_call` rows carrying its id as `parentToolUseId`, by that id. Grouped
+   * in SQLite for {@link toolUsage}'s reason.
+   *
+   * TWIN PARSER: `daemonSubagentReadings` in
+   * apps/ui/src/renderer/chats/durable-transcript.ts adds the delegate's rows
+   * above `maxSeq` by the same rule (`subagentIdOf`).
+   */
+  async delegateToolCallCounts(
+    runId: string,
+    maxSeq: number,
+    txEm?: EntityManager,
+  ): Promise<Map<string, number>> {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom((db) =>
+        db
+          .selectFrom('items')
+          .select((eb) =>
+            payloadField(eb, '$.parentToolUseId').as('delegate_id'),
+          )
+          .where('run_id', '=', runId)
+          .where('kind', '=', 'tool_call')
+          .where('deleted_at', 'is', null)
+          .where('seq', '<=', maxSeq)
+          .as('delegate_calls'),
+      )
+      .select((eb) => ['delegate_id', eb.fn.countAll<number>().as('calls')])
+      .where('delegate_id', 'is not', null)
+      .where('delegate_id', '!=', '')
+      .groupBy('delegate_id')
+      .execute();
+    return new Map(
+      rows.map((row) => [String(row.delegate_id), Number(row.calls)]),
+    );
+  }
+
+  /**
    * The seqs of one run's SUB-AGENT tool calls — `tool_call` rows carrying
    * `parentToolUseId` — up to `maxSeq`: what lets the payload-free spine tell
    * an agent's own calls from its delegates'. Only the seq crosses.

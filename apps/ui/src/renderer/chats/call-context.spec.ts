@@ -39,8 +39,13 @@ function live(
   };
 }
 
+/** One call as a spec states it: its listing entry and its figures together. */
+type CallEntry = NodeDurableReading['calls'][number] &
+  Partial<Omit<NodeDurableReading['callFigures'][number], 'callId'>>;
+
+/** The node reading the route would send for these calls, split as it does. */
 function reading(
-  calls: NodeDurableReading['calls'],
+  entries: readonly CallEntry[],
 ): ReadonlyMap<string, NodeDurableReading> {
   return new Map([
     [
@@ -50,7 +55,22 @@ function reading(
         contextEstimated: false,
         contextWindowTokens: null,
         model: null,
-        calls,
+        calls: entries.map(
+          ({
+            totals: _totals,
+            toolCalls: _toolCalls,
+            toolCallsThroughSeq: _through,
+            promptCacheExpiresAt: _expiry,
+            ...heavy
+          }) => heavy,
+        ),
+        callFigures: entries.map((entry) => ({
+          callId: entry.callId,
+          totals: entry.totals ?? NO_TOTALS,
+          toolCalls: entry.toolCalls ?? 0,
+          toolCallsThroughSeq: entry.toolCallsThroughSeq ?? null,
+          promptCacheExpiresAt: entry.promptCacheExpiresAt ?? null,
+        })),
         totals: NO_TOTALS,
         mainTotals: NO_TOTALS,
         workedMs: null,
@@ -336,12 +356,47 @@ describe('resolveConversationSpend', () => {
   });
 });
 
+describe('a call past the listing cap', () => {
+  it('still states its spend, tools and cache expiry from the uncapped figures', () => {
+    // The listing (`calls`) keeps only the newest calls; call-1 has aged out
+    // of it, and its figures must not age out with it.
+    const readings: ReadonlyMap<string, NodeDurableReading> = new Map([
+      [
+        'callee',
+        {
+          ...reading([]).get('callee')!,
+          calls: [],
+          callFigures: [
+            {
+              callId: 'call-1',
+              totals: totals({ turns: 2, costUsd: 9.5, outputTokens: 40 }),
+              toolCalls: 230,
+              toolCallsThroughSeq: 900,
+              promptCacheExpiresAt: '2026-10-25T12:00:00.000Z',
+            },
+          ],
+        },
+      ],
+    ]);
+    expect(resolveConversationSpend(readings, 'callee', ['call-1'])).toEqual({
+      tokens: 40,
+      costUsd: 9.5,
+    });
+    expect(
+      resolveConversationToolCalls(readings, 'callee', ['call-1'], new Map()),
+    ).toBe(230);
+    expect(resolveConversationCacheExpiry(readings, 'callee', ['call-1'])).toBe(
+      '2026-10-25T12:00:00.000Z',
+    );
+  });
+});
+
 describe('resolveConversationToolCalls', () => {
   const callReading = (
     callId: string,
     toolCalls: number,
     toolCallsThroughSeq: number | null,
-  ): NodeDurableReading['calls'][number] => ({
+  ): CallEntry => ({
     promptCacheExpiresAt: null,
     callId,
     contextTokens: null,
@@ -559,7 +614,7 @@ describe('resolveConversationCacheExpiry', () => {
   const call = (
     callId: string,
     promptCacheExpiresAt: string | null,
-  ): NodeDurableReading['calls'][number] => ({
+  ): CallEntry => ({
     callId,
     contextTokens: null,
     contextEstimated: false,

@@ -40,6 +40,7 @@ function stateOf(
         status,
         processEnded: false,
         launchSeq: 1,
+        toolCalls: 0,
         startedAt: launch.createdAt,
       },
     ],

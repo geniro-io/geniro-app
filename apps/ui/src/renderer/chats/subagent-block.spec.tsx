@@ -172,6 +172,19 @@ describe('SubagentBlock', () => {
       .querySelector('button[aria-expanded]')
       ?.getAttribute('aria-expanded');
 
+  it('draws the daemon’s whole-run tool count, not the loaded rows’', () => {
+    // No tool row of this delegate is loaded, so the figure on screen can only
+    // be the daemon's.
+    const block = {
+      ...makeBlock({ withResult: false }),
+      durableToolCalls: 412,
+    };
+    act(() => root.render(<TranscriptEntryView entry={block} />));
+    expect(
+      container.querySelector('[data-slot="subagent-meta-tools"]')?.textContent,
+    ).toBe('412');
+  });
+
   it('shows tracking loss and the possibility of continued work from the daemon outcome', () => {
     const block = {
       ...makeBlock({ withResult: false }),

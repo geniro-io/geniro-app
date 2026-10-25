@@ -1844,34 +1844,47 @@ export interface CallContextReading {
     contextWindowTokens: number | null;
     /**
      * 
-     * @type {ChatTotals}
+     * @type {CallStartReading}
      * @memberof CallContextReading
+     */
+    start: CallStartReading | null;
+}
+/**
+ * 
+ * @export
+ * @interface CallFigures
+ */
+export interface CallFigures {
+    /**
+     * 
+     * @type {string}
+     * @memberof CallFigures
+     */
+    callId: string;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof CallFigures
      */
     totals: ChatTotals;
     /**
      * The tools the node itself called inside this call, its CLI sub-agents' excluded, counted from the transcript as of toolCallsThroughSeq
      * @type {number}
-     * @memberof CallContextReading
+     * @memberof CallFigures
      */
     toolCalls: number;
     /**
      * 
      * @type {number}
-     * @memberof CallContextReading
+     * @memberof CallFigures
      */
     toolCallsThroughSeq: number | null;
     /**
      * 
      * @type {string}
-     * @memberof CallContextReading
+     * @memberof CallFigures
      */
     promptCacheExpiresAt: string | null;
-    /**
-     * 
-     * @type {CallStartReading}
-     * @memberof CallContextReading
-     */
-    start: CallStartReading | null;
 }
 /**
  * 
@@ -4569,6 +4582,12 @@ export interface NodeStateDto {
     calls: Array<CallContextReading>;
     /**
      * 
+     * @type {Array<CallFigures>}
+     * @memberof NodeStateDto
+     */
+    callFigures: Array<CallFigures>;
+    /**
+     * 
      * @type {ChatTotals}
      * @memberof NodeStateDto
      */
@@ -5507,6 +5526,12 @@ export interface RunDelegateState {
      * @memberof RunDelegateState
      */
     startedAt: string;
+    /**
+     * the tool calls this delegate made (rows carrying its id as parentToolUseId), over every row of the run up to the read's throughSeq
+     * @type {number}
+     * @memberof RunDelegateState
+     */
+    toolCalls: number;
 }
 
 

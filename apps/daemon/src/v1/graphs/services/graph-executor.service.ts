@@ -2331,7 +2331,7 @@ export class GraphExecutorService
       nodeId: string,
       callId: string,
     ): Pick<
-      NodeStateWire['calls'][number],
+      NodeStateWire['callFigures'][number],
       'toolCalls' | 'toolCallsThroughSeq'
     > => {
       const count = callTools.get(`${nodeId}\u0000${callId}`);
@@ -2340,6 +2340,35 @@ export class GraphExecutorService
         toolCallsThroughSeq: count?.lastSeq ?? null,
       };
     };
+    // Every call's FIGURES, never capped: the maps above already cover every
+    // call of the run, so only the heavy listing below is bounded.
+    const callNodes = new Map<string, string>();
+    for (const [callId, started] of starts) {
+      callNodes.set(callId, started.nodeId);
+    }
+    for (const [callId, spent] of callTotals) {
+      if (!callNodes.has(callId)) {
+        callNodes.set(callId, spent.nodeId);
+      }
+    }
+    for (const count of callTools.values()) {
+      if (!callNodes.has(count.callId)) {
+        callNodes.set(count.callId, count.nodeId);
+      }
+    }
+    const figuresByNode = new Map<string, NodeStateWire['callFigures']>();
+    for (const [callId, nodeId] of [...callNodes].sort(
+      ([a], [b]) => (callNumber(a) ?? 0) - (callNumber(b) ?? 0),
+    )) {
+      const forNode = figuresByNode.get(nodeId) ?? [];
+      forNode.push({
+        callId,
+        totals: callTotals.get(callId)?.totals ?? emptyTotals(),
+        ...toolsOf(nodeId, callId),
+        promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
+      });
+      figuresByNode.set(nodeId, forNode);
+    }
     const readings = await this.callContextDao.listByRun(runId, em);
     for (const call of readings) {
       pushCall(call.nodeId, {
@@ -2347,35 +2376,25 @@ export class GraphExecutorService
         contextTokens: call.contextTokens,
         contextEstimated: call.contextEstimated === true,
         contextWindowTokens: call.contextWindowTokens,
-        totals: callTotals.get(call.callId)?.totals ?? emptyTotals(),
-        ...toolsOf(call.nodeId, call.callId),
-        promptCacheExpiresAt: cacheExpiryOf(callCache.get(call.callId)),
         start: starts.get(call.callId)?.start ?? null,
       });
-      callTotals.delete(call.callId);
-      starts.delete(call.callId);
     }
-    // A call that has no `call_context` row — it spent without reporting a
-    // context reading, or has not reported anything yet — is still owed its
-    // spend and its start. Newest first and within the listing's own cap,
-    // which bounds what every re-read pays for.
-    const unread = [...new Set([...callTotals.keys(), ...starts.keys()])]
+    // A call that has no `call_context` row — it has not reported a context
+    // reading — is still owed its start. Newest first and within the listing's
+    // own cap, which bounds the briefs every re-read carries.
+    const read = new Set(readings.map((call) => call.callId));
+    const unread = [...callNodes.keys()]
+      .filter((callId) => !read.has(callId))
       .sort((a, b) => (callNumber(b) ?? 0) - (callNumber(a) ?? 0))
       .slice(0, Math.max(0, CALL_CONTEXT_SNAPSHOT_LIMIT - readings.length))
       .reverse();
     for (const callId of unread) {
-      const spent = callTotals.get(callId);
-      const started = starts.get(callId);
-      const nodeId = (spent?.nodeId ?? started?.nodeId)!;
-      pushCall(nodeId, {
+      pushCall(callNodes.get(callId)!, {
         callId,
         contextTokens: null,
         contextEstimated: false,
         contextWindowTokens: null,
-        totals: spent?.totals ?? emptyTotals(),
-        ...toolsOf(nodeId, callId),
-        promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
-        start: started?.start ?? null,
+        start: starts.get(callId)?.start ?? null,
       });
     }
     return rows.map((row) => ({
@@ -2387,6 +2406,7 @@ export class GraphExecutorService
       contextWindowTokens: row.contextWindowTokens,
       model: models.get(row.nodeId) ?? null,
       calls: callsByNode.get(row.nodeId) ?? [],
+      callFigures: figuresByNode.get(row.nodeId) ?? [],
       // A polled-spend node's turns carry no price; its polled bill stands for
       // them, beside whatever a self-pricing pool member's turns cost.
       totals: withNodePolledSpend(

@@ -124,10 +124,11 @@ import {
   liveCostOf,
   liveNodeCost,
   liveRunCost,
+  ownToolCallSeqsByCall,
   resolveConversationCacheExpiry,
   resolveConversationContext,
   resolveConversationSpend,
-  resolveNodeToolCalls,
+  resolveConversationToolCalls,
   spendOfTotals,
   spentOf,
   withLiveCost,
@@ -4777,6 +4778,10 @@ export function Chats({
     taskList: activeRun?.taskList,
     collapseToolSteps,
   });
+  const ownToolSeqs = useMemo(
+    () => ownToolCallSeqsByCall(transcriptRows),
+    [transcriptRows],
+  );
   const resolveCallReading = useCallback(
     (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
       ...resolveConversationContext(
@@ -4787,9 +4792,14 @@ export function Chats({
       ),
       spend: resolveConversationSpend(nodeReadings, calleeNodeId, callIds),
       liveCost: liveConversationCost(liveText, calleeNodeId, callIds),
-      toolCalls: resolveNodeToolCalls(nodeReadings, calleeNodeId),
+      toolCalls: resolveConversationToolCalls(
+        nodeReadings,
+        calleeNodeId,
+        callIds,
+        ownToolSeqs,
+      ),
     }),
-    [liveText, nodeReadings],
+    [liveText, nodeReadings, ownToolSeqs],
   );
   /**
    * The direct line to a running call's callee, past the agent that called it.

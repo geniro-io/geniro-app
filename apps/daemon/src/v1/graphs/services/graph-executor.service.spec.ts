@@ -48,6 +48,7 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import {
   ChatApprovalModeSchema,
   type HistoryWindow,
+  type OwnToolCallCount,
   type RunCreatedEvent,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
@@ -385,6 +386,36 @@ class FakeItemDao {
       payload: i.payload,
       createdAt: i.createdAt,
     }));
+  }
+  // `NO_CALL_INDEX` files every row in the run's own flow, so a row's call is
+  // the one its payload names; the real grouping is pinned in `item.dao.spec.ts`.
+  async ownToolCallsByCall(runId: string): Promise<OwnToolCallCount[]> {
+    const counts = new Map<string, OwnToolCallCount>();
+    for (const row of this.ofKinds(runId, ['tool_call'])) {
+      const payload = JSON.parse(row.payload) as {
+        callId?: unknown;
+        parentToolUseId?: unknown;
+      };
+      const callId = row.inCall || payload.callId;
+      if (
+        row.nodeId === null ||
+        typeof callId !== 'string' ||
+        payload.parentToolUseId != null
+      ) {
+        continue;
+      }
+      const key = `${row.nodeId}\u0000${callId}`;
+      const count = counts.get(key) ?? {
+        nodeId: row.nodeId,
+        callId,
+        calls: 0,
+        lastSeq: row.seq,
+      };
+      count.calls += 1;
+      count.lastSeq = Math.max(count.lastSeq, row.seq);
+      counts.set(key, count);
+    }
+    return [...counts.values()];
   }
   /** The call-seed read a follow-up folds — same shape rule as the two above. */
   async callRecordRows(
@@ -12943,7 +12974,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
     // LEVEL, so the newest one is the whole truth and `rememberContext`
     // replaces. These are TOTALS — a callee called twice has worked the sum of
     // both turns, and a writer that replaced would report only the second.
-    const { service, claude, callBroker, nodeDao } = setup();
+    const { service, claude, callBroker, nodeDao, itemDao } = setup();
     const run = await service.startRun({
       slug: 'work',
       workflow: triggered(CALL_WORKFLOW),
@@ -13000,6 +13031,118 @@ describe('GraphExecutorService — a node’s context reading', () => {
       workedMs: 12_000,
       toolCalls: 3,
     });
+    // The nodes route states each CALL's own share, which a call card draws:
+    // the node total above speaks for every call the node answered.
+    const calls = (await service.getNodeStates(run.id)).find(
+      (n) => n.nodeId === 'callee',
+    )?.calls;
+    const toolSeq = (id: string): number =>
+      itemDao.items.find(
+        (row) =>
+          row.kind === 'tool_call' &&
+          (JSON.parse(row.payload) as { id?: string }).id === id,
+      )!.seq;
+    expect(
+      calls?.map(({ callId, toolCalls, toolCallsThroughSeq }) => ({
+        callId,
+        toolCalls,
+        toolCallsThroughSeq,
+      })),
+    ).toEqual([
+      { callId: 'call-1', toolCalls: 2, toolCallsThroughSeq: toolSeq('t2') },
+      { callId: 'call-2', toolCalls: 1, toolCallsThroughSeq: toolSeq('t4') },
+    ]);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('counts a running call’s tools before it has reported any context reading', async () => {
+    // A call with no `call_context` row yet is listed from its start row, and
+    // still states what it has called so far.
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'work',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    const running = claude.starts[1]!;
+    running.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+    running.emit({ type: 'tool_call', id: 't2', name: 'Read', input: {} });
+    await drain();
+
+    const lastSeq = Math.max(
+      ...itemDao.items
+        .filter((row) => row.kind === 'tool_call')
+        .map((row) => row.seq),
+    );
+    expect(
+      (await service.getNodeStates(run.id)).find((n) => n.nodeId === 'callee')
+        ?.calls,
+    ).toEqual([
+      expect.objectContaining({
+        callId: 'call-1',
+        contextTokens: null,
+        toolCalls: 2,
+        toolCallsThroughSeq: lastSeq,
+      }),
+    ]);
+
+    completeTurn(running, 'one done');
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('adds a turn’s tools to the node total when the turn ends in an error or is cancelled', async () => {
+    // A failed or stopped turn still called its tools.
+    const { service, claude, callBroker, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'work',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    const failing = claude.starts[1]!;
+    failing.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+    failing.emit({ type: 'tool_call', id: 't2', name: 'Read', input: {} });
+    failing.emit({ type: 'error', message: 'model overloaded' });
+    failing.finish();
+    await drain();
+
+    expect(nodeDao.row(run.id, 'callee')?.toolCalls).toBe(2);
+
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'two',
+      mode: 'async',
+    });
+    await drain();
+    const cancelled = claude.starts[2]!;
+    cancelled.emit({ type: 'tool_call', id: 't3', name: 'Bash', input: {} });
+    cancelled.emit({ type: 'turn_cancelled' });
+    cancelled.finish();
+    await drain();
+
+    expect(nodeDao.row(run.id, 'callee')?.toolCalls).toBe(3);
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
@@ -13381,6 +13524,8 @@ describe('GraphExecutorService — a node’s context reading', () => {
         contextEstimated: false,
         contextWindowTokens: null,
         totals: expect.objectContaining({ turns: 0, costUsd: null }),
+        toolCalls: 0,
+        toolCallsThroughSeq: null,
         // No turn has ended yet, so there is no cache to lapse.
         promptCacheExpiresAt: null,
         // The start row's own words, for a client whose window opens after it.

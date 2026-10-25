@@ -1849,6 +1849,18 @@ export interface CallContextReading {
      */
     totals: ChatTotals;
     /**
+     * The tools the node itself called inside this call, its CLI sub-agents' excluded, counted from the transcript as of toolCallsThroughSeq
+     * @type {number}
+     * @memberof CallContextReading
+     */
+    toolCalls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallContextReading
+     */
+    toolCallsThroughSeq: number | null;
+    /**
      * 
      * @type {string}
      * @memberof CallContextReading

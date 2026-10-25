@@ -1495,6 +1495,73 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
+  it('counts each agent’s own tool calls per call, with the newest counted seq', async () => {
+    const call = (
+      seq: number,
+      nodeId: string,
+      inCall: string | null,
+      payload: Record<string, unknown> | string = { name: 'Bash' },
+    ) =>
+      dao.create({
+        runId: 'run-a',
+        seq,
+        kind: 'tool_call',
+        nodeId,
+        inCall,
+        payload:
+          typeof payload === 'string' ? payload : JSON.stringify(payload),
+      });
+    await call(1, 'qa', 'call-1');
+    await call(2, 'qa', 'call-1', 'not json');
+    // A sub-agent's call inside the same call is not the agent's own; an empty
+    // id names no sub-agent, as the renderer's `subagentIdOf` reads it.
+    await call(3, 'qa', 'call-1', { name: 'Bash', parentToolUseId: 'toolu_x' });
+    await call(9, 'qa', 'call-1', { name: 'Bash', parentToolUseId: '' });
+    // A deleted row, and one no agent owns.
+    const deleted = await call(10, 'qa', 'call-1');
+    await orm.em
+      .fork()
+      .createQueryBuilder(Item)
+      .update({ deletedAt: new Date() })
+      .where({ id: deleted.id })
+      .execute();
+    await dao.create({
+      runId: 'run-a',
+      seq: 11,
+      kind: 'tool_call',
+      nodeId: null,
+      inCall: 'call-1',
+      payload: JSON.stringify({ name: 'Bash' }),
+    });
+    await call(4, 'qa', 'call-2');
+    // Another agent answering a call of the same id is counted apart.
+    await call(5, 'eng', 'call-2');
+    // The run's own flow, and a row not stamped with its call yet.
+    await call(6, 'qa', '');
+    await call(7, 'qa', null);
+    await dao.create({
+      runId: 'other-run',
+      seq: 8,
+      kind: 'tool_call',
+      nodeId: 'qa',
+      inCall: 'call-1',
+      payload: JSON.stringify({ name: 'Bash' }),
+    });
+
+    const counts = await dao.ownToolCallsByCall('run-a');
+
+    expect(
+      counts.sort(
+        (a, b) =>
+          a.callId.localeCompare(b.callId) || a.nodeId.localeCompare(b.nodeId),
+      ),
+    ).toEqual([
+      { nodeId: 'qa', callId: 'call-1', calls: 3, lastSeq: 9 },
+      { nodeId: 'eng', callId: 'call-2', calls: 1, lastSeq: 5 },
+      { nodeId: 'qa', callId: 'call-2', calls: 1, lastSeq: 4 },
+    ]);
+  });
+
   describe('rowsByPayloadId', () => {
     it('reads past a row whose payload is not JSON', async () => {
       await insert('run-ids', 1, 'tool_call', 'not json');

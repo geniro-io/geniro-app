@@ -129,6 +129,8 @@ describe('useNodeDurableReadings', () => {
           contextEstimated: false,
           contextWindowTokens: 200_000,
           totals: NO_TOTALS,
+          toolCalls: 0,
+          toolCallsThroughSeq: null,
           start: null,
         },
         {
@@ -138,6 +140,8 @@ describe('useNodeDurableReadings', () => {
           contextEstimated: false,
           contextWindowTokens: 200_000,
           totals: NO_TOTALS,
+          toolCalls: 141,
+          toolCallsThroughSeq: 640,
           start: null,
         },
       ]),
@@ -155,6 +159,8 @@ describe('useNodeDurableReadings', () => {
         contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        toolCalls: 0,
+        toolCallsThroughSeq: null,
         start: null,
         promptCacheExpiresAt: null,
       },
@@ -164,6 +170,9 @@ describe('useNodeDurableReadings', () => {
         contextEstimated: false,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        // The conversation's own tool count, which its call card draws.
+        toolCalls: 141,
+        toolCallsThroughSeq: 640,
         start: null,
         // When this call's cache lapses — what its instance row counts down to.
         promptCacheExpiresAt: '2026-10-11T11:00:00.000Z',

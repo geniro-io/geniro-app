@@ -2318,6 +2318,28 @@ export class GraphExecutorService
       forNode.push(call);
       callsByNode.set(nodeId, forNode);
     };
+    // Each call's own tools, keyed by call and the node that ran it — counted
+    // by `in_call`, so the run's rows are stamped first.
+    await this.calls.ensureIndexed(runId);
+    const callTools = new Map(
+      (await this.itemDao.ownToolCallsByCall(runId, em)).map((count) => [
+        `${count.nodeId}\u0000${count.callId}`,
+        count,
+      ]),
+    );
+    const toolsOf = (
+      nodeId: string,
+      callId: string,
+    ): Pick<
+      NodeStateWire['calls'][number],
+      'toolCalls' | 'toolCallsThroughSeq'
+    > => {
+      const count = callTools.get(`${nodeId}\u0000${callId}`);
+      return {
+        toolCalls: count?.calls ?? 0,
+        toolCallsThroughSeq: count?.lastSeq ?? null,
+      };
+    };
     const readings = await this.callContextDao.listByRun(runId, em);
     for (const call of readings) {
       pushCall(call.nodeId, {
@@ -2326,6 +2348,7 @@ export class GraphExecutorService
         contextEstimated: call.contextEstimated === true,
         contextWindowTokens: call.contextWindowTokens,
         totals: callTotals.get(call.callId)?.totals ?? emptyTotals(),
+        ...toolsOf(call.nodeId, call.callId),
         promptCacheExpiresAt: cacheExpiryOf(callCache.get(call.callId)),
         start: starts.get(call.callId)?.start ?? null,
       });
@@ -2343,12 +2366,14 @@ export class GraphExecutorService
     for (const callId of unread) {
       const spent = callTotals.get(callId);
       const started = starts.get(callId);
-      pushCall((spent?.nodeId ?? started?.nodeId)!, {
+      const nodeId = (spent?.nodeId ?? started?.nodeId)!;
+      pushCall(nodeId, {
         callId,
         contextTokens: null,
         contextEstimated: false,
         contextWindowTokens: null,
         totals: spent?.totals ?? emptyTotals(),
+        ...toolsOf(nodeId, callId),
         promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
         start: started?.start ?? null,
       });
@@ -3966,16 +3991,12 @@ export class GraphExecutorService
       const endedAs = (): NodeOutcome =>
         outcome ?? (cancelRequested ? 'cancelled' : 'completed');
       /**
-       * Tool calls seen since the last `turn_complete`, counted here because no
+       * Tool calls not yet added to the node's total, counted here because no
        * CLI reports a total and the transcript a client loads is windowed.
        *
-       * Today this closure is built per TURN, so it starts at zero anyway and
-       * the zeroing below is unobservable — verified by mutation: removing it
-       * changes no test. It stays because the durable write ADDS, so the day a
-       * closure serves two turns (a kept session driving them, as the ACP
-       * transport already does for its own state) an un-zeroed counter would
-       * contribute the first turn's tools again on the second settle, and the
-       * figure would silently overcount rather than fail.
+       * The `turn_complete` write zeroes it in the same breath: the durable
+       * write ADDS, and `finish` adds whatever is left, so a count left
+       * standing would be added twice.
        */
       let toolCalls = 0;
       // Never zeroed, unlike the counter above: whether the turn ACTED at all,
@@ -5106,6 +5127,22 @@ export class GraphExecutorService
         // or will be by a line this key no longer answers for — so the live
         // figure comes down with the turn, never to be added twice.
         this.partials.retireCost(runId, ownerKey, node.id);
+        // A turn that failed, was stopped, or exited with no terminal at all
+        // still called its tools; only `turn_complete` adds them earlier. No
+        // usage came with them, so the time stays unmeasured.
+        if (toolCalls > 0) {
+          const leftToolCalls = toolCalls;
+          toolCalls = 0;
+          enqueue(() =>
+            this.nodeStateDao
+              .rememberWork(runId, node.id, null, leftToolCalls, em)
+              .catch((err: unknown) => {
+                this.logger.warn(
+                  `run ${runId}: could not add ${leftToolCalls} tool calls to ${node.id}'s total: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }),
+          );
+        }
         // A clean exit with no result line still completes the node — the
         // synthetic-completion mirror of the chat turn's finalizer.
         const finalOutcome = endedAs();

@@ -1804,19 +1804,18 @@ describe('CallBlock', () => {
       expect(tokens?.textContent).toBe('≈900 / 200k');
     });
 
-    it('counts every tool the AGENT ran, not the ones in this call’s rows', () => {
-      // The same reasoning as the spend above, one figure over: an agent asked
-      // again and again holds one conversation, and the fold can only count
-      // the rows of the latest call that are still in the loaded window. This
-      // block carries no tool rows at all, so a count on screen can only have
-      // come from the daemon's own running total.
+    it('draws the conversation’s tool count from the resolver, not the window’s rows', () => {
+      // The same reasoning as the spend above, one figure over: the fold can
+      // only count the rows still in the loaded window. This block carries no
+      // tool rows at all, so a count on screen can only have come from the
+      // resolver — and the title says whose count it is.
       act(() =>
         root.render(
           <CalleeContextResolverContext.Provider
             value={() => ({
               contextTokens: null,
               contextWindowTokens: null,
-              toolCalls: 2_543,
+              toolCalls: 141,
             })}>
             <CallBlock block={makeBlock()} nodes={NODES} />
           </CalleeContextResolverContext.Provider>,
@@ -1825,7 +1824,10 @@ describe('CallBlock', () => {
       expand();
 
       const footer = container.querySelector('[data-slot="block-footer"]')!;
-      expect(footer.textContent).toContain('2543 tools');
+      expect(footer.textContent).toContain('141 tools');
+      expect(
+        footer.querySelector('[title*="in this conversation"]'),
+      ).not.toBeNull();
     });
 
     it('asks the resolver about the WHOLE conversation, not the drawn calls', () => {

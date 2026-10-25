@@ -842,6 +842,19 @@ export const NodeStateWireSchema = z.object({
         contextWindowTokens: z.number().nullable(),
         /** What this call's own turns spent, over the whole run. */
         totals: ChatTotalsWireSchema,
+        toolCalls: z
+          .number()
+          .int()
+          .describe(
+            "The tools the node itself called inside this call, its CLI sub-agents' excluded, counted from the transcript as of toolCallsThroughSeq",
+          ),
+        toolCallsThroughSeq: z
+          .number()
+          .int()
+          .nullable()
+          .describe(
+            'The seq of the newest tool call counted in toolCalls; a later tool_call row of this call is not in it. Null when none was counted',
+          ),
         /**
          * When this call's prompt cache lapses (ISO): the end of its newest
          * turn plus the lifetime its CLI reported. Null when its CLI reports

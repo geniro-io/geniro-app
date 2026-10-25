@@ -489,14 +489,8 @@ export const CallBlock = memo(function CallBlock({
     live?.liveCost ?? null,
   );
   /**
-   * Every tool this AGENT has run, on the same rule and for the same reason —
-   * the daemon's running count over the fold.
-   *
-   * The fold is what a reader was shown before, and it answered a narrower
-   * question than the one the card asks: it counted the tools of the LATEST
-   * call that are inside the loaded window, beside a context ring and a cost
-   * that both speak for the whole conversation. REPORTED as "I see 35 tools,
-   * though there are really more — one agent was run several times".
+   * Every tool the callee ran in this CONVERSATION, on the same rule — the
+   * daemon's per-call counts over the fold, which holds only the loaded window.
    */
   const toolCount = live?.toolCalls ?? countTools(block.entries);
   const context = {
@@ -839,7 +833,7 @@ export const CallBlock = memo(function CallBlock({
           {...(live?.toolCalls == null
             ? {}
             : {
-                countTitle: `Every tool ${callee} has run in this workflow, not just in this call`,
+                countTitle: `Every tool ${callee} has run in this conversation, its sub-agents' not included`,
               })}
           action={
             // Only when there is a button to draw: an element the button

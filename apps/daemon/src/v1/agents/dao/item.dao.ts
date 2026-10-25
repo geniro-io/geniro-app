@@ -8,6 +8,7 @@ import type { ItemKind } from '../../runs/runs.types';
 import type {
   ChatTextDatabase,
   HistoryWindow,
+  OwnToolCallCount,
   RunPreview,
   SeqRange,
   ToolCallTime,
@@ -1271,6 +1272,53 @@ export class ItemDao extends BaseDao<Item> {
       toolKind: row.tool_kind === null ? null : String(row.tool_kind),
       delegate: Boolean(row.delegate),
       calls: Number(row.calls),
+    }));
+  }
+
+  /**
+   * How many tools each agent called inside each CALL of one run, its own only
+   * (no `parentToolUseId`), with the newest such row's seq — the count is as
+   * of that row, so a reader adds only the rows above it. Grouped in SQLite
+   * for {@link toolUsage}'s reason. A row not yet stamped with its call
+   * (`in_call` NULL) is not counted; callers run `ensureIndexed` first.
+   *
+   * TWIN PARSER: `ownToolCallSeqsByCall` in
+   * apps/ui/src/renderer/chats/call-context.ts picks the rows above that seq
+   * by the same rule, so the two must agree on which rows count.
+   */
+  async ownToolCallsByCall(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<OwnToolCallCount[]> {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => [
+        'node_id',
+        'in_call',
+        eb.fn.countAll<number>().as('calls'),
+        eb.fn.max('seq').as('last_seq'),
+      ])
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'tool_call')
+      .where('deleted_at', 'is', null)
+      .where('node_id', 'is not', null)
+      .where('in_call', 'is not', null)
+      .where('in_call', '!=', '')
+      // An empty `parentToolUseId` names no delegate (`subagentIdOf`).
+      .where(
+        (eb) =>
+          eb.fn.coalesce(payloadField(eb, '$.parentToolUseId'), eb.val('')),
+        '=',
+        '',
+      )
+      .groupBy(['node_id', 'in_call'])
+      .execute();
+    return rows.map((row) => ({
+      nodeId: String(row.node_id),
+      callId: String(row.in_call),
+      calls: Number(row.calls),
+      lastSeq: Number(row.last_seq),
     }));
   }
 

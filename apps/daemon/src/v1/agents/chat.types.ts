@@ -712,6 +712,15 @@ export interface ToolCallTime {
   isError: boolean;
 }
 
+/** One agent's own tool calls inside one call — `ItemDao.ownToolCallsByCall`. */
+export interface OwnToolCallCount {
+  nodeId: string;
+  callId: string;
+  calls: number;
+  /** The newest counted row's seq. */
+  lastSeq: number;
+}
+
 /** A tool call and how long it took to be answered. */
 export interface ToolSpan {
   seq: number;

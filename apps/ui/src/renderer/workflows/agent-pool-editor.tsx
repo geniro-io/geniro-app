@@ -244,19 +244,19 @@ function PoolMemberRow({
     configDir,
     member.model ?? null,
   );
-  const { efforts } = useAgentEfforts(
+  const { efforts, loading: effortsLoading } = useAgentEfforts(
     agentsApi,
     member.agent,
     member.model ?? null,
     configDir,
   );
-  const { windows } = useAgentContextWindows(
+  const { windows, loading: windowsLoading } = useAgentContextWindows(
     agentsApi,
     member.agent,
     member.model ?? null,
     configDir,
   );
-  const { parameters } = useAgentModelParameters(
+  const { parameters, loading: parametersLoading } = useAgentModelParameters(
     agentsApi,
     member.agent,
     member.model ?? null,
@@ -417,6 +417,7 @@ function PoolMemberRow({
         efforts={efforts}
         windows={windows}
         parameters={parameters}
+        loading={effortsLoading || windowsLoading || parametersLoading}
         value={member}
         onPatch={(patch) => onChange({ ...member, ...patch })}
         afterContext={

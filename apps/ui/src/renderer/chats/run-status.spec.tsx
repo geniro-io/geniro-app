@@ -280,6 +280,7 @@ describe('isSettledRunStatus', () => {
   ];
   const unsettled: RunStatusKind[] = [
     'pending',
+    'queued',
     'running',
     'held',
     'needs-input',

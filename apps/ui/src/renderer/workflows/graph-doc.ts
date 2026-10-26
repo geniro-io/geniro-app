@@ -138,8 +138,14 @@ export function droppedEdgesNotice(
     : `Removed ${dropped.length} wires to nodes this workflow does not have (${wires}) — the next save writes the file without them.`;
 }
 
+/** The workflow-level fields the meta form edits, as a save writes them. */
+export type WorkflowMeta = Pick<
+  Workflow,
+  'name' | 'description' | 'maxActiveTurns'
+>;
+
 export function fromFlow(
-  meta: { name: string; description?: string },
+  meta: WorkflowMeta,
   nodes: readonly GraphFlowNode[],
   edges: readonly Edge[],
 ): Workflow {
@@ -153,6 +159,9 @@ export function fromFlow(
   return {
     name: meta.name,
     ...(meta.description ? { description: meta.description } : {}),
+    ...(meta.maxActiveTurns !== undefined
+      ? { maxActiveTurns: meta.maxActiveTurns }
+      : {}),
     nodes: nodes.map((n): WorkflowNode => n.data.node),
     edges: edges.map((e) => ({
       from: e.source,
@@ -174,6 +183,9 @@ export function fromFlow(
 export function canvasSnapshot(
   name: string,
   description: string,
+  /** Required, not optional: a caller leaving it out would read every saved
+   *  cap as an unsaved change, and autosave would write in a loop. */
+  maxActiveTurns: number | undefined,
   nodes: readonly GraphFlowNode[],
   edges: readonly Edge[],
 ): string {
@@ -183,6 +195,7 @@ export function canvasSnapshot(
       {
         name: name.trim() || 'workflow',
         ...(trimmed ? { description: trimmed } : {}),
+        ...(maxActiveTurns !== undefined ? { maxActiveTurns } : {}),
       },
       nodes,
       edges,

@@ -175,3 +175,27 @@ describe('WorkflowAgentNode.mcpDisabled', () => {
     expect(parseWith([...many, 'one-more']).success).toBe(false);
   });
 });
+
+describe('Workflow.maxActiveTurns', () => {
+  const parseWith = (
+    maxActiveTurns: unknown,
+  ): ReturnType<typeof WorkflowSchema.safeParse> =>
+    WorkflowSchema.safeParse({
+      name: 'n',
+      nodes: [],
+      edges: [],
+      maxActiveTurns,
+    });
+
+  it('accepts a whole number of one or more, and its absence', () => {
+    expect(parseWith(1).success).toBe(true);
+    expect(parseWith(64).success).toBe(true);
+    expect(parseWith(undefined).success).toBe(true);
+  });
+
+  it('refuses zero, a negative and a fraction', () => {
+    expect(parseWith(0).success).toBe(false);
+    expect(parseWith(-2).success).toBe(false);
+    expect(parseWith(2.5).success).toBe(false);
+  });
+});

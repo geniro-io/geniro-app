@@ -105,7 +105,8 @@ export function useDurableTranscript({
   runId: string | null;
   taskList: RunDto['taskList'] | undefined;
   collapseToolSteps: boolean;
-  delegateState?: Pick<RunStateDto, 'throughSeq' | 'delegates'>;
+  delegateState?: Pick<RunStateDto, 'throughSeq' | 'delegates'> &
+    Partial<Pick<RunStateDto, 'calls'>>;
 }): {
   foldItems: readonly ChatItem[];
   anchorIds: ReadonlySet<string>;
@@ -143,11 +144,92 @@ export function useDurableTranscript({
     [delegateState, foldItems],
   );
   const readings = useMemo(() => readingsOfKey(readingsKey), [readingsKey]);
-  const entries = useMemo(
+  const read = useMemo(
     () => applyDaemonReadings(base, readings),
     [base, readings],
   );
+  // Keyed like the readings: which calls the daemon says have started, and
+  // through which row it read.
+  const startedKey =
+    delegateState?.calls === undefined
+      ? ''
+      : startedCallsKeyOf(delegateState.calls, delegateState.throughSeq);
+  const entries = useMemo(
+    () => withDaemonStartedCalls(read, startedCallsOfKey(startedKey)),
+    [read, startedKey],
+  );
   return { foldItems, anchorIds, entries };
+}
+
+/** The calls the daemon reads as started — out and no longer queued. */
+function startedCallsKeyOf(
+  calls: RunStateDto['calls'],
+  throughSeq: RunStateDto['throughSeq'],
+): string {
+  return JSON.stringify([
+    throughSeq,
+    calls
+      .filter((call) => call.endedAt === null && !call.queued)
+      .map((call) => call.callId),
+  ]);
+}
+
+function startedCallsOfKey(key: string): StartedCalls | null {
+  if (key === '') {
+    return null;
+  }
+  const [throughSeq, ids] = JSON.parse(key) as [number | null, string[]];
+  return throughSeq === null ? null : { throughSeq, ids: new Set(ids) };
+}
+
+interface StartedCalls {
+  throughSeq: number;
+  ids: ReadonlySet<string>;
+}
+
+/**
+ * A card the window still reads as QUEUED whose call the daemon says has
+ * started — off the tail the window never takes the call's first status row.
+ * Only a read that covered the queued row counts: an older one knew nothing of
+ * the wait, so its "not queued" says nothing.
+ */
+export function withDaemonStartedCalls(
+  entries: TranscriptEntry[],
+  started: StartedCalls | null,
+): TranscriptEntry[] {
+  if (started === null || started.ids.size === 0) {
+    return entries;
+  }
+  const applyAll = (list: TranscriptEntry[]): TranscriptEntry[] => {
+    let changed = false;
+    const next = list.map((entry) => {
+      const applied = apply(entry);
+      changed ||= applied !== entry;
+      return applied;
+    });
+    return changed ? next : list;
+  };
+  const apply = (entry: TranscriptEntry): TranscriptEntry => {
+    if (
+      entry.type !== 'call-block' &&
+      entry.type !== 'turn-block' &&
+      entry.type !== 'subagent-block'
+    ) {
+      return entry;
+    }
+    const inner = applyAll(entry.entries);
+    if (
+      entry.type === 'call-block' &&
+      entry.queuedSeq !== undefined &&
+      entry.queuedSeq <= started.throughSeq &&
+      started.ids.has(entry.callId)
+    ) {
+      const { queued: _queued, queuedSeq: _queuedSeq, ...rest } = entry;
+      return { ...rest, entries: inner };
+    }
+    return inner === entry.entries ? entry : { ...entry, entries: inner };
+  };
+  return applyAll(entries);
 }
 
 /**

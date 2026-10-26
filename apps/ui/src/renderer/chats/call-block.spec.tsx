@@ -756,6 +756,97 @@ describe('CallBlock', () => {
     ).toBeNull();
   });
 
+  it('reads a call waiting under the run’s active-turn cap as QUEUED, until its turn starts', () => {
+    // `call_started` lands before the call has room to start; the daemon then
+    // writes one `queuedCall` row.
+    const queued = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          severity: 'info',
+          queuedCall: { cap: 2 },
+          message:
+            'Queued — 2 agent turn(s) of this run are already working, at its cap of 2.',
+        },
+        'poet',
+      ),
+    ];
+    expect(blockOf(queued)).toMatchObject({ status: 'pending', queued: true });
+    act(() => root.render(<CallBlock block={blockOf(queued)} nodes={NODES} />));
+    expect(
+      container.querySelector('[data-slot="block-status-badge"]')?.textContent,
+    ).toBe('queued');
+
+    const started = [
+      ...queued,
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ];
+    expect(blockOf(started).queued).toBeUndefined();
+    act(() =>
+      root.render(<CallBlock block={blockOf(started)} nodes={NODES} />),
+    );
+    expect(
+      container.querySelector('[data-slot="block-status-badge"]'),
+    ).toBeNull();
+  });
+
+  it('reads a continued conversation as queued while its newest call waits, the earlier one settled', () => {
+    const block = blockOf([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'call_started',
+        {
+          callId: 'call-2',
+          calleeNodeId: 'poet',
+          message: 'Again.',
+          thread: 'call-1',
+        },
+        'orch',
+      ),
+      item(
+        'system',
+        { callId: 'call-2', severity: 'info', queuedCall: { cap: 1 } },
+        'poet',
+      ),
+    ]);
+    expect(block.callIds).toEqual(['call-1', 'call-2']);
+    expect(block).toMatchObject({ status: 'pending', queued: true });
+  });
+
+  it('reads a call that never waited as running, not queued, before its first row', () => {
+    const block = blockOf([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+    ]);
+    expect(block.queued).toBeUndefined();
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    expect(
+      container.querySelector('[data-slot="block-status-badge"]'),
+    ).toBeNull();
+  });
+
   it('counts DOWN as the calls a held call waits for finish, drawing nothing for the update', () => {
     const held = [
       item(

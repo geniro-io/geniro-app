@@ -235,7 +235,7 @@ import {
   type TurnCacheClock,
 } from '../utils/prompt-cache-standing';
 import { resetWakePrompt } from '../utils/reset-wake-prompt';
-import { createTurnSemaphore } from '../utils/turn-semaphore';
+import { createTurnSemaphore, type TurnSlot } from '../utils/turn-semaphore';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import { CallBroker } from './call-broker.service';
 import { RunWorkflowService } from './run-workflow.service';
@@ -790,16 +790,17 @@ export class GraphExecutorService
   }
 
   /**
-   * The size of EACH of a run's two concurrency pools, defaulting to what the
-   * machine affords ({@link MAX_PARALLEL_AGENTS}).
+   * The size of the run's DAG-node pool and the ceiling of its active-turn
+   * cap, defaulting to what the machine affords ({@link MAX_PARALLEL_AGENTS}).
    *
    * - DAG nodes: a wide level would otherwise spawn every ready node at once.
    *   Ready nodes past the cap stay queued, and each settling node re-enters
    *   schedule(), which launches them as slots free up.
-   * - Callee sub-turns: a pool SEPARATE from the nodes', because a sync caller
-   *   keeps its node slot while blocked on its callee, so one shared pool
-   *   would deadlock a full level of sync callers (every slot held by a
-   *   caller, none left for their callees).
+   * - Callee turns: a gate SEPARATE from the nodes' pool (`activeTurns`, at
+   *   most `Workflow.maxActiveTurns`), because a sync caller keeps its node
+   *   slot while blocked on its callee, so one shared pool would deadlock a
+   *   full level of sync callers (every slot held by a caller, none left for
+   *   their callees).
    *
    * A constructor argument purely as a TEST SEAM, on
    * `AgentSessionRegistry`'s `ceiling` terms: the specs pin a width so a
@@ -2741,11 +2742,11 @@ export class GraphExecutorService
     >();
     /**
      * Calls between two turns of a hold (`CallBroker.holdCall`), by call id:
-     * held, or woken and waiting for a sub-turn slot. Neither has a sub-turn,
-     * so this is what a message addressed to one is checked against — the
-     * node the callee ran as — and where one arriving after the wake but
-     * before its turn starts waits to be added to that turn's prompt. Whether
-     * the call is still HELD is the broker's to say.
+     * held, or woken and not started yet. Neither has a sub-turn, so this is
+     * what a message addressed to one is checked against — the node the callee
+     * ran as — and where one arriving after the wake but before its turn
+     * starts waits to be added to that turn's prompt. Whether the call is
+     * still HELD is the broker's to say.
      */
     const waitingCalls = new Map<
       string,
@@ -2863,11 +2864,12 @@ export class GraphExecutorService
     /**
      * Calls a CALLER asked to stop (`cancel_agent`), by call id.
      *
-     * A mark rather than only a `handle.cancel()`, because at depth 1 the
-     * commonest call worth cancelling has no handle yet: it is queued on the
-     * sub-turn slot pool, which a fan-out of five keeps full. `launchCalleeTurn`
-     * reads this at the two points it already reads the run's own cancel, so
-     * such a call settles `cancelled` without ever spawning a process.
+     * A mark rather than only a `handle.cancel()`, because the commonest call
+     * worth cancelling has no handle yet: it is queued under the run's
+     * active-turn cap, which a fan-out keeps full. `launchCalleeTurn` reads
+     * this at the points it already reads the run's own cancel, and the cancel
+     * also takes the call out of the queue (`queuedStarts`), so such a call
+     * settles `cancelled` at once without ever spawning a process.
      *
      * Bounded by the per-run turn cap and freed with the run's closure.
      */
@@ -2965,7 +2967,47 @@ export class GraphExecutorService
      * running inside it after the second has taken the next turn.
      */
     const callsBySessionKey = new Map<string, Set<string>>();
-    const subTurnSlots = createTurnSemaphore(this.parallelism);
+    /**
+     * The run's cap on callee turns working at once (`Workflow.maxActiveTurns`,
+     * never above this machine's ceiling), at every call depth. Only a FRESH
+     * turn waits for room; see `utils/turn-semaphore.ts` for why a blocked
+     * turn stops counting and a resumed one or a wake never queues.
+     */
+    const turnCap = Math.min(
+      workflow.maxActiveTurns ?? this.parallelism,
+      this.parallelism,
+    );
+    const activeTurns = createTurnSemaphore(turnCap);
+    /** Each counted callee turn's slot, by the conversation it speaks in. */
+    const turnSlots = new Map<string, TurnSlot>();
+    /**
+     * Conversations the broker reports BLOCKED (`RunCallCapability.turnBlocked`)
+     * — kept so a slot taken while its conversation is blocked starts blocked.
+     */
+    const blockedConversations = new Set<string>();
+    /** The way out of the queue for each call waiting to start, by call id. */
+    const queuedStarts = new Map<string, AbortController>();
+    const holdTurnSlot = (caller: string, slot: TurnSlot): void => {
+      turnSlots.set(caller, slot);
+      if (blockedConversations.has(caller)) {
+        slot.block();
+      }
+    };
+    const dropTurnSlot = (caller: string, slot: TurnSlot): void => {
+      slot.release();
+      if (turnSlots.get(caller) === slot) {
+        turnSlots.delete(caller);
+      }
+    };
+    const noteTurnBlocked = (caller: string, blocked: boolean): void => {
+      if (blocked) {
+        blockedConversations.add(caller);
+        turnSlots.get(caller)?.block();
+      } else {
+        blockedConversations.delete(caller);
+        turnSlots.get(caller)?.unblock();
+      }
+    };
     let liveSubTurns = 0;
     const calleeTurnCounts = new Map<string, number>();
     // Live turns per node id — the approval sweep must wait for a node's LAST
@@ -3256,6 +3298,9 @@ export class GraphExecutorService
           }
           for (const { handle } of subTurns.values()) {
             handle.cancel();
+          }
+          for (const queued of queuedStarts.values()) {
+            queued.abort();
           }
           for (const handle of continuationHandles.values()) {
             handle.cancel();
@@ -5998,20 +6043,17 @@ export class GraphExecutorService
      * the write chain — a sync caller's envelope must not outrun the items it
      * summarizes.
      *
-     * Only depth-1 turns (a top-level caller's callee) draw from the sub-turn
-     * slot pool: a nested (depth ≥ 2) sync caller holds a slot while blocked
-     * on its own callee, so bounding deeper turns too would let a legal
-     * fan-out hold every slot and deadlock the run. The depth cap (3) and the
-     * per-run turn cap (50) bound the deeper turns instead.
+     * Every turn, at any depth, is counted against the run's active-turn cap
+     * (`activeTurns`) while it works. A fresh one waits for room; a `wake`
+     * starts at once, as does a held call's wake below.
      */
     const launchCalleeTurn = async (
       callee: WorkflowAgentNode,
       message: string,
       callId: string,
-      depth: number,
       resumeSessionId: string | null,
       conversationId: string,
-      pool?: CalleePoolPlan,
+      { pool, wake }: { pool?: CalleePoolPlan; wake: boolean },
     ): Promise<CalleeTurnOutcome> => {
       /** Whether the run, or the call's own caller, has stopped this call. */
       const callStopped = (): boolean =>
@@ -6068,10 +6110,10 @@ export class GraphExecutorService
         let endedAs: () => NodeOutcome;
         let retireCards: () => () => Promise<void>;
         // The silence window measures the CALLEE, so it starts when the
-        // callee does — not when `call_agent` returned. Depth-1 calls queue
-        // on a four-slot pool, so a fan-out's fifth call can sit here for
-        // minutes before anything of its own could have been produced, and a
-        // window armed at the call would report a callee that had not begun.
+        // callee does — not when `call_agent` returned. A call can queue under
+        // the run's active-turn cap for minutes before anything of its own
+        // could have been produced, and a window armed at the call would
+        // report a callee that had not begun.
         this.callBroker.noteCalleeActivity(runId, callId);
         try {
           const graphNode = nodesById.get(callee.id);
@@ -6363,9 +6405,38 @@ export class GraphExecutorService
         if (cancelledCalls.has(callId)) {
           return callerCancelledOutcome;
         }
+        const conversation = callerKey(callee.id, conversationId);
         // Given back while the call is HELD and taken again for its wake — a
         // held call runs nothing, and its own calls may need the slot.
-        let releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
+        let slot: TurnSlot | null = wake
+          ? activeTurns.admit()
+          : activeTurns.tryAcquire();
+        if (slot === null) {
+          const queued = new AbortController();
+          queuedStarts.set(callId, queued);
+          const working = activeTurns.active();
+          enqueue(async () => {
+            // TWIN PARSER: `apps/ui/src/renderer/chats/transcript-groups.ts`
+            // reads `queuedCall` onto the call block, which then draws a call
+            // that has not started as queued rather than running; the
+            // run-state route reads it too (`ItemDao.callQueueRows` →
+            // `foldRunCalls`, `RunCallState.queued`).
+            await persistItem(callee.id, 'system', null, {
+              callId,
+              severity: 'info',
+              queuedCall: { cap: turnCap },
+              message: `Queued — ${working} agent turn(s) of this run are already working, at its cap of ${turnCap}. ${callee.name ?? callee.id} starts as soon as one of them finishes or waits.`,
+            }).catch(() => {});
+          });
+          this.callBroker.noteCalleeQueued(runId, callId, true);
+          slot = await activeTurns.acquire(queued.signal);
+          queuedStarts.delete(callId);
+          if (slot === null) {
+            return cancelRequested ? cancelledOutcome : callerCancelledOutcome;
+          }
+          this.callBroker.noteCalleeQueued(runId, callId, false);
+        }
+        holdTurnSlot(conversation, slot);
         let callWakes = 0;
         let monitorWakes = 0;
         let currentMessage = message;
@@ -6387,15 +6458,18 @@ export class GraphExecutorService
           while (pending !== null) {
             const waiting = { node, messages: [] as string[] };
             waitingCalls.set(callId, waiting);
-            releaseSlot?.();
-            releaseSlot = null;
+            if (slot !== null) {
+              dropTurnSlot(conversation, slot);
+              slot = null;
+            }
             const release = await pending;
+            // A wake serves calls already running, so it never queues: its
+            // own calls' answers may be what every slot is waiting on.
             if (release.kind === 'wake' && !callStopped()) {
-              releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
+              slot = activeTurns.admit();
+              holdTurnSlot(conversation, slot);
             }
             waitingCalls.delete(callId);
-            // Asked again AFTER the slot: a stop can land while the wake
-            // waits for one, and must not reach a turn start.
             if (release.kind === 'settle' && !callStopped()) {
               // Read again: a command can end while the call is held, and
               // the caller is told what is running when it actually settles.
@@ -6453,7 +6527,7 @@ export class GraphExecutorService
               node,
               member,
               false,
-              // What was sent while the wake waited for its slot — the
+              // What was sent between the wake and its turn's start — the
               // caller's queued messages first, as a held wake orders them —
               // and the note that the reply is the result, said last.
               currentMessage,
@@ -6477,8 +6551,8 @@ export class GraphExecutorService
             return cancelledOutcome;
           }
           // Checked AGAIN after the slot: the whole point of the mark is the
-          // call that waited in the pool while the caller changed its mind, and
-          // a fan-out of five keeps that pool full for minutes.
+          // cancel that lands after the slot was granted, which the queue's own
+          // abort no longer reaches.
           if (cancelledCalls.has(callId)) {
             return callerCancelledOutcome;
           }
@@ -6623,7 +6697,9 @@ export class GraphExecutorService
             );
           }
         } finally {
-          releaseSlot?.();
+          if (slot !== null) {
+            dropTurnSlot(conversation, slot);
+          }
         }
       } finally {
         liveSubTurns -= 1;
@@ -6985,8 +7061,8 @@ export class GraphExecutorService
       const waiting = waitingCalls.get(callId);
       // A call between two turns of its hold: the message opens the turn
       // that continues it, inside the call, rather than waiting for the calls
-      // its callee made — or, once that turn is already due and only waits
-      // for a slot, joins its prompt.
+      // its callee made — or, once that turn is already due and has not
+      // started, joins its prompt.
       if (
         subTurn === undefined &&
         waiting !== undefined &&
@@ -7316,8 +7392,10 @@ export class GraphExecutorService
               ? this.adapterFor(node.agent).getConfig().mcp.toolCallDeadlineMs
               : null;
           },
+          turnBlocked: noteTurnBlocked,
           cancelCalleeTurn: (callId) => {
             cancelledCalls.add(callId);
+            queuedStarts.get(callId)?.abort();
             const subTurn = subTurns.get(callId);
             subTurn?.handle.cancel();
             return subTurn !== undefined;

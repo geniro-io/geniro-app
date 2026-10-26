@@ -2020,6 +2020,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     backgroundWorkNotes: Array<AgentBackgroundWorkNote>;
+    /**
+     * The machine ceiling on callee turns working at once in one run (sized from total memory)
+     * @type {number}
+     * @memberof CapabilitiesDto
+     */
+    maxActiveTurnsCeiling: number;
 }
 
 /**
@@ -5626,6 +5632,12 @@ export interface RunCallState {
      * @memberof RunCallState
      */
     status: RunWorkStatus;
+    /**
+     * still waiting for room under the run’s active-turn cap: out, and no turn of its own has started
+     * @type {boolean}
+     * @memberof RunCallState
+     */
+    queued: boolean;
     /**
      * 
      * @type {number}
@@ -9598,6 +9610,12 @@ export interface Workflow {
      * @memberof Workflow
      */
     description?: string;
+    /**
+     * Cap on callee turns working at once across the run; omitted = the machine ceiling
+     * @type {number}
+     * @memberof Workflow
+     */
+    maxActiveTurns?: number;
     /**
      * 
      * @type {Array<WorkflowNode>}

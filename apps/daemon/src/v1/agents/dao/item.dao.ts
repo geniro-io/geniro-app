@@ -2185,6 +2185,60 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * One run's QUEUED-call rows — the `system` rows the executor writes for a
+   * call that waits under the run's active-turn cap. A run holds one per call
+   * that ever waited, read for the run-state route's `RunCallState.queued`.
+   *
+   * TWIN PARSER: written by `launchCalleeTurn` in
+   * apps/daemon/src/v1/graphs/services/graph-executor.service.ts; read the
+   * same way by `isQueuedCall` in apps/ui/src/renderer/chats/transcript-groups.ts.
+   */
+  async callQueueRows(runId: string, txEm?: EntityManager): Promise<Item[]> {
+    const em = txEm ?? this.em.fork();
+    const heads = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('id')
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'system')
+      .where('deleted_at', 'is', null)
+      .where((eb) => payloadPath(eb, '$.queuedCall'), 'is not', null)
+      .where((eb) => payloadPath(eb, '$.callId'), 'is not', null)
+      .execute();
+    return this.rowsWithIds(
+      heads.map((head) => head.id),
+      em,
+    );
+  }
+
+  /** Which of `callIds` have a `status` row of their own — their turn began. */
+  async callIdsWithStatus(
+    runId: string,
+    callIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Set<string>> {
+    if (callIds.length === 0) {
+      return new Set();
+    }
+    const em = txEm ?? this.em.fork();
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => payloadPath(eb, '$.callId').as('callId'))
+      .distinct()
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'status')
+      .where('deleted_at', 'is', null)
+      .where((eb) => payloadPath(eb, '$.callId'), 'in', [...callIds])
+      .execute();
+    return new Set(
+      rows
+        .map((row) => row.callId)
+        .filter((callId): callId is string => callId !== null),
+    );
+  }
+
+  /**
    * One run's `tool_call` rows whose tool NAME, lowercased, is one of `names` —
    * the run's delegations and its artifact publishes, which the run-state route
    * lists over the whole conversation. `json_extract` for

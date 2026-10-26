@@ -677,6 +677,20 @@ describe('call threads', () => {
       ...(callId === null ? {} : { callId }),
     });
 
+  it('threadsOf: a node working its own turn stays running while a call to it waits under the cap', () => {
+    // A call queued under the run's active-turn cap is open and has no turn
+    // yet; counted as one, it cancelled the node's own live turn out.
+    const activity = computeAgentActivity([
+      status('worker', 'running'),
+      callStarted('call-1', 'go'),
+    ]);
+    const threads = threadsOf(activity.get('worker'));
+    expect(threads.map((thread) => [thread.kind, thread.status])).toEqual([
+      ['main', 'running'],
+      ['call', 'running'],
+    ]);
+  });
+
   it('threadsOf: a call-only node lists ONLY its call threads (no main)', () => {
     const activity = computeAgentActivity([
       callStarted('call-1', 'go'),

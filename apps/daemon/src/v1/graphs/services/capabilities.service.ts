@@ -15,6 +15,7 @@ import type {
   AgentUsageCapability,
   CapabilitiesWire,
 } from '../graphs.types';
+import { MAX_PARALLEL_AGENTS } from '../utils/parallelism';
 
 /**
  * Composes GET /v1/capabilities from the per-CLI probes and adapter configs.
@@ -40,6 +41,7 @@ export class CapabilitiesService {
       // Settings preview cannot describe a preamble the CLIs stopped getting.
       hostPreamble: GENIRO_UI_PREAMBLE,
       backgroundWorkNotes: this.backgroundWorkNotes(),
+      maxActiveTurnsCeiling: MAX_PARALLEL_AGENTS,
     };
   }
 

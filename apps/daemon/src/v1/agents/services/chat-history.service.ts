@@ -34,7 +34,7 @@ import { ItemCallIndexService } from './item-call-index.service';
  * crowd out another. A turn's ending is any of `TERMINAL_KINDS`: without its
  * `error` or `turn_cancelled` row a failed turn reads as still running.
  *
- * TWIN PARSER: `buildCallBlock` and the stalled / held folds of
+ * TWIN PARSER: `buildCallBlock` and the stalled / held / queued folds of
  * `groupTranscript` in apps/ui/src/renderer/chats/transcript-groups.ts, with
  * `callBlockSummary` / `callBlockActivity` / `callBlockTasks` / `callBlockUsage`,
  * `scanTurns` in apps/ui/src/renderer/chats/turn-duration.ts, and the pairing

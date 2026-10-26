@@ -33,7 +33,8 @@ function render(
     open?: boolean;
     busy?: boolean;
     error?: string | null;
-    initial?: { name: string; description?: string };
+    initial?: { name: string; description?: string; maxActiveTurns?: number };
+    maxActiveTurnsCeiling?: number | null;
   } = {},
 ): void {
   act(() => {
@@ -46,6 +47,11 @@ function render(
         submitLabel="Create"
         busyLabel="Creating…"
         {...(props.initial ? { initial: props.initial } : {})}
+        maxActiveTurnsCeiling={
+          props.maxActiveTurnsCeiling === undefined
+            ? 8
+            : props.maxActiveTurnsCeiling
+        }
         onClose={onClose}
         onSubmit={onSubmit}
       />,
@@ -70,6 +76,12 @@ function nameInput(): HTMLInputElement {
 
 function descriptionInput(): HTMLTextAreaElement {
   return container.querySelector<HTMLTextAreaElement>('#workflow-description')!;
+}
+
+function capInput(): HTMLInputElement {
+  return container.querySelector<HTMLInputElement>(
+    '#workflow-max-active-turns',
+  )!;
 }
 
 function submitButton(): HTMLButtonElement {
@@ -173,5 +185,40 @@ describe('WorkflowMetaDialog', () => {
     render({ open: false, initial: { name: 'Demo team' } });
     render({ open: true, initial: { name: 'Demo team' } });
     expect(nameInput().value).toBe('Demo team');
+  });
+
+  it('submits a whole-number cap of one or more', () => {
+    render();
+    type(nameInput(), 'Team');
+    type(capInput(), ' 3 ');
+    submit();
+    expect(onSubmit).toHaveBeenCalledWith({ name: 'Team', maxActiveTurns: 3 });
+  });
+
+  it.each(['0', '-1', '2.5', 'abc'])(
+    'refuses %s as a cap — submit disabled, the rule said',
+    (value) => {
+      render();
+      type(nameInput(), 'Team');
+      type(capInput(), value);
+      expect(submitButton().disabled).toBe(true);
+      expect(container.textContent).toContain('a whole number of 1 or more');
+      submit();
+      expect(onSubmit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('leaves an emptied cap off the meta — the machine ceiling', () => {
+    render({ initial: { name: 'Team', maxActiveTurns: 4 } });
+    expect(capInput().value).toBe('4');
+    type(capInput(), '');
+    submit();
+    expect(onSubmit).toHaveBeenCalledWith({ name: 'Team' });
+  });
+
+  it('names the machine ceiling an empty cap stands for', () => {
+    render({ maxActiveTurnsCeiling: 12 });
+    expect(capInput().placeholder).toBe('12');
+    expect(container.textContent).toContain('Empty uses 12');
   });
 });

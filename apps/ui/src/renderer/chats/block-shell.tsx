@@ -18,7 +18,7 @@ import { useThreadFlag, useThreadOverride } from './thread-ui-memory';
  * translates it before anything is drawn.
  */
 export type BlockStatus =
-  'running' | 'done' | 'error' | 'stopped' | 'untracked';
+  'queued' | 'running' | 'done' | 'error' | 'stopped' | 'untracked';
 
 /**
  * How the body of an OPEN collapsible {@link BlockShell} folds its card back —
@@ -43,6 +43,7 @@ export const REVEALABLE_CARD_CLASS =
 
 /** The pill's tint per translated status — presentation, not vocabulary. */
 const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
+  queued: 'bg-muted text-muted-foreground',
   running: 'bg-primary/10 text-primary',
   done: 'bg-success/15 text-success',
   error: 'bg-destructive/10 text-destructive',
@@ -60,6 +61,7 @@ const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
  * `subagentThreadsByAgent` makes: work that ended without finishing.
  */
 const RUN_STATUS_OF: Record<BlockStatus, RunStatusKind> = {
+  queued: 'queued',
   running: 'running',
   done: 'completed',
   error: 'failed',
@@ -137,8 +139,9 @@ export function StatusBadge({
  * and in the one place the eye lands first. `running` had a pill AND a spinner
  * beside it, saying it twice.
  *
- * `error`, `stopped` and `untracked` keep the pill, because those are not
- * self-evident from a glyph and are exactly the rows a reader is scanning for.
+ * `queued`, `error`, `stopped` and `untracked` keep the pill, because those
+ * are not self-evident from a glyph and are exactly the rows a reader is
+ * scanning for.
  */
 function BlockStatusMark({
   status,
@@ -147,7 +150,12 @@ function BlockStatusMark({
   status: BlockStatus;
   title?: string;
 }): React.JSX.Element {
-  if (status === 'error' || status === 'stopped' || status === 'untracked') {
+  if (
+    status === 'queued' ||
+    status === 'error' ||
+    status === 'stopped' ||
+    status === 'untracked'
+  ) {
     return <StatusBadge status={status} title={title} />;
   }
   return (

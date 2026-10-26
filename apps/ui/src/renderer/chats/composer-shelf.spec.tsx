@@ -184,7 +184,41 @@ describe('RunningCallChips', () => {
     title: 'Fix the drop zone',
     startedAt: Date.now() - 125_000,
     stalled: false,
+    queued: false,
     ...over,
+  });
+
+  it('counts a call waiting under the run’s cap as queued, not working', async () => {
+    const el = mount(
+      <RunningCallChips
+        calls={[
+          call(),
+          call({ blockId: 'call-4', callId: 'call-6', queued: true }),
+        ]}
+        onReveal={() => {}}
+      />,
+    );
+    expect(
+      el
+        .querySelector('[data-slot="running-calls"] button')
+        ?.getAttribute('aria-label'),
+    ).toBe('1 agent working · 1 queued');
+    await press(el, 'running-calls');
+    expect(
+      document.querySelector('[data-slot="running-call-rows"] p')?.textContent,
+    ).toMatch(/^1 agent working · 1 queued/);
+    const rows = document.querySelectorAll('[data-slot="running-call-row"]');
+    expect(rows[1]?.textContent).toContain('queued');
+    expect(rows[0]?.textContent).not.toContain('queued');
+  });
+
+  it('does not spin while every call out is queued', () => {
+    const el = mount(
+      <RunningCallChips calls={[call({ queued: true })]} onReveal={() => {}} />,
+    );
+    const trigger = el.querySelector('[data-slot="running-calls"] button');
+    expect(trigger?.getAttribute('aria-label')).toBe('1 queued');
+    expect(trigger?.querySelector('[data-status="queued"]')).not.toBeNull();
   });
 
   it('draws nothing while no call is out', () => {
@@ -293,6 +327,7 @@ describe('RunningCallChips — a callee gone quiet', () => {
               title: null,
               startedAt: null,
               stalled: true,
+              queued: false,
             },
           ]}
           onReveal={() => {}}
@@ -930,6 +965,7 @@ describe('every shelf chip opens on a CLICK alone', () => {
             title: null,
             startedAt: null,
             stalled: false,
+            queued: false,
           },
         ]}
         onReveal={() => {}}

@@ -4818,7 +4818,7 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
 
     // The turn BEGAN — armed from here rather than from `call_agent`, since a
-    // depth-1 call queues on the sub-turn pool and may not have started yet.
+    // call queues under the run's active-turn cap and may not have started yet.
     expect(note).toHaveBeenCalledWith(run.id, 'call-1');
     const atStart = note.mock.calls.length;
 
@@ -6716,15 +6716,12 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
-  it('launches every level-2 callee when four 2-deep sync chains run at once', async () => {
-    // The sub-turn pool holds the pinned parallelism (4) slots. Four DAG
-    // callers each sync-call a distinct level-1 callee (b1..b4); those four
-    // callee turns occupy every sub-turn slot and, being sync callers
-    // themselves, stay live while blocked on their own call. Each b then
-    // sync-calls a distinct level-2 callee (d1..d4) — a legal depth-2 chain
-    // the run must be able to launch. Since the four b-turns never release a
-    // slot (they are waiting on d), the four d-turns can never acquire one:
-    // the whole run wedges. Every d-turn should still start.
+  it('launches every level-2 callee when four 2-deep sync chains fill the cap — a blocked caller frees its slot', async () => {
+    // The cap is the pinned parallelism (4). Four DAG callers each sync-call a
+    // distinct level-1 callee (b1..b4), which takes every slot. Each b then
+    // sync-calls a distinct level-2 callee (d1..d4) — a legal depth-2 chain the
+    // cap counts too. A b-turn blocked in its own call_agent must stop
+    // counting, or the four d-turns could never start and the run would wedge.
     const { service, claude, callBroker } = setup();
     const ids = [1, 2, 3, 4];
     const agent = (id: string) => ({
@@ -6777,9 +6774,10 @@ describe('GraphExecutorService — agent calls', () => {
       expect(afterB).toContain(`to-b${i}`);
     }
 
-    // Each level-1 callee sync-calls its own level-2 callee (depth 2, legal).
+    // Each level-1 callee sync-calls its own level-2 callee (depth 2, legal),
+    // from the conversation it answers its caller in.
     for (const i of ids) {
-      void callBroker.callAgent(run.id, `b${i}`, {
+      void callBroker.callAgent(run.id, callerKey(`b${i}`, `call-${i}`), {
         title: 'why',
         agent: `d${i}`,
         message: `to-d${i}`,
@@ -6794,10 +6792,9 @@ describe('GraphExecutorService — agent calls', () => {
     }
   });
 
-  it('caps concurrent depth-1 callee turns at the parallelism, then drains the queue', async () => {
-    // Deleting the sub-turn slot acquire/release would let all 5 fan-out
-    // callee turns spawn at once (unbounded in the worst case); this
-    // pins that only 4 run concurrently and the 5th launches when one frees.
+  it('caps concurrent callee turns at the parallelism, then drains the queue', async () => {
+    // With no cap all 5 fan-out callee turns would spawn at once; this pins
+    // that only 4 run concurrently and the 5th launches when one frees.
     const { service, claude, callBroker } = setup();
     const agent = (id: string) => ({
       id,
@@ -6853,6 +6850,103 @@ describe('GraphExecutorService — agent calls', () => {
       }
     }
     completeTurn(claude.starts[orchTurn - 1]!, 'orch done');
+    await drain();
+  });
+
+  it.each([
+    [2, 2],
+    [10, 4],
+  ])(
+    'runs a fan-out at the workflow’s maxActiveTurns (%i), lowered to the machine ceiling — %i at once',
+    async (maxActiveTurns, running) => {
+      const { service, claude, callBroker } = setup();
+      const ids = [1, 2, 3, 4, 5];
+      const agent = (id: string) => ({
+        id,
+        kind: 'agent' as const,
+        agent: 'claude' as const,
+        approval: 'auto' as const,
+      });
+      const run = await service.startRun({
+        slug: 'fanout',
+        workflow: triggered({
+          name: 'fanout',
+          maxActiveTurns,
+          nodes: [agent('orch'), ...ids.map((i) => agent(`h${i}`))],
+          edges: ids.map((i) => ({
+            from: 'orch',
+            to: `h${i}`,
+            kind: 'call' as const,
+          })),
+        }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      for (const i of ids) {
+        void callBroker.callAgent(run.id, 'orch', {
+          title: 'why',
+          agent: `h${i}`,
+          message: `call ${i}`,
+          mode: 'async',
+        });
+      }
+      await drain();
+      expect(claude.starts.slice(1)).toHaveLength(running);
+      await service.cancel(run.id);
+      await drain();
+    },
+  );
+
+  it('takes a queued call out of the queue on the run’s Stop, even while no slot frees', async () => {
+    const { service, claude, callBroker } = setup();
+    const agent = (id: string) => ({
+      id,
+      kind: 'agent' as const,
+      agent: 'claude' as const,
+      approval: 'auto' as const,
+    });
+    const run = await service.startRun({
+      slug: 'fanout',
+      workflow: triggered({
+        name: 'fanout',
+        maxActiveTurns: 1,
+        nodes: [agent('orch'), agent('h1'), agent('h2')],
+        edges: [
+          { from: 'orch', to: 'h1', kind: 'call' as const },
+          { from: 'orch', to: 'h2', kind: 'call' as const },
+        ],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    for (const id of ['h1', 'h2']) {
+      await callBroker.callAgent(run.id, 'orch', {
+        title: 'work',
+        agent: id,
+        message: `to ${id}`,
+        mode: 'async',
+      });
+    }
+    await drain();
+    expect(claude.starts).toHaveLength(2);
+    // The running call's turn takes no cancel — it is already ending — so
+    // its slot stays taken through the Stop.
+    const running = claude.starts[1]!;
+    running.settled = true;
+
+    await service.cancel(run.id);
+    await drain();
+
+    expect(
+      await callBroker.awaitAgent(run.id, 'orch', {
+        call_id: 'call-2',
+        timeout_ms: 50,
+      }),
+    ).toMatchObject({ status: 'error' });
+    expect(claude.starts).toHaveLength(2);
+    running.finish();
     await drain();
   });
 
@@ -7487,9 +7581,9 @@ describe('GraphExecutorService — agent calls', () => {
       await drain();
     });
 
-    it('gives its sub-turn slot back while it is held', async () => {
+    it('gives its slot back while it is held', async () => {
       // A held call runs nothing; holding the slot through the wait would
-      // queue the caller's next call behind work it is not doing.
+      // keep the very calls it waits for from starting.
       const { service, claude, callBroker } = setup();
       const run = await service.startRun({
         slug: 'chain',
@@ -7518,21 +7612,222 @@ describe('GraphExecutorService — agent calls', () => {
         );
       }
       await drain();
+      // Every slot is an Engineer's, so the research waits.
+      const before = claude.starts.length;
+      expect(before).toBe(5);
       for (const turn of engineers) {
         completeTurn(turn, 'delegated');
       }
       await drain();
-      const before = claude.starts.length;
+      // Each Engineer is now held for its research, which takes the slots.
+      expect(
+        claude.starts.slice(before).map((t) => t.input.systemPrompt),
+      ).toEqual([
+        'You research.',
+        'You research.',
+        'You research.',
+        'You research.',
+      ]);
+      await service.cancel(run.id);
+      await drain();
+    });
+
+    it('queues the cap’s next fresh callee turn at depth 2, and starts it once a turn waits or ends', async () => {
+      const { service, claude, callBroker, itemDao } = setup();
+      const queuedNotes = vi.spyOn(callBroker, 'noteCalleeQueued');
+      const run = await service.startRun({
+        slug: 'chain',
+        workflow: triggered({ ...CHAIN, maxActiveTurns: 2 }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
       await callBroker.callAgent(run.id, 'mgr', {
         title: 'build',
         agent: 'eng',
-        message: 'feature 5',
+        message: 'build feature A',
         mode: 'async',
       });
       await drain();
-      expect(claude.starts.slice(before).map((t) => t.input.prompt)).toContain(
-        'feature 5',
+      claude.starts[1]!.emit({ type: 'session', sessionId: 's-eng' });
+      for (const topic of ['one', 'two', 'three']) {
+        await callBroker.callAgent(run.id, engIn, {
+          title: 'research',
+          agent: 'res',
+          message: `research ${topic}`,
+          mode: 'async',
+        });
+      }
+      await drain();
+      const prompts = () => claude.starts.map((t) => t.input.prompt);
+      // The Engineer is still working, so only one research turn fits.
+      expect(prompts().slice(2)).toEqual(['research one']);
+      const queued = itemDao.items
+        .filter((item) => item.kind === 'system' && item.nodeId === 'res')
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+        .filter((payload) => payload.queuedCall !== undefined);
+      expect(queued.map((payload) => payload.callId)).toEqual([
+        'call-3',
+        'call-4',
+      ]);
+      expect(queued[0]!.queuedCall).toEqual({ cap: 2 });
+      // The broker is told, so the waiting call's silence is not timed.
+      expect(queuedNotes.mock.calls).toEqual([
+        [run.id, 'call-3', true],
+        [run.id, 'call-4', true],
+      ]);
+
+      // Waiting on its research, the Engineer stops counting.
+      const awaited = callBroker.awaitAgent(run.id, engIn, {
+        call_id: 'call-2',
+      });
+      await drain();
+      expect(prompts().slice(2)).toEqual(['research one', 'research two']);
+
+      // A research turn ends: its slot goes to the third, and the Engineer,
+      // its wait returned, is counted again over the cap rather than queued.
+      completeTurn(claude.starts[2]!, 'found one');
+      await awaited;
+      await drain();
+      expect(prompts().slice(2)).toEqual([
+        'research one',
+        'research two',
+        'research three',
+      ]);
+      // Counted again it is: with the second research done, the Engineer and
+      // the third fill the cap, so a fourth waits.
+      completeTurn(claude.starts[3]!, 'found two');
+      await drain();
+      await callBroker.callAgent(run.id, engIn, {
+        title: 'research',
+        agent: 'res',
+        message: 'research four',
+        mode: 'async',
+      });
+      await drain();
+      expect(prompts()).not.toContain('research four');
+      await service.cancel(run.id);
+      await drain();
+    });
+
+    it('stops counting a callee parked on its own question: a fresh call takes its slot', async () => {
+      const { service, claude, callBroker } = setup();
+      const run = await service.startRun({
+        slug: 'chain',
+        workflow: triggered({ ...CHAIN, maxActiveTurns: 2 }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'mgr', {
+        title: 'build',
+        agent: 'eng',
+        message: 'build feature A',
+        mode: 'async',
+      });
+      await drain();
+      claude.starts[1]!.emit({ type: 'session', sessionId: 's-eng' });
+      await callBroker.callAgent(run.id, engIn, {
+        title: 'research',
+        agent: 'res',
+        message: 'look it up',
+        mode: 'async',
+      });
+      await drain();
+      const res = claude.starts[2]!;
+      res.emit({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: {
+          questions: [
+            {
+              question: 'Which source?',
+              header: 'Source',
+              options: [{ label: 'Docs' }, { label: 'Code' }],
+              multiSelect: false,
+            },
+          ],
+        },
+        requiresUserInteraction: true,
+      });
+      await drain();
+      // The Engineer works on; only the parked Researcher has stopped counting.
+      await callBroker.callAgent(run.id, 'mgr', {
+        title: 'build',
+        agent: 'eng',
+        message: 'build feature B',
+        mode: 'async',
+      });
+      await drain();
+      expect(claude.starts.map((t) => t.input.prompt)).toContain(
+        'build feature B',
       );
+      await service.cancel(run.id);
+      await drain();
+    });
+
+    it('never deadlocks a blocked caller against a callee parked on a question, with the cap at one', async () => {
+      // One slot: the Engineer's. Its sync call must not keep the Researcher
+      // from starting, and once the Researcher parks a question the Engineer
+      // must come back to answer it rather than wait for a slot.
+      const { service, claude, callBroker } = setup();
+      const run = await service.startRun({
+        slug: 'chain',
+        workflow: triggered({ ...CHAIN, maxActiveTurns: 1 }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'mgr', {
+        title: 'build',
+        agent: 'eng',
+        message: 'build feature A',
+        mode: 'async',
+      });
+      await drain();
+      const asking = callBroker.callAgent(run.id, engIn, {
+        title: 'research',
+        agent: 'res',
+        message: 'look it up',
+      });
+      await drain();
+      const res = claude.starts[2]!;
+      expect(res.input.systemPrompt).toBe('You research.');
+
+      res.emit({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: {
+          questions: [
+            {
+              question: 'Which source?',
+              header: 'Source',
+              options: [{ label: 'Docs' }, { label: 'Code' }],
+              multiSelect: false,
+            },
+          ],
+        },
+        requiresUserInteraction: true,
+      });
+      await drain();
+      expect(await asking).toMatchObject({
+        status: 'question',
+        call_id: 'call-2',
+      });
+      expect(
+        callBroker.answerAgent(run.id, engIn, {
+          call_id: 'call-2',
+          answer: 'Code',
+        }),
+      ).toMatchObject({ status: 'ok' });
+      expect(res.respondApproval).toHaveBeenCalled();
+      completeTurn(res, 'read the code');
+      await drain();
+      expect(
+        await callBroker.awaitAgent(run.id, engIn, { call_id: 'call-2' }),
+      ).toMatchObject({ status: 'ok', result: { text: 'read the code' } });
       await service.cancel(run.id);
       await drain();
     });
@@ -7763,12 +8058,15 @@ describe('GraphExecutorService — agent calls', () => {
       await drain();
     });
 
-    it('adds a message sent while a woken call waits for a slot to the turn that continues it', async () => {
+    it('starts a woken held call at once, over the cap, while every slot is taken', async () => {
+      // A wake serves calls already running: queued behind the cap, it could
+      // wait on turns that are themselves waiting for its answer.
       const { service, claude, callBroker, run, eng, res } =
         await engineerDelegating();
       completeTurn(eng, 'dispatched');
       await drain();
-      // Four more Engineer calls take every sub-turn slot and keep working.
+      // The research and three more Engineer calls take every slot; a fourth
+      // queues for the next one to free.
       for (let i = 2; i <= 5; i += 1) {
         await callBroker.callAgent(run.id, 'mgr', {
           title: 'build',
@@ -7778,75 +8076,25 @@ describe('GraphExecutorService — agent calls', () => {
         });
       }
       await drain();
-      const busy = claude.starts.slice(3, 7);
-      expect(busy).toHaveLength(4);
-      // The research ends: call-1 is woken, and waits for a slot.
-      completeTurn(res, 'the research');
-      await drain();
+      expect(claude.starts.slice(3).map((t) => t.input.prompt)).toEqual([
+        'feature 2',
+        'feature 3',
+        'feature 4',
+      ]);
       const before = claude.starts.length;
 
-      // The caller steers it too, in the same window; it has no turn to join.
-      expect(
-        callBroker.messageAgent(run.id, 'mgr', {
-          call_id: 'call-1',
-          message: 'caller says hi',
-        }),
-      ).toMatchObject({ status: 'ok' });
-      await service.sendCallMessage(run.id, 'eng', 'call-1', 'use Postgres');
-      completeTurn(busy[0]!, 'done');
-      await drain();
-
-      const woken = claude.starts.slice(before).at(-1)!;
-      expect(woken.input.mcpEndpoint?.url).toMatch(/\/eng\/call-1$/);
-      const prompt = woken.input.prompt;
-      const caller = prompt.indexOf('caller says hi');
-      const user = prompt.indexOf('use Postgres');
-      const note = prompt.indexOf("still answering your caller's call");
-      // Both reach the turn — the caller's queued one first — and the note
-      // that its reply is the result is still said last.
-      expect(caller).toBeGreaterThanOrEqual(0);
-      expect(user).toBeGreaterThan(caller);
-      expect(note).toBeGreaterThan(user);
-      await service.cancel(run.id);
-      await drain();
-    });
-
-    it('says a message sent while a woken call waits for a slot was not delivered when the call is stopped', async () => {
-      const { service, claude, callBroker, run, eng, res, itemDao } =
-        await engineerDelegating();
-      completeTurn(eng, 'dispatched');
-      await drain();
-      for (let i = 2; i <= 5; i += 1) {
-        await callBroker.callAgent(run.id, 'mgr', {
-          title: 'build',
-          agent: 'eng',
-          message: `feature ${i}`,
-          mode: 'async',
-        });
-      }
-      await drain();
-      const busy = claude.starts.slice(3, 7);
+      // The research ends: its slot goes to the queued fifth feature, and the
+      // held Engineer it woke starts as well, over the cap.
       completeTurn(res, 'the research');
       await drain();
 
-      await service.sendCallMessage(run.id, 'eng', 'call-1', 'use Postgres');
-      callBroker.cancelAgent(run.id, 'mgr', { call_id: 'call-1', reason: 'x' });
-      completeTurn(busy[0]!, 'done');
-      await drain();
-
-      expect(
-        itemDao.items
-          .filter((item) => item.kind === 'system' && item.nodeId === 'eng')
-          .map(
-            (item) =>
-              JSON.parse(item.payload as string) as { message?: string },
-          )
-          .some(
-            (payload) =>
-              payload.message?.startsWith('Not delivered') === true &&
-              payload.message.includes('use Postgres'),
-          ),
-      ).toBe(true);
+      const started = claude.starts.slice(before);
+      expect(started).toHaveLength(2);
+      expect(started.map((t) => t.input.prompt)).toContain('feature 5');
+      const woken = started.find((t) =>
+        /\/eng\/call-1$/.test(t.input.mcpEndpoint?.url ?? ''),
+      );
+      expect(woken?.input.prompt).toContain('res has finished call-2');
       await service.cancel(run.id);
       await drain();
     });
@@ -8365,11 +8613,11 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
-  it('cancels a call still QUEUED on the sub-turn pool without ever spawning it', async () => {
-    // The pool holds the pinned parallelism (4), so the fifth call of a fan-out
-    // has no process to signal — and that is exactly the call worth cancelling,
+  it('cancels a call still QUEUED under the cap at once, without ever spawning it', async () => {
+    // The cap is the pinned parallelism (4), so the fifth call of a fan-out has
+    // no process to signal — and that is exactly the call worth cancelling,
     // because nothing has been spent on it yet. A `handle.cancel()` alone
-    // reaches none of these; the mark is what does.
+    // reaches none of these; the mark and the queue's own cancel do.
     const { service, claude, callBroker } = setup();
     const ids = [1, 2, 3, 4, 5];
     const wf: Workflow = {
@@ -8429,19 +8677,21 @@ describe('GraphExecutorService — agent calls', () => {
       },
     });
 
-    // Free a slot: the fifth call now reaches the front of the pool, reads the
-    // mark, and settles without spawning anything.
-    completeTurn(claude.starts[1]!, 'ok-1');
-    await drain();
-    expect(claude.starts).toHaveLength(5);
-
+    // Settled with every slot still taken: it left the queue, rather than
+    // waiting for a slot only to read the mark there.
     const collected = await callBroker.awaitAgent(run.id, 'orch', {
       call_id: 'call-5',
+      timeout_ms: 50,
     });
     expect(collected.status).toBe('error');
     expect(collected.status === 'error' ? collected.error : '').toContain(
       'CALLEE_CANCELLED',
     );
+
+    // Its slot never went to it: freeing one spawns nothing.
+    completeTurn(claude.starts[1]!, 'ok-1');
+    await drain();
+    expect(claude.starts).toHaveLength(5);
 
     for (const index of [2, 3, 4]) {
       completeTurn(claude.starts[index]!, 'ok');

@@ -172,6 +172,7 @@ export function serializeWorkflowYaml(
 
   setOrDelete(root, 'name', workflow.name);
   setOrDelete(root, 'description', workflow.description);
+  setOrDelete(root, 'maxActiveTurns', workflow.maxActiveTurns);
 
   // Nodes: patch retained items in place (file order preserved), drop removed
   // ones, append new ones at the end.

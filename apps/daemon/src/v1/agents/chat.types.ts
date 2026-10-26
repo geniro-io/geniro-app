@@ -3084,6 +3084,11 @@ export const RunCallStateSchema = z
       .nullable()
       .describe('when the broker settled it; null while it is out'),
     status: RunWorkStatusSchema,
+    queued: z
+      .boolean()
+      .describe(
+        'still waiting for room under the run’s active-turn cap: out, and no turn of its own has started',
+      ),
     member: z
       .number()
       .int()

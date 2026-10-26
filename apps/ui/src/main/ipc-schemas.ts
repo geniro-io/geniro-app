@@ -7,6 +7,7 @@ import {
   type CliKind,
   hasControlCharacters,
   HISTORY_PAGE_SIZES,
+  isReplyLanguage,
   MAX_AUTO_COMPACT_PERCENT,
   MAX_CONFIG_PROFILE_NAME,
   MAX_CONFIG_PROFILES,
@@ -389,6 +390,14 @@ export const settingsPatchSchema = z.strictObject({
     .refine(
       (value) => !hasControlCharacters(value),
       'must not contain control characters',
+    )
+    .optional(),
+  // Checked for the same reason, against the daemon's own twin.
+  replyLanguage: z
+    .string()
+    .refine(
+      isReplyLanguage,
+      'must be one short line, without control, invisible or bidirectional characters',
     )
     .optional(),
   // ENUMERATED, unlike the CLI-vocabulary fields above, because this

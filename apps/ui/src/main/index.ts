@@ -219,6 +219,7 @@ const autopilot = new AutopilotConductor({
   gitStamp: readGitStamp,
   agentOptions: () => readSettings().agentOptions,
   customInstructions: () => readSettings().customInstructions,
+  replyLanguage: () => readSettings().replyLanguage,
   log: (message) => {
     void reportMainLog(supervisor.getHandle(), 'info', message, {
       source: 'autopilot',

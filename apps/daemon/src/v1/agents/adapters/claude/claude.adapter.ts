@@ -141,6 +141,7 @@ import {
   CLAUDE_RESUME_FLAG,
   CLAUDE_SESSION_STATE_EVENTS_ENV,
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
+  CLAUDE_SETTINGS_FLAG,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
   CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES,
@@ -169,7 +170,6 @@ import {
 } from './utils/claude-cost-state.utils';
 import { ClaudeCostTotalsFile } from './utils/claude-cost-totals.utils';
 import {
-  fastModeArgs,
   fastModeParameter,
   isFastModeCapable,
 } from './utils/claude-fast-mode.utils';
@@ -218,6 +218,7 @@ import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
+import { claudeSettingsArgs } from './utils/claude-settings.utils';
 import { recoverClaudeSubagent } from './utils/claude-subagent-recovery.utils';
 import {
   sweepStaleTurnSystemPrompts,
@@ -277,7 +278,7 @@ export class ClaudeAdapter extends AgentAdapter {
           CLAUDE_CODE_USE_FOUNDRY: '0',
         },
         baseUrlEnv: 'ANTHROPIC_BASE_URL',
-        envSettingsFlag: '--settings',
+        envSettingsFlag: CLAUDE_SETTINGS_FLAG,
         modelEnvKeys: [
           'ANTHROPIC_DEFAULT_OPUS_MODEL',
           'ANTHROPIC_DEFAULT_SONNET_MODEL',
@@ -1353,7 +1354,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
   /**
    * FAST MODE, this CLI's one further model setting — see
-   * {@link fastModeArgs} for the argv it turns into.
+   * {@link claudeSettingsArgs} for the argv it turns into.
    *
    * Support is per MODEL, not per CLI ({@link isFastModeCapable}), so an
    * unsupported model gets no row rather than a control the CLI would
@@ -2124,11 +2125,12 @@ export class ClaudeAdapter extends AgentAdapter {
       // `listEfforts()`, so the flag only carries a level claude accepts.
       args.push(CLAUDE_EFFORT_FLAG, input.effort);
     }
-    // A model parameter like effort, and checked against nothing here for the
-    // same reason `listEfforts` guards effort: `listModelParameters` already
-    // withholds the row from a model that cannot use it, so a value reaching
-    // this field is one the caller offered honestly.
-    args.push(...fastModeArgs(input.modelParameters));
+    // Fast mode, the reply language and an Ollama model's env, in the one
+    // object `claudeSettingsArgs` builds. Fast mode is checked against nothing
+    // here for the same reason `listEfforts` guards effort:
+    // `listModelParameters` already withholds the row from a model that cannot
+    // use it, so a value reaching this field is one the caller offered honestly.
+    args.push(...this.settingsArgs(input));
     // Before the resume flag deliberately: the window this asks for governs the
     // conversation being resumed, not just what is said this turn.
     args.push(...this.autoCompactArgs(input));
@@ -2299,8 +2301,8 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * Fast mode rides {@link CLAUDE_SETTINGS_FLAG} — argv, like everything else
-   * the base key already covers — so a kept process spawned without it cannot
+   * The turn's settings object rides {@link CLAUDE_SETTINGS_FLAG} — argv, like
+   * everything else the base key already covers — so a kept process spawned without it cannot
    * serve a turn that just asked for it, and the reverse: a flip must
    * respawn rather than silently keep running on the value the process
    * started with.
@@ -2308,8 +2310,16 @@ export class ClaudeAdapter extends AgentAdapter {
   protected override sessionKey(input: AgentTurnInput): string {
     return JSON.stringify([
       super.sessionKey(input),
-      fastModeArgs(input.modelParameters).join(' '),
+      this.settingsArgs(input).join(' '),
     ]);
+  }
+
+  private settingsArgs(input: AgentTurnInput): string[] {
+    return claudeSettingsArgs({
+      modelParameters: input.modelParameters,
+      replyLanguage: input.replyLanguage,
+      env: this.modelConfiguration(input.model).env,
+    });
   }
 
   /**

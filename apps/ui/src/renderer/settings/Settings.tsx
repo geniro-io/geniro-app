@@ -22,8 +22,10 @@ import {
   hasControlCharacters,
   HISTORY_PAGE_SIZES,
   type HistoryPageSize,
+  isReplyLanguage,
   MAX_KEPT_SESSION_IDLE_MINUTES,
   MIN_KEPT_SESSION_IDLE_MINUTES,
+  REPLY_LANGUAGE_MAX_LENGTH,
   resolveDaemonInspect,
   type RunConfig,
   type Settings as SettingsShape,
@@ -50,6 +52,7 @@ import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { ThemePicker } from '../components/theme-picker';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { ProgressBar } from '../components/ui/progress-bar';
 import { Select, type SelectGroup } from '../components/ui/select';
@@ -343,6 +346,7 @@ export function Settings({
     Partial<Record<CliKind, Record<string, boolean>>>
   >({});
   const [customInstructions, setCustomInstructions] = useState('');
+  const [replyLanguage, setReplyLanguage] = useState('');
   const [archiveRetentionDays, setArchiveRetentionDays] = useState<
     number | null
   >(null);
@@ -392,6 +396,7 @@ export function Settings({
     notificationsEnabled: 0,
     daemonInspect: 0,
     customInstructions: 0,
+    replyLanguage: 0,
     other: 0,
   });
 
@@ -547,6 +552,9 @@ export function Settings({
       }
       // Guarded like the others: this read is async, and clobbering the box
       // would discard whatever the user typed while it was in flight.
+      if (!language.dirtyRef.current) {
+        setReplyLanguage(s.replyLanguage ?? '');
+      }
       if (!instructions.dirtyRef.current) {
         // `?? ''` because this value crosses the IPC boundary and is read for
         // its `.length` on the very next render: an absent key makes the whole
@@ -629,7 +637,9 @@ export function Settings({
                 ? 'daemonInspect'
                 : patch.customInstructions !== undefined
                   ? 'customInstructions'
-                  : 'other';
+                  : patch.replyLanguage !== undefined
+                    ? 'replyLanguage'
+                    : 'other';
       const generation = ++persistGenerationRef.current[domain];
       setError(null);
       try {
@@ -813,6 +823,19 @@ export function Settings({
       instructions.schedule(next);
     },
     [instructions],
+  );
+
+  /** Debounced like the instructions, and held on screen on the same terms. */
+  const language = useDebouncedPersist(
+    (value: string) => persist({ replyLanguage: value.trim() }),
+    isReplyLanguage,
+  );
+  const onReplyLanguageChange = useCallback(
+    (next: string): void => {
+      setReplyLanguage(next);
+      language.schedule(next);
+    },
+    [language],
   );
 
   /**
@@ -1705,6 +1728,34 @@ export function Settings({
               <section className="flex flex-col gap-3">
                 <h2 className="text-lg font-medium">Custom instructions</h2>
                 <SettingsPanel>
+                  <SettingsPanelRow
+                    label="Reply language"
+                    htmlFor="settings-reply-language"
+                    description="Every agent answers you in this language, even when the task, files and tools around it are in English. Empty lets the agent choose.">
+                    {/* One column, so an error wraps under the field instead
+                        of widening the control and squeezing the label. */}
+                    <div className="flex w-56 flex-col gap-1">
+                      <Input
+                        id="settings-reply-language"
+                        className="w-full"
+                        value={replyLanguage}
+                        maxLength={REPLY_LANGUAGE_MAX_LENGTH}
+                        onChange={(event) =>
+                          onReplyLanguageChange(event.target.value)
+                        }
+                        placeholder="e.g. Russian"
+                        aria-invalid={
+                          isReplyLanguage(replyLanguage) ? undefined : true
+                        }
+                      />
+                      {isReplyLanguage(replyLanguage) ? null : (
+                        <ErrorText>
+                          Contains a line break or an invisible character — not
+                          saved. Type the language's name.
+                        </ErrorText>
+                      )}
+                    </div>
+                  </SettingsPanelRow>
                   <SettingsPanelRow layout="block">
                     <ExpandableTextarea
                       id="settings-custom-instructions"

@@ -310,6 +310,16 @@ export class Run extends TimestampsEntity {
   customInstructions: string | null = null;
 
   /**
+   * The language the user wanted replies in when this run was created
+   * (`Settings.replyLanguage`); null when none was set, and for every row
+   * predating the setting. A snapshot for {@link customInstructions}' reason:
+   * it is argv (the composed block, and claude's `--settings`), so a live read
+   * would respawn the kept CLI mid-conversation.
+   */
+  @Property({ type: 'text', nullable: true })
+  replyLanguage: string | null = null;
+
+  /**
    * What the board card this run works asks of its agent — the card's LABEL
    * instructions and geniro's own report ask, already composed; null for every
    * run no card started.

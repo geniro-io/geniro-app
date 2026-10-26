@@ -306,6 +306,7 @@ export class TaskRunsService {
         approval: this.chats.offeredApproval(target.agentKind, target.approval),
         configDir: target.configDir ?? undefined,
         customInstructions: input.customInstructions,
+        replyLanguage: input.replyLanguage,
         agentOptions: input.agentOptions,
         taskInstructions: this.composeTaskInstructions(
           labelInstructions,
@@ -362,6 +363,7 @@ export class TaskRunsService {
       cwd: input.cwd,
       prompt: this.brief(task, input),
       customInstructions: input.customInstructions,
+      replyLanguage: input.replyLanguage,
       agentOptions: input.agentOptions,
       startSha: input.startSha,
       startDirty: input.startDirty,

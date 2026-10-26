@@ -9,6 +9,7 @@ import {
   type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
+import { hasHiddenText } from './utils/hidden-text';
 import { RUN_PROCESS_CAP } from './utils/run-process-scan';
 
 /**
@@ -1687,6 +1688,25 @@ export const CustomInstructionsSchema = z
   .refine(
     (value) => !hasControlCharacters(value),
     'must not contain control characters',
+  );
+
+/** The longest reply-language name accepted — a language's name, not prose. */
+export const REPLY_LANGUAGE_MAX_LENGTH = 64;
+
+/**
+ * The ONE validator for a reply-language value arriving on the wire
+ * (`Settings.replyLanguage`: "Russian", "Deutsch"). Bounded and one line,
+ * unlike {@link CustomInstructionsSchema}: it lands inside a sentence geniro
+ * writes and in claude's `--settings` JSON, so it is a name, never a
+ * paragraph — a line break would open a new instruction line of its own.
+ */
+export const ReplyLanguageSchema = z
+  .string()
+  .trim()
+  .max(REPLY_LANGUAGE_MAX_LENGTH)
+  .refine(
+    (value) => !hasHiddenText(value, false),
+    'must be one line, without control, invisible or bidirectional characters',
   );
 
 /**
@@ -3799,6 +3819,12 @@ export const ChatExportRunSchema = z
       .nullable()
       .describe(
         "The user's standing instructions AS THIS RUN SNAPSHOTTED THEM — not what the settings box says now",
+      ),
+    replyLanguage: z
+      .string()
+      .nullable()
+      .describe(
+        'The reply language this run snapshotted at creation; null when the user had set none',
       ),
     taskInstructions: z
       .string()

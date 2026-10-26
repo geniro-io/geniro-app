@@ -7892,6 +7892,19 @@ describe('ChatService', () => {
     );
   });
 
+  it('snapshots the reply language onto the run, trimmed, and spawns every turn with it', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      replyLanguage: ' Russian ',
+    });
+
+    await service.sendMessage(run.id, 'go');
+    expect(runDao.runs.get(run.id)?.replyLanguage).toBe('Russian');
+    expect(claude.start.mock.calls[0]?.[0].replyLanguage).toBe('Russian');
+  });
+
   it('stores a card’s task instructions apart from the user’s own and spawns the turn with both', async () => {
     // Two fields, two columns: the user can purge their own text, and that
     // purge must not reach what the card asks of its run.

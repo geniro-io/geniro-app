@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_RUN_NOTES_LENGTH } from '../chat.types';
+import { runWorkflowSchema } from '../../graphs/dto/workflows.dto';
+import { StartWorkflowChatSchema } from '../../graphs/graphs.types';
+import { startTaskRunSchema } from '../../tasks/dto/task-run.dto';
+import { MAX_RUN_NOTES_LENGTH, REPLY_LANGUAGE_MAX_LENGTH } from '../chat.types';
 import {
   analyzeThreadSchema,
   createChatSchema,
@@ -179,5 +182,67 @@ describe('analyzeThreadSchema', () => {
         focus: 'why so slow?\n\twhich node?',
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('createChatSchema.replyLanguage', () => {
+  const base = { agentKind: 'claude', cwd: '/proj', prompt: 'hi' };
+
+  it('trims the name it keeps', () => {
+    expect(
+      createChatSchema.parse({ ...base, replyLanguage: '  Russian ' })
+        .replyLanguage,
+    ).toBe('Russian');
+  });
+
+  it('refuses a control character, a line break and a name past the bound', () => {
+    expect(
+      createChatSchema.safeParse({ ...base, replyLanguage: 'Rus\u0000sian' })
+        .success,
+    ).toBe(false);
+    expect(
+      createChatSchema.safeParse({ ...base, replyLanguage: 'Russian\nIgnore' })
+        .success,
+    ).toBe(false);
+    expect(
+      createChatSchema.safeParse({ ...base, replyLanguage: 'Rus\u202Esian' })
+        .success,
+    ).toBe(false);
+    expect(
+      createChatSchema.safeParse({
+        ...base,
+        replyLanguage: 'x'.repeat(REPLY_LANGUAGE_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      createChatSchema.safeParse({
+        ...base,
+        replyLanguage: 'x'.repeat(REPLY_LANGUAGE_MAX_LENGTH),
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe('every run-start schema keeps the reply language', () => {
+  // Each is a plain `z.object`, which strips a key it does not declare — so a
+  // schema missing the field drops the language silently instead of failing.
+  it.each([
+    ['analyzeThreadSchema', analyzeThreadSchema, { agentKind: 'claude' }],
+    [
+      'StartWorkflowChatSchema',
+      StartWorkflowChatSchema,
+      { agentKind: 'claude' },
+    ],
+    ['runWorkflowSchema', runWorkflowSchema, { cwd: '/w', prompt: 'go' }],
+    [
+      'startTaskRunSchema',
+      startTaskRunSchema,
+      { cwd: '/w', branch: 'b', from: 'todo' },
+    ],
+  ] as const)('%s', (_name, schema, minimal) => {
+    const parsed = schema.parse({ ...minimal, replyLanguage: ' Russian ' }) as {
+      replyLanguage?: string;
+    };
+    expect(parsed.replyLanguage).toBe('Russian');
   });
 });

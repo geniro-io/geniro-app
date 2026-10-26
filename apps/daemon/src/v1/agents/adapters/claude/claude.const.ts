@@ -97,14 +97,24 @@ export const CLAUDE_AUTOCOMPACT_MAX_TOKENS = 1_000_000;
  * the settings key WORKS (unlike `enableArtifact` beside {@link
  * CLAUDE_ARTIFACT_ENV}, which this CLI silently ignores) and the toggle is
  * offered regardless of that account gate.
+ *
+ * A second `--settings` REPLACES the first rather than merging with it
+ * (measured on 2.1.295: `{"language":"russian"}` then `{"env":…}` answered in
+ * English, the reverse order in Russian), so the LAST one must carry every
+ * key the turn needs: `claudeSettingsArgs` repeats an Ollama model's env,
+ * because the base's env-only flag sits ahead of it on the same command line.
  */
 export const CLAUDE_SETTINGS_FLAG = '--settings';
 /** The id a turn's `modelParameters` carries this axis under — the CLI's own settings key, never translated. */
 export const CLAUDE_FAST_MODE_PARAMETER_ID = 'fastMode';
 export const CLAUDE_FAST_MODE_ON_VALUE = 'true';
 export const CLAUDE_FAST_MODE_OFF_VALUE = 'false';
-/** The literal argv value for {@link CLAUDE_SETTINGS_FLAG} once fast mode is ON — see {@link CLAUDE_SETTINGS_FLAG}'s doc block for why this is the only value ever sent (turning it off is simply omitting the flag). */
-export const CLAUDE_FAST_MODE_SETTINGS_JSON = '{"fastMode":true}';
+/**
+ * The CLI's own reply-language setting. Set, it adds a `# Language` section to
+ * the system prompt ("Always respond in <value>…"); probed on 2.1.295, an
+ * English question under `{"language":"russian"}` was answered in Russian.
+ */
+export const CLAUDE_LANGUAGE_SETTING_KEY = 'language';
 
 // ── The conversations this CLI keeps on disk ───────────────────────────────
 /**

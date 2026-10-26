@@ -411,7 +411,7 @@ Rules when adding or changing routes:
 
 - Declare static segments (`forget-custom-instructions`, `sweep-archived`, `reorder-pinned`, `processes`, `reconcile`, `awaiting-merge`, `reorder`) before `:param` routes. Workflow slugs `runs` and `import` are reserved.
 - Take query filters through a Zod DTO, never a bare `@Query` (an absent value lists everything; `fastify-qs` parses operators). List `scope` is an enum, never a boolean.
-- `configDir` and `customInstructions` are snapshotted onto the run. `configDir` travels as env, never argv, and must exist; a CLI without the mechanism refuses it (`CONFIG_DIR_UNSUPPORTED`). Text reaching argv (custom instructions, label instructions) refuses control characters.
+- `configDir`, `customInstructions` and `replyLanguage` are snapshotted onto the run. `configDir` travels as env, never argv, and must exist; a CLI without the mechanism refuses it (`CONFIG_DIR_UNSUPPORTED`). Text reaching argv (custom instructions, label instructions) refuses control characters.
 - A mid-turn message is told to the CLI first and written only once delivered; else `409 RUN_BUSY`.
 - `archivedAt` is its own column, never `deletedAt`. Archive cancels only a `running` turn; an archived run refuses messages (`RUN_ARCHIVED`).
 - `PATCH /v1/tasks/:taskId` never accepts `runId` / `worktreePath` / `branch`. Status moves are a database compare-and-set (`TaskDao.compareAndSetStatus`).

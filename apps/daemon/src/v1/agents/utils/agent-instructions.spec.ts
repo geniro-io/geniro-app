@@ -9,6 +9,7 @@ import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import {
   composeTurnInstructions,
   GENIRO_UI_PREAMBLE,
+  replyLanguageInstruction,
 } from './agent-instructions';
 
 /** The block an adapter hands its CLI — the one seam every delivery path calls. */
@@ -172,6 +173,64 @@ describe('composeTurnInstructions — background work note', () => {
       }),
     ).toBe('ROLE');
   });
+});
+
+describe('composeTurnInstructions — reply language', () => {
+  const RUSSIAN = replyLanguageInstruction('Russian')!;
+
+  it('names the language and says the English around it does not decide', () => {
+    expect(RUSSIAN).toContain('Reply to the user in Russian');
+    expect(RUSSIAN).toContain('whatever language these instructions');
+    expect(RUSSIAN).toContain('comments in code');
+    expect(RUSSIAN).toContain('stays in the language the project already uses');
+  });
+
+  it('sits after the background note and ahead of the user’s own instructions', () => {
+    expect(
+      composeTurnInstructions({
+        backgroundWorkNote: 'NOTE',
+        replyLanguage: 'Russian',
+        customInstructions: 'GLOBAL',
+        systemPrompt: 'ROLE',
+      }),
+    ).toBe(`${GENIRO_UI_PREAMBLE}\n\nNOTE\n\n${RUSSIAN}\n\nGLOBAL\n\nROLE`);
+  });
+
+  it('trims the name and composes nothing for a blank or absent one', () => {
+    expect(replyLanguageInstruction('  Russian \n')).toBe(RUSSIAN);
+    expect(replyLanguageInstruction('   ')).toBeNull();
+    expect(replyLanguageInstruction(null)).toBeNull();
+    expect(composeTurnInstructions({ replyLanguage: '  ' })).toBe(
+      GENIRO_UI_PREAMBLE,
+    );
+  });
+
+  it('withholds the line with the preamble, for a probe whose output is parsed', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        replyLanguage: 'Russian',
+        systemPrompt: 'ROLE',
+      }),
+    ).toBe('ROLE');
+  });
+
+  it.each([
+    ['claude', new ClaudeAdapter()],
+    [
+      'cursor-agent',
+      new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
+    ],
+    ['codex', new CodexAdapter({ clientVersion: '1.0.0' })],
+  ])(
+    '%s: carries the run’s language into its composed block',
+    (_agent, adapter) => {
+      expect(
+        composedBy(adapter, { ...TURN, replyLanguage: 'Russian' }),
+      ).toContain(RUSSIAN);
+      expect(composedBy(adapter, TURN)).not.toContain('Reply to the user in');
+    },
+  );
 });
 
 describe('each CLI’s background work note', () => {

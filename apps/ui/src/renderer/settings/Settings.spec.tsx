@@ -786,6 +786,56 @@ describe('Settings — custom instructions', () => {
     });
   });
 
+  it('seeds the reply language and saves an edit trimmed', async () => {
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      replyLanguage: 'German',
+    });
+    await mount();
+    const field = container.querySelector<HTMLInputElement>(
+      '#settings-reply-language',
+    )!;
+    expect(field.value).toBe('German');
+
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    await act(async () => {
+      setValue?.call(field, ' Russian ');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      replyLanguage: 'Russian',
+    });
+  });
+
+  it('holds an unsavable reply language on screen, says why, and never writes it', async () => {
+    await mount();
+    const field = container.querySelector<HTMLInputElement>(
+      '#settings-reply-language',
+    )!;
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    await act(async () => {
+      setValue?.call(field, 'Rus\u202Esian');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(container.textContent).toContain('not saved');
+    await act(async () => root?.unmount());
+    root = null;
+    expect(geniro.updateSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ replyLanguage: expect.anything() }),
+    );
+  });
+
   it('leaves no timer running once the flush on the way out has been answered', async () => {
     // The flush writes as the screen goes and its save is answered AFTER that.
     // A save arms the "saved" flash's timer as it lands, so an unmounted screen

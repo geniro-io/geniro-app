@@ -147,6 +147,29 @@ describe('Ollama through the existing agent harnesses', () => {
     await handle.done;
   });
 
+  it('keeps the Ollama env in the last --settings when the turn also sets a reply language', async () => {
+    // claude keeps only the LAST --settings, so the language must not arrive
+    // in an object of its own after the env one.
+    vi.stubEnv('OLLAMA_HOST', '127.0.0.1:12000');
+    const { spawn, child, captured } = fakeSpawn();
+    const adapter = new ClaudeAdapter({ spawn });
+    new AgentAdapterRegistry([adapter]);
+    const handle = adapter.start(
+      { ...INPUT, replyLanguage: 'Russian' },
+      () => undefined,
+    );
+    const settingsAt = captured.args!.lastIndexOf('--settings');
+    expect(JSON.parse(captured.args![settingsAt + 1]!)).toEqual({
+      language: 'Russian',
+      env: expect.objectContaining({
+        ANTHROPIC_BASE_URL: 'http://127.0.0.1:12000',
+        ANTHROPIC_AUTH_TOKEN: 'ollama',
+      }),
+    });
+    child.emit('close', 0);
+    await handle.done;
+  });
+
   it('selects Codex’s local provider in process config and its thread protocol', async () => {
     vi.stubEnv('OLLAMA_HOST', '127.0.0.1:11434');
     const { spawn, child, captured } = fakeSpawn();

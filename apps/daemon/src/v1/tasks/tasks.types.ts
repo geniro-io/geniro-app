@@ -440,6 +440,7 @@ export interface StartTaskRun {
   configDir?: string;
   workflowSlug?: string;
   customInstructions?: string;
+  replyLanguage?: string;
   agentOptions?: AgentOptionsSnapshot;
 }
 

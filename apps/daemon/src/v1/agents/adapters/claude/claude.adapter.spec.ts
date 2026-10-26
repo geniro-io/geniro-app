@@ -2853,6 +2853,26 @@ describe('ClaudeAdapter — fast mode', () => {
     expect(unset.captured.args).not.toContain(CLAUDE_SETTINGS_FLAG);
   });
 
+  it('hands the CLI the run’s reply language in the same one --settings as fast mode', () => {
+    const both = fakeSpawn();
+    new ClaudeAdapter({ spawn: both.spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        model: 'claude-opus-5-5',
+        modelParameters: { [CLAUDE_FAST_MODE_PARAMETER_ID]: 'true' },
+        replyLanguage: 'Russian',
+      },
+      () => {},
+    );
+    const args = both.captured.args!;
+    expect(args.filter((arg) => arg === CLAUDE_SETTINGS_FLAG)).toHaveLength(1);
+    expect(JSON.parse(args[args.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!)).toEqual({
+      fastMode: true,
+      language: 'Russian',
+    });
+  });
+
   it('respawns the kept process when fast mode flips, and reuses it when it does not', async () => {
     // Mirrors the base class's own "sessions separate on…" pattern
     // (`agent-adapter.spec.ts`): a session refuses a turn whose key differs

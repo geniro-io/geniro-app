@@ -1905,6 +1905,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      * one — see {@link Run.customInstructions} for why that is deliberate.
      */
     customInstructions?: string;
+    /** The app's reply language as it stands now, snapshotted the same way. */
+    replyLanguage?: string;
     /**
      * What the board card this chat works asks of it — its label instructions
      * and the report ask, already composed. Absent for every ordinary chat;
@@ -2022,6 +2024,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // are one state in the row, and the turn input below cannot hand an
         // adapter an empty string to compose around.
         customInstructions: input.customInstructions?.trim() || null,
+        replyLanguage: input.replyLanguage?.trim() || null,
         taskInstructions: input.taskInstructions?.trim() || null,
         editsWorkflowSlug: input.editsWorkflowSlug ?? null,
         workflowInstructions: input.workflowInstructions?.trim() || null,
@@ -5398,6 +5401,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // here is exactly what would respawn this run's CLI process mid-thread
       // (`AgentAdapter.sessionKey` hashes it).
       const customInstructions = settings.customInstructions ?? undefined;
+      const replyLanguage = settings.replyLanguage ?? undefined;
       // Off the row too; `TaskRunsService` rewrites it before continuing a
       // card's thread, which is the one time it is meant to change.
       const taskInstructions = settings.taskInstructions ?? undefined;
@@ -6717,6 +6721,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           ...(autoCompact === null ? {} : { autoCompact }),
           configDir,
           customInstructions,
+          replyLanguage,
           taskInstructions,
           workflowInstructions,
           agentOptions,

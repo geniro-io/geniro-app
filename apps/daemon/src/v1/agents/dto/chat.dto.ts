@@ -25,6 +25,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_RUN_NOTES_LENGTH,
   RecommendationApplySchema,
+  ReplyLanguageSchema,
   RunArtifactsWireSchema,
   RunProcessesWireSchema,
   RunSeenWireSchema,
@@ -144,6 +145,11 @@ export const createChatSchema = z.object({
    * and far over any plausible prose.
    */
   customInstructions: CustomInstructionsSchema.optional(),
+  /**
+   * The language the user wants replies in, snapshotted onto this run at
+   * creation ({@link Run.replyLanguage}); sent for `customInstructions`' reason.
+   */
+  replyLanguage: ReplyLanguageSchema.optional(),
   /** The user's per-CLI switches, snapshotted onto the run ({@link Run.agentOptions}). */
   agentOptions: AgentOptionsSchema.optional(),
   /**
@@ -185,6 +191,7 @@ export const analyzeThreadSchema = z.object({
     .optional()
     .describe("The user's focus or extra instructions for this analysis"),
   customInstructions: CustomInstructionsSchema.optional(),
+  replyLanguage: ReplyLanguageSchema.optional(),
   agentOptions: AgentOptionsSchema.optional(),
 });
 export class AnalyzeThreadDto extends createZodDto(analyzeThreadSchema) {}

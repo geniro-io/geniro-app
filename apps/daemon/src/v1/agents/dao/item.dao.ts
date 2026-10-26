@@ -1,7 +1,7 @@
-import { EntityManager, type FilterQuery, raw } from '@mikro-orm/sqlite';
+import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
-import type { ExpressionBuilder } from 'kysely';
+import type { Expression, ExpressionBuilder, SqlBool } from 'kysely';
 
 import { Item } from '../../runs/entity/item.entity';
 import type { ItemKind } from '../../runs/runs.types';
@@ -75,11 +75,6 @@ const NOT_IN_A_CALL = {
  */
 const PAYLOAD_ID_BATCH = 1000;
 
-/** A row's `insideTurn` stamp read as 0 or 1 — absent reads as 0. */
-function insideTurnSql(alias: string): string {
-  return `coalesce(json_extract(${alias}.payload, '$.insideTurn'), 0)`;
-}
-
 /** The filter for rows on the asked side of a page. */
 function seqFilter(range: SeqRange | undefined): {
   $or?: FilterQuery<Item>[];
@@ -99,6 +94,42 @@ function seqFilter(range: SeqRange | undefined): {
   return 'before' in range
     ? { seq: { $lt: range.before } }
     : { seq: { $gt: range.after } };
+}
+
+/** {@link seqFilter} for a Kysely read of `items`. */
+function seqRangeOf(
+  eb: ExpressionBuilder<ChatTextDatabase, 'items'>,
+  range: SeqRange,
+): Expression<SqlBool> {
+  if ('outside' in range) {
+    return eb.or([
+      eb('seq', '<', range.outside.firstSeq),
+      eb('seq', '>', range.outside.lastSeq),
+    ]);
+  }
+  return 'before' in range
+    ? eb('seq', '<', range.before)
+    : eb('seq', '>', range.after);
+}
+
+/**
+ * One field of an item's JSON payload, read straight off the column: unlike
+ * {@link payloadField}, a row whose payload is not JSON makes SQLite's
+ * `json_extract` throw.
+ */
+function payloadPath<T = string | null>(
+  eb: ExpressionBuilder<ChatTextDatabase, 'items'>,
+  path: string,
+) {
+  return eb.fn<T>('json_extract', [eb.ref('payload'), eb.val(path)]);
+}
+
+/** A row's `insideTurn` stamp read as 0 or 1 — absent reads as 0. */
+function insideTurnOf(eb: ExpressionBuilder<ChatTextDatabase, 'items'>) {
+  return eb.fn<number>('coalesce', [
+    payloadPath<number | null>(eb, '$.insideTurn'),
+    eb.val(0),
+  ]);
 }
 
 /**
@@ -242,34 +273,58 @@ export class ItemDao extends BaseDao<Item> {
     nodeId: string,
     txEm?: EntityManager,
   ): Promise<Item[]> {
-    const rows = await this.getRepo(txEm).find(
-      {
-        runId,
-        $or: [
-          {
-            nodeId,
-            kind: { $in: ['message', 'tool_call', 'tool_result'] },
-            [raw((alias) => `json_extract(${alias}.payload, '$.callId')`)]: {
-              $eq: null,
-            },
-            [raw(
-              (alias) => `json_extract(${alias}.payload, '$.parentToolUseId')`,
-            )]: { $eq: null },
-          },
-          {
-            nodeId,
-            kind: { $in: ['call_started', 'call_result'] },
-            [raw(
-              (alias) =>
-                `json_extract(${alias}.payload, '$.callerConversationId')`,
-            )]: { $eq: null },
-          },
-          { nodeId: null, kind: 'message', role: 'user' },
-        ],
-      },
-      { orderBy: { seq: 'desc' }, limit: 200, disableIdentityMap: true },
+    const em = txEm ?? this.em.fork();
+    // The newest 200, picked newest first, then read back oldest first.
+    const ids = (
+      await em
+        .getKysely<ChatTextDatabase>({ convertValues: false })
+        .selectFrom('items')
+        .select('id')
+        .where('run_id', '=', runId)
+        .where('deleted_at', 'is', null)
+        .where((eb) =>
+          eb.or([
+            eb.and([
+              eb('node_id', '=', nodeId),
+              eb('kind', 'in', ['message', 'tool_call', 'tool_result']),
+              eb(payloadPath(eb, '$.callId'), 'is', null),
+              eb(payloadPath(eb, '$.parentToolUseId'), 'is', null),
+            ]),
+            eb.and([
+              eb('node_id', '=', nodeId),
+              eb('kind', 'in', ['call_started', 'call_result']),
+              eb(payloadPath(eb, '$.callerConversationId'), 'is', null),
+            ]),
+            eb.and([
+              eb('node_id', 'is', null),
+              eb('kind', '=', 'message'),
+              eb('role', '=', 'user'),
+            ]),
+          ]),
+        )
+        .orderBy('seq', 'desc')
+        .limit(200)
+        .execute()
+    ).map((head) => head.id);
+    return this.rowsWithIds(ids, em);
+  }
+
+  /**
+   * The rows a Kysely read picked by id, loaded as entities in seq order — the
+   * second half of a read whose filter is a payload path, which only Kysely
+   * can say.
+   */
+  private async rowsWithIds(
+    ids: readonly string[],
+    em: EntityManager,
+  ): Promise<Item[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.getRepo(em).find(
+      { id: { $in: [...ids] } },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
     );
-    return rows.reverse();
   }
 
   /**
@@ -1110,22 +1165,23 @@ export class ItemDao extends BaseDao<Item> {
     if (ids.length === 0) {
       return [];
     }
-    return this.getRepo(txEm).find(
-      {
-        runId,
-        kind: 'tool_call',
-        // The id lives inside the JSON; compared exactly, as
-        // {@link rowsByPayloadId} compares it.
-        [raw((alias) => `json_extract(${alias}.payload, '$.id')`)]: {
-          $in: [...ids],
-        },
-      },
-      {
-        orderBy: { seq: 'asc' },
-        fields: ['payload', 'nodeId', 'createdAt'],
-        disableIdentityMap: true,
-      },
-    );
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select(['payload', 'node_id', 'created_at'])
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'tool_call')
+      .where('deleted_at', 'is', null)
+      // The id lives inside the JSON; compared exactly, as
+      // {@link rowsByPayloadId} compares it.
+      .where((eb) => payloadPath<string | null>(eb, '$.id'), 'in', [...ids])
+      .orderBy('seq', 'asc')
+      .execute();
+    return rows.map((row) => ({
+      payload: row.payload,
+      nodeId: row.node_id,
+      createdAt: new Date(row.created_at),
+    }));
   }
 
   /**
@@ -2062,24 +2118,30 @@ export class ItemDao extends BaseDao<Item> {
     range?: SeqRange,
     txEm?: EntityManager,
   ): Promise<Item[]> {
+    const em = txEm ?? this.em.fork();
     const rows: Item[] = [];
     for (let at = 0; at < ids.length; at += PAYLOAD_ID_BATCH) {
+      let heads = em
+        .getKysely<ChatTextDatabase>({ convertValues: false })
+        .selectFrom('items')
+        .select('id')
+        .where('run_id', '=', runId)
+        .where('kind', 'in', [...kinds])
+        .where('deleted_at', 'is', null)
+        // Guarded by `payloadField`: one malformed payload must not fail the
+        // whole read.
+        .where(
+          (eb) => payloadField<string>(eb, '$.id'),
+          'in',
+          ids.slice(at, at + PAYLOAD_ID_BATCH),
+        );
+      if (range !== undefined) {
+        heads = heads.where((eb) => seqRangeOf(eb, range));
+      }
       rows.push(
-        ...(await this.getRepo(txEm).find(
-          {
-            runId,
-            kind: { $in: [...kinds] },
-            // Guarded like `payloadField`: one malformed payload must not fail
-            // the whole read.
-            [raw(
-              (alias) =>
-                `json_extract(CASE WHEN json_valid(${alias}.payload) THEN ${alias}.payload ELSE '{}' END, '$.id')`,
-            )]: {
-              $in: ids.slice(at, at + PAYLOAD_ID_BATCH),
-            },
-            ...seqFilter(range),
-          },
-          { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+        ...(await this.rowsWithIds(
+          (await heads.execute()).map((head) => head.id),
+          em,
         )),
       );
     }
@@ -2103,19 +2165,22 @@ export class ItemDao extends BaseDao<Item> {
     range?: SeqRange,
     txEm?: EntityManager,
   ): Promise<Item[]> {
-    return this.getRepo(txEm).find(
-      {
-        runId,
-        kind: 'system',
-        [raw((alias) => `json_extract(${alias}.payload, '$.member')`)]: {
-          $ne: null,
-        },
-        [raw((alias) => `json_extract(${alias}.payload, '$.callId')`)]: {
-          $ne: null,
-        },
-        ...seqFilter(range),
-      },
-      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    const em = txEm ?? this.em.fork();
+    let heads = em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('id')
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'system')
+      .where('deleted_at', 'is', null)
+      .where((eb) => payloadPath(eb, '$.member'), 'is not', null)
+      .where((eb) => payloadPath(eb, '$.callId'), 'is not', null);
+    if (range !== undefined) {
+      heads = heads.where((eb) => seqRangeOf(eb, range));
+    }
+    return this.rowsWithIds(
+      (await heads.execute()).map((head) => head.id),
+      em,
     );
   }
 
@@ -2130,15 +2195,23 @@ export class ItemDao extends BaseDao<Item> {
     names: readonly string[],
     txEm?: EntityManager,
   ): Promise<Item[]> {
-    return this.getRepo(txEm).find(
-      {
-        runId,
-        kind: 'tool_call',
-        [raw((alias) => `lower(json_extract(${alias}.payload, '$.name'))`)]: {
-          $in: [...names],
-        },
-      },
-      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    const em = txEm ?? this.em.fork();
+    const heads = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('id')
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'tool_call')
+      .where('deleted_at', 'is', null)
+      .where(
+        (eb) => eb.fn<string | null>('lower', [payloadPath(eb, '$.name')]),
+        'in',
+        [...names],
+      )
+      .execute();
+    return this.rowsWithIds(
+      heads.map((head) => head.id),
+      em,
     );
   }
 
@@ -2152,19 +2225,23 @@ export class ItemDao extends BaseDao<Item> {
     afterSeq: number,
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'seq' | 'nodeId' | 'kind' | 'payload'>[]> {
-    return this.getRepo(txEm).find(
-      {
-        runId,
-        kind: { $in: ['turn_complete', 'turn_cancelled', 'error'] },
-        seq: { $gt: afterSeq },
-        [raw(insideTurnSql)]: 0,
-      },
-      {
-        orderBy: { seq: 'asc' },
-        fields: ['seq', 'nodeId', 'kind', 'payload'],
-        disableIdentityMap: true,
-      },
-    );
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select(['seq', 'node_id', 'kind', 'payload'])
+      .where('run_id', '=', runId)
+      .where('kind', 'in', ['turn_complete', 'turn_cancelled', 'error'])
+      .where('seq', '>', afterSeq)
+      .where('deleted_at', 'is', null)
+      .where((eb) => insideTurnOf(eb), '=', 0)
+      .orderBy('seq', 'asc')
+      .execute();
+    return rows.map((row) => ({
+      seq: row.seq,
+      nodeId: row.node_id,
+      kind: row.kind,
+      payload: row.payload,
+    }));
   }
 
   /**
@@ -2184,20 +2261,20 @@ export class ItemDao extends BaseDao<Item> {
     runId: string,
     txEm?: EntityManager,
   ): Promise<Date | null> {
-    const [ending] = await this.getRepo(txEm).find(
-      {
-        runId,
-        nodeId: null,
-        kind: { $in: ['turn_complete', 'turn_cancelled', 'error'] },
-        [raw(insideTurnSql)]: 0,
-      },
-      {
-        orderBy: { seq: 'desc' },
-        limit: 1,
-        fields: ['seq'],
-        disableIdentityMap: true,
-      },
-    );
+    const db = (txEm ?? this.em.fork()).getKysely<ChatTextDatabase>({
+      convertValues: false,
+    });
+    const ending = await db
+      .selectFrom('items')
+      .select('seq')
+      .where('run_id', '=', runId)
+      .where('node_id', 'is', null)
+      .where('kind', 'in', ['turn_complete', 'turn_cancelled', 'error'])
+      .where('deleted_at', 'is', null)
+      .where((eb) => insideTurnOf(eb), '=', 0)
+      .orderBy('seq', 'desc')
+      .limit(1)
+      .executeTakeFirst();
     const [opener] = await this.getRepo(txEm).find(
       {
         runId,
@@ -2216,29 +2293,33 @@ export class ItemDao extends BaseDao<Item> {
     if (opener === undefined) {
       return null;
     }
-    const [measured] = await this.getRepo(txEm).find(
-      {
-        runId,
-        nodeId: null,
-        kind: 'turn_complete',
-        seq: { $gt: opener.seq },
-        [raw(insideTurnSql)]: 1,
-        [raw(
-          (alias) =>
-            `json_type(${alias}.payload, '$.usage.durationMs') in ('integer', 'real')`,
-        )]: 1,
-      },
-      {
-        orderBy: { seq: 'desc' },
-        limit: 1,
-        fields: ['createdAt'],
-        disableIdentityMap: true,
-      },
-    );
-    return measured === undefined ||
-      measured.createdAt.getTime() < opener.createdAt.getTime()
+    const measured = await db
+      .selectFrom('items')
+      .select('created_at')
+      .where('run_id', '=', runId)
+      .where('node_id', 'is', null)
+      .where('kind', '=', 'turn_complete')
+      .where('seq', '>', opener.seq)
+      .where('deleted_at', 'is', null)
+      .where((eb) => insideTurnOf(eb), '=', 1)
+      .where(
+        (eb) =>
+          eb.fn<string | null>('json_type', [
+            eb.ref('payload'),
+            eb.val('$.usage.durationMs'),
+          ]),
+        'in',
+        ['integer', 'real'],
+      )
+      .orderBy('seq', 'desc')
+      .limit(1)
+      .executeTakeFirst();
+    const measuredAt =
+      measured === undefined ? null : new Date(measured.created_at);
+    return measuredAt === null ||
+      measuredAt.getTime() < opener.createdAt.getTime()
       ? opener.createdAt
-      : measured.createdAt;
+      : measuredAt;
   }
 
   /**

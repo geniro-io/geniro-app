@@ -26,8 +26,13 @@ Rules:
 
 - Put a new file in its kind-directory from the start; never at the module root, even temporarily. (The sibling Geniro repo parks `*.listener.ts` / `*.utils.ts` at module roots — don't copy that.)
 - Create only the directories the module needs.
-- A type used by one file may stay unexported in that file; once a second file imports it, it moves to `<name>.types.ts`.
+- A type used by one file may stay unexported in that file; once a second file imports it, it moves to the module's types file (`<name>.types.ts`; `chat.types.ts` in `v1/agents`).
 - Reference layout: `apps/daemon/src/v1/agents/`.
+
+## Layers and entities
+
+- The flow is Controller (one `@Controller` class per file, no module-scope functions) → Service (all logic) → DAO → Entity; HTTP input uses `createZodDto()` DTOs.
+- Entities use `@mikro-orm/decorators/legacy`, extend `TimestampsEntity`, and declare explicit column types (`@PrimaryKey({ type: 'string' })`, `@Property({ type: 'integer' | 'text' | … })`); swc discovery needs them. Declare dates with the `DateTimeType` class, never `'datetime'` (the string form marks every loaded entity dirty).
 
 ## `__tests__/`
 
@@ -41,3 +46,12 @@ Rules:
 - Cross-module logic is extracted into its owning module and imported, never copied. `v1/agents` is the shared agent-execution substrate (adapters, event bus, registries, run DAOs, `utils/event-to-item`, `utils/persist-item`).
 - The daemon↔renderer HTTP contract is generated, never mirrored (see root `AGENTS.md` → *The daemon API client*).
 - Anything outside the typed HTTP contract (a CLI tool payload, a WS envelope, an on-disk handshake file) is a deliberate twin parser: an independent implementation on each side, each carrying a `TWIN PARSER:` doc block naming the other. A shape change on one side must be made on the other. Find them with `grep -rn "TWIN PARSER:" apps packages`.
+
+## Daemon side of the HTTP contract (`v1/*`)
+
+- Wire shapes are zod schemas in each module's types file; TS types are `z.infer` of them. Shared schemas carry `.meta({ id })` so they become named OpenAPI components.
+- A response DTO's root schema must not carry `.meta({ id })`; `setupSwagger` fails the boot on the resulting dangling `$ref`.
+- Declare responses with `@ZodResponse({ status, type })` (nestjs-zod). No `@nestjs/swagger` CLI plugin (swc cannot run it).
+- Every controller has `@ApiTags`, `@ApiBearerAuth` and `@ApiOperation({ operationId })`; operationIds are globally unique (`setupSwagger` throws on duplicates).
+- `WorkflowSchema` stays default-free so request and response collapse to one type; YAML defaults live in `WorkflowYamlSchema` (`parseWorkflowYaml` only).
+- `McpController` is `@ApiExcludeController()`.

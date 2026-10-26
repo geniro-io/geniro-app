@@ -16,7 +16,7 @@ Every tool geniro's own MCP endpoint serves (`call_agent`, `show_chart`, `propos
 - `<tool>.tool.ts` — the class: `name`, when it is offered, what a call does. No prose, no schema.
 - `<tool>.instructions.ts` — `export function <tool>Instructions(…): string`, the description a model reads.
 - `<tool>.schema.ts` — `export function <tool>Schema(…): Record<string, unknown>`, the input schema with field descriptions (a function, so each listing gets a fresh object).
-- `<tool>.reader.ts` — reads the model's arguments defensively (never throws) and words the result; spec beside it as `<tool>.reader.spec.ts`.
+- `<tool>.reader.ts` — reads the model's arguments defensively (never throws; every tool's zod argument reader is `tools/tool-args.ts`) and words the result; spec beside it as `<tool>.reader.spec.ts`.
 
 Instructions and schemas are `.ts`, never `.md` or `.json` — swc copies nothing else into `dist/`, so they would silently be missing from a packaged daemon. Values the text needs are function parameters or imports, never load-time placeholders.
 
@@ -25,7 +25,7 @@ Instructions and schemas are `.ts`, never `.md` or `.json` — swc copies nothin
 - `McpTool` (`mcp.types.ts`) is the contract: `handles`, `list`, `call`.
 - Extend `BaseMcpTool` (`tools/base-mcp-tool.ts`): fill `isOffered`, `instructions`, `inputSchema`, `run`; answer through `this.text(…)` / `this.invalidArgs(…)`. Never override `list` or `call`.
 - `CallMcpTool` is the base for agent-to-agent call-runtime tools (offered only to nodes with callees, answers via `envelope(…)`, waits via `waiting(…)`).
-- `HistoryMcpTool` is the base for chat-history tools. They are never auto-approved and carry no `readOnlyHint` (codex skips approval for read-only tools). One recorded exception: `read_analyzed_thread` (on `BaseMcpTool`, reusing the history preface; every tool's zod argument reader is `tools/tool-args.ts`) is auto-approved (`agents/utils/host-analysis.ts`) because it is installed only on an analysis chat and reads only its one source thread up to a snapshot; it still carries no `readOnlyHint`, leads with the history preface and masks secrets.
+- `HistoryMcpTool` is the base for chat-history tools. They are never auto-approved and carry no `readOnlyHint` (codex skips approval for read-only tools). One recorded exception: `read_analyzed_thread` (on `BaseMcpTool`, reusing the history preface) is auto-approved (`agents/utils/host-analysis.ts`) because it is installed only on an analysis chat and reads only its one source thread up to a snapshot; it still carries no `readOnlyHint`, leads with the history preface and masks secrets.
 - A tool that waits on a person runs the wait through `context.whileCancellable(…)`.
 - The only tool not on `BaseMcpTool` is `tools/board/board.tools.ts` (the tasks module owns those tools and this module may not import it). Do not add a second exception.
 

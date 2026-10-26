@@ -53,16 +53,17 @@ it starts. A pull request is merged once CI passes and it has been reviewed.
 - **Commit messages and PR titles are [conventional](https://www.conventionalcommits.org/)**
   — `type(scope): subject`, e.g. `fix(ui): keep the composer focused after send`.
   A git hook checks commit messages, and `pnpm commit` will walk you through
-  one. Pull requests are squash-merged, so the PR title becomes the commit on
-  `main` and decides the next release version.
+  one. Pull requests should be squash-merged, so the PR title becomes the
+  commit on `main` and decides the next release version; a merge commit makes
+  semantic-release read the branch's own commit messages instead.
 - **Never commit with `--no-verify`.** The hooks are part of the checks.
 - **Tests** live next to the code as `*.spec.ts(x)`. A change in behaviour
   comes with a test that fails without it.
 - **Project conventions** — module layout, the design system, how agent
   adapters and MCP tools are structured — are written down in
-  [`AGENTS.md`](AGENTS.md), `apps/daemon/AGENTS.md`, `apps/ui/AGENTS.md` and
-  the rules under `.claude/rules/`. Please read the parts that cover the code
-  you're touching.
+  [`AGENTS.md`](AGENTS.md), `apps/daemon/AGENTS.md`, `apps/ui/AGENTS.md`,
+  `apps/ui/src/main/AGENTS.md` (the Electron main process) and the rules under
+  `.claude/rules/`. Please read the parts that cover the code you're touching.
 - **Local-first.** Geniro runs entirely on the user's machine. A change that
   adds a cloud service, telemetry or a stored credential will not be accepted;
   see _Constraints_ in `AGENTS.md`.

@@ -990,11 +990,13 @@ export function formatTokens(count: number): string {
 }
 
 /**
- * Money — the app's TWO formats, and every dollar on screen comes from one of
- * them. They agree everywhere above a cent (`$0.24`, `$21,547.80`) and differ
- * only below it, where a bare 2-decimal rounding would print `$0.00` and claim
- * a turn cost nothing. Neither is willing to say that; they refuse it
- * differently, and which refusal is right depends on the surface.
+ * Money — the app's sanctioned formats are `formatUsd` and `formatExactUsd`
+ * here, plus `formatUsdAxis` (`stats/stats-format.ts`) for chart ticks only,
+ * and every dollar on screen comes from one of them. The first two agree
+ * everywhere above a cent (`$0.24`, `$21,547.80`) and differ only below it,
+ * where a bare 2-decimal rounding would print `$0.00` and claim a turn cost
+ * nothing. Neither is willing to say that; they refuse it differently, and
+ * which refusal is right depends on the surface.
  *
  * Both are GROUPED, because these render a lifetime total as well as a single
  * turn's cost. Ungrouped, that total was `$21547.80` — seven digits the reader

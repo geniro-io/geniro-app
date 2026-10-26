@@ -57,6 +57,15 @@ import { WorkflowProposalService } from './v1/graphs/services/workflow-proposal.
 import { ShareService } from './v1/shares/services/share.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 
+/**
+ * The one method of better-sqlite3's `Database` this file calls. No type
+ * declarations for better-sqlite3 are installed, so the connection's
+ * `getNativeClient()` hands the database back untyped.
+ */
+interface SqlitePragmas {
+  pragma(source: string): unknown;
+}
+
 installCrashGuards({
   markCrash: () => writeCrashMark(environment.userDataDir, process.pid),
 });
@@ -219,10 +228,14 @@ bootstrapper.addExtension(
       // daemon's write for that run failed. The mode is stored in the file, so
       // this only changes anything once. Switching needs a moment's exclusive
       // access, so a reader holding the file at this instant costs the switch
-      // until the next launch, never the launch itself.
+      // until the next launch, never the launch itself. Set through
+      // better-sqlite3's own `pragma()` on the connection's database.
       await orm.em
         .getConnection()
-        .execute('pragma journal_mode = wal')
+        .getNativeClient()
+        .then((database) =>
+          (database as SqlitePragmas).pragma('journal_mode = wal'),
+        )
         .catch((err: unknown) => {
           new Logger('Database').warn(
             `could not switch the database to WAL — staying on its current journal mode until the next launch: ${

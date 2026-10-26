@@ -1,3 +1,4 @@
+import { awakeTimeout, type AwakeTimer } from '../../../../utils/sleep-watch';
 import type { ModelPrice } from '../../utils/model-prices';
 import type { SessionLogger } from '../../utils/spawn-cli';
 import type {
@@ -16,7 +17,11 @@ import {
   type JsonRpcId,
 } from '../utils/json-rpc.utils';
 import { PendingRequests } from '../utils/json-rpc-pending.utils';
-import { CODEX_INITIALIZED_NOTIFICATION, CODEX_METHODS } from './codex.const';
+import {
+  CODEX_INITIALIZED_NOTIFICATION,
+  CODEX_LATE_COMMAND_BACKGROUND_MS,
+  CODEX_METHODS,
+} from './codex.const';
 import type {
   CodexItem,
   CodexThreadFacts,
@@ -28,7 +33,7 @@ import {
   type CodexTurnOptions,
 } from './codex-turn.driver';
 import { codexInitializeParams } from './utils/codex-handshake.utils';
-import { subagentState } from './utils/codex-items.utils';
+import { subagentState, unitPhase } from './utils/codex-items.utils';
 import { CodexSubagentSpend } from './utils/codex-usage.utils';
 
 /**
@@ -139,6 +144,17 @@ export class CodexSession implements TurnDriver {
    * that command's end rather than the agent at work again.
    */
   readonly leftRunning = new Set<string>();
+  /**
+   * Tool calls whose result will land after a COMPLETED turn's ending: those
+   * still open when it completed, and those codex starts after it. A completed
+   * turn is not fenced like a stopped or failed one ({@link endedTurns}), so
+   * such a result arrives as ordinary work on a settled run, and no turn ending
+   * follows it: `late_work_ended` is emitted when this set empties instead. On
+   * the session: the result reaches whichever driver is current.
+   */
+  readonly lateToolItems = new Set<string>();
+  /** The background window of each late command now running ({@link startLateWindow}). */
+  private readonly lateWindows = new Map<string, AwakeTimer>();
   /**
    * Server requests awaiting the user's verdict, by encoded id. Thread-scoped
    * rather than per-turn: a request left unanswered when its turn settles is
@@ -288,6 +304,10 @@ export class CodexSession implements TurnDriver {
   }
 
   onProcessEnded(): AgentEvent[] {
+    for (const window of this.lateWindows.values()) {
+      window.clear();
+    }
+    this.lateWindows.clear();
     return this.turn.onProcessEnded();
   }
 
@@ -298,6 +318,47 @@ export class CodexSession implements TurnDriver {
   /** Whether `turn` is the one this session is serving now. */
   isCurrentTurn(turn: CodexTurnDriver): boolean {
     return this.turn === turn;
+  }
+
+  /**
+   * (Re)start a late command's window ({@link CODEX_LATE_COMMAND_BACKGROUND_MS},
+   * awake time): a command still running at its end goes to the background like
+   * one a turn left running, and stops holding the late work open. Not
+   * {@link schedule}, which drops its step once another turn has opened.
+   */
+  startLateWindow(id: string): void {
+    this.stopLateWindow(id);
+    this.lateWindows.set(
+      id,
+      awakeTimeout(() => {
+        this.lateWindows.delete(id);
+        if (
+          this.io?.processAlive?.() === false ||
+          !this.commandUnits.has(id) ||
+          !this.lateToolItems.delete(id)
+        ) {
+          return;
+        }
+        this.emitNow([
+          this.moveToBackground(id),
+          ...(this.lateToolItems.size === 0
+            ? [{ type: 'late_work_ended' as const }]
+            : []),
+        ]);
+      }, CODEX_LATE_COMMAND_BACKGROUND_MS),
+    );
+  }
+
+  /** A command still running goes to the background ({@link leftRunning}). */
+  moveToBackground(id: string): AgentEvent {
+    this.leftRunning.add(id);
+    return unitPhase(id, 'backgrounded');
+  }
+
+  /** Stop a late command's window: it ended, or it is waiting on its card. */
+  stopLateWindow(id: string): void {
+    this.lateWindows.get(id)?.clear();
+    this.lateWindows.delete(id);
   }
 
   /** Emit to the turn now open, outside any reply — the held ending's release. */

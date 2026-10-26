@@ -1066,6 +1066,16 @@ type AgentEventBody =
       endsBackgroundWork?: true;
     }
   | {
+      /**
+       * Every tool call the CLI started, or left open, after its turn ended has
+       * ended or gone to the background, and nothing of that turn follows. It
+       * ends the off-turn stretch those calls opened the way a terminal event
+       * does (`endsOffTurnStretch`): no turn ending will ever arrive for it.
+       * Set by the adapter that knows its turn ended. No row.
+       */
+      type: 'late_work_ended';
+    }
+  | {
       type: 'turn_complete';
       usage: AgentUsage | null;
       stopReason: string | null;

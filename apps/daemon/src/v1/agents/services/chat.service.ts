@@ -112,6 +112,7 @@ import { BackgroundWorkCounts } from '../utils/background-work-counts';
 import { withCarriedContext } from '../utils/carried-context';
 import { CompactionRows } from '../utils/compaction-rows';
 import {
+  endsOffTurnStretch,
   mapEventToItem,
   offTurnActivity,
   restatesRunAsWorking,
@@ -364,6 +365,15 @@ function adoptsStanding(standing: PendingCardSnapshot, key: string): boolean {
 }
 
 /**
+ * Whether a between-turn event starts new late work: a tool call of the main
+ * thread, whose stretch the adapter ends with a `late_work_ended` of its own.
+ * A delegate's call takes a lease instead.
+ */
+function startsLateWork(event: AgentEvent): boolean {
+  return event.type === 'tool_call' && event.parentToolUseId === undefined;
+}
+
+/**
  * Orchestrates a single-agent chat: validates the run's cwd, drives the chosen
  * adapter, and applies **persist-then-emit** — every item is written (allocating
  * its monotonic seq) BEFORE it is published on the bus, so the durable
@@ -568,6 +578,20 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * run over.
    */
   private readonly offTurnRuns = new Map<string, RunStatus>();
+  /**
+   * Each run's between-turn handlers still in flight. They run concurrently,
+   * and `late_work_ended` carries no row, so it would otherwise settle the run
+   * before the late result just ahead of it has written its row and restated
+   * the badge; it waits for these instead.
+   */
+  private readonly offTurnInFlight = new Map<string, Set<Promise<void>>>();
+  /**
+   * How many between-turn calls that start late work each run has received,
+   * counted on arrival. A `late_work_ended` waiting on {@link offTurnInFlight}
+   * is dropped once one arrives after it: that call ends with an end of its
+   * own, and settling then would put it under `completed`.
+   */
+  private readonly offTurnLateCalls = new Map<string, number>();
   /** Keep overlapping status writes in order, including Stop behind an off-turn write. */
   private readonly statusWrites = new Map<string, Promise<void>>();
   /**
@@ -3892,6 +3916,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       await this.retireWithdrawnCard(runId, event.id);
       return;
     }
+    // Above the row gate: it maps to no row, and it ends the stretch the late
+    // calls' rows opened below.
+    if (endsOffTurnStretch(event)) {
+      await this.settleLateWork(runId, session);
+      return;
+    }
     // ABOVE the row gate, like the in-turn twin: a `shell_open` yields no row,
     // so a launch recorded below this line would be dropped and the count would
     // only ever go down.
@@ -4086,6 +4116,38 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         this.offTurnEventClaims.delete(runId);
       }
     }
+  }
+
+  /**
+   * Hand back the badge an off-turn stretch of LATE calls took
+   * ({@link endsOffTurnStretch}). Such a stretch has no terminal event to end
+   * it, so without this the run reads `running` until its session closes.
+   * Guarded like the terminal branch of {@link restatusAfterOffTurnEvent}: a
+   * restate read before this must not write `running` after it, and a badge
+   * this path did not take is not its to hand back. A delegate still producing
+   * rows keeps the stretch: its lease's expiry hands the badge back. Runs only
+   * after the run's earlier between-turn handlers ({@link offTurnInFlight}),
+   * so the late result's own `running` has landed before the re-read.
+   */
+  private async settleLateWork(
+    runId: string,
+    session: AgentSession | null,
+  ): Promise<void> {
+    if (!this.ownsSession(runId, session)) {
+      return;
+    }
+    this.offTurnEventClaims.delete(runId);
+    this.offTurnSignalClaims.delete(runId);
+    const restoreTo = this.offTurnRuns.get(runId);
+    if (
+      restoreTo === undefined ||
+      this.registry.has(runId) ||
+      this.delegateLeases.has(runId)
+    ) {
+      return;
+    }
+    this.offTurnRuns.delete(runId);
+    await this.restoreOffTurnBadge(runId, restoreTo);
   }
 
   /**
@@ -4791,7 +4853,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * settle it is a second non-terminal→terminal crossing for a turn that ended
    * minutes ago, which the client reads as a fresh ending and notifies about.
    *
-   * Re-reads rather than trusting the caller: both callers reach this after an
+   * Re-reads rather than trusting the caller: every caller reaches this after an
    * `await`, and only a run still wearing the `running` the off-turn stretch
    * put there is theirs to change back.
    */
@@ -6962,6 +7024,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               await this.retireWithdrawnCard(runId, event.id);
               return;
             }
+            if (endsOffTurnStretch(event)) {
+              // The late calls a previous turn left behind have ended, but this
+              // turn owns the badge now: there is no off-turn stretch to end.
+              return;
+            }
             if (event.type === 'slash_commands') {
               // The CLI's own invokable set for this cwd — feeds the
               // composer's `/` autocomplete, never the transcript.
@@ -7467,17 +7534,46 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         ({ toolName }) =>
           autoApproves(toolName, this.runPosture.get(runId)) ? true : null,
         (event) => {
-          void this.handleBetweenTurnEvent(
-            runId,
-            adapter.getConfig().kind,
-            cwd,
-            configDir ?? null,
-            event,
-            owningSession,
+          const inFlight = this.offTurnInFlight.get(runId) ?? new Set();
+          this.offTurnInFlight.set(runId, inFlight);
+          const handle = (): Promise<void> =>
+            this.handleBetweenTurnEvent(
+              runId,
+              adapter.getConfig().kind,
+              cwd,
+              configDir ?? null,
+              event,
+              owningSession,
+            );
+          if (startsLateWork(event)) {
+            this.offTurnLateCalls.set(
+              runId,
+              (this.offTurnLateCalls.get(runId) ?? 0) + 1,
+            );
+          }
+          const seen = this.offTurnLateCalls.get(runId) ?? 0;
+          // Every other event starts at once: the handler takes some of its
+          // ordering synchronously, in the order events arrive.
+          const handled = (
+            endsOffTurnStretch(event)
+              ? Promise.allSettled([...inFlight]).then(() =>
+                  (this.offTurnLateCalls.get(runId) ?? 0) === seen
+                    ? handle()
+                    : undefined,
+                )
+              : handle()
           ).catch((err: unknown) => {
             this.logger.error(
               `run ${runId} between-turn event failed: ${String(err)}`,
             );
+          });
+          inFlight.add(handled);
+          void handled.finally(() => {
+            inFlight.delete(handled);
+            if (inFlight.size === 0) {
+              this.offTurnInFlight.delete(runId);
+              this.offTurnLateCalls.delete(runId);
+            }
           });
         },
         // A chat HAS a card surface, so a request the posture above will not

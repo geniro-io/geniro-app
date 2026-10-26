@@ -29,6 +29,14 @@ export const CODEX_TITLE_MODEL_FLAG = '-m';
 
 export const CODEX_OLLAMA_PROVIDER = 'geniro-ollama';
 
+/**
+ * How long a command codex starts with no turn open may run before it counts
+ * as background work. codex reports nothing while a command keeps running, and
+ * its exec tool yields after at most 30 s (exec_command: "effective range is
+ * 250-30000 ms", 0.162.0), so one still running past this was handed back.
+ */
+export const CODEX_LATE_COMMAND_BACKGROUND_MS = 30_000;
+
 /** What this client calls itself in `initialize.clientInfo`. */
 export const CODEX_CLIENT_NAME = 'geniro';
 

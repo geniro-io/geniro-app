@@ -103,6 +103,7 @@ import { asksForSecret } from '../../agents/utils/card-questions';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
 import {
+  endsOffTurnStretch,
   mapEventToItem,
   restatesRunAsWorking,
   terminalStatus,
@@ -4926,6 +4927,12 @@ export class GraphExecutorService
             return;
           }
           this.backgroundWork.record(runId, event, node.id);
+          // A stretch of late calls has no terminal; this event, which maps to
+          // no row, is what ends it.
+          if (endsOffTurnStretch(event)) {
+            await restoreOffTurnNodeBadge(sessionKey);
+            return;
+          }
           const mapped = mapEventToItem(event);
           const settles = terminalStatus(event) !== null;
           const callId = callContext ? callContext.callId : null;

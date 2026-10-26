@@ -25,7 +25,7 @@ import {
   ACP_PROTOCOL_VERSION,
   type AcpAgentCapabilities,
   type AcpMcpServerHttp,
-  type AcpPermissionOption,
+  type AcpParkedPermission,
   type AcpToolCall,
 } from './acp.types';
 import {
@@ -224,7 +224,8 @@ export class AcpSession implements TurnDriver {
    */
   readonly toolInputs = new Map<string, unknown>();
   /**
-   * Options offered per parked permission request, keyed by encoded id.
+   * Each parked permission request — its offered options and the tool call it
+   * asked about — keyed by encoded id.
    *
    * SESSION-scoped, and that is a fix rather than a tidy-up. A request the user
    * has not answered when its turn settles is re-held and re-offered to the
@@ -234,7 +235,16 @@ export class AcpSession implements TurnDriver {
    * read as answered while the agent stayed parked forever. Unreachable while
    * one process served one turn, because the session died with the turn.
    */
-  readonly parkedPermissions = new Map<string, AcpPermissionOption[]>();
+  readonly parkedPermissions = new Map<string, AcpParkedPermission>();
+  /**
+   * Tool calls whose permission geniro answered with anything but a selected
+   * allow option (a Deny, an auto-deny, a request released unanswered, an allow
+   * the agent offered no option for). The agent still closes such a call as
+   * `completed`; the mark is what lets its result read as an error. Session
+   * scoped like {@link parkedPermissions}: a verdict can land in a later turn
+   * than the call's update.
+   */
+  readonly refusedToolCalls = new Set<string>();
   /**
    * Params of each parked QUESTION, keyed by encoded id. A separate map from
    * the permissions above, and not merely for the payload: which map an id is

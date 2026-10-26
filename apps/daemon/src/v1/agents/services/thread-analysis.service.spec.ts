@@ -248,6 +248,17 @@ describe('ThreadAnalysisService.start', () => {
     expect(createChat.mock.calls[0]![0].replyLanguage).toBe('Russian');
   });
 
+  it('starts the analysis on auto-approve unless the dialog names a mode', async () => {
+    const { service, createChat } = build({});
+
+    await service.start('source', { agentKind: 'claude' });
+    await service.start('source', { agentKind: 'claude', approval: 'ask' });
+
+    // Never the chat default `ask`: omitted means `auto`.
+    expect(createChat.mock.calls[0]![0].approval).toBe('auto');
+    expect(createChat.mock.calls[1]![0].approval).toBe('ask');
+  });
+
   it('records whether the source was still working at the snapshot', async () => {
     const { service, createChat } = build({ status: 'running' });
 

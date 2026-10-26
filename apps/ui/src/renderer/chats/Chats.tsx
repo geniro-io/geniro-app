@@ -10883,6 +10883,8 @@ export function Chats({
                     configDir: configDirs[agentKind] ?? null,
                     model: models[agentKind] ?? null,
                     effort: efforts[agentKind] ?? null,
+                    // Never the composer's mode: an analysis starts on auto.
+                    approval: null,
                   }}
                   recentConfigDirsFor={(kind) =>
                     recentConfigDirsByAgent[kind] ?? []
@@ -10891,6 +10893,7 @@ export function Chats({
                     configProfiles.filter((profile) => profile.agent === kind)
                   }
                   configDirReasonFor={configDirReasonFor}
+                  approvalCapabilityFor={approvalCapabilityFor}
                   runSettings={currentRunSettings}
                   onClose={() => setAnalyzingRun(null)}
                   onStarted={() => {

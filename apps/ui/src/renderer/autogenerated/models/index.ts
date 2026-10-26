@@ -1535,6 +1535,12 @@ export interface AnalyzeThreadDto {
     agentKind: AgentKind;
     /**
      * 
+     * @type {ChatApprovalMode}
+     * @memberof AnalyzeThreadDto
+     */
+    approval?: ChatApprovalMode;
+    /**
+     * 
      * @type {string}
      * @memberof AnalyzeThreadDto
      */

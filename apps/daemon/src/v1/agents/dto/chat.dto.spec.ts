@@ -183,6 +183,17 @@ describe('analyzeThreadSchema', () => {
       }).success,
     ).toBe(true);
   });
+
+  it('carries the approval mode the dialog picked, and refuses an unknown one', () => {
+    expect(
+      analyzeThreadSchema.parse({ agentKind: 'claude', approval: 'ask' })
+        .approval,
+    ).toBe('ask');
+    expect(
+      analyzeThreadSchema.safeParse({ agentKind: 'claude', approval: 'yolo' })
+        .success,
+    ).toBe(false);
+  });
 });
 
 describe('createChatSchema.replyLanguage', () => {

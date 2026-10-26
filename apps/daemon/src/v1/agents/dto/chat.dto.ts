@@ -174,9 +174,11 @@ export class CreateChatDto extends createZodDto(createChatSchema) {}
  * `cwd` is only sent when the source's own folder is gone (the route answers
  * `ANALYSIS_FOLDER_GONE` until one is); otherwise the analysis runs where the
  * source ran, so its repo recommendations land in that working tree.
+ * `approval` omitted is `ANALYSIS_DEFAULT_APPROVAL` (`auto`), not the chat's.
  */
 export const analyzeThreadSchema = z.object({
   agentKind: AgentKindSchema,
+  approval: ChatApprovalModeSchema.optional(),
   model: z.string().min(1).optional(),
   effort: z.string().min(1).optional(),
   configDir: z.string().min(1).optional(),

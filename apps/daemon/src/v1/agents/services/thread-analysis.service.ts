@@ -10,7 +10,11 @@ import { ConflictException, NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
 import { type AgentKind, isTerminalRunStatus } from '../../runs/runs.types';
-import type { RunWire } from '../chat.types';
+import {
+  ANALYSIS_DEFAULT_APPROVAL,
+  type ChatApprovalMode,
+  type RunWire,
+} from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import type { AgentOptionsSnapshot } from '../utils/agent-options';
@@ -26,6 +30,8 @@ import { ChatService } from './chat.service';
 /** What the "Analyze thread" dialog sends — see `AnalyzeThreadDto`. */
 export interface StartThreadAnalysis {
   agentKind: AgentKind;
+  /** Omitted = {@link ANALYSIS_DEFAULT_APPROVAL}. */
+  approval?: ChatApprovalMode;
   model?: string;
   effort?: string;
   configDir?: string;
@@ -186,6 +192,7 @@ export class ThreadAnalysisService
     const run = await this.chats.createChat({
       agentKind: input.agentKind,
       cwd,
+      approval: input.approval ?? ANALYSIS_DEFAULT_APPROVAL,
       model: input.model,
       effort: input.effort,
       configDir: input.configDir,

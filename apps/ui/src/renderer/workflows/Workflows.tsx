@@ -94,6 +94,7 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
   toFlow,
+  type WorkflowMeta,
 } from './graph-doc';
 import { InstructionSizeCard } from './instruction-size-card';
 import { ModelSettingsRows } from './model-settings-rows';
@@ -225,6 +226,11 @@ export function Workflows({
   // Set in the create dialog / loaded with the workflow; carried through every
   // save so a described workflow never loses its description to the builder.
   const [description, setDescription] = useState('');
+  // The run's cap on agent turns working at once; undefined = the machine's
+  // ceiling. Carried through every save like the description.
+  const [maxActiveTurns, setMaxActiveTurns] = useState<number | undefined>(
+    undefined,
+  );
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   // The builder's "Change workflow" popup — the create meta form, prefilled.
@@ -366,6 +372,7 @@ export function Workflows({
         setActiveSlug(slug);
         setName(workflow.name);
         setDescription(workflow.description ?? '');
+        setMaxActiveTurns(workflow.maxActiveTurns);
         setNodes(flow.nodes);
         setEdges(flow.edges);
         setSelectedNodeId(null);
@@ -377,6 +384,7 @@ export function Workflows({
           canvasSnapshot(
             workflow.name,
             workflow.description ?? '',
+            workflow.maxActiveTurns,
             flow.nodes,
             flow.edges,
           ),
@@ -402,7 +410,7 @@ export function Workflows({
    * showing the error.
    */
   const createWorkflow = useCallback(
-    async (meta: { name: string; description?: string }): Promise<void> => {
+    async (meta: WorkflowMeta): Promise<void> => {
       if (!api) {
         return;
       }
@@ -433,6 +441,7 @@ export function Workflows({
     setSelectedNodeId(null);
     setName('');
     setDescription('');
+    setMaxActiveTurns(undefined);
     setNodes([]);
     setEdges([]);
     setError(null);
@@ -449,13 +458,13 @@ export function Workflows({
   /** The live canvas serialized as a write would store it — the autosave
    *  trigger (compared against `savedSnapshot`). */
   const liveSnapshot = useMemo(
-    () => canvasSnapshot(name, description, nodes, edges),
-    [name, description, nodes, edges],
+    () => canvasSnapshot(name, description, maxActiveTurns, nodes, edges),
+    [name, description, maxActiveTurns, nodes, edges],
   );
 
   /** Persist the canvas under the given meta; true on success. */
   const persist = useCallback(
-    async (meta: { name: string; description?: string }): Promise<boolean> => {
+    async (meta: WorkflowMeta): Promise<boolean> => {
       if (!api) {
         return false;
       }
@@ -483,7 +492,13 @@ export function Workflows({
         setActiveSlug(saved.slug);
         loadedHashRef.current = saved.hash;
         setSavedSnapshot(
-          canvasSnapshot(meta.name, meta.description ?? '', nodes, edges),
+          canvasSnapshot(
+            meta.name,
+            meta.description ?? '',
+            meta.maxActiveTurns,
+            nodes,
+            edges,
+          ),
         );
         await refreshList();
         return true;
@@ -511,8 +526,9 @@ export function Workflows({
     return persist({
       name: name.trim() || 'workflow',
       ...(trimmedDescription ? { description: trimmedDescription } : {}),
+      ...(maxActiveTurns !== undefined ? { maxActiveTurns } : {}),
     });
-  }, [persist, name, description]);
+  }, [persist, name, description, maxActiveTurns]);
 
   // No Save button: edits persist on their own once the user pauses. Suspended
   // while a delete is in flight so a queued write can't resurrect the file.
@@ -571,6 +587,7 @@ export function Workflows({
       const onDisk = canvasSnapshot(
         workflow.name,
         workflow.description ?? '',
+        workflow.maxActiveTurns,
         flow.nodes,
         flow.edges,
       );
@@ -589,6 +606,7 @@ export function Workflows({
         liveSnapshotRef.current !== savedSnapshotRef.current;
       setName(workflow.name);
       setDescription(workflow.description ?? '');
+      setMaxActiveTurns(workflow.maxActiveTurns);
       setNodes(flow.nodes);
       setEdges(flow.edges);
       setSavedSnapshot(onDisk);
@@ -658,12 +676,13 @@ export function Workflows({
   /** Change-popup submit: adopt the new meta and persist it immediately —
    *  the popup only closes once the library file actually carries it. */
   const renameWorkflow = useCallback(
-    async (meta: { name: string; description?: string }): Promise<void> => {
+    async (meta: WorkflowMeta): Promise<void> => {
       setRenaming(true);
       try {
         if (await persist(meta)) {
           setName(meta.name);
           setDescription(meta.description ?? '');
+          setMaxActiveTurns(meta.maxActiveTurns);
           setRenameOpen(false);
         }
       } finally {
@@ -1492,6 +1511,7 @@ export function Workflows({
           title="New workflow"
           submitLabel="Create"
           busyLabel="Creating…"
+          maxActiveTurnsCeiling={capabilities?.maxActiveTurnsCeiling ?? null}
           onClose={() => setCreateOpen(false)}
           onSubmit={(meta) => void createWorkflow(meta)}
         />
@@ -2230,7 +2250,9 @@ export function Workflows({
         initial={{
           name,
           ...(description.trim() ? { description } : {}),
+          ...(maxActiveTurns !== undefined ? { maxActiveTurns } : {}),
         }}
+        maxActiveTurnsCeiling={capabilities?.maxActiveTurnsCeiling ?? null}
         onClose={() => setRenameOpen(false)}
         onSubmit={(meta) => void renameWorkflow(meta)}
       />

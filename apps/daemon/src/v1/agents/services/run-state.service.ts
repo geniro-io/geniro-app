@@ -82,6 +82,11 @@ export class RunStateService {
             ),
           );
 
+    const queuedCallIds = new Set(
+      wire(await this.itemDao.callQueueRows(runId, em))
+        .map((row) => payloadString(row.payload, 'callId'))
+        .filter((callId): callId is string => callId !== null),
+    );
     const calls = foldRunCalls(
       wire(
         await this.itemDao.rowsOfKinds(
@@ -92,6 +97,8 @@ export class RunStateService {
         ),
       ),
       wire(await this.itemDao.callHandOffRows(runId, undefined, em)),
+      queuedCallIds,
+      await this.itemDao.callIdsWithStatus(runId, [...queuedCallIds], em),
     );
 
     const declarations = wire(

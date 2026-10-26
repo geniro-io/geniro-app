@@ -5849,6 +5849,56 @@ describe('Chats workflow runs', () => {
     ).toBeGreaterThan(1);
   });
 
+  it('reads a call queued under the run’s cap as queued in the agents panel, then running once it starts', async () => {
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(5, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-1',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          message: 'summarize the diff',
+        },
+      });
+      emitItem({
+        ...wfItem(6, 'system', 'helper'),
+        payload: {
+          callId: 'call-1',
+          severity: 'info',
+          queuedCall: { cap: 1 },
+          message: 'Queued — 1 agent turn(s) of this run are already working.',
+        },
+      });
+    });
+    const helperCard = (): HTMLElement | undefined =>
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          '[data-slot="agent-cards"] li',
+        ),
+      ].find((row) => row.textContent?.includes('helper'));
+    expect(
+      helperCard()?.querySelector('[data-status="queued"]'),
+    ).not.toBeNull();
+    expect(
+      helperCard()?.querySelector('[data-status="running"]') ?? null,
+    ).toBeNull();
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(7, 'status', 'helper'),
+        payload: { nodeId: 'helper', status: 'running', callId: 'call-1' },
+      });
+    });
+    expect(
+      helperCard()?.querySelector('[data-status="queued"]') ?? null,
+    ).toBeNull();
+  });
+
   it('a callee sub-turn streams into ONE communication card — no separate "started" row, no interleaved text', async () => {
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
     const { client, emitItem } = makeClient();

@@ -65,7 +65,10 @@ import { payloadString } from './transcript-payload';
 import { JUMP_MARK_CLASS, TranscriptRow } from './transcript-row';
 import { JumpMarkContext } from './use-transcript-jump';
 
-function blockStatusOf(status: CallBlockEntry['status']): BlockStatus {
+function blockStatusOf(
+  status: CallBlockEntry['status'],
+  queued: boolean,
+): BlockStatus {
   switch (status) {
     case 'completed':
       return 'done';
@@ -73,6 +76,8 @@ function blockStatusOf(status: CallBlockEntry['status']): BlockStatus {
       return 'error';
     case 'cancelled':
       return 'stopped';
+    case 'pending':
+      return queued ? 'queued' : 'running';
     default:
       return 'running';
   }
@@ -440,7 +445,10 @@ export const CallBlock = memo(function CallBlock({
   // A callee carrying on by itself after the call settled is working IN this
   // card — its live row is drawn inside it — so the card's mark spins with it.
   // The call itself stays settled: `callRunning` below still reads the call.
-  const status = blockStatusOf(block.calleeWorking ? 'running' : block.status);
+  const status = blockStatusOf(
+    block.calleeWorking ? 'running' : block.status,
+    block.queued === true,
+  );
   const foldedUsage = callBlockUsage(block);
   /**
    * The callee's window, live first and the block's own settled rows last.
@@ -467,8 +475,8 @@ export const CallBlock = memo(function CallBlock({
   const runId = useContext(ThreadUiMemoryContext);
   const [messageOpen, setMessageOpen] = useState(false);
   const calleeNodeAgent = calleeAgentOf(block, nodes);
-  // The block's own status, not the card's: a call still queued for a
-  // sub-turn slot draws as running but has no turn to join yet.
+  // The block's own status, not the card's: a call still pending — queued
+  // under the run's cap, or not yet started — has no turn to join yet.
   const callRunning = block.status === 'running';
   const live =
     resolveCallReading !== null && block.calleeNodeId !== null

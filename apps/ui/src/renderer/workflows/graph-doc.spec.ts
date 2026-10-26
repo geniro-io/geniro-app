@@ -199,35 +199,79 @@ describe('toFlow / fromFlow', () => {
 describe('canvasSnapshot (the builder dirty-check baseline)', () => {
   it('is stable across a load round-trip and selection, and flips on a real edit', () => {
     const flow = toFlow(WF);
-    const baseline = canvasSnapshot('team', '', flow.nodes, flow.edges);
+    const baseline = canvasSnapshot(
+      'team',
+      '',
+      undefined,
+      flow.nodes,
+      flow.edges,
+    );
 
     // Re-serializing the untouched canvas reads clean.
-    expect(canvasSnapshot('team', '', flow.nodes, flow.edges)).toBe(baseline);
+    expect(canvasSnapshot('team', '', undefined, flow.nodes, flow.edges)).toBe(
+      baseline,
+    );
 
     // Selecting a node is not an edit — it must never arm the discard guard.
     const selected = flow.nodes.map((n) =>
       n.id === 'coder' ? { ...n, selected: true } : n,
     );
-    expect(canvasSnapshot('team', '', selected, flow.edges)).toBe(baseline);
+    expect(canvasSnapshot('team', '', undefined, selected, flow.edges)).toBe(
+      baseline,
+    );
 
     // Moving a node IS an edit (layout persists to the YAML).
     const moved = flow.nodes.map((n) =>
       n.id === 'coder' ? { ...n, position: { x: 99, y: 20 } } : n,
     );
-    expect(canvasSnapshot('team', '', moved, flow.edges)).not.toBe(baseline);
+    expect(canvasSnapshot('team', '', undefined, moved, flow.edges)).not.toBe(
+      baseline,
+    );
 
     // Removing an edge IS an edit.
-    expect(canvasSnapshot('team', '', flow.nodes, [])).not.toBe(baseline);
+    expect(canvasSnapshot('team', '', undefined, flow.nodes, [])).not.toBe(
+      baseline,
+    );
   });
 
   it('normalizes meta like Save does — whitespace and the empty-name fallback', () => {
     const flow = toFlow(WF);
-    expect(canvasSnapshot(' team ', '  ', flow.nodes, flow.edges)).toBe(
-      canvasSnapshot('team', '', flow.nodes, flow.edges),
+    expect(
+      canvasSnapshot(' team ', '  ', undefined, flow.nodes, flow.edges),
+    ).toBe(canvasSnapshot('team', '', undefined, flow.nodes, flow.edges));
+    expect(canvasSnapshot('', '', undefined, flow.nodes, flow.edges)).toBe(
+      canvasSnapshot('workflow', '', undefined, flow.nodes, flow.edges),
     );
-    expect(canvasSnapshot('', '', flow.nodes, flow.edges)).toBe(
-      canvasSnapshot('workflow', '', flow.nodes, flow.edges),
+  });
+});
+
+describe('maxActiveTurns through the builder', () => {
+  it('rides fromFlow onto the saved workflow, and is left off when unset', () => {
+    const flow = toFlow(WF);
+    expect(
+      fromFlow({ name: 'team', maxActiveTurns: 3 }, flow.nodes, flow.edges)
+        .maxActiveTurns,
+    ).toBe(3);
+    expect(
+      'maxActiveTurns' in fromFlow({ name: 'team' }, flow.nodes, flow.edges),
+    ).toBe(false);
+  });
+
+  it('is part of the dirty-check baseline: a cap loaded from the file reads clean, a changed one does not', () => {
+    // The snapshot taken at load and the one autosave compares against must
+    // agree on the cap, or a capped workflow reads dirty forever and autosave
+    // writes in a loop — or a change to it is never saved.
+    const flow = toFlow({ ...WF, maxActiveTurns: 3 });
+    const baseline = canvasSnapshot('team', '', 3, flow.nodes, flow.edges);
+    expect(canvasSnapshot('team', '', 3, flow.nodes, flow.edges)).toBe(
+      baseline,
     );
+    expect(canvasSnapshot('team', '', 2, flow.nodes, flow.edges)).not.toBe(
+      baseline,
+    );
+    expect(
+      canvasSnapshot('team', '', undefined, flow.nodes, flow.edges),
+    ).not.toBe(baseline);
   });
 });
 

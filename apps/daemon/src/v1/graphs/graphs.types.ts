@@ -571,6 +571,19 @@ export const WorkflowSchema = z
   .object({
     name: z.string().min(1).describe('Human-readable workflow name'),
     description: z.string().optional(),
+    /**
+     * How many callee turns of one run may be working at once, at every call
+     * depth. Omitted = the machine's ceiling (`CapabilitiesWire`'s
+     * `maxActiveTurnsCeiling`); a value above it runs at the ceiling.
+     */
+    maxActiveTurns: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe(
+        'Cap on callee turns working at once across the run; omitted = the machine ceiling',
+      ),
     // An empty node list is a legal library draft (the builder starts from a
     // blank canvas); running one is rejected at run start (GRAPH_EMPTY).
     nodes: z.array(WorkflowNodeSchema),
@@ -1633,6 +1646,17 @@ export const CapabilitiesWireSchema = z.object({
     .describe(
       'Per-CLI note on background work, composed right after the host preamble, one entry per known agent',
     ),
+  /**
+   * The most callee turns one run works at once on this machine — what an
+   * unset `Workflow.maxActiveTurns` means, and what a higher one is lowered to.
+   */
+  maxActiveTurnsCeiling: z
+    .number()
+    .int()
+    .min(1)
+    .describe(
+      'The machine ceiling on callee turns working at once in one run (sized from total memory)',
+    ),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 
@@ -1747,10 +1771,10 @@ export interface RunCallCapability {
    */
   readonly messageTargets: ReadonlySet<string>;
   /**
-   * Spawn one callee turn; resolves once the turn fully settles.
-   * `depth` is the call's chain depth (1 = a top-level caller's callee): the
-   * executor bounds only depth-1 turns with its sub-turn slot pool, so a
-   * nested sync chain can't hold every slot while blocked on a deeper call.
+   * Spawn one callee turn; resolves once the turn fully settles. A fresh turn
+   * waits for room under the run's active-turn cap (`Workflow.maxActiveTurns`)
+   * at any call depth; `options.wake` — geniro continuing a conversation to
+   * deliver what its running calls owe it — starts at once.
    * `resumeSessionId` continues a prior callee CLI session (a thread
    * continuation); null starts a fresh conversation.
    *
@@ -1762,38 +1786,30 @@ export interface RunCallCapability {
    * put two live `claude --resume <id>` processes on one worktree, both
    * answering one message and editing the same files.
    *
-   * `pool` is set for a callee with an agent pool: `callee` is then that
-   * member's resolved node, and the plan names it and the members to fall
-   * through to. The outcome says which member produced it.
+   * `options.pool` is set for a callee with an agent pool: `callee` is then
+   * that member's resolved node, and the plan names it and the members to
+   * fall through to. The outcome says which member produced it.
    */
   launchCalleeTurn(
     callee: WorkflowAgentNode,
     message: string,
     callId: string,
-    depth: number,
     resumeSessionId: string | null,
     conversationId: string,
-    pool?: CalleePoolPlan,
+    options: { pool?: CalleePoolPlan; wake: boolean },
   ): Promise<CalleeTurnOutcome>;
   /**
    * Stop ONE callee turn — the executor half of `cancel_agent`.
    *
    * It marks the call cancelled and cancels its turn if one is running, and
-   * BOTH halves are load-bearing: a depth-1 call queues on the sub-turn slot
-   * pool, so the commonest thing a caller wants to cancel is a call that has no
-   * process yet. Marking is what reaches that one — the turn checks the mark
-   * when its slot comes up and settles `cancelled` without ever spawning.
+   * BOTH halves are load-bearing: a call can be queued under the run's
+   * active-turn cap, so the commonest thing a caller wants to cancel is a call
+   * that has no process yet. Marking reaches that one: it leaves the queue at
+   * once and settles `cancelled` without ever spawning.
    *
    * Returns whether a turn was actually signalled, which the broker uses only to
    * word its receipt: a marked-but-unstarted call is cancelled just as
    * effectively, so `false` is never a refusal.
-   *
-   * KNOWN LIMIT for the queued case: the mark stops the call from ever spawning,
-   * which is the whole point (nothing is spent on it), but the call's promise
-   * settles only when its slot comes up — the semaphore has no cancellable wait.
-   * So a caller that cancels a queued call may collect its cancellation a little
-   * later than it asked for it, bounded by the pool draining. A live call, which
-   * is the case this tool exists for, settles at once.
    */
   cancelCalleeTurn(callId: string): boolean;
   /**
@@ -1802,7 +1818,7 @@ export interface RunCallCapability {
    * message into a call block takes (`deliverToCall`), minus the transcript
    * row, which the broker writes as the caller's.
    *
-   * `not_started` is a call still queued on the sub-turn pool (there is no
+   * `not_started` is a call still queued under the active-turn cap (there is no
    * process to write to), `refused` a CLI that took no message mid-turn.
    * `interrupts` says what a delivery COST: a CLI whose follow-up replaces
    * the prompt in flight dropped the step it was on.
@@ -1853,6 +1869,13 @@ export interface RunCallCapability {
    * Absent for a capability with no monitor tools.
    */
   monitorsOwed?(caller: string): boolean;
+  /**
+   * A conversation started or stopped being BLOCKED — inside a wait on its
+   * own calls, on its own parked question, or on an approval card. A blocked
+   * callee turn does not count against the run's active-turn cap, and is
+   * counted again, without waiting, once it is not. Reported on a change only.
+   */
+  turnBlocked?(caller: string, blocked: boolean): void;
   /** Stop a conversation's monitors — its call is being cancelled. */
   stopMonitors?(caller: string): void;
   /** A callee conversation's call is now held — output waiting for it can go. */

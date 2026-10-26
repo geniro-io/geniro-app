@@ -90,6 +90,10 @@ function harness(options?: {
     conversationId: string;
   }[];
   deferred: Deferred[];
+  /** Call ids launched as WAKES, which skip the active-turn cap's queue. */
+  wakes: string[];
+  /** Every `turnBlocked` report, in order: [conversation, blocked]. */
+  blockedReports: [string, boolean][];
   /** Call ids the broker asked the executor to stop, in order. */
   cancelledTurns: string[];
   /** Every message the broker handed to a running callee, in order. */
@@ -104,6 +108,8 @@ function harness(options?: {
     conversationId: string;
   }[] = [];
   const deferred: Deferred[] = [];
+  const wakes: string[] = [];
+  const blockedReports: [string, boolean][] = [];
   const cancelledTurns: string[] = [];
   const messages: { callId: string; text: string }[] = [];
   const mode = options?.launch ?? 'instant';
@@ -114,10 +120,13 @@ function harness(options?: {
       callee,
       message,
       callId,
-      _depth,
       resumeSessionId,
       conversationId,
+      launch,
     ) => {
+      if (launch.wake) {
+        wakes.push(callId);
+      }
       launches.push({
         callee,
         message,
@@ -184,6 +193,9 @@ function harness(options?: {
         return { delivered: true, interrupts: false };
       }),
     isNodeLive: options?.isNodeLive ?? (() => true),
+    turnBlocked: (caller, blocked) => {
+      blockedReports.push([caller, blocked]);
+    },
     wakeNode: options?.wakeNode ?? (() => false),
     tellLiveNode: options?.tellLiveNode ?? (() => false),
     ...(options?.unreadTeamNotes === undefined
@@ -198,6 +210,8 @@ function harness(options?: {
     items,
     launches,
     deferred,
+    wakes,
+    blockedReports,
     cancelledTurns,
     messages,
   };
@@ -2307,6 +2321,43 @@ describe('CallBroker — a call whose callee goes quiet', () => {
     }
   });
 
+  it('stands down while the call waits under the run’s cap, however much is said to it, and resumes once it leaves the queue', async () => {
+    // A call that has not started has produced nothing because it has not
+    // begun; "has produced nothing for 10 minutes" would be false.
+    vi.useFakeTimers();
+    try {
+      const { broker, items, deferred } = harness({ launch: 'defer' });
+      const call = broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'wait your turn',
+      });
+
+      broker.noteCalleeQueued('run-1', 'call-1', true);
+      broker.noteCalleeActivity('run-1', 'call-1');
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(items.some((i) => i.payload.stalledCall === true)).toBe(false);
+
+      broker.noteCalleeQueued('run-1', 'call-1', false);
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      expect(items.filter((i) => i.payload.stalledCall === true)).toHaveLength(
+        1,
+      );
+
+      deferred[0]!.resolve({
+        status: 'completed',
+        finalText: 'done',
+        error: null,
+        failureClass: null,
+        resetsAt: null,
+        sessionId: 'sess-1',
+      });
+      await call;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stands down while the callee waits on its own tool call, and resumes after it answers', async () => {
     // REPORTED as "'qa' has produced nothing for 10 minutes" over a QA agent
     // that had launched ten reviewer sub-agents as `Task` tool calls: their
@@ -3909,6 +3960,9 @@ describe('CallBroker — every conversation of a node is a caller of its own', (
       conversationId: 'call-1',
       resumeSessionId: 'sess-1',
     });
+    // A wake: it serves a call already running, so it never queues under the
+    // active-turn cap — the calls the agent itself made do.
+    expect(h.wakes).toEqual(['call-3']);
     h.deferred[2]!.resolve(DONE('looked at it'));
     await new Promise((resolve) => setImmediate(resolve));
     expect(
@@ -7729,5 +7783,100 @@ describe('CallBroker — the machine sleeping through a deadline', () => {
     expect(fail).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(fail).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CallBroker — tells the executor when a conversation is blocked', () => {
+  // What the active-turn cap reads: a blocked turn stops counting, so a turn
+  // waiting on calls that are themselves queued for a slot can never hold the
+  // slot they need.
+  const helperIn = (call: string): string => callerKey('helper', call);
+  const DONE: CalleeTurnOutcome = {
+    status: 'completed',
+    finalText: 'done',
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: 'sess-x',
+  };
+
+  it('a sync call_agent blocks its caller for exactly the wait', async () => {
+    const h = harness({ launch: 'defer' });
+    const call = h.broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'm',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.blockedReports).toEqual([['orch', true]]);
+    h.deferred[0]!.resolve(DONE);
+    await call;
+    expect(h.blockedReports).toEqual([
+      ['orch', true],
+      ['orch', false],
+    ]);
+  });
+
+  it('a parked question blocks the asking callee until it is answered', async () => {
+    const h = harness({ launch: 'defer' });
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    h.broker.parkQuestion('run-1', 'call-1', {
+      question: 'Which?',
+      options: [],
+      payload: null,
+      deliver: () => true,
+      fail: () => {},
+    });
+    expect(h.blockedReports).toEqual([[helperIn('call-1'), true]]);
+    h.broker.answerAgent('run-1', 'orch', { call_id: 'call-1', answer: 'A' });
+    expect(h.blockedReports).toEqual([
+      [helperIn('call-1'), true],
+      [helperIn('call-1'), false],
+    ]);
+  });
+
+  it('reports a change only: a card and a wait together are one block, lifted by the last', async () => {
+    const h = harness({ launch: 'defer' });
+    h.broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+    const call = h.broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'm',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    h.broker.noteCallerUnblocked('run-1', 'orch', 'card-1');
+    expect(h.blockedReports).toEqual([['orch', true]]);
+    h.deferred[0]!.resolve(DONE);
+    await call;
+    expect(h.blockedReports).toEqual([
+      ['orch', true],
+      ['orch', false],
+    ]);
+  });
+
+  it('a conversation whose turn ended is no longer blocked by the cards it left', () => {
+    const h = harness();
+    h.broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+    h.broker.drainCaller('run-1', 'orch');
+    expect(h.blockedReports).toEqual([
+      ['orch', true],
+      ['orch', false],
+    ]);
+  });
+
+  it('a caller’s own call_agent is a fresh turn, never a wake', async () => {
+    const h = harness();
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'm',
+    });
+    expect(h.launches.map((launch) => launch.callId)).toEqual(['call-1']);
+    expect(h.wakes).toEqual([]);
   });
 });

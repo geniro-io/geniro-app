@@ -142,6 +142,7 @@ One home for each concern:
 **Calls, instances and delegates:**
 
 - A workflow run's agents come from the run's snapshot (`GET /v1/workflows/runs/:runId/workflow`), never the library. The new-run trigger chip is the exception.
+- A call waiting under its run's active-turn cap reads `queued`, never running — on its card, in the agents panel and in the shelf's Agents chip (`CallBlockEntry.queued`, folded from the executor's `queuedCall` row; its first status row ends it; off the page, run state's `RunCallState.queued`). `queued` is unsettled and is not working.
 - A call continuing an earlier call's `thread` is the same instance. Both surfaces resolve chains through `resolveCallChains` and match through `callIds`.
 - Never pool every instance's work into one list. Rows are filed by `callId`. Content whose call is not loaded becomes an inferred instance.
 - A main conversation exists only when there is a `status` row with no `callId`. Never infer one by counting turns.
@@ -331,6 +332,7 @@ One home for each concern:
 - A wire to a missing node is dropped on open and named. A data wire that closes a loop is refused (`closesDataCycle`).
 - After a socket reconnect, the dock reads back from the newest row held when the socket dropped. A turn ending is counted once, by row id. The dock holds anchors the way the chat screen does.
 - `RunDto.awaiting` follows the three-state rule: absent asserts nothing, and `null` clears.
+- `maxActiveTurns` (the "Change workflow" dialog's agents-at-once row: a switch — off is no limit of its own, the machine ceiling — and a `Stepper` from 1 to the ceiling, so no value outside the range can be entered) rides `WorkflowMeta` through `fromFlow`, `canvasSnapshot` (a required argument) and every save, like the description; dropping it from any one of them loses the cap or loops autosave.
 - Agent pools are capped at the twin `MAX_AGENT_POOL_EXTRA_MEMBERS`. Call instances name their member (`CallBlockEntry.member`). Hand-offs above the page arrive as anchors.
 
 ### Settings

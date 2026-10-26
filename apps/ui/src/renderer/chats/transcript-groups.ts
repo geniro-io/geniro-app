@@ -323,6 +323,24 @@ export interface CallBlockEntry {
    */
   heldOn?: number;
   /**
+   * The LATEST call is waiting for room under its run's active-turn cap
+   * (`Workflow.maxActiveTurns`): asked for, not started. Set only while the
+   * call is still `pending` — its first status row ends it.
+   *
+   * TWIN PARSER: written by `GraphExecutorService`'s `launchCalleeTurn` as a
+   * `system` row carrying `queuedCall: { cap }` and this call's id — see
+   * `apps/daemon/src/v1/graphs/services/graph-executor.service.ts`; the
+   * daemon's whole-run reading of the same row is `RunCallState.queued`
+   * (`ItemDao.callQueueRows`, `foldRunCalls`).
+   */
+  queued?: true;
+  /**
+   * The seq of the `queuedCall` row behind {@link queued} — what a run-state
+   * read must have covered before it may say the call has since started
+   * (`withDaemonStartedCalls`).
+   */
+  queuedSeq?: number;
+  /**
    * The LATEST call has SETTLED and its callee is working in it again.
    *
    * A callee's process outlives its call's turn, and it routinely carries on
@@ -2656,6 +2674,16 @@ export function groupTranscript(
       heldCalls.delete(callId);
     }
   }
+  // Calls that waited under the run's active-turn cap — see
+  // `CallBlockEntry.queued` for the twin it parses. Whether one still waits is
+  // its block's status to say: a call that started has a status row.
+  const queuedCalls = new Map<string, number>();
+  for (const item of items) {
+    const callId = payloadString(item.payload, 'callId');
+    if (callId !== null && item.kind === 'system' && isQueuedCall(item)) {
+      queuedCalls.set(callId, item.seq);
+    }
+  }
   // The call each delegate was LAUNCHED in, for a later row about it that names
   // none. A close the daemon wrote on a delegate's behalf can carry the node
   // and no call id (every one written before it stamped the call), and would
@@ -2784,6 +2812,7 @@ export function groupTranscript(
               shells,
               stalledCalls,
               heldCalls,
+              queuedCalls,
               // The WHOLE conversation, not the drawn part: what this card
               // COST is summed over every call of it, and the calls whose
               // rows page out are the expensive ones — see
@@ -3516,6 +3545,7 @@ function buildCallBlock(
   shell: CallShell,
   stalled: boolean,
   heldOn: number | null,
+  queuedSeq: number | null,
   pullResult: boolean,
 ): CallBlockEntry {
   let status: CallBlockEntry['status'] = 'pending';
@@ -3637,6 +3667,9 @@ function buildCallBlock(
     result,
     stalled,
     ...(heldOn !== null && OPEN_CALL_STATUSES.has(status) ? { heldOn } : {}),
+    ...(queuedSeq !== null && status === 'pending'
+      ? { queued: true as const, queuedSeq }
+      : {}),
     calleeWorking,
     ...(member !== null ? { member } : {}),
     ...(handOff !== null && handOffMessage !== null
@@ -3840,6 +3873,12 @@ export function conversationRoot(
   return chains.get(callId)?.[0] ?? callId;
 }
 
+/** Whether `item` says its call waited under the cap — see `CallBlockEntry.queued`. */
+function isQueuedCall(item: ChatItem): boolean {
+  const queued = (item.payload as { queuedCall?: unknown } | null)?.queuedCall;
+  return typeof queued === 'object' && queued !== null;
+}
+
 /**
  * How many calls a `heldCall` row says its callee is waiting for, or null for
  * any other row — see `CallBlockEntry.heldOn`.
@@ -3902,6 +3941,7 @@ function buildConversationBlock(
   shells: ReadonlyMap<string, CallShell>,
   stalledCalls: ReadonlySet<string>,
   heldCalls: ReadonlyMap<string, number>,
+  queuedCalls: ReadonlyMap<string, number>,
   /**
    * The WHOLE conversation, windowed calls and paged-out ones alike — see
    * {@link CallBlockEntry.conversationCallIds}. Defaults to the drawn calls,
@@ -3915,6 +3955,7 @@ function buildConversationBlock(
       shells.get(id)!,
       stalledCalls.has(id),
       heldCalls.get(id) ?? null,
+      queuedCalls.get(id) ?? null,
       pullResult,
     );
   const last = callIds.length - 1;
@@ -3935,22 +3976,37 @@ function buildConversationBlock(
   const heldOn = heldOfOpen(open);
   const first = blocks[0]!;
   const latest = blocks[last]!;
+  const status: CallBlockEntry['status'] =
+    open.length === 0
+      ? latest.status
+      : open.some((block) => block.status === 'running')
+        ? 'running'
+        : 'pending';
+  const {
+    queued: _latestQueued,
+    queuedSeq: _latestQueuedSeq,
+    ...latestRest
+  } = latest;
+  const queuedBlock =
+    status === 'pending'
+      ? open.find((block) => block.queued === true)
+      : undefined;
   const poolHandOff = blocks.findLast(
     (block) => block.poolHandOff !== undefined,
   )?.poolHandOff;
   return {
-    ...latest,
+    ...latestRest,
     ...(poolHandOff !== undefined ? { poolHandOff } : {}),
     id: first.id,
     message: first.message,
     callIds: [...callIds],
     conversationCallIds: [...conversation],
-    status:
-      open.length === 0
-        ? latest.status
-        : open.some((block) => block.status === 'running')
-          ? 'running'
-          : 'pending',
+    status,
+    // Queued only while nothing of the conversation runs and one open call
+    // still waits for room.
+    ...(queuedBlock?.queuedSeq !== undefined
+      ? { queued: true as const, queuedSeq: queuedBlock.queuedSeq }
+      : {}),
     stalled: open.some((block) => block.stalled),
     ...(heldOn !== null ? { heldOn } : {}),
     entries: blocks.flatMap((block, index): TranscriptEntry[] =>

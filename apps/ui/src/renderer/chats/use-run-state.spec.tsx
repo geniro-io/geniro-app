@@ -25,6 +25,7 @@ const state = (calls: number): RunStateDto => ({
     startedAt: 'now',
     endedAt: null,
     status: 'running' as const,
+    queued: false,
     member: null,
   })),
   delegates: [],
@@ -142,6 +143,39 @@ describe('useRunState', () => {
 
     await act(async () => {
       h.emitItem({ kind: 'tool_call', payload: { id: 't2', name: 'Task' } });
+    });
+    await settle();
+    expect(h.api.readRunState.mock.calls.length).toBe(before + 1);
+  });
+
+  it('re-reads when a call it lists as queued writes its first status row', async () => {
+    // A slot freed by a turn blocking or a held call writes no structural row,
+    // so off the page nothing else would say the queued call started.
+    const h = harness('r1');
+    const base = state(2);
+    h.api.readRunState.mockResolvedValue({
+      ...base,
+      calls: base.calls.map((call) =>
+        call.callId === 'call-1' ? { ...call, queued: true } : call,
+      ),
+    });
+    await h.render('r1');
+    const before = h.api.readRunState.mock.calls.length;
+
+    await act(async () => {
+      h.emitItem({
+        kind: 'status',
+        payload: { status: 'running', callId: 'call-0' },
+      });
+    });
+    await settle();
+    expect(h.api.readRunState.mock.calls.length).toBe(before);
+
+    await act(async () => {
+      h.emitItem({
+        kind: 'status',
+        payload: { status: 'running', callId: 'call-1' },
+      });
     });
     await settle();
     expect(h.api.readRunState.mock.calls.length).toBe(before + 1);

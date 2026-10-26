@@ -47,10 +47,17 @@ function memberOf(payload: unknown): number | null {
  * `handOffs` are the run's pool hand-off rows (`ItemDao.callHandOffRows`), in
  * seq order: the member a call names is its settle's, else its newest
  * hand-off's, else its start's.
+ *
+ * `queuedCallIds` are the calls that waited under the run's active-turn cap
+ * (`ItemDao.callQueueRows`) and `startedCallIds` those whose turn has since
+ * begun (`ItemDao.callIdsWithStatus`): a call is `queued` while it is out,
+ * waited, and has not begun.
  */
 export function foldRunCalls(
   rows: readonly ItemWire[],
   handOffs: readonly ItemWire[] = [],
+  queuedCallIds: ReadonlySet<string> = new Set(),
+  startedCallIds: ReadonlySet<string> = new Set(),
 ): RunCallState[] {
   const calls = new Map<string, RunCallState>();
   for (const row of rows) {
@@ -74,6 +81,7 @@ export function foldRunCalls(
       startedAt: row.createdAt,
       endedAt: null,
       status: 'running',
+      queued: queuedCallIds.has(callId) && !startedCallIds.has(callId),
       member: memberOf(row.payload),
     });
   }
@@ -94,6 +102,7 @@ export function foldRunCalls(
     }
     call.endedAt = row.createdAt;
     call.status = callEndStatus(row.payload);
+    call.queued = false;
     call.member = memberOf(row.payload) ?? call.member;
   }
   return [...calls.values()];

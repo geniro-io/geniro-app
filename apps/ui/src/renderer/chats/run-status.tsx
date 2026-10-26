@@ -34,6 +34,7 @@ import { cn } from '../components/ui/utils';
  */
 export type RunStatusKind =
   | 'pending'
+  | 'queued'
   | 'running'
   | 'held'
   | 'needs-input'
@@ -60,6 +61,14 @@ export const RUN_STATUS_META: Record<
     icon: Clock,
     className: 'text-muted-foreground',
     label: 'pending',
+  },
+  // An agent call waiting for room under its run's active-turn cap: asked for,
+  // nothing started. Muted and still, like `pending` — nothing is working on
+  // it yet — but named, because "why is this not running" has an answer here.
+  queued: {
+    icon: Clock,
+    className: 'text-muted-foreground',
+    label: 'queued',
   },
   running: { icon: Loader2, className: 'text-primary', label: 'running' },
   // Accent-toned like `running`, because that is what it IS — work is going on

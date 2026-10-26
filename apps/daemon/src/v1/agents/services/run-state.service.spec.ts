@@ -264,6 +264,45 @@ describe('RunStateService (in-memory sqlite)', () => {
     ]);
   });
 
+  it('says which calls still wait under the run’s active-turn cap, until their turn begins', async () => {
+    // Over the whole run: a call queued above the client's page has no card
+    // there, and this is the only place it can read "queued" from.
+    await createRun('running', 'dev-team');
+    await insert(1, 'call_started', { callId: 'call-1', calleeNodeId: 'qa' });
+    await insert(2, 'call_started', { callId: 'call-2', calleeNodeId: 'qa' });
+    await insert(3, 'call_started', { callId: 'call-3', calleeNodeId: 'qa' });
+    for (const [seq, callId] of [
+      [4, 'call-1'],
+      [5, 'call-2'],
+      [6, 'call-3'],
+    ] as const) {
+      await insert(
+        seq,
+        'system',
+        { callId, severity: 'info', queuedCall: { cap: 1 } },
+        { nodeId: 'qa', inCall: callId },
+      );
+    }
+    // call-1 started; call-3 was cancelled while it waited.
+    await insert(
+      7,
+      'status',
+      { nodeId: 'qa', status: 'running', callId: 'call-1' },
+      { nodeId: 'qa', inCall: 'call-1' },
+    );
+    await insert(8, 'call_result', { callId: 'call-3', status: 'error' });
+
+    const state = await service().read('run-a');
+
+    expect(
+      state.calls.map((call) => [call.callId, call.status, call.queued]),
+    ).toEqual([
+      ['call-1', 'running', false],
+      ['call-2', 'running', true],
+      ['call-3', 'failed', false],
+    ]);
+  });
+
   it('counts each delegate’s tool calls over every row of the run', async () => {
     // However few of them a client has loaded: the sub-agent card draws this.
     await createRun('running');

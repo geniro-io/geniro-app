@@ -213,6 +213,7 @@ describe('callEndedPerDaemon', () => {
           startedAt: 'now',
           endedAt: null,
           status,
+          queued: false,
           member: null,
         },
       ],

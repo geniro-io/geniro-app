@@ -216,6 +216,23 @@ edges:
     expect(agentNode(back.nodes[0]).role).toBeUndefined();
   });
 
+  it('writes maxActiveTurns into an existing file, and removes it once cleared', () => {
+    // The MERGE path patches the root's keys one by one, so a root field
+    // without its own line there is dropped on every save of a file that
+    // already exists — the no-source path would not show it.
+    const wf = parseWorkflowYaml(VALID_SOURCE);
+    wf.maxActiveTurns = 3;
+    const out = serializeWorkflowYaml(wf, VALID_SOURCE);
+    expect(parseWorkflowYaml(out).maxActiveTurns).toBe(3);
+    expect(out).toContain('# the coder writes the change');
+
+    const cleared = parseWorkflowYaml(out);
+    delete cleared.maxActiveTurns;
+    const back = serializeWorkflowYaml(cleared, out);
+    expect(back).not.toContain('maxActiveTurns');
+    expect(parseWorkflowYaml(back).maxActiveTurns).toBeUndefined();
+  });
+
   it('writes an agent description back into an existing file', () => {
     // The merge patches a fixed field list, so a field missing from it is
     // silently dropped on every save of a pre-existing file — and description

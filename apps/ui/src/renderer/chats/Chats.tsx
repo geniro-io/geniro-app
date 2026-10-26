@@ -490,12 +490,17 @@ function runLabel(run: ChatRun, workflowNames: Map<string, string>): string {
  */
 /**
  * A call block's lifecycle in the panel's run vocabulary. A `pending` call has
- * been asked for and is not over, which the panel's rows call `running`.
+ * been asked for and is not over, which the panel's rows call `running` —
+ * unless it is waiting under the run's active-turn cap, which they call
+ * `queued`.
  */
 function callThreadStatusOf(
-  status: CallBlockEntry['status'],
+  block: Pick<CallBlockEntry, 'status' | 'queued'>,
 ): AgentThread['status'] {
-  return status === 'pending' ? 'running' : status;
+  if (block.status !== 'pending') {
+    return block.status;
+  }
+  return block.queued === true ? 'queued' : 'running';
 }
 
 /** The ring's figures as an agent card's three context fields. */
@@ -6225,6 +6230,7 @@ export function Chats({
               ? parsed
               : null,
         stalled: block.stalled,
+        queued: block.queued === true,
       };
     });
     // Every call the daemon still holds open that the window holds no card
@@ -6241,6 +6247,7 @@ export function Chats({
           title: call.title,
           startedAt: Number.isFinite(startedAt) ? startedAt : null,
           stalled: false,
+          queued: call.queued,
         };
       });
     return [...elsewhere, ...fromWindow];
@@ -6989,7 +6996,11 @@ export function Chats({
                 runState,
                 thread.callIds[thread.callIds.length - 1] ?? '',
               ) ?? thread.status)
-            : thread.status;
+            : // The activity fold opens every call as running at its
+              // `call_started`; the card knows it is still waiting to start.
+              thread.status === 'running' && block?.queued === true
+              ? 'queued'
+              : thread.status;
         // The daemon's whole-run figure first: the window's fold sums only the
         // turns it holds, so a conversation started above it read a fraction.
         const usage = withLiveCost(
@@ -7060,9 +7071,11 @@ export function Chats({
         const recorded = stateCalls.get(callId);
         return block !== undefined
           ? (callEndedPerDaemon(stateCalls, runState, callId) ??
-              callThreadStatusOf(block.status))
+              callThreadStatusOf(block))
           : recorded !== undefined
-            ? recorded.status
+            ? recorded.status === 'running' && recorded.queued
+              ? 'queued'
+              : recorded.status
             : liveText.has(partialOwnerKey(nodeId, callId))
               ? 'running'
               : 'completed';
@@ -7086,10 +7099,18 @@ export function Chats({
         const openCallIds = callIds.filter((callId) => {
           const status = statusOfCall(callId);
           return (
-            status === 'running' || status === 'pending' || status === 'held'
+            status === 'running' ||
+            status === 'pending' ||
+            status === 'held' ||
+            status === 'queued'
           );
         });
-        const status = openCallIds.length > 0 ? 'running' : statusOfCall(head);
+        const status =
+          openCallIds.length === 0
+            ? statusOfCall(head)
+            : openCallIds.every((callId) => statusOfCall(callId) === 'queued')
+              ? 'queued'
+              : 'running';
         return {
           id: head,
           kind: 'call',

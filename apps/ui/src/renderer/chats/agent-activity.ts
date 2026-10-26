@@ -42,6 +42,12 @@ export interface AgentActivity {
    */
   mainTurnStarts: number;
   /**
+   * The node's OWN conversation has a live turn, read from its rows. Absent
+   * where only a node-wide reading is known (`withDurableNodeStatus`), and then
+   * the main instance's state is inferred from the live-turn count.
+   */
+  mainTurnLive?: boolean;
+  /**
    * The OWN conversation's context reading, folded from `turn_complete` rows
    * carrying no `callId` — the main instance's ring. {@link contextTokens} is
    * whichever conversation of this node settled last, which is the card's
@@ -402,10 +408,13 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
     id: MAIN_THREAD_ID,
     kind: 'main',
     label: 'Main conversation',
-    // The node's live turns beyond its live calls ARE the main turn; once
-    // settled, the node's last transition is the best record of how it ended.
+    // The node's own conversation's live turn, where its rows say; else its
+    // live turns beyond its live calls — counting a call still queued under
+    // the run's cap, which has no turn yet, so the rows' answer comes first.
+    // Once settled, the node's last transition is the best record of how it
+    // ended.
     status:
-      activity.activeTurns > runningCalls
+      (activity.mainTurnLive ?? activity.activeTurns > runningCalls)
         ? 'running'
         : activity.lastStatus && activity.lastStatus !== 'running'
           ? activity.lastStatus
@@ -609,8 +618,9 @@ export function withDurableNodeStatus(
       continue;
     }
     out ??= new Map(activity);
+    const { mainTurnLive: _fromRows, ...rest } = existing ?? emptyActivity();
     out.set(nodeId, {
-      ...(existing ?? emptyActivity()),
+      ...rest,
       lastStatus: row.status,
       activeTurns: running ? 1 : 0,
     });
@@ -619,7 +629,7 @@ export function withDurableNodeStatus(
     for (const [nodeId, entry] of out ?? activity) {
       if (entry.activeTurns > 0) {
         out ??= new Map(activity);
-        out.set(nodeId, { ...entry, activeTurns: 0 });
+        out.set(nodeId, { ...entry, activeTurns: 0, mainTurnLive: false });
       }
     }
   }
@@ -730,6 +740,7 @@ export function computeAgentActivity(
         }
       }
       agent.activeTurns = open.size;
+      agent.mainTurnLive = open.has(MAIN_CONVERSATION);
       continue;
     }
     // Call items are persisted under the CALLER's node — the thread belongs

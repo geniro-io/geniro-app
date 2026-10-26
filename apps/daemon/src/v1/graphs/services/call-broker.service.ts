@@ -66,7 +66,7 @@ const RUN_NOT_ACTIVE: CallEnvelope = {
  * braking runaway mutual-call loops. There is deliberately NO cap on how many
  * calls a run makes in total: a long-lived workflow's coordinator works by
  * calling, and a count-per-pass cap ran a Manager out of calls mid-task while
- * never more than the executor's sub-turn pool were live at once.
+ * never more than the run's active-turn cap were live at once.
  */
 const MAX_CALL_DEPTH = 3;
 
@@ -315,6 +315,12 @@ interface ActiveCall {
    */
   blockedOnVerdicts: number;
   /**
+   * Waiting for room under the run's active-turn cap: no turn has started, so
+   * there is nothing whose silence to time. The watchdog is suspended until
+   * the call leaves the queue ({@link CallBroker.noteCalleeQueued}).
+   */
+  queued: boolean;
+  /**
    * The tool calls this callee has started and not yet had answered, by id.
    *
    * The silence watchdog is SUSPENDED while any is open: a callee waiting on
@@ -494,6 +500,13 @@ interface RunCallState {
    * beside it, and the node stops waiting only when the last of them returns.
    */
   waitingOwners: Map<string, number>;
+  /**
+   * Conversations last reported BLOCKED to the executor
+   * ({@link RunCallCapability.turnBlocked}): inside a wait on their own calls
+   * ({@link waitingOwners}) or held by a blocker ({@link blockedOwners}). Kept
+   * so only a change is reported.
+   */
+  reportedBlocked: Set<string>;
   /**
    * The release of every wait each caller has open right now (caller key → one
    * resolver per wait) — what {@link CallBroker.interruptWaits} calls.
@@ -891,6 +904,7 @@ export class CallBroker implements OnModuleInit {
       threads,
       blockedOwners: new Map(),
       waitingOwners: new Map(),
+      reportedBlocked: new Set(),
       waitReleases: new Map(),
       waitGaps: new Map(),
       unreadUserMessages: new Set(),
@@ -998,6 +1012,7 @@ export class CallBroker implements OnModuleInit {
     const before = waitingTargets(state);
     this.clearWaitGap(state, owner);
     state.waitingOwners.set(owner, (state.waitingOwners.get(owner) ?? 0) + 1);
+    this.reportBlocked(state, owner);
     if (waitingTargets(state) !== before) {
       this.announceWaiting(state);
     }
@@ -1021,6 +1036,7 @@ export class CallBroker implements OnModuleInit {
     }
     const before = waitingTargets(state);
     state.waitingOwners.delete(owner);
+    this.reportBlocked(state, owner);
     if (gap) {
       const timer = setTimeout(() => {
         if (state.waitGaps.get(owner) === timer) {
@@ -1336,6 +1352,12 @@ export class CallBroker implements OnModuleInit {
        * cost argument should stop.
        */
       coldGuard?: boolean;
+      /**
+       * geniro continuing a conversation on its caller's behalf to deliver
+       * what calls already running owe it ({@link startOwnerTurn}) — started
+       * without waiting under the run's active-turn cap, as any wake is.
+       */
+      wake?: boolean;
     },
   ):
     | { refused: CallEnvelope }
@@ -1452,6 +1474,7 @@ export class CallBroker implements OnModuleInit {
       wakingMessages: [],
       messageRetry: null,
       blockedOnVerdicts: 0,
+      queued: false,
       openToolCalls: new Set(),
       // A fresh call opens a conversation of its own, named after itself.
       conversationId: conversationId ?? callId,
@@ -1501,10 +1524,12 @@ export class CallBroker implements OnModuleInit {
         selected.node,
         args.message,
         callId,
-        depth,
         resumeSessionId,
         call.conversationId,
-        ...(selected.plan !== null ? [selected.plan] : []),
+        {
+          ...(selected.plan !== null ? { pool: selected.plan } : {}),
+          wake: args.wake === true,
+        },
       )
       .then((outcome) => {
         const member = outcome.member ?? selected.plan?.member ?? 1;
@@ -2170,7 +2195,7 @@ export class CallBroker implements OnModuleInit {
       result: {
         call_id: args.call_id,
         agent: call.calleeId,
-        // A call still queued on the sub-turn pool is cancelled just as
+        // A call still queued under the active-turn cap is cancelled just as
         // effectively and never started, which is worth saying: the caller then
         // knows nothing was spent on it.
         state: signalled ? 'cancelling' : 'cancelled_before_it_started',
@@ -3076,6 +3101,7 @@ export class CallBroker implements OnModuleInit {
     // call), so nothing blocks it any more — and a blocker left over here would
     // keep every question it is woken with suspended for good.
     state.blockedOwners.delete(caller);
+    this.reportBlocked(state, caller);
     this.drainWhenFree(runId, state, caller);
   }
 
@@ -3085,7 +3111,7 @@ export class CallBroker implements OnModuleInit {
    *
    * A CALLEE conversation's turn IS a call, and that call is still settling
    * when its turn ends; a conversation can also hold a call that has not got
-   * its turn yet (queued on the sub-turn pool, or waking the run). It can be
+   * its turn yet (queued under the active-turn cap, or waking the run). It can be
    * continued (see `startOwnerTurn`) only once that call has settled, so the
    * drain waits for exactly that — and re-checks then, since a further call may
    * have taken the conversation meanwhile.
@@ -3977,7 +4003,7 @@ export class CallBroker implements OnModuleInit {
       return state.capability.wakeNode(owner, prompt) ? { callId: null } : null;
     }
     // A call already on the conversation that is not LIVE (this runs only for
-    // an owner that is not): queued on the sub-turn pool, or waking the run.
+    // an owner that is not): queued under the active-turn cap, or waking the run.
     // Continuing the conversation beside it is THREAD_BUSY, and reading that as
     // "nobody can be reached" orphaned a question — and killed its callee — a
     // moment before a turn of this very conversation was due to run.
@@ -4009,6 +4035,7 @@ export class CallBroker implements OnModuleInit {
       thread: lastCallId,
       mode: 'async',
       title: PICKED_BACK_UP_TITLE,
+      wake: true,
     });
     if ('refused' in opened) {
       // The run is stopping, superseded, or out of call turns or depth — the
@@ -4315,6 +4342,20 @@ export class CallBroker implements OnModuleInit {
     if (call) {
       this.armSilenceWatch(runId, callId, call);
     }
+  }
+
+  /**
+   * The call started or stopped waiting under the run's active-turn cap — the
+   * executor says so on both sides of the wait. Its silence window stands down
+   * while it waits and is armed afresh once it leaves the queue.
+   */
+  noteCalleeQueued(runId: string, callId: string, queued: boolean): void {
+    const call = this.runs.get(runId)?.activeCalls.get(callId);
+    if (!call) {
+      return;
+    }
+    call.queued = queued;
+    this.armSilenceWatch(runId, callId, call);
   }
 
   /** {@link RunCallCapability.unreadTeamNotes} for one conversation; 0 off-run. */
@@ -4630,6 +4671,7 @@ export class CallBroker implements OnModuleInit {
     const wasBlocked = blockers.size > 0;
     blockers.add(blocker);
     state.blockedOwners.set(owner, blockers);
+    this.reportBlocked(state, owner);
     if (wasBlocked) {
       return;
     }
@@ -4651,11 +4693,32 @@ export class CallBroker implements OnModuleInit {
       return;
     }
     state.blockedOwners.delete(owner);
+    this.reportBlocked(state, owner);
     for (const [callId, call] of state.activeCalls) {
       if (call.owner === owner && call.parked) {
         this.rearmQuestionTtl(state.runId, callId);
       }
     }
+  }
+
+  /**
+   * Tell the executor when `owner` starts or stops being blocked — inside a
+   * wait on its own calls, on its own parked question or on a card — so its
+   * turn stops counting against the run's active-turn cap while it can
+   * produce nothing. Reported on a change only.
+   */
+  private reportBlocked(state: RunCallState, owner: string): void {
+    const blocked =
+      state.waitingOwners.has(owner) || state.blockedOwners.has(owner);
+    if (blocked === state.reportedBlocked.has(owner)) {
+      return;
+    }
+    if (blocked) {
+      state.reportedBlocked.add(owner);
+    } else {
+      state.reportedBlocked.delete(owner);
+    }
+    state.capability.turnBlocked?.(owner, blocked);
   }
 
   /**
@@ -4696,8 +4759,10 @@ export class CallBroker implements OnModuleInit {
     // And one waiting on its own tool call, for the same reason: the tool call
     // is persisted as a row too, and it is what starts the wait.
     // And a HELD one: its callee's turn is over and it is waiting on calls of
-    // its own, whose silence is theirs to report.
+    // its own, whose silence is theirs to report. And a QUEUED one, whose turn
+    // has not begun.
     if (
+      call.queued ||
       call.blockedOnVerdicts > 0 ||
       call.parked !== null ||
       call.openToolCalls.size > 0 ||

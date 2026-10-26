@@ -5,14 +5,21 @@ import { Field } from '../components/field';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
+import { Stepper } from '../components/ui/stepper';
+import { Switch } from '../components/ui/switch';
 import { Textarea } from '../components/ui/textarea';
+import type { WorkflowMeta } from './graph-doc';
+
+/** Where a newly switched-on limit starts: low enough to mean something. */
+const DEFAULT_MAX_ACTIVE_TURNS = 4;
 
 /**
- * The one workflow-meta form (name + optional description), shared by BOTH
- * meta flows so they stay identical: "New workflow" (empty form; Create
- * persists a fresh workflow) and the builder's "Change workflow" (form
- * prefilled from the open workflow; Save persists the new meta). Submit hands
- * the trimmed meta to the caller; Cancel changes nothing.
+ * The one workflow-meta form (name, optional description, optional cap on
+ * agent turns working at once), shared by BOTH meta flows so they stay
+ * identical: "New workflow" (empty form; Create persists a fresh workflow) and
+ * the builder's "Change workflow" (form prefilled from the open workflow; Save
+ * persists the new meta). Submit hands the trimmed meta to the caller; Cancel
+ * changes nothing.
  */
 export function WorkflowMetaDialog({
   open,
@@ -22,6 +29,7 @@ export function WorkflowMetaDialog({
   submitLabel,
   busyLabel,
   initial,
+  maxActiveTurnsCeiling,
   onClose,
   onSubmit,
 }: {
@@ -32,12 +40,23 @@ export function WorkflowMetaDialog({
   submitLabel: string;
   busyLabel: string;
   /** Prefill for editing an existing workflow's meta; omit for a blank form. */
-  initial?: { name: string; description?: string };
+  initial?: WorkflowMeta;
+  /**
+   * This Mac's ceiling on agent turns working at once in one run
+   * (`GET /v1/capabilities`) — what no limit means, and the most a limit can
+   * be set to. Null until it is read.
+   */
+  maxActiveTurnsCeiling: number | null;
   onClose: () => void;
-  onSubmit: (meta: { name: string; description?: string }) => void;
+  onSubmit: (meta: WorkflowMeta) => void;
 }): React.JSX.Element {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  // Off = no limit of the workflow's own: the run goes up to the ceiling.
+  const [limited, setLimited] = useState(false);
+  const [maxActiveTurns, setMaxActiveTurns] = useState(
+    DEFAULT_MAX_ACTIVE_TURNS,
+  );
 
   // A reopened dialog starts from `initial` (or blank) — never from the
   // previous visit's abandoned draft.
@@ -45,10 +64,12 @@ export function WorkflowMetaDialog({
     if (open) {
       setName(initial?.name ?? '');
       setDescription(initial?.description ?? '');
+      setLimited(initial?.maxActiveTurns !== undefined);
+      setMaxActiveTurns(initial?.maxActiveTurns ?? DEFAULT_MAX_ACTIVE_TURNS);
     }
     // `initial` is compared by its fields: a rename dialog reopened for the
     // same workflow must reset even when the caller rebuilt the object.
-  }, [open, initial?.name, initial?.description]);
+  }, [open, initial?.name, initial?.description, initial?.maxActiveTurns]);
 
   const canSubmit = name.trim().length > 0 && !busy;
 
@@ -65,6 +86,7 @@ export function WorkflowMetaDialog({
           onSubmit({
             name: name.trim(),
             ...(trimmedDescription ? { description: trimmedDescription } : {}),
+            ...(limited ? { maxActiveTurns } : {}),
           });
         }}>
         <Field label="Name" htmlFor="workflow-name">
@@ -86,6 +108,43 @@ export function WorkflowMetaDialog({
             placeholder="What this agent team does…"
             onChange={(event) => setDescription(event.target.value)}
           />
+        </Field>
+        <Field
+          label="Agents working at once"
+          htmlFor="workflow-limit-turns"
+          hint="How many agent calls of a run may work at the same time, at any depth; the rest wait their turn.">
+          <div className="flex h-8 items-center justify-between gap-3">
+            <label
+              htmlFor="workflow-limit-turns"
+              className="flex min-w-0 items-center gap-2 text-sm">
+              <Switch
+                id="workflow-limit-turns"
+                checked={limited}
+                onCheckedChange={setLimited}
+              />
+              <span className="truncate">
+                {limited ? 'Limited to' : 'No limit of its own'}
+              </span>
+            </label>
+            {limited ? (
+              <Stepper
+                value={maxActiveTurns}
+                min={1}
+                // Until the ceiling is read, the value can go down but not up.
+                max={maxActiveTurnsCeiling ?? maxActiveTurns}
+                aria-label="Agents working at once"
+                onChange={setMaxActiveTurns}
+              />
+            ) : (
+              <span
+                data-slot="max-active-turns-ceiling"
+                className="truncate text-sm text-muted-foreground tabular-nums">
+                {maxActiveTurnsCeiling === null
+                  ? 'this Mac’s ceiling'
+                  : `up to ${maxActiveTurnsCeiling}, this Mac’s ceiling`}
+              </span>
+            )}
+          </div>
         </Field>
         {error ? <ErrorText>{error}</ErrorText> : null}
         <div className="flex justify-end gap-2">

@@ -7,6 +7,7 @@ import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { GENIRO_UI_PREAMBLE } from '../../agents/utils/agent-instructions';
+import { MAX_PARALLEL_AGENTS } from '../utils/parallelism';
 import { CapabilitiesService } from './capabilities.service';
 
 const CLAUDE_MODES = {
@@ -81,6 +82,12 @@ describe('CapabilitiesService', () => {
     expect(subject.capabilitiesWire().hostPreamble).toBe(GENIRO_UI_PREAMBLE);
     expect(subject.capabilitiesWire().hostPreamble).toContain(
       'they are not printed to a terminal',
+    );
+  });
+
+  it('serves the machine ceiling on active callee turns the executor runs at', () => {
+    expect(service().service.capabilitiesWire().maxActiveTurnsCeiling).toBe(
+      MAX_PARALLEL_AGENTS,
     );
   });
 

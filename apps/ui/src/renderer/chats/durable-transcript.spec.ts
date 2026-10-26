@@ -10,6 +10,7 @@ import {
   applyDaemonReadings,
   daemonSubagentReadings,
   foldDurableTranscript,
+  withDaemonStartedCalls,
 } from './durable-transcript';
 import {
   collectSubagentBlocks,
@@ -322,6 +323,74 @@ function delegateState(
     startedAt: '2026-09-14T10:00:00.000Z',
   };
 }
+
+describe('withDaemonStartedCalls', () => {
+  const queuedCall = (): TranscriptEntry[] =>
+    foldOf(
+      [
+        {
+          ...row(
+            's',
+            'call_started',
+            {
+              callId: 'call-1',
+              calleeNodeId: 'poet',
+              message: 'go',
+            },
+            1,
+          ),
+          nodeId: 'orch',
+        },
+        {
+          ...row(
+            'q',
+            'system',
+            {
+              callId: 'call-1',
+              severity: 'info',
+              queuedCall: { cap: 1 },
+            },
+            2,
+          ),
+          nodeId: 'poet',
+        },
+      ],
+      false,
+    );
+  const blockOf = (entries: readonly TranscriptEntry[]) =>
+    flattenEntries(entries).find((entry) => entry.type === 'call-block');
+
+  it('drops QUEUED from a card once a read that covered its queued row says the call started', () => {
+    // Off the tail the window never takes the call's first status row.
+    const entries = queuedCall();
+    expect(blockOf(entries)).toMatchObject({ queued: true, queuedSeq: 2 });
+    const started = withDaemonStartedCalls(entries, {
+      throughSeq: 2,
+      ids: new Set(['call-1']),
+    });
+    expect(blockOf(started)).not.toHaveProperty('queued');
+  });
+
+  it('keeps it for a read older than the queued row, or one that lists no start', () => {
+    const entries = queuedCall();
+    expect(
+      blockOf(
+        withDaemonStartedCalls(entries, {
+          throughSeq: 1,
+          ids: new Set(['call-1']),
+        }),
+      ),
+    ).toMatchObject({ queued: true });
+    expect(
+      blockOf(
+        withDaemonStartedCalls(entries, {
+          throughSeq: 9,
+          ids: new Set(['call-7']),
+        }),
+      ),
+    ).toMatchObject({ queued: true });
+  });
+});
 
 describe('applyDaemonReadings', () => {
   const rows = [

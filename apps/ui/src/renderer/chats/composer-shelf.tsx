@@ -25,6 +25,7 @@ import {
 } from './panel-flags';
 import { ThreadPullRequestChip } from './pull-request-row';
 import { formatClockTime, formatRelativeTime } from './relative-time';
+import { RunStatusIcon } from './run-status';
 import {
   SHELF_CHIP_CLASS,
   SHELF_CHIP_TRIGGER_CLASS,
@@ -590,6 +591,22 @@ export interface OpenCallChipRow {
   startedAt: number | null;
   /** The daemon said this callee has gone quiet. */
   stalled: boolean;
+  /** Still waiting for room under the run's active-turn cap — not working. */
+  queued: boolean;
+}
+
+/** "2 agents working · 1 queued" — a queued call is out, but nobody works on it. */
+function callsLine(calls: readonly OpenCallChipRow[]): string {
+  const queued = calls.filter((call) => call.queued).length;
+  const working = calls.length - queued;
+  return [
+    working > 0 || queued === 0
+      ? `${working} ${working === 1 ? 'agent' : 'agents'} working`
+      : null,
+    queued > 0 ? `${queued} queued` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(' · ');
 }
 
 /**
@@ -617,7 +634,7 @@ export function RunningCallChips({
     <HoverPopover
       slot="running-calls"
       openOn="click"
-      label={`${count} ${count === 1 ? 'agent' : 'agents'} working`}
+      label={callsLine(calls)}
       panelLabel="Agents working"
       side="top"
       align="start"
@@ -626,7 +643,11 @@ export function RunningCallChips({
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
         <>
-          <Spinner className="size-3.5" />
+          {calls.every((call) => call.queued) ? (
+            <RunStatusIcon status="queued" className="size-3.5" />
+          ) : (
+            <Spinner className="size-3.5" />
+          )}
           <span className="font-medium">Agents</span>
           <span className="text-muted-foreground tabular-nums">{count}</span>
         </>
@@ -665,7 +686,7 @@ function CallRows({
   return (
     <div data-slot="running-call-rows" className="flex flex-col gap-0.5">
       <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
-        {calls.length === 1 ? '1 agent' : `${calls.length} agents`} working
+        {callsLine(calls)}
         {waited === null ? '' : ` · waiting ${formatElapsed(waited)}`}
       </p>
       {calls.map((call) => (
@@ -691,9 +712,13 @@ function CallRows({
                 : formatElapsed(now - call.startedAt)}
             </span>
           </span>
-          {call.title !== null || call.caller !== null || call.stalled ? (
+          {call.title !== null ||
+          call.caller !== null ||
+          call.stalled ||
+          call.queued ? (
             <span className="w-full truncate pl-4.5 text-[11px] text-muted-foreground">
               {[
+                call.queued ? 'queued' : null,
                 call.stalled ? 'gone quiet' : null,
                 call.caller === null ? null : `from ${call.caller}`,
                 call.title,

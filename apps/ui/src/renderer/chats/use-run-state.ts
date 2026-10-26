@@ -44,7 +44,15 @@ function movesStructure(item: ChatItem, listed: ReadonlySet<string>): boolean {
     return isAgentToolName(payload.name) || isArtifactToolName(payload.name);
   }
   const reply = replyId(item);
-  return reply !== null && listed.has(reply);
+  if (reply !== null && listed.has(reply)) {
+    return true;
+  }
+  // A queued call's first status row: it started, which nothing structural
+  // says when a turn blocking or a held call freed its slot.
+  const callId = (item.payload as { callId?: unknown } | null)?.callId;
+  return (
+    item.kind === 'status' && typeof callId === 'string' && listed.has(callId)
+  );
 }
 
 /** The call a `tool_result` row answers, if it is one. */
@@ -54,12 +62,15 @@ function replyId(item: ChatItem): string | null {
 }
 
 /**
- * The tool-call ids the state lists — delegates, workflows, artifacts, and the
- * open turns' unanswered calls, whose reply ends a command the page may not
- * hold.
+ * The ids the state lists — delegates, workflows, artifacts, and the open
+ * turns' unanswered calls, whose reply ends a command the page may not hold;
+ * and the agent calls still queued, whose first status row starts them.
  */
 function listedIds(state: RunStateDto): Set<string> {
-  const ids = new Set(state.delegates.map((delegate) => delegate.id));
+  const ids = new Set([
+    ...state.delegates.map((delegate) => delegate.id),
+    ...state.calls.filter((call) => call.queued).map((call) => call.callId),
+  ]);
   for (const row of [
     ...state.workflowRows,
     ...state.artifactRows,

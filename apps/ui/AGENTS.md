@@ -259,7 +259,7 @@ One home for each concern:
 - A direct link (`#chats/<id>`) or the processes panel can still open an analysis as the thread on screen; its header's "Analyzing: <source> ↗" chip (`analysisSourceOf`) is kept for exactly that way back.
 - The popup and the builder's chat dock are one surface: `chats/hosted-chat.tsx` (`HostedChat`, transcript + composer + chips) over `chats/use-hosted-chat.ts`. Change a hosted-chat behaviour there, never in one frame.
 
-**Run waterfall** (`chats/run-waterfall-*.ts(x)`, the "Where the run went" card and its full view):
+**Run waterfall** (`chats/run-waterfall*.ts(x)`, the "Where the run went" popup, opened from the agents panel's control row straight into its full view):
 
 - Every span, its `seq` (what "Open in chat" jumps to) and the critical path come from the daemon's waterfall route; the renderer never folds them from loaded `items`.
 - `blocksCaller` (`run-waterfall-geometry.ts`) is a twin of the daemon's critical-path rule in `v1/agents/utils/thread-timeline.ts`: any call not `async` holds its caller. Change one, change the other.
@@ -348,6 +348,7 @@ One home for each concern:
 - Use `useThreadFlag`, `useThreadOverride` or `useThreadFlags`. `use-persisted-flag` is for global flags outside a thread.
 - Two things are deliberately not per thread: the context readout's drill-downs and the builder palette.
 - The agents panel is always rendered when a chat is open and starts folded per thread. Do not reintroduce a show/hide toggle, a header button, auto-open on an artifact, or the `ListTree` toggle.
+- The agents panel's column holds only what belongs to the thread: its agents, workflows, pull requests and pages. The run waterfall, the processes readout and the thread notes open in popups from its control row (and rail), never as sections in the column; their reads are gated on that popup being open (`onPopupChange`), never on the panel being unfolded.
 - Read the MCP listing only when its disclosure opens (`mcpOpen`).
 
 **Fast actions** (`chats/fast-action-bar.tsx`, `settings/fast-actions.tsx`, `Settings.fastActions`):

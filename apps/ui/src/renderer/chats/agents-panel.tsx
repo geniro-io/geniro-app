@@ -1,8 +1,10 @@
 import {
   Bot as SubagentIcon,
+  ChartGantt,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Cpu,
   Download,
   FileText,
   LayoutTemplate,
@@ -31,6 +33,7 @@ import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { PanelSection } from '../components/panel-section';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Dialog } from '../components/ui/dialog';
 import { Popover } from '../components/ui/popover';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { cn } from '../components/ui/utils';
@@ -66,7 +69,7 @@ import type { PublishedArtifact } from './published-artifact';
 import { ThreadPullRequestRow } from './pull-request-row';
 import { RunProcesses } from './run-processes';
 import { RUN_STATUS_META, RunStatusIcon, RunStatusLabel } from './run-status';
-import { RunWaterfall } from './run-waterfall';
+import { RunWaterfallPopup } from './run-waterfall';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
@@ -369,16 +372,28 @@ function AnalyzeThreadButton({
 }
 
 /**
- * The folded rail's way to the thread's notes: unfolds the panel with the
- * field focused. Tinted when the thread already has notes, so a folded panel
- * still says there is something written there.
+ * The popups the panel's control row opens. Each is something ABOUT the
+ * thread rather than part of it — its analysis, its load on the machine, the
+ * user's own notes — so none of them takes room in the column; the column
+ * holds the thread's agents, pull requests and pages.
+ *
+ * One at a time, because each is a modal dialog.
  */
-function ThreadNotesRailButton({
+export type AgentsPanelPopup = 'waterfall' | 'processes' | 'notes';
+
+/**
+ * The way to the thread's notes, in the control row and on the folded rail:
+ * opens them in a popup with the field focused. Tinted when the thread
+ * already has notes, so the row still says there is something written there.
+ */
+function ThreadNotesButton({
   hasNotes,
   onOpen,
+  className,
 }: {
   hasNotes: boolean;
   onOpen: () => void;
+  className?: string;
 }): React.JSX.Element {
   const label = hasNotes ? 'Open thread notes' : 'Add thread notes';
   return (
@@ -391,10 +406,61 @@ function ThreadNotesRailButton({
       data-has-notes={hasNotes || undefined}
       onClick={onOpen}
       className={cn(
-        'size-7 shrink-0',
+        'shrink-0',
         hasNotes ? 'text-primary' : 'text-muted-foreground',
+        className,
       )}>
       <NotebookPen className="size-4" />
+    </Button>
+  );
+}
+
+/**
+ * "Where the run went": opens the run's money, order and timing in its full
+ * view. A panel control for Export's reason — it is about the whole run.
+ */
+function RunWaterfallButton({
+  onOpen,
+  className,
+}: {
+  onOpen: () => void;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label="Where the run went"
+      title="Where the run went — who worked when, and what it cost"
+      onClick={onOpen}
+      className={cn('shrink-0 text-muted-foreground', className)}>
+      <ChartGantt className="size-4" />
+    </Button>
+  );
+}
+
+/**
+ * "Processes": opens what this thread has running right now — every agent CLI
+ * geniro started for it and the tree under each, with CPU and memory.
+ */
+function RunProcessesButton({
+  onOpen,
+  className,
+}: {
+  onOpen: () => void;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label="Processes"
+      title="Processes — what this thread has running, with CPU and memory"
+      onClick={onOpen}
+      className={cn('shrink-0 text-muted-foreground', className)}>
+      <Cpu className="size-4" />
     </Button>
   );
 }
@@ -1657,9 +1723,9 @@ export function AgentsPanel({
   fill = false,
   metricsRunId = null,
   metricsByNode = false,
-  waterfall = null,
-  processes = null,
-  onCollapsedChange,
+  waterfall,
+  processes,
+  onPopupChange,
   notes,
 }: {
   agents: AgentDisplay[];
@@ -1713,17 +1779,18 @@ export function AgentsPanel({
    */
   metricsByNode?: boolean;
   /**
-   * This run as money, order and timing, or null when nobody is reading it.
+   * This run as money, order and timing, shown in a popup from the control
+   * row. Absent draws no control.
    *
    * Handed in already-read rather than fetched here, like every other figure on
-   * this panel: the owner holds the one read, so the card cannot show a second,
-   * differently-timed copy of the same run beside the readouts above it.
+   * this panel: the owner holds the one read, and pays for it only while
+   * {@link onPopupChange} says the popup is open.
    */
-  waterfall?: RunWaterfallState | null;
+  waterfall?: RunWaterfallState;
   /**
-   * The user's own notes on this thread, and how to store a new text. Absent
-   * draws no notes section and no rail control — the panel never invents a
-   * write path it was not given.
+   * The user's own notes on this thread, and how to store a new text, edited
+   * in a popup from the control row. Absent draws no control — the panel never
+   * invents a write path it was not given.
    */
   notes?: {
     /** The run they belong to — keys the field, so a draft never outlives it. */
@@ -1733,20 +1800,20 @@ export function AgentsPanel({
   };
   /**
    * What this thread has running right now — every agent CLI geniro started
-   * for it and the tree under each, with CPU and memory — or null when nobody
-   * is reading it. Polled by the owner, on {@link waterfall}'s rule.
+   * for it and the tree under each, with CPU and memory — shown in a popup
+   * from the control row. Polled by the owner, on {@link waterfall}'s rule.
+   * Absent draws no control.
    */
-  processes?: RunProcessesState | null;
+  processes?: RunProcessesState;
   /**
-   * Told whenever this panel folds or unfolds.
+   * Told whenever one of the panel's popups opens or closes (null: none).
    *
-   * The fold is a fact about the THREAD and so lives here, but the owner holds
-   * the reads that only a visible panel should pay for — and `showAgentsPanel`
-   * up there means "a run is open on a desktop-width window", never "this
-   * section is on screen". Without this the waterfall's whole-run read fired on
-   * every chat switch for a card nobody had unfolded.
+   * Which popup is open is the panel's own state, but the owner holds the reads
+   * only an open popup should pay for: the waterfall walks the run's whole
+   * spine and the processes readout polls the process table, and neither may
+   * run for a popup nobody opened.
    */
-  onCollapsedChange?: (collapsed: boolean) => void;
+  onPopupChange?: (popup: AgentsPanelPopup | null) => void;
   /**
    * MCP servers per {@link mcpScopeKey}, fetched by the owner.
    *
@@ -2023,12 +2090,26 @@ export function AgentsPanel({
     AGENTS_PANEL_COLLAPSED_FLAG,
     true,
   );
+  // Which of the control row's popups is open. Not per thread and not
+  // remembered: a popup is something opened to look at now, and the panel is
+  // remounted per run, so a switch closes it.
+  const [popup, setPopup] = useState<AgentsPanelPopup | null>(null);
+  // Through a ref for the MCP gate's reason below: the effects key on the open
+  // popup alone, never on the callback's identity.
+  const notifyPopup = useRef(onPopupChange);
+  notifyPopup.current = onPopupChange;
   useEffect(() => {
-    onCollapsedChange?.(collapsed);
-  }, [collapsed, onCollapsedChange]);
-  // Set by the rail's notes control, which unfolds the panel to WRITE: the
-  // field then mounts focused. The chevron unfolds it to read, so it clears.
-  const [focusNotes, setFocusNotes] = useState(false);
+    notifyPopup.current?.(popup);
+  }, [popup]);
+  // Unmounting the panel (a run switch) discards the popup; the owner's read
+  // gate has to hear about it, or the processes poll outlives the popup.
+  useEffect(
+    () => () => {
+      notifyPopup.current?.(null);
+    },
+    [],
+  );
+  const closePopup = (): void => setPopup(null);
   // ONE at a time, and that is a statement of fact rather than a policy:
   // `Popover` closes on any pointer press outside its own trigger, so pressing
   // a second card's trigger closes the first before it opens. A set of open
@@ -2112,6 +2193,75 @@ export function AgentsPanel({
   const toggleInstance = (key: string, wasOpen: boolean): void => {
     folds.set(`instance:${key}`, !wasOpen);
   };
+  // The control row's popups, drawn from BOTH shapes of the panel — the rail
+  // opens them too, and folding the column must not close one that is open.
+  const popups = (
+    <>
+      {waterfall ? (
+        <RunWaterfallPopup
+          open={popup === 'waterfall'}
+          onClose={closePopup}
+          state={waterfall}
+          onJump={timeline?.onJump}
+        />
+      ) : null}
+      {processes ? (
+        <Dialog
+          open={popup === 'processes'}
+          onClose={closePopup}
+          title="Processes"
+          className="max-w-xl">
+          <RunProcesses
+            key={processes.runId}
+            data={processes.data}
+            loading={processes.loading}
+            error={processes.error}
+            onStopDetached={processes.stopDetached}
+          />
+        </Dialog>
+      ) : null}
+      {notes ? (
+        <Dialog
+          open={popup === 'notes'}
+          onClose={closePopup}
+          title="Notes"
+          className="max-w-lg">
+          {/* Mounted only while open (the dialog draws nothing shut), so
+              closing it is the field's way out: its owed text is saved then. */}
+          <ThreadNotes
+            key={notes.runId}
+            notes={notes.value}
+            onSave={notes.onSave}
+            autoFocus
+          />
+        </Dialog>
+      ) : null}
+    </>
+  );
+  // The popup openers, at the size of whichever shape draws them.
+  const popupButtons = (className: string): React.ReactNode => (
+    <>
+      {waterfall ? (
+        <RunWaterfallButton
+          onOpen={() => setPopup('waterfall')}
+          className={className}
+        />
+      ) : null}
+      {processes ? (
+        <RunProcessesButton
+          onOpen={() => setPopup('processes')}
+          className={className}
+        />
+      ) : null}
+      {notes ? (
+        <ThreadNotesButton
+          hasNotes={hasThreadNotes(notes.value)}
+          onOpen={() => setPopup('notes')}
+          className={className}
+        />
+      ) : null}
+    </>
+  );
   // `fill` outranks the fold: inside a drawer the rail would be a second way
   // to put away something the drawer's own backdrop already closes, and it
   // would leave a 36px sliver of panel over the transcript with no way back.
@@ -2141,6 +2291,8 @@ export function AgentsPanel({
         onOpenFolderTerminal ||
         onExportChat ||
         onAnalyzeThread ||
+        waterfall ||
+        processes ||
         notes ? (
           <>
             {/* The chevron acts on the COLUMN; everything under it acts on the
@@ -2190,17 +2342,10 @@ export function AgentsPanel({
                 className="size-7"
               />
             ) : null}
-            {notes ? (
-              <ThreadNotesRailButton
-                hasNotes={hasThreadNotes(notes.value)}
-                onOpen={() => {
-                  setFocusNotes(true);
-                  setCollapsed(false);
-                }}
-              />
-            ) : null}
+            {popupButtons('size-7')}
           </>
         ) : null}
+        {popups}
       </aside>
     );
   }
@@ -2239,7 +2384,9 @@ export function AgentsPanel({
           themselves, and it was the one thing in the row that could not be
           pressed; the `aria-label` on the `aside` carries the name for a reader
           who cannot see the cards. */}
-      <div className="flex items-center py-1.5 pr-2 pl-2">
+      {/* Wraps rather than clipping: with every popup opener present the row
+          is wider than the panel's narrowest width. */}
+      <div className="flex flex-wrap items-center py-1.5 pr-2 pl-2">
         {/* Navigation first, then the two things you DO with the thread. Both
             arrived here from the chat header on report; they act on the whole
             conversation, which is what the rest of this row already does. */}
@@ -2271,6 +2418,9 @@ export function AgentsPanel({
             className="size-6"
           />
         ) : null}
+        {/* The thread's analysis, its load and the user's notes: each opens
+            in a popup rather than taking room in the column. */}
+        {popupButtons('size-6')}
         {/* Withheld while filling a drawer: the fold is dropped there (see
             `fill`), so this would be a control that does nothing — and the
             drawer's own backdrop is already the way out. */}
@@ -2281,12 +2431,7 @@ export function AgentsPanel({
             size="icon"
             aria-label="Collapse agents panel"
             title="Collapse agents panel"
-            onClick={() => {
-              // Otherwise the next unfold by any route (a shelf reveal) would
-              // pull focus into the notes field.
-              setFocusNotes(false);
-              setCollapsed(true);
-            }}
+            onClick={() => setCollapsed(true)}
             className="ml-auto size-6 text-muted-foreground">
             <ChevronRight className="size-4" />
           </Button>
@@ -2728,18 +2873,6 @@ export function AgentsPanel({
             })
           )}
         </ul>
-        {/* First of the foot sections: the notes are the user's own context,
-          and the blocks below it grow with the run while this one does not. */}
-        {notes ? (
-          <PanelSection label="Notes">
-            <ThreadNotes
-              key={notes.runId}
-              notes={notes.value}
-              onSave={notes.onSave}
-              autoFocus={focusNotes}
-            />
-          </PanelSection>
-        ) : null}
         {/* Its OWN block, under the agents rather than wedged above them: this
           panel is a list of agents under one heading, and a section inserted
           between that heading and its first card read as part of the list —
@@ -2795,27 +2928,6 @@ export function AgentsPanel({
             </ul>
           </PanelSection>
         ) : null}
-        {waterfall === null ? null : (
-          <PanelSection label="Where the run went">
-            <RunWaterfall
-              data={waterfall.data}
-              loading={waterfall.loading}
-              error={waterfall.error}
-              onJump={timeline?.onJump}
-            />
-          </PanelSection>
-        )}
-        {processes === null ? null : (
-          <PanelSection label="Processes">
-            <RunProcesses
-              key={processes.runId}
-              data={processes.data}
-              loading={processes.loading}
-              error={processes.error}
-              onStopDetached={processes.stopDetached}
-            />
-          </PanelSection>
-        )}
         {workflows.length > 0 && onRevealWorkflow !== undefined ? (
           <WorkflowsSection workflows={workflows} onReveal={onRevealWorkflow} />
         ) : null}
@@ -2823,6 +2935,7 @@ export function AgentsPanel({
           <ThreadPullRequestsSection results={threadPullRequests} />
         ) : null}
       </div>
+      {popups}
     </aside>
   );
 }

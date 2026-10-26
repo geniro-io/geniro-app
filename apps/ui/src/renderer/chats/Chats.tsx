@@ -106,7 +106,7 @@ import {
   conversationTaskLists,
   type InstanceTaskList,
 } from './agent-instances';
-import { AgentsPanel } from './agents-panel';
+import { AgentsPanel, type AgentsPanelPopup } from './agents-panel';
 import { AnalysisDialog } from './analysis-dialog';
 import { AnalyzeThreadDialog } from './analyze-thread-dialog';
 import { ApprovalCard } from './approval-card';
@@ -7629,35 +7629,25 @@ export function Chats({
     return [...byKey.values()];
   }, [showAgentsPanel, showPanelDrawer, mobilePanelOpen, agents]);
   /**
-   * Whether the agents panel is FOLDED, as the panel itself reports it.
-   *
-   * Held here rather than read here: the fold is remembered per thread inside
-   * the panel, and the owner needs it only to decide which of its reads to pay
-   * for. Starts folded, matching the panel's own default, so a chat switch
-   * never pays for a card before the panel has said it is open.
+   * Which of the agents panel's popups is open, as the panel itself reports
+   * it. Held here only to decide which reads to pay for.
    */
-  const [agentsPanelCollapsed, setAgentsPanelCollapsed] = useState(true);
+  const [panelPopup, setPanelPopup] = useState<AgentsPanelPopup | null>(null);
   /**
-   * This run folded into money, order and timing — read only while the panel
-   * that draws it is actually on screen, for `mcpScopes`' reason above: the
-   * daemon walks the run's whole spine to answer, and a panel nobody opened
-   * would pay that on every chat switch.
+   * This run folded into money, order and timing — read only while its popup
+   * is open, for `mcpScopes`' reason above: the daemon walks the run's whole
+   * spine to answer. Each opening reads it afresh.
    */
   const runWaterfall = useRunWaterfall(
     apis,
     activeRun?.id ?? null,
-    // BOTH halves, and the second is the load-bearing one: `showAgentsPanel`
-    // says a run is open on a desktop-width window, never that this section is
-    // on screen, and the panel starts FOLDED in a thread nobody opened it in.
-    (showAgentsPanel || (showPanelDrawer && mobilePanelOpen)) &&
-      !agentsPanelCollapsed,
+    panelPopup === 'waterfall',
   );
-  /** The thread's live processes, polled on exactly the waterfall's gate. */
+  /** The thread's live processes, polled only while their popup is open. */
   const runProcesses = useRunProcesses(
     apis,
     activeRun?.id ?? null,
-    (showAgentsPanel || (showPanelDrawer && mobilePanelOpen)) &&
-      !agentsPanelCollapsed,
+    panelPopup === 'processes',
   );
   // Read only while a list is actually open. The read health-checks each
   // server — it LAUNCHES the user's own MCP processes — so doing it on mount
@@ -10154,9 +10144,9 @@ export function Chats({
                       // holding its own process; a chat's is its one agent's.
                       metricsRunId={activeRun?.id ?? null}
                       metricsByNode={Boolean(activeRun?.workflowId)}
-                      waterfall={runWaterfall}
-                      processes={runProcesses}
-                      onCollapsedChange={setAgentsPanelCollapsed}
+                      waterfall={activeRun ? runWaterfall : undefined}
+                      processes={activeRun ? runProcesses : undefined}
+                      onPopupChange={setPanelPopup}
                       notes={
                         activeRun
                           ? {

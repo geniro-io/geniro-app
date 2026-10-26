@@ -95,7 +95,7 @@ function harness(
     // pin what the DRIVER does with the callback's result — that it prepends
     // it, and that it passes the right `granted` — never how the text is
     // composed. The real join (host preamble, custom instructions, role, call
-    // surface) is `composeTurnInstructions`, covered directly by
+    // surface) is `turnInstructionParts`, covered directly by
     // `utils/agent-instructions.spec.ts` and end-to-end through the real
     // adapter in `cursor-acp.adapter.spec.ts`.
     composeSystemPrompt: (granted) =>

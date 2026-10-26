@@ -21,7 +21,9 @@ import type {
   ExportWorkflowDto,
   ExportedDto,
   ImportWorkflowDto,
+  InstructionSizesDto,
   ItemDto,
+  MeasureInstructionSizesDto,
   NodeStateDto,
   PressActionDto,
   ResetWakesCancelledDto,
@@ -93,6 +95,10 @@ export interface WorkflowsApiListWorkflowRunsRequest {
     beforeCreatedAt?: string;
     beforeId?: string;
     runId?: string;
+}
+
+export interface WorkflowsApiMeasureInstructionSizesRequest {
+    measureInstructionSizesDto: MeasureInstructionSizesDto;
 }
 
 export interface WorkflowsApiOpenWorkflowChatRequest {
@@ -786,6 +792,53 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async listWorkflows(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<WorkflowSummaryDto>> {
         const response = await this.listWorkflowsRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async measureInstructionSizesRaw(requestParameters: WorkflowsApiMeasureInstructionSizesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<InstructionSizesDto>> {
+        if (requestParameters['measureInstructionSizesDto'] == null) {
+            throw new runtime.RequiredError(
+                'measureInstructionSizesDto',
+                'Required parameter "measureInstructionSizesDto" was null or undefined when calling measureInstructionSizes().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/instruction-sizes`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['measureInstructionSizesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async measureInstructionSizes(requestParameters: WorkflowsApiMeasureInstructionSizesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<InstructionSizesDto> {
+        const response = await this.measureInstructionSizesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

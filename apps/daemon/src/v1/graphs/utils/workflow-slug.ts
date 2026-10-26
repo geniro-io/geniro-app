@@ -16,6 +16,7 @@
 export const RESERVED_WORKFLOW_SLUGS: ReadonlySet<string> = new Set([
   'runs',
   'import',
+  'instruction-sizes',
 ]);
 
 /** Whether `slug` is a segment a route owns — see {@link RESERVED_WORKFLOW_SLUGS}. */

@@ -9,6 +9,7 @@ import {
 } from '../../agents/chat.types';
 import { messageImagesSchema } from '../../agents/dto/chat.dto';
 import {
+  InstructionSizesWireSchema,
   NodeStateWireSchema,
   ResetWakesCancelledSchema,
   RunWorkflowSnapshotWireSchema,
@@ -49,6 +50,24 @@ export const saveWorkflowSchema = z.object({
     ),
 });
 export class SaveWorkflowDto extends createZodDto(saveWorkflowSchema) {}
+
+/**
+ * The workflow as the builder's canvas holds it — saved or not — plus the two
+ * run settings the instruction block carries, which live in the Electron
+ * process's `settings.json` and so are sent the way a run start sends them.
+ */
+export const measureInstructionSizesSchema = z.object({
+  workflow: WorkflowSchema,
+  customInstructions: CustomInstructionsSchema.optional(),
+  replyLanguage: ReplyLanguageSchema.optional(),
+});
+export class MeasureInstructionSizesDto extends createZodDto(
+  measureInstructionSizesSchema,
+) {}
+
+export class InstructionSizesDto extends createZodDto(
+  InstructionSizesWireSchema,
+) {}
 
 export const importWorkflowSchema = z.object({
   path: z.string().min(1),

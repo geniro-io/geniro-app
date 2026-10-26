@@ -17,10 +17,15 @@ describe('slugifyWorkflowName', () => {
 });
 
 describe('RESERVED_WORKFLOW_SLUGS', () => {
-  // `GET /v1/workflows/runs` is the run list and `POST /v1/workflows/import`
-  // the importer — static routes Fastify matches before `:slug`.
+  // `GET /v1/workflows/runs` is the run list, `POST /v1/workflows/import`
+  // the importer and `POST /v1/workflows/instruction-sizes` the inspector's
+  // size readout — static routes Fastify matches before `:slug`.
   it('reserves the static segments the workflows controller owns', () => {
-    expect([...RESERVED_WORKFLOW_SLUGS].sort()).toEqual(['import', 'runs']);
+    expect([...RESERVED_WORKFLOW_SLUGS].sort()).toEqual([
+      'import',
+      'instruction-sizes',
+      'runs',
+    ]);
     expect(isReservedWorkflowSlug('runs')).toBe(true);
     expect(isReservedWorkflowSlug('import')).toBe(true);
     expect(isReservedWorkflowSlug('runs-1')).toBe(false);

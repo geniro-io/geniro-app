@@ -187,6 +187,7 @@ export function installRemoteBridge(): void {
     onDaemonRestarted: () => noSubscription(),
     onClearAgentCaches: () => noSubscription(),
     onFlushLineMeasurements: () => noSubscription(),
+    onSettingsChanged: () => noSubscription(),
     pickProjectFolder: (defaultPath?: string) =>
       invoke(IPC.pickProjectFolder, [defaultPath]) as ReturnType<
         GeniroApi['pickProjectFolder']

@@ -95,6 +95,7 @@ import {
   NODE_WIDTH,
   toFlow,
 } from './graph-doc';
+import { InstructionSizeCard } from './instruction-size-card';
 import { ModelSettingsRows } from './model-settings-rows';
 import {
   nextMcpDisabled,
@@ -121,6 +122,7 @@ import {
 import { agentCallInfo } from './node-validate';
 import { useAutosave } from './use-autosave';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
+import { useInstructionSizes } from './use-instruction-sizes';
 import { useNodeMcp } from './use-node-mcp';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
@@ -1356,6 +1358,22 @@ export function Workflows({
     [selected, nodes, edges],
   );
 
+  // What the selected agent's every turn carries before its prompt, measured
+  // by the daemon from the canvas as it stands.
+  const instructionSizes = useInstructionSizes(
+    api,
+    activeSlug ?? '',
+    liveSnapshot,
+    selected?.kind === 'agent' && active,
+  );
+  const instructionName = useCallback(
+    (nodeId: string): string => {
+      const node = nodes.find((n) => n.id === nodeId)?.data.node;
+      return node?.name ?? nodeId;
+    },
+    [nodes],
+  );
+
   // The last pan/zoom of this workflow, restored on open. Only read when the
   // builder (re)mounts its ReactFlow — one instance per opened workflow.
   const savedViewport = useMemo(
@@ -2143,6 +2161,18 @@ export function Workflows({
                           />
                         </Field>
                       ) : null}
+                      <Field
+                        label="Always-on instructions"
+                        hint="Carried in this agent's context on every turn. The token count is an estimate.">
+                        <InstructionSizeCard
+                          size={
+                            instructionSizes.sizes?.get(selected.id) ?? null
+                          }
+                          loading={instructionSizes.loading}
+                          error={instructionSizes.error}
+                          instructionName={instructionName}
+                        />
+                      </Field>
                     </>
                   )}
                 </div>

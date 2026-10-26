@@ -50,7 +50,9 @@ const {
   deleteWorkflow,
   getCapabilities,
   listAgentMcpServers,
+  measureInstructionSizes,
 } = vi.hoisted(() => ({
+  measureInstructionSizes: vi.fn(),
   listAgentMcpServers: vi.fn(),
   getCapabilities: vi.fn(),
   createWorkflow: vi.fn(),
@@ -84,6 +86,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       discardWorkflowChat: vi.fn(async () => ({ deleted: 0 })),
       listWorkflowRuns: vi.fn(async () => []),
       deleteWorkflow,
+      measureInstructionSizes,
     },
     chats: withHistoryPages({
       readRunState: vi.fn(async () => emptyRunState()),
@@ -202,6 +205,9 @@ beforeEach(() => {
   client = null;
 
   getCapabilities.mockReset().mockImplementation(async () => ({}));
+  measureInstructionSizes
+    .mockReset()
+    .mockImplementation(async () => ({ nodes: [] }));
   listAgentMcpServers.mockReset().mockImplementation(async () => ({
     servers: [],
     plugins: [],
@@ -1380,5 +1386,181 @@ describe('Workflows — a save over a file changed outside the builder', () => {
     await wait(900);
 
     expect(savedRequests().at(-1)!.saveWorkflowDto.baseHash).toBe('reread-2');
+  });
+});
+
+describe('Workflows — an agent node’s always-on instruction size', () => {
+  beforeEach(() => {
+    getWorkflow.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      workflow: {
+        ...EMPTY,
+        nodes: [
+          {
+            id: 'settings',
+            name: 'Team Settings',
+            kind: 'instruction',
+            instructions: 'TEAM',
+          },
+          {
+            id: 'manager',
+            name: 'Manager',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            role: 'ROLE',
+          },
+        ],
+        edges: [{ from: 'settings', to: 'manager', kind: 'instruction' }],
+        layout: { settings: { x: 0, y: 200 }, manager: { x: 0, y: 0 } },
+      },
+      hash: 'loaded-1',
+    }));
+    measureInstructionSizes.mockImplementation(async () => ({
+      nodes: [
+        {
+          nodeId: 'manager',
+          agent: 'claude',
+          turn: 'own',
+          totalChars: 2_412,
+          approxTokens: 603,
+          separatorChars: 4,
+          parts: [
+            { source: 'preamble', chars: 2_400, approxTokens: 600 },
+            {
+              source: 'instructionBlocks',
+              instructionNodeId: 'settings',
+              chars: 4,
+              approxTokens: 1,
+            },
+            { source: 'role', chars: 4, approxTokens: 1 },
+          ],
+        },
+      ],
+    }));
+  });
+
+  async function selectManager(): Promise<void> {
+    await openBuilder();
+    const node = container.querySelector<HTMLElement>(
+      '.react-flow__node[data-id="manager"]',
+    );
+    await act(async () => {
+      node?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    // The measurement is debounced behind a canvas change.
+    await wait(700);
+  }
+
+  it('measures the workflow and shows the daemon’s figure for the selected agent', async () => {
+    await selectManager();
+
+    const [request] = measureInstructionSizes.mock.calls.at(-1) as [
+      { measureInstructionSizesDto: { workflow: Workflow } },
+    ];
+    expect(
+      request.measureInstructionSizesDto.workflow.nodes.map((n) => n.id),
+    ).toEqual(['settings', 'manager']);
+    const card = container.querySelector('[data-slot="instruction-size"]');
+    expect(card?.textContent).toContain('~603 tokens');
+    expect(card?.textContent).toContain('2,412 characters');
+    // A wired block's row is named by the canvas's instruction node.
+    expect(card?.textContent).toContain('Team Settings4~1');
+  });
+
+  /** Type into the selected node's role box the way React hears it. */
+  async function typeRole(text: string): Promise<void> {
+    const area = container.querySelector<HTMLTextAreaElement>('#node-role');
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )!.set!;
+    await act(async () => {
+      setValue.call(area, text);
+      area?.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  const lastRequest = () =>
+    (
+      measureInstructionSizes.mock.calls.at(-1) as [
+        {
+          measureInstructionSizesDto: {
+            workflow: Workflow;
+            customInstructions?: string;
+          };
+        },
+      ]
+    )[0].measureInstructionSizesDto;
+
+  it('measures an unsaved edit, and keeps the last figures up when the daemon refuses one', async () => {
+    await selectManager();
+    measureInstructionSizes.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/workflows/instruction-sizes failed (400): {"code":"VALIDATION","message":"role is invalid"}',
+      ),
+    );
+
+    await typeRole('A NEW ROLE');
+    await wait(700);
+
+    const manager = lastRequest().workflow.nodes.find(
+      (node) => node.id === 'manager',
+    );
+    expect(manager?.kind === 'agent' ? manager.role : null).toBe('A NEW ROLE');
+    const card = container.querySelector('[data-slot="instruction-size"]');
+    expect(card?.textContent).toContain('~603 tokens');
+    expect(card?.textContent).toContain('Not measured:');
+    expect(card?.textContent).toContain('role is invalid');
+  });
+
+  it('measures again with the Settings as they now stand when the screen comes back', async () => {
+    await selectManager();
+    const asked = measureInstructionSizes.mock.calls.length;
+    await window.geniro.updateSettings({ customInstructions: 'NEW RULES' });
+
+    await paint(false);
+    await paint(true);
+    await wait(700);
+
+    expect(measureInstructionSizes.mock.calls.length).toBe(asked + 1);
+    expect(lastRequest().customInstructions).toBe('NEW RULES');
+  });
+
+  it('measures again when main announces a settings write, with the Settings as they now stand', async () => {
+    let announce: (() => void) | null = null;
+    window.geniro = createPreloadStub({
+      onSettingsChanged: (listener) => {
+        announce = listener;
+        return () => {
+          announce = null;
+        };
+      },
+    });
+    await selectManager();
+    const asked = measureInstructionSizes.mock.calls.length;
+    // Written by a paired phone: the Mac window never loses focus.
+    await window.geniro.updateSettings({ replyLanguage: 'Russian' });
+
+    await act(async () => {
+      announce?.();
+    });
+    await wait(700);
+
+    expect(measureInstructionSizes.mock.calls.length).toBe(asked + 1);
+    expect(
+      (
+        measureInstructionSizes.mock.calls.at(-1) as [
+          { measureInstructionSizesDto: { replyLanguage?: string } },
+        ]
+      )[0].measureInstructionSizesDto.replyLanguage,
+    ).toBe('Russian');
+  });
+
+  it('asks nothing while no agent is selected', async () => {
+    await openBuilder();
+    await wait(700);
+
+    expect(measureInstructionSizes).not.toHaveBeenCalled();
   });
 });

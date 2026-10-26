@@ -486,6 +486,7 @@ Custom instructions:
 - **Remove from existing chats** (`POST /v1/chats/forget-custom-instructions`) is an explicit press, never a side effect of clearing the box. It does not touch the snapshotted reply language.
 - `replyLanguage` saves through the same debounced persist; a value over the bound or with control characters is held on screen and never written.
 - The host-preamble preview renders nothing until `hostPreamble` arrives.
+- Every settings write is announced to every window (`onSettingsChanged`, `main/settings-changed-notify.ts`; no payload, a no-op on the phone bridge). The workflow inspector re-measures its instruction sizes on it, so an edit from the Settings screen or a paired phone reaches the figures.
 
 Appearance:
 

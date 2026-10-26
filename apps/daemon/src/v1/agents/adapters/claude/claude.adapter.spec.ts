@@ -725,7 +725,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       expect.arrayContaining(['--dangerously-skip-permissions']),
     );
     // The role now rides BEHIND the host preamble every user-facing turn
-    // carries. Spelled out rather than rebuilt with composeTurnInstructions,
+    // carries. Spelled out rather than rebuilt with turnInstructionParts,
     // which is the function under test one layer down — asserting against it
     // here would pass whatever that function did.
     expect(captured.args).toEqual(

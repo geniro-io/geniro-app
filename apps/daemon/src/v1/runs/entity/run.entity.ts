@@ -334,7 +334,7 @@ export class Run extends TimestampsEntity {
    * snapshot is never re-read that way.
    *
    * Composed onto the turn right after {@link customInstructions}
-   * (`composeTurnInstructions`), and hashed by `AgentAdapter.sessionKey` on the
+   * (`turnInstructionParts`), and hashed by `AgentAdapter.sessionKey` on the
    * same terms. TEXT so the `safe: true` schema sync adds it additively.
    */
   @Property({ type: 'text', nullable: true })

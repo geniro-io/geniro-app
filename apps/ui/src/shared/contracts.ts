@@ -1554,6 +1554,11 @@ export interface GeniroApi {
    */
   onFlushLineMeasurements(listener: (requestId: string) => void): () => void;
   /**
+   * The settings file was just written — by any window or a paired phone. No
+   * payload: a view that shows figures derived from settings re-reads them.
+   */
+  onSettingsChanged(listener: () => void): () => void;
+  /**
    * Open the native folder picker; returns the chosen absolute path or null.
    *
    * `defaultPath` is where the dialog OPENS — pass the folder the field already
@@ -1993,6 +1998,7 @@ export const IPC = {
   onDaemonRestarted: 'geniro:onDaemonRestarted',
   onClearAgentCaches: 'geniro:onClearAgentCaches',
   onFlushLineMeasurements: 'geniro:onFlushLineMeasurements',
+  onSettingsChanged: 'geniro:onSettingsChanged',
   pickProjectFolder: 'geniro:pickProjectFolder',
   pickAgentBinary: 'geniro:pickAgentBinary',
   pickTaskFiles: 'geniro:pickTaskFiles',

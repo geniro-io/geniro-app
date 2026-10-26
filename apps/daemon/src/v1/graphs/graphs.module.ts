@@ -8,6 +8,7 @@ import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
 import { GraphExecutorService } from './services/graph-executor.service';
 import { HostWakeGraphDelivery } from './services/host-wake-graph-delivery.service';
+import { InstructionSizesService } from './services/instruction-sizes.service';
 import { MonitorGraphDelivery } from './services/monitor-graph-delivery.service';
 import { PoolCooldowns } from './services/pool-cooldowns.store';
 import { RunWorkflowService } from './services/run-workflow.service';
@@ -39,6 +40,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
       useFactory: () => new WorkflowStoreService(),
     },
     CapabilitiesService,
+    InstructionSizesService,
     MonitorGraphDelivery,
     HostWakeGraphDelivery,
     {

@@ -8,7 +8,11 @@ import { registerSecret } from '../../diagnostics/utils/redact';
 import type { AgentVersionService } from '../services/agent-version.service';
 import type { ProcessRegistry } from '../services/process-registry';
 import { resolveAgentBinary } from '../utils/agent-binary';
-import { composeTurnInstructions } from '../utils/agent-instructions';
+import {
+  joinTurnInstructionParts,
+  type TurnInstructionPart,
+  turnInstructionParts,
+} from '../utils/agent-instructions';
 import { spawnAgentVersion } from '../utils/agent-version';
 import { buildChildEnv, registerIsolatedEnvKeys } from '../utils/child-env';
 import { childProcessHandle } from '../utils/child-handle';
@@ -94,6 +98,7 @@ import type {
   SessionPullRequestsInput,
   SubagentRecoveryRef,
   TurnDriver,
+  TurnInstructionInput,
 } from './adapter.types';
 import {
   discoverPluginDirs,
@@ -2163,7 +2168,19 @@ export abstract class AgentAdapter {
     input: AgentTurnInput,
     granted: boolean,
   ): string {
-    return composeTurnInstructions({
+    return joinTurnInstructionParts(this.turnInstructionParts(input, granted));
+  }
+
+  /**
+   * The parts {@link composeSystemPrompt} joins, each named by its source —
+   * what the workflow inspector measures, so the sizes it shows are this
+   * CLI's real block rather than a copy of the rule.
+   */
+  turnInstructionParts(
+    input: TurnInstructionInput,
+    granted: boolean,
+  ): TurnInstructionPart[] {
+    return turnInstructionParts({
       // An `internalProbe` turn has no transcript for the preamble to describe.
       includePreamble: input.internalProbe !== true,
       backgroundWorkNote: this.getConfig().backgroundWork.agentNote,

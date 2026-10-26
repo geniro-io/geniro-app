@@ -39,6 +39,8 @@ import {
   ExportedDto,
   ExportWorkflowDto,
   ImportWorkflowDto,
+  InstructionSizesDto,
+  MeasureInstructionSizesDto,
   NodeStateDto,
   ResetWakesCancelledDto,
   RunWorkflowDto,
@@ -51,6 +53,7 @@ import {
   WorkflowSummaryDto,
 } from '../dto/workflows.dto';
 import type {
+  InstructionSizesWire,
   NodeStateWire,
   ResetWakesCancelled,
   RunWorkflowSnapshotWire,
@@ -58,6 +61,7 @@ import type {
   WorkflowWire,
 } from '../graphs.types';
 import { GraphExecutorService } from '../services/graph-executor.service';
+import { InstructionSizesService } from '../services/instruction-sizes.service';
 import { RunWorkflowService } from '../services/run-workflow.service';
 import { WorkflowActionsService } from '../services/workflow-actions.service';
 import { WorkflowChatService } from '../services/workflow-chat.service';
@@ -82,6 +86,7 @@ export class WorkflowsController {
     private readonly runWorkflows: RunWorkflowService,
     private readonly workflowChats: WorkflowChatService,
     private readonly actions: WorkflowActionsService,
+    private readonly instructionSizes: InstructionSizesService,
   ) {}
 
   /**
@@ -259,6 +264,15 @@ export class WorkflowsController {
   @ZodResponse({ status: 201, type: WorkflowFileDto })
   import(@Body() dto: ImportWorkflowDto): Promise<WorkflowWire> {
     return this.store.importFrom(dto.path);
+  }
+
+  @Post('instruction-sizes')
+  @ApiOperation({ operationId: 'measureInstructionSizes' })
+  @ZodResponse({ status: 200, type: InstructionSizesDto })
+  measureInstructionSizes(
+    @Body() dto: MeasureInstructionSizesDto,
+  ): InstructionSizesWire {
+    return this.instructionSizes.measure(dto);
   }
 
   @Get(':slug')

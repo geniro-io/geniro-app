@@ -3246,7 +3246,7 @@ export interface AgentTurnInput {
    *
    * A peer of {@link customInstructions} rather than joined into it, for the
    * reason the two are separate columns: the user can purge their own text,
-   * and that purge must not reach this. `composeTurnInstructions` ranks it
+   * and that purge must not reach this. `turnInstructionParts` ranks it
    * directly after the user's own text.
    */
   taskInstructions?: string | null;
@@ -3266,7 +3266,7 @@ export interface AgentTurnInput {
    * executor. Undefined for plain chat and for a node nothing is wired to.
    *
    * A THIRD peer beside {@link systemPrompt} and {@link customInstructions};
-   * `composeTurnInstructions` owns where it ranks between them.
+   * `turnInstructionParts` owns where it ranks between them.
    *
    * Joined by the executor rather than sent as a list, because the ORDER of
    * several blocks is a graph fact (the wiring) that no adapter can recover.
@@ -3484,6 +3484,20 @@ export interface AgentTurnInput {
     toolTimeoutMs?: number;
   } | null;
 }
+
+/** The fields of a turn its instruction block is composed from. */
+export type TurnInstructionInput = Pick<
+  AgentTurnInput,
+  | 'internalProbe'
+  | 'replyLanguage'
+  | 'customInstructions'
+  | 'taskInstructions'
+  | 'workflowInstructions'
+  | 'instructionBlocks'
+  | 'systemPrompt'
+  | 'answeringACallPrompt'
+  | 'callSurfacePrompt'
+>;
 
 /**
  * One CLI process, and the turns an adapter runs on it.

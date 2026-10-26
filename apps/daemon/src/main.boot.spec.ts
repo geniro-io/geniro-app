@@ -189,6 +189,40 @@ describe('the daemon boots and serves', () => {
     expect(await res.json()).toEqual({ hits: [], partialReason: null });
   });
 
+  it('measures a draft workflow’s instruction sizes on its static route, not as a slug', async () => {
+    const res = await request(`${base()}/v1/workflows/instruction-sizes`, {
+      method: 'POST',
+      headers: { ...auth(), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workflow: {
+          name: 'draft',
+          nodes: [
+            {
+              id: 'solo',
+              kind: 'agent',
+              agent: 'claude',
+              approval: 'auto',
+              role: 'ROLE',
+            },
+          ],
+          edges: [],
+        },
+        customInstructions: 'MINE',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      nodes: { nodeId: string; parts: { source: string }[] }[];
+    };
+    expect(body.nodes.map((node) => node.nodeId)).toEqual(['solo']);
+    expect(body.nodes[0]?.parts.map((part) => part.source)).toEqual([
+      'preamble',
+      'backgroundWorkNote',
+      'customInstructions',
+      'role',
+    ]);
+  });
+
   it('renders the OpenAPI document — and only for the launch token', async () => {
     // Every mount the gate covers: the UI, both documents (siblings of the
     // UI path, not children) and the Scalar reference.

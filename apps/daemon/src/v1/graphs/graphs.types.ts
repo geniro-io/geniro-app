@@ -16,6 +16,7 @@ import {
   type PersistedResetWake,
 } from '../agents/chat.types';
 import { createChatSchema } from '../agents/dto/chat.dto';
+import { TURN_INSTRUCTION_SOURCES } from '../agents/utils/agent-instructions';
 import {
   AgentKindSchema,
   type ItemKind,
@@ -488,7 +489,7 @@ export const WorkflowTriggerNodeSchema = z
  *
  * It is NOT an execution step: it runs no CLI, holds no slot, never enters the
  * run order and never settles. Each wired agent's turn is composed with this
- * text in it; `composeTurnInstructions` owns where it ranks against the user's
+ * text in it; `turnInstructionParts` owns where it ranks against the user's
  * global instructions and that node's own `role`.
  */
 export const WorkflowInstructionNodeSchema = z
@@ -1634,6 +1635,69 @@ export const CapabilitiesWireSchema = z.object({
     ),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
+
+/** One instruction node's text, as it reaches a wired agent. */
+export interface InstructionBlock {
+  /** The instruction node the text was written in. */
+  nodeId: string;
+  text: string;
+}
+
+export const InstructionSizeSourceSchema = z
+  .enum(TURN_INSTRUCTION_SOURCES)
+  .meta({ id: 'InstructionSizeSource' });
+
+/** One part of an agent node's always-on instruction block, measured. */
+export const InstructionSizePartSchema = z
+  .object({
+    source: InstructionSizeSourceSchema,
+    instructionNodeId: z
+      .string()
+      .optional()
+      .describe(
+        'For an instructionBlocks part: the instruction node whose text it is (one part per wired block)',
+      ),
+    chars: z.number().int().nonnegative(),
+    approxTokens: z.number().int().nonnegative(),
+  })
+  .meta({ id: 'InstructionSizePart' });
+export type InstructionSizePart = z.infer<typeof InstructionSizePartSchema>;
+
+/** What one agent node's turns pay for before the prompt, every turn. */
+export const NodeInstructionSizeSchema = z
+  .object({
+    nodeId: z.string(),
+    agent: AgentKindSchema.describe(
+      'The CLI measured — the node’s own, a pool’s first member',
+    ),
+    turn: z
+      .enum(['own', 'call'])
+      .describe(
+        'Which turn was measured: the node’s own turn, or — for a node only ever called — a turn answering a call',
+      ),
+    totalChars: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('Length of the composed block, exactly'),
+    approxTokens: z.number().int().nonnegative(),
+    separatorChars: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe(
+        'The paragraph breaks between parts — totalChars less the parts',
+      ),
+    parts: z.array(InstructionSizePartSchema),
+  })
+  .meta({ id: 'NodeInstructionSize' });
+export type NodeInstructionSize = z.infer<typeof NodeInstructionSizeSchema>;
+
+/** POST /v1/workflows/instruction-sizes — one entry per agent node. */
+export const InstructionSizesWireSchema = z.object({
+  nodes: z.array(NodeInstructionSizeSchema),
+});
+export type InstructionSizesWire = z.infer<typeof InstructionSizesWireSchema>;
 
 /** What calling off a run's promised continues answers. */
 export const ResetWakesCancelledSchema = z.object({

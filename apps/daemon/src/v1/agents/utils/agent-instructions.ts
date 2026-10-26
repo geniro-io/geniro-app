@@ -4,8 +4,10 @@
  * A built-in preamble describing the surface the reply is rendered on, the
  * user's own custom instructions, what a board card asks of the run working it,
  * and whatever the turn itself has to say (a graph node's instruction blocks
- * and role, the call surface). `AgentAdapter.composeSystemPrompt` is the only caller —
- * adapters never join these fields themselves (`.claude/rules/agent-adapters.md`).
+ * and role, the call surface). Reached only through `AgentAdapter`
+ * (`composeSystemPrompt`, and `turnInstructionParts` for the workflow
+ * inspector's size readout) — adapters never join these fields themselves
+ * (`.claude/rules/agent-adapters.md`).
  *
  * Shared by the chat and graph paths through that one seam, which is the
  * convention this directory exists for: execution logic both paths need lives
@@ -180,7 +182,38 @@ export function replyLanguageInstruction(
 }
 
 /**
- * Join the turn's instruction parts into the one block an adapter hands its CLI.
+ * Where each part of a turn's instruction block comes from, in the order they
+ * are joined. The workflow inspector's size readout names its rows by these.
+ */
+export const TURN_INSTRUCTION_SOURCES = [
+  'preamble',
+  'backgroundWorkNote',
+  'replyLanguage',
+  'customInstructions',
+  'taskInstructions',
+  'workflowInstructions',
+  'instructionBlocks',
+  'role',
+  'answeringACall',
+  'callSurface',
+] as const;
+
+export type TurnInstructionSource = (typeof TURN_INSTRUCTION_SOURCES)[number];
+
+/** One non-blank part of a turn's instruction block, already trimmed. */
+export interface TurnInstructionPart {
+  source: TurnInstructionSource;
+  text: string;
+}
+
+/** What separates two parts in the composed block. */
+export const TURN_INSTRUCTION_SEPARATOR = '\n\n';
+
+/**
+ * The turn's instruction parts, each named by its source, trimmed, blank ones
+ * dropped — what an adapter joins ({@link joinTurnInstructionParts}) into the
+ * one block it hands its CLI, and what the workflow inspector measures, so the
+ * block and its breakdown can never disagree.
  *
  * **Order is precedence, and it runs general → specific.** The preamble is
  * first because it is the weakest claim in the stack — facts about the host
@@ -206,22 +239,38 @@ export function replyLanguageInstruction(
  * line, and `customInstructions` arrives as `''` from a cleared textarea at
  * least as often as it arrives absent.
  */
-export function composeTurnInstructions(parts: TurnInstructionParts): string {
-  return [
-    parts.includePreamble === false ? null : GENIRO_UI_PREAMBLE,
-    parts.includePreamble === false ? null : parts.backgroundWorkNote,
-    parts.includePreamble === false
-      ? null
-      : replyLanguageInstruction(parts.replyLanguage),
-    parts.customInstructions,
-    parts.taskInstructions,
-    parts.workflowInstructions,
-    parts.instructionBlocks,
-    parts.systemPrompt,
-    parts.answeringACallPrompt,
-    parts.callSurfacePrompt,
-  ]
-    .map((part) => part?.trim())
-    .filter((part): part is string => Boolean(part))
-    .join('\n\n');
+export function turnInstructionParts(
+  parts: TurnInstructionParts,
+): TurnInstructionPart[] {
+  const preamble = parts.includePreamble !== false;
+  const candidates: [TurnInstructionSource, string | null | undefined][] = [
+    ['preamble', preamble ? GENIRO_UI_PREAMBLE : null],
+    ['backgroundWorkNote', preamble ? parts.backgroundWorkNote : null],
+    [
+      'replyLanguage',
+      preamble ? replyLanguageInstruction(parts.replyLanguage) : null,
+    ],
+    ['customInstructions', parts.customInstructions],
+    ['taskInstructions', parts.taskInstructions],
+    ['workflowInstructions', parts.workflowInstructions],
+    ['instructionBlocks', parts.instructionBlocks],
+    ['role', parts.systemPrompt],
+    ['answeringACall', parts.answeringACallPrompt],
+    ['callSurface', parts.callSurfacePrompt],
+  ];
+  const kept: TurnInstructionPart[] = [];
+  for (const [source, text] of candidates) {
+    const trimmed = text?.trim();
+    if (trimmed) {
+      kept.push({ source, text: trimmed });
+    }
+  }
+  return kept;
+}
+
+/** The one block a list of {@link turnInstructionParts} composes to. */
+export function joinTurnInstructionParts(
+  parts: readonly TurnInstructionPart[],
+): string {
+  return parts.map((part) => part.text).join(TURN_INSTRUCTION_SEPARATOR);
 }

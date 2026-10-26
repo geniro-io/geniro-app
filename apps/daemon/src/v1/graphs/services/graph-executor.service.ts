@@ -203,12 +203,6 @@ import {
 } from '../utils/agent-pool';
 import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
 import {
-  ANSWERING_A_CALL,
-  ANSWERING_WITH_CALLS_OUT,
-  CALLEE_DESCRIPTION_MAX,
-  calleeSummary,
-} from '../utils/callee-text';
-import {
   callerConversationOf,
   callerKey,
   callerNodeOf,
@@ -224,12 +218,18 @@ import {
   validateRunnableGraph,
   validateWorkflowGraph,
 } from '../utils/graph-validate';
+import {
+  calleesByNode,
+  callToolsAdmitted,
+  holdsCallTools,
+  instructionBlocksByNode,
+  nodeInstructionFields,
+} from '../utils/node-instructions';
 import { openCalls, openNodeTurns } from '../utils/open-call-work';
 import { MAX_PARALLEL_AGENTS } from '../utils/parallelism';
 import {
   advanceCacheClock,
   cacheExpiryOf,
-  COLD_RESUME_RULE,
   statedTtlOf,
   type TurnCacheClock,
 } from '../utils/prompt-cache-standing';
@@ -259,13 +259,6 @@ const NODE_OUTCOMES: ReadonlySet<string> = new Set<NodeOutcome>([
   'cancelled',
   'skipped',
 ]);
-
-/**
- * How several instruction blocks wired to one node are joined — the blank
- * line `composeTurnInstructions` puts between the parts, so a block reads as
- * its own paragraph rather than running into its neighbour.
- */
-const INSTRUCTION_BLOCK_SEPARATOR = '\n\n';
 
 /**
  * How many times one call may be continued inside itself after its callee
@@ -2723,52 +2716,10 @@ export class GraphExecutorService
     const dagNodes = nodes
       .filter(isExecutableNode)
       .filter((n) => !onDemand.has(n.id));
-    // The instruction text each agent node is wired to, in NODE-LIST order —
-    // the order the YAML file and the builder's own list already put the
-    // blocks in, so two blocks on one agent read the same way every run.
-    // Every block is sent whole, whatever its length: instruction text carries
-    // no size limit anywhere.
-    const blocksOf = new Map<string, string[]>();
-    for (const source of nodes) {
-      if (source.kind !== 'instruction') {
-        continue;
-      }
-      const text = source.instructions.trim();
-      if (!text) {
-        continue;
-      }
-      for (const edge of workflow.edges) {
-        if (edge.kind !== 'instruction' || edge.from !== source.id) {
-          continue;
-        }
-        const blocks = blocksOf.get(edge.to);
-        if (blocks) {
-          blocks.push(text);
-        } else {
-          blocksOf.set(edge.to, [text]);
-        }
-      }
-    }
-    const instructionsFor = (nodeId: string): string | null =>
-      blocksOf.get(nodeId)?.join(INSTRUCTION_BLOCK_SEPARATOR) ?? null;
+    const blocksOf = instructionBlocksByNode(workflow);
     // Caller → callee agent nodes, from the call edges. Drives the broker's
     // dispatch, each caller's MCP endpoint grant, and its awareness block.
-    const calleesOf = new Map<string, WorkflowAgentNode[]>();
-    for (const edge of workflow.edges) {
-      if (edge.kind !== 'call') {
-        continue;
-      }
-      const callee = nodesById.get(edge.to);
-      if (callee?.kind !== 'agent') {
-        continue;
-      }
-      const list = calleesOf.get(edge.from);
-      if (list) {
-        list.push(callee);
-      } else {
-        calleesOf.set(edge.from, [callee]);
-      }
-    }
+    const calleesOf = calleesByNode(workflow);
 
     const finalTexts = new Map<string, string>();
     const settled = new Map<string, NodeOutcome>();
@@ -3872,19 +3823,19 @@ export class GraphExecutorService
     };
 
     /**
-     * Whether this agent kind may hold the call tools in THIS run: a CLI whose
-     * tools need no machine trust always, one that does only on a probed pass
-     * (M3's cursor MCP-trust probe). The one predicate behind every admission
-     * surface — the endpoint grant, the token minting, the awareness block,
-     * and the self-check — so a change here cannot silently miss a sibling
-     * gate.
+     * Whether this agent kind may hold the call tools in THIS run — the shared
+     * `callToolsAdmitted` rule, which the "May call" block also reads through
+     * `holdsCallTools`, so a change there cannot silently miss a sibling gate.
      */
     const callCapable = (node: WorkflowAgentNode): boolean =>
-      !this.adapterFor(node.agent).getConfig().mcp.callToolsRequireTrustProbe;
+      callToolsAdmitted(this.adapterFor(node.agent).getConfig());
 
     /** Nodes that hold the call tools in THIS run (callers, not callees). */
     const isCaller = (node: WorkflowAgentNode): boolean =>
-      callCapable(node) && calleesOf.has(node.id);
+      holdsCallTools(
+        calleesOf.get(node.id),
+        this.adapterFor(node.agent).getConfig(),
+      );
 
     /**
      * Nodes handed the MCP endpoint: EVERY call-capable agent, not callers
@@ -3931,39 +3882,6 @@ export class GraphExecutorService
         // Per-run — see `AgentTurnInput.mcpEndpoint.serverName` for why.
         serverName: hostMcpServerName(runId),
       };
-    };
-
-    /**
-     * The caller's "May call" block, naming each callee and what that callee
-     * says it does, so the agent can route work from the graph alone — its own
-     * role never has to name the team. Callee ROLES stay private (see
-     * `calleeSummary`). Null for a non-caller.
-     *
-     * Kept out of the node's role prompt so an adapter that withholds the call
-     * endpoint can withhold this block with it — see `callSurfacePrompt`.
-     */
-    const callSurfaceFor = (
-      node: WorkflowAgentNode,
-      /** Whether this turn answers a call — see `ANSWERING_WITH_CALLS_OUT`. */
-      answeringACall: boolean,
-    ): string | null => {
-      const callees = calleesOf.get(node.id);
-      if (!callees || !isCaller(node)) {
-        return null;
-      }
-      const lines = callees.map(
-        (callee) => `- ${calleeSummary(callee, CALLEE_DESCRIPTION_MAX)}`,
-      );
-      // The escalation half differs per CLI, and the tool's NAME is the
-      // adapter's to spell: a caller whose CLI has a question channel can
-      // relay to the user; one without it can only answer-or-time-out.
-      const questionTool = this.adapterFor(node.agent).getConfig()
-        .questionToolName;
-      const questionLine =
-        questionTool !== null
-          ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
-          : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.\nBefore continuing an earlier conversation with call_agent(thread), above all after a pause, check it with list_agent_threads. ${COLD_RESUME_RULE}${answeringACall ? `\n${ANSWERING_WITH_CALLS_OUT}` : ''}`;
     };
 
     /**
@@ -4222,7 +4140,17 @@ export class GraphExecutorService
           carried !== null
             ? null
             : (callContext?.resumeSessionId ?? extras.resumeSessionId ?? null),
-        systemPrompt: node.role ?? null,
+        // The role, wired blocks, answering-a-call note and "May call" block —
+        // built by the helper the inspector's size readout measures with.
+        // Blocks are joined there because the order of several blocks is a
+        // graph fact no adapter could recover; the rest are peers ranked by
+        // `turnInstructionParts`.
+        ...nodeInstructionFields(node, {
+          blocks: blocksOf.get(node.id),
+          callees: calleesOf.get(node.id),
+          answeringACall: callContext !== undefined,
+          config: adapter.getConfig(),
+        }),
         // A PEER of the role rather than something joined into it: the two are
         // composed by `AgentAdapter.composeSystemPrompt`, which ranks the
         // node's role after this so a node authored for one job still outranks
@@ -4232,17 +4160,9 @@ export class GraphExecutorService
         replyLanguage,
         // A peer on the same terms; ranked right after the user's own text.
         taskInstructions,
-        // Joined here because the order of several blocks is a graph fact no
-        // adapter could recover; ranked by `composeTurnInstructions`.
-        instructionBlocks: instructionsFor(node.id),
         // This node's own CLI's slice; an option it does not carry reads as
         // that option's declared default, never as off.
         agentOptions: agentOptions[node.agent],
-        // Every callee, a leaf included: one with no callees gets no "May
-        // call" block to carry it.
-        answeringACallPrompt:
-          callContext !== undefined ? ANSWERING_A_CALL : null,
-        callSurfacePrompt: callSurfaceFor(node, callContext !== undefined),
         // A questionCapable AUTO node spawns in ask mode when its CLI's
         // question channel COSTS that posture (the daemon auto-approves plain
         // permissions below, so unattended semantics survive).

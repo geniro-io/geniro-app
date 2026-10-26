@@ -714,7 +714,7 @@ export class TaskRunsService {
    * a class of card, and the ask this run itself needs is the more specific.
    *
    * Stored as `Run.taskInstructions`, never joined into the user's own
-   * `customInstructions`: `composeTurnInstructions` places the pair directly
+   * `customInstructions`: `turnInstructionParts` places the pair directly
    * after that text, so the turn reads user's own → label block → report ask,
    * while the user's purge of their own text leaves this intact.
    *

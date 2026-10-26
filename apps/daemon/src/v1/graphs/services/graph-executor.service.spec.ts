@@ -117,6 +117,7 @@ import {
 import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
+import { InstructionSizesService } from './instruction-sizes.service';
 import { RunWorkflowService } from './run-workflow.service';
 import type { WorkflowStoreService } from './workflow-store.service';
 
@@ -11486,6 +11487,99 @@ describe('instruction blocks on a call-only callee', () => {
     completeTurn(claude.starts[0]!, 'done');
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+});
+
+describe('the inspector’s instruction size against a real turn', () => {
+  // The readout promises the length of the block a run hands the CLI. This
+  // composes what the EXECUTOR actually passed a turn and compares it with
+  // what `InstructionSizesService` measured for the same node — so a change to
+  // how the executor builds a turn, and not only to the shared helpers, shows
+  // up here.
+  const TEAM_WF: Workflow = {
+    name: 'team',
+    nodes: [
+      { id: 'start', kind: 'trigger', trigger: 'manual' },
+      { id: 'settings', kind: 'instruction', instructions: 'TEAM SETTINGS' },
+      { id: 'standard', kind: 'instruction', instructions: 'STANDARD' },
+      {
+        id: 'manager',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You run the team.',
+      },
+      {
+        id: 'lead',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        description: 'Leads a piece of work.',
+        role: 'You lead.',
+      },
+      {
+        id: 'dev',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        description: 'Writes code.',
+        role: 'You write code.',
+      },
+    ],
+    edges: [
+      { from: 'start', to: 'manager', kind: 'data' },
+      { from: 'settings', to: 'manager', kind: 'instruction' },
+      { from: 'standard', to: 'manager', kind: 'instruction' },
+      { from: 'settings', to: 'lead', kind: 'instruction' },
+      { from: 'manager', to: 'lead', kind: 'call' },
+      // The lead is only ever called AND calls on: its turn carries the
+      // answering-a-call note and the calls-out rule in its "May call" block.
+      { from: 'lead', to: 'dev', kind: 'call' },
+    ],
+  };
+
+  it('measures exactly the block the executor composes, for a caller and a calling callee', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 't',
+      workflow: TEAM_WF,
+      cwd: dir,
+      prompt: 'go',
+      customInstructions: 'MINE',
+      replyLanguage: 'Russian',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'manager', {
+      title: 'why',
+      agent: 'lead',
+      message: 'lead this',
+    });
+    await drain();
+
+    const shipped = new ClaudeAdapter();
+    const composed = (input: AgentTurnInput): string =>
+      (
+        shipped as unknown as {
+          composeSystemPrompt(input: AgentTurnInput, granted: boolean): string;
+        }
+      ).composeSystemPrompt(input, true);
+    const sizes = new InstructionSizesService(
+      new AgentAdapterRegistry([shipped]),
+    ).measure({
+      workflow: TEAM_WF,
+      customInstructions: 'MINE',
+      replyLanguage: 'Russian',
+    });
+    const total = (nodeId: string): number | undefined =>
+      sizes.nodes.find((node) => node.nodeId === nodeId)?.totalChars;
+
+    const managerTurn = claude.starts[0]!.input;
+    const leadTurn = claude.starts[1]!.input;
+    expect(managerTurn.systemPrompt).toBe('You run the team.');
+    expect(leadTurn.systemPrompt).toBe('You lead.');
+    expect(leadTurn.answeringACallPrompt).not.toBeNull();
+    expect(total('manager')).toBe(composed(managerTurn).length);
+    expect(total('lead')).toBe(composed(leadTurn).length);
   });
 });
 

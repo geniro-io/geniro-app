@@ -36,6 +36,7 @@ import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { teardownThenQuit } from './quit-teardown';
 import { RemoteAccess } from './remote/remote-access';
 import { onSettingsWritten, readSettings } from './settings';
+import { notifySettingsChanged } from './settings-changed-notify';
 import { ShareConfigPush } from './share-config-push';
 import { TerminalSessions } from './terminal-sessions';
 import { reportUncaughtErrors } from './uncaught-error-report';
@@ -164,6 +165,7 @@ const keptSessionConfigPush = new KeptSessionConfigPush((message) => {
   });
 });
 onSettingsWritten((settings) => {
+  notifySettingsChanged(BrowserWindow.getAllWindows());
   void shareConfigPush.pushIfChanged(supervisor.getHandle(), settings.sharing);
   void keptSessionConfigPush.pushIfChanged(supervisor.getHandle(), {
     idleMinutes: settings.keptSessionIdleMinutes,

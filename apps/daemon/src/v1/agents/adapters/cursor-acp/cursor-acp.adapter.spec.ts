@@ -817,7 +817,7 @@ describe('CursorAcpAdapter turn shaping', () => {
       (frame) => frame.method === 'session/prompt',
     )?.params as { prompt: { text: string }[] };
     // The node role still leads the user's message; the host preamble sits
-    // ahead of both, per composeTurnInstructions' general → specific order.
+    // ahead of both, per turnInstructionParts' general → specific order.
     expect(prompt.prompt[0]?.text).toBe(
       `ship it\n\n${hostBlock(`${HOST_BLOCK}\n\nYou are a reviewer.`)}`,
     );

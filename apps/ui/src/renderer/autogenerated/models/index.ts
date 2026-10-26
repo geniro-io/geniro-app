@@ -3981,6 +3981,71 @@ export interface ImportWorkflowDto {
 /**
  * 
  * @export
+ * @interface InstructionSizePart
+ */
+export interface InstructionSizePart {
+    /**
+     * 
+     * @type {InstructionSizeSource}
+     * @memberof InstructionSizePart
+     */
+    source: InstructionSizeSource;
+    /**
+     * For an instructionBlocks part: the instruction node whose text it is (one part per wired block)
+     * @type {string}
+     * @memberof InstructionSizePart
+     */
+    instructionNodeId?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof InstructionSizePart
+     */
+    chars: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof InstructionSizePart
+     */
+    approxTokens: number;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const InstructionSizeSource = {
+    Preamble: 'preamble',
+    BackgroundWorkNote: 'backgroundWorkNote',
+    ReplyLanguage: 'replyLanguage',
+    CustomInstructions: 'customInstructions',
+    TaskInstructions: 'taskInstructions',
+    WorkflowInstructions: 'workflowInstructions',
+    InstructionBlocks: 'instructionBlocks',
+    Role: 'role',
+    AnsweringACall: 'answeringACall',
+    CallSurface: 'callSurface'
+} as const;
+export type InstructionSizeSource = typeof InstructionSizeSource[keyof typeof InstructionSizeSource];
+
+/**
+ * 
+ * @export
+ * @interface InstructionSizesDto
+ */
+export interface InstructionSizesDto {
+    /**
+     * 
+     * @type {Array<NodeInstructionSize>}
+     * @memberof InstructionSizesDto
+     */
+    nodes: Array<NodeInstructionSize>;
+}
+/**
+ * 
+ * @export
  * @interface ItemDto
  */
 export interface ItemDto {
@@ -4482,6 +4547,31 @@ export interface LogoutResultDto {
 /**
  * 
  * @export
+ * @interface MeasureInstructionSizesDto
+ */
+export interface MeasureInstructionSizesDto {
+    /**
+     * 
+     * @type {Workflow}
+     * @memberof MeasureInstructionSizesDto
+     */
+    workflow: Workflow;
+    /**
+     * 
+     * @type {string}
+     * @memberof MeasureInstructionSizesDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MeasureInstructionSizesDto
+     */
+    replyLanguage?: string;
+}
+/**
+ * 
+ * @export
  * @interface MoveTaskStatusDto
  */
 export interface MoveTaskStatusDto {
@@ -4526,6 +4616,66 @@ export interface NamedPathsResultDto {
      */
     named: Array<string>;
 }
+/**
+ * 
+ * @export
+ * @interface NodeInstructionSize
+ */
+export interface NodeInstructionSize {
+    /**
+     * 
+     * @type {string}
+     * @memberof NodeInstructionSize
+     */
+    nodeId: string;
+    /**
+     * The CLI measured — the node’s own, a pool’s first member
+     * @type {AgentKind}
+     * @memberof NodeInstructionSize
+     */
+    agent: AgentKind;
+    /**
+     * Which turn was measured: the node’s own turn, or — for a node only ever called — a turn answering a call
+     * @type {string}
+     * @memberof NodeInstructionSize
+     */
+    turn: NodeInstructionSizeTurnEnum;
+    /**
+     * Length of the composed block, exactly
+     * @type {number}
+     * @memberof NodeInstructionSize
+     */
+    totalChars: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof NodeInstructionSize
+     */
+    approxTokens: number;
+    /**
+     * The paragraph breaks between parts — totalChars less the parts
+     * @type {number}
+     * @memberof NodeInstructionSize
+     */
+    separatorChars: number;
+    /**
+     * 
+     * @type {Array<InstructionSizePart>}
+     * @memberof NodeInstructionSize
+     */
+    parts: Array<InstructionSizePart>;
+}
+
+
+/**
+ * @export
+ */
+export const NodeInstructionSizeTurnEnum = {
+    Own: 'own',
+    Call: 'call'
+} as const;
+export type NodeInstructionSizeTurnEnum = typeof NodeInstructionSizeTurnEnum[keyof typeof NodeInstructionSizeTurnEnum];
+
 /**
  * 
  * @export

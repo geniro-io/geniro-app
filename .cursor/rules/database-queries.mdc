@@ -18,6 +18,7 @@ Every daemon query goes through MikroORM's QueryBuilder or its typed Kysely buil
 ## The one exception: `db/chat-text-index.ddl.ts`
 
 - The chat full-text index's DDL (the FTS5 virtual table, its three triggers on `items`, and the rebuild's `DROP`s) is hand-written because no builder can express it.
+- The index (`chat_text`, FTS5 over `message`/`reasoning` items) sits outside the schema sync: the triggers on `items` keep it current, and `ChatTextIndexService.ensure()` builds or repairs it at boot.
 - Every statement there is built from constants only, and it is DDL only — every query against the index uses the Kysely builder.
 - Change a statement only by bumping its version (see the file's doc block).
 - The FTS tables are listed in `schemaGenerator.skipTables` (`CHAT_TEXT_TABLES`); keep the two in step on a rename.

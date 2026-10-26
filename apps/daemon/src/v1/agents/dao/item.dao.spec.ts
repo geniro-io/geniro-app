@@ -9,6 +9,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import type { SeqRange } from '../chat.types';
 import { PULL_REQUEST_NAMING_KINDS } from '../utils/pull-request-capture';
 import { ItemDao } from './item.dao';
 
@@ -1339,12 +1340,23 @@ describe('ItemDao (in-memory sqlite)', () => {
     await call('run-a', 1, 'toolu_other');
     await call('run-a', 3, 'toolu_a', 'tool_result');
     await call('run-b', 4, 'toolu_a');
+    // A soft-deleted call is gone, though its id is asked for.
+    const deleted = await call('run-a', 5, 'toolu_b');
+    await orm.em
+      .fork()
+      .createQueryBuilder(Item)
+      .update({ deletedAt: new Date() })
+      .where({ id: deleted.id })
+      .execute();
 
     const ids = (rows: { payload: unknown }[]): unknown[] =>
       rows.map((row) => JSON.parse(String(row.payload)).id);
-    expect(
-      ids(await dao.toolCallsByIds('run-a', ['toolu_a', 'toolu_b'])),
-    ).toEqual(['toolu_a', 'toolu_b']);
+    const found = await dao.toolCallsByIds('run-a', ['toolu_a', 'toolu_b']);
+    expect(ids(found)).toEqual(['toolu_a', 'toolu_b']);
+    expect(found.map((row) => [row.nodeId, row.createdAt])).toEqual([
+      ['callee', expect.any(Date)],
+      ['callee', expect.any(Date)],
+    ]);
     expect(await dao.toolCallsByIds('run-a', [])).toEqual([]);
   });
 
@@ -1596,6 +1608,225 @@ describe('ItemDao (in-memory sqlite)', () => {
 
       expect(rows.map((row) => row.seq)).toEqual([2]);
     });
+
+    it('matches the id exactly, among the asked kinds of one run, on the asked side of a page', async () => {
+      const row = (
+        runId: string,
+        seq: number,
+        kind: ItemKind,
+        id: string,
+      ): Promise<Item> => insert(runId, seq, kind, JSON.stringify({ id }));
+      await row('run-ids', 4, 'tool_result', 'call-1');
+      await row('run-ids', 1, 'tool_call', 'call-1');
+      // `call-1` is a prefix of this id, not the id.
+      await row('run-ids', 2, 'tool_call', 'call-10');
+      await row('run-ids', 3, 'message', 'call-1');
+      await row('run-ids', 6, 'tool_call', 'call-2');
+      await row('run-other', 5, 'tool_call', 'call-1');
+
+      const seqs = async (range?: SeqRange): Promise<number[]> =>
+        (
+          await dao.rowsByPayloadId(
+            'run-ids',
+            ['tool_call', 'tool_result'],
+            ['call-1', 'call-2'],
+            range,
+          )
+        ).map((item) => item.seq);
+
+      expect(await seqs()).toEqual([1, 4, 6]);
+      expect(await seqs({ before: 4 })).toEqual([1]);
+      expect(await seqs({ after: 1 })).toEqual([4, 6]);
+      expect(await seqs({ outside: { firstSeq: 2, lastSeq: 5 } })).toEqual([
+        1, 6,
+      ]);
+    });
+  });
+
+  describe('callHandOffRows', () => {
+    it('reads the system rows that name both a member and a call, on the asked side of a page', async () => {
+      const row = (
+        runId: string,
+        seq: number,
+        kind: ItemKind,
+        payload: Record<string, unknown>,
+      ): Promise<Item> => insert(runId, seq, kind, JSON.stringify(payload));
+      await row('run-h', 5, 'system', { member: 'c', callId: 'call-2' });
+      await row('run-h', 1, 'system', { member: 'b', callId: 'call-1' });
+      await row('run-h', 2, 'system', { member: 'b' });
+      await row('run-h', 3, 'system', { callId: 'call-1' });
+      await row('run-h', 4, 'message', { member: 'b', callId: 'call-1' });
+      await row('run-h', 7, 'system', { member: null, callId: 'call-3' });
+      await row('run-other', 6, 'system', { member: 'b', callId: 'call-1' });
+
+      const seqs = async (range?: SeqRange): Promise<number[]> =>
+        (await dao.callHandOffRows('run-h', range)).map((item) => item.seq);
+
+      expect(await seqs()).toEqual([1, 5]);
+      expect(await seqs({ after: 1 })).toEqual([5]);
+      expect(await seqs({ before: 5 })).toEqual([1]);
+      expect(await seqs({ outside: { firstSeq: 1, lastSeq: 4 } })).toEqual([5]);
+    });
+  });
+
+  describe('toolCallsNamed', () => {
+    it("reads one run's tool calls whose name, lowercased, is one of the names", async () => {
+      const row = (
+        runId: string,
+        seq: number,
+        kind: ItemKind,
+        name: string,
+      ): Promise<Item> =>
+        insert(runId, seq, kind, JSON.stringify({ id: `t${seq}`, name }));
+      await row('run-n', 2, 'tool_call', 'Task');
+      await row('run-n', 1, 'tool_call', 'mcp__geniro__show_artifact');
+      await row('run-n', 3, 'tool_result', 'Task');
+      await row('run-n', 4, 'tool_call', 'Bash');
+      await row('run-n', 5, 'tool_call', 'TASK');
+      await row('run-other', 6, 'tool_call', 'Task');
+
+      expect(
+        (
+          await dao.toolCallsNamed('run-n', [
+            'task',
+            'mcp__geniro__show_artifact',
+          ])
+        ).map((item) => item.seq),
+      ).toEqual([1, 2, 5]);
+      // The names are compared lowercased only on the row's side.
+      expect(
+        (await dao.toolCallsNamed('run-n', ['Task'])).map((item) => item.seq),
+      ).toEqual([]);
+      expect(await dao.toolCallsNamed('run-n', [])).toEqual([]);
+    });
+  });
+
+  describe('turnEndingsAfter', () => {
+    it('reads every live turn ending after the seq, skipping one that finished inside a turn', async () => {
+      const ending = (
+        runId: string,
+        seq: number,
+        kind: ItemKind,
+        payload: Record<string, unknown>,
+        nodeId: string | null = null,
+      ): Promise<Item> =>
+        dao.create({
+          runId,
+          seq,
+          kind,
+          nodeId,
+          payload: JSON.stringify(payload),
+        });
+      await ending('run-t', 6, 'turn_complete', { usage: {} }, 'n1');
+      await ending('run-t', 1, 'turn_complete', {});
+      await ending('run-t', 2, 'turn_complete', { insideTurn: true });
+      await ending('run-t', 3, 'turn_cancelled', {});
+      await ending('run-t', 4, 'error', { insideTurn: false });
+      await ending('run-t', 5, 'message', {});
+      await ending('run-other', 7, 'turn_complete', {});
+      const deleted = await ending('run-t', 8, 'turn_complete', {});
+      await orm.em
+        .fork()
+        .createQueryBuilder(Item)
+        .update({ deletedAt: new Date() })
+        .where({ id: deleted.id })
+        .execute();
+
+      const rows = await dao.turnEndingsAfter('run-t', 1);
+
+      expect(
+        rows.map((row) => [row.seq, row.nodeId, row.kind, row.payload]),
+      ).toEqual([
+        [3, null, 'turn_cancelled', '{}'],
+        [4, null, 'error', '{"insideTurn":false}'],
+        [6, 'n1', 'turn_complete', '{"usage":{}}'],
+      ]);
+    });
+  });
+
+  describe('openTurnStartedAt', () => {
+    /** One row of a 1:1 chat (no node unless named), written at `ms`. */
+    const chatRow = (
+      runId: string,
+      seq: number,
+      kind: ItemKind,
+      ms: number,
+      payload: Record<string, unknown> = {},
+      extra: { role?: string; nodeId?: string } = {},
+    ): Promise<Item> =>
+      dao.create({
+        runId,
+        seq,
+        kind,
+        role: extra.role ?? null,
+        nodeId: extra.nodeId ?? null,
+        payload: JSON.stringify(payload),
+        createdAt: new Date(ms),
+      });
+
+    it('is null while nothing has been asked since the last turn ending', async () => {
+      await chatRow('run-o', 0, 'message', 1_000, {}, { role: 'user' });
+      await chatRow('run-o', 1, 'turn_complete', 2_000);
+
+      expect(await dao.openTurnStartedAt('run-o')).toBeNull();
+    });
+
+    it('starts at the first message after the last ending of the chat itself', async () => {
+      await chatRow('run-o', 0, 'message', 1_000, {}, { role: 'user' });
+      await chatRow('run-o', 1, 'turn_complete', 2_000);
+      // The opener: the FIRST user message after the last ending.
+      await chatRow('run-o', 2, 'message', 3_000, {}, { role: 'user' });
+      await chatRow('run-o', 3, 'message', 4_000, {}, { role: 'user' });
+      // Each of these, read as an ending, would leave no message after it
+      // and the answer null: a continuation that finished inside the turn, a
+      // workflow node's ending, another run's ending.
+      await chatRow('run-o', 4, 'turn_complete', 5_000, { insideTurn: true });
+      await chatRow('run-o', 5, 'error', 5_500, {}, { nodeId: 'n1' });
+      await chatRow('run-other', 6, 'turn_complete', 6_000);
+      // Measured inside the turn, but on a clock behind the opener's: the
+      // opener's time stands.
+      await chatRow('run-o', 7, 'turn_complete', 2_500, {
+        insideTurn: true,
+        usage: { durationMs: 100 },
+      });
+
+      expect(await dao.openTurnStartedAt('run-o')).toEqual(new Date(3_000));
+    });
+
+    it.each([
+      ['integer', 1_500],
+      ['real', 12.5],
+    ])(
+      'moves the start up to the newest continuation inside the turn whose duration is a JSON %s',
+      async (_type, durationMs) => {
+        await chatRow('run-o', 1, 'turn_complete', 2_000);
+        await chatRow('run-o', 2, 'message', 3_000, {}, { role: 'user' });
+        await chatRow('run-o', 3, 'turn_complete', 4_000, {
+          insideTurn: true,
+          usage: { durationMs: 900 },
+        });
+        await chatRow('run-o', 4, 'turn_complete', 5_000, {
+          insideTurn: true,
+          usage: { durationMs },
+        });
+        // Newer, but its duration is not a number.
+        await chatRow('run-o', 5, 'turn_complete', 6_000, {
+          insideTurn: true,
+          usage: { durationMs: '7' },
+        });
+        // Newer, but a workflow node's.
+        await chatRow(
+          'run-o',
+          6,
+          'turn_complete',
+          7_000,
+          { insideTurn: true, usage: { durationMs: 7 } },
+          { nodeId: 'n1' },
+        );
+
+        expect(await dao.openTurnStartedAt('run-o')).toEqual(new Date(5_000));
+      },
+    );
   });
 
   describe('pullRequestCandidates', () => {

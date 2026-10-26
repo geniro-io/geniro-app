@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 import {
   EntityManager,
-  raw,
   UniqueConstraintViolationException,
 } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
+import type { ExpressionBuilder } from 'kysely';
 
 import { UsageActivity } from '../entity/usage-activity.entity';
 import type {
@@ -17,7 +17,32 @@ import type {
   UsageActivityKind,
 } from '../stats.types';
 import { pullRequestFact, threadFact } from '../utils/activity-facts';
-import { SNAPSHOT_LINE_KEY_SQL } from '../utils/line-keys';
+import { LEGACY_LINE_KEY_PREFIX } from '../utils/line-keys';
+
+/** The `usage_activity` columns the grouped lines read uses, as SQLite stores them. */
+interface LinesDatabase {
+  usage_activity: {
+    kind: UsageActivity['kind'];
+    run_id: UsageActivity['runId'];
+    line_key: UsageActivity['lineKey'];
+    lines_added: UsageActivity['linesAdded'];
+    lines_removed: UsageActivity['linesRemoved'];
+    /** Epoch milliseconds. */
+    occurred_at: number;
+    deleted_at: number | null;
+  };
+}
+
+/**
+ * `snapshotLineKey` in the database, for a read that groups rows by series. Built from the
+ * same prefix, so the database and the fold cannot file one row under two keys.
+ */
+function seriesKeyOf(eb: ExpressionBuilder<LinesDatabase, 'usage_activity'>) {
+  return eb.fn<string>('coalesce', [
+    eb.ref('line_key'),
+    eb(eb.val(LEGACY_LINE_KEY_PREFIX), '||', eb.ref('run_id')),
+  ]);
+}
 
 /**
  * The durable record of what threads did (see the entity). The two facts that happen
@@ -188,31 +213,35 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
     if (lineKeys.size === 0 && legacyRunIds.size === 0) {
       return peaks;
     }
-    const rows = await this.getRepo(txEm)
-      .createQueryBuilder('activity')
-      .select([
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<LinesDatabase>({ convertValues: false })
+      .selectFrom('usage_activity')
+      .select((eb) => [
         // The same key `snapshotLineKey` gives a row, so the two maps cannot disagree.
-        raw(`${SNAPSHOT_LINE_KEY_SQL} as series_key`),
-        raw('max(activity.lines_added) as lines_added'),
-        raw('max(activity.lines_removed) as lines_removed'),
+        seriesKeyOf(eb).as('series_key'),
+        eb.fn.max<number>('lines_added').as('lines_added'),
+        eb.fn.max<number>('lines_removed').as('lines_removed'),
       ])
-      .where({
-        kind: 'lines',
-        occurredAt: { $lt: before },
-        linesAdded: { $ne: null },
-        linesRemoved: { $ne: null },
-        $or: [
-          ...(lineKeys.size > 0 ? [{ lineKey: { $in: [...lineKeys] } }] : []),
+      .where('kind', '=', 'lines')
+      .where('occurred_at', '<', before.getTime())
+      .where('lines_added', 'is not', null)
+      .where('lines_removed', 'is not', null)
+      .where('deleted_at', 'is', null)
+      .where((eb) =>
+        eb.or([
+          ...(lineKeys.size > 0 ? [eb('line_key', 'in', [...lineKeys])] : []),
           ...(legacyRunIds.size > 0
-            ? [{ lineKey: null, runId: { $in: [...legacyRunIds] } }]
+            ? [
+                eb.and([
+                  eb('line_key', 'is', null),
+                  eb('run_id', 'in', [...legacyRunIds]),
+                ]),
+              ]
             : []),
-        ],
-      })
-      .groupBy(raw(SNAPSHOT_LINE_KEY_SQL))
-      // Unmapped, so the rows keep the aliases above: mapping would rename them to property names.
-      .execute<
-        { series_key: string; lines_added: number; lines_removed: number }[]
-      >('all', false);
+        ]),
+      )
+      .groupBy((eb) => [seriesKeyOf(eb)])
+      .execute();
     for (const row of rows) {
       peaks.set(row.series_key, {
         linesAdded: row.lines_added,

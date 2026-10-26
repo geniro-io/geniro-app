@@ -2,122 +2,14 @@
 
 The Electron app: main process, preload and React renderer (electron-vite). Project-wide commands, conventions and constraints are in the root `AGENTS.md`. Renderer styling and reuse rules are in `.claude/rules/renderer-*.md`.
 
-**Contents**: [Main process](#main-process) · [Renderer shell](#renderer-shell) · [Design system](#design-system) · [Chats](#chats) · [Workflows](#workflows) · [Settings](#settings) (incl. _Settings keys_) · [macOS packaging](#macos-packaging) · [App updates](#app-updates) · [System notifications](#system-notifications) · [Sidebar](#sidebar) · [Security](#security)
+**Contents**: [Renderer shell](#renderer-shell) · [Design system](#design-system) · [Chats](#chats) · [Workflows](#workflows) · [Settings](#settings) (incl. _Settings keys_) · [System notifications](#system-notifications) · [Sidebar](#sidebar)
 
 ---
 
-### Main process
-
-Where things live:
-
-- `src/main/` is the Electron main process, `src/preload/index.ts` exposes the typed `window.geniro`, and `src/shared/contracts.ts` holds the Electron-internal contracts (IPC, Settings, CLI detection, `DaemonHandle`). Never add a daemon wire type to `shared/contracts.ts`; those are generated. One deliberate exception: `ShareDestination` inside `Settings.sharing`, which main owns in settings.json and pushes to the daemon as a twin (`shareDestinationSchema` in `ipc-schemas.ts` ↔ the daemon's `ShareDestinationSchema`).
-- `main/agents/` holds one descriptor per CLI, collected as a total `Record<CliKind, …>`. No other main file names a CLI. The daemon's twin of each fact is that CLI's `AdapterConfig`.
-- `main/remote/` is the LAN gateway (below). `main/notifications/` is system notifications. `updater.ts`, `update-installer.ts` and `update-service.ts` are app updates.
-- Every git call this app makes belongs to main: `git-info.ts`, `git-changes.ts`, `worktree-service.ts`, `github-prs.ts`. The daemon runs no git.
-
-IPC:
-
-- Every IPC argument is validated against its zod schema in `ipc-schemas.ts` before main acts on it. The renderer is the untrusted side.
-- Every channel declares a `RemotePolicy` in `ipc-registry.ts`: `ALLOW_REMOTELY`, `allowRemotelyRedacted` (strip a secret from the answer), `allowRemotelyExceptFields` (refuse fields a phone must never set, such as `updateSettings`' `cliPaths`/`daemonInspect`/`sharing`) or `denyRemotely`.
-- Use `allow` only for a handler that never reads its event. The remote bridge hands handlers a Proxy that throws on any read.
-- `toggleDevTools` acts on `event.sender` only, so one window cannot open another's devtools.
-- `GeniroApi.filePath` is the one preload-local member (`webUtils.getPathForFile`). It is excluded from the IPC exhaustiveness check through `PreloadLocalMethod`.
-
-Child processes and environment:
-
-- `probe-env.ts` is the main-side twin of the daemon's `child-env.ts`. A probe child gets its own agent's credentials and never another's. A non-agent child such as `gh` gets `neutralEnv()`.
-- Spawn a binary by bare name only through `resolve-binary.ts`. A Finder launch runs under launchd's minimal PATH, where a Homebrew binary fails with a silent ENOENT.
-- `login-shell-path.ts` spawns the interactive shell with stdin on `/dev/null` and SIGKILLs it at its deadline. Otherwise a `.zshrc` that reads stdin hangs daemon start and ⌘Q.
-- `cli-detect.ts`: a `loggedIn` of `null` means unknown, never signed-out. Read a CLI's structured reply where it has one (`cursor-agent status --format json`). Otherwise read the exit code and the wording together (codex answers on stderr).
-- `cli-install.ts` runs the descriptor's `installer` as `curl -fsSL <url> | <shell>`, and only on the user's press. It reports success only once detection resolves the new binary's `--version`.
-- Main's own failures go to the daemon's log (`reportMainLog`, the `ui` channel), never to stdout. A packaged Finder launch discards main's stdout.
-
-Git (the hardening is under _Security_):
-
-- Switch a branch with `git switch` behind a re-read dirty check, never `git checkout` (which treats a branch name as a pathspec and restores a file).
-- `pullBranch` is stash, then `git pull --ff-only`, then stash pop. The pop runs on every path, a failed pull included. A failed stash push aborts the pull.
-- `pullStashIsOurs` requires both that the stash ref moved and that the tip's subject ends `geniro: pull`.
-- Decide which branches are checked out in another worktree from `git worktree list --porcelain`. Never parse git's translated error prose.
-- Every `git worktree list` read goes through `worktree-list.ts` (`readWorktreeEntries`: `--porcelain -z`, newline framing only on git < 2.36); never hand-parse the listing. Path and branch are read off one record.
-- `github-prs.ts` fails closed. Every failure (no `gh`, signed out, not GitHub, query error) is the empty list, with no "did it work" flag on the wire.
-
-Task worktrees (`worktree-service.ts`):
-
-- A worktree lives at `<userData>/worktrees/<taskId>` on branch `geniro/task-<id>`, derived from the task id and never from its title. Pass `--` before the path.
-- `<userData>/worktrees.json` is the only thing that authorizes a recursive delete. A row naming a path outside the worktrees directory (compared segment-wise) is dropped, and nothing is removed for it.
-- Before removing a worktree, confirm it against `git worktree list --porcelain`. Leave a row you cannot confirm alone.
-- `reapFinishedWorktrees` removes only worktrees whose work the daemon calls finished (`POST /v1/tasks/finished`). Never remove every clean worktree at launch, because a worktree outlives its run.
-- `prepareWorktree` reuses the task's standing worktree (`reused`). If the start is then refused, leave a reused worktree alone. Refuse anything else in the slot that is not empty.
-- A worktree just made gets the files the checkout's `.worktreeinclude` lists (`worktree-include.ts`, Claude Code's convention): only untracked files the checkout's `.gitignore` also ignores, never through a symlink, never over a file already there. A reused worktree gets nothing. A failure is logged (`source: worktree`) and never fails the start. Nothing is kept anywhere but in the new worktree.
-- `settleWorktreeForTask` is the only path allowed to clear a dirty tree. It runs `git add -A` onto the task's branch first. If the commit fails (hooks refused, no git identity), keep the worktree. Hooks run and are never skipped. The branch is never removed.
-- Three IPC channels only: `geniro:prepareTaskWorktree` (returns a shaped `TaskWorktreeResult` and never throws), `geniro:pruneTaskWorktree` (keyed by task and looked up in the registry) and `geniro:settleTaskWorktree`.
-- `settleTaskWorktree` fires off the daemon's `work-finished` reason. Never fire it off a card's column (written optimistically on drag) or off its run settling.
-
-Background loops in main (main hosts them because a renderer timer dies with the window and is throttled):
-
-- **Autopilot** (`autopilot-conductor.ts`) is a recurring tick that starts what `GET /v1/projects/:id/queue` hands out, with `approval: 'auto'` and `startedBy: 'autopilot'`. It decides nothing about capacity, because the daemon enforces the cap and the breaker at the route. A refusal is the ordinary case: give the worktree back. A worktree it cannot prepare is reported to `POST /v1/tasks/:taskId/prepare-failed` with `gitFailureLine`'s reason; the daemon then holds the card in `blocked` and decides the retry, never the conductor. One failing project never ends the sweep. The tick is `unref`'d.
-- **Daemon keepalive** (`daemon-keepalive.ts`) holds one authenticated Socket.IO client while any project is armed, so the daemon's idle exit does not fire with every window closed. It must authenticate, because an unauthenticated client is disconnected and not counted. `before-quit` disposes it.
-- **Merge watcher** (`pull-request-merge-watcher.ts`) reports merges to `POST /v1/tasks/:taskId/pull-request-merged`. The daemon moves the card. Only a merge strictly after the card's `lastDoneAt` counts (`endsCard`, twin of the daemon's `mergedSince`). `readAwaitingMerge` is a twin parser of `TaskAwaitingMergeSchema`.
-
-Smaller rules:
-
-- `app-menu.ts`: **Toggle Developer Tools** is hidden, not deleted, so ⌥⌘I stays bound.
-- **Clear Agent Cache** runs in the focused renderer. It reloads only after the daemon has answered, and never on a failure. Do not reintroduce a confirmation strip or a `vocabulary-epoch` key.
-- **Component Catalog** appears only when `isDev` (`ELECTRON_RENDERER_URL`) is passed in, and is omitted otherwise. Its port is a twin of `apps/ui/package.json`'s `storybook` script. Main never starts Storybook.
-- `reveal-path.ts` reveals in Finder and never opens.
-- `open-terminal.ts` hands off to the user's own terminal through a 0700 `.command` file. `chats/handoff-open.ts` is its one renderer helper, with one call site in `Chats.tsx`.
-- `navigation-policy.ts` keeps the top frame on the renderer document. `URL.origin` cannot decide this, because it is `null` for every `file:` URL.
-
-**Daemon supervision** (`daemon-supervisor.ts`):
-
-- `start()` adopts a healthy daemon left by a prior instance only after checking pid, `/health/check`, identity, the bundled `version` and the pidfile's `entry` stamp (`mayAdopt`).
-- The `entry` stamp is the only "is this the current build" signal. `version` is identical across rebuilds.
-  - Same path with a changed mtime or size means a rebuild: replace it.
-  - A different path (`pnpm daemon:dev`): leave it.
-- Replace a stale daemon only when it is not busy and its identity is re-confirmed. The busy check fails toward busy, because replacing a daemon kills its agent children.
-- A pid that is alive but fails health or identity is refused, never signalled, and no second daemon starts. A recycled pid's pidfile is swept.
-- The root `dev` script must stay `turbo run dev --filter=@geniro/ui`. Turbo's `^build` edge, plus the otherwise-unused `@geniro/daemon` dependency in `apps/ui/package.json`, is what rebuilds `dist/` before launch.
-- Every spawned daemon gets `GENIRO_IDLE_EXIT_MS`, so a daemon the app no longer owns can stop itself.
-- `ensureDaemon()` is the one path that both launch and `activate` take.
-- On darwin, ⌘W hides the window rather than destroying it, because notification decisions live in the renderer. `activate` re-shows that window.
-- An owned daemon that exits unexpectedly is respawned with a capped backoff (1s → 30s, then Retry). Exits the app asked for are left alone: stop, restart, quit, and idle.
-- A crash leaves its pid in `<userData>/daemon-crashed` (`consumeCrashMark`).
-- Before signalling a daemon, write the cause to `<userData>/daemon-stop-cause` (`quit`, `self-update`, `restart`, `crash`). The daemon's boot reconcile reads it. Write it only for a daemon seen serving (`handle !== null`): one still booting has not read the previous note, and overwriting an unread `crash` lets the autopilot restart crash-cut cards unattended.
-- `start()` joins an in-flight restart rather than racing it.
-- `before-quit` runs each step isolated through `quit-teardown.ts`, with `app.quit()` in a `finally`.
-
-**Terminal panel** (`main/terminal-sessions.ts`, `renderer/terminal/`):
-
-- Main owns the node-pty shells.
-- A session belongs to the WebContents that created it. Only that one may write, resize or kill it, or receive its output, and only from its top-level frame (`terminalOwner` refuses when `senderFrame !== sender.mainFrame`).
-- A window's shells are hung up on `destroyed`, `render-process-gone` and main-frame `did-navigate`, and all shells at `before-quit`. Use `did-navigate`, never `did-start-navigation`, which also fires for blocked navigations.
-- The shell env drops only `GENIRO_`/`ELECTRON_`/`npm_` keys. It is the user's shell, so their own credentials stay.
-- Output is flow-controlled. A view acks each batch once xterm has drawn it (`terminalAck`). A hidden window acks on receipt.
-- The renderer mints the session id per mount of `terminal-view.tsx`.
-- Closing the panel hides it and never unmounts it. Closing a tab ends that shell.
-- node-pty is an app `dependency` with an N-API prebuild. Never add it to `rebuild:native`. `spawn-helper` is unpacked from the asar, and `build-mac.mjs` restores its exec bit.
-- The in-app terminal is a different feature from the "continue in your terminal" handoff.
-
-**LAN gateway** (`main/remote/`). The hard rules (daemon stays loopback-only, pairing gate, Origin check, injected token, Host guard, tunnel on a press only) are in the root `AGENTS.md` → _Constraints_. In code:
-
-- `gateway.ts` binds IPv4 only on `REMOTE_PREFERRED_PORT` (47616), with a free-port fallback. Routing order: its own routes, then `/v1/*` and `/health` proxied, then `/ws` upgraded, then the bundle, all behind one path-traversal guard.
-- Match the upgrade as `/ws` or `/ws/…`. engine.io requests the trailing-slash form, so an exact match breaks live streaming while every unit test still passes.
-- `daemon-proxy.ts` strips the browser's `Authorization` and injects the daemon token. On `/ws` it rewrites the `token` query param. It drops any client `x-geniro-via` and stamps `x-geniro-via: remote` on every request and upgrade it forwards (twin of the daemon's `auth/remote-marker.ts`).
-- `host-guard.ts` admits a `*.suffix` only while a tunnel is open. The match is at a label boundary. A bare `*` and one-label suffixes are refused.
-- The tunnel mask is derived from the URL the client printed, never stored per provider.
-- `tunnel.ts` providers are a table in preference order (cloudflared, then ngrok). The client is spawned with only `PATH` and `HOME`.
-- An open tunnel is watched after its address is shown: an exit nobody asked for, or cloudflared's loopback `/ready` failing for `TUNNEL_EXPIRED_AFTER_MS` on the wall clock (a quick tunnel is deleted ~13 min after it disconnects, e.g. through sleep), ends it as `status: 'error'` and reaps the client. A connection counts only when two answers in a row report it (the client reports its pre-sleep connection for seconds after wake), and expiry needs `TUNNEL_EXPIRY_CONFIRM_MS` of failures without a break. It is never reopened unasked, and the public URL is never probed.
-- `pairing.ts` is a constant-time compare, bounded per address and globally. The global trip rotates the code.
-- `device-registry.ts` stores only a token hash, written atomically with mode 0600.
-- Revoking a device, or stopping the gateway, destroys that device's upgraded sockets.
-- `remote-routes.ts` answers bridge calls through the same `ipc-registry.ts` table as IPC. `on*` push channels are no-ops remotely, and `filePath` answers `null`.
-- `serveStatic` 404s a missing file. Only a navigation (no extension, not under `/assets/`) falls back to `index.html`.
-- Cache headers: the page is `no-store`, `/assets/*` are `immutable`, and everything else is `no-cache`.
+Main process (git, task worktrees, **Daemon supervision**, **Terminal panel**, **LAN gateway**), app updates and security: `apps/ui/src/main/AGENTS.md`. macOS packaging: `.claude/rules/packaging-config.md`.
 
 ### Renderer shell
 
-- `src/renderer/` contains `App.tsx` and one directory per screen (`chats/`, `workflows/`, `tasks/`, `stats/`, `settings/`, `onboarding/`, `notifications/`, …).
-- `autogenerated/` is the generated daemon client: run `pnpm generate:api` and never hand-edit it. `daemon-api.ts` binds the client to a launch handle. `daemon-client.ts` is the WS client.
 - The phone page is not a secure context: the gateway serves plain http. Use `renderer/random-id.ts`, never `crypto.randomUUID`, and `renderer/clipboard.ts`, never `navigator.clipboard`. eslint bans both direct uses.
 - A new secure-context-only API passes every test and fails only on the phone.
 - Stale bundle: `renderer/stale-bundle.ts` → `reloadForNewBundle` reloads once, from whichever of three places sees a chunk-load failure first: `vite:preloadError`, the root `ErrorBoundary`, or `boot-app.tsx`. A second page failing within 30s shows the error instead of looping.
@@ -130,7 +22,7 @@ Smaller rules:
   - `TRAFFIC_LIGHT_*` and `TITLEBAR_CONTENT_INSET` live in `shared/contracts.ts`, because main positions the buttons and the renderer reserves room for them. Re-measure before changing them.
   - `trafficLightPosition.y` and the bar's `h-11` move together.
   - The title bar is the only drag region (`.app-drag`). Any control inside it needs `.app-no-drag`.
-  - The title is centred on the window. Never put a flex `gap` on the bar row. Do not reintroduce per-column header rows, a divider, or a `leadingWidth` centring prop.
+  - The title is centred on the window, never measured from a column's width. Never put a flex `gap` on the bar row. The title bar is the one header band: no per-column header rows and no divider.
   - The debug log is ⌥⌘L only.
   - `chats/waiting-status.tsx` counts what waits on the user (asking, failed, unread); a press or ⌘J (`chats/use-next-waiting-shortcut.ts`) opens the next one. Window-wide chords go through `components/use-global-chord.ts`.
 - A Settings note under a control is one line: what flipping it does, plus the one consequence nobody would guess.
@@ -158,12 +50,12 @@ Smaller rules:
 
 ### Design system
 
-The rules live in `.claude/rules/renderer-design-system.md` (tokens, themes, `data-theme`, no hardcoded colour), `renderer-components.md` (layers, reuse, no barrels), `renderer-overlay-primitives.md` and `renderer-stories.md`. Main-process and tooling facts they do not cover:
+The rules live in `.claude/rules/renderer-*.md`; start from `renderer-components.md`, which also holds the catalog-coverage rule. Main-process and tooling facts they do not cover:
 
 - The theme is applied by main, with no IPC channel. `Settings.theme` is read by `main/native-appearance.ts`, which sets `nativeTheme.themeSource`. That one write themes the OS chrome and drives the renderer's `prefers-color-scheme`.
 - `applyTheme` is the only exported way to apply a theme, because it also repaints the window `backgroundColor` (`watchSystemAppearance`). Never export the bare OS write.
 - `createWindow` reads `resolvedTheme` → `ThemeDescriptor.windowBackground` from `shared/themes.ts` before any stylesheet exists.
-- Storybook is dev-only and binds `127.0.0.1` explicitly (its default would serve the workspace over the LAN). CI's `pnpm build-storybook` is the only gate that compiles stories.
+- Storybook is dev-only and binds `127.0.0.1` explicitly (its default would serve the workspace over the LAN).
 - `.storybook/preview.tsx` drives `theme/apply-theme.ts` and never sets `data-theme` itself. It installs the `window.geniro` stub before any other import.
 - xterm and ANSI output are themed from tokens (`terminal-theme.ts`, `--ansi-*`). `ESC[90m` means dim and must never map onto `--ansi-black`. A copy of command output hands over `stripAnsi(text)`.
 
@@ -213,7 +105,7 @@ One home for each concern:
 - `sendFollowUp` queues when the agent is working or when the queue is non-empty. Never decide on `streaming` alone.
 - Queueing behind an idle run kicks the drain. Never kick it while the agent is working.
 - RUN_BUSY from the daemon means queue and retry. The daemon is the fact, and the renderer's `streaming` is only a belief.
-- Do not reintroduce a composer-side refusal of geniro commands (`geniroCommandName`).
+- The composer refuses no geniro command itself.
 - Whether a unit is foreground or background is the CLI's own word, as announced by the daemon. Never guess it.
 - A Stop leaves the queue standing on every surface, the hosted chats included: only `settleReleasesQueue` decides whether a settle drains. The head waits for its Send.
 - A held turn (`holdingFor`) is not a working agent. The live announce drains once, on the transition into held. `queueMayDrainAfterReplay` treats a held run as drainable.
@@ -243,7 +135,7 @@ One home for each concern:
 - Live clocks count from durable-row timestamps, never from their own mount.
 - The chat live-plane key is `CHAT_LIVE_KEY` (`liveTextKey`), never the daemon's owner key `agent`. Node id is the discriminator.
 - `chats/geniro-tool.ts` is the one place host tool names are matched. A composing card of an unknown kind draws nothing.
-- While a turn runs there is one clock, the worked total. Do not reintroduce `ElapsedTime`.
+- While a turn runs there is one clock, the worked total, and no second elapsed-time readout beside it.
 - Turn duration uses the CLI's own figure where one exists. A thread total is the sum of its turns, never `updatedAt - createdAt`.
 - A workflow's header clock (`clockMs`) is one formula for any number of open turns: the union of working stretches minus `pausedSpans`, the time a card waited on the user with no background shell or delegate running. Both come from the daemon's totals route (`utils/active-spans.ts`). It is re-read when the run's `awaiting`, shells-out or delegates-out flip, or a row they are folded from lands (`movesPausedSpans`). Never fold them from loaded `items`.
 
@@ -298,7 +190,7 @@ One home for each concern:
 
 **Artifacts** (`published-artifact.ts`, `artifact-frame.tsx`):
 
-- The page is framed with `sandbox="allow-scripts"` and never `allow-same-origin`. It is served by the daemon, never put in `srcdoc`, and loaded with `referrerPolicy="no-referrer"`.
+- The frame's sandbox is the root `AGENTS.md`'s (_Constraints_, the artifact page's outbound call). The page is served by the daemon, never put in `srcdoc`, and loaded with `referrerPolicy="no-referrer"`.
 - Only theme tokens and height cross the frame, by `postMessage`, filtered on `event.source`.
 - Key the frame by `${artifactId}:${version}`.
 - A `show_artifact` row is never claimed into a call card (`UNCLAIMABLE_KINDS`): a callee's page is drawn in the main flow, and the newest-card sweep spans the whole run.
@@ -325,7 +217,7 @@ One home for each concern:
 - A geniro-performed compaction (cursor) invalidates earlier readings. It resets the fold (`endsContextHistory`), clears the live plane and the mirrored row, and the ring shows empty with `awaitingReading`.
 - The context panel is fetched on open and never polled. On a workflow run every readout branch carries `nodeId`.
 - Category colours are assigned by position, never by name.
-- Two money formats: `formatUsd` (a bound, for columns) and `formatExactUsd` (an exact value, for standalone figures). Never add a third. A figure nothing measured is a dash or omitted, never `$0.00` or `0`.
+- Money goes through `formatUsd` (a bound, for columns), `formatExactUsd` (an exact value, for standalone figures) or, for chart ticks only, `formatUsdAxis` (`stats/stats-format.ts`). Never add another format. A figure nothing measured is a dash or omitted, never `$0.00` or `0`.
 
 **Composer and chips:**
 
@@ -350,15 +242,15 @@ One home for each concern:
 - Do not reintroduce a branch-scoped pull-request list.
 - `keepFresherRows`: a pin, colour or pull-request list written without moving `updatedAt` is decided by the listing. So are the live readings (`awaiting`, `holdingFor`, the shell/sub-agent/call counts), unless an announce of them arrived while the listing was in flight: no write stamps them, and an announce's `at` always postdates the row's `updatedAt`.
 - "Changed since this chat started" uses `upstreamBaseSince` and excludes what a pull brought in. The header names the ref and claims no cause.
-- The changes chip and dialog also count the worktrees the thread's agents made (`use-run-work-folders.ts`). A worktree is the thread's only if all three hold: main lists it (`listWorktrees(cwd, startedAtMs)`: a linked worktree made after the thread started — birth of its `.git` link file — never the main checkout and never a geniro task worktree, the direct children of `worktreesRoot()`), and the run's own tool calls name it (`POST /v1/chats/:runId/named-paths`). Each is read as a work folder (`getChangesSince(…, true)`: from where its history meets the start, past what upstream already has). Found folders are only ever added; each lists in its own dialog section. Listings go through `worktree-list.ts` (see *Git*).
+- The changes chip and dialog also count the worktrees the thread's agents made (`use-run-work-folders.ts`). A worktree is the thread's only if all three hold: main lists it (`listWorktrees(cwd, startedAtMs)`: a linked worktree made after the thread started — birth of its `.git` link file — never the main checkout and never a geniro task worktree, the direct children of `worktreesRoot()`), and the run's own tool calls name it (`POST /v1/chats/:runId/named-paths`). Each is read as a work folder (`getChangesSince(…, true)`: from where its history meets the start, past what upstream already has). Found folders are only ever added; each lists in its own dialog section. Listings go through `worktree-list.ts` (see *Git* in `apps/ui/src/main/AGENTS.md`).
 
 **Thread UI memory** (`chats/thread-ui-memory.ts`):
 
 - Folds are remembered per thread, keyed by the row they belong to (`tools:<group id>`, `tool:<call id>`, …), never by an index.
 - Only a press writes.
-- Use `useThreadFlag`, `useThreadOverride` or `useThreadFlags`. `use-persisted-flag` is for global flags outside a thread.
+- Which hook remembers a boolean, in a thread or outside one: `.claude/rules/renderer-components.md` → _The one home for…_.
 - Two things are deliberately not per thread: the context readout's drill-downs and the builder palette.
-- The agents panel is always rendered when a chat is open and starts folded per thread. Do not reintroduce a show/hide toggle, a header button, auto-open on an artifact, or the `ListTree` toggle.
+- The agents panel is always rendered when a chat is open and starts folded per thread. Nothing but its per-thread fold shows or hides it: no show/hide toggle, no header button, no auto-open on an artifact.
 - The agents panel's column holds only what belongs to the thread: its agents, workflows, pull requests and pages. The run waterfall, the processes readout and the thread notes open in popups from its control row (and rail), never as sections in the column; their reads are gated on that popup being open (`onPopupChange`), never on the panel being unfolded.
 - Read the MCP listing only when its disclosure opens (`mcpOpen`).
 
@@ -443,9 +335,11 @@ One home for each concern:
 
 ### Settings
 
-**Settings keys (`settings.json`).** `main/settings.ts` owns the file, and `shared/contracts.ts` holds `Settings`. Values whose vocabulary is the daemon's stay opaque strings here. The renderer validates them against the generated enum.
+**Settings keys (`settings.json`).** `main/settings.ts` owns the file, and `shared/contracts.ts` holds `Settings`. Values whose vocabulary is the daemon's stay opaque strings here. The renderer validates them against the generated enum. `interface Settings` in `shared/contracts.ts` is the authoritative key list; this list covers the keys with special rules.
 
-- Composer memory: `lastChatTarget`, `lastApprovalMode`, `lastAutoCompactPercent`, `projectFolder`/`recentFolders`. The Analyze thread dialog's last choice: `lastAnalysisConfig` (agent, profile, model, effort). `lastModels`, `lastEfforts`, `configDirs` and `recentConfigDirs` are keyed per CLI.
+- Composer memory: `lastChatTarget`, `lastApprovalMode`, `lastAutoCompactPercent`, `projectFolder`/`recentFolders`. The Analyze thread dialog's last choice: `lastAnalysisConfig` (agent, profile, model, effort). `lastModels`, `lastEfforts`, `lastContextWindows`, `lastModelParameters` (`{parameterId: value}`), `configDirs` and `recentConfigDirs` are keyed per CLI.
+- Onboarding: `onboardingComplete` (first run finished; gates the initial route) and `onboardingProgress` (resumable setup choices, no credentials).
+- Interface: `sidebarCollapsed` (the nav rail at icon-only width) and `collapseToolSteps` (a turn's tool steps stay folded; off by default, and it decides only what is open when a row first appears).
 - Hand-managed lists, three different features: `fastActions`, `runConfigs` and `configProfiles`. Never fold any two together, or into `recentConfigDirs`.
   - Nothing adds or evicts an entry, and order is preserved.
   - `readSettings` salvages each list entry by entry (`salvageList`, twin of `salvageCliRecord`) and re-applies the cap.
@@ -453,7 +347,7 @@ One home for each concern:
 - `notificationsEnabled`: one switch for every notification kind.
 - `archiveRetentionDays`: `null` by default. It arms a permanent deletion sweep (`POST /v1/chats/sweep-archived`), and the daemon learns the window from the client.
 - `customInstructions`: see below.
-- `replyLanguage`: the language every agent is told to reply in (`''` = not set), at most 64 characters (twin of the daemon's `REPLY_LANGUAGE_MAX_LENGTH`). Sent at every run start beside `customInstructions` and snapshotted onto the run; the daemon composes it into the instruction block and hands claude its own `language` setting.
+- `replyLanguage`: the language every agent is told to reply in (`''` = not set), at most 64 characters (twin of the daemon's `REPLY_LANGUAGE_MAX_LENGTH`). Sent at every run start beside `customInstructions`.
 - `theme`: read by main before any window exists, and enumerated in `settingsPatchSchema`. An unknown value falls back to `'system'`.
 - `historyPageSize`, `checkForUpdates`, `remoteAccessEnabled`, `daemonInspect`, `cliPaths`.
 - `keptSessionIdleMinutes`: how long a run's CLI and its MCP servers are kept after the last turn, 5–180, default 60 (a subscription's prompt-cache TTL), the same for chats and cards. The same window ends what the run's agents left running outside the CLI that attribution can reach (dev servers, watchers; not an orphaned system binary), with a note in the transcript (`apps/daemon/AGENTS.md` → Run processes → Idle). The bounds are twins of the daemon's (`chat.types.ts`). Every write that changes it is pushed to the daemon (`kept-session-config-push.ts`, through `onSettingsWritten`), as is every daemon start; the daemon holds it in memory.
@@ -486,6 +380,7 @@ Custom instructions:
 - `customInstructions` saves through `use-debounced-persist.ts`. An unsavable value (control characters) is held on screen and never written. The timer handle is nulled.
 - **Remove from existing chats** (`POST /v1/chats/forget-custom-instructions`) is an explicit press, never a side effect of clearing the box. It does not touch the snapshotted reply language.
 - `replyLanguage` saves through the same debounced persist; a value over the bound or with control characters is held on screen and never written.
+- The Settings screen reads the preamble and the per-CLI notes from `GET /v1/capabilities` (`hostPreamble`, `backgroundWorkNotes`), and the workflow inspector reads each agent node's block sizes from `POST /v1/workflows/instruction-sizes` (measured through the same parts); never restate either in the renderer.
 - The host-preamble preview renders nothing until `hostPreamble` arrives.
 - Every settings write is announced to every window (`onSettingsChanged`, `main/settings-changed-notify.ts`; no payload, a no-op on the phone bridge). The workflow inspector re-measures its instruction sizes on it, so an edit from the Settings screen or a paired phone reaches the figures.
 
@@ -493,39 +388,6 @@ Appearance:
 
 - The picker does `persist({ theme })` plus `setThemePreference`.
 - `theme` gets no `??` default: `readSettings` always merges defaults.
-
-### macOS packaging
-
-**macOS packaging**: `pnpm --filter @geniro/ui build:mac` runs `scripts/build-mac.mjs`.
-
-- Each half (shell app, and the daemon under `Resources/daemon`) is staged with `pnpm --filter <pkg> --config.inject-workspace-packages=true deploy --prod <dir>`.
-- Never pass `--legacy` to that deploy. It re-resolves ranges against the registry, so the build ships dependency versions nothing tested.
-- Output (DMG and zip) lands in `release/dist/`. `productName` is `Geniro`.
-- Signing: `GENIRO_SIGN_IDENTITY` names the self-signed certificate from `scripts/make-signing-identity.mjs`. Without it the build is ad hoc and says so.
-  - The branch is described in `.claude/rules/packaging-config.md`: the identity plus `forceCodeSigning` plus a read-back of the bundle's requirement.
-  - Releases are not notarized, so the Homebrew cask and the install script strip quarantine.
-- Privacy grants are tied to the designated requirement. An ad-hoc build re-asks every grant.
-  - A grant recorded under an ad-hoc build is dead even though it shows as on. Diagnose with `/usr/bin/log stream --level debug --process tccd` (the absolute path, because `log` is a zsh builtin).
-  - The fix is on the machine: `tccutil reset <Service> io.geniro.desktop`, then relaunch.
-- A TCC-denied folder passes `stat`/`access` and fails only on open. `resolveValidDirectory` opens the folder and refuses with `FOLDER_NOT_READABLE`. The folder purpose strings are in `electron-builder.yml` `extendInfo`.
-
-### App updates
-
-**App updates**: `updater.ts` reads the feed, `update-installer.ts` stages and swaps, and `update-service.ts` holds the policy and state. electron-updater is not used.
-
-- Never replace the running bundle. Staging goes to `<bundle>.new-<pid>` beside the app, and `applyStagedUpdate` runs from `will-quit` as two renames.
-- The old bundle is moved aside, never deleted first. A failed second rename restores it.
-- Every `rm` runs inside the refcounted `withoutAsar`. Under Electron, `fs.rm` walks into an `app.asar` and never returns.
-- A release without `SHA256SUMS.txt` is refused.
-- `fetchLatestRelease` reads the release list, filters drafts and pre-releases, and orders by parsed version. It answers both `release` (installable) and `published` (newest tag).
-- `ready` is an ending: `check()` returns early.
-- Automatic checks are silent unless the state changed. `emit` broadcasts only on a real difference.
-- `canInstall` is asked of the filesystem on each use. A translocated, read-only or other-account install gets the `brew upgrade --cask geniro` sentence instead.
-- Main owns the state, and the renderer reports presses. Every non-terminal phase has a deadline. A trip bumps `attempt` and aborts the work.
-- `sweepUpdateDebris` runs at launch and matches only the names this code writes.
-- `failedPhase` is derived in `emit`. `updateStatusText` is the one composition, joined with a colon. Never capitalise the fragment.
-- Failures go to the daemon log through the injected `UpdateLog`.
-- Nothing installs unasked. The check runs at launch and every 5 minutes when `checkForUpdates` is on. The download needs a press.
 
 ### System notifications
 
@@ -564,17 +426,3 @@ Appearance:
 - The sidebar row is one activatable element, so nothing inside it may be a control (labels, not chips).
 - A workflow row previews its root conversation (`previewsThread`, twin of `ItemDao`'s `NOT_IN_A_CALL`).
 - A background thread's preview comes from the `run_status` announce, not from items.
-
-### Security
-
-- `SAFE_CONFIG` (`git-safe-config.ts`) applies to every read-side git call:
-  - Empty every repository `filter.*` driver (`clean`, `smudge`, `process`, `required=false`).
-  - Pass `--ignore-submodules=dirty`, `core.hooksPath=/dev/null` and `core.fsmonitor=false` (a repository's fsmonitor is a program git runs on any index read).
-  - Refuse a driver name `-c` cannot address.
-- User-pressed actions (switch, pull, stash, the worktree commit) keep the repository's filters and hooks.
-- A task worktree is committed and removed only while HEAD is the task's own branch, with no operation half done. A detached HEAD is kept.
-- The renderer has no network beyond loopback and the artifact CDNs, WebRTC included (`network-lockdown.ts`). Three measures, all needed:
-  - `disable_non_proxied_udp`.
-  - A black-hole SOCKS proxy.
-  - `host-resolver-rules` mapping every name to NOTFOUND except `localhost`/`127.0.0.1` and `ARTIFACT_CDN_HOSTS`.
-- `ARTIFACT_CDN_HOSTS` is a twin of the daemon's `ARTIFACT_PAGE_CSP`, checked by `network-lockdown.spec.ts`. Anything new that loads a remote host through Chromium will fail to resolve, deliberately.

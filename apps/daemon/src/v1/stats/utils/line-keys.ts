@@ -40,12 +40,9 @@ export function snapshotLineKey(row: {
   return row.lineKey ?? `${LEGACY_LINE_KEY_PREFIX}${row.runId}`;
 }
 
-/** What a row with no line key is filed under: its own thread. */
-const LEGACY_LINE_KEY_PREFIX = 'run:';
-
 /**
- * {@link snapshotLineKey} in SQL, over the `activity` alias, for a query that groups rows by
- * series. Built from the same prefix, so the database and the fold cannot file one row under
- * two keys.
+ * What a row with no line key is filed under: its own thread. The grouped read in
+ * `UsageActivityDao.peakLinesBefore` builds {@link snapshotLineKey} in the database from this
+ * same prefix, so the database and the fold cannot file one row under two keys.
  */
-export const SNAPSHOT_LINE_KEY_SQL = `coalesce(activity.line_key, '${LEGACY_LINE_KEY_PREFIX}' || activity.run_id)`;
+export const LEGACY_LINE_KEY_PREFIX = 'run:';

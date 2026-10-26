@@ -1,0 +1,147 @@
+# apps/ui — main process
+
+The Electron main process (`apps/ui/src/main/`): IPC, git and worktrees, daemon supervision, the terminal panel, the LAN gateway, app updates and the network lockdown. The preload, renderer, design system, chats, workflows and settings are in `apps/ui/AGENTS.md`; macOS packaging is in `.claude/rules/packaging-config.md`. Project-wide commands, conventions and constraints are in the root `AGENTS.md`.
+
+**Contents**: [Main process](#main-process) (incl. _Git_, _Task worktrees_, **Daemon supervision**, **Terminal panel**, **LAN gateway**) · [App updates](#app-updates) · [Security](#security)
+
+---
+
+### Main process
+
+Where things live:
+
+- `src/main/` is the Electron main process, `src/preload/index.ts` exposes the typed `window.geniro`, and `src/shared/contracts.ts` holds the Electron-internal contracts (IPC, Settings, CLI detection, `DaemonHandle`). Never add a daemon wire type to `shared/contracts.ts`; those are generated. One deliberate exception: `ShareDestination` inside `Settings.sharing`, which main owns in settings.json and pushes to the daemon as a twin (`shareDestinationSchema` in `ipc-schemas.ts` ↔ the daemon's `ShareDestinationSchema`).
+- `main/agents/` holds one descriptor per CLI, collected as a total `Record<CliKind, …>`. No other main file names a CLI. The daemon's twin of each fact is that CLI's `AdapterConfig`.
+- `main/remote/` is the LAN gateway (below). `main/notifications/` is system notifications. `updater.ts`, `update-installer.ts` and `update-service.ts` are app updates.
+- Every git call this app makes belongs to main: `git-info.ts`, `git-changes.ts`, `worktree-service.ts`, `github-prs.ts`. The daemon runs no git.
+
+IPC:
+
+- Every IPC argument is validated against its zod schema in `ipc-schemas.ts` before main acts on it. The renderer is the untrusted side.
+- Every channel declares a `RemotePolicy` in `ipc-registry.ts`: `ALLOW_REMOTELY`, `allowRemotelyRedacted` (strip a secret from the answer), `allowRemotelyExceptFields` (refuse fields a phone must never set, such as `updateSettings`' `cliPaths`/`daemonInspect`/`sharing`) or `denyRemotely`.
+- Use `allow` only for a handler that never reads its event. The remote bridge hands handlers a Proxy that throws on any read.
+- `toggleDevTools` acts on `event.sender` only, so one window cannot open another's devtools.
+- `GeniroApi.filePath` is the one preload-local member (`webUtils.getPathForFile`). It is excluded from the IPC exhaustiveness check through `PreloadLocalMethod`.
+
+Child processes and environment:
+
+- `probe-env.ts` is the main-side twin of the daemon's `child-env.ts`. A probe child gets its own agent's credentials and never another's. A non-agent child such as `gh` gets `neutralEnv()`.
+- Spawn a binary by bare name only through `resolve-binary.ts`. A Finder launch runs under launchd's minimal PATH, where a Homebrew binary fails with a silent ENOENT.
+- `login-shell-path.ts` spawns the interactive shell with stdin on `/dev/null` and SIGKILLs it at its deadline. Otherwise a `.zshrc` that reads stdin hangs daemon start and ⌘Q.
+- `cli-detect.ts`: a `loggedIn` of `null` means unknown, never signed-out. Read a CLI's structured reply where it has one (`cursor-agent status --format json`). Otherwise read the exit code and the wording together (codex answers on stderr).
+- `cli-install.ts` runs the descriptor's `installer` as `curl -fsSL <url> | <shell>`, and only on the user's press. It reports success only once detection resolves the new binary's `--version`.
+- Main's own failures go to the daemon's log (`reportMainLog`, the `ui` channel), never to stdout. A packaged Finder launch discards main's stdout.
+
+Git (the hardening is under _Security_):
+
+- Switch a branch with `git switch` behind a re-read dirty check, never `git checkout` (which treats a branch name as a pathspec and restores a file).
+- `pullBranch` is stash, then `git pull --ff-only`, then stash pop. The pop runs on every path, a failed pull included. A failed stash push aborts the pull.
+- `pullStashIsOurs` requires both that the stash ref moved and that the tip's subject ends `geniro: pull`.
+- Decide which branches are checked out in another worktree from `git worktree list --porcelain`. Never parse git's translated error prose.
+- Every `git worktree list` read goes through `worktree-list.ts` (`readWorktreeEntries`: `--porcelain -z`, newline framing only on git < 2.36); never hand-parse the listing. Path and branch are read off one record.
+- `github-prs.ts` fails closed. Every failure (no `gh`, signed out, not GitHub, query error) is the empty list, with no "did it work" flag on the wire.
+
+Task worktrees (`worktree-service.ts`):
+
+- A worktree lives at `<userData>/worktrees/<taskId>` on branch `geniro/task-<id>`, derived from the task id and never from its title. Pass `--` before the path.
+- `<userData>/worktrees.json` is the only thing that authorizes a recursive delete. A row naming a path outside the worktrees directory (compared segment-wise) is dropped, and nothing is removed for it.
+- Before removing a worktree, confirm it against `git worktree list --porcelain`. Leave a row you cannot confirm alone.
+- `reapFinishedWorktrees` removes only worktrees whose work the daemon calls finished (`POST /v1/tasks/finished`). Never remove every clean worktree at launch, because a worktree outlives its run.
+- `prepareWorktree` reuses the task's standing worktree (`reused`). If the start is then refused, leave a reused worktree alone. Refuse anything else in the slot that is not empty.
+- A worktree just made gets the files the checkout's `.worktreeinclude` lists (`worktree-include.ts`, Claude Code's convention): only untracked files the checkout's `.gitignore` also ignores, never through a symlink, never over a file already there. A reused worktree gets nothing. A failure is logged (`source: worktree`) and never fails the start. Nothing is kept anywhere but in the new worktree.
+- `settleWorktreeForTask` is the only path allowed to clear a dirty tree. It runs `git add -A` onto the task's branch first. If the commit fails (hooks refused, no git identity), keep the worktree. Hooks run and are never skipped. The branch is never removed.
+- Three IPC channels only: `geniro:prepareTaskWorktree` (returns a shaped `TaskWorktreeResult` and never throws), `geniro:pruneTaskWorktree` (keyed by task and looked up in the registry) and `geniro:settleTaskWorktree`.
+- `settleTaskWorktree` fires off the daemon's `work-finished` reason. Never fire it off a card's column (written optimistically on drag) or off its run settling.
+
+Background loops in main (main hosts them because a renderer timer dies with the window and is throttled):
+
+- **Autopilot** (`autopilot-conductor.ts`) is a recurring tick that starts what `GET /v1/projects/:id/queue` hands out, with `approval: 'auto'` and `startedBy: 'autopilot'`. It decides nothing about capacity, because the daemon enforces the cap and the breaker at the route. A refusal is the ordinary case: give the worktree back. A worktree it cannot prepare is reported to `POST /v1/tasks/:taskId/prepare-failed` with `gitFailureLine`'s reason; the daemon then holds the card in `blocked` and decides the retry, never the conductor. One failing project never ends the sweep. The tick is `unref`'d.
+- **Daemon keepalive** (`daemon-keepalive.ts`) holds one authenticated Socket.IO client while any project is armed, so the daemon's idle exit does not fire with every window closed. It must authenticate, because an unauthenticated client is disconnected and not counted. `before-quit` disposes it.
+- **Merge watcher** (`pull-request-merge-watcher.ts`) reports merges to `POST /v1/tasks/:taskId/pull-request-merged`. The daemon moves the card. Only a merge strictly after the card's `lastDoneAt` counts (`endsCard`, twin of the daemon's `mergedSince`). `readAwaitingMerge` is a twin parser of `TaskAwaitingMergeSchema`.
+
+Smaller rules:
+
+- `app-menu.ts`: **Toggle Developer Tools** is hidden, not deleted, so ⌥⌘I stays bound.
+- **Clear Agent Cache** runs in the focused renderer. It reloads only after the daemon has answered, and never on a failure. It acts on the press alone, with no confirmation strip.
+- **Component Catalog** appears only when `isDev` (`ELECTRON_RENDERER_URL`) is passed in, and is omitted otherwise. Its port is a twin of `apps/ui/package.json`'s `storybook` script. Main never starts Storybook.
+- `reveal-path.ts` reveals in Finder and never opens.
+- `open-terminal.ts` hands off to the user's own terminal through a 0700 `.command` file. `renderer/handoff-open.ts` is its one renderer helper, with one call site in `Chats.tsx`.
+- `navigation-policy.ts` keeps the top frame on the renderer document. `URL.origin` cannot decide this, because it is `null` for every `file:` URL.
+
+**Daemon supervision** (`daemon-supervisor.ts`):
+
+- `start()` adopts a healthy daemon left by a prior instance only after checking pid, `/health/check`, identity, the bundled `version` and the pidfile's `entry` stamp (`mayAdopt`).
+- The `entry` stamp is the only "is this the current build" signal. `version` is identical across rebuilds.
+  - Same path with a changed mtime or size means a rebuild: replace it.
+  - A different path (`pnpm daemon:dev`): leave it.
+- Replace a stale daemon only when it is not busy and its identity is re-confirmed. The busy check fails toward busy, because replacing a daemon kills its agent children.
+- A pid that is alive but fails health or identity is refused, never signalled, and no second daemon starts. A recycled pid's pidfile is swept.
+- The root `dev` script must stay `turbo run dev --filter=@geniro/ui`. Turbo's `^build` edge, plus the otherwise-unused `@geniro/daemon` dependency in `apps/ui/package.json`, is what rebuilds `dist/` before launch.
+- Every spawned daemon gets `GENIRO_IDLE_EXIT_MS`, so a daemon the app no longer owns can stop itself.
+- `ensureDaemon()` is the one path that both launch and `activate` take.
+- On darwin, ⌘W hides the window rather than destroying it, because notification decisions live in the renderer. `activate` re-shows that window.
+- An owned daemon that exits unexpectedly is respawned with a capped backoff (1s → 30s, then Retry). Exits the app asked for are left alone: stop, restart, quit, and idle.
+- A crash leaves its pid in `<userData>/daemon-crashed` (`consumeCrashMark`).
+- Before signalling a daemon, write the cause to `<userData>/daemon-stop-cause` (`quit`, `self-update`, `restart`, `crash`). The daemon's boot reconcile reads it. Write it only for a daemon seen serving (`handle !== null`): one still booting has not read the previous note, and overwriting an unread `crash` lets the autopilot restart crash-cut cards unattended.
+- `start()` joins an in-flight restart rather than racing it.
+- `before-quit` runs each step isolated through `quit-teardown.ts`, with `app.quit()` in a `finally`.
+
+**Terminal panel** (`main/terminal-sessions.ts`, `renderer/terminal/`):
+
+- Main owns the node-pty shells.
+- A session belongs to the WebContents that created it. Only that one may write, resize or kill it, or receive its output, and only from its top-level frame (`terminalOwner` refuses when `senderFrame !== sender.mainFrame`).
+- A window's shells are hung up on `destroyed`, `render-process-gone` and main-frame `did-navigate`, and all shells at `before-quit`. Use `did-navigate`, never `did-start-navigation`, which also fires for blocked navigations.
+- The shell env drops only `GENIRO_`/`ELECTRON_`/`npm_` keys. It is the user's shell, so their own credentials stay.
+- Output is flow-controlled. A view acks each batch once xterm has drawn it (`terminalAck`). A hidden window acks on receipt.
+- The renderer mints the session id per mount of `terminal-view.tsx`.
+- Closing the panel hides it and never unmounts it. Closing a tab ends that shell.
+- node-pty is an app `dependency` with an N-API prebuild. Never add it to `rebuild:native`. `spawn-helper` is unpacked from the asar, and `build-mac.mjs` restores its exec bit.
+- The in-app terminal is a different feature from the "continue in your terminal" handoff.
+
+**LAN gateway** (`main/remote/`). The hard rules (daemon stays loopback-only, pairing gate, Origin check, injected token, Host guard, tunnel on a press only) are in the root `AGENTS.md` → _Constraints_. In code:
+
+- `gateway.ts` listens on `REMOTE_PREFERRED_PORT` (47616), with a free-port fallback. Routing order: its own routes, then `/v1/*` and `/health` proxied, then `/ws` upgraded, then the bundle, all behind one path-traversal guard.
+- Match the upgrade as `/ws` or `/ws/…`. engine.io requests the trailing-slash form, so an exact match breaks live streaming while every unit test still passes.
+- `daemon-proxy.ts` drops any client `x-geniro-via` and stamps `x-geniro-via: remote` on every request and upgrade it forwards (twin of the daemon's `auth/remote-marker.ts`).
+- `host-guard.ts` matches a `*.suffix` at a label boundary.
+- The tunnel mask is derived from the URL the client printed, never stored per provider.
+- `tunnel.ts` providers are a table in preference order (cloudflared, then ngrok). The client is spawned with only `PATH` and `HOME`.
+- An open tunnel is watched after its address is shown: an exit nobody asked for, or cloudflared's loopback `/ready` failing for `TUNNEL_EXPIRED_AFTER_MS` on the wall clock (a quick tunnel is deleted ~13 min after it disconnects, e.g. through sleep), ends it as `status: 'error'` and reaps the client. A connection counts only when two answers in a row report it (the client reports its pre-sleep connection for seconds after wake), and expiry needs `TUNNEL_EXPIRY_CONFIRM_MS` of failures without a break. The public URL is never probed.
+- `pairing.ts` is a constant-time compare.
+- `device-registry.ts` stores only a token hash, written atomically with mode 0600.
+- Revoking a device, or stopping the gateway, destroys that device's upgraded sockets.
+- `remote-routes.ts` answers bridge calls through the same `ipc-registry.ts` table as IPC. `on*` push channels are no-ops remotely, and `filePath` answers `null`.
+- `serveStatic` 404s a missing file. Only a navigation (no extension, not under `/assets/`) falls back to `index.html`.
+- Cache headers: the page is `no-store`, `/assets/*` are `immutable`, and everything else is `no-cache`.
+
+### App updates
+
+**App updates**: `updater.ts` reads the feed, `update-installer.ts` stages and swaps, and `update-service.ts` holds the policy and state. electron-updater is not used.
+
+- Never replace the running bundle. Staging goes to `<bundle>.new-<pid>` beside the app, and `applyStagedUpdate` runs from `will-quit` as two renames.
+- The old bundle is moved aside, never deleted first. A failed second rename restores it.
+- Every `rm` runs inside the refcounted `withoutAsar`. Under Electron, `fs.rm` walks into an `app.asar` and never returns.
+- A release without `SHA256SUMS.txt` is refused.
+- `fetchLatestRelease` reads the release list, filters drafts and pre-releases, and orders by parsed version. It answers both `release` (installable) and `published` (newest tag).
+- `ready` is an ending: `check()` returns early.
+- Automatic checks are silent unless the state changed. `emit` broadcasts only on a real difference.
+- `canInstall` is asked of the filesystem on each use. A translocated, read-only or other-account install gets the `brew upgrade --cask geniro` sentence instead.
+- Main owns the state, and the renderer reports presses. Every non-terminal phase has a deadline. A trip bumps `attempt` and aborts the work.
+- `sweepUpdateDebris` runs at launch and matches only the names this code writes.
+- `failedPhase` is derived in `emit`. `updateStatusText` is the one composition, joined with a colon. Never capitalise the fragment.
+- Failures go to the daemon log through the injected `UpdateLog`.
+- Nothing installs unasked. The check runs at launch and every 5 minutes when `checkForUpdates` is on. The download needs a press.
+
+### Security
+
+- `SAFE_CONFIG` (`git-safe-config.ts`) applies to every read-side git call:
+  - Empty every repository `filter.*` driver (`clean`, `smudge`, `process`, `required=false`).
+  - Pass `--ignore-submodules=dirty`, `core.hooksPath=/dev/null` and `core.fsmonitor=false` (a repository's fsmonitor is a program git runs on any index read).
+  - Refuse a driver name `-c` cannot address.
+- User-pressed actions (switch, pull, stash, the worktree commit) keep the repository's filters and hooks.
+- A task worktree is committed and removed only while HEAD is the task's own branch, with no operation half done. A detached HEAD is kept.
+- The renderer has no network beyond loopback and the artifact CDNs, WebRTC included (`network-lockdown.ts`). Three measures, all needed:
+  - `disable_non_proxied_udp`.
+  - A black-hole SOCKS proxy.
+  - `host-resolver-rules` mapping every name to NOTFOUND except `localhost`/`127.0.0.1` and `ARTIFACT_CDN_HOSTS`.
+- `ARTIFACT_CDN_HOSTS` is a twin of the daemon's `ARTIFACT_PAGE_CSP`, checked by `network-lockdown.spec.ts`. Anything new that loads a remote host through Chromium will fail to resolve, deliberately.

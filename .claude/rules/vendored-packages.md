@@ -1,0 +1,16 @@
+---
+description: Packages vendored from the sibling Geniro repo — keep changes minimal; the deliberate local changes
+paths:
+  - "packages/**"
+---
+
+# A note on vendored packages
+
+`packages/{common,http-server,metrics,mikroorm}` are copied from the sibling Geniro monorepo (`../geniro` beside this checkout). Keep changes minimal so fixes can flow between the repos. The deliberate local changes:
+
+- Sentry removed from `common` and the `http-server` exception path; OIDC auth in `http-server` left dormant.
+- `mikroorm` driver swapped from Postgres to `@mikro-orm/sqlite`.
+- `http-server`: `runHttpApp` / `buildHttpServerExtension` gained `host` / `portFallback` / `onListening` (defaults keep upstream's `0.0.0.0`); `setupSwagger` gained an optional `swagger.guard(authorization)`; `utils/openapi-schemas` canonicalizes duplicate components and fails boot on a dangling `$ref`.
+- `http-server`'s `redactSecretQueries` masks the artifact page's `key` parameter; keep that name in any fix that flows back.
+- `mikroorm`'s `BaseDao.hardDeleteIncludingSoftDeleted`: a separate method so the destructive purge is never reachable through an option.
+- `mikroorm`'s `TimestampsEntity` declares its dates with the `DateTimeType` class (the `'datetime'` string makes every loaded entity dirty and re-dates rows on flush).

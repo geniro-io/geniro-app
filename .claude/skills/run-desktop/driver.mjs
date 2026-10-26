@@ -3,8 +3,10 @@
 // The packaged Electron SHELL can't launch here — the Electron binary download
 // is blocked by the container's egress policy (403 from github releases). So we
 // drive the SAME renderer bundle the Electron window loads, in the pre-installed
-// Chromium, wired to a REAL daemon (spawned under host Node), with window.geniro
-// stubbed to hand the renderer a live daemon handle + an onboarded state.
+// Chromium, wired to a REAL daemon, with window.geniro stubbed to hand the
+// renderer a live daemon handle + an onboarded state. The daemon is spawned under
+// Electron's Node (ELECTRON_RUN_AS_NODE=1) when node_modules/electron/dist holds
+// the Electron binary, and under host Node only where that download was blocked.
 //
 // Designed for agents: wrap in tmux, send-keys commands, capture-pane output.
 // Commands: launch, caps, nav <Chats|Workflows|Tasks|Stats|Settings>, seed-workflow,
@@ -159,7 +161,7 @@ function startDaemon() {
       }
     });
     child.stderr.on('data', (d) => { buf += d.toString(); });
-    child.on('exit', (c) => reject(new Error('daemon exited code=' + c + '. Did you `npm rebuild better-sqlite3` for host Node ABI + `pnpm build`?\n' + buf.slice(-1200))));
+    child.on('exit', (c) => reject(new Error('daemon exited code=' + c + '. Is better-sqlite3 built for the runtime the daemon ran under (Electron present in node_modules/electron/dist: `pnpm rebuild:native`; Electron absent, host Node: `pnpm rebuild better-sqlite3`), and is the daemon built (`pnpm build`)?\n' + buf.slice(-1200))));
     setTimeout(() => reject(new Error('daemon ready timeout\n' + buf.slice(-1200))), 30000);
   });
 }

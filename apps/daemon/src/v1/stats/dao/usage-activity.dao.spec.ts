@@ -449,9 +449,12 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
     it('reads every thread in one statement, not one per thread', async () => {
       const em = orm.em.fork();
       const reader = new UsageActivityDao(em);
-      // The database is asked through the connection, so a statement per thread would show here
-      // as one call per thread however the rows were fetched.
-      const execute = vi.spyOn(em.getConnection(), 'execute');
+      // Every statement is compiled by the native database, whichever builder wrote it, so a
+      // statement per thread would show here as one call per thread however the rows were fetched.
+      const prepare = vi.spyOn(
+        await em.getConnection().getNativeClient(),
+        'prepare',
+      );
 
       await reader.peakLinesBefore(
         [
@@ -463,8 +466,8 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
         at('2026-08-11T00:00:00.000Z'),
       );
 
-      expect(execute).toHaveBeenCalledTimes(1);
-      execute.mockRestore();
+      expect(prepare).toHaveBeenCalledTimes(1);
+      prepare.mockRestore();
     });
   });
 });

@@ -12,7 +12,7 @@ Style only from design tokens (Tailwind CSS v4, CSS-first `@theme`); never hardc
 ## Tokens and themes
 
 - `styles/themes/<id>.css` is the only source of token values, one file per theme. `styles/global.css` maps them to utilities in `@theme inline` and holds no value of its own. Components never define a token.
-- Adding a token: add it to every file in `styles/themes/` and to the `@theme inline` map, then reference it. Keep the light theme's names and values aligned with the sibling repo's `geniro/apps/web/src/styles/global.css`.
+- Adding a token: add it to every file in `styles/themes/` and to the `@theme inline` map, then reference it. Keep the light theme's token names aligned with the sibling repo's `geniro/apps/web/src/styles/global.css`; the values follow `styles/themes/light.css`, which diverged on purpose ("direction A", explained in its header).
 - Every theme file declares the same tokens; a missing one silently falls back to light. `styles/themes/theme-tokens.spec.ts` catches it.
 - Adding a theme: a file in `styles/themes/` plus a row in `shared/themes.ts` (id, label, appearance, window background). `shared/themes.spec.ts` fails if they disagree.
 - The theme marker is `data-theme` on `<html>`, written only by `renderer/theme/apply-theme.ts`. Never use a `.dark` class or the OS media query; Tailwind's `dark:` is re-keyed onto `data-theme`. A component that must name the theme uses that module's hooks.

@@ -62,6 +62,6 @@ Every fact about a specific CLI lives in its `adapters/<name>/` directory, as a 
 - Remembered approvals:
   - An adapter whose CLI can remember a permission answer ("for this session", "always") stamps them on its `approval_request` as `options` (`ApprovalOption`), built from what the CLI offered on that request and labelled by the scope geniro actually gives it (`approvalOptionLabel`) — cursor's "Allow always" lives in a per-process profile, so it is `session`.
   - Offer a scope only after a throwaway run proved the CLI stops asking under it (the measurements sit beside each adapter's constants). Its encoder answers with the option only when the verdict carries one; every auto-approval passes none, so nothing the daemon decides alone is remembered.
-- Per-agent state is keyed by agent as well as subject (`SkillHarvestStore` keys by agent + cwd).
+- Per-agent state is keyed by agent as well as subject (`SkillHarvestStore` keys by agent + cwd + configDir).
 - Keep the testable unit process-free: a stream-json mapper is an exported pure function in `<name>/utils/<name>-message.utils.ts`; an ACP adapter's unit is its driver.
 - Adapters are factory providers in `agents.module.ts`; the options bag is a test seam, not a DI token.

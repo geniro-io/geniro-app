@@ -189,6 +189,14 @@ describe('the daemon boots and serves', () => {
     expect(await res.json()).toEqual({ hits: [], partialReason: null });
   });
 
+  it('switches its database to WAL at boot', () => {
+    // SQLite records the journal mode in the file's own header: bytes 18 and
+    // 19 (the write and read format versions) are 2 in WAL mode, and 1 under
+    // the rollback journal a new database starts in.
+    const header = readFileSync(join(userData, 'geniro.db')).subarray(18, 20);
+    expect([...header]).toEqual([2, 2]);
+  });
+
   it('measures a draft workflow’s instruction sizes on its static route, not as a slug', async () => {
     const res = await request(`${base()}/v1/workflows/instruction-sizes`, {
       method: 'POST',

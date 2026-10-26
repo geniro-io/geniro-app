@@ -27,6 +27,7 @@ function item(id: string, seq = 3): RecommendationItem {
       : id.startsWith('U')
         ? 'user'
         : 'repo',
+    territory: 'process',
     kind: id.startsWith('W') ? 'parallelize' : 'check',
     location: id.startsWith('W') ? 'reviewer' : 'AGENTS.md:12',
     title: `Item ${id}`,
@@ -158,6 +159,32 @@ describe('ReportRecommendationsTool', () => {
       (await report({ items: [{ ...item('R-3'), target: 'user' }] }))
         .content[0]!.text,
     ).toContain('starts with U-');
+  });
+
+  it('keeps each item to one territory: process or domain, named on the row', async () => {
+    const { report, written } = setup('dev-team');
+    const { territory: _omitted, ...untagged } = item('R-1');
+
+    const missing = await report({ items: [untagged] });
+    const mixed = await report({
+      items: [{ ...item('R-1'), territory: 'process+domain' }],
+    });
+    const taken = await report({
+      items: [item('W-1'), { ...item('R-1'), territory: 'domain' }],
+    });
+
+    expect(missing.isError).toBe(true);
+    expect(missing.content[0]!.text).toContain('territory');
+    expect(mixed.isError).toBe(true);
+    expect(mixed.content[0]!.text).toContain('territory');
+    expect(taken.isError).toBe(false);
+    expect(written).toHaveLength(1);
+    expect(written[0]!.payload).toMatchObject({
+      items: [
+        { id: 'W-1', territory: 'process' },
+        { id: 'R-1', territory: 'domain' },
+      ],
+    });
   });
 
   it('refuses more than five items for one target', async () => {

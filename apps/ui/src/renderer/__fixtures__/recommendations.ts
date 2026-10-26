@@ -33,6 +33,7 @@ export function recommendation(
   return {
     id,
     target: workflow ? 'workflow' : id.startsWith('U') ? 'user' : 'repo',
+    territory: 'process',
     kind: workflow ? 'parallelize' : 'check',
     location: workflow ? 'reviewer' : 'AGENTS.md:42',
     title: workflow
@@ -68,7 +69,25 @@ export const ITEMS: RecommendationView[] = [
     confidence: 3,
     risk: 'low',
   }),
-  recommendation('R-1'),
+  recommendation('R-1', {
+    territory: 'domain',
+    kind: 'rule',
+    location: '.claude/rules/billing.md',
+    title: 'Write down that a sent invoice is never edited',
+    change:
+      'WHEN a change edits an invoice that was already sent → issue a credit note instead',
+    evidence: [
+      {
+        seq: 1530,
+        ts: '2026-10-14T10:48:00.000Z',
+        nodeId: 'reviewer',
+        quote:
+          'Blocking: sent invoices must not be mutated — use a credit note',
+      },
+    ],
+    rootCause: 'The builder did not know sent invoices are immutable',
+    riskNote: 'none — it states a rule the code already enforces',
+  }),
   recommendation('U-1', {
     kind: 'pointer',
     location: '~/.claude/CLAUDE.md',

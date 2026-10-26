@@ -16,6 +16,7 @@ const CARD: RecommendationsPayload = {
     {
       id: 'W-1',
       target: 'workflow',
+      territory: 'process',
       kind: 'parallelize',
       location: 'reviewer',
       title: 'Parallel reviewers',

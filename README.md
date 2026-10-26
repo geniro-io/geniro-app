@@ -1,14 +1,63 @@
-# Geniro
+<div align="center">
 
-A local-first macOS app for **Claude Code, Cursor Agent and Codex**. Chat with
-one coding agent, connect a team in a visual workflow, or run tasks from a board.
-Geniro uses your agents' own CLI logins and needs no Geniro account.
+<img src="apps/ui/src/renderer/assets/logo.png" alt="Geniro" width="460">
 
-## Install
+### Your coding agents, working as a team — right on your Mac.
 
-**macOS · Apple Silicon**
+Chat with one agent, wire a whole crew together on a canvas, or hand them a board<br>
+of tasks and go make coffee. ☕ **Claude Code**, **Cursor Agent** and **Codex**, driven<br>
+through their own CLIs and your own logins. No cloud, no account, no telemetry.
 
-With Homebrew:
+<p>
+  <a href="https://github.com/geniro-io/geniro-app/releases/latest"><img src="https://img.shields.io/github/v/release/geniro-io/geniro-app?style=for-the-badge&label=release&color=c17c3a" alt="Latest release"></a>
+  <a href="https://github.com/geniro-io/geniro-app/actions/workflows/ci.yaml"><img src="https://img.shields.io/github/actions/workflow/status/geniro-io/geniro-app/ci.yaml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/geniro-io/geniro-app?style=for-the-badge&color=6b8e4e" alt="Apache 2.0 license"></a>
+  <a href="#-install"><img src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?style=for-the-badge&logo=apple&logoColor=white" alt="macOS on Apple Silicon"></a>
+</p>
+<p>
+  <img src="https://img.shields.io/badge/Claude%20Code-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Code">
+  <img src="https://img.shields.io/badge/Cursor%20Agent-000000?style=flat-square&logo=cursor&logoColor=white" alt="Cursor Agent">
+  <img src="https://img.shields.io/badge/Codex-412991?style=flat-square" alt="Codex">
+  <img src="https://img.shields.io/badge/Ollama-local%20models-ffffff?style=flat-square&logo=ollama&logoColor=black" alt="Ollama local models">
+  <img src="https://img.shields.io/badge/MCP-ready-6b5b95?style=flat-square" alt="MCP ready">
+  <img src="https://img.shields.io/badge/local--first-no%20cloud-2f7d5b?style=flat-square" alt="Local-first, no cloud">
+</p>
+
+**[Install](#-install)** ·
+**[Features](#-whats-inside)** ·
+**[Workflows](#-workflows-and-agent-teams)** ·
+**[Task board](#-task-board)** ·
+**[Artifacts](#-artifacts-and-sharing)** ·
+**[Stats](#-stats-cost-and-cpu--ram)** ·
+**[Phone](#-your-phone)** ·
+**[Privacy](#-local-first-for-real)** ·
+**[Gallery](#-gallery)** ·
+**[Contribute](#-development)**
+
+<br>
+
+<img src="docs/screenshots/chat-transcript.png" alt="A Geniro chat: the agent's reasoning, its task list, the diff it wrote and its answer, with the agents panel showing spend, tasks and where the run went" width="100%">
+
+</div>
+
+<br>
+
+## 🤔 Wait, what is this?
+
+You already pay for Claude Code, Cursor or Codex. They are brilliant, and each one lives in its own terminal tab.
+
+**Geniro is the desk they share.** One native window where you can:
+
+- 💬 **chat** with any of them, each in its own folder and branch;
+- 🧩 **wire them into a team** — a planner hands work to a backend agent and a frontend agent, and a reviewer checks both;
+- 📋 **run a task board** where every card gets its own git worktree and an agent works through the queue;
+- 📊 **see what it all costs**: money, tokens, time, CPU and RAM.
+
+What does Geniro charge? **Nothing.** It is open source (Apache 2.0), has no server, and never asks you to sign up. Your agents keep using the subscriptions and logins they already have.
+
+## 🚀 Install
+
+**macOS · Apple Silicon.** With Homebrew:
 
 ```sh
 brew tap geniro-io/tap
@@ -23,131 +72,280 @@ curl -fsSL https://raw.githubusercontent.com/geniro-io/geniro-app/main/scripts/i
 bash /tmp/geniro-install.sh
 ```
 
-The app is signed but not notarized. Both methods handle macOS quarantine;
-use one of them to install. Updates install from inside the app. If an update
-cannot replace your copy, run `brew upgrade --cask geniro` or the script again.
+> [!NOTE]
+> The app is signed but not notarized. Both methods above handle macOS quarantine, so install with one of them. Updates install from inside the app. If an update cannot replace your copy, run `brew upgrade --cask geniro` or the script again.
 
-**First run:** open Geniro, install or select an agent CLI, sign in, and choose
-your project folder. Missing CLIs can be installed from onboarding or Settings.
+**First run:** open Geniro, install or pick an agent CLI, sign in, and choose your project folder. A missing CLI installs with one press, from onboarding or from Settings. No terminal needed.
 
-[Features](#features) · [Agent pools](#workflows-and-agent-pools) ·
-[Local models](#local-models) · [Screenshots](#screenshots) ·
-[Development](#development)
-
-## Features
-
-- **Chats:** choose a model, profile and approval mode. Save run configurations
-  and reusable prompts, import CLI sessions, search conversations, and export
-  threads to Markdown.
-- **Agent teams:** connect agents on a canvas, run independent steps in parallel,
-  and let agents call, message and ask questions of each other.
-- **Agent pools:** give a workflow agent several accounts, models or CLIs to
-  distribute calls and continue when one hits a usage limit.
-- **Task board:** each card gets its own git worktree, branch and chat or workflow.
-  Agents write reports and attach pull requests; autopilot works through the queue.
-- **Rich results:** see diffs, review findings, charts, comparisons, image galleries
-  and interactive pages alongside tool calls, sub-agents and background commands.
-- **Accounts and tools:** manage named profiles, install and update CLIs, sign in,
-  add or toggle MCP servers, and use skills and slash commands from the composer.
-- **Context and stats:** inspect context usage and plan limits, set auto-compaction,
-  and track cost, tokens, time, pull requests and changed lines. The usage ledger
-  survives deleted chats; unavailable measurements stay blank.
-- **Phone and terminal:** follow or steer live sessions from a paired phone, or
-  reopen a conversation in your own terminal with its model, profile and session.
-- **Local models:** use tool-capable Ollama models with Claude Code or Codex.
-
-## Workflows and agent pools
-
-Connect agents and shared instruction blocks on the canvas. Dependencies set
-which steps run first; independent agents run in parallel. Workflows are saved as
-`*.geniro.yaml` files you can export, review and reuse.
-
-In an agent node's settings, add an **Agent pool** to give it several
-configurations. Each member can have its own CLI, account profile, model,
-approval mode and MCP settings. For example, a reviewer can use two Claude
-accounts and a Codex configuration.
-
-Work goes to the first member in pool order that is available. If a member hits
-a usage limit or its sign-in expires, Geniro hands the work to the next one and
-remembers until when that account is spent — across every workflow run, for
-calls, workflow steps and direct messages alike. Once the limit resets, the next
-turn or call goes back to the first member, carrying the recent conversation
-over. Continuing a call keeps it on the member that handled it.
-
-## Local models
-
-Start Ollama on your Mac and download a model that supports tool calling.
-Choose it under **Ollama · local models** in the Claude Code or Codex model picker.
-Geniro discovers local models automatically and explains when a model or CLI
-cannot be used. Local inference runs on your machine and can work offline.
-
-## Your phone
-
-In **Settings → Remote access**, scan the QR code and enter the pairing code
-shown on your Mac. Your phone opens the same live chats, workflows and board
-on your Wi-Fi. For access away from home, **Get an address** can start an
-installed `cloudflared` or `ngrok` tunnel from the Mac.
-
-## Local-first
-
-Geniro has no cloud backend, account or telemetry. Chats, workflows and task
-history live on your Mac; agents keep their own logins and connect to their
-model providers. Ollama offers local inference.
-
-The daemon listens on loopback with a per-launch credential. Remote access
-uses a separate gateway and requires device pairing. Agent-built pages run
-in a sandbox; they can display local pictures and load libraries from allowed
-CDNs. Public metadata fetches support app updates and model pricing; CLI
-installation, optional Cursor usage lookup and tunnels also use the network.
-
-## Screenshots
-
-<details>
-<summary>View screenshots: chats, workflows, task board, stats and phone</summary>
-
-All screenshots use synthetic data from a fictional `acme-web` / `acme-api`
-project.
-
-### Chats
-
-![A chat: the agent's reasoning, its task list, the diff it wrote and its answer, with the agents panel showing its spend, tasks and where the run went](docs/screenshots/chat-transcript.png)
+## ✨ What's inside
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/chat-artifact.png" alt="An interactive release dashboard the agent published as a page inside the chat"></td>
-<td width="50%"><img src="docs/screenshots/chat-findings.png" alt="A code review reported as a card, grouped by file, each finding with a verdict, below two sub-agent blocks"></td>
+<td width="33%" valign="top">
+
+<b>💬 Chats</b><br>
+Pick the agent, model, effort, context window and approval mode. Queue follow-ups, import sessions from the CLIs, search every chat, and export to Markdown.
+
+</td>
+<td width="33%" valign="top">
+
+<b>🧩 Workflows</b><br>
+Drag agents onto a canvas and wire them up. Independent steps run in parallel. Agents call, message, question and cancel each other.
+
+</td>
+<td width="33%" valign="top">
+
+<b>🏊 Agent pools</b><br>
+Give one agent up to 8 setups: other accounts, models or CLIs. When one hits its usage limit, the next one takes over.
+
+</td>
 </tr>
 <tr>
-<td><b>Artifacts</b>: a page the agent built, running in a sandbox next to the chat.</td>
-<td><b>Findings</b>: a review as a card instead of prose, with the sub-agents that did the tracing.</td>
+<td valign="top">
+
+<b>📋 Task board</b><br>
+Each card gets its own worktree and branch, and runs a chat or a workflow. Autopilot works the queue, and a merged PR closes the card.
+
+</td>
+<td valign="top">
+
+<b>🎨 Artifacts</b><br>
+Agents publish live HTML pages that open next to the chat. Share one as an encrypted link to a bucket you own.
+
+</td>
+<td valign="top">
+
+<b>🃏 Rich cards</b><br>
+Charts, comparisons, scorecards, image galleries, review findings, patches, plans, questions and buttons, instead of a wall of text.
+
+</td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/screenshots/chat-comparison.png" alt="A scorecard above a comparison table with per-cell verdicts and a recommendation"></td>
-<td width="50%"><img src="docs/screenshots/chat-chart.png" alt="A line chart of bundle size over fourteen builds, plotted from the agent's own numbers"></td>
+<td valign="top">
+
+<b>🔬 Thread analyzer</b><br>
+An agent studies a finished run, from slow tools to failed calls to the critical path, and proposes fixes. Tick the ones you like and press **Apply selected**.
+
+</td>
+<td valign="top">
+
+<b>📊 Stats</b><br>
+Spend, tokens, cache hits, agent time, lines changed and pull requests, broken down by agent, model, project and thread.
+
+</td>
+<td valign="top">
+
+<b>🧮 CPU & RAM</b><br>
+See which thread is chewing through your Mac, down to each agent's processes, and stop the leftovers.
+
+</td>
 </tr>
 <tr>
-<td><b>Scorecard + comparison</b>: the winning column stands out at a glance.</td>
-<td><b>Charts</b>: measurements plotted instead of listed in a table.</td>
+<td valign="top">
+
+<b>⚡ Fast actions & run configs</b><br>
+Your own prompt buttons under the message box, and saved new-chat setups you apply in one click.
+
+</td>
+<td valign="top">
+
+<b>🗂 Folders, colours & groups</b><br>
+Every chat runs in a folder and branch you pick. Colour your threads, file them into groups and keep notes on them.
+
+</td>
+<td valign="top">
+
+<b>🦙 Local models</b><br>
+Run tool-capable Ollama models through Claude Code or Codex, offline if you want to.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+<b>🔌 Accounts & MCP</b><br>
+Named profiles for several accounts on one CLI. Add, edit and toggle MCP servers. Use skills and slash commands right in the composer.
+
+</td>
+<td valign="top">
+
+<b>📱 Phone</b><br>
+Pair your phone on Wi-Fi and follow or steer live sessions from the couch, or from anywhere through your own tunnel.
+
+</td>
+<td valign="top">
+
+<b>⌨️ Terminal</b><br>
+In-app terminal tabs. Or reopen a conversation in your own terminal with its model, profile and session.
+
+</td>
 </tr>
 </table>
 
-### Workflows
+## 🤖 Bring your own agents
+
+Geniro drives each agent headlessly through its own CLI. No SDKs and no API keys of Geniro's own: if the CLI works on your Mac, it works in Geniro.
+
+| Agent | How Geniro talks to it | Good to know |
+| --- | --- | --- |
+| <img src="https://img.shields.io/badge/-Claude%20Code-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Code"> | `claude -p`, streaming JSON | Runs Ollama models too |
+| <img src="https://img.shields.io/badge/-Cursor%20Agent-000000?style=flat-square&logo=cursor&logoColor=white" alt="Cursor Agent"> | `cursor-agent acp` (Agent Client Protocol) | Account spend shown from your own login |
+| <img src="https://img.shields.io/badge/-Codex-412991?style=flat-square" alt="Codex"> | `codex app-server` (JSON-RPC) | Runs Ollama models too |
+
+- **Install and sign in from the app.** Geniro runs each vendor's official installer when you press the button, and signs you in without opening a terminal.
+- **Several accounts per CLI.** Config profiles give each account a name and a colour. Pick one per chat, or per node in a workflow.
+- **MCP servers.** List, add, edit as JSON and toggle the servers each CLI knows, and switch them off for one workflow node.
+- **Your instructions, everywhere.** Write custom instructions once, and choose a language every agent replies in.
+
+## 🧩 Workflows and agent teams
+
+Drag agents onto a canvas, connect them, and press run. Dependencies decide what runs first, and independent agents run **in parallel**. Workflows are plain `*.geniro.yaml` files you can export, review and share.
+
+```mermaid
+flowchart LR
+  T(["▶ You: ship dark mode"]) --> P["🧠 Planner<br/>Claude Code"]
+  P --> B["⚙️ Backend<br/>Codex"]
+  P --> F["🎨 Frontend<br/>Cursor Agent"]
+  S[["📏 House style"]] -.-> B
+  S -.-> F
+  B --> R["🔍 Reviewer<br/>pool: 2× Claude + Codex"]
+  F --> R
+  P -. call_agent .-> X["📚 Researcher"]
+```
+
+- **Three kinds of nodes:** a **trigger** (your prompt), **agents** (any CLI, model and profile), and **instruction blocks** (shared text wired into the agents that need it, like a house style guide).
+- **Agents talk to each other.** An agent can `call_agent` a teammate it is wired to, `message_agent` it mid-task, `await_agent` its answer, `answer_agent` its questions, or `cancel_agent` it when plans change.
+- **Team notes:** every agent in a run can write to and read from one shared notebook.
+- **Build it by talking.** A chat dock in the builder edits the workflow from plain-language requests. A chat agent can also propose a whole workflow as a card for you to approve.
 
 ![The workflow canvas: a trigger feeds a planner that fans out to a codex backend agent and a cursor frontend agent, both feeding a reviewer; a house-style instruction block is wired into both builders, and the planner can call a researcher](docs/screenshots/workflow-canvas.png)
 
-![A finished workflow run: each agent's messages and tool calls in one transcript, and the agents panel with every node's model, spend, time and tool count](docs/screenshots/workflow-run.png)
+### 🏊 Agent pools
 
-### Task board
+Rate limits are the worst part of a long run. In an agent node's settings, add an **agent pool** with up to 8 members. Each member can have its own CLI, account profile, model, approval mode and MCP settings. A reviewer could use two Claude accounts and one Codex setup, for example.
+
+- Work goes to the first member, in pool order, that is available.
+- When a member hits a usage limit or its sign-in expires, Geniro hands the work to the next one. It remembers until when that account is spent, across every workflow run, for calls, workflow steps and direct messages alike.
+- Once the limit resets, the next turn or call goes back to the first member and carries the recent conversation over.
+- Continuing a call keeps it on the member that handled it.
+
+## 📋 Task board
+
+A project board for agents. Write a card and hit start, or let **autopilot** pick up cards by itself.
+
+- **Each card gets its own git worktree** and branch (`geniro/task-<id>`), so agents never step on each other or on you.
+- A card runs a single chat or a whole workflow. Agents write a report onto the card and attach the pull requests they open.
+- **Autopilot** starts cards from your intake columns, as many at once as you allow.
+- When a card's pull request is merged, the card moves itself to Done.
+- Agents can manage the board themselves through Geniro's board tools: list, read, create and update tasks.
 
 ![The tasks board with a card open: its properties, the run configuration it will use, its description and the report the agent wrote](docs/screenshots/tasks-board.png)
 
-### Context and stats
+## 🎨 Artifacts and sharing
 
-![Where the run went: a waterfall of each agent's turns on one clock with their cost, and a breakdown of the tools the run used](docs/screenshots/run-waterfall.png)
+Sometimes the right answer is a page, not a paragraph. Agents call `show_artifact` to publish an interactive HTML page: a dashboard, a report or a little tool. It opens beside the chat, goes full screen, and can be saved as a file.
 
-![The Stats page: spend, cost per turn, turns and agent time, tokens and cache, a per-day chart, and breakdowns by agent, model, project and workflow](docs/screenshots/stats.png)
+- **Sandboxed.** The page runs in a locked-down frame. It can show local pictures and load libraries from a short list of public CDNs, and that's it.
+- **Encrypted sharing.** Press share on the page and Geniro encrypts it (AES-256-GCM) and uploads it to a place *you* configured: Google Cloud Storage through `gcloud`, S3 through `aws`, or your own command. The key travels only in the link's `#fragment`, which browsers never send to a server.
+- **You stay in control.** Revoke a link, revoke them all, or have links expire after a set number of days. Agents may share pages too, but only if you turn that on (it is off by default).
 
-### Phone and remote access
+<img src="docs/screenshots/chat-artifact.png" alt="An interactive release dashboard the agent published as a page inside the chat" width="100%">
+
+![Settings, Sharing: agents may not share by default, pages go to a Google Cloud Storage bucket or an S3 bucket, links are revoked after 30 days, and one shared page is listed with Get link and Revoke](docs/screenshots/sharing.png)
+
+## 🃏 Rich cards
+
+Geniro gives every agent a set of MCP tools for showing results instead of describing them:
+
+| Card | What the agent shows you |
+| --- | --- |
+| 📈 **Chart** | Its own measurements, plotted |
+| ⚖️ **Comparison** | Options scored against criteria, with a recommendation |
+| 🔢 **Scorecard** | The headline figures, each with its delta |
+| 🖼 **Gallery** | Screenshots and images in a grid, with full-screen zoom |
+| 🐞 **Findings** | A code review grouped by file, each finding with a verdict |
+| 🩹 **Patch** | A one-file diff you **Approve** or **Deny** |
+| 🗺 **Plan** | A plan you approve before any work starts |
+| ❓ **Question** | Multiple-choice questions you answer with a click |
+| 🔘 **Buttons** | "Press when the PR is merged" or "Stop the preview server" |
+| 👀 **Monitor** | A background command (a CI run, a long build, a log) that wakes the agent with what it prints |
+| 🔔 **Notify** | A macOS notification when something needs you |
+
+Agents can also search your past chats and read the conversation around any hit.
+
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/chat-findings.png" alt="A code review reported as a card, grouped by file, each finding with a verdict, below two sub-agent blocks"></td>
+<td width="33%"><img src="docs/screenshots/chat-comparison.png" alt="A scorecard above a comparison table with per-cell verdicts and a recommendation"></td>
+<td width="34%"><img src="docs/screenshots/chat-chart.png" alt="A line chart of bundle size over fourteen builds, plotted from the agent's own numbers"></td>
+</tr>
+<tr>
+<td align="center"><b>Findings</b></td>
+<td align="center"><b>Scorecard + comparison</b></td>
+<td align="center"><b>Charts</b></td>
+</tr>
+</table>
+
+## 🔬 Thread analyzer
+
+Finished a long run and wondering why it took 40 minutes? Press **Analyze thread**.
+
+1. Pick the agent, account, model and effort that should do the analysis.
+2. It reads a snapshot of the thread: timings, slow or failed tools, the critical path and every row.
+3. You get a **recommendations card** with evidence for each item, tagged by where the fix belongs: your workflow, your repo, or your own instruction files.
+4. Tick what you want and press **Apply selected**. Workflow edits are saved only if the file has not changed in the meantime, and a backup is written first.
+
+The analysis lives in a popup over the thread it analyzed, so you can come back to it, ask follow-up questions, or start a fresh one.
+
+![An analysis of a rate-limiter bug fix: the run took 59 seconds, and one repository recommendation, ticked, says to document the real check script and what ACME_ENV=test touches, with its evidence quoted from the thread and an Apply selected button](docs/screenshots/thread-analysis.png)
+
+## 📊 Stats, cost and CPU & RAM
+
+**Stats page.** Pick a period: today, 7, 30 or 90 days, or all time. See spend, cost per turn, turns, agent time, threads, pull requests, lines changed, tokens in and out, cache reads and writes, and cache hit rate. Break it all down by agent, model, project and thread. Prices come from the public [models.dev](https://models.dev) catalog. A model without a price shows a dash, never a made-up `$0`. The usage ledger survives deleted chats.
+
+**Where the run went.** An interactive waterfall of every agent's turns on one clock, with the critical path, zoom, cost tables and "open in chat" on any span.
+
+**CPU & RAM.** A meter in the title bar splits the app's memory or CPU across your threads, Geniro itself, and anything a deleted thread left running. Open a thread to see every process each agent started, with its CPU and memory, and **Stop** or **Stop all** the strays. Readings are taken only while you are looking.
+
+**Context and limits.** A context ring shows how full each agent's window is, auto-compaction kicks in at a percentage you choose, and plan limits sit one click away.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/stats.png" alt="The Stats page: spend, cost per turn, turns and agent time, tokens and cache, a per-day chart, and breakdowns by agent, model and project"></td>
+<td width="50%"><img src="docs/screenshots/run-waterfall.png" alt="Where the run went: a waterfall of each agent's turns on one clock with their cost, and a breakdown of the tools the run used"></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="38%" valign="top"><img src="docs/screenshots/app-usage.png" alt="The title-bar usage meter: 33 processes using 3.11 GB, split across four threads and Geniro itself, each with its CPU and memory"></td>
+<td width="62%" valign="top"><img src="docs/screenshots/processes.png" alt="One thread's processes: the claude agent, its two MCP servers, and a detached node dev server with Stop and Stop all"></td>
+</tr>
+<tr>
+<td align="center"><b>Usage, split by thread</b></td>
+<td align="center"><b>One thread's processes</b></td>
+</tr>
+</table>
+
+## ⚡ Fast actions, run configurations and tidy threads
+
+- **Fast actions:** your own buttons under the message box, each one a name and a snippet. A press drops the snippet into the message box. It sends nothing, so you can still edit.
+- **Run configurations:** save a new-chat setup (folder, branch, agent or workflow, model, effort, context window, approval mode and profile) under a name, and apply it by hovering the **New chat** button.
+- **Folders and branches:** each chat runs in its own folder, with your recent folders one click away. Switch the branch right from the composer.
+- **Colours and groups:** give a thread one of 8 colours. File threads into colour-coded groups that you can collapse and drag into order. A group can automatically collect every new chat from a folder, or every run of a workflow.
+- **Notes:** keep private notes on any thread. They are never sent to the agent.
+- **What's waiting on you:** Geniro knows which threads need you (an open question, a failed turn, an unread reply), and <kbd>⌘</kbd> <kbd>J</kbd> jumps to the next one.
+- **And the small stuff:** a message queue you can drag to reorder (or **Send now**), pull-request chips, a "what changed" diff view, macOS notifications, light and dark themes, archive with optional auto-cleanup, and a debug log on <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>L</kbd>.
+
+![A new chat: hovering New chat lists three saved run configurations (Opus with high effort, Codex, Cursor), and four fast-action buttons sit under the message box](docs/screenshots/run-configs.png)
+
+## 🦙 Local models
+
+Start [Ollama](https://ollama.com) on your Mac and download a model that supports tool calling. Then pick it under **Ollama · local models** in the Claude Code or Codex model picker. Geniro discovers local models on its own and tells you when a model or CLI cannot be used. Inference stays on your machine and works offline.
+
+## 📱 Your phone
+
+In **Settings → Remote access**, scan the QR code and enter the pairing code shown on your Mac. Your phone opens the same live chats, workflows and board over your Wi-Fi. For access away from home, **Get an address** starts the `cloudflared` or `ngrok` you already have installed and opens a tunnel from the Mac.
 
 <table>
 <tr>
@@ -157,7 +355,26 @@ project.
 </tr>
 </table>
 
-### Settings and dark theme
+## 🔒 Local-first, for real
+
+Geniro has **no cloud backend, no account and no telemetry**. Chats, workflows and task history live on your Mac. Your agents keep their own logins and talk to their own model providers.
+
+- The daemon listens on loopback only, with a fresh credential every launch.
+- Remote access goes through a separate gateway and only works for devices you have paired.
+- Secrets live in the macOS Keychain, never in a database or a file.
+- Agent-built pages run in a sandbox.
+- Geniro's own network calls are few: app updates and the public model price list. CLI installs, the optional Cursor spend lookup, tunnels and sharing happen only when you set them up or press for them.
+
+## 📸 Gallery
+
+<details>
+<summary><b>More screenshots:</b> a full workflow run, Settings and the dark theme</summary>
+
+<br>
+
+All screenshots use synthetic data from a fictional `acme-web` / `acme-api` project.
+
+![A finished workflow run: each agent's messages and tool calls in one transcript, and the agents panel with every node's model, spend, time and tool count](docs/screenshots/workflow-run.png)
 
 ![Settings: the three agent CLIs detected with their versions, notification delivery, theme and archive retention](docs/screenshots/settings.png)
 
@@ -165,12 +382,32 @@ project.
 
 </details>
 
-## Development
+## 🔨 Development
 
-See the [development guide](docs/development.md) for source setup, commands,
-architecture and releases. It includes the required native rebuild and
-`pnpm full-check` verification.
+<p>
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Electron-47848F?style=flat-square&logo=electron&logoColor=white" alt="Electron">
+  <img src="https://img.shields.io/badge/React-149ECA?style=flat-square&logo=react&logoColor=white" alt="React">
+  <img src="https://img.shields.io/badge/NestJS-E0234E?style=flat-square&logo=nestjs&logoColor=white" alt="NestJS">
+  <img src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite">
+  <img src="https://img.shields.io/badge/Tailwind-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white" alt="Tailwind CSS">
+</p>
 
-## License
+An Electron app (`apps/ui`) supervises a NestJS daemon (`apps/daemon`) that listens on loopback and drives the agent CLIs. The [development guide](docs/development.md) covers source setup, commands, architecture and releases, including the required native rebuild and `pnpm full-check`.
+
+```sh
+pnpm install && pnpm rebuild:native && pnpm dev
+```
+
+Contributions are welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md), and use the issue forms for [bugs](https://github.com/geniro-io/geniro-app/issues/new?template=bug_report.yml) and [ideas](https://github.com/geniro-io/geniro-app/issues/new?template=feature_request.yml).
+
+## 📜 License
 
 [Apache License 2.0](LICENSE). See also [NOTICE](NOTICE) for attribution.
+
+<div align="center">
+<br>
+<img src="apps/ui/resources/icon.png" alt="" width="72">
+<br>
+<sub>Made with ☕ and a lot of agents, on a Mac.</sub>
+</div>

@@ -1535,6 +1535,44 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Every `team_note` row of one run, oldest first, projected on
+   * {@link artifactRows}' terms. A supersede can name any earlier note, so a
+   * reader folds the whole set rather than a page of it.
+   */
+  async teamNoteRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload' | 'createdAt'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'team_note' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'payload', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * How many team notes one run holds — what the per-run cap counts — or,
+   * given `throughSeq`, how many it held at that row.
+   */
+  async teamNoteCount(
+    runId: string,
+    txEm?: EntityManager,
+    throughSeq?: number,
+  ): Promise<number> {
+    return this.count(
+      {
+        runId,
+        kind: 'team_note',
+        ...(throughSeq === undefined ? {} : { seq: { $lte: throughSeq } }),
+      },
+      txEm,
+    );
+  }
+
+  /**
    * The newest thing the USER said in this run — what a retry re-sends on a CLI
    * that cannot reopen a conversation without a prompt.
    *

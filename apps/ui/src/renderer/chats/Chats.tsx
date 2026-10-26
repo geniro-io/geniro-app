@@ -161,6 +161,7 @@ import {
   RunningShellChips,
   RunningSubagentChips,
   TaskListChip,
+  TeamNotesChip,
   ThreadPullRequestChips,
 } from './composer-shelf';
 import {
@@ -294,6 +295,8 @@ import {
   taskProgress,
 } from './task-payload';
 import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
+import { agentNameOf } from './team-note-author';
+import { TeamNotesDialog } from './team-notes-dialog';
 import { forgetThread, writeThreadFlag } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -371,6 +374,7 @@ import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunProcesses } from './use-run-processes';
 import { useRunState } from './use-run-state';
+import { useRunTeamNotes } from './use-run-team-notes';
 import { useRunWaterfall } from './use-run-waterfall';
 import { useRunWorkFolders } from './use-run-work-folders';
 import { useThreadAnalysis } from './use-thread-analysis';
@@ -6514,6 +6518,32 @@ export function Chats({
     activeRunId,
     latestArtifactSeq,
   ).artifacts;
+  /**
+   * The newest team note in the loaded window and the open call cards — the
+   * team-notes listing's one refresh trigger: a note is append-only, so a new
+   * row is the only way the list moves.
+   */
+  const latestTeamNoteSeq = useMemo(
+    () =>
+      transcriptRows.reduce(
+        (newest, item) =>
+          item.kind === 'team_note' && item.seq > newest ? item.seq : newest,
+        0,
+      ),
+    [transcriptRows],
+  );
+  /** The run's team notes, read from the daemon — a workflow run's only. */
+  /** The team notes' full view, opened from the panel section or the chip. */
+  const [teamNotesOpen, setTeamNotesOpen] = useState(false);
+  // A thread switch closes it: it belongs to the run it was opened over.
+  useEffect(() => {
+    setTeamNotesOpen(false);
+  }, [activeRunId]);
+  const { notes: teamNotes, loaded: teamNotesLoaded } = useRunTeamNotes(
+    chatApi,
+    activeRun?.workflowId != null ? activeRunId : null,
+    latestTeamNoteSeq,
+  );
   const latestShowArtifactResult = useMemo(
     () =>
       activeRunId === null
@@ -7308,6 +7338,11 @@ export function Chats({
     threadTotals.outputTokens,
     threadTotals.cacheTokens,
   ]);
+  /** A team note's author by name, for the shelf chip — the panel has its own. */
+  const teamNoteAuthor = useCallback(
+    (nodeId: string): string => agentNameOf(agents, nodeId),
+    [agents],
+  );
 
   /**
    * What the composer's ring shows — this chat's own context, and never
@@ -8784,6 +8819,24 @@ export function Chats({
         // about the same task for as long as that lasted.
         live={activeRunStatus === 'running'}
       />
+      <TeamNotesChip
+        notes={teamNotes}
+        agentName={teamNoteAuthor}
+        onJump={jumpToSeq}
+        onOpenAll={() => setTeamNotesOpen(true)}
+      />
+      {/* Mounted only while open and keyed by the run, so its search and
+          filters start clean on every open and never carry to another thread. */}
+      {teamNotesOpen ? (
+        <TeamNotesDialog
+          key={activeRunId ?? 'no-run'}
+          open
+          onClose={() => setTeamNotesOpen(false)}
+          notes={teamNotes}
+          agentName={teamNoteAuthor}
+          onJump={jumpToSeq}
+        />
+      ) : null}
       {/* An agent's buttons outlive the turn that made them,
             so they sit after the task list and ahead of
             everything that ends within a turn — behind their
@@ -10496,6 +10549,9 @@ export function Chats({
                       timeline={timelinePanel}
                       artifacts={artifacts}
                       publishedArtifacts={publishedArtifacts}
+                      teamNotes={teamNotes}
+                      teamNotesLoaded={teamNotesLoaded}
+                      onOpenTeamNotes={() => setTeamNotesOpen(true)}
                       threadPullRequests={openedByActiveThread}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}

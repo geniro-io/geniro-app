@@ -45,8 +45,13 @@ export abstract class CallMcpTool extends BaseMcpTool {
     context: McpCallContext,
   ): Promise<McpToolResult> {
     const envelope = await this.envelope(args, context);
+    // Beside the envelope, not one of its arms: every reply the caller reads
+    // can tell it the team wrote something new, whatever the call's state.
+    const unread = this.calls.unreadTeamNotes(context.runId, context.caller);
+    const reply =
+      unread > 0 ? { ...envelope, unread_team_notes: unread } : envelope;
     // A question envelope is a normal outcome, not a tool failure.
-    return this.text(JSON.stringify(envelope), envelope.status === 'error');
+    return this.text(JSON.stringify(reply), envelope.status === 'error');
   }
 
   /**

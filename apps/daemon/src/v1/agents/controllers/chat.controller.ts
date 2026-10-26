@@ -37,6 +37,7 @@ import type {
   RunProcessesWire,
   RunSeenWire,
   RunStateWire,
+  RunTeamNotesWire,
   RunWaterfallWire,
   RunWire,
   ShellKillWire,
@@ -78,6 +79,7 @@ import {
   RunProcessesDto,
   RunSeenDto,
   RunStateDto,
+  RunTeamNotesDto,
   RunWaterfallDto,
   SearchChatQueryDto,
   SendMessageDto,
@@ -107,6 +109,7 @@ import { ChatHistoryService } from '../services/chat-history.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
 import { ChatSearchService } from '../services/chat-search.service';
 import { ChatShellsService } from '../services/chat-shells.service';
+import { ChatTeamNotesService } from '../services/chat-team-notes.service';
 import { ChatTimelineService } from '../services/chat-timeline.service';
 import { ChatUploadStoreService } from '../services/chat-upload-store.service';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
@@ -135,6 +138,7 @@ import { runListPageOf } from '../utils/run-list-page';
 export class ChatController {
   constructor(
     private readonly artifacts: ChatArtifactsService,
+    private readonly teamNotes: ChatTeamNotesService,
     private readonly chatService: ChatService,
     private readonly chatExport: ChatExportService,
     private readonly history: ChatHistoryService,
@@ -488,6 +492,17 @@ export class ChatController {
   @ZodResponse({ status: 200, type: RunArtifactsDto })
   readArtifacts(@Param('runId') runId: string): Promise<RunArtifactsWire> {
     return this.artifacts.read(runId);
+  }
+
+  /**
+   * Every team note this run's agents wrote, superseded ones marked — a
+   * daemon fold on `:runId/artifacts`' reason.
+   */
+  @Get(':runId/team-notes')
+  @ApiOperation({ operationId: 'readRunTeamNotes' })
+  @ZodResponse({ status: 200, type: RunTeamNotesDto })
+  readTeamNotes(@Param('runId') runId: string): Promise<RunTeamNotesWire> {
+    return this.teamNotes.read(runId);
   }
 
   /**

@@ -3135,6 +3135,131 @@ export const MONITOR_TIMEOUT_MIN_MS = 1000;
 export const MONITOR_TIMEOUT_DEFAULT_MS = 600_000;
 export const MONITOR_TIMEOUT_MAX_MS = 3_600_000;
 
+/** geniro's own tools that write a team note and read the run's team notes. */
+export const HOST_TEAM_NOTE_TOOL = 'team_note';
+export const HOST_TEAM_NOTES_TOOL = 'team_notes';
+
+/**
+ * Team-note limits. They REFUSE rather than truncate: a note cut short can say
+ * the opposite of what was meant. The reply budget keeps one `team_notes` answer
+ * inside the smallest CLI tool-result cap (claude's ~25k tokens); the per-run
+ * cap bounds a looping agent, not ordinary use.
+ */
+export const TEAM_NOTE_MAX_CHARS = 16_000;
+export const TEAM_NOTES_DEFAULT_LIMIT = 50;
+export const TEAM_NOTES_MAX_LIMIT = 200;
+export const TEAM_NOTES_REPLY_BUDGET_CHARS = 60_000;
+export const TEAM_NOTES_PER_RUN = 5_000;
+
+/** What a team note is about — the only five things worth writing down for the team. */
+export const TeamNoteKindSchema = z
+  .enum(['contract', 'decision', 'fact', 'pitfall', 'pointer'])
+  .meta({ id: 'TeamNoteKind' });
+export type TeamNoteKind = z.infer<typeof TeamNoteKindSchema>;
+
+/**
+ * The payload of a `team_note` row. `nodeId` / `conversationId` name the
+ * writing conversation (the row's own `nodeId` is the node alone); `callId` is
+ * the call that conversation was answering, which files the row in that call's
+ * card.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/team-note-payload.ts
+ * (`readTeamNotePayload`), which draws the transcript row from these rows.
+ */
+export const TeamNotePayloadSchema = z.object({
+  kind: TeamNoteKindSchema,
+  text: z.string(),
+  supersedes: z.number().int().optional(),
+  nodeId: z.string(),
+  conversationId: z.string().nullable(),
+  callId: z.string().optional(),
+});
+export type TeamNotePayload = z.infer<typeof TeamNotePayloadSchema>;
+
+/** One team note with its supersede pair folded in — what readers are shown. */
+export const TeamNoteSchema = z
+  .object({
+    seq: z.number().int().describe('the row that holds it; its id'),
+    kind: TeamNoteKindSchema,
+    text: z.string(),
+    nodeId: z.string().describe('the agent that wrote it'),
+    conversationId: z
+      .string()
+      .nullable()
+      .describe("the writing conversation; null for the node's own"),
+    callId: z
+      .string()
+      .nullable()
+      .describe('the call the writing conversation was answering'),
+    createdAt: z.string().describe('ISO-8601'),
+    supersedes: z
+      .number()
+      .int()
+      .nullable()
+      .describe('the earlier note this one replaces'),
+    supersededBy: z
+      .number()
+      .int()
+      .nullable()
+      .describe('the newest note that replaces this one'),
+  })
+  .meta({ id: 'TeamNote' });
+export type TeamNote = z.infer<typeof TeamNoteSchema>;
+
+/**
+ * Every team note of one run, newest first, superseded ones included and
+ * marked. A daemon route on `RunArtifactsWireSchema`'s reason: a client holds
+ * one page of the transcript, and the panel lists the whole set.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const RunTeamNotesWireSchema = z.object({
+  notes: z.array(TeamNoteSchema),
+});
+export type RunTeamNotesWire = z.infer<typeof RunTeamNotesWireSchema>;
+
+/** A `team_note` call as its reader hands it over. */
+export interface TeamNoteWriteInput {
+  kind: TeamNoteKind;
+  text: string;
+  supersedes?: number;
+}
+
+/** A `team_notes` call as its reader hands it over. */
+export interface TeamNotesQuery {
+  /** Empty = every kind. */
+  kinds: TeamNoteKind[];
+  /** An agent's name or node id; null = every author. */
+  author: string | null;
+  /** Only notes after this seq. */
+  since: number | null;
+  /** Only notes before this seq — the paging cursor a reply hands back. */
+  before: number | null;
+  limit: number;
+  includeSuperseded: boolean;
+}
+
+export type TeamNoteWriteOutcome =
+  | { status: 'written'; seq: number; unread: number }
+  | { status: 'refused'; reason: string };
+
+/** A note as a reader is shown it: who wrote it, by name. */
+export interface TeamNoteEntry extends TeamNote {
+  author: string;
+}
+
+export interface TeamNotesReadOutcome {
+  status: 'read';
+  /** Newest first. */
+  notes: TeamNoteEntry[];
+  /** Matching notes older than the last one shown, left out by the limit or the reply budget. */
+  olderRemaining: number;
+  /** The `before` that fetches them; null when none remain. */
+  nextBefore: number | null;
+  /** Notes the reading conversation has still not been shown. */
+  unread: number;
+}
+
 /** A `monitor` call as its reader hands it over. */
 export interface MonitorStartInput {
   command: string;

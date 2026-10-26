@@ -86,6 +86,7 @@ import type { RunProcessReaper } from '../../agents/services/run-process-reaper.
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
 import {
@@ -261,6 +262,14 @@ class FakeItemDao {
   }
 
   readonly items: Item[] = [];
+  async teamNoteRows(runId: string): Promise<Item[]> {
+    return this.items
+      .filter((item) => item.runId === runId && item.kind === 'team_note')
+      .sort((a, b) => a.seq - b.seq);
+  }
+  async teamNoteCount(runId: string): Promise<number> {
+    return (await this.teamNoteRows(runId)).length;
+  }
   /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
   readonly hardDeleted: unknown[] = [];
   failNextKind: string | null = null;
@@ -1141,6 +1150,8 @@ function setup(
   artifacts: ArtifactBroker;
   /** The button tools' broker, over the real publisher and its one writer. */
   actions: ActionBroker;
+  /** The team-note tools' broker, over the fake `items` table. */
+  teamNotes: TeamNoteBroker;
   chatActions: ChatActionsService;
   /** The page store's answer, switchable per test: a refusal names its reason. */
   pageStore: { refusal: string | null };
@@ -1354,6 +1365,7 @@ function setup(
   const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   const artifacts = new ArtifactBroker();
   const actions = new ActionBroker();
+  const teamNotes = new TeamNoteBroker(em, itemDao as unknown as ItemDao);
   const chatActions = new ChatActionsService(
     em,
     itemDao as unknown as ItemDao,
@@ -1488,6 +1500,9 @@ function setup(
     opts.agentMcp as AgentMcpService | undefined,
     actions,
     new ActionPublishService(chatActions, NO_STOPS, NO_COMMANDS),
+    undefined,
+    undefined,
+    teamNotes,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -1526,6 +1541,7 @@ function setup(
     removedAttachmentRuns,
     artifacts,
     actions,
+    teamNotes,
     chatActions,
     pageStore,
   };
@@ -6240,6 +6256,131 @@ describe('GraphExecutorService — agent calls', () => {
 
     await service.deleteRun(run.id);
     expect(artifacts.inWorkflowRun(run.id)).toBe(false);
+  });
+
+  it('files a callee’s team note in the call it answers, under its own node and conversation', async () => {
+    const { service, callBroker, teamNotes, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'plan it',
+    });
+    await drain();
+
+    const outcome = await teamNotes.write(
+      run.id,
+      'helper',
+      callerKey('helper', 'call-1'),
+      { kind: 'contract', text: 'GET /plan returns { steps }' },
+    );
+
+    expect(outcome.status).toBe('written');
+    // The figure the call runtime reads, through the executor's capability:
+    // the Manager has one note to read, its author none.
+    expect(callBroker.unreadTeamNotes(run.id, 'orch')).toBe(1);
+    expect(
+      callBroker.unreadTeamNotes(run.id, callerKey('helper', 'call-1')),
+    ).toBe(0);
+    const row = itemDao.items.find((item) => item.kind === 'team_note');
+    expect(row?.nodeId).toBe('helper');
+    expect(JSON.parse(row!.payload)).toEqual({
+      kind: 'contract',
+      text: 'GET /plan returns { steps }',
+      nodeId: 'helper',
+      conversationId: 'call-1',
+      callId: 'call-1',
+    });
+  });
+
+  it('files a note from a continued conversation in the call it answers NOW, not the one that opened it', async () => {
+    const { service, claude, callBroker, teamNotes, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'first',
+      agent: 'helper',
+      message: 'plan A',
+      mode: 'async',
+    });
+    await drain();
+    const first = claude.starts.at(-1)!;
+    first.emit({ type: 'session', sessionId: 's-helper' });
+    completeTurn(first, 'A done');
+    await drain();
+    await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' });
+    const second = await callBroker.callAgent(run.id, 'orch', {
+      title: 'second',
+      agent: 'helper',
+      message: 'and plan B',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    await drain();
+    expect(second.status).not.toBe('error');
+
+    const outcome = await teamNotes.write(
+      run.id,
+      'helper',
+      callerKey('helper', 'call-1'),
+      { kind: 'decision', text: 'B reuses A’s schema' },
+    );
+
+    expect(outcome.status).toBe('written');
+    const row = itemDao.items.find((item) => item.kind === 'team_note');
+    expect(JSON.parse(row!.payload)).toMatchObject({
+      conversationId: 'call-1',
+      callId: 'call-2',
+    });
+  });
+
+  it('lets an agent with no call edges write a team note another agent reads, until the run is deleted', async () => {
+    const { service, teamNotes } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const wrote = await teamNotes.write(run.id, 'a', 'a', {
+      kind: 'pitfall',
+      text: 'the fixture folder is read-only',
+    });
+    expect(wrote.status).toBe('written');
+    expect(
+      teamNotes.unreadCount(run.id, { nodeId: 'b', conversationId: null }),
+    ).toBe(1);
+    const read = await teamNotes.read(run.id, 'b', 'b', {
+      kinds: [],
+      author: null,
+      since: null,
+      before: null,
+      limit: 50,
+      includeSuperseded: false,
+    });
+    expect(read).toMatchObject({
+      status: 'read',
+      notes: [
+        { text: 'the fixture folder is read-only', author: 'a', callId: null },
+      ],
+    });
+
+    await service.deleteRun(run.id);
+    expect(teamNotes.canUse(run.id, 'a')).toBe(false);
+    expect(teamNotes.canUse(run.id, 'b')).toBe(false);
   });
 
   it('a live fire-and-forget callee holds the run open until it settles', async () => {

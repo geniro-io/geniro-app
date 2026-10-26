@@ -66,6 +66,7 @@ const api = vi.hoisted(() => ({
   dismissChatAction: vi.fn(),
   readChatTimeline: vi.fn(),
   readRunArtifacts: vi.fn(),
+  readRunTeamNotes: vi.fn(),
   readRunWaterfall: vi.fn(),
   readRunProcesses: vi.fn(),
   getThreadAnalysis: vi.fn(),
@@ -776,6 +777,7 @@ beforeEach(() => {
     );
   api.updateChatSettings.mockReset();
   api.readRunArtifacts.mockReset().mockResolvedValue({ artifacts: [] });
+  api.readRunTeamNotes.mockReset().mockResolvedValue({ notes: [] });
   api.readChatMetrics.mockReset().mockResolvedValue({
     context: null,
     breakdownReason: 'no live agent',

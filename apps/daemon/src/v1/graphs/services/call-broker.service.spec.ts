@@ -76,6 +76,8 @@ function harness(options?: {
   cwd?: string;
   /** The daemon-wide record of spent pool members; default: an empty one. */
   poolCooldowns?: PoolCooldowns;
+  /** Each conversation's unread team notes; default: no team-note tools. */
+  unreadTeamNotes?: RunCallCapability['unreadTeamNotes'];
 }): {
   broker: CallBroker;
   capability: RunCallCapability;
@@ -184,6 +186,9 @@ function harness(options?: {
     isNodeLive: options?.isNodeLive ?? (() => true),
     wakeNode: options?.wakeNode ?? (() => false),
     tellLiveNode: options?.tellLiveNode ?? (() => false),
+    ...(options?.unreadTeamNotes === undefined
+      ? {}
+      : { unreadTeamNotes: options.unreadTeamNotes }),
   };
   const broker = new CallBroker(undefined, options?.poolCooldowns);
   broker.registerRun('run-1', capability, options?.seed ?? null);
@@ -1505,6 +1510,43 @@ describe('CallBroker — parked questions (M4)', () => {
       call_id: 'call-1',
     });
     expect(errorOf(final)).toContain('QUESTION_ORPHANED');
+  });
+
+  it('says in a wake how many team notes the woken conversation has not read, and nothing at 0', async () => {
+    const wakeOf = (unread: number): string => {
+      const wakes: string[] = [];
+      const { broker } = harness({
+        launch: 'defer',
+        isNodeLive: () => false,
+        wakeNode: (_nodeId, prompt) => {
+          wakes.push(prompt);
+          return true;
+        },
+        unreadTeamNotes: (caller) => (caller === 'orch' ? unread : 0),
+      });
+      void broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      park(broker, { ttlMs: 60_000 });
+      return wakes[0]!;
+    };
+
+    expect(wakeOf(2)).toContain(
+      '2 team notes by other agents of this run are unread — read them with team_notes',
+    );
+    expect(wakeOf(0)).not.toContain('team note');
+  });
+
+  it('answers the unread team-note figure per conversation, and 0 for a run it does not hold', () => {
+    const { broker } = harness({
+      unreadTeamNotes: (caller) => (caller === 'orch' ? 3 : 0),
+    });
+    expect(broker.unreadTeamNotes('run-1', 'orch')).toBe(3);
+    expect(broker.unreadTeamNotes('run-1', 'helper')).toBe(0);
+    expect(broker.unreadTeamNotes('run-x', 'orch')).toBe(0);
   });
 
   it('WAKES a caller whose turn ended when its callee asks — the callee keeps its question', async () => {
@@ -5473,8 +5515,10 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
   /** call-1 to the Engineer, and `modes` calls it made from inside it. */
   async function engineerDelegated(
     modes: ('async' | 'fire_and_forget')[] = ['async'],
+    unreadTeamNotes?: RunCallCapability['unreadTeamNotes'],
   ) {
     const h = harness({
+      unreadTeamNotes,
       launch: 'defer',
       // Only the Manager's own conversation has a turn: the Engineer's ended.
       isNodeLive: (caller) => caller === 'orch',
@@ -5562,6 +5606,28 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     expect(
       await h.broker.awaitAgent('run-1', ENGINEER, { call_id: 'call-2' }),
     ).toMatchObject({ status: 'ok', result: { text: 'the research' } });
+  });
+
+  it('tells a held callee, woken inside its call, how many team notes it has not read', async () => {
+    // Keyed on the woken CONVERSATION — the Engineer inside call-1 — never the
+    // Manager that is waiting on it.
+    const h = await engineerDelegated(['async'], (caller) =>
+      caller === ENGINEER ? 3 : 0,
+    );
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+    await finishSubCall(h, 1, 'the research');
+
+    const wake = release() as { kind: 'wake'; prompt: string };
+    expect(wake.prompt).toContain(
+      '3 team notes by other agents of this run are unread',
+    );
+
+    const quiet = await engineerDelegated(['async'], () => 0);
+    const quietRelease = released(quiet.broker.holdCall('run-1', 'call-1')!);
+    await finishSubCall(quiet, 1, 'the research');
+    expect(
+      (quietRelease() as { kind: 'wake'; prompt: string }).prompt,
+    ).not.toContain('team note');
   });
 
   it('waits for the LAST of its calls, and tells it about all of them at once', async () => {

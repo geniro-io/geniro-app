@@ -141,6 +141,35 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     );
   });
 
+  it('counts the team notes up to the snapshot and points at them only when there are some', async () => {
+    const note = {
+      kind: 'fact',
+      text: 'CI is ubuntu',
+      nodeId: 'a',
+      conversationId: null,
+    };
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(1, 'team_note', note, 1);
+    await insert(2, 'team_note', { ...note, kind: 'pitfall' }, 2);
+    await insert(3, 'turn_complete', { usage: { durationMs: 3_000 } }, 3);
+    // Written after the analysis began: outside its snapshot.
+    await insert(4, 'team_note', note, 4);
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 3, sourceWorking: false },
+      { view: 'overview' },
+    );
+    expect(answer.teamNotes).toBe(2);
+    expect(answer.next).toContain('kinds=["team_note"]');
+
+    const before = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 0, sourceWorking: false },
+      { view: 'overview' },
+    );
+    expect(before.teamNotes).toBe(0);
+    expect(before.next).not.toContain('team_note');
+  });
+
   it("names the chat agent's own instructions file, failed tool calls and the tokens it spent", async () => {
     await insert(0, 'message', { text: 'go' }, 0);
     await insert(1, 'tool_call', { id: 't1', name: 'Bash' }, 1);

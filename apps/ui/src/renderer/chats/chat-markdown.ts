@@ -12,6 +12,7 @@ import {
   subagentIdOf,
   subagentRef,
 } from './subagent-payload';
+import { readTeamNotePayload } from './team-note-payload';
 import { isAgentToolName } from './tool-kind';
 import {
   isDeliveryAcknowledgement,
@@ -250,6 +251,21 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
     }
     const head = parts.join(' — ');
     return summary === null ? [head] : [head, '', summary];
+  },
+  team_note: (item, agent) => {
+    const note = readTeamNotePayload(item.payload);
+    if (note === null) {
+      return null;
+    }
+    const parts = [
+      `**📝 team note · ${note.kind}** — ${speaker(item, agent)}`,
+      `note ${item.seq}`,
+    ];
+    if (note.supersedes !== null) {
+      parts.push(`replaces note ${note.supersedes}`);
+    }
+    // Verbatim, as a message is: the note is markdown already.
+    return [parts.join(' — '), '', note.text];
   },
 };
 

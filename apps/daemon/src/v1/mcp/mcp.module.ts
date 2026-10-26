@@ -14,6 +14,7 @@ import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
 import { PatchBroker } from '../agents/services/patch.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
+import { TeamNoteBroker } from '../agents/services/team-note.broker';
 import { ThreadReaderService } from '../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../agents/services/user-question.broker';
 import { WorkflowProposalBroker } from '../agents/services/workflow-proposal.broker';
@@ -59,6 +60,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         artifacts: ArtifactBroker,
         actions: ActionBroker,
         monitors: MonitorBroker,
+        teamNotes: TeamNoteBroker,
         patches: PatchBroker,
         plans: PlanBroker,
         notices: NotifyBroker,
@@ -83,6 +85,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           artifacts,
           actions,
           monitors,
+          teamNotes,
           patches,
           plans,
           notices,
@@ -107,6 +110,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         ArtifactBroker,
         ActionBroker,
         MonitorBroker,
+        TeamNoteBroker,
         PatchBroker,
         PlanBroker,
         NotifyBroker,

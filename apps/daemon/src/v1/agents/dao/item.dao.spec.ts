@@ -60,6 +60,27 @@ describe('ItemDao (in-memory sqlite)', () => {
     return dao.create({ runId, seq, kind, payload });
   }
 
+  it('reads one run’s team notes oldest first, and counts them up to a seq', async () => {
+    const note = (text: string): string =>
+      JSON.stringify({ kind: 'fact', text, nodeId: 'a', conversationId: null });
+    // Written out of seq order, beside rows of other kinds and another run.
+    await insert('run-a', 7, 'team_note', note('third'));
+    await insert('run-a', 2, 'team_note', note('first'));
+    await insert('run-a', 3, 'message');
+    await insert('run-b', 4, 'team_note', note('other run'));
+    await insert('run-a', 5, 'team_note', note('second'));
+
+    const rows = await dao.teamNoteRows('run-a');
+    expect(rows.map((row) => row.seq)).toEqual([2, 5, 7]);
+    expect(rows.map((row) => JSON.parse(row.payload).text)).toEqual([
+      'first',
+      'second',
+      'third',
+    ]);
+    expect(await dao.teamNoteCount('run-a')).toBe(3);
+    expect(await dao.teamNoteCount('run-a', undefined, 5)).toBe(2);
+  });
+
   it('finds a send id only on a live user message in its own run', async () => {
     const payload = JSON.stringify({
       text: 'hello',

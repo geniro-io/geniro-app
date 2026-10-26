@@ -38,6 +38,8 @@ import {
   noticeCaption,
   unsentMessageIds,
 } from './system-payload';
+import { readTeamNotePayload } from './team-note-payload';
+import { TeamNoteRow } from './team-note-row';
 import { ThinkingDisclosure } from './thinking-block';
 import { ToolBodyView } from './tool-body-view';
 import { toolRowAccent } from './tool-icon';
@@ -735,6 +737,16 @@ export const TranscriptItem = memo(function TranscriptItem({
                 : 'orphaned — the caller ended before answering'}
           </div>
         </MessageBubble>
+      );
+    }
+    case 'team_note': {
+      const note = readTeamNotePayload(item.payload);
+      return note === null ? null : (
+        <TeamNoteRow
+          note={note}
+          seq={item.seq}
+          author={nodeName(item.nodeId)}
+        />
       );
     }
     default:

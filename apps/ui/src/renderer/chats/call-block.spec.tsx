@@ -2188,6 +2188,51 @@ describe("a call card's own conversation", () => {
     expect(keyed(`row:${first}`)?.className).not.toContain('bg-accent/60');
   });
 
+  it('files a callee’s team note inside its call’s card, as a row a jump lands on and marks', () => {
+    const rows = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write.' },
+        'orch',
+      ),
+      item('message', { text: 'Drafting', callId: 'call-1' }, 'poet'),
+      item(
+        'team_note',
+        {
+          kind: 'contract',
+          text: 'Haiku lines are 5-7-5 syllables.',
+          nodeId: 'poet',
+          conversationId: 'call-1',
+          callId: 'call-1',
+        },
+        'poet',
+      ),
+    ];
+    const [block] = groupTranscript(rows);
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    const noteSeq = rows[2]!.seq;
+    const value = loader({
+      loading: false,
+      failed: false,
+      hasOlder: false,
+      oldestSeq: rows[1]!.seq,
+    });
+    renderBlock(block, value);
+    expand();
+
+    const anchor = container.querySelector<HTMLElement>(
+      `[data-jump-key$=":${noteSeq}"]`,
+    );
+    expect(anchor?.textContent).toContain('Haiku lines are 5-7-5 syllables.');
+    expect(anchor?.textContent).toContain('team note');
+    const key = anchor!.dataset.jumpKey!;
+
+    renderBlock(block, value, { seq: noteSeq, cardId: block.id, key });
+    expect(keyed(key)?.className).toContain('bg-accent/60');
+  });
+
   it('marks only the anchor the landing names, never another drawn at the same seq', () => {
     const { block, first } = threeSaid();
     const value = loader({

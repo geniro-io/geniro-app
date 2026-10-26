@@ -59,6 +59,7 @@ import { ChatHistoryService } from './services/chat-history.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatSearchService } from './services/chat-search.service';
 import { ChatShellsService } from './services/chat-shells.service';
+import { ChatTeamNotesService } from './services/chat-team-notes.service';
 import { ChatTextIndexService } from './services/chat-text-index.service';
 import { ChatTimelineService } from './services/chat-timeline.service';
 import { ChatTitleService } from './services/chat-title.service';
@@ -123,6 +124,7 @@ import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
 import { SubagentRecoveryService } from './services/subagent-recovery.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
+import { TeamNoteBroker } from './services/team-note.broker';
 import { ThreadAnalysisService } from './services/thread-analysis.service';
 import { ThreadOverviewService } from './services/thread-overview.service';
 import { ThreadReaderService } from './services/thread-reader.service';
@@ -170,6 +172,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     GlobalChatSearchService,
     ChatActionsService,
     ChatArtifactsService,
+    ChatTeamNotesService,
     ChatTimelineService,
     ChatWaterfallService,
     ThreadTimelineService,
@@ -233,6 +236,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     MonitorChatDelivery,
     MonitorOutcomeSweep,
     MonitorBroker,
+    TeamNoteBroker,
     HostWakeBus,
     HostWakeChatDelivery,
     ArtifactPageService,
@@ -548,6 +552,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // panel and teardown, which list and stop them.
     MonitorBroker,
     MonitorRegistry,
+    // For the MCP host's team-note tools and the graph executor, which registers
+    // each node's sink and reads the unread figure into call replies and wakes.
+    TeamNoteBroker,
     // For the workflow delivery, which records the end of output it drops.
     MonitorRowWriter,
     // For the share service, which wakes the agent that asked once a share

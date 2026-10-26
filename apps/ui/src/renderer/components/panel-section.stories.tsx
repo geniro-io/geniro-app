@@ -1,8 +1,9 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { FileText } from 'lucide-react';
+import { FileText, Filter } from 'lucide-react';
 
 import { PanelLinkRow } from './panel-link-row';
 import { PanelSection } from './panel-section';
+import { Button } from './ui/button';
 
 const meta = {
   title: 'Components/PanelSection',
@@ -27,4 +28,19 @@ export const Playground: Story = {};
 
 export const Empty: Story = {
   args: { children: null },
+};
+
+export const WithAction: Story = {
+  args: {
+    action: (
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-6"
+        aria-label="Filter">
+        <Filter className="shrink-0" />
+      </Button>
+    ),
+  },
 };

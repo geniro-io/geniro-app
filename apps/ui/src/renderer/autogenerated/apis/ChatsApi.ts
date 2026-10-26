@@ -45,6 +45,7 @@ import type {
   RunProcessesDto,
   RunSeenDto,
   RunStateDto,
+  RunTeamNotesDto,
   RunWaterfallDto,
   SendMessageDto,
   SetRunColorDto,
@@ -175,6 +176,10 @@ export interface ChatsApiReadRunProcessesRequest {
 }
 
 export interface ChatsApiReadRunStateRequest {
+    runId: string;
+}
+
+export interface ChatsApiReadRunTeamNotesRequest {
     runId: string;
 }
 
@@ -1517,6 +1522,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readRunState(requestParameters: ChatsApiReadRunStateRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunStateDto> {
         const response = await this.readRunStateRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readRunTeamNotesRaw(requestParameters: ChatsApiReadRunTeamNotesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunTeamNotesDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readRunTeamNotes().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/team-notes`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readRunTeamNotes(requestParameters: ChatsApiReadRunTeamNotesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunTeamNotesDto> {
+        const response = await this.readRunTeamNotesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

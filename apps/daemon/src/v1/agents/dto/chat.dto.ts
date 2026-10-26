@@ -29,6 +29,7 @@ import {
   RunProcessesWireSchema,
   RunSeenWireSchema,
   RunStateWireSchema,
+  RunTeamNotesWireSchema,
   RunWaterfallWireSchema,
   RunWireSchema,
   ShellKillWireSchema,
@@ -740,6 +741,9 @@ export class ChatTimelineDto extends createZodDto(ChatTimelineWireSchema) {}
 
 /** The pages this run published — see `RunArtifactsWireSchema`. */
 export class RunArtifactsDto extends createZodDto(RunArtifactsWireSchema) {}
+
+/** Every team note of one run — see `RunTeamNotesWireSchema`. */
+export class RunTeamNotesDto extends createZodDto(RunTeamNotesWireSchema) {}
 
 /** One run as money, order and timing — see `RunWaterfallWireSchema`. */
 export class RunWaterfallDto extends createZodDto(RunWaterfallWireSchema) {}

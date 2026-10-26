@@ -257,6 +257,11 @@ export interface AnalysisConfig {
   configDir: string | null;
   model: string | null;
   effort: string | null;
+  /**
+   * The tool-approval mode, opaque for `lastApprovalMode`'s reason; null =
+   * auto-approve, the analysis default (it works unwatched in its popup).
+   */
+  approval: string | null;
 }
 
 /**

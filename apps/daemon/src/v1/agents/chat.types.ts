@@ -82,6 +82,18 @@ export type ChatApprovalMode = z.infer<typeof ChatApprovalModeSchema>;
 export const CHAT_DEFAULT_APPROVAL: ChatApprovalMode = 'ask';
 
 /**
+ * What a thread analysis starts in when its dialog names no mode — `auto`, not
+ * {@link CHAT_DEFAULT_APPROVAL}: the analysis is left to work in its popup
+ * while the user is elsewhere, and a card per read would stall it unseen.
+ * `auto` is the floor every CLI honours, so no fallback is needed.
+ *
+ * Twin of `ANALYSIS_DEFAULT_APPROVAL` in
+ * `apps/ui/src/renderer/chats/analyze-thread-dialog.tsx`, the dialog's opening
+ * choice.
+ */
+export const ANALYSIS_DEFAULT_APPROVAL: ChatApprovalMode = 'auto';
+
+/**
  * One probed approval mode's verdict on the installed binary — `unknown` means
  * the probe has not settled, never that the mode failed.
  */

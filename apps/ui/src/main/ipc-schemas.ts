@@ -331,6 +331,9 @@ export const settingsPatchSchema = z.strictObject({
       configDir: absolutePath.nullable(),
       model: z.string().min(1).max(64).nullable(),
       effort: z.string().min(1).max(64).nullable(),
+      // Defaulted, so a choice saved before the dialog offered a mode still
+      // reads (as auto-approve) rather than being dropped whole.
+      approval: z.string().min(1).max(32).nullable().default(null),
     })
     .nullable()
     .optional(),

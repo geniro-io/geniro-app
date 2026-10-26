@@ -110,6 +110,25 @@ describe('readSettings', () => {
     expect(readSettings().historyPageSize).toBe(250);
   });
 
+  it('an analysis choice saved before it carried a mode still reads, as auto-approve', () => {
+    const choice = {
+      agent: 'claude',
+      configDir: null,
+      model: 'opus',
+      effort: null,
+    };
+    writeRaw({ lastAnalysisConfig: choice });
+
+    expect(readSettings().lastAnalysisConfig).toEqual({
+      ...choice,
+      approval: null,
+    });
+
+    writeRaw({ lastAnalysisConfig: { ...choice, approval: 'ask' } });
+
+    expect(readSettings().lastAnalysisConfig?.approval).toBe('ask');
+  });
+
   it('keeps a run’s CLI for an hour by default, and a stored window survives a read', () => {
     expect(readSettings().keptSessionIdleMinutes).toBe(60);
 

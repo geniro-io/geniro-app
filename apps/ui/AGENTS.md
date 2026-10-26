@@ -339,9 +339,7 @@ One home for each concern:
 
 **Settings keys (`settings.json`).** `main/settings.ts` owns the file, and `shared/contracts.ts` holds `Settings`. Values whose vocabulary is the daemon's stay opaque strings here. The renderer validates them against the generated enum. `interface Settings` in `shared/contracts.ts` is the authoritative key list; this list covers the keys with special rules.
 
-- Composer memory: `lastChatTarget`, `lastApprovalMode`, `lastAutoCompactPercent`, `projectFolder`/`recentFolders`. The Analyze thread dialog's last choice: `lastAnalysisConfig` (agent, profile, model, effort). `lastModels`, `lastEfforts`, `lastContextWindows`, `lastModelParameters` (`{parameterId: value}`), `configDirs` and `recentConfigDirs` are keyed per CLI.
-- Onboarding: `onboardingComplete` (first run finished; gates the initial route) and `onboardingProgress` (resumable setup choices, no credentials).
-- Interface: `sidebarCollapsed` (the nav rail at icon-only width) and `collapseToolSteps` (a turn's tool steps stay folded; off by default, and it decides only what is open when a row first appears).
+- Composer memory: `lastChatTarget`, `lastApprovalMode`, `lastAutoCompactPercent`, `projectFolder`/`recentFolders`. The Analyze thread dialog's last choice: `lastAnalysisConfig` (agent, profile, model, effort, approval — null and a choice saved before it had one read as auto-approve, never the composer's mode). `lastModels`, `lastEfforts`, `lastContextWindows`, `lastModelParameters` (`{parameterId: value}`), `configDirs` and `recentConfigDirs` are keyed per CLI.
 - Hand-managed lists, three different features: `fastActions`, `runConfigs` and `configProfiles`. Never fold any two together, or into `recentConfigDirs`.
   - Nothing adds or evicts an entry, and order is preserved.
   - `readSettings` salvages each list entry by entry (`salvageList`, twin of `salvageCliRecord`) and re-applies the cap.

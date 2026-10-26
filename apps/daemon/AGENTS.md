@@ -167,7 +167,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 
 "Analyze thread": `ThreadAnalysisService`, `POST /v1/chats/:runId/analyses`.
 
-- An analysis is an ordinary chat whose `Run.analysisSourceRunId` / `analysisSourceSeq` name the thread it reads and the seq its reads stop at (the source's newest row when it was started). Its method is `taskInstructions` (`utils/thread-analysis-guide.ts`), never a plugin skill at run time.
+- An analysis is an ordinary chat whose `Run.analysisSourceRunId` / `analysisSourceSeq` name the thread it reads and the seq its reads stop at (the source's newest row when it was started). Its method is `taskInstructions` (`utils/thread-analysis-guide.ts`), never a plugin skill at run time. Its approval mode is the dialog's, else `ANALYSIS_DEFAULT_APPROVAL` (`auto`), never `CHAT_DEFAULT_APPROVAL`: it works unwatched in its popup.
 - It belongs to its source, like the builder's chat to its workflow: `listChats` and chat search (`ChatSearchIndexDao.match` / `run`) never return it, `GET /v1/chats/:runId/analysis` finds it (`{analysis: null}` for none, newest wins), and there is one per thread.
   - A start replaces exactly the analyses that existed BEFORE it created its own, and only AFTER the new one has its brief: a failed start keeps the old one, and two racing starts never delete each other's.
   - Deleting the source deletes it (`ThreadAnalysisService` on `bus.allDeleted()`, whichever route deleted the source); what that misses (a daemon stopped before the announce, a failed delete) is swept at boot (`sweepOrphans`).

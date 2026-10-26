@@ -712,6 +712,15 @@ export interface ToolCallTime {
   isError: boolean;
 }
 
+/** One agent's own tool calls inside one call — `ItemDao.ownToolCallsByCall`. */
+export interface OwnToolCallCount {
+  nodeId: string;
+  callId: string;
+  calls: number;
+  /** The newest counted row's seq. */
+  lastSeq: number;
+}
+
 /** A tool call and how long it took to be answered. */
 export interface ToolSpan {
   seq: number;
@@ -3078,9 +3087,17 @@ export const RunDelegateStateSchema = z
       ),
     launchSeq: z.number().int(),
     startedAt: z.string(),
+    toolCalls: z
+      .number()
+      .int()
+      .describe(
+        "the tool calls this delegate made (rows carrying its id as parentToolUseId), over every row of the run up to the read's throughSeq",
+      ),
   })
   .meta({ id: 'RunDelegateState' });
 export type RunDelegateState = z.infer<typeof RunDelegateStateSchema>;
+/** A delegate as its rows say it went; the run-state read adds its tool count. */
+export type DelegateLifecycle = Omit<RunDelegateState, 'toolCalls'>;
 
 /** geniro's own tools that put a button in the chat and take one away. */
 export const HOST_PUBLISH_ACTION_TOOL = 'publish_action';

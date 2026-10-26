@@ -143,7 +143,7 @@ export class RunStateService {
           );
 
     const delegateReplies = rowsWithId(replies, delegateIds);
-    const delegates = foldRunDelegates({
+    const lifecycles = foldRunDelegates({
       declarations,
       launches: delegationCalls,
       replies: delegateReplies,
@@ -156,6 +156,16 @@ export class RunStateService {
         em,
       ),
     });
+    // Counted over every row through this read: a delegate with none counted
+    // made none.
+    const toolCalls =
+      lifecycles.length === 0
+        ? new Map<string, number>()
+        : await this.itemDao.delegateToolCallCounts(runId, throughSeq, em);
+    const delegates = lifecycles.map((delegate) => ({
+      ...delegate,
+      toolCalls: toolCalls.get(delegate.id) ?? 0,
+    }));
     const workflowRows = [
       ...workflowEdgeRows(announcements, workflowIds),
       ...workflowLaunches,

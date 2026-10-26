@@ -529,7 +529,7 @@ export const SubagentBlock = memo(function SubagentBlock({
 }): React.JSX.Element {
   const openDetail = useContext(SubagentDetailContext);
   const title = subagentTitle(block);
-  const toolCount = countTools(block.entries);
+  const toolCount = block.durableToolCalls ?? countTools(block.entries);
   const tasks = subagentTaskProgress(block);
   const cards = renderCards(block.entries);
   const cardSummary = renderCardSummary(cards);

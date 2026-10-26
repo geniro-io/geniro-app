@@ -1,5 +1,6 @@
 import type { Item } from '../../runs/entity/item.entity';
 import {
+  type DelegateLifecycle,
   type ItemWire,
   RUN_CALL_BRIEF_MAX,
   type RunCallState,
@@ -162,7 +163,7 @@ export function foldRunDelegates({
    * this fold is where a missing ending is resolved.
    */
   endings?: readonly TurnEnding[];
-}): RunDelegateState[] {
+}): DelegateLifecycle[] {
   const declared = new Map<string, Declared>();
   for (const row of declarations) {
     const id = payloadString(row.payload, 'id');
@@ -211,7 +212,7 @@ export function foldRunDelegates({
     }
   }
 
-  const delegates: RunDelegateState[] = [];
+  const delegates: DelegateLifecycle[] = [];
   for (const id of new Set([...launched.keys(), ...declared.keys()])) {
     const launch = launched.get(id);
     const declaration = declared.get(id);

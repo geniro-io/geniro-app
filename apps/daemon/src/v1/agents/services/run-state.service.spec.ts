@@ -264,6 +264,61 @@ describe('RunStateService (in-memory sqlite)', () => {
     ]);
   });
 
+  it('counts each delegate’s tool calls over every row of the run', async () => {
+    // However few of them a client has loaded: the sub-agent card draws this.
+    await createRun('running');
+    await insert(1, 'tool_call', {
+      id: 'toolu_a',
+      name: 'Task',
+      input: { description: 'Review bugs' },
+    });
+    await insert(2, 'tool_call', { id: 'toolu_b', name: 'Task', input: {} });
+    for (const seq of [3, 4, 5]) {
+      await insert(seq, 'tool_call', {
+        id: `a-${seq}`,
+        name: 'Read',
+        parentToolUseId: 'toolu_a',
+      });
+    }
+    await insert(6, 'tool_call', {
+      id: 'b-6',
+      name: 'Bash',
+      parentToolUseId: 'toolu_b',
+    });
+    // The launching agent's own call, and one naming no delegate.
+    await insert(7, 'tool_call', { id: 'own', name: 'Bash' });
+    await insert(8, 'tool_call', {
+      id: 'blank',
+      name: 'Bash',
+      parentToolUseId: '',
+    });
+    // The delegate's other rows are not tool calls.
+    await insert(9, 'tool_result', { id: 'a-3', parentToolUseId: 'toolu_a' });
+    await insert(10, 'message', {
+      text: 'found it',
+      parentToolUseId: 'toolu_a',
+    });
+    // A seq reserved and not yet written stops the read short, so a tool call
+    // written above it is the client's to add, never the count's.
+    const reserved = await seqs.reserve('run-a');
+    await insert(reserved + 1, 'tool_call', {
+      id: 'late',
+      name: 'Read',
+      parentToolUseId: 'toolu_a',
+    });
+
+    const state = await service().read('run-a');
+
+    expect(state.throughSeq).toBe(reserved - 1);
+
+    expect(
+      state.delegates.map((delegate) => [delegate.id, delegate.toolCalls]),
+    ).toEqual([
+      ['toolu_a', 3],
+      ['toolu_b', 1],
+    ]);
+  });
+
   it('lists delegates launched by name AND by declaration, each with its launch reply', async () => {
     await createRun('running');
     await insert(1, 'tool_call', {

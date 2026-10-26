@@ -826,6 +826,10 @@ export const NodeStateWireSchema = z.object({
    * node called several times needs these to draw one ring per call thread
    * rather than one flickering between windows.
    *
+   * CAPPED at the newest `CALL_CONTEXT_SNAPSHOT_LIMIT` calls of the run: it
+   * carries the heavy parts (the start brief). A call's FIGURES are never
+   * here — they are in the uncapped {@link callFigures}.
+   *
    * Nested, so it carries a `.meta({ id })` of its own to land as a named
    * component, exactly as `AgentCount` above does.
    */
@@ -840,14 +844,6 @@ export const NodeStateWireSchema = z.object({
             "Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it",
           ),
         contextWindowTokens: z.number().nullable(),
-        /** What this call's own turns spent, over the whole run. */
-        totals: ChatTotalsWireSchema,
-        /**
-         * When this call's prompt cache lapses (ISO): the end of its newest
-         * turn plus the lifetime its CLI reported. Null when its CLI reports
-         * none — never a guessed expiry.
-         */
-        promptCacheExpiresAt: z.string().nullable(),
         /**
          * What the call's `call_started` row said — who asked, the title, the
          * brief (capped at {@link CALL_START_BRIEF_MAX} characters) and the
@@ -873,6 +869,39 @@ export const NodeStateWireSchema = z.object({
           .nullable(),
       })
       .meta({ id: 'CallContextReading' }),
+  ),
+  /**
+   * EVERY call this node ran, with what the daemon measured of it over the
+   * whole run — never capped, so a card's figures do not depend on how many
+   * calls the run has made since.
+   */
+  callFigures: z.array(
+    z
+      .object({
+        callId: z.string(),
+        /** What this call's own turns spent, over the whole run. */
+        totals: ChatTotalsWireSchema,
+        toolCalls: z
+          .number()
+          .int()
+          .describe(
+            "The tools the node itself called inside this call, its CLI sub-agents' excluded, counted from the transcript as of toolCallsThroughSeq",
+          ),
+        toolCallsThroughSeq: z
+          .number()
+          .int()
+          .nullable()
+          .describe(
+            'The seq of the newest tool call counted in toolCalls; a later tool_call row of this call is not in it. Null when none was counted',
+          ),
+        /**
+         * When this call's prompt cache lapses (ISO): the end of its newest
+         * turn plus the lifetime its CLI reported. Null when its CLI reports
+         * none — never a guessed expiry.
+         */
+        promptCacheExpiresAt: z.string().nullable(),
+      })
+      .meta({ id: 'CallFigures' }),
   ),
   /**
    * What this node has spent over the WHOLE run, summed from every

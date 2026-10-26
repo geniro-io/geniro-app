@@ -18,6 +18,8 @@ export type NodeDurableReading = Pick<
   | 'contextTokens'
   | 'contextWindowTokens'
   | 'calls'
+  // Every call's figures, uncapped, unlike `calls`.
+  | 'callFigures'
   | 'workedMs'
   | 'toolCalls'
   // The node's own status and when its running turn began: what the transcript
@@ -140,6 +142,7 @@ export function useNodeDurableReadings(
                 ...(node.contextEstimated ? { contextEstimated: true } : {}),
                 contextWindowTokens: node.contextWindowTokens,
                 calls: node.calls,
+                callFigures: node.callFigures,
                 workedMs: node.workedMs,
                 toolCalls: node.toolCalls,
                 status: node.status,

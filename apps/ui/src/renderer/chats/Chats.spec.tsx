@@ -4862,12 +4862,10 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
-            promptCacheExpiresAt: null,
             callId: 'call-5',
             contextTokens: null,
             contextEstimated: false,
             contextWindowTokens: null,
-            totals: NO_TOTALS,
             start: {
               callerNodeId: 'orch',
               title: 'Capture the visuals',
@@ -4876,6 +4874,15 @@ describe('Chats workflow runs', () => {
               thread: null,
               startedAt: Date.now() - 300_000,
             },
+          },
+        ],
+        callFigures: [
+          {
+            callId: 'call-5',
+            totals: NO_TOTALS,
+            toolCalls: 0,
+            toolCallsThroughSeq: null,
+            promptCacheExpiresAt: null,
           },
         ],
         totals: NO_TOTALS,
@@ -5267,13 +5274,20 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
-            promptCacheExpiresAt: null,
             callId: 'call-4',
             contextTokens: 201_788,
             contextEstimated: false,
             contextWindowTokens: 256_000,
-            totals: NO_TOTALS,
             start: null,
+          },
+        ],
+        callFigures: [
+          {
+            callId: 'call-4',
+            totals: NO_TOTALS,
+            toolCalls: 0,
+            toolCallsThroughSeq: null,
+            promptCacheExpiresAt: null,
           },
         ],
         totals: NO_TOTALS,
@@ -5316,13 +5330,20 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
-            promptCacheExpiresAt: '2020-01-01T00:00:00.000Z',
             callId: 'call-4',
             contextTokens: 201_788,
             contextEstimated: false,
             contextWindowTokens: 256_000,
-            totals: NO_TOTALS,
             start: null,
+          },
+        ],
+        callFigures: [
+          {
+            callId: 'call-4',
+            totals: NO_TOTALS,
+            toolCalls: 0,
+            toolCallsThroughSeq: null,
+            promptCacheExpiresAt: '2020-01-01T00:00:00.000Z',
           },
         ],
         totals: NO_TOTALS,
@@ -5374,6 +5395,7 @@ describe('Chats workflow runs', () => {
         contextWindowTokens: null,
         model: 'claude-opus-5-5',
         calls: [],
+        callFigures: [],
         totals: NO_TOTALS,
         mainTotals: NO_TOTALS,
         workedMs: null,
@@ -5421,6 +5443,7 @@ describe('Chats workflow runs', () => {
         contextWindowTokens: null,
         model: null,
         calls: [],
+        callFigures: [],
         totals: NO_TOTALS,
         mainTotals: NO_TOTALS,
         workedMs: 60_000,
@@ -5470,6 +5493,92 @@ describe('Chats workflow runs', () => {
     expect(work.some((text) => text?.includes('12 tools'))).toBe(true);
   });
 
+  it('counts a call card’s tools for ITS conversation, not every call the callee node answered in the run', async () => {
+    // REPORTED: a QA call card read "1214 tools" while that conversation had
+    // made 141 — the figure was QA's total over its eleven calls, so it grew
+    // with every unrelated call (≈150 after the first, ≈2000 later).
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        promptCacheExpiresAt: null,
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'running',
+        contextTokens: null,
+        contextEstimated: false,
+        contextWindowTokens: null,
+        model: null,
+        calls: [
+          {
+            callId: 'call-5',
+            contextTokens: null,
+            contextEstimated: false,
+            contextWindowTokens: null,
+            start: null,
+          },
+        ],
+        callFigures: [
+          {
+            callId: 'call-5',
+            totals: NO_TOTALS,
+            // Read when the call's newest tool row was seq 37: most of its
+            // tools are older than the loaded window.
+            toolCalls: 140,
+            toolCallsThroughSeq: 37,
+            promptCacheExpiresAt: null,
+          },
+        ],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
+        workedMs: null,
+        // The node's run-wide total: earlier, separate calls made most of it.
+        toolCalls: 1_214,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    // Seqs of its own: a card's fold is remembered per thread by its first
+    // row's id, and opening one keyed like a later test's would leak into it.
+    await act(async () => {
+      emitItem({
+        ...wfItem(35, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-5',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          message: 'verify the findings',
+        },
+        inCall: '',
+      });
+      emitItem({
+        ...wfItem(36, 'status', 'helper'),
+        payload: { nodeId: 'helper', status: 'running', callId: 'call-5' },
+        inCall: 'call-5',
+      });
+      for (const seq of [37, 38]) {
+        emitItem({
+          ...wfItem(seq, 'tool_call', 'helper'),
+          payload: { id: `t${seq}`, name: 'Bash', input: {}, callId: 'call-5' },
+          inCall: 'call-5',
+        });
+      }
+    });
+    const block = container.querySelector('[data-role="call-block"]');
+    await act(async () => {
+      block?.querySelector<HTMLButtonElement>('button[aria-expanded]')?.click();
+    });
+
+    // The daemon's 140 plus seq 38, the one row written after its read.
+    const footer = block?.querySelector('[data-slot="block-footer"]');
+    expect(footer?.textContent).toContain('141 tools');
+    expect(footer?.textContent).not.toContain('1214');
+  });
+
   it('states each instance’s and each card’s spend over the WHOLE run, from the daemon’s totals', async () => {
     // REPORTED: "we always need real cost everywhere it is shown, based on all
     // messages". The window's fold summed only the loaded page, so a call
@@ -5486,18 +5595,25 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
-            promptCacheExpiresAt: null,
             callId: 'call-4',
             contextTokens: null,
             contextEstimated: false,
             contextWindowTokens: null,
+            start: null,
+          },
+        ],
+        callFigures: [
+          {
+            callId: 'call-4',
             totals: totals({
               turns: 3,
               costUsd: 52.38,
               inputTokens: 1_000,
               outputTokens: 2_000,
             }),
-            start: null,
+            toolCalls: 0,
+            toolCallsThroughSeq: null,
+            promptCacheExpiresAt: null,
           },
         ],
         totals: totals({
@@ -5553,22 +5669,34 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
-            promptCacheExpiresAt: null,
             callId: 'call-1',
             contextTokens: null,
             contextEstimated: false,
             contextWindowTokens: null,
-            totals: totals({ turns: 1, costUsd: 2, outputTokens: 1_000 }),
             start: null,
           },
           {
-            promptCacheExpiresAt: null,
             callId: 'call-2',
             contextTokens: null,
             contextEstimated: false,
             contextWindowTokens: null,
-            totals: totals({ turns: 1, costUsd: 3, outputTokens: 1_000 }),
             start: null,
+          },
+        ],
+        callFigures: [
+          {
+            callId: 'call-1',
+            totals: totals({ turns: 1, costUsd: 2, outputTokens: 1_000 }),
+            toolCalls: 0,
+            toolCallsThroughSeq: null,
+            promptCacheExpiresAt: null,
+          },
+          {
+            callId: 'call-2',
+            totals: totals({ turns: 1, costUsd: 3, outputTokens: 1_000 }),
+            toolCalls: 0,
+            toolCallsThroughSeq: null,
+            promptCacheExpiresAt: null,
           },
         ],
         totals: totals({ turns: 2, costUsd: 5, outputTokens: 2_000 }),
@@ -5638,13 +5766,20 @@ describe('Chats workflow runs', () => {
         model: null,
         calls: [
           {
-            promptCacheExpiresAt: null,
             callId: 'call-5',
             contextTokens: 47_200,
             contextEstimated: false,
             contextWindowTokens: 200_000,
-            totals: NO_TOTALS,
             start: null,
+          },
+        ],
+        callFigures: [
+          {
+            callId: 'call-5',
+            totals: NO_TOTALS,
+            toolCalls: 0,
+            toolCallsThroughSeq: null,
+            promptCacheExpiresAt: null,
           },
         ],
         totals: NO_TOTALS,
@@ -12419,6 +12554,7 @@ describe('Chats sidebar list', () => {
         contextWindowTokens: 1_000_000,
         model: null,
         calls: [],
+        callFigures: [],
         totals: NO_TOTALS,
         mainTotals: NO_TOTALS,
         workedMs: null,
@@ -12523,6 +12659,7 @@ describe('Chats sidebar list', () => {
         contextWindowTokens: 1_000_000,
         model: null,
         calls: [],
+        callFigures: [],
         totals: NO_TOTALS,
         mainTotals: NO_TOTALS,
         workedMs: null,
@@ -12607,6 +12744,7 @@ describe('Chats sidebar list', () => {
         contextWindowTokens: 1_000_000,
         model: null,
         calls: [],
+        callFigures: [],
         totals: NO_TOTALS,
         mainTotals: NO_TOTALS,
         workedMs: null,

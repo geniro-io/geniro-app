@@ -5393,6 +5393,40 @@ describe('groupTranscript task lists', () => {
     expect(countTools(entries)).toBe(0);
   });
 
+  it('counts an agent’s own tools, never a sub-agent’s — the sub-agent has a count of its own', () => {
+    // The same rule as the daemon's figures, so a card does not change what it
+    // counts when the daemon's figure replaces this one.
+    const rows = [
+      call('Read', 'own', { file_path: 'a.ts' }),
+      result('own'),
+      call('Task', 'toolu_d', { description: 'review' }),
+      item('tool_call', {
+        id: 'd-1',
+        name: 'Read',
+        input: {},
+        parentToolUseId: 'toolu_d',
+      }),
+      item('tool_result', {
+        id: 'd-1',
+        name: null,
+        result: 'ok',
+        parentToolUseId: 'toolu_d',
+      }),
+      item('tool_call', {
+        id: 'd-2',
+        name: 'Bash',
+        input: {},
+        parentToolUseId: 'toolu_d',
+      }),
+    ];
+    const entries = buildSubagentBlocks(groupTranscript(rows), rows);
+    const block = collectSubagentBlocks(entries)[0];
+
+    expect(block).toBeDefined();
+    expect(countTools(block!.entries)).toBe(2);
+    expect(countTools(entries)).toBe(1);
+  });
+
   it('counts a findings card as no tool work, and does not walk into it', () => {
     // The card entry carries no `entries` array, so the recursion has to stop
     // at it by TYPE — the arm that does so is unreachable from the task-list

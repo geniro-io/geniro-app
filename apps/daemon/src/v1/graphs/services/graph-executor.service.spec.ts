@@ -48,10 +48,14 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import {
   ChatApprovalModeSchema,
   type HistoryWindow,
+  type OwnToolCallCount,
   type RunCreatedEvent,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
-import type { CallContextDao } from '../../agents/dao/call-context.dao';
+import {
+  CALL_CONTEXT_SNAPSHOT_LIMIT,
+  type CallContextDao,
+} from '../../agents/dao/call-context.dao';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
@@ -385,6 +389,36 @@ class FakeItemDao {
       payload: i.payload,
       createdAt: i.createdAt,
     }));
+  }
+  // `NO_CALL_INDEX` files every row in the run's own flow, so a row's call is
+  // the one its payload names; the real grouping is pinned in `item.dao.spec.ts`.
+  async ownToolCallsByCall(runId: string): Promise<OwnToolCallCount[]> {
+    const counts = new Map<string, OwnToolCallCount>();
+    for (const row of this.ofKinds(runId, ['tool_call'])) {
+      const payload = JSON.parse(row.payload) as {
+        callId?: unknown;
+        parentToolUseId?: unknown;
+      };
+      const callId = row.inCall || payload.callId;
+      if (
+        row.nodeId === null ||
+        typeof callId !== 'string' ||
+        payload.parentToolUseId != null
+      ) {
+        continue;
+      }
+      const key = `${row.nodeId}\u0000${callId}`;
+      const count = counts.get(key) ?? {
+        nodeId: row.nodeId,
+        callId,
+        calls: 0,
+        lastSeq: row.seq,
+      };
+      count.calls += 1;
+      count.lastSeq = Math.max(count.lastSeq, row.seq);
+      counts.set(key, count);
+    }
+    return [...counts.values()];
   }
   /** The call-seed read a follow-up folds — same shape rule as the two above. */
   async callRecordRows(
@@ -12943,7 +12977,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
     // LEVEL, so the newest one is the whole truth and `rememberContext`
     // replaces. These are TOTALS — a callee called twice has worked the sum of
     // both turns, and a writer that replaced would report only the second.
-    const { service, claude, callBroker, nodeDao } = setup();
+    const { service, claude, callBroker, nodeDao, itemDao } = setup();
     const run = await service.startRun({
       slug: 'work',
       workflow: triggered(CALL_WORKFLOW),
@@ -13000,6 +13034,125 @@ describe('GraphExecutorService — a node’s context reading', () => {
       workedMs: 12_000,
       toolCalls: 3,
     });
+    // The nodes route states each CALL's own share, which a call card draws:
+    // the node total above speaks for every call the node answered.
+    const calls = (await service.getNodeStates(run.id)).find(
+      (n) => n.nodeId === 'callee',
+    )?.callFigures;
+    const toolSeq = (id: string): number =>
+      itemDao.items.find(
+        (row) =>
+          row.kind === 'tool_call' &&
+          (JSON.parse(row.payload) as { id?: string }).id === id,
+      )!.seq;
+    expect(
+      calls?.map(({ callId, toolCalls, toolCallsThroughSeq }) => ({
+        callId,
+        toolCalls,
+        toolCallsThroughSeq,
+      })),
+    ).toEqual([
+      { callId: 'call-1', toolCalls: 2, toolCallsThroughSeq: toolSeq('t2') },
+      { callId: 'call-2', toolCalls: 1, toolCallsThroughSeq: toolSeq('t4') },
+    ]);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('counts a running call’s tools before it has reported any context reading', async () => {
+    // A call with no `call_context` row yet still states what it has called
+    // so far.
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'work',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    const running = claude.starts[1]!;
+    running.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+    running.emit({ type: 'tool_call', id: 't2', name: 'Read', input: {} });
+    await drain();
+
+    const lastSeq = Math.max(
+      ...itemDao.items
+        .filter((row) => row.kind === 'tool_call')
+        .map((row) => row.seq),
+    );
+    const callee = (await service.getNodeStates(run.id)).find(
+      (n) => n.nodeId === 'callee',
+    );
+    expect(callee?.callFigures).toEqual([
+      expect.objectContaining({
+        callId: 'call-1',
+        toolCalls: 2,
+        toolCallsThroughSeq: lastSeq,
+      }),
+    ]);
+    // Listed from its start row, brief included, though it has no reading.
+    expect(callee?.calls).toEqual([
+      expect.objectContaining({
+        callId: 'call-1',
+        contextTokens: null,
+        start: expect.objectContaining({ title: 'why', message: 'one' }),
+      }),
+    ]);
+
+    completeTurn(running, 'one done');
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('adds a turn’s tools to the node total when the turn ends in an error or is cancelled', async () => {
+    // A failed or stopped turn still called its tools.
+    const { service, claude, callBroker, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'work',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    const failing = claude.starts[1]!;
+    failing.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+    failing.emit({ type: 'tool_call', id: 't2', name: 'Read', input: {} });
+    failing.emit({ type: 'error', message: 'model overloaded' });
+    failing.finish();
+    await drain();
+
+    expect(nodeDao.row(run.id, 'callee')?.toolCalls).toBe(2);
+
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'two',
+      mode: 'async',
+    });
+    await drain();
+    const cancelled = claude.starts[2]!;
+    cancelled.emit({ type: 'tool_call', id: 't3', name: 'Bash', input: {} });
+    cancelled.emit({ type: 'turn_cancelled' });
+    cancelled.finish();
+    await drain();
+
+    expect(nodeDao.row(run.id, 'callee')?.toolCalls).toBe(3);
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
@@ -13380,9 +13533,6 @@ describe('GraphExecutorService — a node’s context reading', () => {
         contextTokens: 10_000,
         contextEstimated: false,
         contextWindowTokens: null,
-        totals: expect.objectContaining({ turns: 0, costUsd: null }),
-        // No turn has ended yet, so there is no cache to lapse.
-        promptCacheExpiresAt: null,
         // The start row's own words, for a client whose window opens after it.
         start: {
           callerNodeId: 'a',
@@ -13396,9 +13546,21 @@ describe('GraphExecutorService — a node’s context reading', () => {
         },
       },
     ]);
-    // The CALLER ran no call of its own, so its row carries an empty list
+    // Its figures ride the uncapped list.
+    expect(nodes.find((n) => n.nodeId === 'callee')?.callFigures).toEqual([
+      {
+        callId: 'call-1',
+        totals: expect.objectContaining({ turns: 0, costUsd: null }),
+        toolCalls: 0,
+        toolCallsThroughSeq: null,
+        // No turn has ended yet, so there is no cache to lapse.
+        promptCacheExpiresAt: null,
+      },
+    ]);
+    // The CALLER ran no call of its own, so its row carries empty lists
     // rather than inheriting its callee's.
     expect(nodes.find((n) => n.nodeId === 'a')?.calls).toEqual([]);
+    expect(nodes.find((n) => n.nodeId === 'a')?.callFigures).toEqual([]);
 
     completeTurn(claude.starts[1]!, 'one done');
     await drain();
@@ -13451,7 +13613,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
 
     const nodes = await service.getNodeStates(run.id);
     // The fake stamps every row at the epoch, so the lapse is an hour past it.
-    expect(nodes.find((n) => n.nodeId === 'callee')?.calls).toEqual([
+    expect(nodes.find((n) => n.nodeId === 'callee')?.callFigures).toEqual([
       expect.objectContaining({
         callId: 'call-1',
         promptCacheExpiresAt: '1970-01-01T01:00:00.000Z',
@@ -13498,8 +13660,112 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
 
     const nodes = await service.getNodeStates(run.id);
-    expect(nodes.find((n) => n.nodeId === 'callee')?.calls).toEqual([
+    expect(nodes.find((n) => n.nodeId === 'callee')?.callFigures).toEqual([
       expect.objectContaining({ callId: 'call-1', promptCacheExpiresAt: null }),
+    ]);
+  });
+
+  it('states the figures of EVERY call, past the cap that bounds the heavy listing', async () => {
+    // A run with more calls than the listing keeps: its oldest call drops out
+    // of `calls` (brief and reading) but never out of what it spent and called.
+    const { service, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    let seq = 10_000;
+    const row = (kind: Item['kind'], payload: object): Promise<Item> =>
+      itemDao.create({
+        runId: run.id,
+        seq: (seq += 1),
+        kind,
+        nodeId: 'callee',
+        payload: JSON.stringify(payload),
+      });
+    const total = CALL_CONTEXT_SNAPSHOT_LIMIT + 1;
+    for (let n = 1; n <= total; n += 1) {
+      await row('call_started', {
+        callId: `call-${n}`,
+        calleeNodeId: 'callee',
+        callerNodeId: 'a',
+      });
+    }
+    const toolRow = await row('tool_call', {
+      id: 't1',
+      name: 'Bash',
+      callId: 'call-1',
+    });
+    await row('turn_complete', {
+      callId: 'call-1',
+      usage: {
+        ...NO_USAGE,
+        costUsd: 2.5,
+        inputTokens: 100,
+        promptCacheTtlMs: 3_600_000,
+      },
+    });
+
+    const callee = (await service.getNodeStates(run.id)).find(
+      (n) => n.nodeId === 'callee',
+    );
+    expect(callee?.calls).toHaveLength(CALL_CONTEXT_SNAPSHOT_LIMIT);
+    expect(callee?.calls.map((call) => call.callId)).not.toContain('call-1');
+    expect(callee?.callFigures).toHaveLength(total);
+    expect(
+      callee?.callFigures.find((figures) => figures.callId === 'call-1'),
+    ).toEqual({
+      callId: 'call-1',
+      totals: expect.objectContaining({ turns: 1, costUsd: 2.5 }),
+      toolCalls: 1,
+      toolCallsThroughSeq: toolRow.seq,
+      // The fake stamps every row at the epoch, so the lapse is an hour past it.
+      promptCacheExpiresAt: '1970-01-01T01:00:00.000Z',
+    });
+  });
+
+  it('states the figures of a call the run holds no start row for', async () => {
+    // Spend or tools filed under a call whose `call_started` row is not in the
+    // run still belong to that call's node.
+    const { service, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    let seq = 10_000;
+    const row = (kind: Item['kind'], payload: object): Promise<Item> =>
+      itemDao.create({
+        runId: run.id,
+        seq: (seq += 1),
+        kind,
+        nodeId: 'callee',
+        payload: JSON.stringify(payload),
+      });
+    await row('turn_complete', {
+      callId: 'call-7',
+      usage: { ...NO_USAGE, costUsd: 1.25, inputTokens: 10 },
+    });
+    await row('tool_call', { id: 't1', name: 'Bash', callId: 'call-8' });
+
+    const callee = (await service.getNodeStates(run.id)).find(
+      (n) => n.nodeId === 'callee',
+    );
+    expect(callee?.callFigures).toEqual([
+      expect.objectContaining({
+        callId: 'call-7',
+        totals: expect.objectContaining({ turns: 1, costUsd: 1.25 }),
+        toolCalls: 0,
+      }),
+      expect.objectContaining({
+        callId: 'call-8',
+        totals: expect.objectContaining({ turns: 0 }),
+        toolCalls: 1,
+      }),
     ]);
   });
 
@@ -13552,10 +13818,9 @@ describe('GraphExecutorService — a node’s context reading', () => {
 
     const nodes = await service.getNodeStates(run.id);
     const callee = nodes.find((n) => n.nodeId === 'callee');
-    expect(callee?.calls).toEqual([
+    expect(callee?.callFigures).toEqual([
       expect.objectContaining({
         callId: 'call-1',
-        contextTokens: null,
         totals: expect.objectContaining({
           turns: 1,
           costUsd: 1.5,

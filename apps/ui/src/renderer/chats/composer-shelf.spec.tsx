@@ -1000,7 +1000,11 @@ describe('TeamNotesChip', () => {
     supersededBy: null,
   });
 
-  function mount(notes: ReturnType<typeof note>[], onJump = vi.fn()) {
+  function mount(
+    notes: ReturnType<typeof note>[],
+    onJump = vi.fn(),
+    onOpenAll?: () => void,
+  ) {
     container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
@@ -1010,6 +1014,7 @@ describe('TeamNotesChip', () => {
           notes={notes}
           agentName={(id) => (id === 'engineer' ? 'Engineer' : id)}
           onJump={onJump}
+          onOpenAll={onOpenAll}
         />,
       );
     });
@@ -1034,5 +1039,18 @@ describe('TeamNotesChip', () => {
     expect(rows).toHaveLength(2);
     act(() => rows[1]!.click());
     expect(onJump).toHaveBeenCalledWith(4);
+  });
+
+  it('opens the full view from its panel', () => {
+    const onOpenAll = vi.fn();
+    mount([note(9)], vi.fn(), onOpenAll);
+    act(() => {
+      container.querySelector<HTMLButtonElement>('button')!.click();
+    });
+    const full = [
+      ...document.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent === 'Open the full view');
+    act(() => full?.click());
+    expect(onOpenAll).toHaveBeenCalledTimes(1);
   });
 });

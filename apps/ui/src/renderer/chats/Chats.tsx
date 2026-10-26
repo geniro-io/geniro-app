@@ -295,6 +295,7 @@ import {
 } from './task-payload';
 import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
 import { agentNameOf } from './team-note-author';
+import { TeamNotesDialog } from './team-notes-dialog';
 import { forgetThread, writeThreadFlag } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -6522,6 +6523,12 @@ export function Chats({
     [transcriptRows],
   );
   /** The run's team notes, read from the daemon — a workflow run's only. */
+  /** The team notes' full view, opened from the panel section or the chip. */
+  const [teamNotesOpen, setTeamNotesOpen] = useState(false);
+  // A thread switch closes it: it belongs to the run it was opened over.
+  useEffect(() => {
+    setTeamNotesOpen(false);
+  }, [activeRunId]);
   const { notes: teamNotes, loaded: teamNotesLoaded } = useRunTeamNotes(
     chatApi,
     activeRun?.workflowId != null ? activeRunId : null,
@@ -8806,7 +8813,20 @@ export function Chats({
         notes={teamNotes}
         agentName={teamNoteAuthor}
         onJump={jumpToSeq}
+        onOpenAll={() => setTeamNotesOpen(true)}
       />
+      {/* Mounted only while open and keyed by the run, so its search and
+          filters start clean on every open and never carry to another thread. */}
+      {teamNotesOpen ? (
+        <TeamNotesDialog
+          key={activeRunId ?? 'no-run'}
+          open
+          onClose={() => setTeamNotesOpen(false)}
+          notes={teamNotes}
+          agentName={teamNoteAuthor}
+          onJump={jumpToSeq}
+        />
+      ) : null}
       {/* An agent's buttons outlive the turn that made them,
             so they sit after the task list and ahead of
             everything that ends within a turn — behind their
@@ -10521,6 +10541,7 @@ export function Chats({
                       publishedArtifacts={publishedArtifacts}
                       teamNotes={teamNotes}
                       teamNotesLoaded={teamNotesLoaded}
+                      onOpenTeamNotes={() => setTeamNotesOpen(true)}
                       threadPullRequests={openedByActiveThread}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}

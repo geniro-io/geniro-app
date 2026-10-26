@@ -4018,6 +4018,27 @@ describe('AgentsPanel — team notes', () => {
     expect(texts(el)).toEqual(['note text 9', 'note text 6', 'note text 4']);
   });
 
+  it('opens the full view from the section, and offers it only when given the way to', () => {
+    const onOpenTeamNotes = vi.fn();
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[agents[0]!, agents[1]!]}
+        teamNotes={[teamNote(4)]}
+        onOpenTeamNotes={onOpenTeamNotes}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const open = [
+      ...(section(el)?.querySelectorAll<HTMLButtonElement>('button') ?? []),
+    ].find((button) => button.textContent === 'Open the full view');
+    act(() => open?.click());
+    expect(onOpenTeamNotes).toHaveBeenCalledTimes(1);
+
+    const { el: without } = withNotes([teamNote(4)]);
+    expect(section(without)?.textContent).not.toContain('Open the full view');
+  });
+
   it('draws no section for a run whose agents wrote none', () => {
     const { el } = withNotes([]);
     expect(section(el)).toBeNull();

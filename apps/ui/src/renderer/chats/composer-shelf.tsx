@@ -799,11 +799,14 @@ export function TeamNotesChip({
   notes,
   agentName,
   onJump,
+  onOpenAll,
 }: {
   /** Newest first, as the daemon lists them. */
   notes: readonly TeamNote[];
   agentName: (nodeId: string) => string;
   onJump: (seq: number) => void;
+  /** Open every note in the full view; absent draws no button for it. */
+  onOpenAll?: () => void;
 }): React.JSX.Element | null {
   const runId = useContext(ThreadUiMemoryContext);
   if (notes.length === 0) {
@@ -861,16 +864,32 @@ export function TeamNotesChip({
               );
             })}
           </ul>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              close();
-              revealAgentsPanel(runId);
-            }}>
-            Open in agents panel
-          </Button>
+          <div className="flex gap-1">
+            {onOpenAll === undefined ? null : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="flex-1"
+                onClick={() => {
+                  close();
+                  onOpenAll();
+                }}>
+                Open the full view
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="flex-1"
+              onClick={() => {
+                close();
+                revealAgentsPanel(runId);
+              }}>
+              Open in agents panel
+            </Button>
+          </div>
         </div>
       )}
     </HoverPopover>

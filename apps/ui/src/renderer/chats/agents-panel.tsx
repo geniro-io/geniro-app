@@ -1667,6 +1667,7 @@ export function AgentsPanel({
   publishedArtifacts = [],
   teamNotes = [],
   teamNotesLoaded = true,
+  onOpenTeamNotes,
   threadPullRequests = [],
   workflows = [],
   onRevealWorkflow,
@@ -1736,6 +1737,8 @@ export function AgentsPanel({
   teamNotes?: readonly TeamNote[];
   /** Whether {@link teamNotes} has been read yet — see `TeamNotesSection`. */
   teamNotesLoaded?: boolean;
+  /** Open every team note in the full view; absent draws no button for it. */
+  onOpenTeamNotes?: () => void;
   /**
    * The pull requests THIS THREAD opened or its CLI recorded it touching,
    * newest first — captured from the agent's own output and record rather
@@ -2810,6 +2813,7 @@ export function AgentsPanel({
           loaded={teamNotesLoaded}
           agentName={teamNoteAgentName}
           onJump={timeline?.onJump}
+          onOpenAll={onOpenTeamNotes}
         />
         {/* Its OWN block, under the agents rather than wedged above them: this
           panel is a list of agents under one heading, and a section inserted

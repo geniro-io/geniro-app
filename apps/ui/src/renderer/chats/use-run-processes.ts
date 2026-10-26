@@ -14,7 +14,7 @@ export type RunProcessesState = PolledReadState<RunProcessesDto> & {
 /**
  * What this run has running right now, polled while `enabled`.
  *
- * Gated on `enabled` like the waterfall: a panel nobody unfolded must not have
+ * Gated on `enabled` like the waterfall: a popup nobody opened must not have
  * the daemon reading the process table every few seconds.
  */
 export function useRunProcesses(

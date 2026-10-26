@@ -1,6 +1,8 @@
 import { ExternalLink } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { cn } from './ui/utils';
+
 /**
  * What a row in a side panel LOOKS like — named once so the anchor form and the
  * in-app form below cannot drift apart after one retint.
@@ -21,6 +23,7 @@ export function PanelLinkRow({
   tooltip,
   icon,
   meta,
+  detail,
 }: {
   href: string;
   title: string;
@@ -29,6 +32,13 @@ export function PanelLinkRow({
   icon?: ReactNode;
   /** Trailing detail that must never give up width to the title. */
   meta?: ReactNode;
+  /**
+   * A second line UNDER the title, for a row whose figures would otherwise
+   * squeeze its title to a couple of words — a pull request's number, size
+   * and line counts beside its title left the title `feat(ui): …` in a 280px
+   * panel. The title gets the whole first line.
+   */
+  detail?: ReactNode;
 }): React.JSX.Element {
   return (
     <a
@@ -36,9 +46,30 @@ export function PanelLinkRow({
       target="_blank"
       rel="noreferrer"
       title={tooltip}
-      className={PANEL_ROW_CLASS}>
-      {icon}
-      <span className="min-w-0 flex-1 truncate">{title}</span>
+      className={cn(PANEL_ROW_CLASS, detail !== undefined && 'items-start')}>
+      {icon === undefined ? null : (
+        // On a two-line row the glyph sits beside the TITLE, not between the
+        // two lines.
+        <span
+          className={cn(
+            'flex shrink-0 items-center',
+            detail !== undefined && 'h-5',
+          )}>
+          {icon}
+        </span>
+      )}
+      {detail === undefined ? (
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+      ) : (
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate">{title}</span>
+          <span
+            data-slot="panel-link-detail"
+            className="truncate text-xs text-muted-foreground">
+            {detail}
+          </span>
+        </span>
+      )}
       {meta === undefined ? null : (
         <span
           data-slot="panel-link-meta"
@@ -46,7 +77,12 @@ export function PanelLinkRow({
           {meta}
         </span>
       )}
-      <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+      <ExternalLink
+        className={cn(
+          'size-3 shrink-0 text-muted-foreground',
+          detail !== undefined && 'mt-1',
+        )}
+      />
     </a>
   );
 }

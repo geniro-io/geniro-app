@@ -35,6 +35,13 @@ export const LongTitleTruncates: Story = {
   },
 };
 
+export const WithDetailLine: Story = {
+  args: {
+    title: 'feat(ui): migrate the settings store to the new schema',
+    detail: '#321 · 6 files · +120 −30',
+  },
+};
+
 export const InAppAction: Story = {
   render: () => (
     <PanelActionRow

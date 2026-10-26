@@ -16,10 +16,7 @@ import type {
 import type { AgentDisplay, AgentThread } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ArtifactShareContext } from './artifact-share';
-import {
-  revealWorkflows,
-  THREAD_PULL_REQUESTS_SETTLED_FLAG,
-} from './panel-flags';
+import { THREAD_PULL_REQUESTS_SETTLED_FLAG } from './panel-flags';
 import type { PublishedArtifact } from './published-artifact';
 import { ThreadUiMemoryContext, writeThreadFlag } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
@@ -3359,7 +3356,7 @@ describe('AgentsPanel thread pull requests', () => {
     );
 
   const section = (el: HTMLDivElement): HTMLElement | null =>
-    el.querySelector('section[aria-label="This thread’s pull requests"]');
+    el.querySelector('section[aria-label="Pull requests"]');
 
   const foldControl = (el: HTMLDivElement): HTMLButtonElement | null =>
     [...el.querySelectorAll('button')].find((button) =>
@@ -3382,6 +3379,19 @@ describe('AgentsPanel thread pull requests', () => {
 
     click(foldControl(el));
     expect(section(el)?.textContent).toContain('privacy copy');
+  });
+
+  it('counts every pull request on the heading, folded ones included', () => {
+    const el = withThreadPullRequests([
+      threadRow(87, 'still in review', 'open'),
+      threadRow(84, 'privacy copy', 'merged'),
+      threadRow(80, 'abandoned idea', 'closed'),
+    ]);
+
+    expect(
+      section(el)?.querySelector('[data-slot="panel-section-count"]')
+        ?.textContent,
+    ).toBe('3');
   });
 
   it('keeps an UNRESOLVED row in the open', async () => {
@@ -3669,7 +3679,7 @@ describe('AgentsPanel — thread notes', () => {
       'textarea[aria-label="Thread notes"]',
     );
 
-  it('draws the notes section with the stored text', () => {
+  it('keeps the notes out of the column and opens them in a popup', () => {
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -3682,11 +3692,20 @@ describe('AgentsPanel — thread notes', () => {
         }}
       />,
     );
-    expect(el.querySelector('section[aria-label="Notes"]')).not.toBeNull();
-    expect(notesField(el)?.value).toBe('ask about the retry policy');
+    expect(el.querySelector('section[aria-label="Notes"]')).toBeNull();
+    expect(notesField(el)).toBeNull();
+
+    click(el.querySelector('button[aria-label="Open thread notes"]'));
+
+    const dialog = el.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain('Notes');
+    expect(notesField(dialog as HTMLElement)?.value).toBe(
+      'ask about the retry policy',
+    );
+    expect(document.activeElement).toBe(notesField(el));
   });
 
-  it('draws no notes section when it is not handed a way to save', () => {
+  it('draws no notes control when it is not handed a way to save', () => {
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -3694,10 +3713,16 @@ describe('AgentsPanel — thread notes', () => {
         onOpenThread={vi.fn()}
       />,
     );
-    expect(notesField(el)).toBeNull();
+    expect(el.querySelector('button[data-has-notes]')).toBeNull();
+    expect(
+      el.querySelector('button[aria-label="Add thread notes"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector('button[aria-label="Open thread notes"]'),
+    ).toBeNull();
   });
 
-  it('opens from the folded rail straight into the notes field', () => {
+  it('opens the popup from the folded rail without unfolding the column', () => {
     const el = renderFolded(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -3712,52 +3737,42 @@ describe('AgentsPanel — thread notes', () => {
     expect(railButton?.dataset.hasNotes).toBe('true');
     click(railButton);
     expect(document.activeElement).toBe(notesField(el));
+    // Still the rail: the column's own fold control is the only way to unfold.
+    expect(
+      el.querySelector('button[aria-label="Expand agents panel"]'),
+    ).not.toBeNull();
   });
 
-  it('unfolding again after a fold does NOT focus the notes field', () => {
-    const el = renderFolded(
-      <AgentsPanel
-        terminalReasons={TERMINALS}
-        agents={agents}
-        onOpenThread={vi.fn()}
-        notes={{ runId: 'run-1', value: 'draft', onSave: vi.fn() }}
-      />,
-    );
-    // Opened for writing from the rail, folded again, then unfolded to read.
-    click(el.querySelector('button[aria-label="Open thread notes"]'));
-    expect(document.activeElement).toBe(notesField(el));
-    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
-    act(() => {
-      (document.activeElement as HTMLElement | null)?.blur();
-    });
-    click(el.querySelector('button[aria-label="Expand agents panel"]'));
-    expect(notesField(el)).not.toBeNull();
-    expect(document.activeElement).not.toBe(notesField(el));
-  });
-
-  it('a shelf reveal after folding does NOT pull focus into the notes field', () => {
-    const el = renderFolded(
-      <ThreadUiMemoryContext.Provider value="run-notes">
+  it('saves the owed text when the popup is closed before the pause ends', async () => {
+    vi.useFakeTimers();
+    try {
+      const onSave = vi.fn(async () => {});
+      const el = render(
         <AgentsPanel
           terminalReasons={TERMINALS}
           agents={agents}
           onOpenThread={vi.fn()}
-          notes={{ runId: 'run-notes', value: 'draft', onSave: vi.fn() }}
-        />
-      </ThreadUiMemoryContext.Provider>,
-    );
-    click(el.querySelector('button[aria-label="Open thread notes"]'));
-    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
-    act(() => {
-      (document.activeElement as HTMLElement | null)?.blur();
-    });
+          notes={{ runId: 'run-1', value: null, onSave }}
+        />,
+      );
+      click(el.querySelector('button[aria-label="Add thread notes"]'));
+      act(() => {
+        const field = notesField(el)!;
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          'value',
+        )!.set!.call(field, 'typed then closed');
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(onSave).not.toHaveBeenCalled();
 
-    // The shelf's "All N" unfolds the panel without the chevron.
-    act(() => {
-      revealWorkflows('run-notes');
-    });
-    expect(notesField(el)).not.toBeNull();
-    expect(document.activeElement).not.toBe(notesField(el));
+      click(el.querySelector('[role="dialog"] button[aria-label="Close"]'));
+
+      expect(notesField(el)).toBeNull();
+      expect(onSave).toHaveBeenCalledWith('typed then closed');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('saves a pending draft to the run it was typed in when the panel moves to another', async () => {
@@ -3777,6 +3792,7 @@ describe('AgentsPanel — thread notes', () => {
         />
       );
       const el = render(panelFor('a', saveA));
+      click(el.querySelector('button[aria-label="Add thread notes"]'));
       act(() => {
         const field = notesField(el)!;
         Object.getOwnPropertyDescriptor(
@@ -3801,7 +3817,7 @@ describe('AgentsPanel — thread notes', () => {
     }
   });
 
-  it('offers to ADD notes from the rail when the thread has none', () => {
+  it('offers to ADD notes when the thread has none', () => {
     const el = renderFolded(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -3815,6 +3831,233 @@ describe('AgentsPanel — thread notes', () => {
     );
     expect(railButton).not.toBeNull();
     expect(railButton?.dataset.hasNotes).toBeUndefined();
+  });
+});
+
+describe('AgentsPanel — controls and card layout', () => {
+  const dividers = (el: HTMLElement): number =>
+    el.querySelectorAll('[data-slot="control-group-divider"]').length;
+
+  it('splits the run controls into groups with a rule between each', () => {
+    // Getting around (search) | doing (export) | looking (notes): seven equal
+    // glyphs in one row read as an undifferentiated toolbar.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onSearch={vi.fn()}
+        onExportChat={vi.fn()}
+        notes={{ runId: 'run-1', value: null, onSave: vi.fn() }}
+      />,
+    );
+    const row = el.querySelector('aside > div.flex-wrap')!;
+    expect(
+      [...row.children].map(
+        (child) =>
+          child.getAttribute('aria-label') ?? child.getAttribute('data-slot'),
+      ),
+    ).toEqual([
+      'Search this conversation',
+      'control-group-divider',
+      'Export this chat to a file',
+      'control-group-divider',
+      'Add thread notes',
+      'Collapse agents panel',
+    ]);
+
+    // The rail draws the same groups.
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    expect(dividers(el)).toBe(2);
+  });
+
+  it('draws no rule beside a group that has nothing in it', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onExportChat={vi.fn()}
+      />,
+    );
+    expect(dividers(el)).toBe(0);
+  });
+
+  it('puts the money on the model’s line, so the card reads it in one place', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[{ ...agents[0]!, model: 'claude-opus-5', spentUsd: 3.42 }]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const model = el.querySelector('[data-slot="agent-model"]')!;
+    const spend = el.querySelector('[data-slot="agent-spend"]')!;
+    expect(spend.parentElement).toBe(model.parentElement);
+    expect(spend.textContent).toBe('$3.42');
+  });
+
+  it('still states the money for an agent that names no model', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[{ ...agents[0]!, model: null, spentUsd: 0.5 }]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('[data-slot="agent-model"]')).toBeNull();
+    expect(el.querySelector('[data-slot="agent-spend"]')?.textContent).toBe(
+      '$0.50',
+    );
+  });
+
+  it('marks a pool member by its CLI’s glyph, the name kept for a reader', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...agents[1]!,
+            pool: [{ agent: 'codex', model: 'gpt-6.1-sol', configDir: null }],
+            threads: [{ ...agents[1]!.threads[1]!, member: 2 }],
+          },
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const member = el.querySelector('[data-slot="instance-member"]')!;
+    // A glyph rather than a word badge, which took a third of the heading.
+    expect(member.querySelector('svg')).not.toBeNull();
+    expect(member.querySelector('.sr-only')?.textContent).toBe('codex');
+    expect(member.getAttribute('title')).toContain('Pool member 2');
+  });
+
+  it('says in the notes popup that the notes never reach the agent', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        notes={{ runId: 'run-1', value: 'written', onSave: vi.fn() }}
+      />,
+    );
+    click(el.querySelector('button[aria-label="Open thread notes"]'));
+    expect(
+      el.querySelector('[role="dialog"] [data-slot="thread-notes-hint"]')
+        ?.textContent,
+    ).toContain('never sent to the agent');
+  });
+});
+
+describe('AgentsPanel — the run readouts open in popups', () => {
+  const WATERFALL = { data: null, loading: true, error: null };
+  const PROCESSES = {
+    data: null,
+    loading: true,
+    error: null,
+    runId: 'run-1',
+  };
+
+  it('draws neither readout in the column', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        waterfall={WATERFALL}
+        processes={PROCESSES}
+      />,
+    );
+    expect(
+      el.querySelector('section[aria-label="Where the run went"]'),
+    ).toBeNull();
+    expect(el.querySelector('section[aria-label="Processes"]')).toBeNull();
+    expect(el.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('draws no control for a readout it was not handed', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(
+      el.querySelector('button[aria-label="Where the run went"]'),
+    ).toBeNull();
+    expect(el.querySelector('button[aria-label="Processes"]')).toBeNull();
+  });
+
+  it.each([
+    ['Where the run went', 'waterfall', 'reading the run…'],
+    ['Processes', 'processes', 'reading processes…'],
+  ] as const)(
+    'opens %s in a popup and tells the owner while it is open',
+    (label, popup, text) => {
+      const onPopupChange = vi.fn();
+      const el = render(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={agents}
+          onOpenThread={vi.fn()}
+          waterfall={WATERFALL}
+          processes={PROCESSES}
+          onPopupChange={onPopupChange}
+        />,
+      );
+      expect(onPopupChange).toHaveBeenLastCalledWith(null);
+
+      click(el.querySelector(`button[aria-label="${label}"]`));
+
+      const dialog = el.querySelector('[role="dialog"]');
+      expect(dialog?.textContent).toContain(text);
+      expect(onPopupChange).toHaveBeenLastCalledWith(popup);
+
+      click(dialog!.querySelector('button[aria-label="Close"]'));
+
+      expect(el.querySelector('[role="dialog"]')).toBeNull();
+      expect(onPopupChange).toHaveBeenLastCalledWith(null);
+    },
+  );
+
+  it('opens them from the folded rail too', () => {
+    const onPopupChange = vi.fn();
+    const el = renderFolded(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        processes={PROCESSES}
+        onPopupChange={onPopupChange}
+      />,
+    );
+    click(el.querySelector('button[aria-label="Processes"]'));
+
+    expect(el.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(onPopupChange).toHaveBeenLastCalledWith('processes');
+  });
+
+  it('lowers the owner’s read gate when the panel goes away with a popup open', () => {
+    const onPopupChange = vi.fn();
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        processes={PROCESSES}
+        onPopupChange={onPopupChange}
+      />,
+    );
+    click(el.querySelector('button[aria-label="Processes"]'));
+    expect(onPopupChange).toHaveBeenLastCalledWith('processes');
+
+    act(() => {
+      root!.unmount();
+    });
+    root = null;
+
+    expect(onPopupChange).toHaveBeenLastCalledWith(null);
   });
 });
 

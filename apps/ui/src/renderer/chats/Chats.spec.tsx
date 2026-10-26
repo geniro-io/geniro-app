@@ -29,6 +29,7 @@ import { PARKED_SEND_TITLE } from './follow-up-delivery';
 import type { LiveTextEvent } from './live-text';
 import { RUN_LIST_PAGE } from './run-list-pages';
 import { HISTORY_PAGE } from './use-chat-run';
+import { PROCESS_POLL_MS } from './use-run-processes';
 import { REREAD_DELAY_MS } from './use-run-state';
 import type { WaitReading } from './waiting';
 
@@ -492,6 +493,24 @@ async function expandAgentsPanel(container: HTMLElement): Promise<void> {
   await act(async () => {
     expand?.click();
   });
+}
+
+/**
+ * Open the thread's notes popup from the agents panel's control row and hand
+ * back its field — the notes live in a popup, not in the column.
+ */
+async function openThreadNotes(
+  container: HTMLElement,
+): Promise<HTMLTextAreaElement> {
+  const button = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Open thread notes"], button[aria-label="Add thread notes"]',
+  );
+  await act(async () => {
+    button?.click();
+  });
+  return container.querySelector<HTMLTextAreaElement>(
+    '[role="dialog"] textarea[aria-label="Thread notes"]',
+  )!;
 }
 
 /** The composer's round icon actions, looked up by their accessible name. */
@@ -11117,9 +11136,7 @@ describe('Chats sidebar list', () => {
       const { client } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');
-      const field = container.querySelector<HTMLTextAreaElement>(
-        'textarea[aria-label="Thread notes"]',
-      )!;
+      const field = await openThreadNotes(container);
       await act(async () => {
         Object.getOwnPropertyDescriptor(
           HTMLTextAreaElement.prototype,
@@ -11161,9 +11178,7 @@ describe('Chats sidebar list', () => {
       const { client } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');
-      const field = container.querySelector<HTMLTextAreaElement>(
-        'textarea[aria-label="Thread notes"]',
-      )!;
+      const field = await openThreadNotes(container);
       const typeAndPause = async (text: string): Promise<void> => {
         await act(async () => {
           Object.getOwnPropertyDescriptor(
@@ -11195,7 +11210,7 @@ describe('Chats sidebar list', () => {
     }
   });
 
-  it("saves notes typed into the open thread's panel to THAT run", async () => {
+  it("saves notes typed into the open thread's notes popup to THAT run", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       api.setRunNotes.mockImplementation(async ({ runId, setRunNotesDto }) => ({
@@ -11207,9 +11222,7 @@ describe('Chats sidebar list', () => {
       const container = await mount(client);
       await clickRun(container, 'My chat');
 
-      const field = container.querySelector<HTMLTextAreaElement>(
-        'textarea[aria-label="Thread notes"]',
-      )!;
+      const field = await openThreadNotes(container);
       await act(async () => {
         Object.getOwnPropertyDescriptor(
           HTMLTextAreaElement.prototype,
@@ -11225,6 +11238,65 @@ describe('Chats sidebar list', () => {
         runId: 'r1',
         setRunNotesDto: { notes: 'check the migration' },
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads the run waterfall only once its popup is opened, not when the panel unfolds', async () => {
+    const { client } = makeClient();
+    const container = await mount(client);
+    // `clickRun` unfolds the agents panel as well.
+    await clickRun(container, 'My chat');
+    expect(api.readRunWaterfall).not.toHaveBeenCalled();
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Where the run went"]',
+        )
+        ?.click();
+    });
+
+    expect(api.readRunWaterfall).toHaveBeenCalledWith({ runId: 'r1' });
+  });
+
+  it('polls the thread processes only while their popup is open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      expect(api.readRunProcesses).not.toHaveBeenCalled();
+
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>('button[aria-label="Processes"]')
+          ?.click();
+      });
+      expect(api.readRunProcesses).toHaveBeenCalledWith({ runId: 'r1' });
+      // Still polling while open — so the silence below is the close's doing.
+      const firstReads = api.readRunProcesses.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PROCESS_POLL_MS + 100);
+      });
+      expect(api.readRunProcesses.mock.calls.length).toBeGreaterThan(
+        firstReads,
+      );
+
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>(
+            '[role="dialog"] button[aria-label="Close"]',
+          )
+          ?.click();
+      });
+      const reads = api.readRunProcesses.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PROCESS_POLL_MS * 3);
+      });
+      expect(container.querySelector('[role="dialog"]')).toBeNull();
+      expect(api.readRunProcesses).toHaveBeenCalledTimes(reads);
     } finally {
       vi.useRealTimers();
     }

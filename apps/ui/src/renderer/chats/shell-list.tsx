@@ -101,8 +101,15 @@ function ShellRow({
       data-slot="shell-row"
       data-shell-background={shell.background}
       data-shell-left-running={leftRunning !== null}
-      className="flex items-center gap-1.5 text-xs">
-      {/* Nudged UP by a pixel, and this is an optical correction rather than a
+      className="flex flex-col gap-0.5 text-xs">
+      {/* Line 1 is the COMMAND, with its clock and its stop control — the
+          command is the row's subject and gets every pixel the two leave.
+          The tag and the agent's own note about the command sit on a second
+          line, drawn only when there is one: on one line the `background` tag
+          took the width a 280px panel had for the command, which it cut to
+          `pnpm d…`. */}
+      <div className="flex items-center gap-1.5">
+        {/* Nudged UP by a pixel, and this is an optical correction rather than a
           fudge — REPORTED as "it should be on the same line, now icon a bit
           more down". `items-center` centres BOXES, and a line box is not
           symmetric about its ink: it reserves descender space below the
@@ -121,8 +128,8 @@ function ShellRow({
           work: shrinking a centred line box moves its top down by exactly half
           of what it takes off the leading, so the ink does not move at all.
           Verified twice, here and on the shelf chip. */}
-      <ShellIcon className="-translate-y-px text-muted-foreground" />
-      {/* BEFORE the command and `shrink-0`, which is the whole of its layout
+        <ShellIcon className="-translate-y-px text-muted-foreground" />
+        {/* BEFORE the command and `shrink-0`, which is the whole of its layout
           argument: the command is the row's subject and the one part worth the
           flex space, while the name identifies the row and must not truncate to
           nothing — an agent called `Engineer` clipped to `Eng…` answers the
@@ -130,76 +137,55 @@ function ShellRow({
           clock beside it uses rather than as a `Badge`: a badge on every row of
           a dozen is a second column of chrome, and this is a caption on the
           command, not a status about it. */}
-      {agentName === null ? null : (
-        <span
-          data-slot="shell-agent"
-          className="shrink-0 text-[11px] text-muted-foreground"
-          title={`Started by ${agentName}`}>
-          {agentName}
-        </span>
-      )}
-      {onOpen === undefined ? (
-        <span
-          className="min-w-0 flex-1 truncate font-mono text-[11px]"
-          // The whole command, and the note the agent wrote about it. The
-          // column is 280px and these are routinely a pipeline; truncation is
-          // what keeps the row one line, and this is what makes the rest
-          // reachable.
-          title={
-            shell.description === null
-              ? shell.command
-              : `${shell.command}\n\n${shell.description}`
-          }>
-          {shell.command}
-        </span>
-      ) : (
-        <button
-          type="button"
-          // `font-normal text-[11px]` is an OVERRIDE, not decoration:
-          // `styles/global.css` gives every bare `button` the base 15px at
-          // medium weight, so without it this row would render half again the
-          // size of the `bg` and clock beside it — the same correction the
-          // panel's sub-agent rows carry.
-          className="min-w-0 flex-1 truncate rounded text-left font-mono text-[11px] font-normal transition-colors hover:text-foreground hover:underline"
-          title={`Show what this command has printed — ${shell.command}`}
-          onClick={() => onOpen(shell)}>
-          {shell.command}
-        </button>
-      )}
-      {/* Said in a WORD, not an abbreviation and not a second glyph: a detached
-          command is the one row that will still be running after the agent has
-          answered, and "why is this one still here" needs an answer on the row
-          itself. It read `BG` until it was REPORTED as unreadable ("not
-          understandable what is BG") — two letters of shell jargon, set in the
-          same muted grey as the clock beside them, so the one row carrying an
-          explanation was the one nobody could decode. It is drawn as a TAG
-          rather than as more muted text for the same reason: a bare word
-          between a command and a duration reads as part of one of them. The
-          sentence a tag has no room for lives on `title`. */}
-      {shell.background ? (
-        <span
-          data-slot="shell-kind"
-          className="shrink-0 rounded border border-border px-1 py-px text-[10px] text-muted-foreground"
-          title={
-            leftRunning ??
-            "Detached — this command keeps running after the agent's turn ends"
-          }>
-          {leftRunning === null ? 'background' : 'left running'}
-        </span>
-      ) : null}
-      {/* A COLUMN, not a trailing word: the clock is the last thing on the row
+        {agentName === null ? null : (
+          <span
+            data-slot="shell-agent"
+            className="shrink-0 text-[11px] text-muted-foreground"
+            title={`Started by ${agentName}`}>
+            {agentName}
+          </span>
+        )}
+        {onOpen === undefined ? (
+          <span
+            className="min-w-0 flex-1 truncate font-mono text-[11px]"
+            // The whole command, and the note the agent wrote about it. The
+            // column is 280px and these are routinely a pipeline; truncation is
+            // what keeps the row one line, and this is what makes the rest
+            // reachable.
+            title={
+              shell.description === null
+                ? shell.command
+                : `${shell.command}\n\n${shell.description}`
+            }>
+            {shell.command}
+          </span>
+        ) : (
+          <button
+            type="button"
+            // `font-normal text-[11px]` is an OVERRIDE, not decoration:
+            // `styles/global.css` gives every bare `button` the base 15px at
+            // medium weight, so without it this row would render half again the
+            // size of the `bg` and clock beside it — the same correction the
+            // panel's sub-agent rows carry.
+            className="min-w-0 flex-1 truncate rounded text-left font-mono text-[11px] font-normal transition-colors hover:text-foreground hover:underline"
+            title={`Show what this command has printed — ${shell.command}`}
+            onClick={() => onOpen(shell)}>
+            {shell.command}
+          </button>
+        )}
+        {/* A COLUMN, not a trailing word: the clock is the last thing on the row
           and its width swings with the duration (`7s` against `2m 29s`), so
           left to size itself it pushes everything before it sideways — two
           rows of one list then carry their `background` tags at two different
           x positions, which reads as a broken layout rather than as two
           durations. `min-w` and not a fixed width, since nothing here bounds
           how long a detached command runs. */}
-      {elapsed === null ? null : (
-        <span className="min-w-[3.25rem] shrink-0 text-right tabular-nums text-muted-foreground">
-          {elapsed}
-        </span>
-      )}
-      {/* LAST on the row, past the clock, and that placement is the point: it
+        {elapsed === null ? null : (
+          <span className="min-w-[3.25rem] shrink-0 text-right tabular-nums text-muted-foreground">
+            {elapsed}
+          </span>
+        )}
+        {/* LAST on the row, past the clock, and that placement is the point: it
           is the only thing here that CHANGES the machine, so it sits outside
           the three readings rather than among them.
 
@@ -215,29 +201,63 @@ function ShellRow({
           36px beside an 11px monospace row would be the tallest thing in the
           list, and the row's own height is what keeps a dozen commands
           readable at a glance. */}
-      {onKill === undefined ? null : (
-        <ConfirmButton
-          data-slot="shell-kill"
-          size="icon"
-          variant="ghost"
-          // ROUND, like the stop glyph it holds, and tinted in the destructive
-          // colour alone. The ghost hover was the caramel accent behind a red
-          // icon — two warm tones that read as a mistake — and once armed the
-          // resting `text-muted-foreground` beat the variant's white, leaving a
-          // grey (and, hovered, a red) icon on a red fill: the one state that
-          // must be unmistakable was the hardest to see.
-          className="size-5 shrink-0 rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive data-[armed]:text-destructive-foreground data-[armed]:hover:bg-destructive/90 data-[armed]:hover:text-destructive-foreground"
-          // ONE title for both states, since the control has one job and the
-          // press count is part of describing it. The command is named because
-          // the row above truncates, and this is the press that cannot be
-          // taken back.
-          title={`Stop this command — press twice to confirm (${shell.command})`}
-          aria-label={`Stop ${shell.command}`}
-          confirmLabel={<CircleStop className="size-3.5" />}
-          onConfirm={() => onKill(shell)}>
-          <CircleStop className="size-3.5" />
-        </ConfirmButton>
-      )}
+        {onKill === undefined ? null : (
+          <ConfirmButton
+            data-slot="shell-kill"
+            size="icon"
+            variant="ghost"
+            // ROUND, like the stop glyph it holds, and tinted in the destructive
+            // colour alone. The ghost hover was the caramel accent behind a red
+            // icon — two warm tones that read as a mistake — and once armed the
+            // resting `text-muted-foreground` beat the variant's white, leaving a
+            // grey (and, hovered, a red) icon on a red fill: the one state that
+            // must be unmistakable was the hardest to see.
+            className="size-5 shrink-0 rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive data-[armed]:text-destructive-foreground data-[armed]:hover:bg-destructive/90 data-[armed]:hover:text-destructive-foreground"
+            // ONE title for both states, since the control has one job and the
+            // press count is part of describing it. The command is named because
+            // the row above truncates, and this is the press that cannot be
+            // taken back.
+            title={`Stop this command — press twice to confirm (${shell.command})`}
+            aria-label={`Stop ${shell.command}`}
+            confirmLabel={<CircleStop className="size-3.5" />}
+            onConfirm={() => onKill(shell)}>
+            <CircleStop className="size-3.5" />
+          </ConfirmButton>
+        )}
+      </div>
+      {shell.background || shell.description !== null ? (
+        <div
+          data-slot="shell-detail"
+          // Indented to the command, past the 12px glyph and the row's gap.
+          className="flex min-w-0 items-center gap-1.5 pl-[18px] text-[11px] text-muted-foreground">
+          {shell.description === null ? null : (
+            <span className="min-w-0 flex-1 truncate" title={shell.description}>
+              {shell.description}
+            </span>
+          )}
+          {/* Said in a WORD, not an abbreviation and not a second glyph: a detached
+              command is the one row that will still be running after the agent has
+              answered, and "why is this one still here" needs an answer on the row
+              itself. It read `BG` until it was REPORTED as unreadable ("not
+              understandable what is BG") — two letters of shell jargon, set in the
+              same muted grey as the clock beside them, so the one row carrying an
+              explanation was the one nobody could decode. It is drawn as a TAG
+              rather than as more muted text for the same reason: a bare word
+              between a command and a duration reads as part of one of them. The
+              sentence a tag has no room for lives on `title`. */}
+          {shell.background ? (
+            <span
+              data-slot="shell-kind"
+              className="shrink-0 rounded border border-border px-1 py-px text-[10px] text-muted-foreground"
+              title={
+                leftRunning ??
+                "Detached — this command keeps running after the agent's turn ends"
+              }>
+              {leftRunning === null ? 'background' : 'left running'}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </li>
   );
 }

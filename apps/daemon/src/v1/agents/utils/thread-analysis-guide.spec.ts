@@ -43,6 +43,24 @@ describe('threadAnalysisGuide', () => {
     }
   });
 
+  it('has every item keep to one territory, process or domain, and split one that needs both', () => {
+    for (const kind of ['chat', 'workflow'] as const) {
+      const guide = threadAnalysisGuide(kind, null);
+
+      expect(guide).toContain('## Two territories: process and domain');
+      expect(guide).toContain('named in `territory`');
+      expect(guide).toContain('- process — how the agents work');
+      expect(guide).toContain(
+        '- domain — knowledge, procedures and constraints of the work itself',
+      );
+      expect(guide).toContain(
+        'one that exists only because of this project (its scripts, its invariants, a new check enforcing a fact about it) is domain; when, whether and in what order the agents run commands and checks is process',
+      );
+      expect(guide).toContain('Never mix the two in one item');
+      expect(guide).toContain('file two items, each with its own evidence');
+    }
+  });
+
   it("adds the user's focus as its own section, and nothing for a blank one", () => {
     expect(threadAnalysisGuide('chat', '  why so many reviews?  ')).toContain(
       "## The user's focus for this analysis\n\nwhy so many reviews?",

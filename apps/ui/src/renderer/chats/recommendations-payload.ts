@@ -4,6 +4,7 @@ import type {
   RecommendationOutcomeView,
   RecommendationRisk,
   RecommendationsTimingView,
+  RecommendationTerritory,
   RecommendationView,
 } from '../components/recommendations-card';
 
@@ -37,6 +38,7 @@ export interface RecommendationApplyData {
 }
 
 const RISKS: readonly RecommendationRisk[] = ['low', 'medium', 'high'];
+const TERRITORIES: readonly RecommendationTerritory[] = ['process', 'domain'];
 const STATUSES: readonly RecommendationOutcomeStatus[] = [
   'applied',
   'skipped',
@@ -101,12 +103,14 @@ function readItem(value: unknown): RecommendationView | null {
   const row = record(value);
   const id = text(row?.id);
   const target = oneOf(row?.target, ['workflow', 'repo', 'user'] as const);
+  const territory = oneOf(row?.territory, TERRITORIES);
   const title = text(row?.title);
   const change = text(row?.change);
   if (
     row === null ||
     id === null ||
     target === null ||
+    territory === null ||
     title === null ||
     change === null
   ) {
@@ -127,6 +131,7 @@ function readItem(value: unknown): RecommendationView | null {
   return {
     id,
     target,
+    territory,
     title,
     change,
     kind: text(row.kind) ?? '',
@@ -149,13 +154,19 @@ export function readRecommendations(
   if (row === null || !Array.isArray(row.items)) {
     return null;
   }
+  const items = row.items
+    .map(readItem)
+    .filter((entry): entry is RecommendationView => entry !== null);
+  // Items that all fail to read are not "no recommendations": drawn, the card
+  // would claim the thread ran efficiently.
+  if (items.length === 0 && row.items.length > 0) {
+    return null;
+  }
   return {
     summary: text(row.summary),
     timing: readTiming(row.timing),
     sourceKind: row.sourceKind === 'workflow' ? 'workflow' : 'chat',
-    items: row.items
-      .map(readItem)
-      .filter((entry): entry is RecommendationView => entry !== null),
+    items,
   };
 }
 

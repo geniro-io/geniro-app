@@ -187,6 +187,32 @@ describe('RecommendationsCard', () => {
     ).not.toBeNull();
   });
 
+  it('tags each row with its territory, and says what the territory means', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflow={false}
+        items={[
+          recommendation('R-1', { territory: 'process' }),
+          recommendation('R-2', { territory: 'domain' }),
+        ]}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+    const tag = (id: string): HTMLElement | null =>
+      el.querySelector(
+        `[data-id="${id}"] [data-slot="recommendation-territory"]`,
+      );
+
+    expect(tag('R-1')?.textContent).toBe('process');
+    expect(tag('R-1')?.title).toContain('How the agents work');
+    expect(tag('R-2')?.textContent).toBe('domain');
+    expect(tag('R-2')?.title).toContain('What the work itself needs to know');
+  });
+
   it('closes the estimate once, whether or not the agent ended it with a period', () => {
     const el = render(
       <RecommendationsCard

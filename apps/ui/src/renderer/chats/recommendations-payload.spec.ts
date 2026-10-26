@@ -41,6 +41,7 @@ const CARD = {
     {
       id: 'W-1',
       target: 'workflow',
+      territory: 'process',
       kind: 'parallelize',
       location: 'reviewer',
       title: 'Parallel reviewers',
@@ -53,6 +54,7 @@ const CARD = {
     {
       id: 'U-1',
       target: 'user',
+      territory: 'domain',
       kind: 'pointer',
       location: '~/.claude/CLAUDE.md',
       title: 'Name the check command',
@@ -75,6 +77,41 @@ describe('recommendations payload readers', () => {
     expect(card?.items.map((entry) => entry.id)).toEqual(['W-1', 'U-1']);
     expect(card?.items[1]?.target).toBe('user');
     expect(card?.items[0]).toMatchObject({ minutesSaved: 12, risk: 'low' });
+  });
+
+  it("reads each item's territory, and drops an item that names none or another", () => {
+    const [w1, u1] = CARD.items as Record<string, unknown>[];
+    const { territory: _omitted, ...untagged } = w1!;
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        items: [
+          { ...untagged, id: 'W-1' },
+          { ...w1, id: 'W-2', territory: 'both' },
+          u1,
+        ],
+      }),
+    );
+
+    expect(card?.items.map((entry) => [entry.id, entry.territory])).toEqual([
+      ['U-1', 'domain'],
+    ]);
+  });
+
+  it('reads a card none of whose items read as no card, never as an empty one', () => {
+    const untagged = (CARD.items as Record<string, unknown>[]).map(
+      ({ territory: _omitted, ...rest }) => rest,
+    );
+
+    expect(
+      readRecommendations(
+        item(5, 'recommendations', { ...CARD, items: untagged }),
+      ),
+    ).toBeNull();
+    expect(
+      readRecommendations(item(5, 'recommendations', { ...CARD, items: [] }))
+        ?.items,
+    ).toEqual([]);
   });
 
   it('reads an Apply only off a user message', () => {

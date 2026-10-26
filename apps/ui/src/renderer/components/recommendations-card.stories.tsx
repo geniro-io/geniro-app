@@ -56,7 +56,7 @@ export const Applied: Story = {
           },
           'R-1': {
             status: 'failed',
-            note: 'AGENTS.md changed since the analysis',
+            note: '.claude/rules/billing.md changed since the analysis',
             backup: null,
           },
         }}

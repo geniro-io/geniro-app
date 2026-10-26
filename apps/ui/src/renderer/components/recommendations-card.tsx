@@ -8,12 +8,14 @@ import { OptionIndicator } from './ui/option-list';
 import { cn } from './ui/utils';
 
 export type RecommendationRisk = 'low' | 'medium' | 'high';
+export type RecommendationTerritory = 'process' | 'domain';
 export type RecommendationOutcomeStatus = 'applied' | 'skipped' | 'failed';
 
 /** One recommendation as the card draws it. */
 export interface RecommendationView {
   id: string;
   target: 'workflow' | 'repo' | 'user';
+  territory: RecommendationTerritory;
   kind: string;
   location: string;
   title: string;
@@ -60,6 +62,20 @@ const RISK_BADGE: Record<
   low: { variant: 'muted', label: 'low risk' },
   medium: { variant: 'secondary', label: 'medium risk' },
   high: { variant: 'destructive', label: 'high risk' },
+};
+
+const TERRITORY_BADGE: Record<
+  RecommendationTerritory,
+  { label: string; hint: string }
+> = {
+  process: {
+    label: 'process',
+    hint: 'How the agents work: commands, retries, reading order, hand-offs, running the checks they have, parallelism, model and effort',
+  },
+  domain: {
+    label: 'domain',
+    hint: 'What the work itself needs to know: the project’s facts, procedures and constraints',
+  },
 };
 
 const OUTCOME_BADGE: Record<
@@ -216,6 +232,7 @@ function ItemRow({
   onToggle: () => void;
 }): React.JSX.Element {
   const risk = RISK_BADGE[item.risk];
+  const territory = TERRITORY_BADGE[item.territory];
   const result = outcome === null ? null : OUTCOME_BADGE[outcome.status];
   return (
     <li
@@ -239,6 +256,12 @@ function ItemRow({
               {item.title}
             </span>
             <span className="flex flex-wrap items-center gap-1">
+              <Badge
+                variant="muted"
+                title={territory.hint}
+                data-slot="recommendation-territory">
+                {territory.label}
+              </Badge>
               <Badge variant="outline">{item.kind}</Badge>
               <Badge variant="secondary">
                 {minutesLabel(item.minutesSaved)} · confidence {item.confidence}

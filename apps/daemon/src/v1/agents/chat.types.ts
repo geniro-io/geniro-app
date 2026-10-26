@@ -523,6 +523,13 @@ export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   user: 'U-',
 };
 
+/**
+ * The territory a recommendation keeps to: how the agents work (`process`),
+ * or what the work itself needs to know (`domain`). One item never mixes the
+ * two, so a pick on the card is never half a process fix and half a fact.
+ */
+export const RECOMMENDATION_TERRITORIES = ['process', 'domain'] as const;
+
 /** At most this many items per target on one card; zero is a valid report. */
 export const MAX_RECOMMENDATIONS_PER_TARGET = 5;
 
@@ -561,6 +568,11 @@ export const RecommendationItemSchema = z.object({
     'W-1, W-2… workflow; R-1, R-2… repo; U-1, U-2… user-instructions file',
   ),
   target: RecommendationTargetSchema,
+  territory: z
+    .enum(RECOMMENDATION_TERRITORIES)
+    .describe(
+      'process: how the agents work (commands, retries, reading order, hand-offs, running or wiring the checks they have, parallelism, model and effort); domain: knowledge, procedures and constraints of the work itself, a new check enforcing a project fact included. One item keeps to one',
+    ),
   kind: z
     .string()
     .min(1)

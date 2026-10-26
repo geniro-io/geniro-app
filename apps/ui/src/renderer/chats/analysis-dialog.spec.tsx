@@ -43,6 +43,7 @@ const CARD = {
     {
       id: 'R-1',
       target: 'repo',
+      territory: 'process',
       kind: 'ADD',
       location: 'AGENTS.md',
       title: 'Report every opened PR by URL',

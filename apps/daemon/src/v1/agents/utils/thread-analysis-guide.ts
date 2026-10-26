@@ -76,6 +76,15 @@ Put each repo or user fix on the first rung that works:
 4. AGENTS.md / CLAUDE.md or the user's own file — only for a pointer to where something lives, or a rule that truly holds everywhere.
 
 Deleting a line is a fix too: prefer it whenever a line is a no-op or contradicts the code.`,
+    `## Two territories: process and domain
+
+Every item belongs to exactly one territory, named in \`territory\`, and keeps to it:
+- process — how the agents work: the commands they run, retries, the order they read things in, hand-offs between agents, the checks they run, parallelism, model and effort.
+- domain — knowledge, procedures and constraints of the work itself: facts about the project the thread worked on (its code, its product, its APIs, its conventions) and how a task in it is done correctly.
+
+A command or a check is filed by what it carries: one that exists only because of this project (its scripts, its invariants, a new check enforcing a fact about it) is domain; when, whether and in what order the agents run commands and checks is process.
+
+Never mix the two in one item: a process fix carries no project facts, and a domain item changes no way of working. When one root cause needs both, file two items, each with its own evidence. Look for both kinds — time is usually lost to process, mistakes often to missing domain knowledge.`,
     `## The bar for a recommendation
 
 Keep an item only if all four hold; when unsure, drop it:

@@ -12,17 +12,23 @@ import {
 import type { Subscription } from 'rxjs';
 import type { Server, Socket } from 'socket.io';
 
+import { cameViaRemote } from '../../../auth/remote-marker';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { enforceWsHandshakeAuth } from '../../../auth/ws-auth';
-import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
+import {
+  MAX_ANSWER_LENGTH,
+  MAX_OPTION_ID_LENGTH,
+} from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
+import { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
 import {
   extractBooleanField,
   extractStringField,
 } from '../../agents/utils/ws-payload';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
@@ -43,15 +49,17 @@ function extractVerdict(data: unknown): {
   requestId: string;
   allow: boolean;
   answer?: string;
+  optionId?: string;
 } | null {
   if (!data || typeof data !== 'object') {
     return null;
   }
-  const { runId, requestId, allow, answer } = data as {
+  const { runId, requestId, allow, answer, optionId } = data as {
     runId?: unknown;
     requestId?: unknown;
     allow?: unknown;
     answer?: unknown;
+    optionId?: unknown;
   };
   if (
     typeof runId !== 'string' ||
@@ -62,7 +70,11 @@ function extractVerdict(data: unknown): {
     (answer !== undefined &&
       (typeof answer !== 'string' ||
         answer.length === 0 ||
-        answer.length > MAX_ANSWER_LENGTH))
+        answer.length > MAX_ANSWER_LENGTH)) ||
+    (optionId !== undefined &&
+      (typeof optionId !== 'string' ||
+        optionId.length === 0 ||
+        optionId.length > MAX_OPTION_ID_LENGTH))
   ) {
     return null;
   }
@@ -71,6 +83,7 @@ function extractVerdict(data: unknown): {
     requestId,
     allow,
     answer: typeof answer === 'string' ? answer : undefined,
+    ...(typeof optionId === 'string' ? { optionId } : {}),
   };
 }
 
@@ -94,6 +107,9 @@ const DEBUG_ROOM = 'debug';
 function extractRunId(data: unknown): string | null {
   return extractStringField(data, 'runId');
 }
+
+/** The room every socket of the Mac's own windows joins — never a paired device's. */
+const DESKTOP_ROOM = 'desktop';
 
 /**
  * Loopback notifications gateway (Socket.IO). The renderer authenticates with
@@ -126,6 +142,7 @@ export class NotificationsGateway
   private debugSubscription?: Subscription;
   private usageSubscription?: Subscription;
   private taskSubscription?: Subscription;
+  private shareSubscription?: Subscription;
   /**
    * Debug fan-out failures, counted rather than logged.
    *
@@ -145,6 +162,8 @@ export class NotificationsGateway
     private readonly usage: UsageEventBus,
     private readonly tasks: TaskEventBus,
     private readonly partials: PartialStreamService,
+    private readonly subagents: SubagentRecoveryService,
+    private readonly shares: ShareEventBus,
   ) {}
 
   afterInit(server: Server): void {
@@ -213,6 +232,23 @@ export class NotificationsGateway
       },
       error: (err: unknown) =>
         this.logger.error(`task event bus errored: ${String(err)}`),
+    });
+    // A share row written or removed goes to every DESKTOP client, whichever
+    // run it has open: an agent's share waiting on sign-in must reach the
+    // window that will ask the user. Never a paired device, which no share
+    // route serves; and the event never carries the link.
+    this.shareSubscription = this.shares.allChanges().subscribe({
+      next: (change) => {
+        try {
+          server.to(DESKTOP_ROOM).emit('shares_changed', change);
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast shares_changed for ${change.shareId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`share event bus errored: ${String(err)}`),
     });
     // A DESTROYED run goes to every client, and it is the one announcement
     // whose absence a client cannot recover from on its own.
@@ -335,6 +371,7 @@ export class NotificationsGateway
     this.deltaSubscription?.unsubscribe();
     this.statusSubscription?.unsubscribe();
     this.taskSubscription?.unsubscribe();
+    this.shareSubscription?.unsubscribe();
     this.deletedSubscription?.unsubscribe();
     this.changedSubscription?.unsubscribe();
     this.groupsSubscription?.unsubscribe();
@@ -372,6 +409,12 @@ export class NotificationsGateway
       return;
     }
     this.presence.opened(client.id);
+    // The Mac's own windows, apart from a paired device's socket (stamped by
+    // the LAN gateway): share changes go to these only, as every share route
+    // is desktop-only.
+    if (!cameViaRemote(client.handshake.headers ?? {})) {
+      void client.join(DESKTOP_ROOM);
+    }
     client.emit('hello', { version: this.runtime.version });
   }
 
@@ -387,6 +430,7 @@ export class NotificationsGateway
     const runId = extractRunId(data);
     if (runId) {
       await client.join(runRoom(runId));
+      this.subagents.schedule(runId);
       // The live plane as it stands, to this socket alone. A delta is
       // published only when its figure changes and the room kept nothing for
       // a client that was not in it, so a thread reopened mid-turn started on
@@ -444,6 +488,7 @@ export class NotificationsGateway
       parsed.requestId,
       parsed.allow,
       parsed.answer,
+      parsed.optionId,
     );
     return {
       event: 'verdict_ack',

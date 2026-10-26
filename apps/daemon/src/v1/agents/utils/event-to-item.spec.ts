@@ -31,6 +31,55 @@ describe('mapEventToItem', () => {
     ).toBeNull();
   });
 
+  it('never reads a dropped follow-up as the run working again', () => {
+    expect(
+      restatesRunAsWorking({ type: 'follow_up_dropped', deliveryIds: ['d-1'] }),
+    ).toBe(false);
+  });
+
+  it('writes dropped follow-ups as a not-sent row naming their delivery ids', () => {
+    expect(
+      mapEventToItem({ type: 'follow_up_dropped', deliveryIds: ['d-1'] }),
+    ).toEqual({
+      kind: 'system',
+      role: null,
+      payload: {
+        message:
+          'Your message was not sent — the turn ended before the agent took it.',
+        severity: 'warning',
+        caption: 'Not sent',
+        unsentMessages: ['d-1'],
+      },
+    });
+    expect(
+      mapEventToItem({
+        type: 'follow_up_dropped',
+        deliveryIds: ['d-1', 'd-2'],
+      })?.payload,
+    ).toMatchObject({
+      message:
+        '2 messages were not sent — the turn ended before the agent took them.',
+      unsentMessages: ['d-1', 'd-2'],
+    });
+  });
+
+  it('quotes what the CLI said when it refused a message', () => {
+    expect(
+      mapEventToItem({
+        type: 'follow_up_dropped',
+        deliveryIds: ['d-1'],
+        reason: 'turn already finishing',
+      })?.payload,
+    ).toEqual({
+      message:
+        'Your message was not sent — the agent refused it (turn already finishing).',
+      severity: 'warning',
+      caption: 'Not sent',
+      unsentMessages: ['d-1'],
+      unsentReason: 'turn already finishing',
+    });
+  });
+
   it('drops text deltas — the live plane must NEVER become a database row', () => {
     // A turn emits hundreds of these. The durable record is the `text` event
     // that follows; if this ever returned a row, every token would be written
@@ -196,6 +245,44 @@ describe('mapEventToItem', () => {
     // absent, not merely undefined.
     expect(
       'requiresUserInteraction' in (mapped!.payload as Record<string, unknown>),
+    ).toBe(false);
+  });
+
+  it('persists the remembering options the card draws, without the adapter-private reply', () => {
+    const mapped = mapEventToItem({
+      type: 'approval_request',
+      id: 'req-o',
+      toolName: 'Bash',
+      input: { command: 'npm test' },
+      options: [
+        {
+          id: 'session',
+          label: 'Allow for this session',
+          allow: true,
+          scope: 'session',
+          reply: [{ type: 'addRules', destination: 'session' }],
+        },
+      ],
+    });
+    expect(mapped?.payload.options).toEqual([
+      {
+        id: 'session',
+        label: 'Allow for this session',
+        allow: true,
+        scope: 'session',
+      },
+    ]);
+    // No options, no key — an empty list would read as "offers nothing extra"
+    // on a row whose CLI was never asked.
+    expect(
+      'options' in
+        mapEventToItem({
+          type: 'approval_request',
+          id: 'req-p',
+          toolName: 'Bash',
+          input: {},
+          options: [],
+        })!.payload,
     ).toBe(false);
   });
 
@@ -737,7 +824,10 @@ describe('terminalStatus', () => {
 
 describe('restatesRunAsWorking', () => {
   /** The announcement `spawn-cli` makes about one delegate's liveness. */
-  const announce = (backgroundOpen: boolean | null): AgentEvent => ({
+  const announce = (
+    backgroundOpen: boolean | null,
+    costUsd: number | null = null,
+  ): AgentEvent => ({
     type: 'subagent_info',
     id: 'toolu_a',
     label: null,
@@ -751,22 +841,36 @@ describe('restatesRunAsWorking', () => {
     outputTokens: null,
     cacheReadTokens: null,
     cacheCreationTokens: null,
-    costUsd: null,
+    costUsd,
     stepsUnavailableReason: null,
     backgroundOpen,
     backgroundOutcome: null,
   });
 
-  it('is false only for the announcement that a delegate has STOPPED', () => {
-    expect(restatesRunAsWorking(announce(false))).toBe(false);
+  it('is true only for the announcement that a delegate has STARTED', () => {
     expect(restatesRunAsWorking(announce(true))).toBe(true);
+    expect(restatesRunAsWorking(announce(false))).toBe(false);
   });
 
-  it('reads an announcement that claims nothing about liveness as no close', () => {
-    // A `subagent_info` carrying a delegate's FACTS says nothing about whether
-    // it is running; reading null as a close would silence the run every time
-    // the CLI described the delegate it had just launched.
-    expect(restatesRunAsWorking(announce(null))).toBe(true);
+  it('reads an announcement that claims nothing about liveness as no work', () => {
+    // A `subagent_info` carrying a delegate's FACTS — the price claude reports
+    // with a continuation's `result` among them — says nothing about whether
+    // it is running, and can land after that continuation has settled.
+    expect(restatesRunAsWorking(announce(null, 0.0016))).toBe(false);
+  });
+
+  it('is false for the result reporting a background command’s end, and true for any other result', () => {
+    const result = {
+      type: 'tool_result' as const,
+      id: 'exec-1',
+      name: 'shell',
+      result: { exitCode: 0 },
+      isError: false,
+    };
+    expect(restatesRunAsWorking({ ...result, endsBackgroundWork: true })).toBe(
+      false,
+    );
+    expect(restatesRunAsWorking(result)).toBe(true);
   });
 
   it('is false for a notice, which describes the CLI rather than the agent working', () => {

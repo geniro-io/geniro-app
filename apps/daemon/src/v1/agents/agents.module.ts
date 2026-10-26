@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Logger, Module } from '@nestjs/common';
 
+import { DesktopOnlyGuard } from '../../auth/desktop-only.guard';
 import { environment } from '../../environments';
 import { DAEMON_VERSION } from '../../utils/daemon-version';
 import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
@@ -14,6 +15,7 @@ import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
 import { ArtifactsController } from './controllers/artifacts.controller';
 import { ChatController } from './controllers/chat.controller';
 import { ChatSearchController } from './controllers/chat-search.controller';
+import { KeptSessionsController } from './controllers/kept-sessions.controller';
 import { McpController } from './controllers/mcp.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
@@ -24,6 +26,13 @@ import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
 import { WallTurnDao } from './dao/wall-turn.dao';
+import { ActionBroker } from './services/action.broker';
+import { ActionCommandRegistry } from './services/action-command.registry';
+import { ActionCommandService } from './services/action-command.service';
+import { ActionOutcomeSweep } from './services/action-outcome-sweep.service';
+import { ActionPressService } from './services/action-press.service';
+import { ActionPublishService } from './services/action-publish.service';
+import { ActionStopService } from './services/action-stop.service';
 import {
   AGENT_ADAPTERS,
   AgentAdapterRegistry,
@@ -43,12 +52,14 @@ import { AttachmentStoreService } from './services/attachment-store.service';
 import { CacheResetService } from './services/cache-reset.service';
 import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
+import { ChatActionsService } from './services/chat-actions.service';
 import { ChatArtifactsService } from './services/chat-artifacts.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatHistoryService } from './services/chat-history.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatSearchService } from './services/chat-search.service';
 import { ChatShellsService } from './services/chat-shells.service';
+import { ChatTeamNotesService } from './services/chat-team-notes.service';
 import { ChatTextIndexService } from './services/chat-text-index.service';
 import { ChatTimelineService } from './services/chat-timeline.service';
 import { ChatTitleService } from './services/chat-title.service';
@@ -63,6 +74,8 @@ import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
+import { HostWakeBus } from './services/host-wake.bus';
+import { HostWakeChatDelivery } from './services/host-wake-chat-delivery.service';
 import { ItemCallIndexService } from './services/item-call-index.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
@@ -73,6 +86,11 @@ import { ModelParametersService } from './services/model-parameters.service';
 import { ModelPriceCatalog } from './services/model-price-catalog.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
+import { MonitorBroker } from './services/monitor.broker';
+import { MonitorRegistry } from './services/monitor.registry';
+import { MonitorChatDelivery } from './services/monitor-chat-delivery.service';
+import { MonitorOutcomeSweep } from './services/monitor-outcome-sweep.service';
+import { MonitorRowWriter } from './services/monitor-row.writer';
 import { NotifyBroker } from './services/notify.broker';
 import { OllamaService } from './services/ollama.service';
 import { PartialStreamService } from './services/partial-stream.service';
@@ -85,12 +103,16 @@ import { RecommendationsApplyService } from './services/recommendations-apply.se
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import { RunIdleReapService } from './services/run-idle-reap.service';
 import { RunNamedPathsService } from './services/run-named-paths.service';
 import {
   currentRunOwner,
   RunProcessAttribution,
 } from './services/run-process-attribution.service';
-import { RunProcessReaper } from './services/run-process-reaper.service';
+import {
+  createRunProcessReaper,
+  RunProcessReaper,
+} from './services/run-process-reaper.service';
 import { RunProcessSweep } from './services/run-process-sweep.service';
 import { RunProcessesService } from './services/run-processes.service';
 import { RunStateService } from './services/run-state.service';
@@ -100,7 +122,9 @@ import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
+import { SubagentRecoveryService } from './services/subagent-recovery.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
+import { TeamNoteBroker } from './services/team-note.broker';
 import { ThreadAnalysisService } from './services/thread-analysis.service';
 import { ThreadOverviewService } from './services/thread-overview.service';
 import { ThreadReaderService } from './services/thread-reader.service';
@@ -108,6 +132,7 @@ import { ThreadTimelineService } from './services/thread-timeline.service';
 import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
 import { UserQuestionBroker } from './services/user-question.broker';
 import { WallWorkService } from './services/wall-work.service';
+import { WorkflowProposalBroker } from './services/workflow-proposal.broker';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 import { defaultSpawn } from './utils/spawn-cli';
 
@@ -129,11 +154,13 @@ import { defaultSpawn } from './utils/spawn-cli';
     ArtifactsController,
     ChatController,
     ChatSearchController,
+    KeptSessionsController,
     McpController,
     RunGroupsController,
     SkillsController,
   ],
   providers: [
+    DesktopOnlyGuard,
     ChatShellsService,
     ChatHistoryService,
     RunStateService,
@@ -143,7 +170,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatSearchIndexDao,
     ChatTextIndexService,
     GlobalChatSearchService,
+    ChatActionsService,
     ChatArtifactsService,
+    ChatTeamNotesService,
     ChatTimelineService,
     ChatWaterfallService,
     ThreadTimelineService,
@@ -161,13 +190,23 @@ import { defaultSpawn } from './utils/spawn-cli';
         sessions: AgentSessionRegistry,
         attribution: RunProcessAttribution,
         reaper: RunProcessReaper,
-      ) => new RunProcessesService(em, runDao, sessions, attribution, reaper),
+        monitors: MonitorRegistry,
+      ) =>
+        new RunProcessesService(
+          em,
+          runDao,
+          sessions,
+          attribution,
+          reaper,
+          monitors,
+        ),
       inject: [
         EntityManager,
         RunDao,
         AgentSessionRegistry,
         RunProcessAttribution,
         RunProcessReaper,
+        MonitorRegistry,
       ],
     },
     PullRequestCaptureService,
@@ -184,6 +223,22 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     ArtifactBroker,
+    ActionBroker,
+    WorkflowProposalBroker,
+    ActionPublishService,
+    ActionPressService,
+    ActionStopService,
+    ActionCommandService,
+    ActionCommandRegistry,
+    ActionOutcomeSweep,
+    MonitorRegistry,
+    MonitorRowWriter,
+    MonitorChatDelivery,
+    MonitorOutcomeSweep,
+    MonitorBroker,
+    TeamNoteBroker,
+    HostWakeBus,
+    HostWakeChatDelivery,
     ArtifactPageService,
     PlanBroker,
     NotifyBroker,
@@ -352,12 +407,12 @@ import { defaultSpawn } from './utils/spawn-cli';
       useFactory: (
         attribution: RunProcessAttribution,
         sessions: AgentSessionRegistry,
+        commands: ActionCommandRegistry,
+        monitors: MonitorRegistry,
         em: EntityManager,
         runDao: RunDao,
       ) =>
-        new RunProcessReaper(attribution, {
-          held: (runId) => sessions.processRoots(runId).length > 0,
-          processRoots: () => sessions.processRoots().map((root) => root.pid),
+        createRunProcessReaper(attribution, sessions, [commands, monitors], {
           stillGone: async (runIds) => {
             const live = await runDao.getAll(
               { id: { $in: runIds }, archivedAt: null },
@@ -371,6 +426,8 @@ import { defaultSpawn } from './utils/spawn-cli';
       inject: [
         RunProcessAttribution,
         AgentSessionRegistry,
+        ActionCommandRegistry,
+        MonitorRegistry,
         EntityManager,
         RunDao,
       ],
@@ -380,23 +437,38 @@ import { defaultSpawn } from './utils/spawn-cli';
       useFactory: (
         em: EntityManager,
         runDao: RunDao,
+        itemDao: ItemDao,
         sessions: AgentSessionRegistry,
         reaper: RunProcessReaper,
         attribution: RunProcessAttribution,
-      ) => new RunProcessSweep(em, runDao, sessions, reaper, attribution),
+        idleReap: RunIdleReapService,
+      ) =>
+        new RunProcessSweep(
+          em,
+          runDao,
+          itemDao,
+          sessions,
+          reaper,
+          attribution,
+          idleReap,
+        ),
       inject: [
         EntityManager,
         RunDao,
+        ItemDao,
         AgentSessionRegistry,
         RunProcessReaper,
         RunProcessAttribution,
+        RunIdleReapService,
       ],
     },
+    RunIdleReapService,
     RunTeardownService,
     SessionTranscriptsService,
     RunGroupsService,
     ShellOutputService,
     ItemSeqAllocator,
+    SubagentRecoveryService,
     ItemCallIndexService,
     WallWorkService,
     MessageSendService,
@@ -452,6 +524,9 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   exports: [
     AnalysisBroker,
+    // For the graphs module's pool cooldowns, which key a member by the account
+    // its folder pins, as the plan-limits readout does.
+    ConfigDirPinService,
     ThreadReaderService,
     GlobalChatSearchService,
     AgentEventBus,
@@ -471,6 +546,26 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     ArtifactBroker,
+    ActionBroker,
+    // For the MCP host's monitor tools and the graph executor, which registers
+    // each node's sink and delivers its monitors' output; for the run-process
+    // panel and teardown, which list and stop them.
+    MonitorBroker,
+    MonitorRegistry,
+    // For the MCP host's team-note tools and the graph executor, which registers
+    // each node's sink and reads the unread figure into call replies and wakes.
+    TeamNoteBroker,
+    // For the workflow delivery, which records the end of output it drops.
+    MonitorRowWriter,
+    // For the share service, which wakes the agent that asked once a share
+    // waiting on the user's sign-in lands, and the workflow delivery of it.
+    HostWakeBus,
+    // What a workflow node's button tools and the workflow press route reuse:
+    // the publish (over `ChatActionsService`, the rows' one writer) and the
+    // press beside it.
+    ActionPublishService,
+    ActionPressService,
+    WorkflowProposalBroker,
     // And the store behind it: a WORKFLOW node publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,
@@ -490,6 +585,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Exported so a server sign-in can re-check the server until it SEES it
     // connected, through the one path that also patches every reading of it.
     AgentMcpService,
+    SubagentRecoveryService,
     // Exported for main.ts's boot sweep — it runs before the server listens,
     // beside the other reconciles a crashed launch leaves behind.
     StrandedChildReaper,

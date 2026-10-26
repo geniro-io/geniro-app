@@ -17,11 +17,8 @@ import {
   ChatMetricsLoaderContext,
 } from './chat-metrics';
 import { CliLoginContext, type SignInResolver } from './cli-login-context';
-import {
-  DelegatesOutContext,
-  RunActivityContext,
-  RunSettledContext,
-} from './live-row';
+import { CommandConfirmDialog } from './command-confirm-dialog';
+import { RunActivityContext, RunSettledContext } from './live-row';
 import {
   type LocalImageLoader,
   LocalImageLoaderContext,
@@ -30,6 +27,10 @@ import {
   type AttachmentLoader,
   AttachmentLoaderContext,
 } from './message-attachments';
+import {
+  type NotSentMessages,
+  NotSentMessagesContext,
+} from './not-sent-messages';
 import {
   type ArtifactUrlBuilder,
   ArtifactUrlContext,
@@ -46,6 +47,7 @@ import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
 import { CardBackedRequestsContext } from './transcript-item';
 import { type TurnDuration, TurnDurationContext } from './turn-duration';
 import type { ArtifactSharing } from './use-artifact-sharing';
+import { type ChatActions, ChatActionsContext } from './use-chat-actions';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /**
@@ -106,12 +108,13 @@ export function ChatProviders({
   artifactSharing = null,
   threadId,
   runSettledAt,
-  delegatesOut,
   transcript,
   loadAttachment = null,
   callConversations = null,
   jumpMark = null,
   applyRecommendations = null,
+  notSent = null,
+  chatActions = null,
   children,
 }: {
   /**
@@ -127,8 +130,6 @@ export function ChatProviders({
    * read it, so it is provided for the whole surface.
    */
   runSettledAt: RunSettleAt;
-  /** How many of the run's delegates still report out — see `DelegatesOutContext`. */
-  delegatesOut: number | null;
   /**
    * Everything a transcript row reads, for a surface that is ALL transcript
    * (the workflow dock). The chat screen leaves it out: it provides the
@@ -178,6 +179,13 @@ export function ChatProviders({
    * Absent draws the card read-only (the workflow dock has no analysis).
    */
   applyRecommendations?: RecommendationsApplier | null;
+  /**
+   * The user messages a turn dropped, and how to resend one — see
+   * `NotSentMessagesContext`. Absent marks no message.
+   */
+  notSent?: NotSentMessages | null;
+  /** The open chat's buttons and their press — see `ChatActionsContext`. */
+  chatActions?: ChatActions | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -192,18 +200,34 @@ export function ChatProviders({
                     <ThreadUiMemoryContext.Provider value={threadId}>
                       <AttachmentLoaderContext.Provider value={loadAttachment}>
                         <RunSettledContext.Provider value={runSettledAt}>
-                          <DelegatesOutContext.Provider value={delegatesOut}>
-                            <RecommendationsApplyContext.Provider
-                              value={applyRecommendations}>
-                              {transcript === undefined ? (
-                                children
-                              ) : (
-                                <SurfaceContexts {...transcript}>
-                                  {children}
-                                </SurfaceContexts>
-                              )}
-                            </RecommendationsApplyContext.Provider>
-                          </DelegatesOutContext.Provider>
+                          <RecommendationsApplyContext.Provider
+                            value={applyRecommendations}>
+                            <NotSentMessagesContext.Provider value={notSent}>
+                              <ChatActionsContext.Provider value={chatActions}>
+                                {transcript === undefined ? (
+                                  children
+                                ) : (
+                                  <SurfaceContexts {...transcript}>
+                                    {children}
+                                  </SurfaceContexts>
+                                )}
+                                {chatActions === null ? null : (
+                                  <CommandConfirmDialog
+                                    action={chatActions.confirming}
+                                    changed={
+                                      chatActions.confirming !== null &&
+                                      !chatActions.actions.some(
+                                        (a) =>
+                                          a.seq === chatActions.confirming?.seq,
+                                      )
+                                    }
+                                    onCancel={chatActions.cancelCommand}
+                                    onConfirm={chatActions.confirmCommand}
+                                  />
+                                )}
+                              </ChatActionsContext.Provider>
+                            </NotSentMessagesContext.Provider>
+                          </RecommendationsApplyContext.Provider>
                         </RunSettledContext.Provider>
                       </AttachmentLoaderContext.Provider>
                     </ThreadUiMemoryContext.Provider>

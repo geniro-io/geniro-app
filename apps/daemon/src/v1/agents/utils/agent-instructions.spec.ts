@@ -7,8 +7,11 @@ import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CodexAdapter } from '../adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import {
-  composeTurnInstructions,
   GENIRO_UI_PREAMBLE,
+  joinTurnInstructionParts,
+  replyLanguageInstruction,
+  type TurnInstructionParts,
+  turnInstructionParts,
 } from './agent-instructions';
 
 /** The block an adapter hands its CLI — the one seam every delivery path calls. */
@@ -25,6 +28,11 @@ function composedBy(
 }
 
 const TURN: AgentTurnInput = { prompt: 'go', cwd: '/proj' };
+
+/** The block the parts compose to — what every adapter joins. */
+function composed(parts: TurnInstructionParts): string {
+  return joinTurnInstructionParts(turnInstructionParts(parts));
+}
 
 describe('GENIRO_UI_PREAMBLE', () => {
   it('contradicts the terminal claim rather than only stating the truth', () => {
@@ -90,19 +98,19 @@ describe('GENIRO_UI_PREAMBLE', () => {
   });
 });
 
-describe('composeTurnInstructions', () => {
+describe('the composed block', () => {
   it('always leads with the preamble, even when the turn contributes nothing', () => {
-    expect(composeTurnInstructions({})).toBe(GENIRO_UI_PREAMBLE);
+    expect(composed({})).toBe(GENIRO_UI_PREAMBLE);
   });
 
   it('orders the parts general → specific, call surface last', () => {
-    const composed = composeTurnInstructions({
+    const block = composed({
       customInstructions: 'GLOBAL',
       systemPrompt: 'NODE_ROLE',
       callSurfacePrompt: 'MAY_CALL',
     });
 
-    expect(composed).toBe(
+    expect(block).toBe(
       `${GENIRO_UI_PREAMBLE}\n\nGLOBAL\n\nNODE_ROLE\n\nMAY_CALL`,
     );
   });
@@ -111,24 +119,22 @@ describe('composeTurnInstructions', () => {
     // Specific beats general: a node authored for one job outranks a
     // preference the user set once for every agent. Position IS the precedence
     // mechanism here, so swapping these two is a real behaviour change.
-    const composed = composeTurnInstructions({
+    const block = composed({
       customInstructions: 'GLOBAL',
       systemPrompt: 'NODE_ROLE',
     });
 
-    expect(composed.indexOf('GLOBAL')).toBeLessThan(
-      composed.indexOf('NODE_ROLE'),
-    );
+    expect(block.indexOf('GLOBAL')).toBeLessThan(block.indexOf('NODE_ROLE'));
   });
 
   it('drops a blank part instead of joining it as an empty paragraph', () => {
     // A cleared settings textarea arrives as '' at least as often as it
     // arrives absent, and a whitespace-only value is the same intent.
+    expect(composed({ customInstructions: '', systemPrompt: 'ROLE' })).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nROLE`,
+    );
     expect(
-      composeTurnInstructions({ customInstructions: '', systemPrompt: 'ROLE' }),
-    ).toBe(`${GENIRO_UI_PREAMBLE}\n\nROLE`);
-    expect(
-      composeTurnInstructions({
+      composed({
         customInstructions: '   \n  ',
         systemPrompt: 'ROLE',
       }),
@@ -137,7 +143,7 @@ describe('composeTurnInstructions', () => {
 
   it('drops a null part the same way it drops an absent one', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         customInstructions: null,
         systemPrompt: null,
         callSurfacePrompt: null,
@@ -146,16 +152,16 @@ describe('composeTurnInstructions', () => {
   });
 
   it('trims a part rather than carrying the user’s trailing newlines into argv', () => {
-    expect(
-      composeTurnInstructions({ customInstructions: '  BE TERSE\n\n' }),
-    ).toBe(`${GENIRO_UI_PREAMBLE}\n\nBE TERSE`);
+    expect(composed({ customInstructions: '  BE TERSE\n\n' })).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nBE TERSE`,
+    );
   });
 });
 
-describe('composeTurnInstructions — background work note', () => {
+describe('the composed block — background work note', () => {
   it('puts the CLI’s note right after the preamble, ahead of the user’s own instructions', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         backgroundWorkNote: 'NOTE',
         customInstructions: 'GLOBAL',
         systemPrompt: 'ROLE',
@@ -165,13 +171,69 @@ describe('composeTurnInstructions — background work note', () => {
 
   it('withholds the note with the preamble, for a probe that has no turn to end', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         backgroundWorkNote: 'NOTE',
         systemPrompt: 'ROLE',
       }),
     ).toBe('ROLE');
   });
+});
+
+describe('the composed block — reply language', () => {
+  const RUSSIAN = replyLanguageInstruction('Russian')!;
+
+  it('names the language and says the English around it does not decide', () => {
+    expect(RUSSIAN).toContain('Reply to the user in Russian');
+    expect(RUSSIAN).toContain('whatever language these instructions');
+    expect(RUSSIAN).toContain('comments in code');
+    expect(RUSSIAN).toContain('stays in the language the project already uses');
+  });
+
+  it('sits after the background note and ahead of the user’s own instructions', () => {
+    expect(
+      composed({
+        backgroundWorkNote: 'NOTE',
+        replyLanguage: 'Russian',
+        customInstructions: 'GLOBAL',
+        systemPrompt: 'ROLE',
+      }),
+    ).toBe(`${GENIRO_UI_PREAMBLE}\n\nNOTE\n\n${RUSSIAN}\n\nGLOBAL\n\nROLE`);
+  });
+
+  it('trims the name and composes nothing for a blank or absent one', () => {
+    expect(replyLanguageInstruction('  Russian \n')).toBe(RUSSIAN);
+    expect(replyLanguageInstruction('   ')).toBeNull();
+    expect(replyLanguageInstruction(null)).toBeNull();
+    expect(composed({ replyLanguage: '  ' })).toBe(GENIRO_UI_PREAMBLE);
+  });
+
+  it('withholds the line with the preamble, for a probe whose output is parsed', () => {
+    expect(
+      composed({
+        includePreamble: false,
+        replyLanguage: 'Russian',
+        systemPrompt: 'ROLE',
+      }),
+    ).toBe('ROLE');
+  });
+
+  it.each([
+    ['claude', new ClaudeAdapter()],
+    [
+      'cursor-agent',
+      new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
+    ],
+    ['codex', new CodexAdapter({ clientVersion: '1.0.0' })],
+  ])(
+    '%s: carries the run’s language into its composed block',
+    (_agent, adapter) => {
+      expect(
+        composedBy(adapter, { ...TURN, replyLanguage: 'Russian' }),
+      ).toContain(RUSSIAN);
+      expect(composedBy(adapter, TURN)).not.toContain('Reply to the user in');
+    },
+  );
 });
 
 describe('each CLI’s background work note', () => {
@@ -229,10 +291,10 @@ describe('each CLI’s background work note', () => {
   });
 });
 
-describe('composeTurnInstructions — answering a call', () => {
+describe('the composed block — answering a call', () => {
   it('sits after the role and before the call surface, whose calls-specific rule reads on from it', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         systemPrompt: 'ROLE',
         answeringACallPrompt: 'ANSWERING',
@@ -258,13 +320,13 @@ describe('composeTurnInstructions — answering a call', () => {
   });
 });
 
-describe('composeTurnInstructions — task instructions', () => {
+describe('the composed block — task instructions', () => {
   // A card's label block and report ask are stored apart from the user's own
   // text, so the user can purge theirs; the turn must still read them in the
   // order they used to be joined in: user's own first, then the card's.
   it('ranks a card’s instructions right after the user’s own, above the node’s blocks and role', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         customInstructions: 'GLOBAL',
         taskInstructions: 'CARD',
@@ -277,7 +339,7 @@ describe('composeTurnInstructions — task instructions', () => {
 
   it('carries a card’s instructions when the user has none of their own', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         customInstructions: null,
         taskInstructions: 'CARD',
@@ -286,13 +348,13 @@ describe('composeTurnInstructions — task instructions', () => {
   });
 });
 
-describe('composeTurnInstructions — instruction blocks', () => {
+describe('the composed block — instruction blocks', () => {
   // Order IS precedence here, and the block sits between the two fields it is
   // a peer of: below a preference the user set for every agent, above the role
   // of the one node it happens to reach.
   it('ranks the blocks below the user instructions and above the node role', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         customInstructions: 'GLOBAL',
         instructionBlocks: 'BLOCK',
@@ -304,7 +366,7 @@ describe('composeTurnInstructions — instruction blocks', () => {
 
   it('drops a blank block instead of joining an empty paragraph', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         customInstructions: 'GLOBAL',
         instructionBlocks: '   ',
@@ -315,7 +377,7 @@ describe('composeTurnInstructions — instruction blocks', () => {
 
   it('is absent for a plain chat turn, which has no canvas to wire one on', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         customInstructions: 'GLOBAL',
       }),
@@ -323,13 +385,13 @@ describe('composeTurnInstructions — instruction blocks', () => {
   });
 });
 
-describe('composeTurnInstructions — workflow instructions', () => {
+describe('the composed block — workflow instructions', () => {
   // The brief names the file a builder chat owns, so it must outrank a
   // standing preference and yield to a node authored for one job — the same
   // placement the card's block beside it takes.
   it('ranks the brief below the user instructions and above the node role', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         customInstructions: 'GLOBAL',
         workflowInstructions: 'WORKFLOW',
@@ -341,7 +403,7 @@ describe('composeTurnInstructions — workflow instructions', () => {
 
   it('drops a blank brief instead of joining an empty paragraph', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         customInstructions: 'GLOBAL',
         workflowInstructions: '   ',
@@ -351,11 +413,100 @@ describe('composeTurnInstructions — workflow instructions', () => {
 
   it('is absent for a chat opened outside the workflow builder', () => {
     expect(
-      composeTurnInstructions({
+      composed({
         includePreamble: false,
         customInstructions: 'GLOBAL',
         taskInstructions: 'CARD',
       }),
     ).toBe('GLOBAL\n\nCARD');
   });
+});
+
+describe('turnInstructionParts', () => {
+  const EVERY_PART = {
+    backgroundWorkNote: 'NOTE',
+    replyLanguage: 'Russian',
+    customInstructions: '  GLOBAL\n',
+    taskInstructions: 'CARD',
+    workflowInstructions: 'WORKFLOW',
+    instructionBlocks: 'BLOCKS',
+    systemPrompt: 'ROLE',
+    answeringACallPrompt: 'ANSWER',
+    callSurfacePrompt: 'CALLS',
+  };
+
+  it('names every part by its source, in the order the block joins them', () => {
+    expect(turnInstructionParts(EVERY_PART).map((part) => part.source)).toEqual(
+      [
+        'preamble',
+        'backgroundWorkNote',
+        'replyLanguage',
+        'customInstructions',
+        'taskInstructions',
+        'workflowInstructions',
+        'instructionBlocks',
+        'role',
+        'answeringACall',
+        'callSurface',
+      ],
+    );
+  });
+
+  it('joins to the composed block, trimmed and blank parts dropped', () => {
+    const parts = {
+      ...EVERY_PART,
+      taskInstructions: '   ',
+      systemPrompt: null,
+    };
+
+    expect(joinTurnInstructionParts(turnInstructionParts(parts))).toBe(
+      [
+        GENIRO_UI_PREAMBLE,
+        'NOTE',
+        replyLanguageInstruction('Russian'),
+        'GLOBAL',
+        'WORKFLOW',
+        'BLOCKS',
+        'ANSWER',
+        'CALLS',
+      ].join('\n\n'),
+    );
+    expect(
+      turnInstructionParts(parts).some(
+        (p) => p.source === 'taskInstructions' || p.source === 'role',
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ['claude', new ClaudeAdapter()],
+    [
+      'cursor-agent',
+      new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
+    ],
+    ['codex', new CodexAdapter({ clientVersion: '1.0.0' })],
+  ])(
+    '%s: its named parts join to the block it hands its CLI, call surface gated on the grant',
+    (_agent, adapter) => {
+      const input: AgentTurnInput = {
+        ...TURN,
+        customInstructions: 'GLOBAL',
+        instructionBlocks: 'BLOCKS',
+        systemPrompt: 'ROLE',
+        callSurfacePrompt: 'CALLS',
+      };
+      for (const granted of [true, false]) {
+        const parts = adapter.turnInstructionParts(input, granted);
+        expect(joinTurnInstructionParts(parts)).toBe(
+          composedBy(adapter, input, granted),
+        );
+        expect(parts.some((p) => p.source === 'callSurface')).toBe(granted);
+      }
+      expect(
+        adapter
+          .turnInstructionParts(TURN, true)
+          .find((p) => p.source === 'backgroundWorkNote')?.text,
+      ).toBe(adapter.getConfig().backgroundWork.agentNote?.trim());
+    },
+  );
 });

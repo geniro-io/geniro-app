@@ -5,6 +5,11 @@ import type { AgentEvent, AgentTurnInput, TurnIo } from '../adapter.types';
 import {
   CODEX_ACTIVE_WRITER_RETRIES,
   CODEX_ACTIVE_WRITER_RETRY_MS,
+  CODEX_FAILED_TOOL_RESULT,
+  CODEX_STEER_ANSWER_GRACE_MS,
+  CODEX_STOP_CLOSE_GRACE_MS,
+  CODEX_STOPPED_TOOL_RESULT,
+  CODEX_WAIT_GAP_GRACE_MS,
 } from './codex.const';
 import { CodexSession } from './codex-session';
 import type { CodexTurnOptions } from './codex-turn.driver';
@@ -150,6 +155,25 @@ beforeEach(() => {
   written = [];
   emitted = [];
 });
+
+/** A codex command's unit of work, keyed — like its call — by the item id. */
+function commandUnit(
+  id: string,
+  phase: 'started' | 'backgrounded' | 'settled',
+  delegate = false,
+): AgentEvent {
+  return {
+    type: 'background_work',
+    id,
+    phase,
+    unit: 'other',
+    toolCallId: id,
+    ...(phase === 'started' ? { foreground: true as const } : {}),
+    ...(phase === 'started' && delegate
+      ? { ownedByDelegate: true as const }
+      : {}),
+  };
+}
 
 describe('opening a conversation', () => {
   it('pipelines the handshake and the thread, carrying the instruction block', () => {
@@ -508,6 +532,10 @@ describe('a turn', () => {
     expect(
       running?.type === 'cost_progress' ? running.costUsd : undefined,
     ).toBeCloseTo(0.0648, 10);
+    // codex states no price, so all of it is geniro's list-price estimate.
+    expect(
+      running?.type === 'cost_progress' ? running.estimatedCostUsd : undefined,
+    ).toBeCloseTo(0.0648, 10);
     const [zero, terminal] = feed(session, {
       method: 'turn/completed',
       params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
@@ -669,6 +697,42 @@ describe('a turn', () => {
     ]);
   });
 
+  it('closes a failed turn’s unfinished tool call ahead of the error, and only that one', () => {
+    const session = openSession();
+    const command = (id: string) => ({
+      threadId: THREAD,
+      turnId: TURN,
+      item: { type: 'commandExecution', id, command: 'make build' },
+    });
+    feed(session, { method: 'item/started', params: command('done') });
+    feed(session, { method: 'item/completed', params: command('done') });
+    feed(session, { method: 'item/started', params: command('open') });
+    expect(
+      feed(session, {
+        method: 'turn/completed',
+        params: {
+          threadId: THREAD,
+          turn: {
+            id: TURN,
+            status: 'failed',
+            error: { message: 'stream disconnected' },
+          },
+        },
+      }),
+    ).toEqual([
+      // A one-shot command ends with its turn.
+      commandUnit('open', 'settled'),
+      {
+        type: 'tool_result',
+        id: 'open',
+        name: 'shell',
+        result: CODEX_FAILED_TOOL_RESULT,
+        isError: true,
+      },
+      { type: 'error', message: 'stream disconnected' },
+    ]);
+  });
+
   it('reports a retry as a notice without settling the turn', () => {
     const session = openSession();
     const events = feed(session, {
@@ -753,6 +817,14 @@ describe('approvals and questions', () => {
       id: 'n:41',
       toolName: 'shell',
       input: { command: 'npm test', cwd: '/repo' },
+      options: [
+        {
+          id: 'session',
+          label: 'Allow for this session',
+          allow: true,
+          scope: 'session',
+        },
+      ],
     });
     const reply = session.buildApprovalResponse('n:41', true);
     expect(JSON.parse(reply!)).toMatchObject({
@@ -760,6 +832,28 @@ describe('approvals and questions', () => {
       result: { decision: 'accept' },
     });
     expect(session.buildApprovalResponse('n:41', true)).toBeUndefined();
+  });
+
+  it("answers the card's session-long option with `acceptForSession`", () => {
+    const session = openSession(turnInput({ approvalMode: 'ask' }));
+    const [card] = feed(session, {
+      id: 43,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: THREAD,
+        turnId: TURN,
+        itemId: 'c',
+        command: 'npm test',
+        cwd: '/repo',
+      },
+    });
+    const option =
+      card?.type === 'approval_request' ? card.options?.[0] : undefined;
+    expect(
+      JSON.parse(
+        session.buildApprovalResponse('n:43', true, undefined, option)!,
+      ),
+    ).toMatchObject({ id: 43, result: { decision: 'acceptForSession' } });
   });
 
   it('lets `acceptEdits` file changes through without a card', () => {
@@ -958,6 +1052,197 @@ describe('mid-turn', () => {
     expect(message).toContain('"also update the docs"');
   });
 
+  it('reports a refused steer of a message with a row as that message not sent', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    session.sendFollowUp({
+      text: 'also update the docs',
+      deliveryId: 'delivery-1',
+    });
+
+    const events = feed(session, {
+      id: frameFor('turn/steer').id,
+      error: { code: -32600, message: 'turn already finishing' },
+    });
+
+    expect(events).toEqual([
+      {
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1'],
+        reason: 'turn already finishing',
+      },
+    ]);
+  });
+
+  describe('a turn that ends while a steer is unanswered', () => {
+    const COMPLETED = {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+    };
+    const INTERRUPTED = {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'interrupted' } },
+    };
+    /** codex taking the steer into the turn, as it shows it. */
+    const TAKEN = {
+      method: 'item/started',
+      params: {
+        threadId: THREAD,
+        turnId: TURN,
+        item: {
+          type: 'userMessage',
+          id: 'steer-item',
+          content: [
+            { type: 'text', text: 'also update the docs', text_elements: [] },
+          ],
+        },
+      },
+    };
+    function steered(): { session: CodexSession; steerId: unknown } {
+      const session = openSession();
+      acceptTurnStart(session);
+      session.sendFollowUp({
+        text: 'also update the docs',
+        deliveryId: 'delivery-1',
+      });
+      return { session, steerId: frameFor('turn/steer').id };
+    }
+
+    it('holds its ending until the refusal, which is reported ahead of it', () => {
+      const { session, steerId } = steered();
+
+      expect(feed(session, COMPLETED)).toEqual([]);
+      const events = feed(session, {
+        id: steerId,
+        error: { code: -32600, message: 'no active turn' },
+      });
+
+      expect(events.map((event) => event.type)).toEqual([
+        'follow_up_dropped',
+        'turn_complete',
+      ]);
+    });
+
+    it('reports a steer codex never answered as dropped when the process ends', () => {
+      // Measured in the app: a chat's Stop closes the session in the same
+      // tick as the steer, and codex's rollout records the turn aborted with
+      // no trace of the message.
+      const { session } = steered();
+
+      expect(session.onProcessEnded()).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ]);
+      // Once: the process-end path writes the terminal, not a held ending.
+      expect(session.onProcessEnded()).toEqual([]);
+    });
+
+    it('reports nothing on process end for a steer codex took', () => {
+      const { session, steerId } = steered();
+      feed(session, { id: steerId, result: {} });
+      feed(session, TAKEN);
+
+      expect(session.onProcessEnded()).toEqual([]);
+    });
+
+    it('reports a steer codex accepted but never took as dropped when the process ends', () => {
+      const { session, steerId } = steered();
+      feed(session, { id: steerId, result: {} });
+
+      expect(session.onProcessEnded()).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ]);
+    });
+
+    it('reports an accepted steer the stop discarded ahead of the cancel', () => {
+      // PROBED on codex 0.162.0, three of three: a steer accepted just before
+      // the interrupt gets no `userMessage` item and is not in the thread.
+      const { session, steerId } = steered();
+      feed(session, { id: steerId, result: {} });
+
+      const events = feed(session, INTERRUPTED);
+
+      expect(
+        events.filter((event) => event.type === 'follow_up_dropped'),
+      ).toEqual([{ type: 'follow_up_dropped', deliveryIds: ['delivery-1'] }]);
+      expect(events.map((event) => event.type).slice(-2)).toEqual([
+        'follow_up_dropped',
+        'turn_cancelled',
+      ]);
+    });
+
+    it('reports nothing for a steer codex took before the stop, its item ahead of its reply or after', () => {
+      const after = steered();
+      feed(after.session, { id: after.steerId, result: {} });
+      feed(after.session, TAKEN);
+      const before = steered();
+      feed(before.session, TAKEN);
+      feed(before.session, { id: before.steerId, result: {} });
+
+      for (const { session } of [after, before]) {
+        expect(
+          feed(session, INTERRUPTED).some(
+            (event) => event.type === 'follow_up_dropped',
+          ),
+        ).toBe(false);
+      }
+    });
+
+    it('asks a closing session to wait only while a steer is still unconfirmed', () => {
+      const { session, steerId } = steered();
+      expect(session.closeGraceMs()).toBe(CODEX_STOP_CLOSE_GRACE_MS);
+      feed(session, { id: steerId, result: {} });
+      expect(session.closeGraceMs()).toBe(CODEX_STOP_CLOSE_GRACE_MS);
+
+      feed(session, TAKEN);
+
+      expect(session.closeGraceMs()).toBe(0);
+    });
+
+    it('releases its ending when codex takes the steer', () => {
+      const { session, steerId } = steered();
+      feed(session, COMPLETED);
+
+      expect(
+        feed(session, { id: steerId, result: {} }).map((event) => event.type),
+      ).toEqual(['turn_complete']);
+    });
+
+    it('ends after the grace, and a refusal later than that is a notice quoting the message', () => {
+      vi.useFakeTimers();
+      try {
+        const { session, steerId } = steered();
+        feed(session, COMPLETED);
+        emitted = [];
+
+        vi.advanceTimersByTime(CODEX_STEER_ANSWER_GRACE_MS);
+        expect(emitted.map((event) => event.type)).toEqual(['turn_complete']);
+
+        const late = feed(session, {
+          id: steerId,
+          error: { code: -32600, message: 'no active turn' },
+        });
+        expect(late).toEqual([
+          expect.objectContaining({
+            type: 'notice',
+            message: expect.stringContaining('"also update the docs"'),
+          }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('lets a Stop end the held turn at once, with its own ending', () => {
+      const { session } = steered();
+      feed(session, COMPLETED);
+      emitted = [];
+
+      expect(session.withdrawHeldPrompt()).toBe(true);
+      expect(emitted.map((event) => event.type)).toEqual(['turn_complete']);
+      expect(session.withdrawHeldPrompt()).toBe(false);
+    });
+  });
+
   it('quotes only the start of a long refused message', () => {
     const session = openSession();
     acceptTurnStart(session);
@@ -1088,6 +1373,715 @@ describe('later turns on the kept process', () => {
         result: { turn: { id: 'stale' } },
       }),
     ).toEqual([]);
+  });
+
+  it('keeps a stopped turn’s command, finishing after the next turn opened, out of that turn', () => {
+    // codex does not kill a command when its turn is interrupted: the command
+    // runs on, and its output and completion arrive later under the STOPPED
+    // turn's id — measured on codex-cli 0.162.0, 2–6 s into the next turn.
+    const session = openSession();
+    acceptTurnStart(session);
+    const command = (id: string, turnId: string) => ({
+      threadId: THREAD,
+      turnId,
+      item: {
+        type: 'commandExecution',
+        id,
+        command: `sleep 6 && echo ${id}`,
+        status: 'completed',
+        exitCode: 0,
+        aggregatedOutput: `${id}\n`,
+      },
+    });
+    feed(session, { method: 'item/started', params: command('stopped', TURN) });
+    // The stop is the call's only ending, so it is closed with the turn.
+    expect(
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'interrupted' } },
+      }),
+    ).toEqual([
+      commandUnit('stopped', 'settled'),
+      {
+        type: 'tool_result',
+        id: 'stopped',
+        name: 'shell',
+        result: CODEX_STOPPED_TOOL_RESULT,
+        isError: true,
+      },
+      { type: 'turn_cancelled' },
+    ]);
+    const NEXT = '01a0e3aa-ffff-7493-8c1f-01cff8862a2b';
+    session.openTurn(io(), turnInput({ prompt: 'next' }));
+    acceptTurnStart(session, NEXT);
+    feed(session, {
+      method: 'turn/started',
+      params: { threadId: THREAD, turn: { id: NEXT } },
+    });
+
+    expect(
+      feed(session, {
+        method: 'item/completed',
+        params: command('stopped', TURN),
+      }),
+    ).toEqual([]);
+    expect(
+      feed(session, {
+        method: 'item/agentMessage/delta',
+        params: { threadId: THREAD, turnId: TURN, delta: 'stopped turn words' },
+      }),
+    ).toEqual([]);
+
+    // The next turn's own command still reaches it.
+    feed(session, { method: 'item/started', params: command('own', NEXT) });
+    expect(
+      feed(session, {
+        method: 'item/completed',
+        params: command('own', NEXT),
+      }),
+    ).toEqual([
+      expect.objectContaining({ type: 'tool_result', id: 'own' }),
+      commandUnit('own', 'settled'),
+    ]);
+  });
+
+  it('keeps a stopped turn’s late command out of the next turn before codex has named that turn', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    const stopped = {
+      threadId: THREAD,
+      turnId: TURN,
+      item: { type: 'commandExecution', id: 'late', command: 'sleep 9' },
+    };
+    feed(session, { method: 'item/started', params: stopped });
+    feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'interrupted' } },
+    });
+    // The next turn/start is out but unanswered, so its driver has no id yet.
+    session.openTurn(io(), turnInput({ prompt: 'next' }));
+    expect(
+      feed(session, { method: 'item/completed', params: stopped }),
+    ).toEqual([]);
+  });
+
+  it('gives a stopped turn’s call no second result when its command finishes between turns', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    const stopped = {
+      threadId: THREAD,
+      turnId: TURN,
+      item: { type: 'commandExecution', id: 'late', command: 'sleep 9' },
+    };
+    feed(session, { method: 'item/started', params: stopped });
+    feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'interrupted' } },
+    });
+    // No next turn: the settled driver still receives the frame, and the stop
+    // already closed the call.
+    expect(
+      feed(session, { method: 'item/completed', params: stopped }),
+    ).toEqual([]);
+  });
+
+  it.each([
+    [
+      'collabAgentToolCall',
+      {
+        type: 'collabAgentToolCall',
+        id: 'launch',
+        tool: 'spawnAgent',
+        prompt: 'Review the parser',
+      },
+    ],
+    [
+      'subAgentActivity',
+      {
+        type: 'subAgentActivity',
+        id: 'launch',
+        kind: 'started',
+        agentThreadId: 'sub-7',
+        agentPath: '/root/review',
+      },
+    ],
+  ])(
+    'leaves a %s launch open at the stop unclosed, so its delegate is not drawn failed',
+    (_shape, item) => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, {
+        method: 'item/started',
+        params: { threadId: THREAD, turnId: TURN, item },
+      });
+      expect(
+        feed(session, {
+          method: 'turn/completed',
+          params: {
+            threadId: THREAD,
+            turn: { id: TURN, status: 'interrupted' },
+          },
+        }).filter((event) => event.type === 'tool_result'),
+      ).toEqual([]);
+    },
+  );
+
+  describe('commands codex holds in its process store', () => {
+    // Measured on codex-cli 0.162.0: an `exec_command` is a commandExecution
+    // item carrying the store's `processId` from its start; one that outlives
+    // its yield is still `inProgress` at `turn/completed`, and when it ends by
+    // itself `item/completed` arrives under the OLD turn's id, with no turn
+    // open.
+    const command = (id: string, turnId = TURN, done = false) => ({
+      threadId: THREAD,
+      turnId,
+      item: {
+        type: 'commandExecution',
+        id,
+        command: "/bin/zsh -lc 'pnpm dev'",
+        source: 'unifiedExecStartup',
+        processId: '76956',
+        ...(done
+          ? { status: 'completed', exitCode: 0, aggregatedOutput: 'ready\n' }
+          : { status: 'inProgress' }),
+      },
+    });
+    const unit = (
+      id: string,
+      phase: 'started' | 'backgrounded' | 'settled',
+    ): AgentEvent => ({
+      type: 'background_work',
+      id,
+      phase,
+      unit: 'other',
+      toolCallId: id,
+      ...(phase === 'started' ? { foreground: true as const } : {}),
+    });
+    const units = (events: AgentEvent[]) =>
+      events.filter((event) => event.type === 'background_work');
+    const endTurn = (session: CodexSession, status: string, turnId = TURN) =>
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: turnId, status } },
+      });
+
+    it('reports one from its start as work the agent waits on, after its call', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+
+      expect(
+        feed(session, { method: 'item/started', params: command('dev') }),
+      ).toEqual([
+        expect.objectContaining({ type: 'tool_call', id: 'dev' }),
+        unit('dev', 'started'),
+      ]);
+    });
+
+    it('moves one still running at the turn’s end to the background, ahead of the ending', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: command('dev') });
+
+      const ending = endTurn(session, 'completed');
+
+      expect(units(ending)).toEqual([unit('dev', 'backgrounded')]);
+      expect(ending.at(-1)?.type).toBe('turn_complete');
+    });
+
+    it('settles it, after its result marked as its end, when codex completes it with no turn open', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: command('dev') });
+      endTurn(session, 'completed');
+
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: command('dev', TURN, true),
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          type: 'tool_result',
+          id: 'dev',
+          endsBackgroundWork: true,
+        }),
+        unit('dev', 'settled'),
+      ]);
+      // Once: a second report of the same ending settles nothing again.
+      expect(
+        units(
+          feed(session, {
+            method: 'item/completed',
+            params: command('dev', TURN, true),
+          }),
+        ),
+      ).toEqual([]);
+    });
+
+    it('settles it when its completion lands during a later turn', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: command('dev') });
+      endTurn(session, 'completed');
+      const NEXT = '01a0e3aa-ffff-7493-8c1f-01cff8862a2d';
+      session.openTurn(io(), turnInput({ prompt: 'next' }));
+      acceptTurnStart(session, NEXT);
+
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: command('dev', TURN, true),
+        }),
+      ).toContainEqual(unit('dev', 'settled'));
+    });
+
+    it('settles one that finished inside its turn, unmarked and never backgrounded', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: command('ls') });
+
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: command('ls', TURN, true),
+        }),
+      ).toEqual([
+        expect.not.objectContaining({ endsBackgroundWork: true }),
+        unit('ls', 'settled'),
+      ]);
+      expect(units(endTurn(session, 'completed'))).toEqual([]);
+    });
+
+    it('records a one-shot command from its start, and settles it with its turn', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      const once = {
+        threadId: THREAD,
+        turnId: TURN,
+        item: { type: 'commandExecution', id: 'once', command: 'make build' },
+      };
+
+      expect(
+        units(feed(session, { method: 'item/started', params: once })),
+      ).toEqual([unit('once', 'started')]);
+      // codex holds it in no process store: it never runs on past its turn.
+      expect(units(endTurn(session, 'failed'))).toEqual([
+        unit('once', 'settled'),
+      ]);
+    });
+
+    it('keeps the call of one a failed turn leaves running open, and writes its real result when it ends', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: command('dev') });
+      feed(session, {
+        method: 'item/started',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          item: { type: 'commandExecution', id: 'once', command: 'make' },
+        },
+      });
+
+      expect(endTurn(session, 'failed')).toEqual([
+        unit('dev', 'backgrounded'),
+        unit('once', 'settled'),
+        {
+          type: 'tool_result',
+          id: 'once',
+          name: 'shell',
+          result: CODEX_FAILED_TOOL_RESULT,
+          isError: true,
+        },
+        expect.objectContaining({ type: 'error' }),
+      ]);
+      // Fenced as a failed turn's frame, it still carries the open call's
+      // own result.
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: command('dev', TURN, true),
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          type: 'tool_result',
+          id: 'dev',
+          result: 'ready\n',
+          isError: false,
+          endsBackgroundWork: true,
+        }),
+        unit('dev', 'settled'),
+      ]);
+    });
+
+    it('leaves a Stop’s own command a unit, never backgrounded, settled by its fenced completion', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: command('dev') });
+      written = [];
+
+      const ending = endTurn(session, 'interrupted');
+
+      expect(units(ending)).toEqual([]);
+      expect(ending).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_result',
+          id: 'dev',
+          result: CODEX_STOPPED_TOOL_RESULT,
+        }),
+      );
+      // The Stop still asks codex to end it.
+      expect(frameFor('thread/backgroundTerminals/list').params).toEqual({
+        threadId: THREAD,
+      });
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: command('dev', TURN, true),
+        }),
+      ).toEqual([unit('dev', 'settled')]);
+    });
+
+    it('leaves an earlier turn’s command running, and backgrounded, through a later Stop', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: command('dev') });
+      endTurn(session, 'completed');
+      const NEXT = '01a0e3aa-ffff-7493-8c1f-01cff8862a2e';
+      session.openTurn(io(), turnInput({ prompt: 'next' }));
+      acceptTurnStart(session, NEXT);
+
+      expect(units(endTurn(session, 'interrupted', NEXT))).toEqual([]);
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: command('dev', TURN, true),
+        }),
+      ).toContainEqual(unit('dev', 'settled'));
+    });
+  });
+
+  describe('ending the commands a Stop left running', () => {
+    const command = (id: string, words: string) => ({
+      threadId: THREAD,
+      turnId: TURN,
+      item: { type: 'commandExecution', id, command: words },
+    });
+    function stopWith(session: CodexSession, ...started: string[]): void {
+      for (const id of started) {
+        feed(session, {
+          method: 'item/started',
+          params: command(id, `sleep 60 # ${id}`),
+        });
+      }
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'interrupted' } },
+      });
+    }
+    const listed = (...entries: [string, string][]) => ({
+      data: entries.map(([itemId, processId]) => ({
+        itemId,
+        processId,
+        command: 'sleep 60',
+        cwd: '/repo',
+        osPid: null,
+      })),
+      nextCursor: null,
+    });
+
+    it('ends exactly the stopped turn’s running command, even once the next turn has opened', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: command('done', 'ls') });
+      feed(session, {
+        method: 'item/completed',
+        params: command('done', 'ls'),
+      });
+      stopWith(session, 'running');
+      const list = frameFor('thread/backgroundTerminals/list');
+      expect(list.params).toEqual({ threadId: THREAD });
+      session.openTurn(io(), turnInput({ prompt: 'next' }));
+      written = [];
+      // `dev` is a server an earlier turn left running on purpose.
+      expect(
+        feed(session, {
+          id: list.id,
+          result: listed(['dev', '9'], ['running', '41']),
+        }),
+      ).toEqual([]);
+      expect(
+        frames().filter(
+          (frame) => frame.method === 'thread/backgroundTerminals/terminate',
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          params: { threadId: THREAD, processId: '41' },
+        }),
+      ]);
+      expect(
+        feed(session, {
+          id: frameFor('thread/backgroundTerminals/terminate').id,
+          result: { terminated: true },
+        }),
+      ).toEqual([]);
+    });
+
+    it('says nothing of a command that finished by itself before the listing came back', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopWith(session, 'running');
+      feed(session, {
+        method: 'item/completed',
+        params: command('running', 'sleep 60 # running'),
+      });
+      expect(
+        feed(session, {
+          id: frameFor('thread/backgroundTerminals/list').id,
+          result: listed(),
+        }),
+      ).toEqual([]);
+    });
+
+    it('stops following a listing whose cursor repeats', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopWith(session, 'running');
+      const page = { ...listed(['dev', '9']), nextCursor: 'same' };
+      feed(session, {
+        id: frameFor('thread/backgroundTerminals/list').id,
+        result: page,
+      });
+      const again = feed(session, {
+        id: frameFor('thread/backgroundTerminals/list').id,
+        result: page,
+      });
+      expect(
+        frames().filter(
+          (frame) => frame.method === 'thread/backgroundTerminals/list',
+        ),
+      ).toHaveLength(2);
+      expect(again).toEqual([
+        expect.objectContaining({ type: 'notice', severity: 'warning' }),
+      ]);
+    });
+
+    it('asks nothing when the stopped turn left no command running', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopWith(session);
+      expect(
+        frames().some(
+          (frame) => frame.method === 'thread/backgroundTerminals/list',
+        ),
+      ).toBe(false);
+    });
+
+    it('follows the listing’s pages until it has found the command', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopWith(session, 'running');
+      feed(session, {
+        id: frameFor('thread/backgroundTerminals/list').id,
+        result: { ...listed(['dev', '9']), nextCursor: 'page-2' },
+      });
+      const second = frameFor('thread/backgroundTerminals/list');
+      expect(second.params).toEqual({ threadId: THREAD, cursor: 'page-2' });
+      feed(session, { id: second.id, result: listed(['running', '41']) });
+      expect(frameFor('thread/backgroundTerminals/terminate').params).toEqual({
+        threadId: THREAD,
+        processId: '41',
+      });
+    });
+
+    it.each([
+      [
+        'the listing does not show it',
+        (session: CodexSession) =>
+          feed(session, {
+            id: frameFor('thread/backgroundTerminals/list').id,
+            result: listed(['dev', '9']),
+          }),
+        'codex did not list it as running',
+      ],
+      [
+        'codex refuses the listing',
+        (session: CodexSession) =>
+          feed(session, {
+            id: frameFor('thread/backgroundTerminals/list').id,
+            error: { code: -32600, message: 'experimental api required' },
+          }),
+        'codex refused to list its running commands (experimental api required)',
+      ],
+      [
+        'codex cannot end it',
+        (session: CodexSession) => {
+          feed(session, {
+            id: frameFor('thread/backgroundTerminals/list').id,
+            result: listed(['running', '41']),
+          });
+          return feed(session, {
+            id: frameFor('thread/backgroundTerminals/terminate').id,
+            result: { terminated: false },
+          });
+        },
+        'codex reported it could not end it',
+      ],
+    ])(
+      'says the command may still be running when %s',
+      (_case, answer, reason) => {
+        const session = openSession();
+        acceptTurnStart(session);
+        stopWith(session, 'running');
+        expect(answer(session)).toEqual([
+          {
+            type: 'notice',
+            severity: 'warning',
+            message: `The Stop did not end \`sleep 60 # running\` — ${reason}. It may still be running.`,
+          },
+        ]);
+      },
+    );
+  });
+
+  describe('a frame naming a stopped turn, once the next has opened', () => {
+    const NEXT = '01a0e3aa-ffff-7493-8c1f-01cff8862a2c';
+    const stoppedFrame = (extra: Record<string, unknown>) => ({
+      threadId: THREAD,
+      turnId: TURN,
+      ...extra,
+    });
+    function stopAndOpenNext(session: CodexSession): void {
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'interrupted' } },
+      });
+      session.openTurn(io(), turnInput({ prompt: 'next' }));
+      acceptTurnStart(session, NEXT);
+    }
+
+    it.each([
+      [
+        'item/started',
+        {
+          item: { type: 'commandExecution', id: 'late', command: 'make' },
+        },
+      ],
+      [
+        'item/completed',
+        {
+          item: { type: 'agentMessage', id: 'late-msg', text: 'old words' },
+        },
+      ],
+      ['item/agentMessage/delta', { delta: 'old words' }],
+      ['item/reasoning/textDelta', { delta: 'old thought' }],
+      ['item/reasoning/summaryTextDelta', { delta: 'old thought' }],
+      [
+        'turn/plan/updated',
+        { explanation: null, plan: [{ step: 'old', status: 'pending' }] },
+      ],
+    ])('gives the open turn nothing from %s', (method, extra) => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopAndOpenNext(session);
+      expect(feed(session, { method, params: stoppedFrame(extra) })).toEqual(
+        [],
+      );
+    });
+
+    it('still takes its usage reading, a level of the thread', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopAndOpenNext(session);
+      expect(
+        feed(session, {
+          method: 'thread/tokenUsage/updated',
+          params: usage(9_000, 40_000),
+        }),
+      ).toContainEqual(
+        expect.objectContaining({
+          type: 'context_progress',
+          contextTokens: 9_000,
+        }),
+      );
+    });
+
+    it('still closes a sub-agent a late collab call reports finished', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, {
+        method: 'item/completed',
+        params: stoppedFrame({
+          item: {
+            type: 'collabAgentToolCall',
+            id: 'call_spawn',
+            tool: 'spawnAgent',
+            status: 'completed',
+            receiverThreadIds: ['sub-1'],
+            agentsStates: { 'sub-1': { status: 'running' } },
+          },
+        }),
+      });
+      stopAndOpenNext(session);
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: stoppedFrame({
+            item: {
+              type: 'collabAgentToolCall',
+              id: 'call_wait',
+              tool: 'wait',
+              status: 'completed',
+              receiverThreadIds: ['sub-1'],
+              agentsStates: { 'sub-1': { status: 'completed' } },
+            },
+          }),
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          type: 'subagent_info',
+          id: 'call_spawn',
+          backgroundOpen: false,
+          backgroundOutcome: 'completed',
+        }),
+      ]);
+    });
+
+    it('still maps a late spawn’s sub-agent, so its own items nest under the launch', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      stopAndOpenNext(session);
+      feed(session, {
+        method: 'item/completed',
+        params: stoppedFrame({
+          item: {
+            type: 'collabAgentToolCall',
+            id: 'call_spawn',
+            tool: 'spawnAgent',
+            status: 'completed',
+            receiverThreadIds: ['sub-1'],
+            agentsStates: { 'sub-1': { status: 'running' } },
+          },
+        }),
+      });
+      expect(
+        feed(session, {
+          method: 'item/started',
+          params: {
+            threadId: 'sub-1',
+            turnId: 'x',
+            item: { type: 'commandExecution', id: 'sub_cmd', command: 'ls' },
+          },
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          type: 'tool_call',
+          id: 'sub_cmd',
+          parentToolUseId: 'call_spawn',
+        }),
+        commandUnit('sub_cmd', 'started', true),
+      ]);
+    });
   });
 
   it('answers a request parked in one turn after the next has opened', () => {
@@ -1335,6 +2329,7 @@ describe('sub-agents', () => {
         kind: 'execute',
         parentToolUseId: 'call_spawn',
       },
+      commandUnit('sub_cmd', 'started', true),
     ]);
     // A sub-agent's turn ending is not this conversation's.
     const closed = feed(session, {
@@ -1342,6 +2337,8 @@ describe('sub-agents', () => {
       params: { threadId: 'sub-1', turn: { id: 'x', status: 'completed' } },
     });
     expect(closed).toEqual([
+      // Its one-shot command ends with the sub-agent's turn.
+      commandUnit('sub_cmd', 'settled'),
       expect.objectContaining({
         type: 'subagent_info',
         id: 'call_spawn',
@@ -1411,6 +2408,94 @@ describe('sub-agents', () => {
         },
       }),
     ).toEqual([]);
+  });
+});
+
+describe('a wait on sub-agents', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const waitItem = (id: string, status: string) => ({
+    method: status === 'inProgress' ? 'item/started' : 'item/completed',
+    params: {
+      threadId: THREAD,
+      turnId: TURN,
+      item: {
+        type: 'collabAgentToolCall',
+        id,
+        tool: 'wait',
+        status,
+        receiverThreadIds: ['sub-1', 'sub-2'],
+        agentsStates: {},
+      },
+    },
+  });
+  const holds = (events: AgentEvent[]) =>
+    events.filter((event) => event.type === 'turn_held');
+
+  it('holds the turn while codex waits on its sub-agents, and ends the hold once the gap after the last wait has passed', () => {
+    const session = openSession();
+    // The agent produces nothing until a sub-agent reports: announced like
+    // claude's hold, so the composer sends a message straight in.
+    expect(holds(feed(session, waitItem('w1', 'inProgress')))).toEqual([
+      { type: 'turn_held', open: 2 },
+    ]);
+    expect(holds(feed(session, waitItem('w1', 'completed')))).toEqual([]);
+    emitted = [];
+    vi.advanceTimersByTime(CODEX_WAIT_GAP_GRACE_MS);
+    expect(holds(emitted)).toEqual([{ type: 'turn_held', open: 0 }]);
+  });
+
+  it('keeps the hold through the gap when the agent waits again', () => {
+    const session = openSession();
+    expect(holds(feed(session, waitItem('w1', 'inProgress')))).toHaveLength(1);
+    feed(session, waitItem('w1', 'completed'));
+    vi.advanceTimersByTime(CODEX_WAIT_GAP_GRACE_MS - 1);
+    expect(holds(feed(session, waitItem('w2', 'inProgress')))).toEqual([]);
+    emitted = [];
+    vi.advanceTimersByTime(CODEX_WAIT_GAP_GRACE_MS);
+    expect(holds(emitted)).toEqual([]);
+  });
+
+  it('ends the hold at once when the agent starts writing its reply in the gap', () => {
+    const session = openSession();
+    feed(session, waitItem('w1', 'inProgress'));
+    feed(session, waitItem('w1', 'completed'));
+    const writing = feed(session, {
+      method: 'item/agentMessage/delta',
+      params: { threadId: THREAD, turnId: TURN, delta: 'All done' },
+    });
+    expect(holds(writing)).toEqual([{ type: 'turn_held', open: 0 }]);
+  });
+
+  it('ends the hold at once when the agent takes a message in the gap, or the turn ends', () => {
+    const session = openSession();
+    feed(session, waitItem('w1', 'inProgress'));
+    feed(session, waitItem('w1', 'completed'));
+    const took = feed(session, {
+      method: 'item/started',
+      params: {
+        threadId: THREAD,
+        turnId: TURN,
+        item: { type: 'userMessage', id: 'u1', content: [] },
+      },
+    });
+    expect(holds(took)).toEqual([{ type: 'turn_held', open: 0 }]);
+
+    feed(session, waitItem('w2', 'inProgress'));
+    const ended = feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+    });
+    expect(holds(ended)).toEqual([{ type: 'turn_held', open: 0 }]);
+    emitted = [];
+    vi.advanceTimersByTime(CODEX_WAIT_GAP_GRACE_MS);
+    expect(holds(emitted)).toEqual([]);
   });
 });
 
@@ -1531,6 +2616,156 @@ describe('sub-agents reported as subAgentActivity (codex 0.157.1)', () => {
     ).toBe(false);
   });
 
+  describe('a command a sub-agent runs', () => {
+    // Measured on codex-cli 0.162.0: a sub-agent's `exec_command` outlives the
+    // sub-agent's turn and its parent's, is listed in neither thread's
+    // background terminals, and completes ~45 s later under the SUB-AGENT's
+    // thread and turn.
+    const subCommand = (
+      id: string,
+      done: boolean,
+      thread = 'sub-7',
+      processId: string | null = '43526',
+    ) => ({
+      threadId: thread,
+      turnId: `${thread}-turn`,
+      item: {
+        type: 'commandExecution',
+        id,
+        command: "/bin/zsh -lc 'sleep 47'",
+        source: 'unifiedExecStartup',
+        ...(processId === null ? {} : { processId }),
+        ...(done
+          ? { status: 'completed', exitCode: 0, aggregatedOutput: '' }
+          : { status: 'inProgress' }),
+      },
+    });
+    const subTurnEnds = (session: CodexSession, thread = 'sub-7') =>
+      feed(session, {
+        method: 'turn/completed',
+        params: {
+          threadId: thread,
+          turn: { id: `${thread}-turn`, status: 'completed' },
+        },
+      });
+    const settled = (id: string): AgentEvent => ({
+      type: 'background_work',
+      id,
+      phase: 'settled',
+      unit: 'other',
+      toolCallId: id,
+    });
+
+    it('reports it from its start as its delegate’s own command', () => {
+      const session = openSession();
+      spawn(session);
+
+      expect(
+        feed(session, {
+          method: 'item/started',
+          params: subCommand('exec-sub', false),
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          type: 'tool_call',
+          id: 'exec-sub',
+          parentToolUseId: 'call_u7z',
+        }),
+        commandUnit('exec-sub', 'started', true),
+      ]);
+    });
+
+    it('moves it to the background when it outlives the sub-agent’s turn, ahead of the delegate’s close', () => {
+      const session = openSession();
+      spawn(session);
+      feed(session, {
+        method: 'item/started',
+        params: subCommand('exec-sub', false),
+      });
+
+      expect(subTurnEnds(session)).toEqual([
+        commandUnit('exec-sub', 'backgrounded'),
+        expect.objectContaining({ type: 'subagent_info', id: 'call_u7z' }),
+      ]);
+    });
+
+    it('settles it, its result marked as its end, when it outlived the sub-agent’s turn', () => {
+      const session = openSession();
+      spawn(session);
+      feed(session, {
+        method: 'item/started',
+        params: subCommand('exec-sub', false),
+      });
+      subTurnEnds(session);
+
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: subCommand('exec-sub', true),
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          type: 'tool_result',
+          id: 'exec-sub',
+          parentToolUseId: 'call_u7z',
+          endsBackgroundWork: true,
+        }),
+        settled('exec-sub'),
+      ]);
+    });
+
+    it('leaves another sub-agent’s command unmarked when one sub-agent’s turn ends', () => {
+      const session = openSession();
+      spawn(session);
+      feed(session, {
+        method: 'item/started',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          item: {
+            type: 'subAgentActivity',
+            id: 'call_other',
+            kind: 'started',
+            agentThreadId: 'sub-8',
+            agentPath: '/root/other',
+          },
+        },
+      });
+      feed(session, {
+        method: 'item/started',
+        params: subCommand('exec-7', false),
+      });
+      feed(session, {
+        method: 'item/started',
+        params: subCommand('exec-8', false, 'sub-8'),
+      });
+      subTurnEnds(session, 'sub-7');
+
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: subCommand('exec-8', true, 'sub-8'),
+        }),
+      ).toEqual([
+        expect.not.objectContaining({ endsBackgroundWork: true }),
+        settled('exec-8'),
+      ]);
+    });
+
+    it('settles a one-shot command with the sub-agent’s turn', () => {
+      const session = openSession();
+      spawn(session);
+      feed(session, {
+        method: 'item/started',
+        params: subCommand('once-sub', false, 'sub-7', null),
+      });
+
+      expect(subTurnEnds(session)[0]).toEqual(
+        commandUnit('once-sub', 'settled'),
+      );
+    });
+  });
+
   it('nests the sub-agent’s own items under the launch', () => {
     const session = openSession();
     spawn(session);
@@ -1549,6 +2784,7 @@ describe('sub-agents reported as subAgentActivity (codex 0.157.1)', () => {
         id: 'exec-1',
         parentToolUseId: 'call_u7z',
       }),
+      commandUnit('exec-1', 'started', true),
     ]);
   });
 

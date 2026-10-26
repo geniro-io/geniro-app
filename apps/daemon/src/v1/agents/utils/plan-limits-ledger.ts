@@ -1,3 +1,6 @@
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import type { PlanLimitsWire } from '../chat.types';
 
 /**
@@ -30,18 +33,25 @@ export class PlanLimitsLedger {
    *
    * Null `offered` only asks. Null `key` (a run naming no agent) has no
    * account to share with, so the offer is answered alone.
+   *
+   * `preferOffered` is the readout's refresh press: the offered reading is
+   * the agent's answer from just now, and it stands even where a real reading
+   * under {@link REAL_READING_PREFERRED_MS} would otherwise outrank it. The
+   * panel says when what it shows is an estimate.
    */
   settle(
     key: string | null,
     offered: PlanReading | null,
     now: number,
+    preferOffered = false,
   ): PlanReading | null {
     if (key === null) {
       return offered;
     }
     const held = this.entries.get(key);
     const live = held && now - held.takenAt <= LEDGER_MAX_AGE_MS ? held : null;
-    const best = pickBetter(live, offered);
+    const best =
+      preferOffered && offered !== null ? offered : pickBetter(live, offered);
     if (best === null) {
       this.entries.delete(key);
     } else {
@@ -128,4 +138,37 @@ export function accountKeyOf(
   configDir: string | null,
 ): string | null {
   return agentKind === null ? null : `${agentKind}\u0000${configDir ?? ''}`;
+}
+
+/**
+ * The account key of a CLI run in `cwd` under `configDir`: the folder's pin
+ * first (`ConfigDirPinService` — a default-profile run in a pinned folder runs
+ * on the pinned account), else the profile it names, canonicalized.
+ */
+export function effectiveAccountKey(
+  agentKind: string | null,
+  configDir: string | null,
+  pinnedDir: string | null,
+  cwd: string | null,
+): string | null {
+  const dir = pinnedDir ?? configDir;
+  return accountKeyOf(
+    agentKind,
+    dir === null ? null : canonicalAccountDir(dir, cwd),
+  );
+}
+
+/**
+ * One directory in the form two spellings of it share, so a profile named
+ * through a symlink by one chat and directly by another is ONE account. A
+ * directory that cannot be resolved keeps its own spelling: two keys for one
+ * account only costs the sharing, never mixes two accounts.
+ */
+function canonicalAccountDir(dir: string, cwd: string | null): string {
+  const absolute = resolve(cwd ?? '/', dir);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
 }

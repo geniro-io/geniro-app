@@ -5,6 +5,7 @@ import { liveRowKind } from './live-row';
 import { CHAT_LIVE_KEY, type LiveState } from './live-text';
 import { foldTaskList, readTaskAnnouncement } from './task-payload';
 import {
+  type ActionEntry,
   type ArtifactEntry,
   buildSubagentBlocks,
   buildTurnBlocks,
@@ -483,6 +484,56 @@ describe('groupTranscript', () => {
     ).toBeUndefined();
   });
 
+  it('summarizes the newest pool handoff until the next assistant message, including anchored reloads', () => {
+    const started = item('call_started', {
+      callId: 'call-1',
+      calleeNodeId: 'poet',
+      member: 1,
+    });
+    const earlier = item(
+      'message',
+      { callId: 'call-1', text: 'Checking the metre.' },
+      'poet',
+    );
+    const message =
+      'Poet: pool member 1 hit a usage limit — handing the call to member 2.';
+    const handOff = item(
+      'system',
+      { callId: 'call-1', member: 2, message },
+      'poet',
+    );
+    const fold = (rows: ChatItem[], anchorIds?: Set<string>): CallBlockEntry =>
+      groupTranscript(rows, { anchorIds })[0] as CallBlockEntry;
+    const live = fold([started, earlier, handOff]);
+    expect(callBlockSummary(live)).toBe(message);
+
+    const anchored = fold([started, earlier, handOff], new Set([handOff.id]));
+    expect(callBlockSummary(anchored)).toBe(message);
+    expect(anchored.poolHandOff).toEqual({ message, seq: handOff.seq });
+    expect(JSON.stringify(anchored.entries)).not.toContain(handOff.id);
+
+    const spoken = item(
+      'message',
+      { callId: 'call-1', text: 'The second member is checking the metre.' },
+      'poet',
+    );
+    const continued = fold([started, earlier, handOff, spoken]);
+    expect(callBlockSummary(continued)).toBe(
+      'The second member is checking the metre.',
+    );
+    expect(continued.poolHandOff).toEqual({ message, seq: handOff.seq });
+    expect(
+      fold([
+        started,
+        item(
+          'system',
+          { callId: 'call-1', message: 'Ordinary notice' },
+          'poet',
+        ),
+      ]).poolHandOff,
+    ).toBeUndefined();
+  });
+
   it('drops the host tools’ own rows too — each already draws its own card', () => {
     const entries = groupTranscript([
       call('mcp__geniro-run-1__report_findings', 't1', { findings: [] }),
@@ -528,6 +579,51 @@ describe('groupTranscript', () => {
       'mcp__geniro-run-1__update_task',
       'mcp__geniro-run-1__get_task',
       'geniro-run-1: notify_user',
+    ]);
+    expect(pairs.every((pair) => pair.result !== null)).toBe(true);
+  });
+
+  it('hides a team_note call its note row stands for, and SHOWS one that was refused', () => {
+    // A written note is its own row; a refused write writes none, so the call
+    // and the refusal are the only trace that the agent tried.
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__team_note', 't1', { kind: 'fact', text: 'x' }),
+      result('t1', 'Saved as note 4.'),
+      call('mcp__geniro-run-1__team_note', 't2', { kind: 'fact', text: '' }),
+      item('tool_result', {
+        id: 't2',
+        name: null,
+        result: 'text is empty',
+        isError: true,
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(pairs.map((pair) => payloadString(pair.call.payload, 'id'))).toEqual(
+      ['t2'],
+    );
+    expect(pairs[0]?.result).not.toBeNull();
+  });
+
+  it('SHOWS the monitor tools as ordinary tool rows', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__monitor', 't1', { command: 'tail -f log' }),
+      result('t1', 'monitor m1 started'),
+      call('mcp__geniro-run-1__stop_monitor', 't2', { id: 'm1' }),
+      result('t2', 'stopped'),
+      call('geniro-run-1: list_monitors', 't3', {}),
+      result('t3', 'none'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(
+      pairs.map((pair) => payloadString(pair.call.payload, 'name')),
+    ).toEqual([
+      'mcp__geniro-run-1__monitor',
+      'mcp__geniro-run-1__stop_monitor',
+      'geniro-run-1: list_monitors',
     ]);
     expect(pairs.every((pair) => pair.result !== null)).toBe(true);
   });
@@ -1368,6 +1464,145 @@ describe('groupTranscript', () => {
     };
     expect(card.artifact.artifactId).toBe('plan');
     expect(card.artifact.title).toBe('Migration plan');
+  });
+
+  it('groups an action row into an action card and folds its outcome', () => {
+    const publish = (label: string): ChatItem =>
+      item('action', {
+        actionId: label.toLowerCase(),
+        label,
+        once: true,
+        spec: { kind: 'message', text: 'continue' },
+        publisher: { nodeId: 'agent', conversationId: '' },
+      });
+    const merged = publish('Merged');
+    const other = publish('Deploy');
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__publish_action', 't1', { label: 'Merged' }),
+      result('t1', 'Published action "merged" (message).'),
+      merged,
+      other,
+      item('action_outcome', {
+        actionSeq: merged.seq,
+        actionId: 'merged',
+        nodeId: 'agent',
+        conversationId: '',
+        state: 'succeeded',
+        via: 'desktop',
+      }),
+    ]);
+
+    // The tool's own rows are hidden and the outcome draws nothing of its own.
+    expect(entries.map((e) => e.type)).toEqual(['action', 'action']);
+    expect(entries[0]).toMatchObject({
+      seq: merged.seq,
+      action: { label: 'Merged', kind: 'message', once: true },
+      outcome: { actionSeq: merged.seq, state: 'succeeded' },
+    });
+    expect(entries[1]).toMatchObject({ seq: other.seq, outcome: null });
+  });
+
+  it('reads what a stop action stops and whether it had already stopped', () => {
+    const stop = item('action', {
+      actionId: 'stop-preview',
+      label: 'Stop preview',
+      once: true,
+      spec: {
+        kind: 'stop',
+        shellId: 'bg1',
+        targets: [
+          {
+            pid: 48211,
+            startedAt: '2026-10-20T10:00:00.000Z',
+            command: 'python3 -m http.server 8765',
+          },
+          { pid: 'not a pid', command: 'x' },
+          { pid: 48212 },
+        ],
+      },
+      publisher: { nodeId: 'agent', conversationId: '' },
+    });
+    const entries = groupTranscript([
+      stop,
+      item('action_outcome', {
+        actionSeq: stop.seq,
+        actionId: 'stop-preview',
+        nodeId: 'agent',
+        conversationId: '',
+        state: 'stopped',
+        alreadyStopped: true,
+      }),
+    ]);
+
+    expect(entries).toMatchObject([
+      {
+        type: 'action',
+        action: {
+          kind: 'stop',
+          text: null,
+          targets: [{ pid: 48211, command: 'python3 -m http.server 8765' }],
+        },
+        outcome: { state: 'stopped', alreadyStopped: true },
+      },
+    ]);
+  });
+
+  it('reads a command action’s argv and folder and its outcome’s output tail', () => {
+    const run = item('action', {
+      actionId: 'run-tests',
+      label: 'Run tests',
+      once: false,
+      spec: {
+        kind: 'command',
+        argv: ['pnpm', 'test', 7, 'a b'],
+        cwd: '/Users/dev/repo',
+        timeoutMs: 600000,
+      },
+      publisher: { nodeId: 'agent', conversationId: '' },
+    });
+    const entries = groupTranscript([
+      run,
+      item('action_outcome', {
+        actionSeq: run.seq,
+        actionId: 'run-tests',
+        nodeId: 'agent',
+        conversationId: '',
+        state: 'failed',
+        exitCode: 1,
+        error: 'exit 1',
+        outputTail: '1 failed',
+      }),
+    ]);
+
+    expect(entries).toMatchObject([
+      {
+        type: 'action',
+        action: {
+          kind: 'command',
+          argv: ['pnpm', 'test', 'a b'],
+          cwd: '/Users/dev/repo',
+        },
+        outcome: { state: 'failed', exitCode: 1, outputTail: '1 failed' },
+      },
+    ]);
+    expect(
+      groupTranscript([
+        item('action', {
+          actionId: 'm',
+          label: 'M',
+          spec: { kind: 'message', text: 'go' },
+          publisher: { nodeId: 'agent', conversationId: '' },
+        }),
+      ]),
+    ).toMatchObject([{ action: { argv: [], cwd: null } }]);
+  });
+
+  it('drops an action row that does not parse', () => {
+    expect(
+      groupTranscript([
+        item('action', { actionId: 'x', label: 'X', spec: { kind: 'shell' } }),
+      ]),
+    ).toEqual([]);
   });
 
   it('drops a show_artifact row that cannot address a page', () => {
@@ -2304,6 +2539,47 @@ describe('groupTranscript — call blocks', () => {
         (e) => e.type === 'item' && e.item.kind === 'approval_request',
       ),
     ).toBe(true);
+  });
+
+  describe('a button a callee publishes', () => {
+    const button = (publisher: Record<string, unknown>) => ({
+      actionId: 'pr-merged',
+      label: 'PR merged',
+      once: true,
+      spec: { kind: 'message', text: 'merged — go on' },
+      publisher,
+    });
+    const actions = (entries: readonly { type: string }[]) =>
+      entries.filter((e): e is ActionEntry => e.type === 'action');
+
+    it('stays in the MAIN flow under its publisher, not inside the shut call card', () => {
+      const publisher = {
+        nodeId: 'poet',
+        conversationId: 'call-1',
+        callId: 'call-1',
+        agentLabel: 'Poet',
+      };
+      const entries = groupTranscript([
+        startCall('call-1', 'poet'),
+        tagged('status', { status: 'running' }, 'poet', 'call-1'),
+        item('action', button(publisher), 'poet'),
+        // Even a row naming the call at its top level is never claimed.
+        tagged('action', button(publisher), 'poet', 'call-1'),
+      ]);
+
+      const block = entries.find(isBlock)!;
+      expect(actions(block.entries)).toEqual([]);
+      expect(
+        actions(entries).map((e) => [
+          e.nodeId,
+          e.action.agentLabel,
+          e.action.callId,
+        ]),
+      ).toEqual([
+        ['poet', 'Poet', 'call-1'],
+        ['poet', 'Poet', 'call-1'],
+      ]);
+    });
   });
 
   describe('a page a callee publishes', () => {
@@ -4222,11 +4498,7 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('running');
   });
 
-  it('stops calling a delegate known only by its ROWS running once the run says none is out', () => {
-    // A delegate that failed at launch on a usage limit and was resumed has
-    // its launch AND its only close older than the loaded window, so the
-    // window holds nothing but its rows — which would read `running` until the
-    // launching turn ends, in a turn that can run for hours.
+  it('waits for the daemon to classify a delegate known only by its rows', () => {
     const rows = [
       delegated('message', { text: 'writing up the findings' }, 'task-old'),
       // The launching thread has spoken since.
@@ -4234,28 +4506,98 @@ describe('buildSubagentBlocks', () => {
     ];
     const block = onlyBlock(fold(rows));
 
-    expect(block.outlived).toBe(true);
-    expect(subagentBlockStatus(block, null, 0)).toBe('completed');
-    // A delegate the run still counts OUT is working, whatever the thread says:
-    // it was not waiting on it.
-    expect(subagentBlockStatus(block, null, 1)).toBe('running');
-    // And with no count known, nothing changes.
     expect(subagentBlockStatus(block)).toBe('running');
+    expect(subagentBlockStatus({ ...block, daemonStatus: 'completed' })).toBe(
+      'completed',
+    );
   });
 
-  it('keeps a rows-only delegate running while the thread that launched it is silent', () => {
-    // A delegate the thread WAITS on keeps it silent — so its last row being
-    // the newest is what a foreground delegate still at work looks like, even
-    // with nothing counted out.
-    const block = onlyBlock(
-      fold([
-        item('message', { text: 'delegating the review' }, 'orch'),
-        delegated('message', { text: 'still reading' }, 'task-fg'),
-      ]),
-    );
+  describe('a close that named no outcome', () => {
+    // Every close written before recovery refs existed has this shape, so the
+    // reading here is what an old finished chat shows.
+    const close = item('subagent_info', {
+      id: 'task-1',
+      backgroundOpen: false,
+    });
 
-    expect(block.outlived).toBe(false);
-    expect(subagentBlockStatus(block, null, 0)).toBe('running');
+    it('reads completed for a delegate the daemon cannot recover', () => {
+      const block = onlyBlock(
+        fold([call('Task', 'task-1', { description: 'Review' }), close]),
+      );
+      expect(block.recoverable).toBe(false);
+      expect(subagentBlockStatus(block)).toBe('completed');
+    });
+
+    const ref = {
+      agentKind: 'claude',
+      sessionId: 's',
+      cwd: '/project',
+      configDir: null,
+      toolCallId: 'task-1',
+      launchedAtMs: 1,
+      childSessionId: null,
+    };
+
+    it('reads untracked while a recovery ref stands, and completed once it is withdrawn', () => {
+      const declared = item('subagent_info', { id: 'task-1', recovery: ref });
+      const rows = [
+        call('Task', 'task-1', { description: 'Review' }),
+        declared,
+        close,
+      ];
+      expect(subagentBlockStatus(onlyBlock(fold(rows)))).toBe('untracked');
+
+      const withdrawn = item('subagent_info', {
+        id: 'task-1',
+        recovery: null,
+      });
+      expect(subagentBlockStatus(onlyBlock(fold([...rows, withdrawn])))).toBe(
+        'completed',
+      );
+    });
+
+    it('does not count a ref for another delegate, or one missing its identity, as recoverable', () => {
+      const statusWith = (recovery: unknown) =>
+        subagentBlockStatus(
+          onlyBlock(
+            fold([
+              call('Task', 'task-1', { description: 'Review' }),
+              item('subagent_info', { id: 'task-1', recovery }),
+              close,
+            ]),
+          ),
+        );
+      expect(statusWith({ ...ref, toolCallId: 'task-2' })).toBe('completed');
+      expect(statusWith({ toolCallId: 'task-1' })).toBe('completed');
+      expect(statusWith([ref])).toBe('completed');
+    });
+  });
+
+  it('marks an untracked delegate whose process ended, for as long as that close stands', () => {
+    const lost = item('subagent_info', {
+      id: 'task-1',
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked',
+      trackingLost: 'process-ended',
+    });
+    const rows = [call('Task', 'task-1', { description: 'Review' }), lost];
+    expect(onlyBlock(fold(rows)).processEnded).toBe(true);
+
+    const recovered = item('subagent_info', {
+      id: 'task-1',
+      backgroundOpen: false,
+      backgroundOutcome: 'completed',
+    });
+    expect(onlyBlock(fold([...rows, recovered])).processEnded).toBe(false);
+
+    // Opened again, then closed with no outcome: the old process-ended close
+    // no longer explains anything.
+    const reopened = [
+      ...rows,
+      item('subagent_info', { id: 'task-1', backgroundOpen: true }),
+      item('subagent_info', { id: 'task-1', backgroundOpen: false }),
+    ];
+    expect(onlyBlock(fold(reopened)).processEnded).toBe(false);
   });
 
   it('completes a delegate whose launching call fell outside the loaded window', () => {
@@ -4271,7 +4613,11 @@ describe('buildSubagentBlocks', () => {
     // the window, and discarded.
     const entries = fold([
       delegated('message', { text: 'emitting the reaction event' }, 'task-cut'),
-      item('subagent_info', { id: 'task-cut', backgroundOpen: false }),
+      item('subagent_info', {
+        id: 'task-cut',
+        backgroundOpen: false,
+        backgroundOutcome: 'completed',
+      }),
     ]);
 
     const block = onlyBlock(entries);
@@ -4299,14 +4645,7 @@ describe('buildSubagentBlocks', () => {
       item('turn_complete', {}),
     ]);
 
-    const block = onlyBlock(entries);
-    expect(block.closed).toBe(true);
-    // Settled run…
-    expect(subagentBlockStatus(block, Date.parse('2026-09-01T11:00:00Z'))).toBe(
-      'running',
-    );
-    // …and a LATER turn running (no settle) must give the SAME answer.
-    expect(subagentBlockStatus(block)).toBe('running');
+    expect(subagentBlockStatus(onlyBlock(entries))).toBe('running');
   });
 
   it('ends that delegate on the outcome the daemon states, and only on it', () => {
@@ -4328,12 +4667,7 @@ describe('buildSubagentBlocks', () => {
       }),
     ]);
 
-    const block = onlyBlock(entries);
-    // Whatever the run row says, and on both readings — the ending was STATED.
-    expect(subagentBlockStatus(block)).toBe('stopped');
-    expect(subagentBlockStatus(block, Date.parse('2026-09-01T11:00:00Z'))).toBe(
-      'stopped',
-    );
+    expect(subagentBlockStatus(onlyBlock(entries))).toBe('stopped');
   });
 
   it('separates a delegate WRITING rows from one merely declared out', () => {
@@ -4356,61 +4690,16 @@ describe('buildSubagentBlocks', () => {
     expect(subagentSpokeSince(quiet, null)).toBe(true);
   });
 
-  it('goes back to running when that delegate produces a row after the turn ended', () => {
-    // `unknown` is a statement about the evidence, so evidence resolves it: a
-    // delegate that speaks again has demonstrably not finished, and `closed` is
-    // a seq comparison rather than a latch — the turn-end item is no longer
-    // after this block's last row, so the block reopens on its own. That is
-    // what keeps claude's case right, where a backgrounded delegate really does
-    // go on working past the turn that started it and reports into a later one.
-    const entries = fold([
-      call('Task', 'task-bg', { description: 'Stress-test the approaches' }),
-      result('task-bg', 'Task started in the background'),
-      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
-      item('turn_complete', {}),
-      delegated(
-        'message',
-        { text: 'reading the benchmark harness' },
-        'task-bg',
-      ),
-    ]);
-
-    const block = onlyBlock(entries);
-    expect(block.closed).toBe(false);
-    expect(subagentBlockStatus(block)).toBe('running');
-  });
-
-  it('keeps it running while it is still producing rows after that settle', () => {
-    // The other side, and the reason the settle is a MOMENT: a delegate that
-    // has spoken SINCE is working whatever the run row says — which is the
-    // reported "thread says completed while sub-agents are visibly working".
-    const spoke = {
-      ...delegated('message', { text: 'still reading' }, 'task-bg'),
-    };
-    spoke.createdAt = '2026-08-18T10:00:05.000Z';
-    const entries = fold([
-      call('Task', 'task-bg', {
-        description: 'Stress-test the two approaches',
-      }),
-      result('task-bg', 'Task started in the background'),
-      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
-      spoke,
-    ]);
-
-    expect(
-      subagentBlockStatus(
-        onlyBlock(entries),
-        Date.parse('2026-08-18T10:00:00Z'),
-      ),
-    ).toBe('running');
-  });
-
   it('lets the same delegate finish when the CLI says it has', () => {
     const entries = fold([
       call('Task', 'task-bg', { description: 'Sleep 50 then report ok' }),
       result('task-bg', 'Task started in the background'),
       item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
-      item('subagent_info', { id: 'task-bg', backgroundOpen: false }),
+      item('subagent_info', {
+        id: 'task-bg',
+        backgroundOpen: false,
+        backgroundOutcome: 'completed',
+      }),
     ]);
 
     expect(subagentBlockStatus(onlyBlock(entries))).toBe('completed');
@@ -4510,20 +4799,6 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('running');
   });
 
-  it('does not read an EARLIER turn end as the end of a rowless delegation', () => {
-    // `maxSeqOf([])` is 0, so without the launch-seq anchor any prior
-    // turn_complete of the delegating node closed a block that had not started.
-    const block = onlyBlock(
-      fold([
-        item('turn_complete', {}),
-        item('message', { text: 'now delegate' }, null, 'user'),
-        call('Task', 'task-1', { description: 'Review the diff' }),
-      ]),
-    );
-    expect(block.closed).toBe(false);
-    expect(subagentBlockStatus(block)).toBe('running');
-  });
-
   it('reports a delegate whose tool has not returned as running, mid-turn', () => {
     const block = onlyBlock(
       fold([
@@ -4532,14 +4807,11 @@ describe('buildSubagentBlocks', () => {
       ]),
     );
     expect(block.result).toBeNull();
-    expect(block.closed).toBe(false);
     expect(subagentBlockStatus(block)).toBe('running');
   });
 
-  it('stops spinning a delegate whose turn ended without it reporting back', () => {
-    // The stale-spinner shape `ToolGroupEntry.closed` exists for, at block
-    // level: no result ever arrived, but the turn is over, so nothing more is
-    // coming and a spinner would claim work that stopped.
+  it('does not infer a delegate ending from its parent turn ending', () => {
+    // The daemon's whole-conversation reading decides that, not the window.
     const block = onlyBlock(
       fold([
         call('Task', 'task-1', { description: 'Review the diff' }),
@@ -4548,25 +4820,6 @@ describe('buildSubagentBlocks', () => {
       ]),
     );
     expect(block.result).toBeNull();
-    expect(block.closed).toBe(true);
-    expect(subagentBlockStatus(block)).toBe('stopped');
-  });
-
-  it('keeps a delegate running when only one of its node’s CALLS ended', () => {
-    // A call is a conversation of its own beside the one this delegate was
-    // launched in. Scoped to the node alone, the call's turn end closed this
-    // block and drew a delegate still at work as `stopped`.
-    const block = onlyBlock(
-      fold([
-        call('Task', 'task-1', { description: 'Review the diff' }),
-        delegated('message', { text: 'still reading' }, 'task-1'),
-        item('call_started', { callId: 'call-1', calleeNodeId: 'orch' }, 'mgr'),
-        item('status', { status: 'running', callId: 'call-1' }, 'orch'),
-        item('turn_complete', { callId: 'call-1' }, 'orch'),
-        item('status', { status: 'completed', callId: 'call-1' }, 'orch'),
-      ]),
-    );
-    expect(block.closed).toBe(false);
     expect(subagentBlockStatus(block)).toBe('running');
   });
 
@@ -4608,41 +4861,6 @@ describe('buildSubagentBlocks', () => {
         ]),
       );
       expect(block.lastRowAt).toBe(Date.parse('2026-08-11T17:00:00.000Z'));
-    });
-
-    it('is stopped when it said nothing after the run settled', () => {
-      const block = midFlight('2026-08-11T17:00:05.000Z');
-      expect(
-        subagentBlockStatus(block, Date.parse('2026-08-11T17:00:41.000Z')),
-      ).toBe('stopped');
-    });
-
-    it('is STILL RUNNING when its rows are newer than the settle', () => {
-      // The reported defect. Whatever settled the run — a stale `completed`, a
-      // failed turn, a cancel — a delegate that has written since is working,
-      // and the run row saying otherwise does not make it so. Measured on the
-      // author's own `geniro.db`: 1346 delegate rows arrived in run `f42bfe2d`
-      // after the item that settled it, every one of them under a `stopped`
-      // badge.
-      const block = midFlight('2026-08-11T17:20:00.000Z');
-      expect(
-        subagentBlockStatus(block, Date.parse('2026-08-11T17:00:41.000Z')),
-      ).toBe('running');
-    });
-
-    it('still stops one whose OWN turn ended after its last row', () => {
-      // The seq-based route is untouched by the timestamp one and outranks it:
-      // a turn-end item after the delegate's last row is direct evidence that
-      // nothing more is coming, whatever the run row's clock says.
-      const block = onlyBlock(
-        fold([
-          call('Task', 'task-1', { description: 'Review the diff' }),
-          delegated('message', { text: 'still reading' }, 'task-1'),
-          item('turn_complete', {}),
-        ]),
-      );
-      expect(block.closed).toBe(true);
-      expect(subagentBlockStatus(block, 0)).toBe('stopped');
     });
   });
 
@@ -5196,6 +5414,40 @@ describe('groupTranscript task lists', () => {
       tasks('patch', [{ id: '1', title: 'x' }], 'tc-1'),
     ]);
     expect(countTools(entries)).toBe(0);
+  });
+
+  it('counts an agent’s own tools, never a sub-agent’s — the sub-agent has a count of its own', () => {
+    // The same rule as the daemon's figures, so a card does not change what it
+    // counts when the daemon's figure replaces this one.
+    const rows = [
+      call('Read', 'own', { file_path: 'a.ts' }),
+      result('own'),
+      call('Task', 'toolu_d', { description: 'review' }),
+      item('tool_call', {
+        id: 'd-1',
+        name: 'Read',
+        input: {},
+        parentToolUseId: 'toolu_d',
+      }),
+      item('tool_result', {
+        id: 'd-1',
+        name: null,
+        result: 'ok',
+        parentToolUseId: 'toolu_d',
+      }),
+      item('tool_call', {
+        id: 'd-2',
+        name: 'Bash',
+        input: {},
+        parentToolUseId: 'toolu_d',
+      }),
+    ];
+    const entries = buildSubagentBlocks(groupTranscript(rows), rows);
+    const block = collectSubagentBlocks(entries)[0];
+
+    expect(block).toBeDefined();
+    expect(countTools(block!.entries)).toBe(2);
+    expect(countTools(entries)).toBe(1);
   });
 
   it('counts a findings card as no tool work, and does not walk into it', () => {
@@ -5842,6 +6094,47 @@ describe('withLiveText — a card being WRITTEN', () => {
     expect(liveRows(entries)).toEqual([
       { live: 'composing', composingKind: 'artifact' },
     ]);
+  });
+
+  it('names a large call that draws no card on the WORKING row, with its bytes', () => {
+    // An analysis re-emitting a whole workflow as `save_workflow_change`
+    // arguments streamed for ten minutes under a looping word. Its byte count
+    // was arriving the whole time; nothing put it on screen.
+    const entries = withLiveText(
+      [],
+      new Map([
+        [
+          CHAT_LIVE_KEY,
+          live({
+            composingTool: 'mcp__geniro-abc12345__save_workflow_change',
+            composingBytes: 86_016,
+          }),
+        ],
+      ]),
+      new Set([CHAT_LIVE_KEY]),
+      RUN,
+    );
+    expect(liveRows(entries)).toEqual([
+      {
+        live: 'working',
+        writingTool: 'Geniro-abc12345: Save workflow change',
+        writingBytes: 86_016,
+      },
+    ]);
+  });
+
+  it('leaves the working row alone while a small call is written', () => {
+    // A `Bash` is written in well under a second; naming it would swap the
+    // row's phrase for a blink on every ordinary call.
+    const entries = withLiveText(
+      [],
+      new Map([
+        [CHAT_LIVE_KEY, live({ composingTool: 'Bash', composingBytes: 300 })],
+      ]),
+      new Set([CHAT_LIVE_KEY]),
+      RUN,
+    );
+    expect(liveRows(entries)).toEqual([{ live: 'working' }]);
   });
 
   it('suppresses the working fallback for an agent that is composing', () => {

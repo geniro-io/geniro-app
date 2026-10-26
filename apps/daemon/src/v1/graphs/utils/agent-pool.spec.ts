@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import type { CalleeTurnOutcome, WorkflowAgentNode } from '../graphs.types';
+import type {
+  CalleeTurnOutcome,
+  PoolStanding,
+  WorkflowAgentNode,
+} from '../graphs.types';
 import {
+  callPoolHandOffPrompt,
   fallsThroughPool,
+  nodeStartMember,
   poolAttemptOrder,
   poolAttempts,
   poolHandOffPrompt,
@@ -117,15 +123,61 @@ describe('poolMemberNode', () => {
 
 describe('poolAttemptOrder', () => {
   it('tries members in priority order, starting with member 1', () => {
-    expect(poolAttemptOrder(3, () => false)).toEqual([1, 2, 3]);
+    expect(poolAttemptOrder([null, null, null])).toEqual([1, 2, 3]);
   });
 
-  it('moves cooling members to the back, preserving priority in both groups', () => {
-    expect(poolAttemptOrder(4, (m) => m === 2 || m === 4)).toEqual([
+  it('moves spent members to the back, preserving priority in each group', () => {
+    expect(poolAttemptOrder([null, 'limit', null, 'limit'])).toEqual([
       1, 3, 2, 4,
     ]);
-    expect(poolAttemptOrder(4, (m) => m === 1)).toEqual([2, 3, 4, 1]);
-    expect(poolAttemptOrder(4, () => true)).toEqual([1, 2, 3, 4]);
+    expect(poolAttemptOrder(['limit', null, null, null])).toEqual([2, 3, 4, 1]);
+    expect(poolAttemptOrder(['limit', 'limit'])).toEqual([1, 2]);
+  });
+
+  it('tries a member spent on an ordinary failure before one a limit spent', () => {
+    expect(poolAttemptOrder(['limit', 'unavailable', null])).toEqual([3, 2, 1]);
+  });
+});
+
+describe('nodeStartMember', () => {
+  const start = (
+    patch: Partial<Parameters<typeof nodeStartMember>[0]> & {
+      standings: (PoolStanding | null)[];
+    },
+  ): number =>
+    nodeStartMember({
+      order: poolAttemptOrder(patch.standings),
+      held: 1,
+      hasSession: true,
+      holdsWork: false,
+      ...patch,
+    });
+
+  it('starts a node with no conversation yet on the first member in order', () => {
+    expect(start({ standings: ['unavailable', null], hasSession: false })).toBe(
+      2,
+    );
+  });
+
+  it('moves a conversation off a member a limit spent', () => {
+    expect(start({ standings: ['limit', null] })).toBe(2);
+    expect(start({ standings: ['limit', 'unavailable'] })).toBe(2);
+  });
+
+  it('keeps it where it is when every other member is limited too', () => {
+    expect(start({ standings: ['limit', 'limit'], held: 2 })).toBe(2);
+  });
+
+  it('keeps it on a member spent only on an ordinary failure', () => {
+    expect(start({ standings: ['unavailable', null] })).toBe(1);
+  });
+
+  it('moves it back to an earlier unspent member, unless the one it is on runs work', () => {
+    expect(start({ standings: [null, null], held: 2 })).toBe(1);
+    expect(start({ standings: [null, null], held: 2, holdsWork: true })).toBe(
+      2,
+    );
+    expect(start({ standings: ['unavailable', null], held: 2 })).toBe(2);
   });
 });
 
@@ -193,5 +245,26 @@ describe('poolHandOffPrompt', () => {
     expect(poolHandOffPrompt('build it', ['use red', 'skip tests'])).toBe(
       'build it\n\nMessages sent about this task after it was handed out, in order:\n- use red\n- skip tests',
     );
+  });
+});
+
+describe('callPoolHandOffPrompt', () => {
+  it('keeps the original task when recent tool output fills the history budget', () => {
+    const prompt = callPoolHandOffPrompt('Finish the checks.', [
+      {
+        kind: 'call_started',
+        role: null,
+        payload: JSON.stringify({ message: 'Build in /work/letters.' }),
+      },
+      ...Array.from({ length: 200 }, () => ({
+        kind: 'tool_result',
+        role: null,
+        payload: 'x'.repeat(20_000),
+      })),
+    ]);
+    expect(prompt).toContain('Build in /work/letters.');
+    expect(prompt).toContain('Finish the checks.');
+    expect(prompt).toContain('[transcript item truncated]');
+    expect(prompt.length).toBeLessThan(57_000);
   });
 });

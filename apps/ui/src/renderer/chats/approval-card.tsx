@@ -2,7 +2,6 @@ import {
   ChevronDown,
   MessageCircleQuestion,
   ShieldQuestion,
-  TriangleAlert,
 } from 'lucide-react';
 import { useId, useMemo, useRef, useState } from 'react';
 
@@ -12,25 +11,26 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
 import { type OptionArity, OptionList } from '../components/ui/option-list';
-import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { plainMarkdownText } from './brief-text';
 import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
+import { namesGeniroMonitor, PROPOSE_WORKFLOW } from './geniro-tool';
 import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
 import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
-import {
-  type HazardClass,
-  type HazardHit,
-  scanTextHazards,
-} from './text-hazards';
+import { HazardAck, HazardWarning, useHazardGate } from './text-hazard-gate';
 import { useThreadFlag } from './thread-ui-memory';
 import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useOneShotVerdict } from './use-one-shot-verdict';
+import { MAX_ANSWER_LENGTH } from './verdict-note';
+import { WorkflowProposalCard } from './workflow-proposal-card';
+import {
+  readProposalOutcome,
+  readWorkflowProposal,
+} from './workflow-proposal-payload';
 
 /** One question of the card (defensive — bad shapes are dropped). */
 interface ParsedQuestion {
@@ -61,8 +61,79 @@ interface ParsedQuestion {
   secret: boolean;
 }
 
-/** TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts MAX_ANSWER_LENGTH. */
-const MAX_ANSWER_LENGTH = 32_768;
+/** TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts MAX_OPTION_ID_LENGTH. */
+const MAX_OPTION_ID_LENGTH = 256;
+
+/**
+ * The longest option label drawn as a button. The daemon writes short fixed
+ * phrases; anything longer is not one of them, and a button is no place for
+ * a sentence.
+ */
+const MAX_OPTION_LABEL_LENGTH = 80;
+
+/**
+ * One remembering answer a permission card offers beside Approve and Deny —
+ * "Allow for this session", "Always allow". The vocabulary is the row's: which
+ * options exist, their words and their reach all come from the daemon, which
+ * built them from what the agent's own CLI offered.
+ */
+interface ParsedApprovalOption {
+  id: string;
+  label: string;
+  allow: boolean;
+  scope: 'session' | 'always';
+}
+
+/**
+ * Read the `options` the daemon put on an `approval_request` row. Empty for a
+ * row without any, which leaves the card Approve/Deny alone.
+ *
+ * TWIN PARSER: apps/daemon/src/v1/agents/utils/event-to-item.ts
+ * `publicApprovalOptions` writes this shape (`ApprovalOption` in
+ * `adapters/adapter.types.ts`) — a drift fixed there must be mirrored here.
+ * Mirrored rules: `id` non-empty and ≤ MAX_OPTION_ID_LENGTH (the daemon
+ * refuses a longer one on the verdict), `allow` literally boolean, `scope`
+ * one of `session` / `always`. An entry failing any of them is dropped, never
+ * drawn with a guessed meaning.
+ */
+function readApprovalOptions(options: unknown): ParsedApprovalOption[] {
+  if (!Array.isArray(options)) {
+    return [];
+  }
+  const parsed: ParsedApprovalOption[] = [];
+  for (const entry of options) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const o = entry as {
+      id?: unknown;
+      label?: unknown;
+      allow?: unknown;
+      scope?: unknown;
+    };
+    if (
+      typeof o.id !== 'string' ||
+      o.id.length === 0 ||
+      o.id.length > MAX_OPTION_ID_LENGTH ||
+      typeof o.label !== 'string' ||
+      o.label.trim().length === 0 ||
+      o.label.length > MAX_OPTION_LABEL_LENGTH ||
+      typeof o.allow !== 'boolean' ||
+      (o.scope !== 'session' && o.scope !== 'always')
+    ) {
+      continue;
+    }
+    parsed.push({ id: o.id, label: o.label, allow: o.allow, scope: o.scope });
+  }
+  return parsed;
+}
+
+/** The hover sentence of an option's button, by how long the agent keeps it. */
+function optionScopeHint(option: ParsedApprovalOption): string {
+  return option.scope === 'session'
+    ? 'The agent remembers this until its conversation process ends.'
+    : 'The agent remembers this in its own settings, past this conversation.';
+}
 
 /**
  * TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts
@@ -976,19 +1047,6 @@ function QuestionCard({
   );
 }
 
-/** A short, human-readable name for a hazard class — never the character itself. */
-const HAZARD_CLASS_LABEL: Record<HazardClass, string> = {
-  bidi: 'Bidirectional override',
-  invisible: 'Invisible character',
-  mixedScript: 'Look-alike character from another script',
-};
-
-/** `Bidirectional override — U+202E` — the codepoint, never the character. */
-function hazardHitLabel(hit: HazardHit): string {
-  const hex = hit.codePoint.toString(16).toUpperCase().padStart(4, '0');
-  return `${HAZARD_CLASS_LABEL[hit.class]} — U+${hex}`;
-}
-
 /**
  * A paused tool call under review: Approve/Deny over the tool's input, with a
  * file edit rendered as the same red/green diff the tool-group rows use.
@@ -996,15 +1054,26 @@ function hazardHitLabel(hit: HazardHit): string {
 function PermissionCard({
   toolName,
   input,
+  options,
   verdict,
+  verdictOption,
   expired,
   onRespond,
 }: {
   toolName: string;
   input: unknown;
+  /** What the agent offers beside a one-time Approve and Deny. */
+  options: ParsedApprovalOption[];
   verdict: boolean | null;
+  /** The label of the option the settled verdict picked, or null. */
+  verdictOption: string | null;
   expired: boolean;
-  onRespond: (allow: boolean, answer?: string) => void;
+  onRespond: (
+    allow: boolean,
+    answer?: string,
+    images?: SendMessageDtoImagesInner[],
+    optionId?: string,
+  ) => void;
 }): React.JSX.Element {
   const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
   // A file edit under review reads as a diff, not as raw JSON — the same
@@ -1077,25 +1146,7 @@ function PermissionCard({
   // an invisible hit of the separator's own making, gating every card ever
   // drawn. A space is `\p{Zs}` and is in none of the classes.
   const hazardScanText = `${toolName} ${inputScanText} ${diffScanText}`;
-  const hazards = useMemo(
-    () => scanTextHazards(hazardScanText),
-    [hazardScanText],
-  );
-  // Net-new pre-send state: `useOneShotVerdict` freezes only AFTER an answer
-  // is sent, so it cannot gate the Approve press itself. The reset runs
-  // DURING render, keyed on the scanned TEXT rather than on `input`'s object
-  // identity (a parent that reconstructs that object every render must not
-  // un-tick this the instant it is ticked), so there is no committed frame
-  // where a stale tick still gates a new, unreviewed call.
-  const [acknowledged, setAcknowledged] = useState(false);
-  const acknowledgedForRef = useRef(hazardScanText);
-  if (acknowledgedForRef.current !== hazardScanText) {
-    acknowledgedForRef.current = hazardScanText;
-    if (acknowledged) {
-      setAcknowledged(false);
-    }
-  }
-  const hazardAckId = useId();
+  const gate = useHazardGate(hazardScanText);
   return (
     <Card className="flex flex-col gap-2.5 border-primary/40 p-3">
       <div className="flex items-center gap-2">
@@ -1119,47 +1170,7 @@ function PermissionCard({
       {/* Sits OUTSIDE the diff/pre ternary below on purpose: both arms are one
           call's input under review, and a hazard hiding in either one must
           not depend on which arm happened to render. */}
-      {hazards.hits.length > 0 ? (
-        <div
-          data-slot="hazard-warning"
-          className={cn(
-            'flex flex-col gap-1 rounded-md border px-2.5 py-2 text-xs',
-            hazards.gates
-              ? 'border-destructive/30 bg-destructive/10 text-destructive'
-              : 'border-warning/30 bg-warning/10 text-warning',
-          )}>
-          <div className="flex items-center gap-1.5 font-medium">
-            <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" />
-            <span>
-              {hazards.gates
-                ? 'Hidden or reordering characters in this input'
-                : 'Look-alike characters in this input'}
-            </span>
-          </div>
-          {/* Named by CLASS and CODEPOINT alone — never the character, which
-              for a bidi hit would reorder this very warning around it. */}
-          {/* One row per DISTINCT hazard, not per hit. The scanned text
-              deliberately overlaps — a patch's `new_string` is read once inside
-              the input's JSON and again from the diff body — so a single
-              character yields two hits at two offsets. The row carries no
-              offset, so both would render as the identical sentence and read
-              as two separate hazards. */}
-          <div className="flex flex-col gap-0.5 pl-5">
-            {[
-              ...new Map(
-                hazards.hits.map((hit) => [
-                  `${hit.class}-${hit.codePoint}`,
-                  hit,
-                ]),
-              ).values(),
-            ].map((hit) => (
-              <span key={`${hit.class}-${hit.codePoint}`}>
-                {hazardHitLabel(hit)}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      <HazardWarning hazards={gate.hazards} subject="this input" />
       {diff ? (
         <div className="flex flex-col gap-1.5">
           {filePath ? (
@@ -1187,29 +1198,37 @@ function PermissionCard({
           {/* Deny is never gated here — refusing a suspicious call must stay
               one click, on the same rule the question card's arity warning
               follows: only the button that COMMITS needs a second thought. */}
-          {hazards.gates ? (
-            <div className="flex items-center gap-2">
-              <Switch
-                id={hazardAckId}
-                size="sm"
-                checked={acknowledged}
-                onCheckedChange={setAcknowledged}
-              />
-              <Label
-                htmlFor={hazardAckId}
-                className="cursor-pointer text-xs font-normal text-muted-foreground">
-                I&apos;ve reviewed the characters above and want to approve
-                anyway
-              </Label>
-            </div>
+          {gate.hazards.gates ? (
+            <HazardAck
+              id={gate.ackId}
+              checked={gate.acknowledged}
+              onCheckedChange={gate.setAcknowledged}
+            />
           ) : null}
-          <div className="flex gap-2">
+          {/* Approve and Deny stay first and last: a one-time answer is the
+              default, and what the agent would remember sits between them,
+              in its own words. An option that lets the call run is gated on
+              the hazard tick exactly as Approve is. */}
+          <div className="flex flex-wrap gap-2">
             <Button
               type="button"
-              disabled={hazards.gates && !acknowledged}
+              disabled={gate.blocksApprove}
               onClick={() => respond(true)}>
               Approve
             </Button>
+            {options.map((option) => (
+              <Button
+                key={option.id}
+                type="button"
+                variant="outline"
+                title={optionScopeHint(option)}
+                disabled={option.allow && gate.blocksApprove}
+                onClick={() =>
+                  respond(option.allow, undefined, undefined, option.id)
+                }>
+                {option.label}
+              </Button>
+            ))}
             <Button
               type="button"
               variant="outline"
@@ -1217,6 +1236,15 @@ function PermissionCard({
               Deny
             </Button>
           </div>
+          {/* The CLI remembers the TOOL, not this command line: a remembered
+              answer lets every later monitor command run unasked. */}
+          {options.some((option) => option.allow) &&
+          namesGeniroMonitor(toolName) ? (
+            <p className="text-xs text-muted-foreground">
+              Remembering this approves every command a monitor runs from now
+              on, not only this one.
+            </p>
+          ) : null}
         </div>
       ) : (
         <p
@@ -1225,6 +1253,7 @@ function PermissionCard({
             verdict ? 'text-success' : 'text-destructive',
           )}>
           {verdict ? '✓ approved' : '✗ denied'}
+          {verdictOption === null ? null : ` — ${verdictOption}`}
         </p>
       )}
     </Card>
@@ -1248,16 +1277,31 @@ export function ApprovalCard({
   toolName,
   input,
   questions: card,
+  options,
   verdict,
+  verdictOption = null,
   answer = null,
+  outcome = null,
   expired = false,
   requestId,
   onRespond,
+  onOpenWorkflow,
 }: {
   toolName: string;
   input: unknown;
   /** The row's `questions` — the question card, when this is a question. */
   questions?: unknown;
+  /**
+   * The row's `options` — what the agent's CLI offers beside a one-time
+   * Approve and Deny ("Allow for this session"). Drawn on the permission body
+   * only: a question is answered, not remembered.
+   */
+  options?: unknown;
+  /**
+   * The label of the option a settled verdict picked, read back from the
+   * verdict item; null for a one-time answer or a card still pending.
+   */
+  verdictOption?: string | null;
   /**
    * The request this card answers — the key its fold is remembered under
    * within the thread. Absent, a fold is component state and forgets on
@@ -1277,20 +1321,50 @@ export function ApprovalCard({
    * card still pending — need not pass it.
    */
   answer?: string | null;
+  /**
+   * What the card's owner did with an approval, read back from the same verdict
+   * item — only the workflow proposal card reads it.
+   */
+  outcome?: unknown;
   /** The turn ended before an answer — no verdict can apply anymore. */
   expired?: boolean;
+  /** Open a saved library workflow on its canvas; absent, nothing offers to. */
+  onOpenWorkflow?: (slug: string) => void;
   /**
    * `images` arrive only from the QUESTION body, and only as a SEPARATE
    * delivery — see its `onRespond` note. A permission card never sends any:
    * approving a tool call is a yes or a no, with nothing to attach to it.
+   * `optionId` arrives only from the PERMISSION body, naming the row option
+   * the user picked instead of a one-time Approve or Deny.
    */
   onRespond: (
     allow: boolean,
     answer?: string,
     images?: SendMessageDtoImagesInner[],
+    optionId?: string,
   ) => void;
 }): React.JSX.Element {
   const questions = readQuestions(card);
+  // geniro's own workflow proposal, read once per row: its graph and diff are
+  // the largest payload any card parses.
+  const workflowProposal = useMemo(
+    () => (toolName === PROPOSE_WORKFLOW ? readWorkflowProposal(input) : null),
+    [toolName, input],
+  );
+  if (workflowProposal !== null) {
+    return (
+      <WorkflowProposalCard
+        proposal={workflowProposal}
+        verdict={verdict}
+        note={answer}
+        outcome={readProposalOutcome(outcome)}
+        expired={expired}
+        memoryKey={requestId ?? undefined}
+        onRespond={onRespond}
+        onOpenWorkflow={onOpenWorkflow}
+      />
+    );
+  }
   // geniro's own plan proposal — geniro's tool, so its name is this app's to
   // key on — falling back to the permission body when nothing readable is
   // there, as a question with no card does, so a malformed call is still
@@ -1320,7 +1394,9 @@ export function ApprovalCard({
     <PermissionCard
       toolName={toolName}
       input={input}
+      options={readApprovalOptions(options)}
       verdict={verdict}
+      verdictOption={verdictOption}
       expired={expired}
       onRespond={onRespond}
     />

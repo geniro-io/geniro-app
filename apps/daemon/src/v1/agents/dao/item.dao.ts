@@ -8,6 +8,7 @@ import type { ItemKind } from '../../runs/runs.types';
 import type {
   ChatTextDatabase,
   HistoryWindow,
+  OwnToolCallCount,
   RunPreview,
   SeqRange,
   ToolCallTime,
@@ -15,6 +16,10 @@ import type {
 import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
 import { parseJsonColumn, payloadString } from '../utils/json-util';
 import { messagePreview, messageText } from '../utils/message-preview';
+import {
+  PULL_REQUEST_NAMING_KINDS,
+  pullRequestNamingNeedles,
+} from '../utils/pull-request-capture';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
 import {
@@ -830,16 +835,23 @@ export class ItemDao extends BaseDao<Item> {
    * {@link findToolCallPair}, because a call and its result can straddle the
    * scanned boundary — the call was persisted on the previous pass and only its
    * result is new.
+   *
+   * `throughSeq` closes the range, so a caller reading a whole history can cut
+   * it into windows: the `LIKE` runs on the event loop.
    */
   async pullRequestCandidates(
     runId: string,
     afterSeq: number,
     txEm?: EntityManager,
+    throughSeq?: number,
   ): Promise<Pick<Item, 'seq' | 'payload'>[]> {
     return this.getRepo(txEm).find(
       {
         runId,
-        seq: { $gt: afterSeq },
+        seq: {
+          $gt: afterSeq,
+          ...(throughSeq === undefined ? {} : { $lte: throughSeq }),
+        },
         kind: 'tool_result',
         payload: { $like: '%/pull/%' },
       },
@@ -877,6 +889,58 @@ export class ItemDao extends BaseDao<Item> {
       { orderBy: { seq: 'asc' }, fields: ['seq'], disableIdentityMap: true },
     );
     return after?.seq ?? null;
+  }
+
+  /**
+   * The payloads of the run's rows in `(afterSeq, throughSeq]` that may name
+   * this pull request — the prefilter of `textNamesPullRequest`, which decides.
+   * Read over a seq range so a caller can window a long history, as with
+   * {@link pullRequestCandidates}.
+   */
+  async pullRequestNamingCandidates(
+    runId: string,
+    pullRequest: { owner: string; repo: string; number: number },
+    afterSeq: number,
+    throughSeq: number,
+    txEm?: EntityManager,
+  ): Promise<string[]> {
+    const em = txEm ?? this.em.fork();
+    const needles = pullRequestNamingNeedles(pullRequest);
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('payload')
+      .where('run_id', '=', runId)
+      .where('kind', 'in', PULL_REQUEST_NAMING_KINDS)
+      .where('deleted_at', 'is', null)
+      .where('seq', '>', afterSeq)
+      .where('seq', '<=', throughSeq)
+      .where((eb) =>
+        eb.and([
+          eb(
+            eb.fn('instr', [eb.ref('payload'), eb.val(needles.number)]),
+            '>',
+            0,
+          ),
+          eb.or([
+            eb(
+              eb.fn('instr', [
+                eb.fn('lower', [eb.ref('payload')]),
+                eb.val(needles.repoPath),
+              ]),
+              '>',
+              0,
+            ),
+            eb(
+              eb.fn('instr', [eb.ref('payload'), eb.val(needles.command)]),
+              '>',
+              0,
+            ),
+          ]),
+        ]),
+      )
+      .execute();
+    return rows.map((row) => String(row.payload));
   }
 
   /**
@@ -1212,6 +1276,91 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * How many tools each agent called inside each CALL of one run, its own only
+   * (no `parentToolUseId`), with the newest such row's seq — the count is as
+   * of that row, so a reader adds only the rows above it. Grouped in SQLite
+   * for {@link toolUsage}'s reason. A row not yet stamped with its call
+   * (`in_call` NULL) is not counted; callers run `ensureIndexed` first.
+   *
+   * TWIN PARSER: `ownToolCallSeqsByCall` in
+   * apps/ui/src/renderer/chats/call-context.ts picks the rows above that seq
+   * by the same rule, so the two must agree on which rows count.
+   */
+  async ownToolCallsByCall(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<OwnToolCallCount[]> {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => [
+        'node_id',
+        'in_call',
+        eb.fn.countAll<number>().as('calls'),
+        eb.fn.max('seq').as('last_seq'),
+      ])
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'tool_call')
+      .where('deleted_at', 'is', null)
+      .where('node_id', 'is not', null)
+      .where('in_call', 'is not', null)
+      .where('in_call', '!=', '')
+      // An empty `parentToolUseId` names no delegate (`subagentIdOf`).
+      .where(
+        (eb) =>
+          eb.fn.coalesce(payloadField(eb, '$.parentToolUseId'), eb.val('')),
+        '=',
+        '',
+      )
+      .groupBy(['node_id', 'in_call'])
+      .execute();
+    return rows.map((row) => ({
+      nodeId: String(row.node_id),
+      callId: String(row.in_call),
+      calls: Number(row.calls),
+      lastSeq: Number(row.last_seq),
+    }));
+  }
+
+  /**
+   * How many tool calls each delegate of one run made, up to `maxSeq`: the
+   * `tool_call` rows carrying its id as `parentToolUseId`, by that id. Grouped
+   * in SQLite for {@link toolUsage}'s reason.
+   *
+   * TWIN PARSER: `daemonSubagentReadings` in
+   * apps/ui/src/renderer/chats/durable-transcript.ts adds the delegate's rows
+   * above `maxSeq` by the same rule (`subagentIdOf`).
+   */
+  async delegateToolCallCounts(
+    runId: string,
+    maxSeq: number,
+    txEm?: EntityManager,
+  ): Promise<Map<string, number>> {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom((db) =>
+        db
+          .selectFrom('items')
+          .select((eb) =>
+            payloadField(eb, '$.parentToolUseId').as('delegate_id'),
+          )
+          .where('run_id', '=', runId)
+          .where('kind', '=', 'tool_call')
+          .where('deleted_at', 'is', null)
+          .where('seq', '<=', maxSeq)
+          .as('delegate_calls'),
+      )
+      .select((eb) => ['delegate_id', eb.fn.countAll<number>().as('calls')])
+      .where('delegate_id', 'is not', null)
+      .where('delegate_id', '!=', '')
+      .groupBy('delegate_id')
+      .execute();
+    return new Map(
+      rows.map((row) => [String(row.delegate_id), Number(row.calls)]),
+    );
+  }
+
+  /**
    * The seqs of one run's SUB-AGENT tool calls — `tool_call` rows carrying
    * `parentToolUseId` — up to `maxSeq`: what lets the payload-free spine tell
    * an agent's own calls from its delegates'. Only the seq crosses.
@@ -1382,6 +1531,44 @@ export class ItemDao extends BaseDao<Item> {
         fields: ['seq', 'payload', 'createdAt'],
         disableIdentityMap: true,
       },
+    );
+  }
+
+  /**
+   * Every `team_note` row of one run, oldest first, projected on
+   * {@link artifactRows}' terms. A supersede can name any earlier note, so a
+   * reader folds the whole set rather than a page of it.
+   */
+  async teamNoteRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload' | 'createdAt'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'team_note' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'payload', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * How many team notes one run holds — what the per-run cap counts — or,
+   * given `throughSeq`, how many it held at that row.
+   */
+  async teamNoteCount(
+    runId: string,
+    txEm?: EntityManager,
+    throughSeq?: number,
+  ): Promise<number> {
+    return this.count(
+      {
+        runId,
+        kind: 'team_note',
+        ...(throughSeq === undefined ? {} : { seq: { $lte: throughSeq } }),
+      },
+      txEm,
     );
   }
 
@@ -1780,8 +1967,8 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * One run's `call_started` / `call_result` rows in seq order — every
-   * agent-to-agent call it has made, with the session each callee recorded.
+   * One run's calls and message receipts in seq order, including the notices
+   * that acknowledge failed deliveries to their sender.
    *
    * Durable for {@link subagentInfoRows}'s reason: the broker's call state is
    * in memory and dies with the daemon, and a follow-up on a run that made
@@ -1794,13 +1981,42 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'kind' | 'payload' | 'createdAt'>[]> {
     return this.getRepo(txEm).find(
-      { runId, kind: { $in: ['call_started', 'call_result'] } },
+      {
+        runId,
+        $or: [
+          { kind: { $in: ['call_started', 'call_result', 'call_answer'] } },
+          { kind: 'system', payload: { $like: '%"messageDeliveryNotices"%' } },
+        ],
+      },
       {
         orderBy: { seq: 'asc' },
         fields: ['kind', 'payload', 'createdAt'],
         disableIdentityMap: true,
       },
     );
+  }
+
+  /**
+   * Every run that recorded a delegate recovery ref since `since`, once each.
+   * Every run's `subagent_info` rows are matched against the payload text, so
+   * this is a boot-time read, not a per-request one.
+   */
+  async subagentRecoveryRunIds(
+    since: Date,
+    txEm?: EntityManager,
+  ): Promise<string[]> {
+    const em = txEm ?? this.em.fork();
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('run_id')
+      .distinct()
+      .where('kind', '=', 'subagent_info')
+      .where('created_at', '>=', since.getTime())
+      .where('deleted_at', 'is', null)
+      .where('payload', 'like', '%"recovery":%')
+      .execute();
+    return rows.map((row) => row.run_id);
   }
 
   /**
@@ -1853,7 +2069,12 @@ export class ItemDao extends BaseDao<Item> {
           {
             runId,
             kind: { $in: [...kinds] },
-            [raw((alias) => `json_extract(${alias}.payload, '$.id')`)]: {
+            // Guarded like `payloadField`: one malformed payload must not fail
+            // the whole read.
+            [raw(
+              (alias) =>
+                `json_extract(CASE WHEN json_valid(${alias}.payload) THEN ${alias}.payload ELSE '{}' END, '$.id')`,
+            )]: {
               $in: ids.slice(at, at + PAYLOAD_ID_BATCH),
             },
             ...seqFilter(range),
@@ -1930,7 +2151,7 @@ export class ItemDao extends BaseDao<Item> {
     runId: string,
     afterSeq: number,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'seq' | 'nodeId' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'seq' | 'nodeId' | 'kind' | 'payload'>[]> {
     return this.getRepo(txEm).find(
       {
         runId,
@@ -1940,7 +2161,7 @@ export class ItemDao extends BaseDao<Item> {
       },
       {
         orderBy: { seq: 'asc' },
-        fields: ['seq', 'nodeId', 'payload'],
+        fields: ['seq', 'nodeId', 'kind', 'payload'],
         disableIdentityMap: true,
       },
     );
@@ -2075,6 +2296,41 @@ export class ItemDao extends BaseDao<Item> {
       {
         orderBy: { runId: 'asc', seq: 'asc' },
         fields: ['runId', 'kind', 'payload', 'nodeId'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * Every `system` row that records a monitor (`monitors` in its payload),
+   * oldest first per run — what the boot sweep reads a monitor's last word
+   * from. The payload match is a pre-filter; the sweep parses each row.
+   */
+  async allMonitorRows(
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'runId' | 'nodeId' | 'seq' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { kind: 'system', payload: { $like: '%"monitors":[%' } },
+      {
+        orderBy: { runId: 'asc', seq: 'asc' },
+        fields: ['runId', 'nodeId', 'seq', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * EVERY run's action rows, grouped by run and in seq order — the boot
+   * sweep's one read, as {@link allShellRows} is for shells.
+   */
+  async allActionRows(
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'runId' | 'kind' | 'seq' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { kind: { $in: ['action', 'action_outcome'] } },
+      {
+        orderBy: { runId: 'asc', seq: 'asc' },
+        fields: ['runId', 'kind', 'seq', 'payload'],
         disableIdentityMap: true,
       },
     );

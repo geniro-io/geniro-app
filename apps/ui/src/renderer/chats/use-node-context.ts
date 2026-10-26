@@ -18,6 +18,8 @@ export type NodeDurableReading = Pick<
   | 'contextTokens'
   | 'contextWindowTokens'
   | 'calls'
+  // Every call's figures, uncapped, unlike `calls`.
+  | 'callFigures'
   | 'workedMs'
   | 'toolCalls'
   // The node's own status and when its running turn began: what the transcript
@@ -32,7 +34,8 @@ export type NodeDurableReading = Pick<
   | 'model'
   // When the node's own conversation's prompt cache lapses.
   | 'promptCacheExpiresAt'
->;
+> &
+  Partial<Pick<NodeStateDto, 'contextEstimated'>>;
 
 const EMPTY: ReadonlyMap<string, NodeDurableReading> = new Map();
 
@@ -136,8 +139,10 @@ export function useNodeDurableReadings(
               node.nodeId,
               {
                 contextTokens: node.contextTokens,
+                ...(node.contextEstimated ? { contextEstimated: true } : {}),
                 contextWindowTokens: node.contextWindowTokens,
                 calls: node.calls,
+                callFigures: node.callFigures,
                 workedMs: node.workedMs,
                 toolCalls: node.toolCalls,
                 status: node.status,

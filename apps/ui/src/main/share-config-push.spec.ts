@@ -14,6 +14,7 @@ const SHARING: SharingSettings = {
   destinations: [],
   defaultDestinationId: null,
   agentsMayShare: true,
+  autoRevokeAfterDays: null,
 };
 
 function recordingFetch(status = 200) {

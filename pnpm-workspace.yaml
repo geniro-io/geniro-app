@@ -7,6 +7,12 @@ packages:
 # pnpm 11 reads this from here, NOT from .npmrc.
 nodeLinker: hoisted
 
+# Refuse to install on a Node below the root package.json's `engines` (24.15:
+# the first Node 24 whose sockets have `setTypeOfService`, which
+# fetch-dispatcher.spec.ts needs). Without it pnpm only warns, and the suite
+# fails later on an unrelated-looking spec.
+engineStrict: true
+
 # React 19 / Electron toolchains carry loose peer ranges; don't fail install.
 strictPeerDependencies: false
 

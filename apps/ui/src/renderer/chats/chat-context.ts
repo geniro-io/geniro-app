@@ -8,12 +8,15 @@ import type { ContextReading } from './context-reading';
 export interface ContextFigures {
   tokens: number | null;
   window: number | null;
+  /** Whether {@link tokens} is geniro's stand-in rather than a stated reading. */
+  estimated?: boolean;
 }
 
 /** One place a reading can come from, with the window it was taken against. */
 interface ReadingSource {
   contextTokens: number | null;
   contextWindowTokens: number | null;
+  contextEstimated?: boolean;
 }
 
 export interface ChatContextSources {
@@ -47,11 +50,11 @@ export function chatContextFigures(
   sources: ChatContextSources,
 ): ContextFigures {
   const { live, run, transcript } = sources;
-  const tokens =
-    live?.contextTokens ??
-    run?.contextTokens ??
-    transcript?.contextTokens ??
-    null;
+  // The estimate mark belongs to whichever source supplied the count.
+  const counted = [live, run, transcript].find(
+    (source) => source?.contextTokens != null,
+  );
+  const tokens = counted?.contextTokens ?? null;
   // The window is read whether or not there is a count. A compaction clears
   // every count and keeps the window, which belongs to the model, and the empty
   // ring drawn afterwards needs that denominator to be a gauge at all.
@@ -61,11 +64,16 @@ export function chatContextFigures(
     transcript?.contextWindowTokens ??
     null;
   if (tokens !== null) {
-    return { tokens, window: windowTokens };
+    return counted?.contextEstimated === true
+      ? { tokens, window: windowTokens, estimated: true }
+      : { tokens, window: windowTokens };
   }
   const recalled = sources.itemsLoaded ? null : sources.recall();
-  return recalled === null
-    ? { tokens: null, window: windowTokens }
+  if (recalled === null) {
+    return { tokens: null, window: windowTokens };
+  }
+  return recalled.estimated === true
+    ? { tokens: recalled.tokens, window: recalled.window, estimated: true }
     : { tokens: recalled.tokens, window: recalled.window };
 }
 
@@ -111,14 +119,19 @@ export function useContextRing({
   remember: (runId: string, reading: ContextReading | null) => void;
   forget: (runId: string) => void;
 }): string | null {
-  const { tokens, window: windowTokens } = figures;
+  const { tokens, window: windowTokens, estimated = false } = figures;
   const itemsLoaded = items.length > 0;
   useEffect(() => {
     if (runId === null) {
       return;
     }
     if (tokens !== null) {
-      remember(runId, { tokens, window: windowTokens });
+      remember(
+        runId,
+        estimated
+          ? { tokens, window: windowTokens, estimated }
+          : { tokens, window: windowTokens },
+      );
       return;
     }
     // Forgetting only over a loaded transcript. An empty one is the refetch
@@ -126,7 +139,7 @@ export function useContextRing({
     if (itemsLoaded) {
       forget(runId);
     }
-  }, [runId, tokens, windowTokens, itemsLoaded, remember, forget]);
+  }, [runId, tokens, windowTokens, estimated, itemsLoaded, remember, forget]);
   return useMemo(
     () => chatContextAwaitingReading(tokens, items),
     [tokens, items],

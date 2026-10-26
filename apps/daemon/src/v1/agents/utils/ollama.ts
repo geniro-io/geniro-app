@@ -4,7 +4,7 @@ import { delimiter, join } from 'node:path';
 
 import { z } from 'zod';
 
-import type { AgentEvent } from '../adapters/adapter.types';
+import type { AgentEvent, AgentUsage } from '../adapters/adapter.types';
 
 export const OLLAMA_MODEL_PREFIX = 'ollama/';
 export const OLLAMA_CLOUD_MODEL_REASON =
@@ -155,20 +155,26 @@ export function qualifyOllamaEvent(
     return { ...event, contextModel: model };
   }
   if (event.type === 'cost_progress') {
-    return { ...event, costUsd: 0 };
+    return { type: 'cost_progress', costUsd: 0 };
   }
-  if (event.type === 'turn_complete' && event.usage) {
-    return {
-      ...event,
-      // The CLI priced the turn at a hosted model's rates; its per-model split
-      // of that figure goes with it.
-      usage: {
-        ...event.usage,
-        contextModel: model,
-        costUsd: 0,
-        modelCosts: null,
-      },
-    };
+  // A failed or stopped turn carries usage too, and its cost is just as free.
+  if (
+    (event.type === 'turn_complete' ||
+      event.type === 'error' ||
+      event.type === 'turn_cancelled') &&
+    event.usage
+  ) {
+    return { ...event, usage: localUsage(event.usage, model) };
   }
   return event;
+}
+
+/**
+ * A local turn's usage: free, which is a fact rather than an estimate, so
+ * whatever share of the hosted price geniro had priced goes too — and the CLI's
+ * per-model split of that hosted figure with it.
+ */
+function localUsage(usage: AgentUsage, model: string): AgentUsage {
+  const { estimatedCostUsd: _hostedEstimate, ...rest } = usage;
+  return { ...rest, contextModel: model, costUsd: 0, modelCosts: null };
 }

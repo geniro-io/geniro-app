@@ -9,6 +9,16 @@ import { Input } from './ui/input';
 import { cn } from './ui/utils';
 
 /**
+ * What the panel draws from — an agent CLI's sign-in (`LoginSessionDto`) or a
+ * share destination's (`ShareSignInSessionDto`, which also ends `timed-out`).
+ */
+export interface LoginProgressSession {
+  status: LoginSessionDto['status'] | 'timed-out';
+  url: string | null;
+  message: string | null;
+}
+
+/**
  * A sign-in happening IN the app, on the agent card that started it.
  *
  * It exists because the sign-in stopped opening a terminal: the terminal window
@@ -41,8 +51,9 @@ export function CliLoginProgress({
   variant = 'band',
   scope = 'account',
   remote = isRemoteRuntime(),
+  cancelRef,
 }: {
-  session: LoginSessionDto;
+  session: LoginProgressSession;
   onSubmitCode: (code: string) => void;
   onCancel: () => void;
   onDismiss: () => void;
@@ -85,7 +96,9 @@ export function CliLoginProgress({
    * sign in finished, but its still asking to sign in" — the row underneath was
    * right and this line was not.
    */
-  scope?: 'account' | 'server';
+  scope?: 'account' | 'server' | 'share';
+  /** The Cancel / Dismiss button, for a caller that moves focus onto it. */
+  cancelRef?: React.Ref<HTMLButtonElement>;
   /**
    * Whether this panel is on a DIFFERENT device from the CLI — a phone over the
    * LAN gateway. Defaults to asking the runtime; a prop so a spec can say which.
@@ -107,12 +120,23 @@ export function CliLoginProgress({
   const over =
     session.status === 'succeeded' ||
     session.status === 'failed' ||
-    session.status === 'cancelled';
+    session.status === 'cancelled' ||
+    session.status === 'timed-out';
   const band = variant === 'band';
   // One place the two weights are decided, so a later edit cannot make the
   // glyph small and leave the words large.
   const glyph = band ? 'size-4 shrink-0' : 'size-3.5 shrink-0';
   const control = band ? undefined : 'h-5 px-1.5 text-[11px]';
+  const title = headline(session, scope, remote);
+  // The CLI's own last line, when it says more than the headline ("Sign-in
+  // timed out." under "Not shared — sign-in timed out" says nothing). Held
+  // back while a code is asked for: the headline is already the instruction.
+  const message =
+    session.message !== null &&
+    session.status !== 'needs_code' &&
+    !restates(title, session.message)
+      ? session.message
+      : null;
 
   return (
     <div
@@ -145,13 +169,29 @@ export function CliLoginProgress({
         )}
         <span
           className={cn(
+            'shrink-0 whitespace-nowrap',
             session.status === 'succeeded'
               ? 'text-foreground'
               : 'text-muted-foreground',
           )}>
-          {headline(session, scope, remote)}
+          {title}
         </span>
-        <div className="ml-auto flex items-center gap-1">
+        {/* Inline, the CLI's line and an error stay on the headline's row,
+            cut to fit with the whole text on hover: a status among rows is
+            one line, never a block. */}
+        {!band && message !== null ? (
+          <span
+            className="min-w-0 truncate text-muted-foreground"
+            title={message}>
+            — {message}
+          </span>
+        ) : null}
+        {!band && error !== null ? (
+          <span className="min-w-0 truncate text-destructive" title={error}>
+            {error}
+          </span>
+        ) : null}
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           {/* Also while a SERVER sign-in is `verifying`: the CLI exited having
               opened the MAC's browser, so on a phone this link is the only way
               to the provider's page at all. */}
@@ -178,6 +218,7 @@ export function CliLoginProgress({
             </>
           ) : null}
           <Button
+            ref={cancelRef}
             type="button"
             variant="ghost"
             size="sm"
@@ -227,30 +268,27 @@ export function CliLoginProgress({
         </form>
       ) : null}
 
-      {/* The CLI's own last line, when it has one worth showing. Held back while
-          a code is being asked for, where the headline is already the
-          instruction and this would restate it. */}
-      {session.message !== null && session.status !== 'needs_code' ? (
-        <p
-          className={cn(
-            'text-muted-foreground',
-            band ? 'text-xs' : 'text-[11px]',
-          )}>
-          {session.message}
-        </p>
+      {band && message !== null ? (
+        <p className="text-xs text-muted-foreground">{message}</p>
       ) : null}
-      {error !== null ? (
-        <p className={cn('text-destructive', band ? 'text-xs' : 'text-[11px]')}>
-          {error}
-        </p>
+      {band && error !== null ? (
+        <p className="text-xs text-destructive">{error}</p>
       ) : null}
     </div>
   );
 }
 
+/** Whether the CLI's line only repeats what the headline already ends with. */
+function restates(title: string, message: string): boolean {
+  const letters = (text: string): string =>
+    text.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const said = letters(message);
+  return said !== '' && letters(title).endsWith(said);
+}
+
 function headline(
-  session: LoginSessionDto,
-  scope: 'account' | 'server',
+  session: LoginProgressSession,
+  scope: 'account' | 'server' | 'share',
   remote: boolean,
 ): string {
   switch (session.status) {
@@ -261,17 +299,34 @@ function headline(
         ? 'Open the sign-in page, sign in, then paste the code it shows'
         : 'Finish signing in in your browser';
     case 'verifying':
+      // A share's CLI has signed in and the daemon is checking it, then
+      // sharing what waited.
+      if (scope === 'share') {
+        return 'Signed in — sharing…';
+      }
       // The CLI has exited, but a server is signed in only once the daemon has
       // SEEN it connect — it is re-checking it now.
       return 'Finish signing in in your browser — checking the connection…';
     case 'succeeded':
       // For a server this is an observed connect, never just a command that
       // exited — the daemon reports `verifying` until it sees one.
-      return scope === 'server' ? 'Signed in — connected' : 'Sign-in finished';
+      return scope === 'server'
+        ? 'Signed in — connected'
+        : scope === 'share'
+          ? 'Signed in'
+          : 'Sign-in finished';
     case 'failed':
-      return 'Sign-in did not complete';
+      return scope === 'share'
+        ? 'Not shared — sign-in did not complete'
+        : 'Sign-in did not complete';
     case 'cancelled':
-      return 'Sign-in cancelled';
+      return scope === 'share'
+        ? 'Not shared — sign-in cancelled'
+        : 'Sign-in cancelled';
+    case 'timed-out':
+      return scope === 'share'
+        ? 'Not shared — sign-in timed out'
+        : 'Sign-in timed out';
     case 'waiting':
       return 'Waiting for you to finish in the browser…';
     default: {

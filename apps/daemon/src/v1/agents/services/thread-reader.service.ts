@@ -167,6 +167,11 @@ export class ThreadReaderService {
       source.snapshotSeq,
       source.sourceWorking,
     );
+    const teamNotes = await this.itemDao.teamNoteCount(
+      source.sourceRunId,
+      this.em.fork(),
+      source.snapshotSeq,
+    );
     const kind = analysedThreadKindOf(run);
     const header = {
       source: {
@@ -266,8 +271,9 @@ export class ThreadReaderService {
         ...usageOf(fold.turns),
         working: fold.working,
       },
+      teamNotes,
       ...lists,
-      next: 'Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / nodeId / kinds), view=item seq=N for one row in full.',
+      next: `Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / nodeId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
     };
     return fitToBudget(
       answer,
@@ -317,6 +323,10 @@ export class ThreadReaderService {
           outputTokens: turn.outputTokens,
           cacheReadTokens: turn.cacheReadTokens,
           costUsd: turn.costUsd,
+          // The part of that cost geniro priced from tokens, not the CLI's bill.
+          ...(turn.estimatedCostUsd === null
+            ? {}
+            : { estimatedCostUsd: turn.estimatedCostUsd }),
           ...(turn.modelCosts === null ? {} : { modelCosts: turn.modelCosts }),
         });
       }
@@ -545,7 +555,12 @@ function itemEntry(row: Item): Answer {
 
 type TurnUsage = Pick<
   RunWaterfallTurn,
-  'nodeId' | 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'costUsd'
+  | 'nodeId'
+  | 'inputTokens'
+  | 'outputTokens'
+  | 'cacheReadTokens'
+  | 'costUsd'
+  | 'estimatedCostUsd'
 >;
 
 /**
@@ -561,6 +576,8 @@ function usageOf(
   outputTokens: number | null;
   cacheReadTokens: number | null;
   costUsd: number | null;
+  /** Of {@link costUsd}, the part geniro priced from tokens; null when none. */
+  estimatedCostUsd: number | null;
 } {
   const own = turns.filter(
     (turn) => nodeId === undefined || turn.nodeId === nodeId,
@@ -575,6 +592,7 @@ function usageOf(
     outputTokens: sum((turn) => turn.outputTokens),
     cacheReadTokens: sum((turn) => turn.cacheReadTokens),
     costUsd: sum((turn) => turn.costUsd),
+    estimatedCostUsd: sum((turn) => turn.estimatedCostUsd),
   };
 }
 
@@ -608,7 +626,21 @@ export function fitToBudget(
       totals.set(key, list.length);
     }
   }
-  while (bytes(out) > budget) {
+  // The `shortened` note is part of what is measured: added after the loop,
+  // it could carry a fitted answer past the budget.
+  const noted = (candidate: Answer): Answer => {
+    const kept: Record<string, string> = {};
+    for (const [key, total] of totals) {
+      const length = (candidate[key] as unknown[]).length;
+      if (length < total) {
+        kept[key] = `${length} of ${total}`;
+      }
+    }
+    return Object.keys(kept).length === 0
+      ? candidate
+      : { ...candidate, shortened: kept };
+  };
+  while (bytes(noted(out)) > budget) {
     let longest: string | null = null;
     for (const key of totals.keys()) {
       const list = out[key] as unknown[];
@@ -625,12 +657,5 @@ export function fitToBudget(
     const list = out[longest] as unknown[];
     out[longest] = list.slice(0, Math.max(1, Math.floor(list.length / 2)));
   }
-  const kept: Record<string, string> = {};
-  for (const [key, total] of totals) {
-    const length = (out[key] as unknown[]).length;
-    if (length < total) {
-      kept[key] = `${length} of ${total}`;
-    }
-  }
-  return Object.keys(kept).length === 0 ? out : { ...out, shortened: kept };
+  return noted(out);
 }

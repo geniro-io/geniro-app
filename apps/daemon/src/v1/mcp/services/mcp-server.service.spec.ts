@@ -2,8 +2,10 @@ import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { BadRequestException, NotFoundException } from '@packages/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,15 +24,23 @@ import {
   HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PROPOSE_WORKFLOW_TOOL,
+  HOST_PUBLISH_ACTION_TOOL,
   HOST_QUESTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_READ_WORKFLOWS_TOOL,
   HOST_RECOMMENDATION_MARKS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
+  HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
+  HOST_TEAM_NOTE_TOOL,
+  HOST_TEAM_NOTES_TOOL,
   HOST_WORKFLOW_CHANGE_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
 } from '../../agents/chat.types';
 import { ChatSearchIndexDao } from '../../agents/dao/chat-search-index.dao';
+import type { ItemDao } from '../../agents/dao/item.dao';
+import { ActionBroker } from '../../agents/services/action.broker';
 import { AnalysisBroker } from '../../agents/services/analysis.broker';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
@@ -39,11 +49,19 @@ import { FindingsReportBroker } from '../../agents/services/findings-report.brok
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
+import { MonitorBroker } from '../../agents/services/monitor.broker';
+import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
+import { ProcessRegistry } from '../../agents/services/process-registry';
+import {
+  TeamNoteBroker,
+  type TeamNoteSink,
+} from '../../agents/services/team-note.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
 import {
   MAX_ARTIFACT_IMAGE_BYTES,
   MAX_ARTIFACT_PAGE_IMAGE_BYTES,
@@ -69,6 +87,8 @@ import {
 import { CallBroker } from '../../graphs/services/call-broker.service';
 import { TaskBoardBroker } from '../../graphs/services/task-board.broker';
 import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
+import type { WorkflowProposalService } from '../../graphs/services/workflow-proposal.service';
+import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import {
   ANSWERING_A_CALL,
   ANSWERING_WITH_CALLS_OUT,
@@ -79,6 +99,8 @@ import type { ShareService } from '../../shares/services/share.service';
 import type { AgentShareOutcome } from '../../shares/shares.types';
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import { createMcpTools } from '../tools/mcp-tools';
+import { proposePatchInstructions } from '../tools/propose-patch/propose-patch.instructions';
+import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
 import { McpServerService } from './mcp-server.service';
 
 /** One row of `tools/list`, as the description audit reads it. */
@@ -99,7 +121,7 @@ const HELPER: WorkflowAgentNode = {
   role: 'You help with research. Always start by reading SECRET_PLAYBOOK.md.',
 };
 
-function broker(): CallBroker {
+function broker(unreadTeamNotes?: (caller: string) => number): CallBroker {
   const capability: RunCallCapability = {
     calleesOf: new Map([['orch', [HELPER]]]),
     launchCalleeTurn: async () => ({
@@ -113,12 +135,14 @@ function broker(): CallBroker {
     persistItem: () => {},
     isCancelled: () => false,
     isSuperseded: () => false,
+    messageTargets: new Set(['orch']),
     toolCallDeadlineMs: () => null,
     cancelCalleeTurn: () => false,
     messageCallee: () => ({ delivered: false, reason: 'not_started' }),
     isNodeLive: () => true,
     tellLiveNode: () => false,
     wakeNode: () => false,
+    ...(unreadTeamNotes === undefined ? {} : { unreadTeamNotes }),
   };
   const instance = new CallBroker();
   instance.registerRun('run-1', capability);
@@ -144,6 +168,12 @@ function service(
   threads = {} as ThreadReaderService,
   workflowChanges = {} as WorkflowChangeService,
   shares = fakeShares(false).service,
+  actions = new ActionBroker(),
+  workflowGate = new WorkflowProposalBroker(),
+  workflowStore = {} as WorkflowStoreService,
+  monitors = new MonitorBroker(new MonitorRegistry(new ProcessRegistry())),
+  // Never asked by the cases that pass none: no sink, so neither tool is listed.
+  teamNotes = teamNoteBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -155,6 +185,9 @@ function service(
       comparisons,
       galleries,
       artifacts,
+      actions,
+      monitors,
+      teamNotes,
       patches,
       plans,
       notices,
@@ -163,6 +196,10 @@ function service(
       analysis,
       threads,
       workflowChanges,
+      workflowGate,
+      workflowStore,
+      // Never asked by the cases that list tools.
+      workflowProposals: {} as WorkflowProposalService,
       shares,
     }),
     {
@@ -201,6 +238,11 @@ async function everyHostTool(): Promise<ToolListing[]> {
   const galleries = new GalleryBroker();
   const artifacts = new ArtifactBroker();
   const notices = new NotifyBroker();
+  const actions = new ActionBroker();
+  const workflowGate = new WorkflowProposalBroker();
+  const monitors = monitorBroker();
+  const teamNotes = teamNoteBroker();
+  teamNotes.register('run-1', 'agent', noop as never);
   for (const broker of [
     questions,
     findings,
@@ -212,6 +254,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
     galleries,
     artifacts,
     notices,
+    actions,
+    workflowGate,
   ]) {
     broker.register('run-1', 'agent', noop as never);
   }
@@ -244,12 +288,81 @@ async function everyHostTool(): Promise<ToolListing[]> {
       board,
       undefined,
       analysis,
+      undefined,
+      undefined,
+      undefined,
+      actions,
+      workflowGate,
+      undefined,
+      monitors.broker,
+      teamNotes,
     ),
     'run-1',
     'agent',
     rpc('tools/list', {}),
   );
   return (json().result as { tools: ToolListing[] }).tools;
+}
+
+/**
+ * A team-note broker over an in-memory `items` table; `rows` is what
+ * `teamNoteRows` reads back, so a write is readable by the next call.
+ */
+function teamNoteBroker(
+  rows: { seq: number; payload: string; createdAt: Date }[] = [],
+): TeamNoteBroker {
+  const em = { fork: () => em } as unknown as ConstructorParameters<
+    typeof TeamNoteBroker
+  >[0];
+  const items = {
+    teamNoteRows: () => Promise.resolve([...rows]),
+    teamNoteCount: () => Promise.resolve(rows.length),
+  } as unknown as ItemDao;
+  return new TeamNoteBroker(em, items);
+}
+
+/** A monitor broker with run-1's `agent` node registered, over a real registry. */
+function monitorBroker(): { broker: MonitorBroker; registry: MonitorRegistry } {
+  const registry = new MonitorRegistry(new ProcessRegistry());
+  const broker = new MonitorBroker(registry);
+  broker.register('run-1', 'agent', {
+    ownerOf: (caller) => ({
+      owner: {
+        runId: 'run-1',
+        nodeId: 'agent',
+        caller,
+        conversationId: null,
+        callId: null,
+        target: 'chat',
+      },
+      cwd: tmpdir(),
+    }),
+  });
+  return { broker, registry };
+}
+
+/** A service whose only registered host sink is the action one. */
+function actionService(actions: ActionBroker): McpServerService {
+  return service(
+    new CallBroker(),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    actions,
+  );
 }
 
 function patchService(patches: PatchBroker): McpServerService {
@@ -285,17 +398,19 @@ function fakeShares(
   },
 ) {
   const asked: { artifactId: string; title: string; remote: boolean }[] = [];
+  const askers: unknown[] = [];
   const service = {
     agentsMayShare: () => agentsMayShare,
     shareForAgent: (
-      input: { artifactId: string; title: string },
+      input: { artifactId: string; title: string; asker?: unknown },
       remote: boolean,
     ) => {
       asked.push({ artifactId: input.artifactId, title: input.title, remote });
+      askers.push(input.asker);
       return Promise.resolve(outcome);
     },
   } as unknown as ShareService;
-  return { service, asked };
+  return { service, asked, askers };
 }
 
 function artifactService(
@@ -1300,6 +1415,7 @@ describe('McpServerService', () => {
       persistItem: () => {},
       isCancelled: () => false,
       isSuperseded: () => false,
+      messageTargets: new Set(['orch']),
       toolCallDeadlineMs: () => null,
       cancelCalleeTurn: () => false,
       messageCallee: () => ({ delivered: false, reason: 'not_started' }),
@@ -1363,6 +1479,7 @@ describe('McpServerService', () => {
       persistItem: () => {},
       isCancelled: () => false,
       isSuperseded: () => false,
+      messageTargets: new Set(['orch']),
       toolCallDeadlineMs: () => 60_000,
       cancelCalleeTurn: () => false,
       messageCallee: () => ({ delivered: false, reason: 'not_started' }),
@@ -1491,6 +1608,7 @@ describe('McpServerService', () => {
       },
       isCancelled: () => false,
       isSuperseded: () => false,
+      messageTargets: new Set(['orch']),
       toolCallDeadlineMs: () => null,
       cancelCalleeTurn: () => false,
       messageCallee: () => ({ delivered: false, reason: 'not_started' }),
@@ -1629,6 +1747,7 @@ describe('McpServerService', () => {
       persistItem: () => {},
       isCancelled: () => false,
       isSuperseded: () => false,
+      messageTargets: new Set(['orch']),
       toolCallDeadlineMs: () => null,
       cancelCalleeTurn: () => false,
       messageCallee: () => ({ delivered: false, reason: 'not_started' }),
@@ -1979,6 +2098,122 @@ describe('McpServerService', () => {
     expect(kind.enum).toEqual(['line', 'bar', 'area']);
   });
 
+  it('lists publish_action with message optional and a stop by shell or pid', async () => {
+    const actions = new ActionBroker();
+    actions.register('run-1', 'agent', {
+      publish: async () => ({ status: 'refused', reason: 'unused' }),
+      remove: async () => ({ status: 'refused', reason: 'unused' }),
+    });
+    const { json } = await post(
+      actionService(actions),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const schema = (
+      json().result as {
+        tools: {
+          name: string;
+          inputSchema: {
+            required: string[];
+            properties: { stop: { properties: Record<string, unknown> } };
+          };
+        }[];
+      }
+    ).tools.find((t) => t.name === HOST_PUBLISH_ACTION_TOOL)!.inputSchema;
+    expect(schema.required).toEqual(['label']);
+    expect(Object.keys(schema.properties.stop.properties)).toEqual([
+      'shell',
+      'pid',
+    ]);
+  });
+
+  it('tools/call publish_action hands the button and its calling conversation over and answers with its receipt', async () => {
+    const actions = new ActionBroker();
+    const published: unknown[] = [];
+    const callers: string[] = [];
+    actions.register('run-1', 'agent', {
+      publish: async (input, caller) => {
+        published.push(input);
+        callers.push(caller);
+        return { status: 'published', text: 'Published action "pr-merged".' };
+      },
+      remove: async () => ({ status: 'refused', reason: 'unused' }),
+    });
+    const call = async (args: Record<string, unknown>) => {
+      const { json } = await post(
+        actionService(actions),
+        'run-1',
+        'agent',
+        rpc('tools/call', { name: HOST_PUBLISH_ACTION_TOOL, arguments: args }),
+        'call-3',
+      );
+      return json().result as { content: { text: string }[]; isError: boolean };
+    };
+
+    const result = await call({
+      label: 'PR merged',
+      message: 'PR merged — continue',
+      action_id: null,
+    });
+
+    expect(published).toEqual([
+      { label: 'PR merged', message: 'PR merged — continue' },
+    ]);
+    // The sink, not the model, learns which conversation published it.
+    expect(callers).toEqual([callerKey('agent', 'call-3')]);
+    expect(result).toEqual({
+      content: [{ type: 'text', text: 'Published action "pr-merged".' }],
+      isError: false,
+    });
+    // A misspelt kind must not publish a button that sends nothing.
+    expect(await call({ label: 'x', mesage: 'typo' })).toMatchObject({
+      isError: true,
+    });
+    expect(published).toHaveLength(1);
+  });
+
+  it('tools/call answers a refused publish as an error, and remove_action with its receipt', async () => {
+    const actions = new ActionBroker();
+    const removed: string[] = [];
+    actions.register('run-1', 'agent', {
+      publish: async () => ({
+        status: 'refused',
+        reason: 'give exactly one of message, stop or command',
+      }),
+      remove: async (actionId, caller) => {
+        removed.push(`${actionId} by ${caller}`);
+        return { status: 'removed', text: `Removed action "${actionId}".` };
+      },
+    });
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const { json } = await post(
+        actionService(actions),
+        'run-1',
+        'agent',
+        rpc('tools/call', { name, arguments: args }),
+      );
+      return json().result as { content: { text: string }[]; isError: boolean };
+    };
+
+    expect(await call(HOST_PUBLISH_ACTION_TOOL, { label: 'x' })).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'INVALID_ARGS: give exactly one of message, stop or command',
+        },
+      ],
+      isError: true,
+    });
+    expect(
+      await call(HOST_REMOVE_ACTION_TOOL, { action_id: 'pr-merged' }),
+    ).toEqual({
+      content: [{ type: 'text', text: 'Removed action "pr-merged".' }],
+      isError: false,
+    });
+    expect(removed).toEqual(['pr-merged by agent']);
+  });
+
   it('tools/call show_chart hands the chart over and answers with a receipt', async () => {
     const charts = new ChartBroker();
     const drawn: unknown[] = [];
@@ -2291,6 +2526,38 @@ describe('McpServerService', () => {
       expect(text).toContain(
         'Shared link: https://pages.example.com/x/index.html#k=KEY',
       );
+    });
+
+    it('names the asking conversation, so a share waiting on sign-in wakes the right agent', async () => {
+      const shares = fakeShares(true);
+      await post(
+        artifactService(publishing(), shares.service),
+        'run-1',
+        'agent',
+        shareCall(true),
+      );
+      expect(shares.askers).toEqual([
+        {
+          runId: 'run-1',
+          nodeId: 'agent',
+          conversationId: null,
+          caller: 'agent',
+          target: 'chat',
+        },
+      ]);
+
+      const workflow = publishing();
+      workflow.markWorkflowRun('run-1');
+      const inWorkflow = fakeShares(true);
+      await post(
+        artifactService(workflow, inWorkflow.service),
+        'run-1',
+        'agent',
+        shareCall(true),
+      );
+      expect(inWorkflow.askers).toEqual([
+        expect.objectContaining({ target: 'workflow', nodeId: 'agent' }),
+      ]);
     });
 
     it('tells the share a call came through the gateway from a paired device', async () => {
@@ -2904,6 +3171,119 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(find(tools, HOST_METRICS_TOOL)).toContain('show_chart');
   });
 
+  it('makes BOTH team-note tools name the other, and say what a note is not for', async () => {
+    // A writer that never hears of the reader writes into a store nobody
+    // opens; a reader that never hears of the writer treats the notes as a
+    // message channel. Both sides also keep progress and stuck reports out —
+    // the noise that would make the store useless.
+    const tools = await everyHostTool();
+    const write = find(tools, HOST_TEAM_NOTE_TOOL);
+    const read = find(tools, HOST_TEAM_NOTES_TOOL);
+    expect(write).toContain('team_notes');
+    expect(read).toMatch(/\bteam_note\b/);
+    expect(write).toMatch(/Do not use it for progress reports/);
+    expect(read).toMatch(/Do not use it to wait for another agent/);
+  });
+
+  it('keeps propose_patch and propose_plan descriptions byte-identical in both modes', () => {
+    // The BLOCKING pair is the text these two tools served before the deferred
+    // mode existed, byte for byte; the DEFERRED pair is new. A drift in either
+    // is a model-facing behaviour change, not a refactor detail.
+    const patchDeferred =
+      'Propose a change to ONE file without making it. The user sees the diff with Apply and Reject, and this ' +
+      'app writes the file only if they accept. ' +
+      'Use it when you have a concrete fix and would rather hand it over than edit directly — and do NOT also ' +
+      'write the file yourself: if the user accepts, the change is already on disk. ' +
+      'One file per call; call it again for the next one. ' +
+      'The call returns at once — the card is on their screen, so STOP and end your turn. Do not write the file ' +
+      'yourself, and do not call this again for the same change. What happened arrives as your next user message, ' +
+      'and the four outcomes mean different things: applied (it is on disk, do not write it again), rejected ' +
+      '(do NOT route around it — ask what they would prefer), stale (they ACCEPTED but the file no longer matches, ' +
+      'so re-read it and propose again — this is not a refusal), and unavailable (the card could not be shown at ' +
+      'all, so describe the change in your reply instead).';
+    const patchBlocking =
+      'Propose a change to ONE file without making it. The user sees the diff with Apply and Reject, and this ' +
+      'app writes the file only if they accept. ' +
+      'Use it when you have a concrete fix and would rather hand it over than edit directly — and do NOT also ' +
+      'write the file yourself: if the user accepts, the change is already on disk. ' +
+      'One file per call; call it again for the next one. ' +
+      'The result tells you what happened, and the four outcomes mean different things: applied (it is on ' +
+      'disk, do not write it again), rejected (do NOT route around it — ask what they would prefer), stale ' +
+      '(they ACCEPTED but the file no longer matches, so re-read it and propose again — this is not a ' +
+      'refusal), and unavailable (the card could not be shown at all, so describe the change in your reply ' +
+      'instead).';
+    const planBody =
+      'Use it when the work is worth more than a couple of edits, when a request could reasonably be read more ' +
+      'than one way, or when you are about to touch something wide — a rename across files, a dependency, a ' +
+      'schema, anything hard to undo. Do not use it for work you have already been told to do, or for a ' +
+      'one-line change: a plan for something obvious is a card in the way. ' +
+      'If you have a plan mode of your own (an ExitPlanMode tool, or similar), use EITHER that or this, never ' +
+      'both for the same piece of work — two approval cards for one plan is a gate the user has to answer ' +
+      'twice. Prefer this one when it is offered: its card is the one rendered in the app they are watching. ' +
+      'Call it ONCE, before the work, and do not also write the steps out as text — the user sees the card. ';
+    const planTail =
+      'Use show_artifact instead when you want to SHOW a plan rather than be approved for one — a laid-out ' +
+      'page you keep updating as the work moves. This tool is the gate; that one is the picture, and it asks ' +
+      'the user nothing. ' +
+      'Use propose_workflow instead, where it is offered, when the user wants a saved team of ' +
+      'agents (a workflow) rather than a plan for the work in this chat.';
+    const planDeferred =
+      'Show the user how you intend to carry out a request, and wait for them to approve it before you start. ' +
+      planBody +
+      'The call returns at once — the card is on their screen, so STOP and end your turn. Do not start the work, ' +
+      'and do not call this again for the same plan. Their verdict arrives as your next user message: approved ' +
+      '(carry it out), or rejected (do NOT do it another way). Either verdict may carry a note from the user — ' +
+      'when it does, that note outranks the plan you proposed. ' +
+      planTail;
+    const planBlocking =
+      'Show the user how you intend to carry out a request, and WAIT for them to approve it before you start. ' +
+      planBody +
+      'The call blocks until they answer, and the result is what to do next: approved (carry it out), or ' +
+      'rejected (do NOT do it another way). Either verdict may carry a note from the user — when it does, that ' +
+      'note outranks the plan you proposed. ' +
+      planTail;
+
+    expect(proposePatchInstructions(true)).toBe(patchDeferred);
+    expect(proposePatchInstructions(false)).toBe(patchBlocking);
+    expect(proposePlanInstructions(true)).toBe(planDeferred);
+    expect(proposePlanInstructions(false)).toBe(planBlocking);
+  });
+
+  it('tells a deferring plan and patch that the call returns at once', async () => {
+    // The blocking sentences stay for a sink that holds the call. A cursor
+    // listing is the other one: the model has to stop, because the verdict
+    // arrives later, as a message, and waiting on this call is how it times out.
+    const plans = new PlanBroker();
+    const patches = new PatchBroker();
+    const noop = async (): Promise<never> => {
+      throw new Error('not called');
+    };
+    plans.register('run-1', 'agent', noop as never, { answersAtOnce: true });
+    patches.register('run-1', 'agent', noop as never, { answersAtOnce: true });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        new UserQuestionBroker(),
+        new FindingsReportBroker(),
+        new ChartBroker(),
+        patches,
+        plans,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: ToolListing[] }).tools;
+    const plan = find(tools, HOST_PLAN_TOOL);
+    const patch = find(tools, HOST_PATCH_TOOL);
+    expect(plan).toContain('returns at once');
+    expect(plan).toContain('next user message');
+    expect(plan).not.toContain('The call blocks');
+    expect(patch).toContain('returns at once');
+    expect(patch).toContain('four outcomes');
+    expect(patch).toContain('next user message');
+  });
+
   it('names ALL FOUR patch outcomes it promises', async () => {
     // It said "the four outcomes mean different things" and listed three,
     // leaving `unavailable` — the one where nothing was decided at all — for
@@ -2967,6 +3347,12 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_RECOMMENDATIONS_TOOL,
       HOST_RECOMMENDATION_MARKS_TOOL,
       HOST_WORKFLOW_CHANGE_TOOL,
+      HOST_PUBLISH_ACTION_TOOL,
+      HOST_REMOVE_ACTION_TOOL,
+      HOST_READ_WORKFLOWS_TOOL,
+      HOST_PROPOSE_WORKFLOW_TOOL,
+      HOST_TEAM_NOTE_TOOL,
+      HOST_TEAM_NOTES_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
@@ -2984,6 +3370,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_RECOMMENDATIONS_TOOL,
       HOST_RECOMMENDATION_MARKS_TOOL,
       HOST_WORKFLOW_CHANGE_TOOL,
+      HOST_PUBLISH_ACTION_TOOL,
+      HOST_PROPOSE_WORKFLOW_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when NOT`).toMatch(
@@ -3011,6 +3399,246 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const tools = await everyHostTool();
     expect(find(tools, HOST_ARTIFACT_TOOL)).toContain('propose_plan');
     expect(find(tools, HOST_PLAN_TOOL)).toContain('show_artifact');
+  });
+
+  it('makes the two proposal tools, and the workflow pair, name each other', async () => {
+    // A plan of work and a workflow are both "proposed" on a card the user
+    // approves; without the names a model asked for "a team that reviews my
+    // PRs" reaches for the plan card, which saves nothing.
+    const tools = await everyHostTool();
+    expect(find(tools, HOST_PROPOSE_WORKFLOW_TOOL)).toContain(HOST_PLAN_TOOL);
+    expect(find(tools, HOST_PLAN_TOOL)).toContain(HOST_PROPOSE_WORKFLOW_TOOL);
+    expect(find(tools, HOST_PROPOSE_WORKFLOW_TOOL)).toContain(
+      HOST_READ_WORKFLOWS_TOOL,
+    );
+    expect(find(tools, HOST_READ_WORKFLOWS_TOOL)).toContain(
+      HOST_PROPOSE_WORKFLOW_TOOL,
+    );
+  });
+
+  it('offers the workflow tools only where the gate is registered, and refuses an unlisted call', async () => {
+    const gate = new WorkflowProposalBroker();
+    const listed = async (): Promise<string[]> => {
+      const { json } = await post(
+        service(
+          new CallBroker(),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          gate,
+        ),
+        'run-1',
+        'agent',
+        rpc('tools/list', {}),
+      );
+      return (json().result as { tools: { name: string }[] }).tools.map(
+        (tool) => tool.name,
+      );
+    };
+    expect(await listed()).not.toContain(HOST_PROPOSE_WORKFLOW_TOOL);
+    expect(await listed()).not.toContain(HOST_READ_WORKFLOWS_TOOL);
+
+    const dispose = gate.register('run-1', 'agent', { runId: 'run-1' });
+    expect(await listed()).toEqual(
+      expect.arrayContaining([
+        HOST_READ_WORKFLOWS_TOOL,
+        HOST_PROPOSE_WORKFLOW_TOOL,
+      ]),
+    );
+    dispose();
+
+    const { json } = await post(
+      service(),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_PROPOSE_WORKFLOW_TOOL,
+        arguments: { workflow: { name: 'x', nodes: [], edges: [] } },
+      }),
+    );
+    expect(json().result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'Not proposed: workflows are proposed from ordinary chats only.',
+        },
+      ],
+      isError: true,
+    });
+  });
+
+  it('refuses an unlisted read_workflows call', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'agent',
+      rpc('tools/call', { name: HOST_READ_WORKFLOWS_TOOL, arguments: {} }),
+    );
+    expect(json().result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'Not read: the workflow library is offered to ordinary chats only.',
+        },
+      ],
+      isError: true,
+    });
+  });
+
+  it('hands a listed propose_workflow call to the proposal service, and marks a refusal an error', async () => {
+    const gate = new WorkflowProposalBroker();
+    gate.register('run-1', 'agent', { runId: 'run-1' });
+    const propose = vi.fn(() =>
+      Promise.resolve({
+        status: 'refused' as const,
+        code: 'GRAPH_NO_TRIGGER',
+        message: 'add a trigger',
+      }),
+    );
+    const workflow = { name: 'x', nodes: [], edges: [] };
+    const tools = createMcpTools({
+      calls: new CallBroker(),
+      questions: new UserQuestionBroker(),
+      findings: new FindingsReportBroker(),
+      charts: new ChartBroker(),
+      metrics: new MetricsBroker(),
+      comparisons: new ComparisonBroker(),
+      galleries: new GalleryBroker(),
+      artifacts: new ArtifactBroker(),
+      actions: new ActionBroker(),
+      patches: new PatchBroker(),
+      plans: new PlanBroker(),
+      notices: new NotifyBroker(),
+      board: new TaskBoardBroker(),
+      history: new GlobalChatSearchService({} as ChatSearchIndexDao),
+      analysis: new AnalysisBroker(),
+      threads: {} as ThreadReaderService,
+      workflowChanges: {} as WorkflowChangeService,
+      workflowGate: gate,
+      workflowStore: {} as WorkflowStoreService,
+      workflowProposals: { propose } as unknown as WorkflowProposalService,
+      shares: fakeShares(false).service,
+    } as Parameters<typeof createMcpTools>[0]);
+    const tool = tools.find((t) => t.handles(HOST_PROPOSE_WORKFLOW_TOOL))!;
+
+    const result = await tool.call(
+      HOST_PROPOSE_WORKFLOW_TOOL,
+      { workflow, replaces: 'team' },
+      { runId: 'run-1', nodeId: 'agent' } as Parameters<typeof tool.call>[2],
+    );
+
+    expect(propose).toHaveBeenCalledWith('run-1', {
+      workflow,
+      replaces: 'team',
+    });
+    expect(result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'Not proposed — GRAPH_NO_TRIGGER: add a trigger. No card was shown.',
+        },
+      ],
+      isError: true,
+    });
+  });
+
+  it('answers read_workflows failures with a code, never a path', async () => {
+    const gate = new WorkflowProposalBroker();
+    gate.register('run-1', 'agent', { runId: 'run-1' });
+    const store = {
+      get: (slug: string) =>
+        Promise.reject(
+          slug === 'gone'
+            ? new NotFoundException(
+                'WORKFLOW_NOT_FOUND',
+                "No workflow 'gone' in the library",
+              )
+            : // The yaml library quotes the file's lines around the fault.
+              new BadRequestException(
+                'WORKFLOW_YAML_INVALID',
+                'YAML parse error: Nested mappings are not allowed at line 4, column 16:\n\n    configDir: /Users/me/.claude-work\n               ^\n',
+              ),
+        ),
+      list: () =>
+        Promise.reject(
+          Object.assign(
+            new Error("EACCES: permission denied, mkdir '/Users/me/geniro'"),
+            { code: 'EACCES' },
+          ),
+        ),
+    } as unknown as WorkflowStoreService;
+    const read = async (args: Record<string, unknown>): Promise<unknown> => {
+      const { json } = await post(
+        service(
+          new CallBroker(),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          gate,
+          store,
+        ),
+        'run-1',
+        'agent',
+        rpc('tools/call', { name: HOST_READ_WORKFLOWS_TOOL, arguments: args }),
+      );
+      return json().result;
+    };
+
+    await expect(read({ slug: 'gone' })).resolves.toEqual({
+      content: [
+        {
+          type: 'text',
+          text: "WORKFLOW_NOT_FOUND: No workflow 'gone' in the library",
+        },
+      ],
+      isError: true,
+    });
+    await expect(read({ slug: 'broken' })).resolves.toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'WORKFLOW_YAML_INVALID: YAML parse error: Nested mappings are not allowed at line 4, column 16',
+        },
+      ],
+      isError: true,
+    });
+    await expect(read({})).resolves.toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'Not read: the workflow library could not be read (EACCES).',
+        },
+      ],
+      isError: true,
+    });
   });
 
   it('sends each fixed shape to the sibling that already draws it', async () => {
@@ -3078,20 +3706,23 @@ describe('McpServerService — what the descriptions tell a model', () => {
         new RegExp(`\\.${name}(?![a-z-])`),
       );
     }
-    // The badge variants are written as suffixes (`g-badge (+ -success, …)`),
-    // which the class scan above cannot see — so they are read out of the
-    // description too, rather than checked against a list written here.
-    const badgeVariants = (
-      /g-badge \(\+ ([^)]*)\)/.exec(description)?.[1] ?? ''
-    )
-      .split(/,\s*/)
-      .map((v) => v.replace(/^-/, '').trim())
-      .filter(Boolean);
-    expect(badgeVariants.length).toBeGreaterThan(2);
-    for (const variant of badgeVariants) {
-      expect(ARTIFACT_KIT_STYLE, `.g-badge-${variant}`).toContain(
-        `.g-badge-${variant})`,
-      );
+    // Variants are written as suffixes (`g-badge (+ -success, …)`), which the
+    // class scan above cannot see — so they are read out of the description
+    // too, for every class that lists them, rather than checked against a list
+    // written here.
+    const variants = [
+      ...description.matchAll(/\b(g-[a-z-]+) \(\+ ([^)]*)\)/g),
+    ].flatMap(([, base, list]) =>
+      list!
+        .split(/,\s*/)
+        .map((v) => v.trim())
+        .filter((v) => v.startsWith('-'))
+        .map((v) => `${base}${v}`),
+    );
+    expect(variants).toContain('g-badge-success');
+    expect(variants).toContain('g-callout-danger');
+    for (const variant of variants) {
+      expect(ARTIFACT_KIT_STYLE, `.${variant}`).toContain(`.${variant})`);
     }
 
     const tailwind = description.slice(
@@ -3434,6 +4065,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const message = find(tools, 'message_agent');
     expect(message).toMatch(/next tool boundary/);
     expect(message).toMatch(/step in flight/);
+    expect(message).toContain('not delivered');
+    expect(message).toContain('at your next turn');
 
     // Every tool in the listing, not only this one: the same sentence could be
     // written into any of its siblings.
@@ -3457,5 +4090,285 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const description = find(await everyHostTool(), HOST_GALLERY_TOOL);
 
     expect(description).toContain('Do not paste');
+  });
+});
+
+describe('McpServerService — the monitor tools', () => {
+  const NAMES = ['monitor', 'stop_monitor', 'list_monitors'];
+
+  const call = async (
+    subject: McpServerService,
+    name: string,
+    args: Record<string, unknown>,
+  ) => {
+    const { json } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/call', { name, arguments: args }),
+    );
+    return json().result as { content: { text: string }[]; isError?: boolean };
+  };
+
+  const monitorService = (broker: MonitorBroker): McpServerService =>
+    service(
+      new CallBroker(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      broker,
+    );
+
+  it('withholds all three from a node whose turn registered no monitor sink', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const names = (json().result as { tools: { name: string }[] }).tools.map(
+      (tool) => tool.name,
+    );
+    for (const name of NAMES) {
+      expect(names).not.toContain(name);
+    }
+  });
+
+  it('lists the three together, right after the action tools, once a turn registered a sink', async () => {
+    const names = (await everyHostTool()).map((tool) => tool.name);
+    const at = names.indexOf('remove_action');
+    expect(names.slice(at + 1, at + 4)).toEqual(NAMES);
+  });
+
+  it('says when to monitor and when not to, and makes each tool name the other two', async () => {
+    const tools = await everyHostTool();
+    const text = (name: string) =>
+      tools.find((tool) => tool.name === name)!.description;
+    expect(text('monitor')).toMatch(/sleep-and-poll/);
+    expect(text('monitor')).toMatch(/Do not use it/);
+    expect(text('monitor')).toMatch(/end your turn rather than wait/);
+    expect(text('monitor')).toMatch(/grep --line-buffered/);
+    for (const name of NAMES) {
+      for (const other of NAMES.filter((n) => n !== name)) {
+        expect(text(name)).toContain(other);
+      }
+    }
+  });
+
+  it('starts, lists and stops a monitor for the calling conversation', async () => {
+    const { broker, registry } = monitorBroker();
+    const subject = monitorService(broker);
+    try {
+      const started = await call(subject, 'monitor', {
+        command: 'sleep 30',
+        description: 'nap',
+        timeout_ms: 60_000,
+      });
+      expect(started.isError).toBe(false);
+      expect(started.content[0]?.text).toMatch(/^Started monitor m1\./);
+
+      const listed = await call(subject, 'list_monitors', {});
+      expect(JSON.parse(listed.content[0]!.text)).toMatchObject([
+        {
+          id: 'm1',
+          description: 'nap',
+          command: 'sleep 30',
+          timeout_ms: 60_000,
+        },
+      ]);
+
+      const stopped = await call(subject, 'stop_monitor', { id: 'm1' });
+      expect(stopped.isError).toBe(false);
+      expect(registry.isRunning('run-1')).toBe(false);
+    } finally {
+      registry.stopRun('run-1', 'teardown');
+      await registry.settled('run-1', 5000);
+    }
+  });
+
+  it('refuses an empty command, an over-long description and a timeout out of range, starting nothing', async () => {
+    const { broker, registry } = monitorBroker();
+    const subject = monitorService(broker);
+    for (const args of [
+      { command: '   ', description: 'x' },
+      { command: 'true', description: 'y'.repeat(61) },
+      { command: 'true', description: 'x', timeout_ms: 999 },
+      { command: 'true', description: 'x', timeout_ms: 3_600_001 },
+      { command: 'true', description: 'x', timeout_ms: 1500.5 },
+    ]) {
+      const result = await call(subject, 'monitor', args);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toMatch(/^INVALID_ARGS/);
+    }
+    expect(registry.list('run-1')).toEqual([]);
+  });
+});
+
+describe('McpServerService — the team-note tools', () => {
+  it('puts the caller’s unread team-note count beside every call envelope, and leaves it out at 0', async () => {
+    const envelopeOf = async (
+      unread: number,
+    ): Promise<Record<string, unknown>> => {
+      const { json } = await post(
+        service(broker(() => unread)),
+        'run-1',
+        'orch',
+        rpc('tools/call', {
+          name: 'await_agent',
+          arguments: { call_id: 'call-404' },
+        }),
+      );
+      return JSON.parse(
+        (json().result as { content: { text: string }[] }).content[0]!.text,
+      ) as Record<string, unknown>;
+    };
+
+    // Even an error envelope carries it: the caller reads every reply.
+    expect(await envelopeOf(2)).toMatchObject({
+      status: 'error',
+      unread_team_notes: 2,
+    });
+    expect(await envelopeOf(0)).not.toHaveProperty('unread_team_notes');
+  });
+
+  const sinkOf = (
+    rows: { seq: number; payload: string; createdAt: Date }[],
+  ): TeamNoteSink => ({
+    persistItem: (_nodeId, _kind, _role, payload) => {
+      const seq = rows.length + 1;
+      rows.push({
+        seq,
+        payload: JSON.stringify(payload),
+        createdAt: new Date(seq),
+      });
+      return Promise.resolve({ seq } as never);
+    },
+    writer: (caller) => ({
+      nodeId: caller,
+      conversationId: null,
+      callId: null,
+    }),
+    agentName: (nodeId) => (nodeId === 'agent' ? 'Writer' : 'Reader'),
+  });
+
+  const teamService = (teamNotes: TeamNoteBroker): McpServerService =>
+    service(
+      new CallBroker(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      teamNotes,
+    );
+
+  const names = async (subject: McpServerService, nodeId: string) => {
+    const { json } = await post(
+      subject,
+      'run-1',
+      nodeId,
+      rpc('tools/list', {}),
+    );
+    return (json().result as { tools: ToolListing[] }).tools.map((t) => t.name);
+  };
+
+  it('lists both tools to a node with a sink and neither to an endpoint without one', async () => {
+    const teamNotes = teamNoteBroker();
+    teamNotes.register('run-1', 'agent', sinkOf([]));
+    const subject = teamService(teamNotes);
+
+    expect(await names(subject, 'agent')).toEqual(
+      expect.arrayContaining([HOST_TEAM_NOTE_TOOL, HOST_TEAM_NOTES_TOOL]),
+    );
+    // A chat never registers a sink, so its endpoint is never offered them.
+    const chat = await names(subject, 'chat-node');
+    expect(chat).not.toContain(HOST_TEAM_NOTE_TOOL);
+    expect(chat).not.toContain(HOST_TEAM_NOTES_TOOL);
+  });
+
+  it('writes a note through tools/call and reads it back from another node', async () => {
+    const rows: { seq: number; payload: string; createdAt: Date }[] = [];
+    const teamNotes = teamNoteBroker(rows);
+    teamNotes.register('run-1', 'agent', sinkOf(rows));
+    teamNotes.register('run-1', 'other', sinkOf(rows));
+    const subject = teamService(teamNotes);
+
+    const { json: wrote } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_TEAM_NOTE_TOOL,
+        arguments: { kind: 'pitfall', text: 'npm ci fails here; use pnpm' },
+      }),
+    );
+    expect(
+      (wrote().result as { content: { text: string }[] }).content[0]!.text,
+    ).toBe('Saved as note 1.');
+
+    const { json: read } = await post(
+      subject,
+      'run-1',
+      'other',
+      rpc('tools/call', { name: HOST_TEAM_NOTES_TOOL, arguments: {} }),
+    );
+    const text = (read().result as { content: { text: string }[] }).content[0]!
+      .text;
+    expect(text).toContain('note 1 · pitfall · Writer');
+    expect(text).toContain('npm ci fails here; use pnpm');
+  });
+
+  it('answers a refused write as invalid arguments', async () => {
+    const rows: { seq: number; payload: string; createdAt: Date }[] = [];
+    const teamNotes = teamNoteBroker(rows);
+    teamNotes.register('run-1', 'agent', sinkOf(rows));
+
+    const { json } = await post(
+      teamService(teamNotes),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_TEAM_NOTE_TOOL,
+        arguments: { kind: 'fact', text: 'x', supersedes: 99 },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError?: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('names no team note of this run');
+    expect(rows).toHaveLength(0);
   });
 });

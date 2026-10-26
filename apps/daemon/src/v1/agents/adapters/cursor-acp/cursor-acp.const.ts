@@ -1,4 +1,7 @@
-import type { BackgroundUnitOutcome } from '../adapter.types';
+import type {
+  ApprovalOptionScope,
+  BackgroundUnitOutcome,
+} from '../adapter.types';
 
 // ── `cursor-agent acp` ────────────────────────────────────────────────────
 
@@ -263,6 +266,26 @@ export const CURSOR_ASKING_APPROVAL_MODE = 'allowlist';
  * asking turn writes it `false` beside the approval mode.
  */
 export const CURSOR_WEB_SEARCH_AUTO_ACCEPT_CONFIG_KEY = 'autoAcceptWebSearch';
+
+/**
+ * How long cursor keeps an "Allow always" answer as geniro runs it: one
+ * SESSION.
+ *
+ * cursor offers `allow-once` / `allow-always` / `reject-once` on every
+ * `session/request_permission` it raises (the CLI's own handlers, 2026.10.19-
+ * 6bbf2c4), and `allow-always` adds the call's commands to the `permissions`
+ * allowlist of the `cli-config.json` in `CURSOR_CONFIG_DIR`. MEASURED over ACP
+ * on that build, under a profile seeded like `seedCursorProfile` and one
+ * process asked twice to run `mkdir -p probe-out && touch probe-out/marker.txt`:
+ * `allow-once` asked twice; `allow-always` asked ONCE and the profile's list
+ * gained `Shell(mkdir)` and `Shell(touch)`, while `~/.cursor/cli-config.json`
+ * was untouched.
+ *
+ * That profile is the conversation process's own — seeded when it spawns and
+ * removed when it closes (`prepareTurn`) — so the answer outlives neither, and
+ * the card offers it as "for this session" rather than under cursor's word.
+ */
+export const CURSOR_ALWAYS_ANSWER_SCOPE: ApprovalOptionScope = 'session';
 
 /**
  * The option id behind {@link CURSOR_MAX_MODE_CONFIG_KEY} — declared in
@@ -962,7 +985,10 @@ export const CURSOR_ANSWER_KEY = '__geniroAnswer';
  *   todo list" turn sends it and then completes normally after a `-32601`.
  * - `create_plan` DOES block, but its handler treats Unimplemented as a cue to
  *   write the plan locally and report success. The work still happens; only
- *   the delivery differs.
+ *   the delivery differs. Its payload IS wanted — the plan's ids, read by the
+ *   todo protocol before the refusal (see the task-list block below) — but the
+ *   reply is a verdict on the plan, which this client does not give for the
+ *   user, so the request itself is still refused.
  *
  * `ask_question` is deliberately ABSENT, and is the reason this list is not
  * simply "every `cursor/*`": its fallback answers the user's question with the
@@ -982,6 +1008,8 @@ export const CURSOR_ANSWER_KEY = '__geniroAnswer';
  */
 export const CURSOR_SILENTLY_DECLINED_METHODS: readonly string[] = [
   'cursor/generate_image',
+  // `CURSOR_CREATE_PLAN_METHOD`, spelled out because that constant is declared
+  // further down, beside the frames it carries.
   'cursor/create_plan',
 ];
 
@@ -1008,13 +1036,42 @@ export const CURSOR_SILENTLY_DECLINED_METHODS: readonly string[] = [
 // the `Update TODOs` tool row — which discloses no arguments at all
 // (`rawInput:{_toolName:"updateTodos"}`), so the list existed nowhere in geniro.
 //
-// Baseline ACP's `plan`/`plan_update` session updates are NOT what this agent
-// sends: across the whole probe not one arrived, and the driver's own default arm
-// still lists them as updates the transcript does not model. If a future agent
-// uses them, that is the place to add it — not here.
+// ── A PLAN (plan mode's CreatePlan), and why it is read off `create_plan` ──
+//
+// MEASURED on the wire, 2026-10-21, cursor-agent 2026.10.19-6bbf2c4, against a
+// throwaway folder: a plan-mode turn asking for a three-file plan, then an
+// agent-mode turn executing it. The plan turn sent, in this order:
+//
+//   session/update  tool_call  {toolCallId:"call-9d94…", title:"Create Plan",
+//                              rawInput:{_toolName:"createPlan"}}   (then refined
+//                              with {name, plan:<the plan document>})
+//   session/update  plan       {entries:[{content:"Create a.txt containing \"alpha\"",
+//                                         priority:"medium", status:"pending"}, …]}
+//   cursor/create_plan (a REQUEST)
+//     {toolCallId:"call-9d94…", name:"Create three files", overview:"…", plan:"…",
+//      todos:[{id:"create-a-txt", content:"Create a.txt containing \"alpha\"",
+//              status:"pending"}, …]}
+//
+// and the execution turn then moved those tasks with `cursor/update_todos`
+// patches keyed by the SAME ids:
+//
+//   {toolCallId:"…", merge:true, todos:[{id:"create-a-txt", status:"completed", …},
+//                                       {id:"create-b-txt", status:"in_progress", …}]}
+//
+// The `plan` update is baseline ACP and carries NO ids (and `priority` is
+// hard-coded: `priority:"medium"` for every todo, in the CLI's own CreatePlan
+// handler). Drawn from it, the plan's rows get ids from their position, every
+// later patch misses them, and the three tasks are drawn twice. `create_plan`
+// restates the same todos, in the same order, WITH the ids — so it is the
+// plan's announcement, and the `plan` update is held as its fallback (see
+// `AcpTodoProtocol.plan`). Its `status` adds `cancelled` to the three, which
+// reads as unknown, as it does on `update_todos`.
 
 /** @see CURSOR_SILENTLY_DECLINED_METHODS for the frames this method carries. */
 export const CURSOR_TODOS_METHOD = 'cursor/update_todos';
+
+/** Where cursor restates a plan with its ids — see the block above. */
+export const CURSOR_CREATE_PLAN_METHOD = 'cursor/create_plan';
 
 // ── Background sub-agents (the `task` tool) ────────────────────────────────
 //

@@ -84,7 +84,10 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     it('clears an old account conversation without erasing accumulated work or session history', async () => {
       await dao.createPending('run-1', 'root');
       await dao.saveSessionId('run-1', 'root', 'old-account');
-      await dao.rememberContext('run-1', 'root', 100, 1_000);
+      await dao.rememberContext('run-1', 'root', {
+        contextTokens: 100,
+        contextWindowTokens: 1_000,
+      });
       await dao.rememberMetricsReading('run-1', 'root', '{"context":"old"}');
       await dao.rememberWork('run-1', 'root', 50, 2);
       await dao.clearConversation('run-1', 'root');
@@ -170,12 +173,19 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       const findOneSpy = vi.spyOn(SqlEntityRepository.prototype, 'findOne');
       const flushSpy = vi.spyOn(EntityManager.prototype, 'flush');
 
-      await dao.rememberContext('run-1', 'node-a', 500, 1000);
+      await dao.rememberContext('run-1', 'node-a', {
+        contextTokens: 500,
+        contextWindowTokens: 1000,
+      });
 
       expect(nativeUpdateSpy).toHaveBeenCalledTimes(1);
       expect(nativeUpdateSpy).toHaveBeenCalledWith(
         { runId: 'run-1', nodeId: 'node-a' },
-        { contextTokens: 500, contextWindowTokens: 1000 },
+        {
+          contextTokens: 500,
+          contextEstimated: null,
+          contextWindowTokens: 1000,
+        },
       );
       expect(findOneSpy).not.toHaveBeenCalled();
       expect(flushSpy).not.toHaveBeenCalled();
@@ -192,9 +202,31 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       expect(row?.contextWindowTokens).toBe(1000);
     });
 
+    it('marks a stand-in count as an estimate until a stated count replaces it', async () => {
+      await dao.createPending('run-1', 'node-a');
+      const read = () =>
+        new NodeStateDao(orm.em.fork()).getByRunNode('run-1', 'node-a');
+
+      await dao.rememberContext('run-1', 'node-a', {
+        contextTokens: 500,
+        contextWindowTokens: 1000,
+        contextEstimated: true,
+      });
+      expect((await read())?.contextEstimated).toBe(true);
+
+      await dao.rememberContext('run-1', 'node-a', {
+        contextTokens: 700,
+        contextWindowTokens: null,
+      });
+      expect((await read())?.contextEstimated).toBeNull();
+    });
+
     it('a runId/nodeId pair with no row writes nothing and does not throw', async () => {
       await expect(
-        dao.rememberContext('missing-run', 'missing-node', 500, 1000),
+        dao.rememberContext('missing-run', 'missing-node', {
+          contextTokens: 500,
+          contextWindowTokens: 1000,
+        }),
       ).resolves.toBeUndefined();
 
       const row = await dao.getByRunNode('missing-run', 'missing-node');
@@ -203,7 +235,10 @@ describe('NodeStateDao (in-memory sqlite)', () => {
 
     it('a reading with NOTHING positive in it does not reach the database', async () => {
       await dao.createPending('run-1', 'node-a');
-      await dao.rememberContext('run-1', 'node-a', 500, 1000);
+      await dao.rememberContext('run-1', 'node-a', {
+        contextTokens: 500,
+        contextWindowTokens: 1000,
+      });
 
       const nativeUpdateSpy = vi.spyOn(
         SqlEntityRepository.prototype,
@@ -213,7 +248,10 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       // measured nothing reports, and null is silence. Writing either would
       // erase the reading beside it, which is the whole reason this method
       // builds its patch field by field.
-      await dao.rememberContext('run-1', 'node-a', 0, null);
+      await dao.rememberContext('run-1', 'node-a', {
+        contextTokens: 0,
+        contextWindowTokens: null,
+      });
 
       expect(nativeUpdateSpy).not.toHaveBeenCalled();
       const row = await new NodeStateDao(orm.em.fork()).getByRunNode(

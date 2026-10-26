@@ -4,8 +4,10 @@
  * A built-in preamble describing the surface the reply is rendered on, the
  * user's own custom instructions, what a board card asks of the run working it,
  * and whatever the turn itself has to say (a graph node's instruction blocks
- * and role, the call surface). `AgentAdapter.composeSystemPrompt` is the only caller —
- * adapters never join these fields themselves (`.claude/rules/agent-adapters.md`).
+ * and role, the call surface). Reached only through `AgentAdapter`
+ * (`composeSystemPrompt`, and `turnInstructionParts` for the workflow
+ * inspector's size readout) — adapters never join these fields themselves
+ * (`.claude/rules/agent-adapters.md`).
  *
  * Shared by the chat and graph paths through that one seam, which is the
  * convention this directory exists for: execution logic both paths need lives
@@ -91,6 +93,8 @@ Renders:
 
 - A PAGE of your own, where the \`show_artifact\` tool is offered: an HTML document this app shows beside the conversation and opens full-screen, with your own layout and working interaction. Reach for it when the answer is something to look at rather than to read in order; the tool's own description says what it can and cannot do.
 
+- A BUTTON the user can press later, where the \`publish_action\` tool is offered: it is shown in this chat, and a press sends the message you gave it — to you, or in a workflow to the agent the user's messages go to — stops a process you left running, or runs a command once the user has confirmed it. Reach for it when your next step waits on something only the user will see happen, such as a pull request being merged, to let them stop a preview server once they are done with it, or to let them run a step only they should decide to run.
+
 Does not render:
 - Remote image URLs (\`http://\`, \`https://\`). This app's content security policy refuses them; only local file paths work.
 - Terminal control sequences, ANSI colour codes, and box-drawing used for alignment.
@@ -124,6 +128,11 @@ export interface TurnInstructionParts {
    * a probe has no turn to end and nothing to background.
    */
   backgroundWorkNote?: string | null;
+  /**
+   * The language the user wants replies in, as snapshotted onto the run.
+   * Withheld with the preamble: a probe's output is parsed, never read.
+   */
+  replyLanguage?: string | null;
   /** The user's own global custom instructions, as snapshotted onto the run. */
   customInstructions?: string | null;
   /**
@@ -156,12 +165,62 @@ export interface TurnInstructionParts {
 }
 
 /**
- * Join the turn's instruction parts into the one block an adapter hands its CLI.
+ * The sentence that names the user's reply language, or null when none is set.
+ *
+ * It names every English source in the window on purpose: a model surrounded
+ * by English briefs, skills and tool output drifts into English without a rule
+ * that says those do not decide the reply's language.
+ */
+export function replyLanguageInstruction(
+  language: string | null | undefined,
+): string | null {
+  const name = language?.trim();
+  if (!name) {
+    return null;
+  }
+  return `Reply to the user in ${name}, whatever language these instructions, the files, the tools and your earlier replies are in. What you write into the project — code, comments in code, identifiers, file paths, commands, commit messages — stays in the language the project already uses.`;
+}
+
+/**
+ * Where each part of a turn's instruction block comes from, in the order they
+ * are joined. The workflow inspector's size readout names its rows by these.
+ */
+export const TURN_INSTRUCTION_SOURCES = [
+  'preamble',
+  'backgroundWorkNote',
+  'replyLanguage',
+  'customInstructions',
+  'taskInstructions',
+  'workflowInstructions',
+  'instructionBlocks',
+  'role',
+  'answeringACall',
+  'callSurface',
+] as const;
+
+export type TurnInstructionSource = (typeof TURN_INSTRUCTION_SOURCES)[number];
+
+/** One non-blank part of a turn's instruction block, already trimmed. */
+export interface TurnInstructionPart {
+  source: TurnInstructionSource;
+  text: string;
+}
+
+/** What separates two parts in the composed block. */
+export const TURN_INSTRUCTION_SEPARATOR = '\n\n';
+
+/**
+ * The turn's instruction parts, each named by its source, trimmed, blank ones
+ * dropped — what an adapter joins ({@link joinTurnInstructionParts}) into the
+ * one block it hands its CLI, and what the workflow inspector measures, so the
+ * block and its breakdown can never disagree.
  *
  * **Order is precedence, and it runs general → specific.** The preamble is
  * first because it is the weakest claim in the stack — facts about the host
  * that anything more specific may qualify. The CLI's note on background work
- * follows it: another fact about the host, this one per CLI. The user's global
+ * follows it: another fact about the host, this one per CLI. The user's reply
+ * language comes next, ahead of their free text, so their own words can still
+ * qualify it. The user's global
  * instructions come next, then what a board card asks of the run working it —
  * its label instructions, written for a class of card, and the report ask that
  * run needs.
@@ -180,19 +239,38 @@ export interface TurnInstructionParts {
  * line, and `customInstructions` arrives as `''` from a cleared textarea at
  * least as often as it arrives absent.
  */
-export function composeTurnInstructions(parts: TurnInstructionParts): string {
-  return [
-    parts.includePreamble === false ? null : GENIRO_UI_PREAMBLE,
-    parts.includePreamble === false ? null : parts.backgroundWorkNote,
-    parts.customInstructions,
-    parts.taskInstructions,
-    parts.workflowInstructions,
-    parts.instructionBlocks,
-    parts.systemPrompt,
-    parts.answeringACallPrompt,
-    parts.callSurfacePrompt,
-  ]
-    .map((part) => part?.trim())
-    .filter((part): part is string => Boolean(part))
-    .join('\n\n');
+export function turnInstructionParts(
+  parts: TurnInstructionParts,
+): TurnInstructionPart[] {
+  const preamble = parts.includePreamble !== false;
+  const candidates: [TurnInstructionSource, string | null | undefined][] = [
+    ['preamble', preamble ? GENIRO_UI_PREAMBLE : null],
+    ['backgroundWorkNote', preamble ? parts.backgroundWorkNote : null],
+    [
+      'replyLanguage',
+      preamble ? replyLanguageInstruction(parts.replyLanguage) : null,
+    ],
+    ['customInstructions', parts.customInstructions],
+    ['taskInstructions', parts.taskInstructions],
+    ['workflowInstructions', parts.workflowInstructions],
+    ['instructionBlocks', parts.instructionBlocks],
+    ['role', parts.systemPrompt],
+    ['answeringACall', parts.answeringACallPrompt],
+    ['callSurface', parts.callSurfacePrompt],
+  ];
+  const kept: TurnInstructionPart[] = [];
+  for (const [source, text] of candidates) {
+    const trimmed = text?.trim();
+    if (trimmed) {
+      kept.push({ source, text: trimmed });
+    }
+  }
+  return kept;
+}
+
+/** The one block a list of {@link turnInstructionParts} composes to. */
+export function joinTurnInstructionParts(
+  parts: readonly TurnInstructionPart[],
+): string {
+  return parts.map((part) => part.text).join(TURN_INSTRUCTION_SEPARATOR);
 }

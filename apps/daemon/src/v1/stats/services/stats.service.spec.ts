@@ -107,6 +107,7 @@ describe('StatsService (in-memory sqlite)', () => {
       cwd: '/work/project',
       workflowName: null,
       costUsd: 1,
+      estimatedCostUsd: null,
       inputTokens: 100,
       outputTokens: 10,
       cacheReadTokens: 5,

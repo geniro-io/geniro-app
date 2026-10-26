@@ -18,6 +18,27 @@ describe('geniro’s own tool calls', () => {
     expect(isGeniroToolName(`Geniro ${SERVER}: show_chart`, RUN)).toBe(true);
   });
 
+  it('hides team_note’s call row but keeps team_notes’ visible, in either spelling', () => {
+    // The note is its own row, so team_note's call is hidden; team_notes
+    // draws nothing, so its call must stay — and on cursor its label contains
+    // `team_note` as a prefix of `team_notes`.
+    expect(isGeniroToolName(`mcp__${SERVER}__team_note`, RUN)).toBe(true);
+    expect(isGeniroToolName(`${SERVER}-team_note: team_note`, RUN)).toBe(true);
+    expect(isGeniroToolName(`mcp__${SERVER}__team_notes`, RUN)).toBe(false);
+    expect(isGeniroToolName(`${SERVER}-team_notes: team_notes`, RUN)).toBe(
+      false,
+    );
+  });
+
+  it.each(['monitor', 'stop_monitor', 'list_monitors'])(
+    'does not claim the %s tool, so its call renders as an ordinary tool row',
+    (tool) => {
+      expect(isGeniroToolName(`mcp__${SERVER}__${tool}`, RUN)).toBe(false);
+      expect(isGeniroToolName(`Geniro ${SERVER}: ${tool}`, RUN)).toBe(false);
+      expect(geniroCardKindOf(`mcp__${SERVER}__${tool}`, RUN)).toBeNull();
+    },
+  );
+
   it('refuses a user’s OWN server that happens to be called geniro', () => {
     // Matching the prefix alone hid every call to their server too, so an agent
     // would work through it while the transcript showed nothing.
@@ -41,6 +62,9 @@ describe('which of them draw a card', () => {
     );
     expect(geniroCardKindOf(`mcp__${SERVER}__show_chart`, RUN)).toBe('chart');
     expect(geniroCardKindOf(`mcp__${SERVER}__propose_plan`, RUN)).toBe('plan');
+    expect(geniroCardKindOf(`mcp__${SERVER}__propose_workflow`, RUN)).toBe(
+      'workflow',
+    );
   });
 
   it('answers null for one of geniro’s tools that draws NOTHING', () => {

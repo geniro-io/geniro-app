@@ -3,8 +3,6 @@ import {
   CLAUDE_FAST_MODE_OFF_VALUE,
   CLAUDE_FAST_MODE_ON_VALUE,
   CLAUDE_FAST_MODE_PARAMETER_ID,
-  CLAUDE_FAST_MODE_SETTINGS_JSON,
-  CLAUDE_SETTINGS_FLAG,
 } from '../claude.const';
 
 /**
@@ -49,22 +47,17 @@ export function fastModeParameter(): AgentModelParameter {
 }
 
 /**
- * The argv this turn should carry for the fast-mode parameter, or none.
+ * Whether the turn asked for fast mode.
  *
- * Only ever the ON case: turning it off is omitting the flag, which is
+ * Only ever the ON case counts: turning it off is omitting the key, which is
  * already this CLI's default (`sdk_opt_in_required` with no `--settings` at
- * all — see {@link CLAUDE_SETTINGS_FLAG}), so there is no OFF payload to
- * build. Geniro sends no other `--settings` flag, so this
- * never has a sibling value to merge with.
+ * all — see `CLAUDE_SETTINGS_FLAG`), so there is no OFF value to send.
  */
-export function fastModeArgs(
+export function wantsFastMode(
   modelParameters: Record<string, string> | null | undefined,
-): string[] {
-  if (
-    modelParameters?.[CLAUDE_FAST_MODE_PARAMETER_ID] !==
+): boolean {
+  return (
+    modelParameters?.[CLAUDE_FAST_MODE_PARAMETER_ID] ===
     CLAUDE_FAST_MODE_ON_VALUE
-  ) {
-    return [];
-  }
-  return [CLAUDE_SETTINGS_FLAG, CLAUDE_FAST_MODE_SETTINGS_JSON];
+  );
 }

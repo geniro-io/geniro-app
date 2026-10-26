@@ -7,14 +7,17 @@ import { runManagedCommand } from '../agents/utils/managed-command';
 import { SharesController } from './controllers/shares.controller';
 import { ArtifactShareDao } from './dao/artifact-share.dao';
 import { ShareService } from './services/share.service';
+import { ShareEventBus } from './services/share-events.bus';
 import { ShareKeychain } from './services/share-keychain.service';
+import { ShareSignInService } from './services/share-sign-in.service';
 import { SHARE_COMMAND_RUNNER, type ShareCommandRunner } from './shares.types';
 
 /**
  * Encrypted share links for artifacts (`v1/shares`).
  *
  * Its rows deliberately sit outside run teardown: a link outlives the chat it
- * came from, and this table is the only way to revoke it.
+ * came from, and this table is the only way to revoke it. Only a share never
+ * uploaded (waiting on sign-in, or failed after it) goes with its run.
  */
 @Module({
   imports: [AgentsModule],
@@ -32,7 +35,9 @@ import { SHARE_COMMAND_RUNNER, type ShareCommandRunner } from './shares.types';
     },
     ShareKeychain,
     ShareService,
+    ShareEventBus,
+    ShareSignInService,
   ],
-  exports: [ShareService],
+  exports: [ShareService, ShareEventBus],
 })
 export class SharesModule {}

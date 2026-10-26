@@ -157,7 +157,14 @@ const AFTER_TURN_BOOKKEEPING: ReadonlySet<string> = new Set([
   'shell_info',
   'shell_open',
   'subagent_info',
+  // A button dismissed after the turn ended, from this window or a paired phone.
+  'action_outcome',
 ]);
+
+/** Whether this row is {@link AFTER_TURN_BOOKKEEPING} — it says nothing about the turn. */
+export function isAfterTurnBookkeeping(item: ChatItem): boolean {
+  return AFTER_TURN_BOOKKEEPING.has(item.kind);
+}
 
 /**
  * The row a REPLAY reads the run's present state from: the last row that is
@@ -171,7 +178,7 @@ const AFTER_TURN_BOOKKEEPING: ReadonlySet<string> = new Set([
 export function replayTail(items: readonly ChatItem[]): ChatItem | undefined {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item !== undefined && !AFTER_TURN_BOOKKEEPING.has(item.kind)) {
+    if (item !== undefined && !isAfterTurnBookkeeping(item)) {
       return item;
     }
   }

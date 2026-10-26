@@ -8,7 +8,11 @@ import { registerSecret } from '../../diagnostics/utils/redact';
 import type { AgentVersionService } from '../services/agent-version.service';
 import type { ProcessRegistry } from '../services/process-registry';
 import { resolveAgentBinary } from '../utils/agent-binary';
-import { composeTurnInstructions } from '../utils/agent-instructions';
+import {
+  joinTurnInstructionParts,
+  type TurnInstructionPart,
+  turnInstructionParts,
+} from '../utils/agent-instructions';
 import { spawnAgentVersion } from '../utils/agent-version';
 import { buildChildEnv, registerIsolatedEnvKeys } from '../utils/child-env';
 import { childProcessHandle } from '../utils/child-handle';
@@ -21,8 +25,10 @@ import {
   qualifyOllamaEvent,
   validateOllamaModel,
 } from '../utils/ollama';
+import { delegateDeclarationEvent } from '../utils/open-delegates';
 import { listProcesses, type ProcessRow } from '../utils/process-descendants';
 import { repositoryRootOf } from '../utils/repository-root';
+import type { PlainProcess } from '../utils/run-process-scan';
 import {
   type BetweenTurnApproval,
   type CliSession,
@@ -75,6 +81,7 @@ import type {
   AgentTurnFailure,
   AgentTurnHandle,
   AgentTurnInput,
+  ApprovalOption,
   ApprovalResolution,
   CarrySessionInput,
   CarrySessionResult,
@@ -86,9 +93,12 @@ import type {
   HandoffResult,
   InstalledApprovalSupport,
   NO_PLAN_LIMITS,
+  RecoveredSubagentOutcome,
   SessionPullRequest,
   SessionPullRequestsInput,
+  SubagentRecoveryRef,
   TurnDriver,
+  TurnInstructionInput,
 } from './adapter.types';
 import {
   discoverPluginDirs,
@@ -208,6 +218,11 @@ export interface AgentAdapterOptions {
    * `script` put in a session of its own.
    */
   listProcessesFn?: () => Promise<ProcessRow[]>;
+  /**
+   * Replacement for the plain process-table reading a session records its
+   * running commands' groups from; defaults to `ps`. A test seam.
+   */
+  listProcessGroupsFn?: () => Promise<PlainProcess[] | null>;
   /**
    * The public model price catalog {@link AgentAdapter.listPriceOf} reads.
    * Absent in standalone and spec use, where every model is unpriced — which
@@ -555,7 +570,8 @@ export abstract class AgentAdapter {
    * The pull requests this CLI's own record says one conversation touched, in
    * the order it recorded them; empty for a CLI that keeps no such record.
    * Shown beside the ones the transcript capture saw the thread open
-   * (`Run.touchedPullRequests`), never counted as opened. Must NEVER throw —
+   * (`Run.touchedPullRequests`), never counted as opened, and kept only when
+   * the thread names the pull request (`textNamesPullRequest`). Must NEVER throw —
    * an unreadable record costs its chips, not the chat list.
    */
   readSessionPullRequests(
@@ -1210,6 +1226,13 @@ export abstract class AgentAdapter {
   readSessionHistory(
     _input: AgentSessionImportInput & { limit: number },
   ): Promise<AgentSessionHistory | null> {
+    return Promise.resolve(null);
+  }
+
+  /** Null means the CLI's record cannot establish a terminal outcome. */
+  recoverSubagent(
+    _ref: SubagentRecoveryRef,
+  ): Promise<RecoveredSubagentOutcome | null> {
     return Promise.resolve(null);
   }
 
@@ -2145,10 +2168,23 @@ export abstract class AgentAdapter {
     input: AgentTurnInput,
     granted: boolean,
   ): string {
-    return composeTurnInstructions({
+    return joinTurnInstructionParts(this.turnInstructionParts(input, granted));
+  }
+
+  /**
+   * The parts {@link composeSystemPrompt} joins, each named by its source —
+   * what the workflow inspector measures, so the sizes it shows are this
+   * CLI's real block rather than a copy of the rule.
+   */
+  turnInstructionParts(
+    input: TurnInstructionInput,
+    granted: boolean,
+  ): TurnInstructionPart[] {
+    return turnInstructionParts({
       // An `internalProbe` turn has no transcript for the preamble to describe.
       includePreamble: input.internalProbe !== true,
       backgroundWorkNote: this.getConfig().backgroundWork.agentNote,
+      replyLanguage: input.replyLanguage,
       customInstructions: input.customInstructions,
       taskInstructions: input.taskInstructions,
       workflowInstructions: input.workflowInstructions,
@@ -2324,8 +2360,8 @@ export abstract class AgentAdapter {
   protected createTurnDriver(_input: AgentTurnInput): TurnDriver {
     return {
       onMessage: (obj) => this.mapMessage(obj),
-      buildApprovalResponse: (id, allow, updatedInput) =>
-        this.buildApprovalResponse(id, allow, updatedInput),
+      buildApprovalResponse: (id, allow, updatedInput, option) =>
+        this.buildApprovalResponse(id, allow, updatedInput, option),
     };
   }
 
@@ -2333,6 +2369,7 @@ export abstract class AgentAdapter {
     _id: string,
     _allow: boolean,
     _updatedInput?: unknown,
+    _option?: ApprovalOption,
   ): string | undefined {
     return undefined;
   }
@@ -2465,6 +2502,8 @@ export abstract class AgentAdapter {
       // share one CLI process, and the second would silently run on the
       // first's.
       input.customInstructions ?? null,
+      // The same block again, and argv on claude besides.
+      input.replyLanguage ?? null,
       // The same block again: a card whose label instructions changed since
       // this process was spawned must not be served by it.
       input.taskInstructions ?? null,
@@ -2744,14 +2783,71 @@ export abstract class AgentAdapter {
     const spawnedCwd = directoryIdentity(input.cwd);
     let session: CliSession;
     let driver: TurnDriver;
+    let rememberRecovery = (events: AgentEvent[]): AgentEvent[] => events;
     try {
       // Resolved once, INSIDE the try: `command` re-reads the binary override
       // per access, and a `buildArgs` throw must still reach the disposer
       // below — hoisting either one out would leak the session-scoped resource.
       const command = this.command;
       const local = this.modelConfiguration(input.model);
+      // The model's own args FIRST: an adapter's `buildArgs` may emit a flag
+      // that supersedes one of them (claude's `--settings` does).
       const args = [...local.args, ...this.buildArgs(input)];
       driver = this.createTurnDriver(input);
+      let recoverySessionId = input.resumeSessionId ?? null;
+      const recoveryRefs = new Map<string, SubagentRecoveryRef>();
+      const recoveryDisabled = new Set<string>();
+      rememberRecovery = (events: AgentEvent[]): AgentEvent[] => {
+        const mapped: AgentEvent[] = [];
+        for (const event of events) {
+          if (event.type === 'session') {
+            recoverySessionId = event.sessionId;
+          }
+          if (event.type === 'subagent_info' && event.recovery === null) {
+            recoveryDisabled.add(event.id);
+          }
+          const id =
+            event.type === 'subagent_info'
+              ? event.id
+              : event.type === 'background_work' &&
+                  event.phase === 'started' &&
+                  event.unit === 'agent'
+                ? event.toolCallId
+                : null;
+          if (
+            id === null ||
+            recoverySessionId === null ||
+            recoveryDisabled.has(id)
+          ) {
+            mapped.push(event);
+            continue;
+          }
+          const previous = recoveryRefs.get(id);
+          const ref: SubagentRecoveryRef = {
+            agentKind: this.getConfig().kind,
+            sessionId: recoverySessionId,
+            cwd: input.cwd,
+            configDir: input.configDir ?? null,
+            toolCallId: id,
+            launchedAtMs:
+              event.type === 'background_work'
+                ? Date.now()
+                : (previous?.launchedAtMs ?? Date.now()),
+            childSessionId:
+              event.type === 'subagent_info'
+                ? (event.subagentSessionId ?? previous?.childSessionId ?? null)
+                : (previous?.childSessionId ?? null),
+          };
+          recoveryRefs.set(id, ref);
+          if (event.type === 'subagent_info') {
+            mapped.push({ ...event, recovery: ref });
+          } else {
+            // Foreground work can lose its stream before its launching call returns.
+            mapped.push(event, delegateDeclarationEvent(id, { recovery: ref }));
+          }
+        }
+        return mapped;
+      };
       session = runCliSession({
         command,
         args,
@@ -2768,7 +2864,7 @@ export abstract class AgentAdapter {
           : this.keepStdinOpen(input)
             ? 'turn'
             : 'payload',
-        mapper: (obj) => driver.onMessage(obj),
+        mapper: (obj) => rememberRecovery(driver.onMessage(obj)),
         spawn: this.options.spawn,
         logger: this.options.logger,
         questionToolName: this.getConfig().questionToolName,
@@ -2776,14 +2872,20 @@ export abstract class AgentAdapter {
         // CLI it is talking to — the rule every field beside it follows.
         detectDetachedShells:
           this.getConfig().shells.unreportedDetachReason !== null,
+        listProcessGroups: this.options.listProcessGroupsFn,
         // Passed straight through: what to answer between turns depends on the
         // run's approval posture, which the CALLER holds — an adapter deciding
         // it here would be a third copy of approval semantics that already
         // live in the chat service and the graph executor.
         betweenTurnApproval: opts.betweenTurnApproval,
         onBetweenTurnEvent: opts.onBetweenTurnEvent
-          ? (event) =>
-              opts.onBetweenTurnEvent!(qualifyOllamaEvent(event, input.model))
+          ? (event) => {
+              for (const mapped of rememberRecovery([event])) {
+                opts.onBetweenTurnEvent!(
+                  qualifyOllamaEvent(mapped, input.model),
+                );
+              }
+            }
           : undefined,
         // Same passthrough and the same reason: whether a request the posture
         // will not decide can be put in front of the user depends on the owner
@@ -2906,8 +3008,8 @@ export abstract class AgentAdapter {
           stdinPayload: modeLine
             ? `${modeLine}${stdinPayload ?? ''}`
             : stdinPayload,
-          buildApprovalResponse: (id, allow, updatedInput) =>
-            driver.buildApprovalResponse?.(id, allow, updatedInput),
+          buildApprovalResponse: (id, allow, updatedInput, option) =>
+            driver.buildApprovalResponse?.(id, allow, updatedInput, option),
           buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
           followUpConsumptionReported:
             this.getConfig().followUp.consumptionReported,
@@ -2949,6 +3051,12 @@ export abstract class AgentAdapter {
           withdrawPrompt: driver.withdrawHeldPrompt
             ? () => driver.withdrawHeldPrompt!()
             : undefined,
+          onProcessEnded: driver.onProcessEnded
+            ? () => driver.onProcessEnded!()
+            : undefined,
+          closeGraceMs: driver.closeGraceMs
+            ? () => driver.closeGraceMs!()
+            : undefined,
           // Both are FIRST-turn only, and for the same reason: a handshake and
           // a readiness wait belong to the PROCESS, not to each prompt. By the
           // second turn the CLI has been up for a whole turn's worth of time,
@@ -2987,7 +3095,9 @@ export abstract class AgentAdapter {
               });
               return;
             }
-            onEvent(qualifyOllamaEvent(event, turnInput.model));
+            for (const mapped of rememberRecovery([event])) {
+              onEvent(qualifyOllamaEvent(mapped, turnInput.model));
+            }
           },
         });
         if (handle) {
@@ -3032,19 +3142,29 @@ export abstract class AgentAdapter {
       get pid() {
         return session.pid;
       },
+      subagentRecoveryBlocked: (id) =>
+        session.subagentRecoveryBlocked?.(id) ?? false,
       get shellsRunning() {
         // Forwarded for the reapers too: the set of detached commands lives in
         // the process wrapper, and a wrapper that dropped it would read as none
         // — reaping the process that serves a dev server.
         return session.shellsRunning;
       },
+      get detachedRunning() {
+        return session.detachedRunning;
+      },
+      recordedGroupsOf: (callId) => session.recordedGroupsOf(callId),
       get runningCommands() {
         return session.runningCommands;
       },
       get endedRunning() {
         return session.endedRunning;
       },
-      close: () => session.close(),
+      close: (cause, options) => session.close(cause, options),
+      noteCloseCause: (cause) => session.noteCloseCause?.(cause),
+      get closeCause() {
+        return session.closeCause ?? null;
+      },
       closed: session.closed,
     };
   }

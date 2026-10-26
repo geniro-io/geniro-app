@@ -9,6 +9,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import { PULL_REQUEST_NAMING_KINDS } from '../utils/pull-request-capture';
 import { ItemDao } from './item.dao';
 
 /**
@@ -58,6 +59,27 @@ describe('ItemDao (in-memory sqlite)', () => {
   ): Promise<Item> {
     return dao.create({ runId, seq, kind, payload });
   }
+
+  it('reads one run’s team notes oldest first, and counts them up to a seq', async () => {
+    const note = (text: string): string =>
+      JSON.stringify({ kind: 'fact', text, nodeId: 'a', conversationId: null });
+    // Written out of seq order, beside rows of other kinds and another run.
+    await insert('run-a', 7, 'team_note', note('third'));
+    await insert('run-a', 2, 'team_note', note('first'));
+    await insert('run-a', 3, 'message');
+    await insert('run-b', 4, 'team_note', note('other run'));
+    await insert('run-a', 5, 'team_note', note('second'));
+
+    const rows = await dao.teamNoteRows('run-a');
+    expect(rows.map((row) => row.seq)).toEqual([2, 5, 7]);
+    expect(rows.map((row) => JSON.parse(row.payload).text)).toEqual([
+      'first',
+      'second',
+      'third',
+    ]);
+    expect(await dao.teamNoteCount('run-a')).toBe(3);
+    expect(await dao.teamNoteCount('run-a', undefined, 5)).toBe(2);
+  });
 
   it('finds a send id only on a live user message in its own run', async () => {
     const payload = JSON.stringify({
@@ -1326,7 +1348,7 @@ describe('ItemDao (in-memory sqlite)', () => {
     expect(await dao.toolCallsByIds('run-a', [])).toEqual([]);
   });
 
-  it("reads a run's call rows in seq order — starts and results, and nothing else", async () => {
+  it("reads a run's call rows and delivery notices in seq order", async () => {
     // What the call seed folds after a daemon restart: the start (id, parties,
     // the thread it continued) and the result (the callee's session), in the
     // order they happened, so a continuation lands after its parent. Inserted
@@ -1360,17 +1382,42 @@ describe('ItemDao (in-memory sqlite)', () => {
       kind: 'call_started',
       payload: JSON.stringify({ callId: 'call-1' }),
     });
+    await dao.create({
+      runId: 'run-a',
+      seq: 4,
+      kind: 'call_answer',
+      payload: JSON.stringify({
+        outcome: 'undelivered',
+        message: 'correction',
+      }),
+    });
+    await dao.create({
+      runId: 'run-a',
+      seq: 5,
+      kind: 'system',
+      payload: JSON.stringify({ messageDeliveryNotices: ['delivery-1'] }),
+    });
+    await dao.create({
+      runId: 'run-a',
+      seq: 6,
+      kind: 'system',
+      payload: JSON.stringify({ message: 'unrelated system note' }),
+    });
 
     const rows = await dao.callRecordRows('run-a');
     expect(rows.map((row) => row.kind)).toEqual([
       'call_started',
       'call_result',
+      'call_answer',
+      'system',
     ]);
     // The column comes back as it is stored — JSON text — which the fold
     // parses for itself.
     expect(rows.map((row) => row.payload)).toEqual([
       JSON.stringify({ callId: 'call-1' }),
       JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
+      JSON.stringify({ outcome: 'undelivered', message: 'correction' }),
+      JSON.stringify({ messageDeliveryNotices: ['delivery-1'] }),
     ]);
   });
 
@@ -1466,6 +1513,175 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(await dao.delegateToolCallSeqs('run-a', undefined, 2)).toEqual([
         2,
       ]);
+    });
+  });
+
+  it('counts each agent’s own tool calls per call, with the newest counted seq', async () => {
+    const call = (
+      seq: number,
+      nodeId: string,
+      inCall: string | null,
+      payload: Record<string, unknown> | string = { name: 'Bash' },
+    ) =>
+      dao.create({
+        runId: 'run-a',
+        seq,
+        kind: 'tool_call',
+        nodeId,
+        inCall,
+        payload:
+          typeof payload === 'string' ? payload : JSON.stringify(payload),
+      });
+    await call(1, 'qa', 'call-1');
+    await call(2, 'qa', 'call-1', 'not json');
+    // A sub-agent's call inside the same call is not the agent's own; an empty
+    // id names no sub-agent, as the renderer's `subagentIdOf` reads it.
+    await call(3, 'qa', 'call-1', { name: 'Bash', parentToolUseId: 'toolu_x' });
+    await call(9, 'qa', 'call-1', { name: 'Bash', parentToolUseId: '' });
+    // A deleted row, and one no agent owns.
+    const deleted = await call(10, 'qa', 'call-1');
+    await orm.em
+      .fork()
+      .createQueryBuilder(Item)
+      .update({ deletedAt: new Date() })
+      .where({ id: deleted.id })
+      .execute();
+    await dao.create({
+      runId: 'run-a',
+      seq: 11,
+      kind: 'tool_call',
+      nodeId: null,
+      inCall: 'call-1',
+      payload: JSON.stringify({ name: 'Bash' }),
+    });
+    await call(4, 'qa', 'call-2');
+    // Another agent answering a call of the same id is counted apart.
+    await call(5, 'eng', 'call-2');
+    // The run's own flow, and a row not stamped with its call yet.
+    await call(6, 'qa', '');
+    await call(7, 'qa', null);
+    await dao.create({
+      runId: 'other-run',
+      seq: 8,
+      kind: 'tool_call',
+      nodeId: 'qa',
+      inCall: 'call-1',
+      payload: JSON.stringify({ name: 'Bash' }),
+    });
+
+    const counts = await dao.ownToolCallsByCall('run-a');
+
+    expect(
+      counts.sort(
+        (a, b) =>
+          a.callId.localeCompare(b.callId) || a.nodeId.localeCompare(b.nodeId),
+      ),
+    ).toEqual([
+      { nodeId: 'qa', callId: 'call-1', calls: 3, lastSeq: 9 },
+      { nodeId: 'eng', callId: 'call-2', calls: 1, lastSeq: 5 },
+      { nodeId: 'qa', callId: 'call-2', calls: 1, lastSeq: 4 },
+    ]);
+  });
+
+  describe('rowsByPayloadId', () => {
+    it('reads past a row whose payload is not JSON', async () => {
+      await insert('run-ids', 1, 'tool_call', 'not json');
+      await insert('run-ids', 2, 'tool_call', JSON.stringify({ id: 'call-1' }));
+
+      const rows = await dao.rowsByPayloadId(
+        'run-ids',
+        ['tool_call'],
+        ['call-1'],
+      );
+
+      expect(rows.map((row) => row.seq)).toEqual([2]);
+    });
+  });
+
+  describe('pullRequestCandidates', () => {
+    it('reads only the tool results inside the seq window it is given', async () => {
+      const url = JSON.stringify({ result: 'https://github.com/o/r/pull/1' });
+      for (const seq of [1, 5, 9]) {
+        await insert('run-pr', seq, 'tool_result', url);
+      }
+      await insert('run-pr', 6, 'tool_result', url);
+      await insert('run-pr', 7, 'message', url);
+
+      const window = await dao.pullRequestCandidates('run-pr', 1, undefined, 6);
+      const open = await dao.pullRequestCandidates('run-pr', 1);
+
+      // Both edges: the window opens after its first seq and closes on its last.
+      expect(window.map((row) => row.seq)).toEqual([5, 6]);
+      expect(open.map((row) => row.seq)).toEqual([5, 6, 9]);
+    });
+  });
+
+  describe('pullRequestNamingCandidates', () => {
+    const pr = { owner: 'acme', repo: 'web', number: 7207 };
+    const url = JSON.stringify({
+      text: 'Review https://github.com/Acme/Web/pull/7207',
+    });
+
+    it.each(PULL_REQUEST_NAMING_KINDS)(
+      'returns a %s row naming the pull request',
+      async (kind) => {
+        await insert(`run-${kind}`, 1, kind, url);
+        expect(
+          await dao.pullRequestNamingCandidates(`run-${kind}`, pr, -1, 9),
+        ).toEqual([url]);
+      },
+    );
+
+    it('returns only rows of this run, inside the seq range, of a kind a thread names pull requests in', async () => {
+      await insert('run-named', 3, 'tool_result', url);
+      await insert('run-named', 4, 'reasoning', url);
+      await insert('run-other', 9, 'message', url);
+
+      // Both edges: the range opens after its first seq and closes on its last.
+      expect(
+        await dao.pullRequestNamingCandidates('run-named', pr, 2, 3),
+      ).toEqual([url]);
+      expect(
+        await dao.pullRequestNamingCandidates('run-named', pr, 3, 99),
+      ).toEqual([]);
+      expect(
+        await dao.pullRequestNamingCandidates('run-named', pr, 0, 2),
+      ).toEqual([]);
+    });
+
+    it('returns a gh pr command carrying the number, and no row holding the number alone', async () => {
+      const command = JSON.stringify({
+        input: { command: 'gh pr comment 7207 --body ok' },
+      });
+      await insert('run-cmd', 1, 'tool_call', command);
+      await insert(
+        'run-cmd',
+        2,
+        'message',
+        JSON.stringify({ text: 'PR 7207' }),
+      );
+
+      expect(
+        await dao.pullRequestNamingCandidates('run-cmd', pr, -1, 9),
+      ).toEqual([command]);
+    });
+
+    it('skips a row once it is deleted', async () => {
+      const row = await insert('run-deleted', 1, 'message', url);
+      expect(
+        await dao.pullRequestNamingCandidates('run-deleted', pr, -1, 9),
+      ).toEqual([url]);
+
+      await orm.em
+        .fork()
+        .createQueryBuilder(Item)
+        .update({ deletedAt: new Date() })
+        .where({ id: row.id })
+        .execute();
+
+      expect(
+        await dao.pullRequestNamingCandidates('run-deleted', pr, -1, 9),
+      ).toEqual([]);
     });
   });
 

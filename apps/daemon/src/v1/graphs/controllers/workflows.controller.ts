@@ -3,27 +3,44 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
+  ParseIntPipe,
   Post,
   Put,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
-import type { ItemWire, RunWire } from '../../agents/chat.types';
+import { cameViaRemote } from '../../../auth/remote-marker';
+import type {
+  ActionPressWire,
+  ItemWire,
+  RunWire,
+} from '../../agents/chat.types';
 import {
+  ActionPressDto,
   CancelledDto,
   ItemDto,
   ListChatsQueryDto,
+  PressActionDto,
   RunDto,
   SendMessageDto,
 } from '../../agents/dto/chat.dto';
+import { runListPageOf } from '../../agents/utils/run-list-page';
 import {
   CreateWorkflowDto,
   ExportedDto,
   ExportWorkflowDto,
   ImportWorkflowDto,
+  InstructionSizesDto,
+  MeasureInstructionSizesDto,
   NodeStateDto,
   ResetWakesCancelledDto,
   RunWorkflowDto,
@@ -36,6 +53,7 @@ import {
   WorkflowSummaryDto,
 } from '../dto/workflows.dto';
 import type {
+  InstructionSizesWire,
   NodeStateWire,
   ResetWakesCancelled,
   RunWorkflowSnapshotWire,
@@ -43,7 +61,9 @@ import type {
   WorkflowWire,
 } from '../graphs.types';
 import { GraphExecutorService } from '../services/graph-executor.service';
+import { InstructionSizesService } from '../services/instruction-sizes.service';
 import { RunWorkflowService } from '../services/run-workflow.service';
+import { WorkflowActionsService } from '../services/workflow-actions.service';
 import { WorkflowChatService } from '../services/workflow-chat.service';
 import { WorkflowStoreService } from '../services/workflow-store.service';
 
@@ -65,6 +85,8 @@ export class WorkflowsController {
     private readonly executor: GraphExecutorService,
     private readonly runWorkflows: RunWorkflowService,
     private readonly workflowChats: WorkflowChatService,
+    private readonly actions: WorkflowActionsService,
+    private readonly instructionSizes: InstructionSizesService,
   ) {}
 
   /**
@@ -77,7 +99,10 @@ export class WorkflowsController {
   @ApiOperation({ operationId: 'listWorkflowRuns' })
   @ZodResponse({ status: 200, type: [RunDto] })
   listRuns(@Query() query: ListChatsQueryDto): Promise<RunWire[]> {
-    return this.executor.listRuns(query.scope ?? 'active');
+    return this.executor.listRuns(
+      query.scope ?? 'active',
+      runListPageOf(query),
+    );
   }
 
   @Get('runs/:runId/nodes')
@@ -142,6 +167,47 @@ export class WorkflowsController {
   }
 
   /**
+   * A press of an agent's button in a workflow run: a message action goes to
+   * the agents the run's trigger feeds, prefixed with who published it when
+   * that was another agent. Refusals are the chat route's twin, the run's own
+   * `RUN_BUSY` included, after which the same press may be repeated.
+   */
+  @Post('runs/:runId/actions/:seq/press')
+  @ApiOperation({ operationId: 'pressWorkflowAction' })
+  @ApiParam({ name: 'seq', type: Number })
+  @ZodResponse({ status: 201, type: ActionPressDto })
+  pressAction(
+    @Param('runId') runId: string,
+    @Param('seq', ParseIntPipe) seq: number,
+    @Body() dto: PressActionDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ): Promise<ActionPressWire> {
+    return this.actions.press(
+      runId,
+      seq,
+      dto.clientMessageId,
+      cameViaRemote(headers) ? 'remote' : 'desktop',
+    );
+  }
+
+  /** Takes an agent's button off a workflow run; no agent is told. */
+  @Post('runs/:runId/actions/:seq/dismiss')
+  @ApiOperation({ operationId: 'dismissWorkflowAction' })
+  @ApiParam({ name: 'seq', type: Number })
+  @ZodResponse({ status: 201, type: ActionPressDto })
+  dismissAction(
+    @Param('runId') runId: string,
+    @Param('seq', ParseIntPipe) seq: number,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ): Promise<ActionPressWire> {
+    return this.actions.dismiss(
+      runId,
+      seq,
+      cameViaRemote(headers) ? 'remote' : 'desktop',
+    );
+  }
+
+  /**
    * A message straight to the callee of one RUNNING call, past its caller.
    * 409 `CALL_NOT_RUNNING` once the call has settled or the node is not its
    * callee, `CALL_MESSAGE_REFUSED` when the callee's CLI cannot take a message
@@ -198,6 +264,15 @@ export class WorkflowsController {
   @ZodResponse({ status: 201, type: WorkflowFileDto })
   import(@Body() dto: ImportWorkflowDto): Promise<WorkflowWire> {
     return this.store.importFrom(dto.path);
+  }
+
+  @Post('instruction-sizes')
+  @ApiOperation({ operationId: 'measureInstructionSizes' })
+  @ZodResponse({ status: 200, type: InstructionSizesDto })
+  measureInstructionSizes(
+    @Body() dto: MeasureInstructionSizesDto,
+  ): InstructionSizesWire {
+    return this.instructionSizes.measure(dto);
   }
 
   @Get(':slug')

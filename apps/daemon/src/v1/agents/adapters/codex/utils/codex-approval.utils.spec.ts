@@ -43,6 +43,14 @@ const QUESTIONS = {
 
 const NO_ITEMS: ReadonlyMap<string, CodexItem> = new Map();
 
+/** codex's session-long approval, as every permission card offers it. */
+const FOR_SESSION = {
+  id: 'session',
+  label: 'Allow for this session',
+  allow: true,
+  scope: 'session',
+} as const;
+
 /** A session's open items, keyed the way `CodexSession.items` keys them. */
 function itemsOf(...records: unknown[]): Map<string, CodexItem> {
   const items = new Map<string, CodexItem>();
@@ -102,17 +110,50 @@ describe('codexApprovalCard', () => {
       toolName: 'shell',
       input: { command: 'npm install', cwd: '/repo', reason: 'needs network' },
       question: false,
+      options: [FOR_SESSION],
     });
   });
 
   it('shows input for a running command as input, not as a new command', () => {
+    const card = codexApprovalCard(
+      'item/commandExecution/requestApproval',
+      { itemId: 'c', kind: 'writeStdin', command: 'y\n', cwd: '/repo' },
+      NO_ITEMS,
+    );
+    expect(card?.toolName).toBe('write_stdin');
+    // What "for the session" means for a keystroke was never measured.
+    expect(card?.options).toBeUndefined();
+  });
+
+  it('offers the session-long answer on file-change and permissions requests', () => {
     expect(
       codexApprovalCard(
-        'item/commandExecution/requestApproval',
-        { itemId: 'c', kind: 'writeStdin', command: 'y\n', cwd: '/repo' },
+        'item/fileChange/requestApproval',
+        { itemId: 'call_f' },
+        itemsOf(FILE_CHANGE),
+      )?.options,
+    ).toEqual([FOR_SESSION]);
+    expect(
+      codexApprovalCard(
+        'item/permissions/requestApproval',
+        { permissions: { network: { enabled: true } } },
         NO_ITEMS,
-      )?.toolName,
-    ).toBe('write_stdin');
+      )?.options,
+    ).toEqual([FOR_SESSION]);
+  });
+
+  it('offers an MCP tool approval the session-long answer only when its `persist` lists it', () => {
+    const withoutPersist = {
+      ...MCP_TOOL_APPROVAL,
+      _meta: { ...MCP_TOOL_APPROVAL._meta, persist: ['always'] },
+    };
+    expect(
+      codexApprovalCard(
+        'mcpServer/elicitation/request',
+        withoutPersist,
+        NO_ITEMS,
+      )?.options,
+    ).toBeUndefined();
   });
 
   it('names the host a network approval would reach', () => {
@@ -183,6 +224,7 @@ describe('codexApprovalCard', () => {
       toolName: 'mcp__geniro-031a2e69__show_metrics',
       input: MCP_TOOL_APPROVAL._meta.tool_params,
       question: false,
+      options: [FOR_SESSION],
     });
   });
 
@@ -214,6 +256,7 @@ describe('codexApprovalCard', () => {
         arguments: MCP_TOOL_APPROVAL._meta.tool_params,
       },
       question: false,
+      options: [FOR_SESSION],
     });
   });
 
@@ -678,6 +721,61 @@ describe('encodeCodexReply', () => {
         QUESTIONS,
       ),
     ).toEqual({ answers: {} });
+  });
+
+  it('remembers a picked session-long answer the way each request kind takes it', () => {
+    expect(
+      encodeCodexReply(
+        'item/commandExecution/requestApproval',
+        {},
+        true,
+        {},
+        FOR_SESSION,
+      ),
+    ).toEqual({ decision: 'acceptForSession' });
+    expect(
+      encodeCodexReply(
+        'item/fileChange/requestApproval',
+        {},
+        true,
+        {},
+        FOR_SESSION,
+      ),
+    ).toEqual({ decision: 'acceptForSession' });
+    expect(
+      encodeCodexReply(
+        'mcpServer/elicitation/request',
+        MCP_TOOL_APPROVAL,
+        true,
+        MCP_TOOL_APPROVAL,
+        FOR_SESSION,
+      ),
+    ).toEqual({ action: 'accept', content: {}, _meta: { persist: 'session' } });
+    const params = { permissions: { network: { enabled: true } } };
+    expect(
+      encodeCodexReply(
+        'item/permissions/requestApproval',
+        params,
+        true,
+        params,
+        FOR_SESSION,
+      ),
+    ).toEqual({
+      permissions: { network: { enabled: true } },
+      scope: 'session',
+    });
+  });
+
+  it('never remembers a denial, even when the option rides it', () => {
+    expect(
+      encodeCodexReply(
+        'item/commandExecution/requestApproval',
+        {},
+        false,
+        {},
+        FOR_SESSION,
+      ),
+    ).toEqual({ decision: 'decline' });
   });
 
   it('grants the permissions asked for, or none', () => {

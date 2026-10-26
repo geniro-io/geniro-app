@@ -101,7 +101,7 @@ export function composeApplyMessage(
   const blocks = selected.map((item) =>
     [
       `### ${item.id} · ${item.title}`,
-      `Target: ${item.target} · ${item.kind} · ${item.location}`,
+      `Target: ${item.target} · ${item.territory} · ${item.kind} · ${item.location}`,
       'Change:',
       item.change,
     ].join('\n'),

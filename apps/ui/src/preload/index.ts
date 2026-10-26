@@ -36,6 +36,11 @@ const api: GeniroApi = {
     ipcRenderer.on(IPC.onClearAgentCaches, handler);
     return () => ipcRenderer.removeListener(IPC.onClearAgentCaches, handler);
   },
+  onSettingsChanged: (listener) => {
+    const handler = (): void => listener();
+    ipcRenderer.on(IPC.onSettingsChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.onSettingsChanged, handler);
+  },
   onFlushLineMeasurements: (listener) => {
     const handler = (_event: IpcRendererEvent, requestId: string): void =>
       listener(requestId);

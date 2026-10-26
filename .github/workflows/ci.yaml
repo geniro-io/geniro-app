@@ -15,7 +15,8 @@ on:
       - develop
 
 env:
-  # Project requires Node 24+ (see AGENTS.md / package.json "engines").
+  # Project requires Node 24.15+ (see AGENTS.md / package.json "engines");
+  # `24` installs the newest 24.x, which is always at least that.
   NODE_VERSION: 24
 
 jobs:
@@ -41,6 +42,11 @@ jobs:
         run: pnpm install --frozen-lockfile
         env:
           HUSKY: 0
+
+      # .cursor/rules/<name>.mdc is generated from .claude/rules/<name>.md and
+      # committed; fail before the build if one is missing, stale or extra.
+      - name: Check .cursor/rules is generated from .claude/rules
+        run: pnpm -s sync:cursor-rules --check
 
       - name: Build packages
         run: pnpm build:packages
@@ -93,6 +99,7 @@ jobs:
       # fine everywhere except the one suite that opens a real sqlite driver —
       # base.dao.spec.ts — where it fails the suite and then segfaults the
       # runner (exit 139). Same command AGENTS.md prescribes for local dev.
+      # `@geniro/ui` runs under Electron too, for its Node APIs; it loads no sqlite.
       - name: Rebuild native modules for Electron's ABI
         run: pnpm rebuild:native
 

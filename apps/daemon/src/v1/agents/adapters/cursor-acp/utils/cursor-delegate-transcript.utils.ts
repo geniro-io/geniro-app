@@ -92,6 +92,13 @@ export async function readCursorDelegateEnding(
     );
   }
   for (const path of candidates) {
+    const before = ref.notBeforeMs === undefined ? null : await fileTimes(path);
+    if (
+      ref.notBeforeMs !== undefined &&
+      (before === null || before.modifiedAt < ref.notBeforeMs)
+    ) {
+      continue;
+    }
     const tail = await readTail(path, TAIL_BYTES);
     if (tail === null) {
       continue;
@@ -104,6 +111,12 @@ export async function readCursorDelegateEnding(
     // assistant line before `turn_ended`, and it can be far longer than the
     // window that decides whether there is one.
     const report = await readTail(path, REPORT_TAIL_BYTES);
+    if (before !== null) {
+      const after = await fileTimes(path);
+      if (after?.modifiedAt !== before.modifiedAt) {
+        return null;
+      }
+    }
     return {
       ...ending,
       finalText: report === null ? null : lastAssistantText(report),

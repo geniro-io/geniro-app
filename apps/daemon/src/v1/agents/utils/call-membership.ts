@@ -17,8 +17,13 @@ export const CALL_MEMBERSHIP_VERSION = 2;
 
 /**
  * Rows about a call that sit in the run's own flow even though they name it —
- * a published page among them: it is made for the user, and inside a shut call
- * card nobody would see it.
+ * a published page or button among them: it is made for the user, and inside a
+ * shut call card nobody would see it.
+ *
+ * `action` / `action_outcome` joined without a {@link CALL_MEMBERSHIP_VERSION}
+ * bump: no row of either kind carries a top-level `callId` (a callee's call is
+ * named inside its `publisher`), so every stored one already answered
+ * {@link OUTSIDE_ANY_CALL}.
  */
 const CALLER_FLOW_KINDS = new Set<ItemKind>([
   'call_started',
@@ -26,6 +31,8 @@ const CALLER_FLOW_KINDS = new Set<ItemKind>([
   'approval_request',
   'approval_verdict',
   'show_artifact',
+  'action',
+  'action_outcome',
 ]);
 
 /** Caller-written rows about a call that are drawn inside its card. */

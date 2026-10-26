@@ -1,4 +1,3 @@
-import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { Injectable, Logger } from '@nestjs/common';
@@ -8,26 +7,48 @@ import {
   isSameProcess,
   parseStartTimes,
 } from '../../../utils/process-identity';
+import { executableOf } from '../utils/command-text';
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
+import { descendantsOf } from '../utils/process-descendants';
+import {
+  isGroupAnchored,
+  type RecordedGroup,
+} from '../utils/process-descendants';
 import {
   listProcessUsage,
   processTreeOf,
   type ProcessUsageRow,
 } from '../utils/process-usage';
-import { capSelection, type ScannedProcess } from '../utils/run-process-scan';
+import {
+  capSelection,
+  daemonChain,
+  fencedPids,
+  type PlainProcess,
+  type ScannedProcess,
+  scanPlainTable,
+  type StopCandidate,
+} from '../utils/run-process-scan';
 import { runPs } from '../utils/run-ps';
+import type { AgentSessionRegistry } from './agent-session.registry';
 import type { RunProcessAttribution } from './run-process-attribution.service';
 
-/** Seams — the production factory passes `held`; specs pass the rest. */
+/**
+ * Seams — `createRunProcessReaper` passes `held` and `processRoots`, the module
+ * adds `stillGone`; specs pass the rest.
+ */
 export interface RunProcessReaperOptions {
   /**
-   * Whether the registry holds a live agent process under the run right now.
-   * Such a run was reopened after its reap was queued, and its processes are
-   * a working agent's, not leftovers.
+   * Whether the registry holds a live agent process under the run right now,
+   * or the user is running one of its command actions. Such a run was used
+   * after its reap was queued, and its processes are working, not leftovers.
    */
   held?: (runId: string) => boolean;
   processRoots?: () => readonly number[];
   listUsage?: () => Promise<ProcessUsageRow[] | null>;
+  /** The table {@link RunProcessReaper.stopLeftGroups} reads. */
+  listGroups?: () => Promise<PlainProcess[] | null>;
+  /** The user the daemon runs as; null when the platform cannot say, and then nothing is stopped. */
+  uid?: number | null;
   /**
    * Which of these runs are still deleted or archived. Asked after the scan
    * for a reap the SWEEP queued, whose verdict may be minutes old — never for
@@ -48,6 +69,12 @@ interface Target {
   runId: string;
 }
 
+/** A run waiting for the next reap, and who is waiting to hear what it stopped. */
+interface QueuedReap {
+  onlyIfStillGone: boolean;
+  waiters: ((stopped: ScannedProcess[]) => void)[];
+}
+
 /**
  * Whether a pid may never be signalled, whatever selected it: launchd, the
  * whole-session `-1`, and the daemon itself.
@@ -58,7 +85,8 @@ export function isUnsignallable(pid: number, selfPid: number): boolean {
 
 /**
  * Stop every process a run's agents left behind, once the run is archived or
- * deleted — or, through the sweep, once it turns out to be gone.
+ * deleted — or, through the sweep, once it turns out to be gone — and once it
+ * has sat unused for the kept-session window ({@link reapIdle}).
  *
  * Closing the run's sessions ends the agent CLIs, but not what they started
  * DETACHED to outlive a turn — `nohup pnpm dev`, a watcher, a headless browser.
@@ -87,11 +115,10 @@ export class RunProcessReaper {
   private readonly selfPid: number;
   private readonly processRoots: () => readonly number[];
   private readonly listUsage: () => Promise<ProcessUsageRow[] | null>;
-  /**
-   * Runs waiting for the next reap, each with whether it is reaped only if
-   * still gone; one reap runs at a time, over one scan.
-   */
-  private readonly queued = new Map<string, boolean>();
+  private readonly listGroups: () => Promise<PlainProcess[] | null>;
+  private readonly uid: number | null;
+  /** Runs waiting for the next reap; one reap runs at a time, over one scan. */
+  private readonly queued = new Map<string, QueuedReap>();
   private draining: Promise<void> | null = null;
 
   constructor(
@@ -108,6 +135,9 @@ export class RunProcessReaper {
     this.selfPid = options.selfPid ?? process.pid;
     this.processRoots = options.processRoots ?? (() => []);
     this.listUsage = options.listUsage ?? listProcessUsage;
+    this.listGroups = options.listGroups ?? scanPlainTable;
+    this.uid =
+      options.uid !== undefined ? options.uid : (process.getuid?.() ?? null);
   }
 
   /**
@@ -119,15 +149,50 @@ export class RunProcessReaper {
    * queued while a reap ran is reaped together, over one scan.
    */
   reapInBackground(runId: string, onlyIfStillGone = false): void {
+    this.enqueue(runId, onlyIfStillGone, null);
+  }
+
+  /**
+   * Stop what a run that went unused for the kept-session window left running,
+   * resolving with the processes stopped for it — empty when nothing was, or
+   * the reap was refused or failed. Never rejects. Two asking for one run in
+   * the same reap: the first is handed what it stopped, the rest nothing, so
+   * the run is told once.
+   *
+   * Unconditional, unlike the sweep's reap of a gone run: a run is used again
+   * only through a kept CLI process or a command action the user ran, and
+   * {@link held}, asked after the scan, sees both.
+   */
+  reapIdle(runId: string): Promise<ScannedProcess[]> {
+    return new Promise((resolve) => {
+      if (!this.enqueue(runId, false, resolve)) {
+        resolve([]);
+      }
+    });
+  }
+
+  private enqueue(
+    runId: string,
+    onlyIfStillGone: boolean,
+    waiter: QueuedReap['waiters'][number] | null,
+  ): boolean {
     if (runId.trim() === '') {
-      return;
+      return false;
     }
-    // An unconditional request wins: an archive is not undone by a sweep's
-    // stale verdict queued beside it.
-    this.queued.set(runId, onlyIfStillGone && (this.queued.get(runId) ?? true));
+    const prior = this.queued.get(runId);
+    this.queued.set(runId, {
+      // An unconditional request wins: an archive is not undone by a sweep's
+      // stale verdict queued beside it.
+      onlyIfStillGone: onlyIfStillGone && (prior?.onlyIfStillGone ?? true),
+      waiters: [
+        ...(prior?.waiters ?? []),
+        ...(waiter === null ? [] : [waiter]),
+      ],
+    });
     this.draining ??= this.drain().finally(() => {
       this.draining = null;
     });
+    return true;
   }
 
   /** Resolves once every queued reap has finished. For the sweep and specs. */
@@ -139,19 +204,27 @@ export class RunProcessReaper {
 
   private async drain(): Promise<void> {
     while (this.queued.size > 0) {
-      const runIds = [...this.queued.keys()];
-      const conditional = new Set(
-        [...this.queued].filter(([, onlyIf]) => onlyIf).map(([id]) => id),
-      );
+      const batch = [...this.queued];
       this.queued.clear();
+      const runIds = batch.map(([id]) => id);
+      const conditional = new Set(
+        batch.filter(([, queued]) => queued.onlyIfStillGone).map(([id]) => id),
+      );
+      let stopped: Target[] = [];
       try {
-        await this.reap(runIds, conditional);
+        stopped = await this.reapTargets(runIds, conditional);
       } catch (err: unknown) {
         this.logger.warn(
           `could not stop the processes of run(s) ${runIds.join(', ')}: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
+      }
+      for (const [runId, { waiters }] of batch) {
+        const rows = stopped
+          .filter((target) => target.runId === runId)
+          .map((target) => target.row);
+        waiters.forEach((waiter, index) => waiter(index === 0 ? rows : []));
       }
     }
   }
@@ -161,6 +234,13 @@ export class RunProcessReaper {
     runIds: readonly string[],
     onlyIfStillGone: ReadonlySet<string> = new Set(),
   ): Promise<number[]> {
+    return pidsOf(await this.reapTargets(runIds, onlyIfStillGone));
+  }
+
+  private async reapTargets(
+    runIds: readonly string[],
+    onlyIfStillGone: ReadonlySet<string>,
+  ): Promise<Target[]> {
     const wanted = runIds.filter((runId) => runId.trim() !== '');
     if (wanted.length === 0) {
       return [];
@@ -212,32 +292,7 @@ export class RunProcessReaper {
     runId: string,
     pids: readonly number[],
   ): Promise<number[]> {
-    const [reading, usage] = await Promise.all([
-      this.attribution.attribute('fresh'),
-      this.listUsage(),
-    ]);
-    if (reading === null || usage === null) {
-      throw new BadRequestException(
-        'PROCESS_TABLE_UNREADABLE',
-        'could not safely read the process table; try again',
-      );
-    }
-    const { targets, overCap } = capSelection(reading.get(runId) ?? []);
-    if (overCap !== null) {
-      throw new BadRequestException(
-        'RUN_PROCESS_CAP',
-        'too many processes belong to this thread; stopped none',
-      );
-    }
-    // The registry is read after both tables: a newly held CLI must never be
-    // mistaken for a stand, including orphaned members of its process group.
-    const roots = this.processRoots();
-    if (roots.some((pid) => !usage.some((row) => row.pid === pid))) {
-      throw new BadRequestException(
-        'PROCESS_TABLE_CHANGED',
-        'an agent process changed while reading; try again',
-      );
-    }
+    const { targets, usage, roots } = await this.freshReading(runId);
     const held = new Set(
       roots.flatMap((pid) => processTreeOf(usage, pid).map((row) => row.pid)),
     );
@@ -264,21 +319,246 @@ export class RunProcessReaper {
         'a selected process changed while reading; refresh and try again',
       );
     }
-    return this.stopTargets(
-      selected.map((pid) => ({
-        row: detached.get(pid) as ScannedProcess,
-        runId,
-      })),
-      [runId],
-      true,
+    return pidsOf(
+      await this.stopTargets(
+        selected.map((pid) => ({
+          row: detached.get(pid) as ScannedProcess,
+          runId,
+        })),
+        [runId],
+        true,
+      ),
     );
   }
 
+  /**
+   * Stop what a run's agent CLI left running when it ended without stopping it
+   * itself — a crash, an OOM kill, a Force Quit, or a close whose escalation
+   * cut its shutdown short. A CLI starts each background command in a session
+   * of its own and stops them only from its own shutdown, so once it is gone
+   * nothing points at them but the groups its session recorded while it lived.
+   *
+   * A group is acted on only while a recorded member is still alive in it, so
+   * its id cannot have been reused, and never the daemon's own group. Its
+   * current members are then stopped as explicit pids, minus what no run may
+   * own and every tree the registry holds — but not for being on a terminal:
+   * the groups were the agent's by structure when recorded, and codex runs its
+   * commands on a pseudo-terminal of its own.
+   *
+   * Never throws.
+   */
+  async stopLeftGroups(
+    runId: string,
+    groups: readonly RecordedGroup[],
+  ): Promise<number[]> {
+    if (groups.length === 0) {
+      return [];
+    }
+    try {
+      // A CLI ending on its own terms may still be stopping its commands as
+      // it goes: what outlives the grace a kill gives is what it left.
+      await this.wait(GROUP_KILL_GRACE_MS);
+      if (this.uid === null) {
+        this.logger.warn(
+          `could not tell which user the daemon runs as — left what run ${runId}'s agent left running alone`,
+        );
+        return [];
+      }
+      const rows = await this.listGroups();
+      if (rows === null) {
+        this.logger.warn(
+          `could not read the process table — left what run ${runId}'s agent left running alone`,
+        );
+        return [];
+      }
+      const chain = daemonChain(rows, this.selfPid);
+      const daemonGroup = rows.find((row) => row.pid === this.selfPid)?.pgid;
+      const anchored = new Set(
+        groups
+          .filter(
+            (group) =>
+              group.pgid > 1 &&
+              group.pgid !== daemonGroup &&
+              isGroupAnchored(group, rows),
+          )
+          .map((group) => group.pgid),
+      );
+      const spared = new Set([
+        ...chain,
+        ...fencedPids(rows, this.uid, chain, false),
+      ]);
+      for (const root of this.processRoots()) {
+        for (const row of processTreeOf(rows, root)) {
+          spared.add(row.pid);
+        }
+      }
+      const { targets, overCap } = capSelection(
+        rows
+          .filter(
+            (row) =>
+              anchored.has(row.pgid) && row.pid > 1 && !spared.has(row.pid),
+          )
+          .map((row) => ({ ...row, env: null })),
+      );
+      if (overCap !== null) {
+        this.logger.warn(
+          `run ${runId}'s agent left ${overCap.count} processes, more than a run can own — killed none. First of them: ${overCap.sample
+            .map((row) => `${row.pid} (${nameOf(row)})`)
+            .join(', ')}`,
+        );
+        return [];
+      }
+      return pidsOf(
+        await this.stopTargets(
+          targets.map((row) => ({ row, runId })),
+          [runId],
+        ),
+      );
+    } catch (err: unknown) {
+      this.logger.warn(
+        `could not stop what run ${runId}'s agent left running: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * The processes of `runId` an agent's stop action may name, from a fresh
+   * reading: the run's own, less every live CLI and every member of a CLI's
+   * own process group — its MCP servers and helpers. A command the agent
+   * backgrounded runs in a group of its own, so it stays stoppable while the
+   * agent that started it is alive, which {@link stopDetached}'s whole-tree
+   * exclusion would not allow.
+   */
+  async stopCandidates(runId: string): Promise<StopCandidate[]> {
+    const reading = await this.freshReading(runId);
+    const { targets, usage } = reading;
+    const roots = new Set(reading.roots);
+    // A root that leads no group shares its spawner's, the daemon's; its pid
+    // then names no group, so `roots.has(pgid)` only matches a CLI's own.
+    const groupOf = new Map(usage.map((row) => [row.pid, row.pgid]));
+    return targets.filter((row): row is StopCandidate => {
+      const pgid = groupOf.get(row.pid);
+      return (
+        pgid !== undefined &&
+        !roots.has(row.pid) &&
+        !roots.has(pgid) &&
+        !isUnsignallable(row.pid, this.selfPid) &&
+        row.startedAt !== null
+      );
+    });
+  }
+
+  /**
+   * Stop the processes a stop action recorded at publish, and whatever they
+   * have started since that is still a candidate — a dev server's workers
+   * hold its port. A target that has exited — its pid gone, or held by a
+   * process that started later — is `gone` and never signalled. A target
+   * still alive as the process recorded but no longer among
+   * {@link stopCandidates} refuses the whole press: it left the run, or
+   * became an agent's own, since it was published.
+   */
+  async stopRecorded(
+    runId: string,
+    targets: readonly { pid: number; startedAt: number }[],
+  ): Promise<{ stopped: number[]; gone: number[] }> {
+    const candidates = new Map(
+      (await this.stopCandidates(runId)).map((row) => [row.pid, row]),
+    );
+    const alive = await this.startTimes(targets.map((target) => target.pid));
+    if (alive === null) {
+      throw new BadRequestException(
+        'PROCESS_IDENTITY_UNREADABLE',
+        'could not confirm process identities; try again',
+      );
+    }
+    const live: Target[] = [];
+    for (const target of targets) {
+      if (!isSameProcess(target.pid, target.startedAt, alive)) {
+        continue;
+      }
+      const row = candidates.get(target.pid);
+      if (
+        row === undefined ||
+        !isSameProcess(
+          target.pid,
+          target.startedAt,
+          new Map([[row.pid, row.startedAt]]),
+        )
+      ) {
+        throw new BadRequestException(
+          'PROCESS_CHANGED',
+          `pid ${target.pid} is no longer a process this thread may stop; stopped none`,
+        );
+      }
+      live.push({ row, runId });
+    }
+    const chosen = new Set(live.map(({ row }) => row.pid));
+    for (const { row } of [...live]) {
+      for (const child of descendantsOf([...candidates.values()], row.pid)) {
+        const candidate = candidates.get(child.pid);
+        if (candidate !== undefined && !chosen.has(child.pid)) {
+          chosen.add(child.pid);
+          live.push({ row: candidate, runId });
+        }
+      }
+    }
+    const stopped = pidsOf(await this.stopTargets(live, [runId], true));
+    return {
+      stopped,
+      gone: targets
+        .map((target) => target.pid)
+        .filter((pid) => !stopped.includes(pid)),
+    };
+  }
+
+  /**
+   * The run's processes, the usage table and the live CLI roots, all read
+   * fresh — refused rather than guessed at when either table is unreadable,
+   * the run is over the cap, or a root is missing from the usage table.
+   */
+  private async freshReading(runId: string): Promise<{
+    targets: ScannedProcess[];
+    usage: ProcessUsageRow[];
+    roots: readonly number[];
+  }> {
+    const [reading, usage] = await Promise.all([
+      this.attribution.attribute('fresh'),
+      this.listUsage(),
+    ]);
+    if (reading === null || usage === null) {
+      throw new BadRequestException(
+        'PROCESS_TABLE_UNREADABLE',
+        'could not safely read the process table; try again',
+      );
+    }
+    const { targets, overCap } = capSelection(reading.get(runId) ?? []);
+    if (overCap !== null) {
+      throw new BadRequestException(
+        'RUN_PROCESS_CAP',
+        'too many processes belong to this thread; stopped none',
+      );
+    }
+    // The registry is read after both tables: a newly held CLI must never be
+    // mistaken for a stand, including orphaned members of its process group.
+    const roots = this.processRoots();
+    if (roots.some((pid) => !usage.some((row) => row.pid === pid))) {
+      throw new BadRequestException(
+        'PROCESS_TABLE_CHANGED',
+        'an agent process changed while reading; try again',
+      );
+    }
+    return { targets, usage, roots };
+  }
+
+  /** Returns the targets that took the SIGTERM. */
   private async stopTargets(
     targets: readonly Target[],
     wanted: readonly string[],
     reportFailure = false,
-  ): Promise<number[]> {
+  ): Promise<Target[]> {
     const terminated = await this.signalConfirmed(
       targets,
       'SIGTERM',
@@ -288,15 +568,24 @@ export class RunProcessReaper {
       return [];
     }
     await this.wait(GROUP_KILL_GRACE_MS);
-    const killed = await this.signalConfirmed(
-      terminated,
-      'SIGKILL',
-      reportFailure,
-    );
+    let killed: Target[];
+    try {
+      killed = await this.signalConfirmed(terminated, 'SIGKILL', reportFailure);
+    } catch (err) {
+      // The refusal must not read as "nothing happened": these already have
+      // their SIGTERM.
+      if (err instanceof BadRequestException) {
+        throw new BadRequestException(
+          err.errorCode,
+          `sent SIGTERM to ${terminated.length} process(es), then ${err.message}`,
+        );
+      }
+      throw err;
+    }
     this.logger.log(
       `stopped ${terminated.length} process(es) of run(s) ${wanted.join(', ')}; ${killed.length} needed SIGKILL`,
     );
-    return terminated.map((target) => target.row.pid);
+    return terminated;
   }
 
   /**
@@ -358,8 +647,12 @@ export class RunProcessReaper {
   }
 }
 
+function pidsOf(targets: readonly Target[]): number[] {
+  return targets.map((target) => target.row.pid);
+}
+
 function nameOf(row: ScannedProcess): string {
-  return basename(row.args.split(/\s+/)[0] ?? '') || '?';
+  return executableOf(row.args);
 }
 
 /**
@@ -377,4 +670,31 @@ async function readStartTimes(
   }
   const wanted = new Set(pids);
   return new Map([...parseStartTimes(out)].filter(([pid]) => wanted.has(pid)));
+}
+
+/**
+ * The reaper as the agents module provides it: it asks the registry which
+ * processes are a live agent's, and is handed what a run's CLI left running
+ * whenever a process ends ({@link AgentSessionRegistry.onLeftCommands}). A
+ * run with work running that the user started through it — a command action
+ * (`ActionCommandRegistry`), a monitor (`MonitorRegistry`) — is held too;
+ * archive and delete end that work first, so they still reap the run.
+ */
+export function createRunProcessReaper(
+  attribution: RunProcessAttribution,
+  sessions: AgentSessionRegistry,
+  heldWork: readonly { isRunning(runId: string): boolean }[],
+  options: RunProcessReaperOptions = {},
+): RunProcessReaper {
+  const reaper = new RunProcessReaper(attribution, {
+    held: (runId) =>
+      sessions.processRoots(runId).length > 0 ||
+      heldWork.some((work) => work.isRunning(runId)),
+    processRoots: () => sessions.processRoots().map((root) => root.pid),
+    ...options,
+  });
+  sessions.onLeftCommands((runId, left) => {
+    void reaper.stopLeftGroups(runId, left.groups);
+  });
+  return reaper;
 }

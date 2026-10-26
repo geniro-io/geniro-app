@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { formatTokens } from './agent-activity';
-import { ComposingCard } from './composing-card';
+import { ComposingCard, formatComposedBytes } from './composing-card';
 import type { GeniroCardKind } from './geniro-tool';
 import { THINKING_WORDS, useLiveWord, WORKING_WORDS } from './live-words';
 import { MessageBubble } from './message-bubble';
@@ -50,14 +50,6 @@ export const RunActivityContext = createContext<string | null>(null);
  * A reader that only needs the fact asks `!== null`.
  */
 export const RunSettledContext = createContext<RunSettleAt>(null);
-
-/**
- * How many delegates the open run reports OUT (`RunDto.subagentsOut`), or null
- * when not known — beside {@link RunSettledContext} for the same reason: the
- * blocks that read it sit under memoized shells, so it cannot travel as a prop.
- * See `subagentBlockStatus`'s `delegatesOut`.
- */
-export const DelegatesOutContext = createContext<number | null>(null);
 
 /**
  * The two synthetic transcript rows that describe what an agent is doing RIGHT
@@ -270,11 +262,17 @@ export function ComposingRow({
 export function WorkingRow({
   since = null,
   spend = null,
+  writing = null,
 }: {
   /** Epoch ms this agent last showed something, or null if it never has. */
   since?: number | null;
   /** This turn's running token bill, formatted, or null when unmeasured. */
   spend?: string | null;
+  /**
+   * The tool call the agent is WRITING right now and how many argument bytes
+   * have arrived, or null when it is not writing one worth naming.
+   */
+  writing?: { tool: string; bytes: number } | null;
 }): React.JSX.Element {
   const [mountedAt] = useState(() => Date.now());
   const runActivity = useContext(RunActivityContext);
@@ -292,12 +290,17 @@ export function WorkingRow({
   // abstract label leaves a reader unable to tell a long compaction from a hung
   // tool.
   const word = useLiveWord(WORKING_WORDS);
+  // A call being written outranks the daemon's activity: that phrase names a
+  // tool that already RAN, while this is the work happening now, and its byte
+  // count is the one figure on the row that shows the model still producing.
+  const phrase = writing === null ? activity : `Writing ${writing.tool}`;
   return (
     <LiveRow
-      text={activity ?? `${word}…`}
+      text={phrase ?? `${word}…`}
       // Named only when the row IS the word, so the fade is played on a change
       // of vocabulary and never on a tool name the daemon happened to update.
-      word={activity === null ? word : null}
+      word={phrase === null ? word : null}
+      progress={writing === null ? null : formatComposedBytes(writing.bytes)}
       elapsed={formatElapsed(Date.now() - (since ?? mountedAt))}
       spend={spend}
     />
@@ -338,6 +341,7 @@ export function WorkingRow({
 function LiveRow({
   text,
   word = null,
+  progress = null,
   elapsed,
   spend = null,
 }: {
@@ -352,6 +356,11 @@ function LiveRow({
    * line that merely had its tool name updated.
    */
   word?: string | null;
+  /**
+   * How far the work {@link text} names has got (`84.2 KB`), or null. Never
+   * cut, like the clock: it is the half of the phrase that moves.
+   */
+  progress?: string | null;
   /** The clock, always shown in full. */
   elapsed: string;
   /**
@@ -389,6 +398,11 @@ function LiveRow({
           title={text}>
           {text}
         </span>
+        {progress === null ? null : (
+          <span data-slot="live-row-progress" className="shrink-0 tabular-nums">
+            · {progress}
+          </span>
+        )}
         <span className="shrink-0">· {elapsed}</span>
         {/* AFTER the clock, and `shrink-0` like it: the phrase is the only
             part of this row allowed to give way, so a long activity name

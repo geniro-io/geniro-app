@@ -138,6 +138,7 @@ function deps(over: Partial<ConductorDeps> = {}): ConductorDeps {
     gitStamp: vi.fn(async () => ({ sha: START_SHA, dirty: false })),
     agentOptions: () => ({ claude: { browserTools: true } }),
     customInstructions: () => '',
+    replyLanguage: () => '',
     log: () => undefined,
     intervalMs: 5,
     ...over,
@@ -303,6 +304,25 @@ describe('AutopilotConductor', () => {
       expect(starts[0]?.body).not.toHaveProperty('startDirty');
     },
   );
+
+  it('sends the reply language trimmed, and none when the setting is blank', async () => {
+    const run = async (language: string): Promise<unknown> => {
+      const { fetchMock, starts } = daemon({
+        p1: {
+          projectId: 'p1',
+          eligible: [{ id: 't1', title: 'x', status: 'todo' }],
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      await new AutopilotConductor(
+        deps({ replyLanguage: () => language }),
+      ).tick();
+      return starts[0]?.body;
+    };
+
+    expect(await run(' Russian ')).toMatchObject({ replyLanguage: 'Russian' });
+    expect(await run('  ')).not.toHaveProperty('replyLanguage');
+  });
 
   it('sends no custom instructions when the setting is blank', async () => {
     const { fetchMock, starts } = daemon({

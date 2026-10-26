@@ -16,12 +16,15 @@ import type {
   ModelPriceLookup,
   ModelPriceProvider,
 } from '../utils/model-prices';
+import type { RecordedGroup } from '../utils/process-descendants';
 import type {
   SessionAsk,
+  SessionCloseOptions,
   SessionLogger,
   SpawnFn,
   StoppedCommands,
 } from '../utils/spawn-cli';
+import type { SubagentRecoveryRefSchema } from '../utils/subagent-recovery-ref';
 
 // ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
 // The two names that identify OUR server and OUR tools inside a CLI's config
@@ -70,7 +73,8 @@ export const GENIRO_MCP_CALL_TOOLS = [
  * which is why translating at the read site is the only place it can be done
  * once.
  */
-export type BackgroundUnitOutcome = 'completed' | 'failed' | 'stopped';
+export type BackgroundUnitOutcome =
+  'completed' | 'failed' | 'stopped' | 'untracked';
 
 export interface BackgroundUnitUsage {
   /** Every token the unit spent, prompt and completion together. */
@@ -178,7 +182,22 @@ export interface AgentUsage {
    * fallback model's window under the requested one.
    */
   contextModel: string | null;
+  /**
+   * Whether {@link contextTokens} is geniro's stand-in rather than an
+   * occupancy the CLI stated — a different figure put on the meter because no
+   * occupancy was reported. Travels with the reading it describes. Optional and
+   * false alike mean the CLI stated it.
+   */
+  contextEstimated?: boolean;
   costUsd: number | null;
+  /**
+   * Of {@link costUsd}, the part geniro PRICED itself — token counts at the
+   * public list price (`ModelPriceCatalog`) — rather than read off the CLI's
+   * own bill. Equal to `costUsd` when all of it was priced here, and a part of
+   * it once segments fold. Optional and null alike mean none of it was: the
+   * cost is the CLI's, or there is no cost at all.
+   */
+  estimatedCostUsd?: number | null;
   /**
    * How long the turn took, as the CLI ITSELF measured it.
    *
@@ -465,6 +484,23 @@ export interface AgentSessionReadInput {
   /** That conversation's CLI session id, or null before the CLI names one. */
   sessionId: string | null;
 }
+
+/** Durable identity used only to read a lost delegate's existing CLI record. */
+export type SubagentRecoveryRef = z.infer<typeof SubagentRecoveryRefSchema>;
+
+export type SubagentTrackingLost = 'process-ended';
+
+/**
+ * Why a session is closed, when it decides how the work still out ended:
+ * `user-stop` — the user's Stop, so every delegate it cuts off is `stopped`.
+ * Any other close leaves them `untracked`, its process having ended.
+ */
+export type SessionCloseCause = 'user-stop';
+
+export type RecoveredSubagentOutcome = Exclude<
+  BackgroundUnitOutcome,
+  'untracked'
+>;
 
 /**
  * One rate-limit window an account's plan enforces — the thing that actually
@@ -964,18 +1000,21 @@ type AgentEventBody =
        * turns that have FINISHED, as if that were the whole bill — a small
        * fraction of a call hours into its turn. The tokens are already live
        * (`usage_progress`), but pricing them here is not possible for a model
-       * the price table has no row for. The CLI prices its own requests, so
-       * the figure is ASKED of it.
+       * the price table has no row for — so where the CLI prices its own
+       * requests, the figure is ASKED of it.
        *
-       * CLAUDE ONLY today — read over the `get_usage` control request (see
-       * `CLAUDE_LIVE_COST_ASK_INTERVAL_MS` in `claude.const.ts`). A CLI with no
-       * such channel never emits it, and its running figure stays what the
-       * finished turns add up to.
+       * claude answers over the `get_usage` control request (see
+       * `CLAUDE_LIVE_COST_ASK_INTERVAL_MS` in `claude.const.ts`); codex states
+       * no price, so its figure is its tokens at list price and all of it is
+       * `estimatedCostUsd`. A CLI with neither never emits it, and its running
+       * figure stays what the finished turns add up to.
        *
        * EPHEMERAL like its siblings: never persisted, never replayed.
        */
       type: 'cost_progress';
       costUsd: number;
+      /** Of `costUsd`, the part geniro priced itself — see `AgentUsage`. */
+      estimatedCostUsd?: number;
     }
   | { type: 'reasoning'; text: string }
   | {
@@ -1017,6 +1056,14 @@ type AgentEventBody =
       name: string | null;
       result: unknown;
       isError: boolean;
+      /**
+       * This result reports the END of a command that ran on in the background
+       * after its turn ended — codex completes such a command's item whenever
+       * the command exits, usually with no turn open. Set by the adapter that
+       * knows it. A command ending is no agent working again, so it never
+       * restates a settled run (`restatesRunAsWorking`). Absent otherwise.
+       */
+      endsBackgroundWork?: true;
     }
   | {
       type: 'turn_complete';
@@ -1099,6 +1146,21 @@ type AgentEventBody =
        */
       type: 'approval_withdrawn';
       id: string;
+    }
+  | {
+      /**
+       * Follow-ups the driver accepted (`sendFollowUp` answered true, so the
+       * owner already wrote their rows) that will now never reach the agent —
+       * the turn they were addressed to ended first, typically by a Stop.
+       * Carries the `FollowUpMessage.deliveryId`s it was given, oldest first.
+       */
+      type: 'follow_up_dropped';
+      deliveryIds: string[];
+      /**
+       * What the CLI said when it REFUSED the messages (a codex `turn/steer`
+       * error), quoted to the user. Absent when the turn simply ended first.
+       */
+      reason?: string;
     }
   | {
       type: 'error';
@@ -1328,6 +1390,16 @@ type AgentEventBody =
        * nothing here and keeps the old reading, where the tool result is the end.
        */
       backgroundOpen: boolean | null;
+      /** The child conversation identity, when this CLI exposes one. */
+      subagentSessionId?: string;
+      /** Internal recovery metadata; the renderer does not interpret it. */
+      recovery?: SubagentRecoveryRef | null;
+      /**
+       * On an `untracked` close the daemon wrote: `process-ended` when the
+       * process hosting the delegate is gone, so its work is over and only its
+       * outcome is unknown. Absent when tracking was lost while it may still run.
+       */
+      trackingLost?: SubagentTrackingLost;
     }
   | {
       /**
@@ -1580,11 +1652,11 @@ type AgentEventBody =
       /**
        * The unit was started BY a delegate rather than by the agent itself —
        * claude's `owned_by_subagent`, the only owner fact its `task_started`
-       * line carries (read out of the 2.1.270 bundle: no parent id). A
-       * delegate's own background command belongs to that delegate's block,
-       * not to the main thread's terminals, so `runCliSession` announces
-       * nothing for it — but while it runs, it keeps that delegate's
-       * `completed` settle from being announced.
+       * line carries (read out of the 2.1.270 bundle: no parent id), or a
+       * command a codex sub-agent runs. A delegate's own command belongs to
+       * that delegate's block, not to the main thread's terminals, so
+       * `runCliSession` announces nothing for it — but while it runs, it keeps
+       * a bracketed delegate's `completed` settle from being announced.
        */
       ownedByDelegate?: true;
       /**
@@ -1794,7 +1866,45 @@ type AgentEventBody =
        * question whose payload read as none, which is then offered as one.
        */
       questions?: CardQuestion[];
+      /**
+       * The answers this CLI offers BESIDE a one-time Approve and Deny — "allow
+       * for this session", "always allow" — each built by the adapter from
+       * what its CLI put on THIS request, so the card offers only what the CLI
+       * would honour. Absent or empty: the card is Approve/Deny alone.
+       */
+      options?: ApprovalOption[];
     };
+
+/**
+ * How long a CLI remembers an {@link ApprovalOption} once picked: for the rest
+ * of this conversation's process (`session`), or past it, in the CLI's own
+ * settings (`always`). A one-time answer is Approve/Deny and has no option.
+ */
+export type ApprovalOptionScope = 'session' | 'always';
+
+/**
+ * One remembering answer to a permission request, as the user's card draws it
+ * and as the verdict names it back (`id`).
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/approval-card.tsx
+ * `readApprovalOptions` reads `id`, `label`, `allow` and `scope` off the
+ * `approval_request` row (`publicApprovalOptions` writes them there).
+ */
+export interface ApprovalOption {
+  /** Unique within its request; what the card's verdict names. */
+  id: string;
+  /** The button's words — the adapter's, describing the option's real reach. */
+  label: string;
+  /** Whether picking it lets the tool call run. */
+  allow: boolean;
+  scope: ApprovalOptionScope;
+  /**
+   * What this adapter's encoder needs to answer with the option and cannot
+   * re-read at verdict time (claude's permission rules ride the request, not
+   * the reply). Adapter-private: never persisted, never sent to a client.
+   */
+  reply?: unknown;
+}
 
 /**
  * One option of a {@link CardQuestion}. `description` and `preview` are for
@@ -1849,6 +1959,13 @@ export interface TurnImage {
 export interface FollowUpMessage {
   text: string;
   images?: TurnImage[];
+  /**
+   * The owner's id for the row it wrote for this message, echoed back in
+   * `follow_up_dropped` when the message never reaches the agent: an ACP turn
+   * that ends before it went out, or a codex `turn/steer` codex refused. Not
+   * `MessageDeliveryFailure.deliveryId`, which names a broker failure record.
+   */
+  deliveryId?: string;
 }
 
 /**
@@ -3114,13 +3231,22 @@ export interface AgentTurnInput {
    */
   customInstructions?: string | null;
   /**
+   * The language the user wants replies in (`Settings.replyLanguage`), as
+   * snapshotted onto the run; null/undefined when none is set.
+   *
+   * Composed into the instruction block like {@link customInstructions}, and
+   * an adapter whose CLI has a language setting of its own may hand it that
+   * too (claude's `--settings {"language"}`).
+   */
+  replyLanguage?: string | null;
+  /**
    * What the board card this run works asks of it — its label instructions and
    * geniro's report ask, as stored on `Run.taskInstructions`. Undefined for
    * every run no card started.
    *
    * A peer of {@link customInstructions} rather than joined into it, for the
    * reason the two are separate columns: the user can purge their own text,
-   * and that purge must not reach this. `composeTurnInstructions` ranks it
+   * and that purge must not reach this. `turnInstructionParts` ranks it
    * directly after the user's own text.
    */
   taskInstructions?: string | null;
@@ -3140,7 +3266,7 @@ export interface AgentTurnInput {
    * executor. Undefined for plain chat and for a node nothing is wired to.
    *
    * A THIRD peer beside {@link systemPrompt} and {@link customInstructions};
-   * `composeTurnInstructions` owns where it ranks between them.
+   * `turnInstructionParts` owns where it ranks between them.
    *
    * Joined by the executor rather than sent as a list, because the ORDER of
    * several blocks is a graph fact (the wiring) that no adapter can recover.
@@ -3359,6 +3485,20 @@ export interface AgentTurnInput {
   } | null;
 }
 
+/** The fields of a turn its instruction block is composed from. */
+export type TurnInstructionInput = Pick<
+  AgentTurnInput,
+  | 'internalProbe'
+  | 'replyLanguage'
+  | 'customInstructions'
+  | 'taskInstructions'
+  | 'workflowInstructions'
+  | 'instructionBlocks'
+  | 'systemPrompt'
+  | 'answeringACallPrompt'
+  | 'callSurfacePrompt'
+>;
+
 /**
  * One CLI process, and the turns an adapter runs on it.
  *
@@ -3375,6 +3515,8 @@ export interface AgentTurnInput {
  * is logged into. A process per turn tears that down on every message.
  */
 export interface AgentSession {
+  /** A live subordinate command still holds this delegate's terminal report. */
+  subagentRecoveryBlocked?(id: string): boolean;
   /**
    * Open a turn on this process. Null when this session cannot serve it: the
    * process is gone, a turn is already in flight, this CLI hosts one turn per
@@ -3409,12 +3551,17 @@ export interface AgentSession {
    */
   readonly retired: boolean;
   /**
-   * How many detached commands this process has started and not yet ended —
-   * see `CliSession.shellsRunning`. A holder must not reap a process holding
+   * How many commands this process has started and not yet ended that no turn
+   * waits on, a delegate's included — see `CliSession.shellsRunning`. A holder
+   * must not reap a process holding
    * them for going quiet, or evict it to make room: a dev server writes nothing
    * for as long as it works, and it dies with this process.
    */
   readonly shellsRunning: number;
+  /** Of {@link shellsRunning}, the detached ones — see `CliSession.detachedRunning`. */
+  readonly detachedRunning: number;
+  /** Where a call's command runs, as recorded — see `CliSession.recordedGroupsOf`. */
+  recordedGroupsOf(callId: string): readonly RecordedGroup[] | null;
   /**
    * The command lines of those detached commands — see
    * `CliSession.runningCommands`. Read by a holder that is about to close the
@@ -3446,8 +3593,15 @@ export interface AgentSession {
    *
    * This is the ONLY thing that stops a run-scoped process, so whoever holds
    * the session owns that obligation: nothing else will reap it.
+   *
+   * `cause` says why, when that decides how the work still out ended — see
+   * {@link SessionCloseCause}. `graceful` closes an idle process's stdin
+   * first — see `SessionCloseOptions`.
    */
-  close(): void;
+  close(cause?: SessionCloseCause, options?: SessionCloseOptions): void;
+  /** See `CliSession.noteCloseCause` — the one place a close's cause is kept. */
+  noteCloseCause?(cause: SessionCloseCause | null): void;
+  readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
 }
@@ -3584,6 +3738,19 @@ export interface TurnDriver {
    * behind.
    */
   withdrawHeldPrompt?(): boolean;
+  /**
+   * The process ended under this turn before the turn's own reply — answered
+   * with what the driver held that will now never be delivered, emitted ahead
+   * of the terminal `spawn-cli` writes. Undefined = nothing to report.
+   */
+  onProcessEnded?(): AgentEvent[];
+  /**
+   * How long closing the session should let a STOPPED turn finish before the
+   * process is signalled — for a driver that will only learn a delivered
+   * message's fate from the turn's own end (codex's steer). 0 or undefined =
+   * signal at once.
+   */
+  closeGraceMs?(): number;
   /** Map one parsed stdout line to zero or more normalized events. */
   onMessage(obj: unknown): AgentEvent[];
   /**
@@ -3594,6 +3761,7 @@ export interface TurnDriver {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined;
   /**
    * Deliver a user message into the turn this driver is running, answering
@@ -3650,8 +3818,18 @@ export interface AgentTurnHandle {
    * delivered — false once the turn has settled/ended (a late verdict must not
    * be recorded as applied) and for adapters whose CLI has no approval
    * protocol.
+   *
+   * `option` is one of the request's own `options`, when the user picked one
+   * of those rather than plain Approve/Deny. Absent is a ONE-TIME answer, and
+   * every auto-approval sends it absent, so nothing the daemon decides on its
+   * own is remembered by the CLI.
    */
-  respondApproval(id: string, allow: boolean, updatedInput?: unknown): boolean;
+  respondApproval(
+    id: string,
+    allow: boolean,
+    updatedInput?: unknown,
+    option?: ApprovalOption,
+  ): boolean;
   /**
    * Hand the RUNNING turn another user message. Returns whether it was
    * actually delivered — false once the turn has settled, and false for a CLI
@@ -4071,11 +4249,13 @@ export interface AdapterConfig {
    * Why this CLI's MCP client will NOT hold ONE `tools/call` open for as long
    * as a PERSON takes to answer it — or null when it will.
    *
-   * Non-null means `ask_user_question` must answer IMMEDIATELY and let the
-   * user's answer arrive as the run's next message instead (see
-   * `ChatService`'s deferred ask), because the alternative is not a slow
-   * answer but a LOST one: the client gives up, the model is handed a tool
-   * error, and the person is still reading the question.
+   * Non-null means `ask_user_question`, `propose_plan` and `propose_patch` must
+   * answer IMMEDIATELY and let the user's answer arrive as the run's next
+   * message instead (see `ChatService`'s deferred cards), because the
+   * alternative is not a slow answer but a LOST one: the client gives up, the
+   * model is handed a tool error, and the person is still reading the card.
+   * The deadline is on `tools/call`, not on one tool, which is why the same
+   * field covers all three.
    *
    * A REASON rather than a boolean, on the rule every capability here follows.
    * cursor-agent's is a MEASUREMENT of its shipped bundle
@@ -4096,6 +4276,17 @@ export interface AdapterConfig {
    * (`GENIRO_MCP_TOOL_TIMEOUT_MS`, a day).
    */
   readonly hostQuestionDeferredReason: string | null;
+  /**
+   * Why a call of one of geniro's own MCP tools could run outside `auto`
+   * without the user being asked first, or null when it cannot: every such
+   * call is put to the user, or refused, before it runs.
+   *
+   * `monitor` runs a shell command under no sandbox of its own, so a turn is
+   * offered it only where this is null or its mode is `auto` (whose own shell
+   * is unsandboxed on every CLI). A non-null reason keeps the tool from a mode
+   * that sandboxes the agent's shell.
+   */
+  readonly hostToolCallUngatedReason: string | null;
 
   // ── Background sub-agents ───────────────────────────────────────────────
   /**

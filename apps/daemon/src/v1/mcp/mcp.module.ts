@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { ActionBroker } from '../agents/services/action.broker';
 import { AnalysisBroker } from '../agents/services/analysis.broker';
 import { ArtifactBroker } from '../agents/services/artifact.broker';
 import { ChartBroker } from '../agents/services/chart.broker';
@@ -9,15 +10,20 @@ import { FindingsReportBroker } from '../agents/services/findings-report.broker'
 import { GalleryBroker } from '../agents/services/gallery.broker';
 import { GlobalChatSearchService } from '../agents/services/global-chat-search.service';
 import { MetricsBroker } from '../agents/services/metrics.broker';
+import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
 import { PatchBroker } from '../agents/services/patch.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
+import { TeamNoteBroker } from '../agents/services/team-note.broker';
 import { ThreadReaderService } from '../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../agents/services/user-question.broker';
+import { WorkflowProposalBroker } from '../agents/services/workflow-proposal.broker';
 import { GraphsModule } from '../graphs/graphs.module';
 import { CallBroker } from '../graphs/services/call-broker.service';
 import { TaskBoardBroker } from '../graphs/services/task-board.broker';
 import { WorkflowChangeService } from '../graphs/services/workflow-change.service';
+import { WorkflowProposalService } from '../graphs/services/workflow-proposal.service';
+import { WorkflowStoreService } from '../graphs/services/workflow-store.service';
 import { ShareService } from '../shares/services/share.service';
 import { SharesModule } from '../shares/shares.module';
 import { McpController } from './controllers/mcp.controller';
@@ -52,6 +58,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         comparisons: ComparisonBroker,
         galleries: GalleryBroker,
         artifacts: ArtifactBroker,
+        actions: ActionBroker,
+        monitors: MonitorBroker,
+        teamNotes: TeamNoteBroker,
         patches: PatchBroker,
         plans: PlanBroker,
         notices: NotifyBroker,
@@ -60,6 +69,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         analysis: AnalysisBroker,
         threads: ThreadReaderService,
         workflowChanges: WorkflowChangeService,
+        workflowGate: WorkflowProposalBroker,
+        workflowStore: WorkflowStoreService,
+        workflowProposals: WorkflowProposalService,
         shares: ShareService,
       ) =>
         createMcpTools({
@@ -71,6 +83,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           comparisons,
           galleries,
           artifacts,
+          actions,
+          monitors,
+          teamNotes,
           patches,
           plans,
           notices,
@@ -79,6 +94,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           analysis,
           threads,
           workflowChanges,
+          workflowGate,
+          workflowStore,
+          workflowProposals,
           shares,
         }),
       inject: [
@@ -90,6 +108,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         ComparisonBroker,
         GalleryBroker,
         ArtifactBroker,
+        ActionBroker,
+        MonitorBroker,
+        TeamNoteBroker,
         PatchBroker,
         PlanBroker,
         NotifyBroker,
@@ -98,6 +119,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         AnalysisBroker,
         ThreadReaderService,
         WorkflowChangeService,
+        WorkflowProposalBroker,
+        WorkflowStoreService,
+        WorkflowProposalService,
         ShareService,
       ],
     },

@@ -44,7 +44,7 @@ const NAMESPACES: Record<string, string> = {
   ui: 'Primitives/',
 };
 
-const FEATURE_NAMESPACES = { chats: 'Chats/' };
+const FEATURE_NAMESPACES = { chats: 'Chats/', workflows: 'Workflows/' };
 
 /**
  * Components that legitimately have no story.

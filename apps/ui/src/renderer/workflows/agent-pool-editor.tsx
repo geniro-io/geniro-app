@@ -157,7 +157,7 @@ export function AgentPoolEditor({
       <p className="text-xs text-muted-foreground">
         {members.length === 0
           ? 'Add fallback accounts, models or CLIs. Calls and workflow turns, including the root agent, use the settings above first and try later members in order if they cannot run.'
-          : 'Member 1 is the settings above. Calls and workflow turns, including the root agent, fall back in pool order when a member cannot run. The root continues on the member that answered. A calling agent can select a specific member at your request.'}
+          : 'Member 1 is the settings above. Calls and workflow turns, including the root agent, fall back in pool order when a member cannot run. A member that hit a usage limit is skipped until it resets, then the root moves back to it. A calling agent can select a specific member at your request.'}
       </p>
       {members.map((member, index) => (
         <PoolMemberRow
@@ -244,19 +244,19 @@ function PoolMemberRow({
     configDir,
     member.model ?? null,
   );
-  const { efforts } = useAgentEfforts(
+  const { efforts, loading: effortsLoading } = useAgentEfforts(
     agentsApi,
     member.agent,
     member.model ?? null,
     configDir,
   );
-  const { windows } = useAgentContextWindows(
+  const { windows, loading: windowsLoading } = useAgentContextWindows(
     agentsApi,
     member.agent,
     member.model ?? null,
     configDir,
   );
-  const { parameters } = useAgentModelParameters(
+  const { parameters, loading: parametersLoading } = useAgentModelParameters(
     agentsApi,
     member.agent,
     member.model ?? null,
@@ -417,6 +417,7 @@ function PoolMemberRow({
         efforts={efforts}
         windows={windows}
         parameters={parameters}
+        loading={effortsLoading || windowsLoading || parametersLoading}
         value={member}
         onPatch={(patch) => onChange({ ...member, ...patch })}
         afterContext={

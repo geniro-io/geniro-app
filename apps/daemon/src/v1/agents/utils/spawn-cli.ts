@@ -5,7 +5,10 @@ import type {
   AgentApprovalMode,
   AgentEvent,
   AgentTurnHandle,
+  ApprovalOption,
   FollowUpMessage,
+  SessionCloseCause,
+  SubagentTrackingLost,
   TurnIo,
 } from '../adapters/adapter.types';
 import { isUserQuestion } from './approval-answer';
@@ -15,11 +18,16 @@ import { foldTurnComplete, foldUsage } from './fold-turn-complete';
 import { createGroupTerminator } from './kill-tree';
 import { NdjsonBuffer } from './ndjson-buffer';
 import {
+  commandTargets,
   descendantsOf,
   isCommandRunning,
+  isGroupAnchored,
   listProcesses,
   type ProcessRow,
+  type RecordedGroup,
 } from './process-descendants';
+import { decodePsText } from './process-usage';
+import { type PlainProcess, scanPlainTable } from './run-process-scan';
 
 /**
  * The slice of a child process this module depends on. Narrower than node's
@@ -136,6 +144,7 @@ export interface CliTurnOptions {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ) => string | undefined;
   /**
    * Encode a user message sent while THIS turn is still running, as the stdin
@@ -200,6 +209,21 @@ export interface CliTurnOptions {
    */
   withdrawPrompt?: () => boolean;
   /**
+   * Asked when the PROCESS ends under this turn before the turn's own terminal
+   * event — the 5s interrupt fallback's group kill, a crash, a process
+   * `error`, or a stdin that broke — for what the driver still holds that only it can report
+   * (`TurnDriver.onProcessEnded`). Its events are emitted ahead of the
+   * terminal this module writes.
+   */
+  onProcessEnded?: () => AgentEvent[];
+  /**
+   * Asked when the session is CLOSED under this live turn: how long to let the
+   * turn end on its own before the group is signalled
+   * (`TurnDriver.closeGraceMs`). The process still goes — at the turn's settle
+   * or the deadline, whichever comes first.
+   */
+  closeGraceMs?: () => number;
+  /**
    * Awaited BEFORE this turn's opening payload is written, for a CLI that can
    * accept a prompt before it is ready to serve one (claude's MCP servers are
    * still dialling for the first seconds of a process — see
@@ -243,6 +267,9 @@ export interface CliSessionOptions {
    * Off by default: a CLI that reports its own detachments is already served by
    * the `background_work` bracket, and asking the OS about it as well would
    * open every command twice.
+   *
+   * Such a CLI reports no units for its commands at all, so its execute calls
+   * are also what records where its commands run ({@link commandWork}).
    */
   detectDetachedShells?: boolean;
   /**
@@ -250,6 +277,13 @@ export interface CliSessionOptions {
    * `spawn` option's terms — production passes nothing and gets the real `ps`.
    */
   listProcesses?: () => Promise<ProcessRow[]>;
+  /**
+   * How the process table is read with each process's group, for the record
+   * {@link StoppedCommands.groups} hands on. A TEST SEAM on the same terms.
+   */
+  listProcessGroups?: () => Promise<PlainProcess[] | null>;
+  /** {@link COMMAND_GROUP_READ_DELAY_MS}, unless a test sets it. */
+  commandGroupReadDelayMs?: number;
   /**
    * The tool name this CLI asks the USER an open-ended question with, or null
    * when it has none. Supplied by the adapter from its own config — this module
@@ -312,7 +346,8 @@ export interface CliSessionOptions {
    * encoded line on a stdin that is already open, and neither the encoder nor
    * the stdin belongs to a turn. Its `input` argument echoes the request's own
    * arguments back exactly as the in-turn seam does, so an ALLOW cannot hand
-   * the CLI a blanked argument list.
+   * the CLI a blanked argument list. Its `option` is the one of the request's
+   * own `options` the user picked, exactly as `respondApproval` takes it.
    *
    * Returns whether the owner TOOK the request. False (or no handler at all)
    * falls back to holding it — a caller with nowhere to draw a card must not
@@ -320,7 +355,11 @@ export interface CliSessionOptions {
    */
   onHeldApproval?: (
     event: ApprovalRequestEvent,
-    respond: (allow: boolean, input?: unknown) => boolean,
+    respond: (
+      allow: boolean,
+      input?: unknown,
+      option?: ApprovalOption,
+    ) => boolean,
   ) => boolean;
 }
 
@@ -372,6 +411,7 @@ export interface SessionAsk<T> {
 }
 
 export interface CliSession {
+  subagentRecoveryBlocked?(id: string): boolean;
   /**
    * Ask the CLI something on its own stdin control channel, out of band of any
    * turn.
@@ -429,11 +469,13 @@ export interface CliSession {
    */
   readonly pid: number | null;
   /**
-   * How many detached commands this process has started and not yet ended —
-   * a `pnpm dev`, a watcher, a server the agent ran in the background, its
-   * delegates' included.
+   * How many commands this process has started and not yet ended that no turn
+   * of ours waits on — a `pnpm dev`, a watcher, a server the agent ran in the
+   * background — with every command its delegates run, one a delegate still
+   * waits on included.
    *
-   * They are this process's own children and die with its group, so whoever
+   * Closing this process stops them — the CLI stops its own on shutdown, and
+   * what it leaves is stopped from {@link StoppedCommands.groups} — so whoever
    * REAPS an unused process must not reap one holding them: a dev server is
    * quiet by design, and a session that has said nothing for the idle window
    * while serving `localhost:3000` is not a session going unused. Reported as
@@ -442,7 +484,13 @@ export interface CliSession {
    */
   readonly shellsRunning: number;
   /**
-   * The command lines of the detached commands {@link shellsRunning} counts,
+   * Of {@link shellsRunning}, the commands running detached — what a close
+   * reports stopping. A delegate's command its delegate still waits on keeps
+   * the process from being reaped, but is no detached command yet.
+   */
+  readonly detachedRunning: number;
+  /**
+   * The command lines of the detached commands {@link detachedRunning} counts,
    * oldest first — one per command whose launching call disclosed its line, so
    * it may hold fewer entries than that count.
    *
@@ -451,16 +499,54 @@ export interface CliSession {
    */
   readonly runningCommands: readonly string[];
   /**
-   * {@link shellsRunning} and {@link runningCommands} as they stood when the
-   * process ended, or null while it runs. Both read empty by then — the
-   * commands died with the group — so a holder told of the end by `closed`
-   * reads what it took from here.
+   * {@link detachedRunning} and {@link runningCommands} as they stood when the
+   * process ended, with where every command it reported running ran, or null
+   * while it runs. The live readings are empty by then, so a holder told of
+   * the end by `closed` reads what was running from here.
    */
   readonly endedRunning: StoppedCommands | null;
-  /** Terminate the process group (the CLI plus every grandchild). */
-  close(): void;
+  /**
+   * Where the command a call launched runs, as last recorded — its process
+   * groups and their members: empty while it runs with nothing recorded, null
+   * when the CLI reports no command of that call running.
+   */
+  recordedGroupsOf(callId: string): readonly RecordedGroup[] | null;
+  /**
+   * Terminate the CLI's process group — the CLI and whatever shares its group
+   * (claude's MCP servers; codex gives each of its own a group). Its
+   * detached commands run in sessions of their own and are stopped by its
+   * shutdown. On a `user-stop` the delegates still out are closed `stopped`,
+   * not `untracked` — after a graceful close too, which keeps the cause for
+   * the exit it waits for (see {@link SessionCloseOptions}).
+   */
+  close(cause?: SessionCloseCause, options?: SessionCloseOptions): void;
+  /**
+   * Record why the process will be closed, ahead of whatever ends it — a
+   * later close, its own kill after a refused interrupt, or its exit. Null
+   * withdraws it; the next turn withdraws it too.
+   */
+  noteCloseCause?(cause: SessionCloseCause | null): void;
+  /** The cause recorded by {@link noteCloseCause} or `close`, or null. */
+  readonly closeCause?: SessionCloseCause | null;
   /** Resolves once the process is gone. Never rejects. */
   readonly closed: Promise<void>;
+}
+
+/**
+ * How a kept process is ended.
+ *
+ * `graceful` asks an IDLE process to finish rather than signalling it at once:
+ * its stdin is closed first, and the group is SIGTERMed the moment the CLI
+ * exits — or {@link TURN_END_EXIT_GRACE_MS} (2s) later if it has not. claude
+ * exits on EOF; `cursor-agent acp` does not, and the deadline ends it. The
+ * group signal after the CLI is gone is what reaches a grandchild it left
+ * behind — an MCP server's own worker outlives a CLI killed by pid alone, at
+ * ppid 1. A process with a turn in flight is signalled at once either way.
+ * Only the idle close asks for it (`AgentSessionRegistry`); eviction, a
+ * teardown and shutdown stay immediate.
+ */
+export interface SessionCloseOptions {
+  graceful?: boolean;
 }
 
 function errorMessage(err: unknown): string {
@@ -553,6 +639,31 @@ const TURN_END_EXIT_GRACE_MS = 2000;
  * every second for a `pnpm dev` somebody will leave up for an hour.
  */
 const DETACHED_SHELL_POLL_MS = 5000;
+
+/**
+ * How often a session re-reads where the commands its CLI reported running
+ * run while any is out — see `recordCommandGroups`. A process a command forks later joins its
+ * group's record on the next reading; one that starts yet another session in
+ * between is beyond it.
+ */
+export const COMMAND_GROUP_REFRESH_MS = 15_000;
+
+/**
+ * How long after a command is reported starting, a call answered or an
+ * approval allowed, its session reads the table: one reading for a burst, and
+ * a moment for a command a call names to have spawned (cursor reports the call
+ * first). A burst that goes on after its reading was armed gets one more, this
+ * long after the first.
+ */
+export const COMMAND_GROUP_READ_DELAY_MS = 500;
+
+/**
+ * The result written for a command whose call the CLI never answered because
+ * its process died under the turn — a crash, an OOM kill, an exit no one asked
+ * for. Not on a Stop, which the transcript already reads as one.
+ */
+export const CUT_OFF_COMMAND_RESULT =
+  'The agent’s process ended before this command finished.';
 
 /**
  * How many command lines a session keeps by call id for
@@ -691,6 +802,8 @@ interface TurnState {
    */
   stoppedBeforePrompt: boolean;
   resolveDone: () => void;
+  /** Resolves when the turn settles — what a graceful close waits on. */
+  done: Promise<void>;
   options: CliTurnOptions;
   /** Fallback deadline armed when an in-protocol interrupt was delivered. */
   interruptTimer: ReturnType<typeof setTimeout> | null;
@@ -831,8 +944,14 @@ interface TurnState {
    *
    * Only filled for a CLI whose options set `followUpConsumptionReported` —
    * without an acknowledgement nothing could ever empty it.
+   *
+   * Each keeps the `deliveryId` it was written with: one still here when the
+   * process ends died queued inside the CLI — PROBED on claude 2.1.295, which
+   * logs it `enqueue` and runs it as a turn of its own after an interrupt, but
+   * only while the process lives, and a chat's Stop closes the session — so
+   * {@link emitProcessEnded} reports it `follow_up_dropped`.
    */
-  unconsumedFollowUps: string[];
+  unconsumedFollowUps: { text: string; deliveryId: string | null }[];
   /**
    * The `turn_complete` held back because a follow-up was still unconsumed,
    * folded into the one the turn finally settles on ({@link foldTurnComplete})
@@ -856,6 +975,8 @@ interface TurnState {
    * last `result` line — kept so {@link heldCostOf} can be added to it.
    */
   liveCostUsd: number;
+  /** Of {@link liveCostUsd}, the part geniro priced itself. */
+  liveEstimatedCostUsd: number;
   /**
    * Whether a non-zero `cost_progress` has been published for this turn, so
    * its ending owes the live plane a zero ahead of the terminal that records
@@ -876,8 +997,11 @@ interface TurnState {
  * only what it spent after the latest continuation (run `07d68eea`, call-15,
  * whose session files price at ~$15).
  */
-function heldCostOf(turn: TurnState): number {
-  let total = 0;
+function heldCostOf(turn: TurnState): {
+  costUsd: number;
+  estimatedCostUsd: number;
+} {
+  const total = { costUsd: 0, estimatedCostUsd: 0 };
   const held = [
     turn.deferredTerminal,
     turn.supersededTerminal,
@@ -887,12 +1011,16 @@ function heldCostOf(turn: TurnState): number {
     if (segment?.type !== 'turn_complete') {
       continue;
     }
-    const cost = segment.usage?.costUsd;
-    if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) {
-      total += cost;
-    }
+    total.costUsd += positiveOrZero(segment.usage?.costUsd);
+    total.estimatedCostUsd += positiveOrZero(segment.usage?.estimatedCostUsd);
   }
   return total;
+}
+
+function positiveOrZero(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
 }
 
 /**
@@ -1037,7 +1165,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   const settledShells = new Set<string>();
   /**
    * Every detached command this process has started and not yet ended — what
-   * {@link CliSession.shellsRunning} counts, with {@link delegateCommands}.
+   * {@link CliSession.shellsRunning} counts, with every command in
+   * {@link delegateCommands} (one its delegate still waits on included).
    *
    * Its own set rather than a reading of {@link shellWork}, which records only
    * a unit whose launching call is known: a command is running whether or not
@@ -1058,6 +1187,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const callCommands = new Map<string, string>();
   /**
+   * Command calls the CLI has not answered, by id → their tool's name and the
+   * delegate that made each, if one did — what a death under the turn cuts
+   * off ({@link cutOffCommands}).
+   */
+  const openCommandCalls = new Map<
+    string,
+    { name: string; parentToolUseId: string | undefined }
+  >();
+  /**
    * A delegate's own detached command → the call that launched it — the
    * {@link shellWork} of {@link delegateCommands}, which records the owner
    * rather than the call.
@@ -1065,19 +1203,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   const delegateCommandCalls = new Map<string, string>();
   /** See {@link CliSession.endedRunning}. */
   let endedRunning: StoppedCommands | null = null;
+  /**
+   * The delegates' commands running detached — with {@link runningShells},
+   * what a close reports stopping. A command its delegate still waits on is
+   * not one yet.
+   */
+  const detachedDelegateCommands = (): string[] =>
+    [...delegateCommands.keys()].filter((id) => !foregroundUnits.has(id));
   /** The lines of the detached commands running now — {@link CliSession.runningCommands}. */
   const currentCommands = (): string[] =>
     [
       ...[...runningShells].map((id) => shellWork.get(id)),
-      ...[...delegateCommands.keys()].map((id) => delegateCommandCalls.get(id)),
+      ...detachedDelegateCommands().map((id) => delegateCommandCalls.get(id)),
     ].flatMap((call) => {
       const command = call === undefined ? undefined : callCommands.get(call);
       return command === undefined ? [] : [command];
     });
   /**
    * The commands this session's CLI has RUN, by the id of the call that ran
-   * each — the raw material for {@link sweepDetachedShells}, and gathered only
-   * for a CLI that needs it (`CliTurnOptions.detectDetachedShells`).
+   * each — the raw material for {@link sweepDetachedShells}, and what stands
+   * for a unit in {@link commandWork} until the sweep has looked at it;
+   * gathered only for a CLI that needs it (`CliTurnOptions.detectDetachedShells`).
    *
    * `returned` is the whole point of the pair: a call the CLI has not answered
    * yet is an ordinary foreground command, and the transcript already draws it
@@ -1097,6 +1243,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const osDetachedShells = new Set<string>();
   let detachedShellTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Where each command the CLI reports running runs, by its unit id — see
+   * {@link recordCommandGroups}. A settle drops its entry.
+   */
+  const commandGroups = new Map<string, RecordedGroup[]>();
+  let commandGroupTimer: ReturnType<typeof setTimeout> | null = null;
+  let commandGroupRead: ReturnType<typeof setTimeout> | null = null;
+  /** When {@link commandGroupRead} was armed — the burst's first ask. */
+  let commandGroupReadAskedAt = 0;
+  /**
+   * The burst went on after its reading was armed, so that reading can come
+   * before a later command spawns: another follows it, a full delay after.
+   */
+  let commandGroupReadOwed = false;
+  /** A reading is in flight; another asked for meanwhile follows it. */
+  let readingGroups = false;
+  let readGroupsAgain = false;
   /**
    * A terminal event that arrived with NO turn open while {@link openWork} was
    * still outstanding, held until the work reports.
@@ -1238,6 +1401,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * the ratio that turned out to be the diagnosis.
    */
   const approvalSeenAt = new Map<string, number>();
+  /** Why the process was closed, when a close said — see `CliSession.close`. */
+  let closeCause: SessionCloseCause | null = null;
   let processGone = false;
   /**
    * The child's `exit` has fired — set SYNCHRONOUSLY, ahead of the settle.
@@ -1270,10 +1435,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * (`error_during_execution`, `terminal_reason: aborted_streaming`) — and
    * NOTHING after it for five seconds, while a second message on the same
    * process ran to its own `result`. That `result` line is what settles the
-   * turn, so no tail is left to mistake for the next turn's output. It used to
-   * be set for every Stop, REPORTED as "я его остановил. У него был открыт
-   * браузер Playwright. Потом он написал новое сообщение, и Playwright сразу
-   * закрылся" — the respawn taking the browser with the old process.
+   * turn, so no tail is left to mistake for the next turn's output. (codex does
+   * leave one, fenced by turn id in its own driver — `CodexSession.endedTurns`.)
+   *
+   * It used to be set for every Stop, REPORTED as "я его остановил. У него был
+   * открыт браузер Playwright. Потом он написал новое сообщение, и Playwright
+   * сразу закрылся" — the respawn taking the browser with the old process.
    *
    * The defect retiring guards against, for the record: after a Stop, a
    * cancelled turn's trailing `result` line settled the NEXT turn the moment it
@@ -1295,6 +1462,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * exit, after which there is nothing left to escalate against.
    */
   let reapAfterEnd = false;
+  /**
+   * A graceful close is under way: the group is owed a SIGTERM when the CLI
+   * exits — see {@link SessionCloseOptions}.
+   */
+  let reapGroupOnExit = false;
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
   /** See {@link TURN_END_EXIT_GRACE_MS} — one per process, which serves one turn. */
   let turnExitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1335,8 +1507,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     void sweepDetachedShells();
     // Asked to stop AND ended some other way than on the CLI's own terminal
     // line — see {@link cancelledTurnMayStillEmit}. A stopped turn the CLI ended
-    // ITSELF leaves nothing to trail, so the process goes on serving turns and
-    // the user's MCP servers — a browser among them — survive the Stop.
+    // ITSELF leaves nothing here to trail (codex's tail is fenced in its own
+    // driver), so the process goes on serving turns and the user's MCP servers
+    // — a browser among them — survive the Stop.
     //
     // Keyed on the cancel, NOT on the broader "did not end by itself". The
     // silence deadline settles a turn the same way, but the deadline path
@@ -1393,8 +1566,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * {@link TURN_END_EXIT_GRACE_MS}.
    *
    * Armed from the terminal event, beside the stdin close it is the backstop
-   * for. Idempotent and a no-op once the process is accounted for, so a second
-   * terminal condition cannot arm a second kill.
+   * for — and by a graceful close of a kept process, which closes stdin for the
+   * same reason with no turn left to kill. Idempotent and a no-op once the
+   * process is accounted for, so a second terminal condition cannot arm a
+   * second kill.
    */
   const armTurnExitDeadline = (): void => {
     if (turnExitTimer !== null || processGone) {
@@ -1459,8 +1634,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // Given up on, so they must not hold the NEXT turn either — the set is
         // session-scoped now, and a unit this deadline has already written off
         // would otherwise hold every turn after it for as long as the session
-        // lives. `delegateWork` is deliberately left alone: a late report is
-        // still what closes that delegate's block.
+        // lives. `delegateWork` is deliberately left alone so a late report
+        // can resolve its outcome.
+        closeOpenDelegates();
         openWork.clear();
         finishTurn(turn, held);
         return;
@@ -1615,9 +1791,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // never come. A verdict needs no turn — only this stdin and the encoder
       // the last turn installed, both of which outlive it.
       if (opts.onHeldApproval && approvalEncoder) {
-        const respond = (allow: boolean, input?: unknown): boolean => {
+        const respond = (
+          allow: boolean,
+          input?: unknown,
+          option?: ApprovalOption,
+        ): boolean => {
           ownedApprovals.delete(event.id);
-          const answer = approvalEncoder?.(event.id, allow, input);
+          const answer = approvalEncoder?.(event.id, allow, input, option);
           const written = answer !== undefined && sessionWrite(answer);
           if (written) {
             // Answered, so it must be dropped wherever it has moved to since
@@ -1630,6 +1810,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
               armSilenceDeadline(current);
             }
             dropHeldApproval(event.id);
+            if (allow) {
+              requestCommandGroups();
+            }
           }
           // The failure half NAMES its cause rather than blaming stdin for all
           // of them — `writeObstacle`'s reason, and "no encoder" kept distinct
@@ -1697,6 +1880,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     const line = approvalEncoder?.(event.id, verdict, event.input);
     const answered = line !== undefined && sessionWrite(line);
     approvalSeenAt.delete(event.id);
+    if (answered && verdict) {
+      // A command the CLI reported before asking runs only now.
+      requestCommandGroups();
+    }
     // WARN, not debug: the CLI asked permission for work no turn owns, which
     // is the state the D1 numbers point at. Every field a later reader needs
     // to join this to a transcript row is on the line — tool and request id
@@ -1742,12 +1929,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * figure that was up.
    */
   const publishLiveCost = (turn: TurnState): void => {
-    const costUsd = turn.liveCostUsd + heldCostOf(turn);
+    const held = heldCostOf(turn);
+    const costUsd = turn.liveCostUsd + held.costUsd;
     if (costUsd <= 0 && !turn.costPublished) {
       return;
     }
     turn.costPublished = costUsd > 0;
-    turn.options.onEvent({ type: 'cost_progress', costUsd });
+    const estimatedCostUsd = turn.liveEstimatedCostUsd + held.estimatedCostUsd;
+    turn.options.onEvent({
+      type: 'cost_progress',
+      costUsd,
+      ...(estimatedCostUsd > 0 ? { estimatedCostUsd } : {}),
+    });
   };
 
   const finishTurn = (turn: TurnState, ending: AgentEvent): void => {
@@ -1762,7 +1955,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // The terminal records every held segment, so the live figure comes down
     // AHEAD of it — a reader adding the two never counts that money twice.
     turn.liveCostUsd = 0;
+    turn.liveEstimatedCostUsd = 0;
     publishLiveCost(turn);
+    // Ending with its process already told to go (a chat's Stop closes the
+    // session): what the CLI still holds queued goes with it, so it is said
+    // ahead of the terminal, where every owner matches it.
+    if (groupKilled) {
+      emitUntakenFollowUps(turn);
+    }
     if (opts.stdinLifetime === 'turn') {
       endStdin();
       // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
@@ -1794,6 +1994,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const announceDelegateWork = (
     event: Extract<AgentEvent, { type: 'background_work' }>,
+    trackingLost?: SubagentTrackingLost,
   ): void => {
     const toolCallId =
       event.phase === 'started'
@@ -1900,11 +2101,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // A foreground `started` returned above, so both other arms here open it.
       backgroundOpen: event.phase !== 'settled',
       // What the settle SAID, not merely that it happened. Null on a `started`
-      // and on a settle whose CLI names no outcome, on the same terms as every
-      // other field here: absent claims nothing, so a CLI with no such
-      // vocabulary leaves the block reading exactly as it did before.
+      // and on a settle whose CLI names no outcome: absent claims no outcome,
+      // so a recoverable delegate's block reads untracked until its record
+      // is read (`foldRunDelegates`).
       backgroundOutcome:
         event.phase === 'settled' ? (event.outcome ?? null) : null,
+      ...(trackingLost === undefined ? {} : { trackingLost }),
     };
     // To whoever can carry it. A delegate launched between turns is the whole
     // reason this is not simply `turn.options.onEvent`: that path had no turn,
@@ -1915,6 +2117,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return;
     }
     opts.onBetweenTurnEvent?.(announcement);
+  };
+
+  const closeOpenDelegates = (
+    outcome: 'untracked' | 'stopped' = 'untracked',
+    trackingLost?: SubagentTrackingLost,
+  ): void => {
+    for (const id of openWork) {
+      if (delegateWork.has(id)) {
+        announceDelegateWork(
+          {
+            type: 'background_work',
+            id,
+            phase: 'settled',
+            unit: 'agent',
+            toolCallId: null,
+            outcome,
+          },
+          trackingLost,
+        );
+      }
+    }
   };
 
   /**
@@ -1941,6 +2164,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       );
       // Written off exactly as the turn's deadline writes its own units off,
       // and for the same reason: they must not hold anything after this.
+      closeOpenDelegates();
       openWork.clear();
       releaseOffTurnHold();
     }, TURN_SILENCE_DEADLINE_MS);
@@ -1984,6 +2208,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         opts.logger?.warn(
           `${opts.command}: the CLI went idle with ${openWork.size} unit(s) of background work never reported — settling the held '${held.type}'`,
         );
+        closeOpenDelegates();
         openWork.clear();
       } else {
         opts.logger?.debug?.(
@@ -2034,6 +2259,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   /** Record a detached command as running and tell whoever can carry it. */
   const openShell = (workId: string, toolCallId: string | null): void => {
     runningShells.add(workId);
+    requestCommandGroups();
     const opened: AgentEvent = { type: 'shell_open', toolCallId, workId };
     if (current) {
       current.options.onEvent(opened);
@@ -2066,12 +2292,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             delegateCallOwner.delete(event.toolCallId);
           }
         }
+        requestCommandGroups();
         return;
       }
       // Recorded for EVERY unit, delegate or not: a settle carries no kind, so
       // which map answers for an id is decided here, where the CLI stated it.
       if (event.unit !== 'agent' && event.toolCallId !== null) {
         shellWork.set(event.id, event.toolCallId);
+        // A command the agent waits on runs in a session of its own too.
+        if (event.foreground === true) {
+          requestCommandGroups();
+        }
       }
       // …and the OWNER is told, which the bracket itself cannot do: a
       // `background_work` is turn plumbing and is never forwarded, so without
@@ -2115,6 +2346,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       !delegateShells.has(event.id)
     ) {
       shellWork.delete(event.id);
+      commandGroups.delete(event.id);
       return;
     }
     // A delegate's settle is the other twin's business — it is matched against
@@ -2130,6 +2362,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       const owner = delegateCommands.get(event.id) ?? null;
       delegateCommands.delete(event.id);
       delegateCommandCalls.delete(event.id);
+      commandGroups.delete(event.id);
       for (const [call, unit] of unownedDelegateCommands) {
         if (unit === event.id) {
           unownedDelegateCommands.delete(call);
@@ -2144,7 +2377,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       }
       return;
     }
-    runningShells.delete(event.id);
+    const wasRunning = runningShells.delete(event.id);
+    commandGroups.delete(event.id);
     // ONCE per unit. A CLI is free to report one unit's end on both of its
     // terminal channels, and claude does: measured on a real background `sleep`
     // (2026-08-24, 2.1.237), `task_updated` and `task_notification` both landed
@@ -2152,6 +2386,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // is idempotent, so the cost was noise rather than wrongness — but the rows
     // are DURABLE, so it was noise stored forever, twice per background command.
     if (settledShells.has(event.id)) {
+      return;
+    }
+    // A unit this process never opened is one an earlier process of the
+    // conversation ran, and closed as that process ended: claude, resumed after
+    // a crash, reports such a task `stopped` once more (measured on 2.1.295).
+    if (!wasRunning) {
+      shellWork.delete(event.id);
       return;
     }
     settledShells.add(event.id);
@@ -2210,6 +2451,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       const known = executeCalls.get(event.id);
       if (known) {
         known.returned = true;
+        // Answered as finished, maybe while it runs on: where it runs is
+        // recorded now, not at the turn's end.
+        requestCommandGroups();
       }
       return;
     }
@@ -2219,6 +2463,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     const command = commandLineOf(event);
     if (command !== null) {
       executeCalls.set(event.id, { command, returned: false });
+      requestCommandGroups();
     }
   };
 
@@ -2230,6 +2475,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * CLI puts the line.
    */
   const rememberCommandLine = (event: AgentEvent): void => {
+    if (event.type === 'tool_result') {
+      openCommandCalls.delete(event.id);
+      return;
+    }
     if (event.type !== 'tool_call') {
       return;
     }
@@ -2238,6 +2487,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return;
     }
     callCommands.set(event.id, command);
+    openCommandCalls.set(event.id, {
+      name: event.name,
+      parentToolUseId: event.parentToolUseId,
+    });
     if (callCommands.size <= MAX_REMEMBERED_COMMANDS) {
       return;
     }
@@ -2312,6 +2565,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // Answered and gone — the ordinary case, and the reason this map is
         // pruned here rather than growing for the life of the session.
         executeCalls.delete(id);
+        commandGroups.delete(id);
         continue;
       }
       osDetachedShells.add(id);
@@ -2365,6 +2619,162 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       void sweepDetachedShells();
     }, DETACHED_SHELL_POLL_MS);
     detachedShellTimer.unref?.();
+  };
+
+  /**
+   * Record where each command the CLI reports running runs ({@link
+   * commandWork}) — its process group and the members it has now, each with
+   * its start time — from the moment it is reported until it is reported
+   * ended, so that a stop owed after this process is gone has an identity to
+   * act on. Every CLI starts a command in a session of its own, and once the
+   * CLI is gone nothing else ties the command to it: for a system binary not
+   * even the run tag can be read.
+   *
+   * Found by STRUCTURE, among this CLI's own descendants, while that structure
+   * still exists: only the groups the command's own processes run in. Never
+   * the CLI's own group, which holds the CLI and what else it runs there
+   * (claude's MCP servers). A group recorded earlier keeps its place while a
+   * recorded member is still in it, and takes on whatever has joined it since,
+   * wherever that now runs — a wrapper shell that exited leaves its command
+   * parented to launchd. A reading that finds nothing of a command drops it.
+   *
+   * Never rejects: a reading that fails keeps the last record.
+   */
+  const recordCommandGroups = async (): Promise<void> => {
+    if (readingGroups) {
+      readGroupsAgain = true;
+      return;
+    }
+    readingGroups = true;
+    try {
+      do {
+        readGroupsAgain = false;
+        await readCommandGroups();
+      } while (readGroupsAgain && !processGone);
+    } catch (err) {
+      opts.logger?.warn(
+        `${opts.command}: could not record where its background commands run: ${errorMessage(err)}`,
+      );
+    } finally {
+      readingGroups = false;
+    }
+    armCommandGroupRefresh();
+  };
+
+  const readCommandGroups = async (): Promise<void> => {
+    const rootPid = child?.pid;
+    const running = commandWork();
+    if (rootPid === undefined || processGone || running.length === 0) {
+      return;
+    }
+    const rows = await (opts.listProcessGroups ?? scanPlainTable)();
+    // The process may have ended during the read, and `endProcess` has
+    // already handed over what was recorded by then.
+    if (rows === null || processGone) {
+      return;
+    }
+    // Decoded as `listProcesses` does: the commands matched are the agent's
+    // own text, and `ps` escapes every non-ASCII byte.
+    const tree = descendantsOf(rows, rootPid).map((row) => ({
+      ...row,
+      args: decodePsText(row.args),
+    }));
+    const groupOf = new Map(rows.map((row) => [row.pid, row.pgid]));
+    const ownGroup = groupOf.get(rootPid) ?? rootPid;
+    for (const workId of running) {
+      // A call the CLI answered as finished (cursor) is only what still runs
+      // in its tree: a group a reading caught it in while it ran is not
+      // carried over, or a leftover the CLI never counted would be.
+      const answered =
+        executeCalls.get(workId)?.returned === true &&
+        !runningShells.has(workId);
+      const pgids = new Set(
+        (answered ? [] : (commandGroups.get(workId) ?? []))
+          .filter((group) => isGroupAnchored(group, rows))
+          .map((group) => group.pgid),
+      );
+      const call = shellWork.get(workId) ?? delegateCommandCalls.get(workId);
+      const command =
+        (call === undefined ? undefined : callCommands.get(call)) ??
+        executeCalls.get(workId)?.command;
+      if (command !== undefined) {
+        for (const pid of commandTargets(tree, command)) {
+          const pgid = groupOf.get(pid);
+          if (pgid !== undefined) {
+            pgids.add(pgid);
+          }
+        }
+      }
+      pgids.delete(rootPid);
+      pgids.delete(ownGroup);
+      const groups = [...pgids].map((pgid) => ({
+        pgid,
+        members: rows.flatMap((row) =>
+          row.pgid === pgid && row.startedAt !== null
+            ? [{ pid: row.pid, startedAt: row.startedAt }]
+            : [],
+        ),
+      }));
+      if (groups.length > 0) {
+        commandGroups.set(workId, groups);
+      } else {
+        // Nothing of it runs any more, wherever it ran.
+        commandGroups.delete(workId);
+      }
+    }
+  };
+
+  /**
+   * Every command the CLI has reported running and not yet reported ended,
+   * by unit id: its background shells, its delegates' commands, the commands
+   * the agent waits on, and — for a CLI that reports no units (cursor) — its
+   * execute calls, until the turn's sweep finds them gone or detached.
+   */
+  const commandWork = (): string[] => [
+    ...new Set([
+      ...runningShells,
+      ...delegateCommands.keys(),
+      ...[...foregroundUnits].filter((id) => shellWork.has(id)),
+      ...executeCalls.keys(),
+    ]),
+  ];
+
+  /** A reading for the burst this belongs to — see {@link COMMAND_GROUP_READ_DELAY_MS}. */
+  const requestCommandGroups = (): void => {
+    if (processGone) {
+      return;
+    }
+    if (commandGroupRead !== null) {
+      commandGroupReadOwed ||= Date.now() > commandGroupReadAskedAt;
+      return;
+    }
+    commandGroupReadAskedAt = Date.now();
+    commandGroupRead = setTimeout(() => {
+      commandGroupRead = null;
+      void recordCommandGroups().then(() => {
+        if (commandGroupReadOwed) {
+          commandGroupReadOwed = false;
+          requestCommandGroups();
+        }
+      });
+    }, opts.commandGroupReadDelayMs ?? COMMAND_GROUP_READ_DELAY_MS);
+    commandGroupRead.unref?.();
+  };
+
+  /** Chained and `unref`'d like {@link armDetachedShellPoll}, and only while work is out. */
+  const armCommandGroupRefresh = (): void => {
+    if (
+      commandGroupTimer !== null ||
+      processGone ||
+      commandWork().length === 0
+    ) {
+      return;
+    }
+    commandGroupTimer = setTimeout(() => {
+      commandGroupTimer = null;
+      void recordCommandGroups();
+    }, COMMAND_GROUP_REFRESH_MS);
+    commandGroupTimer.unref?.();
   };
 
   /**
@@ -2583,7 +2993,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         turn.promptTaken = true;
         return;
       }
-      const index = turn.unconsumedFollowUps.indexOf(event.text);
+      const index = turn.unconsumedFollowUps.findIndex(
+        (followUp) => followUp.text === event.text,
+      );
       if (index !== -1) {
         turn.unconsumedFollowUps.splice(index, 1);
         armSilenceDeadline(turn);
@@ -2748,6 +3160,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // forgets every segment this turn is still holding — see `heldCostOf`.
     if (normalized.type === 'cost_progress') {
       turn.liveCostUsd = normalized.costUsd > 0 ? normalized.costUsd : 0;
+      turn.liveEstimatedCostUsd = positiveOrZero(normalized.estimatedCostUsd);
       armSilenceDeadline(turn);
       publishLiveCost(turn);
       return;
@@ -2794,6 +3207,54 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     armSilenceDeadline(turn);
     turn.options.onEvent(normalized);
   };
+
+  /**
+   * What the driver still holds that only it can report, for a turn whose
+   * process ended or broke under it — emitted ahead of the terminal this
+   * module writes (`CliTurnOptions.onProcessEnded`). Then the follow-ups this
+   * module wrote into the CLI's stdin that it never took: they died with it
+   * (see {@link TurnState.unconsumedFollowUps}).
+   */
+  const emitProcessEnded = (turn: TurnState): void => {
+    for (const event of turn.options.onProcessEnded?.() ?? []) {
+      emit(event);
+    }
+    if (!turn.cancelRequested) {
+      cutOffCommands();
+    }
+    emitUntakenFollowUps(turn);
+  };
+
+  /**
+   * Answer every command call the CLI never answered, ahead of the turn's
+   * ending: its process died under the turn, so no answer is coming, and a
+   * call without one would read as still running.
+   */
+  const cutOffCommands = (): void => {
+    for (const [id, call] of [...openCommandCalls]) {
+      emit({
+        type: 'tool_result',
+        id,
+        name: call.name,
+        result: CUT_OFF_COMMAND_RESULT,
+        isError: true,
+        ...(call.parentToolUseId === undefined
+          ? {}
+          : { parentToolUseId: call.parentToolUseId }),
+      });
+    }
+  };
+
+  /** Report the follow-ups `turn` wrote that the CLI never took, once. */
+  function emitUntakenFollowUps(turn: TurnState): void {
+    const dropped = turn.unconsumedFollowUps.flatMap((followUp) =>
+      followUp.deliveryId === null ? [] : [followUp.deliveryId],
+    );
+    turn.unconsumedFollowUps = [];
+    if (dropped.length > 0) {
+      turn.options.onEvent({ type: 'follow_up_dropped', deliveryIds: dropped });
+    }
+  }
 
   let child: SpawnedProcess;
   try {
@@ -2898,10 +3359,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       }
       resolveClosed();
     }
-    // Every background command this process was still running dies WITH it —
-    // they are its own children, and the group is killed as a group. Nothing
-    // else will ever say so: a shell's end is reported by the CLI, and the CLI
-    // is what just ended. Announced here so the rows close honestly, since the
+    // Every background command this process was still running ends with it:
+    // the CLI stops them on its own shutdown, and what a CLI that died without
+    // one left is stopped from `endedRunning.groups` by the session's owner.
+    // Nothing else will ever say so: a shell's end is reported by the CLI, and
+    // the CLI is what just ended. Announced here so the rows close, since the
     // client lists a detached command on the strength of that report rather
     // than on the run's status — without it a `pnpm dev` from a reaped session
     // is listed as running for the rest of that transcript's life.
@@ -2914,16 +3376,25 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       clearTimeout(detachedShellTimer);
       detachedShellTimer = null;
     }
+    if (commandGroupTimer !== null) {
+      clearTimeout(commandGroupTimer);
+      commandGroupTimer = null;
+    }
+    if (commandGroupRead !== null) {
+      clearTimeout(commandGroupRead);
+      commandGroupRead = null;
+    }
     endedRunning ??= {
-      running: runningShells.size + delegateCommands.size,
+      running: runningShells.size + detachedDelegateCommands().length,
       commands: currentCommands(),
+      groups: [...commandGroups.values()].flat(),
     };
+    commandGroups.clear();
     osDetachedShells.clear();
     executeCalls.clear();
-    // A delegate's own commands die with the group as well, so a settle held
-    // for them is owed now — as `stopped`, figures kept: its work was cut off,
-    // and it is the outcome the session-close sweep writes for a delegate it
-    // finds still open, so the two writers cannot disagree.
+    // A delegate's own commands end with the process as well, so a settle held
+    // for them is owed now as stopped, figures kept: its CLI reported it done
+    // while those commands ran, and the process ending is what stopped them.
     delegateCommands.clear();
     delegateCommandCalls.clear();
     unownedDelegateCommands.clear();
@@ -2950,9 +3421,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // for background work is handed over rather than dying with the process,
     // which would leave the run reading `running` with no process behind it.
     // A command whose launching call was never known is not in `shellWork`,
-    // so the loop above did not settle it — but it died with the group too.
+    // so the loop above did not settle it — but it ended with the process too.
     runningShells.clear();
     callCommands.clear();
+    openCommandCalls.clear();
+    // The user's Stop is what ended them; any other end of the process says
+    // only that their work is over.
+    if (closeCause === 'user-stop') {
+      closeOpenDelegates('stopped');
+    } else {
+      closeOpenDelegates('untracked', 'process-ended');
+    }
     openWork.clear();
     releaseOffTurnHold();
     if (current) {
@@ -2965,6 +3444,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return;
     }
     if (current && !current.settled) {
+      emitProcessEnded(current);
       emit({
         type: 'error',
         message: `${opts.command} process error: ${err.message}`,
@@ -2985,6 +3465,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   ): void => {
     buffer.flush();
     if (current && !current.terminalEmitted) {
+      emitProcessEnded(current);
       if (signal && current.cancelRequested) {
         emit({ type: 'turn_cancelled' });
       } else if (signal) {
@@ -3071,8 +3552,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   // turn still settles on `close` with stdout fully drained, and the timer is
   // cleared once the process is accounted for. Deliberately signals NOTHING —
   // reaping the group here would SIGKILL the user's own MCP servers, and
-  // through them a browser session they are driving. A stray grandchild costs
-  // memory; the child journal and its next-boot reaper already own that.
+  // through them a browser session they are driving. The detached commands are
+  // not in that group anyway; what the CLI left of them is stopped from
+  // `endedRunning.groups`.
   child.on('exit', (code, signal) => {
     // Before the early return, and before the timer: the process is gone as of
     // now whatever the settle does about it, and every reader below asks this
@@ -3081,6 +3563,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // An abandoned child has now gone, so its pending escalation has nothing
     // left to force — `isGone` reads true again from here.
     reapAfterEnd = false;
+    // The one exit that DOES signal the group: geniro asked this idle process
+    // to finish, so what it left behind is not the user's to keep. A fresh
+    // terminator, so the escalation outlives the settle below — safe by the
+    // POSIX rule `runAsProcessGroup`'s reap relies on: a group id is not
+    // reissued while the group has members, and an empty one finds nothing.
+    if (reapGroupOnExit) {
+      reapGroupOnExit = false;
+      createGroupTerminator(child).terminate();
+    }
     if (processGone || exitTimer) {
       return;
     }
@@ -3230,6 +3721,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         opts.logger?.warn(failure.message);
         return;
       }
+      emitProcessEnded(current);
       emit(failure);
       // The same abandon as the between-turns case, for the same reason.
       // Ending the session with no signal at all — `endProcess` marks it gone
@@ -3241,7 +3733,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     });
   }
 
-  const killGroup = (): void => terminator.terminate();
+  /**
+   * The group has been told to go — set before the signal, so a terminal the
+   * CLI still prints on its way out (claude answers an interrupt in ~25 ms,
+   * inside the SIGTERM's window) knows the follow-ups it never took die with it
+   * ({@link emitUntakenFollowUps}).
+   */
+  let groupKilled = false;
+  const killGroup = (): void => {
+    groupKilled = true;
+    terminator.terminate();
+  };
 
   /**
    * End a session whose child may still be running: signal the group with an
@@ -3264,6 +3766,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     ) {
       return null;
     }
+    // Asked to work again: whatever closes it next is not the Stop's.
+    closeCause = null;
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
@@ -3275,6 +3779,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       cancelRequested: false,
       stoppedBeforePrompt: false,
       resolveDone: () => resolveDone(),
+      done,
       options: turnOptions,
       interruptTimer: null,
       silenceTimer: null,
@@ -3288,6 +3793,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       supersededTerminal: null,
       continuedSegment: null,
       liveCostUsd: 0,
+      liveEstimatedCostUsd: 0,
       costPublished: false,
     };
     current = turn;
@@ -3483,9 +3989,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // Looked up THROUGH the live set, never off {@link delegateWork}.
         return (workId === undefined ? null : delegateWork.get(workId)) ?? null;
       },
-      respondApproval: (id, allow, updatedInput) => {
+      respondApproval: (id, allow, updatedInput, option) => {
         const delivered = turnWrite(() =>
-          turnOptions.buildApprovalResponse?.(id, allow, updatedInput),
+          turnOptions.buildApprovalResponse?.(id, allow, updatedInput, option),
         );
         if (delivered) {
           // Answered, so it must not be re-held when this turn settles.
@@ -3499,6 +4005,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           // at minute 29 must not leave the turn one minute from being given
           // up on. A no-op while another card is still open.
           armSilenceDeadline(turn);
+          if (allow) {
+            // A command the CLI reported before asking runs only now.
+            requestCommandGroups();
+          }
         }
         const seenAt = approvalSeenAt.get(id);
         approvalSeenAt.delete(id);
@@ -3507,7 +4017,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // delivered" has no answer unless the delivered ones are written down
         // too.
         opts.logger?.debug?.(
-          `${opts.command}: approval ${id} ${allow ? 'allowed' : 'denied'} — ` +
+          `${opts.command}: approval ${id} ${allow ? 'allowed' : 'denied'}` +
+            `${option === undefined ? '' : ` (${option.scope}: ${option.id})`} — ` +
             `${delivered ? 'written to stdin' : 'NOT written (turn already settled)'}` +
             (seenAt === undefined
               ? ''
@@ -3539,6 +4050,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           );
           return false;
         }
+        // And refused once the turn has been asked to stop: whatever the CLI
+        // does next, it ends this turn — codex answers "no active turn to
+        // steer", claude's queue dies with a closed session. MEASURED: a
+        // message sent to codex right after Stop was steered into the stopping
+        // turn and refused, so it never opened the turn the user meant. The
+        // refusal is the same RUN_BUSY, which queues it for the next turn.
+        if (turn.cancelRequested) {
+          opts.logger?.debug?.(
+            `${opts.command}: refusing a follow-up — this turn is being stopped`,
+          );
+          return false;
+        }
         const delivered = turnOptions.sendFollowUp
           ? !turn.settled &&
             !turn.terminalEmitted &&
@@ -3556,7 +4079,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             !turnOptions.sendFollowUp &&
             turnOptions.followUpConsumptionReported
           ) {
-            turn.unconsumedFollowUps.push(message.text);
+            turn.unconsumedFollowUps.push({
+              text: message.text,
+              deliveryId: message.deliveryId ?? null,
+            });
           }
         }
         // A message delivered into a HELD turn ends the hold at the write,
@@ -3717,8 +4243,24 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get pid() {
       return processGone || processExited ? null : (child.pid ?? null);
     },
+    subagentRecoveryBlocked: (id) =>
+      [...delegateCommands.values()].includes(id),
     get shellsRunning() {
       return runningShells.size + delegateCommands.size;
+    },
+    get detachedRunning() {
+      return runningShells.size + detachedDelegateCommands().length;
+    },
+    recordedGroupsOf: (callId) => {
+      const work = commandWork().filter(
+        (id) =>
+          (shellWork.get(id) ??
+            delegateCommandCalls.get(id) ??
+            (executeCalls.has(id) ? id : undefined)) === callId,
+      );
+      return work.length === 0
+        ? null
+        : work.flatMap((id) => commandGroups.get(id) ?? []);
     },
     get runningCommands() {
       return currentCommands();
@@ -3726,14 +4268,47 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get endedRunning() {
       return endedRunning;
     },
-    close: () => {
+    close: (cause, options) => {
       if (processGone) {
         return;
       }
-      if (current) {
-        current.cancelRequested = true;
+      // Before the graceful return: the exit it waits for is what closes the
+      // delegates still out, and it reads the cause from here.
+      closeCause ??= cause ?? null;
+      if (options?.graceful === true && current === null && !processExited) {
+        reapGroupOnExit = true;
+        endStdin();
+        armTurnExitDeadline();
+        return;
+      }
+      const turn = current;
+      if (turn) {
+        turn.cancelRequested = true;
+      }
+      // A driver that learns a delivered message's fate only from the turn's
+      // own end gets that end before the signal — bounded, and the process
+      // goes either way.
+      const grace =
+        turn && !turn.terminalEmitted
+          ? (turn.options.closeGraceMs?.() ?? 0)
+          : 0;
+      if (turn && grace > 0) {
+        const deadline = setTimeout(killGroup, grace);
+        void turn.done.then(() => {
+          clearTimeout(deadline);
+          killGroup();
+        });
+        return;
       }
       killGroup();
+    },
+    noteCloseCause: (cause) => {
+      if (!processGone) {
+        closeCause = cause;
+      }
+    },
+    get closeCause() {
+      return closeCause;
     },
     closed,
   };
@@ -3791,8 +4366,10 @@ function deadSession(message: string): CliSession {
     parked: false,
     pid: null,
     shellsRunning: 0,
+    detachedRunning: 0,
     runningCommands: [],
     endedRunning: null,
+    recordedGroupsOf: () => null,
     close: () => {},
     closed: Promise.resolve(),
   };
@@ -3802,6 +4379,13 @@ function deadSession(message: string): CliSession {
 export interface StoppedCommands {
   running: number;
   commands: readonly string[];
+  /**
+   * Where every command the CLI reported running ran, as last recorded while
+   * the process lived — the detached ones counted above and the ones the
+   * agent waited on: their process groups, with the members each had and
+   * their start times.
+   */
+  groups: readonly RecordedGroup[];
 }
 
 export interface RunCliOptions {

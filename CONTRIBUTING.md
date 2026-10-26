@@ -23,7 +23,7 @@ request from your fork.
 
 1. Fork `geniro-io/geniro-app` and create a branch from `main`.
 2. Set up the project as described in the
-   [development guide](docs/development.md). Geniro needs macOS, Node.js 24+
+   [development guide](docs/development.md). Geniro needs macOS, Node.js 24.15+
    and pnpm 11, and the native rebuild step is required:
 
    ```bash

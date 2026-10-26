@@ -14,26 +14,39 @@ import type { ReactNode } from 'react';
 export function PanelSection({
   label,
   count,
+  action,
   children,
 }: {
   label: string;
   count?: number;
+  /** A control for the whole section — a filter — at the heading's end. */
+  action?: ReactNode;
   children: ReactNode;
 }): React.JSX.Element {
+  const heading = (
+    <span className="flex items-baseline gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+      {label}
+      {count === undefined ? null : (
+        <span
+          data-slot="panel-section-count"
+          className="font-normal tabular-nums">
+          {count}
+        </span>
+      )}
+    </span>
+  );
   return (
     <section
       aria-label={label}
       className="flex shrink-0 flex-col gap-1.5 border-t border-border px-3 py-2.5">
-      <span className="flex items-baseline gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-        {label}
-        {count === undefined ? null : (
-          <span
-            data-slot="panel-section-count"
-            className="font-normal tabular-nums">
-            {count}
-          </span>
-        )}
-      </span>
+      {action === undefined ? (
+        heading
+      ) : (
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          {heading}
+          {action}
+        </div>
+      )}
       {children}
     </section>
   );

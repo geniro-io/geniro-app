@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import {
   type BeforeApplicationShutdown,
@@ -22,6 +24,7 @@ import type {
   AgentTurnInput,
   ApprovalResolution,
   InstalledApprovalSupport,
+  SessionCloseCause,
   TurnImage,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
@@ -32,9 +35,12 @@ import {
   type HostArtifact,
   type HostArtifactOutcome,
   type HostArtifactRow,
+  type HostRowWire,
+  type HostWakeOpener,
   type ItemWire,
   type PersistedResetWake,
   type RunCallSeed,
+  type RunListPage,
   type RunWire,
   type SendMessageImage,
 } from '../../agents/chat.types';
@@ -46,6 +52,11 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
+import { ActionBroker } from '../../agents/services/action.broker';
+import {
+  type ActionPublishContext,
+  ActionPublishService,
+} from '../../agents/services/action-publish.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentMcpService } from '../../agents/services/agent-mcp.service';
@@ -58,6 +69,8 @@ import { ItemCallIndexService } from '../../agents/services/item-call-index.serv
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
+import { MonitorBroker } from '../../agents/services/monitor.broker';
+import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import {
   partialOwnerKey,
   PartialStreamService,
@@ -67,6 +80,7 @@ import { PullRequestCaptureService } from '../../agents/services/pull-request-ca
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import {
   type AgentOptionsSnapshot,
@@ -95,19 +109,18 @@ import {
 } from '../../agents/utils/event-to-item';
 import { firstTurnWindow } from '../../agents/utils/first-turn-window';
 import { hostMcpServerName } from '../../agents/utils/host-question';
-import {
-  asRecord,
-  asString,
-  parseJsonColumn,
-} from '../../agents/utils/json-util';
+import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
+import { offersMonitorTools } from '../../agents/utils/monitor-offer';
 import { readNodePoolMembers } from '../../agents/utils/node-pool-members';
 import {
   delegateCloseEvent,
   ownerFields,
+  processEndedCloseEvent,
   strandedDelegates,
 } from '../../agents/utils/open-delegates';
 import {
+  launchingCallOf,
   shellCloseEvent,
   shellCommandOf,
   type StrandedShell,
@@ -176,22 +189,19 @@ import type {
 } from '../graphs.types';
 import { CALL_START_BRIEF_MAX } from '../graphs.types';
 import {
+  callPoolHandOffPrompt,
   fallsThroughPool,
   nodePoolHandOffPrompt,
+  nodeStartMember,
   poolAttempts,
   poolHandOffNotice,
   poolHandOffPrompt,
   poolMemberNode,
   poolMembersOf,
+  poolMoveNotice,
   poolSize,
 } from '../utils/agent-pool';
 import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
-import {
-  ANSWERING_A_CALL,
-  ANSWERING_WITH_CALLS_OUT,
-  CALLEE_DESCRIPTION_MAX,
-  calleeSummary,
-} from '../utils/callee-text';
 import {
   callerConversationOf,
   callerKey,
@@ -208,12 +218,18 @@ import {
   validateRunnableGraph,
   validateWorkflowGraph,
 } from '../utils/graph-validate';
+import {
+  calleesByNode,
+  callToolsAdmitted,
+  holdsCallTools,
+  instructionBlocksByNode,
+  nodeInstructionFields,
+} from '../utils/node-instructions';
 import { openCalls, openNodeTurns } from '../utils/open-call-work';
 import { MAX_PARALLEL_AGENTS } from '../utils/parallelism';
 import {
   advanceCacheClock,
   cacheExpiryOf,
-  COLD_RESUME_RULE,
   statedTtlOf,
   type TurnCacheClock,
 } from '../utils/prompt-cache-standing';
@@ -245,13 +261,6 @@ const NODE_OUTCOMES: ReadonlySet<string> = new Set<NodeOutcome>([
 ]);
 
 /**
- * How several instruction blocks wired to one node are joined — the blank
- * line `composeTurnInstructions` puts between the parts, so a block reads as
- * its own paragraph rather than running into its neighbour.
- */
-const INSTRUCTION_BLOCK_SEPARATOR = '\n\n';
-
-/**
  * How many times one call may be continued inside itself after its callee
  * ended a turn waiting on calls of its own (`CallBroker.holdCall`). Past it
  * the call settles on the answer it has, telling its caller what is still
@@ -259,6 +268,17 @@ const INSTRUCTION_BLOCK_SEPARATOR = '\n\n';
  * a cursor turn's delegate wakes are (`MAX_DELEGATE_WAKES`).
  */
 const MAX_CALL_WAKES = 10;
+
+/**
+ * How many times one call may be continued inside itself with its callee's
+ * monitor output — a budget of its own, so a CI watch reporting step after
+ * step does not spend the waits its delegations are owed. Past it the
+ * callee's monitors are stopped and the call settles on the answer it has.
+ */
+const MAX_MONITOR_WAKES = 50;
+
+/** How a workflow conversation took a monitor's output. */
+export type MonitorWake = 'woken' | 'busy' | 'refused';
 
 export interface StartWorkflowRunInput {
   /** Library slug — persisted as `Run.workflowId`. */
@@ -275,6 +295,8 @@ export interface StartWorkflowRunInput {
    * chat's. Every agent node composes it BEHIND its own `role`.
    */
   customInstructions?: string;
+  /** The app's reply language, snapshotted onto the run like a chat's. */
+  replyLanguage?: string;
   /**
    * What the board card this run works asks of it — its label instructions and
    * the report ask, already composed. Absent for a run started from the
@@ -429,6 +451,8 @@ interface RunContext {
   seedPrompt: string;
   /** The run's snapshotted global instructions; every node composes it. */
   customInstructions: string | null;
+  /** The run's snapshotted reply language; every node composes it. */
+  replyLanguage: string | null;
   /** The card's instructions for a task run; every node composes them too. */
   taskInstructions: string | null;
   /** The run's snapshotted per-CLI switches; each node reads its CLI's slice. */
@@ -752,6 +776,14 @@ export class GraphExecutorService
     @Optional() private readonly artifactStore?: ArtifactStoreService,
     @Optional() parallelism?: number,
     @Optional() private readonly agentMcp?: AgentMcpService,
+    /** The button tools (`publish_action`), optional on `artifacts`' terms. */
+    @Optional() private readonly actionSinks?: ActionBroker,
+    @Optional() private readonly actionPublisher?: ActionPublishService,
+    /** The monitor tools, optional on `artifacts`' terms. */
+    @Optional() private readonly monitors?: MonitorRegistry,
+    @Optional() private readonly monitorSinks?: MonitorBroker,
+    /** The team-note tools, optional on `artifacts`' terms. */
+    @Optional() private readonly teamNotes?: TeamNoteBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -777,6 +809,44 @@ export class GraphExecutorService
   /** Each run's artifact publishers, disposed when the run is deleted. */
   private readonly artifactDisposers = new Map<string, (() => void)[]>();
 
+  /** Each run's button publishers, on the same terms. */
+  private readonly actionDisposers = new Map<string, (() => void)[]>();
+
+  /** Each run's monitor sinks, on the same terms. */
+  private readonly monitorDisposers = new Map<string, (() => void)[]>();
+
+  /** Each run's team-note sinks, on the same terms. */
+  private readonly teamNoteDisposers = new Map<string, (() => void)[]>();
+
+  /**
+   * How a monitor's output reaches one of a run's conversations — installed by
+   * each pass over that pass's own turn machinery, whether or not the workflow
+   * can call (`wakeNode` exists only where it can).
+   */
+  private readonly monitorWakers = new Map<
+    string,
+    (
+      caller: string,
+      prompt: string,
+      row: HostRowWire,
+      onDropped: (requeue: boolean) => void,
+      opener: HostWakeOpener,
+    ) => MonitorWake
+  >();
+
+  /** Told whenever one of a run's conversations ends its turn. */
+  private readonly conversationTurnEndListeners = new Set<
+    (runId: string, caller: string) => void
+  >();
+
+  /**
+   * Whether output waits to be delivered to a conversation — the monitor
+   * delivery's answer, installed by it, so a held call is not let go while it
+   * still owes its callee a message.
+   */
+  private monitorOutputHeld: (runId: string, caller: string) => boolean = () =>
+    false;
+
   /**
    * What to do when one of a LIVE run's sessions is closed by something other
    * than that run's own teardown — keyed by the session key it was opened
@@ -790,7 +860,10 @@ export class GraphExecutorService
    * numbered by this executor's own counter. So the executor listens for its
    * own keys.
    */
-  private readonly sessionClosers = new Map<string, () => void>();
+  private readonly sessionClosers = new Map<
+    string,
+    (cause: SessionCloseCause | null) => void
+  >();
 
   /**
    * The summary an automatic CARRIED compaction owes the next turn on one
@@ -914,17 +987,17 @@ export class GraphExecutorService
     this.bus.allDeleted().subscribe((runId) => {
       this.forgetCompactions(runId);
       this.workingRoots.delete(runId);
-      this.disposeArtifactPublishers(runId);
+      this.disposeHostPublishers(runId);
       // `deleteRun` forgets these itself; the archive sweep reaches this run
       // only through the shared teardown, so without this line a swept run's
       // detached commands stayed counted for the life of the daemon.
       this.backgroundWork.forget(runId);
     });
-    this.sessions.onClosed((key) => {
+    this.sessions.onClosed((key, _interrupted, _exited, cause) => {
       const closer = this.sessionClosers.get(key);
       if (closer) {
         this.sessionClosers.delete(key);
-        closer();
+        closer(cause);
       }
     });
     this.callBroker.useResetWakeHooks({
@@ -1226,22 +1299,15 @@ export class GraphExecutorService
    * bus → WS while the graph executes.
    */
   async startRun(input: StartWorkflowRunInput): Promise<RunWire> {
-    validateWorkflowGraph(input.workflow.nodes, input.workflow.edges);
-    validateRunnableGraph(input.workflow.nodes, input.workflow.edges);
-    computeRunOrder(input.workflow.nodes, input.workflow.edges);
+    // Node settings are resolved HERE rather than per turn, for the same two
+    // reasons `cwd` is: a bad config directory is a configuration mistake, so
+    // refusing the run names it once up front instead of failing one node
+    // halfway through the graph — and the CANONICAL path is what the turn must
+    // spawn with, since that is what was actually checked. The CLI itself would
+    // say nothing: it ignores an unusable --plugin-dir silently
+    // (probe-verified), which reads as "this node has no MCP servers".
+    const { workflow, dropped } = await this.assertRunnable(input.workflow);
     const cwd = resolveValidCwd(input.cwd);
-    // Resolved HERE rather than per turn, for the same two reasons `cwd` is:
-    // a bad config directory is a configuration mistake, so refusing the run
-    // names it once up front instead of failing one node halfway through the
-    // graph — and the CANONICAL path is what the turn must spawn with, since
-    // that is what was actually checked. The CLI itself would say nothing: it
-    // ignores an unusable --plugin-dir silently (probe-verified), which reads
-    // as "this node has no MCP servers".
-    const { workflow, dropped } = withResolvedNodeSettings(
-      input.workflow,
-      (kind) => this.adapterFor(kind),
-    );
-    await this.validateWorkflowModels(workflow);
 
     // Which sidebar group claims this run — by the WORKFLOW first, which is the
     // rule a graph exists for: one team graph runs over a dozen repositories,
@@ -1276,6 +1342,7 @@ export class GraphExecutorService
         // normalizes to null so a cleared box and an untouched one are one
         // state. Every node of this run then composes the same text.
         customInstructions: input.customInstructions?.trim() || null,
+        replyLanguage: input.replyLanguage?.trim() || null,
         taskInstructions: input.taskInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
         startSha: input.startSha ?? null,
@@ -1353,6 +1420,7 @@ export class GraphExecutorService
         cwd,
         seedPrompt: input.prompt,
         customInstructions: run.customInstructions,
+        replyLanguage: run.replyLanguage,
         taskInstructions: run.taskInstructions,
         agentOptions: readAgentOptions(run.agentOptions),
         resumeSessions: new Map(),
@@ -1384,7 +1452,73 @@ export class GraphExecutorService
     // Kind-guarded mirror of ChatService.cancel (shared assert — the two
     // cancels converge on one registry key) + the 404 the chat siblings return.
     assertWorkflowRun(await this.runDao.getById(runId, em), runId);
+    // Before the cancel, which can end a process at once: whatever closes the
+    // run's processes from here — that, or a later close, since they are kept
+    // past the Stop — says it was the Stop's.
+    this.sessions.noteUserStop(runId);
+    // The run's monitors end with it, waking nobody.
+    this.monitors?.stopRun(runId, 'thread-stop');
     return { cancelled: this.registry.cancel(runId) };
+  }
+
+  /**
+   * Wake one of a run's conversations with a monitor's output, as a turn of
+   * its own after the one it is in: `busy` while that conversation's turn
+   * runs (the caller holds the output for {@link onConversationTurnEnded}),
+   * `refused` when no pass of the run can take it — stopped, deleted, or a
+   * callee conversation whose call has already settled. `onDropped` is told
+   * when a wake answered `woken` is dropped after all, before its turn could
+   * start: `requeue` true when a user's message started the run's next pass
+   * meanwhile (the caller holds the output again for that conversation's next
+   * turn end), false when the run was stopped (the caller records what it
+   * carried).
+   */
+  wakeConversation(
+    runId: string,
+    caller: string,
+    prompt: string,
+    row: HostRowWire,
+    onDropped: (requeue: boolean) => void = () => undefined,
+    opener: HostWakeOpener = 'monitor',
+  ): MonitorWake {
+    return (
+      this.monitorWakers.get(runId)?.(caller, prompt, row, onDropped, opener) ??
+      'refused'
+    );
+  }
+
+  /** Be told whenever one of a run's conversations ends its turn. */
+  onConversationTurnEnded(
+    listener: (runId: string, caller: string) => void,
+  ): () => void {
+    this.conversationTurnEndListeners.add(listener);
+    return () => {
+      this.conversationTurnEndListeners.delete(listener);
+    };
+  }
+
+  private notifyConversationTurnEnded(runId: string, caller: string): void {
+    for (const listener of this.conversationTurnEndListeners) {
+      try {
+        listener(runId, caller);
+      } catch (err) {
+        this.logger.error(
+          `workflow run ${runId} conversation ${caller}: a turn-end listener failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /** Installed by the monitor delivery — see {@link monitorOutputHeld}. */
+  setMonitorOutputHeld(
+    check: (runId: string, caller: string) => boolean,
+  ): void {
+    this.monitorOutputHeld = check;
+  }
+
+  /** A callee's monitor ended unannounced: its held call may settle now. */
+  reviewMonitorHold(runId: string, caller: string): void {
+    this.callBroker.reviewHeldCallee(runId, caller);
   }
 
   /**
@@ -1541,14 +1675,8 @@ export class GraphExecutorService
       );
     }
     const stored = await this.runWorkflows.workflowOf(run, em);
-    validateWorkflowGraph(stored.nodes, stored.edges);
-    validateRunnableGraph(stored.nodes, stored.edges);
-    computeRunOrder(stored.nodes, stored.edges);
+    const { workflow, dropped } = await this.assertRunnable(stored);
     const cwd = resolveValidCwd(run.cwd);
-    const { workflow, dropped } = withResolvedNodeSettings(stored, (kind) =>
-      this.adapterFor(kind),
-    );
-    await this.validateWorkflowModels(workflow);
     const resumeSessions = new Map<string, string>();
     const nodePoolMembers = new Map<string, number>();
     if (
@@ -1625,6 +1753,7 @@ export class GraphExecutorService
         cwd,
         seedPrompt: text,
         customInstructions: run.customInstructions,
+        replyLanguage: run.replyLanguage,
         taskInstructions: run.taskInstructions,
         agentOptions: readAgentOptions(run.agentOptions),
         resumeSessions,
@@ -1692,17 +1821,30 @@ export class GraphExecutorService
       // leaving it registered would let a child that outlived its run dispatch
       // into rows that are already (partly) gone.
       this.callBroker.unregisterRun(runId);
-      this.disposeArtifactPublishers(runId);
+      this.disposeHostPublishers(runId);
       this.deleting.delete(runId);
     }
   }
 
-  /** Drop a run's page publishers — every way a run is destroyed calls this. */
-  private disposeArtifactPublishers(runId: string): void {
-    for (const dispose of this.artifactDisposers.get(runId) ?? []) {
-      dispose();
+  /**
+   * Drop a run's host-tool sinks (pages, buttons, monitors, team notes) and
+   * forget its team notes' read state — every way a run is destroyed calls
+   * this.
+   */
+  private disposeHostPublishers(runId: string): void {
+    for (const disposers of [
+      this.artifactDisposers,
+      this.actionDisposers,
+      this.monitorDisposers,
+      this.teamNoteDisposers,
+    ]) {
+      for (const dispose of disposers.get(runId) ?? []) {
+        dispose();
+      }
+      disposers.delete(runId);
     }
-    this.artifactDisposers.delete(runId);
+    this.monitorWakers.delete(runId);
+    this.teamNotes?.forgetRun(runId);
   }
 
   /**
@@ -1730,7 +1872,9 @@ export class GraphExecutorService
     // The previous pass's publishers go first: each holds that pass's whole
     // scope (its database fork, its queues), and without this every pass of a
     // long-lived run added another set that only a delete would release.
-    this.disposeArtifactPublishers(runId);
+    for (const dispose of this.artifactDisposers.get(runId) ?? []) {
+      dispose();
+    }
     const disposers: (() => void)[] = [broker.markWorkflowRun(runId)];
     for (const nodeId of nodeIds) {
       disposers.push(
@@ -1759,10 +1903,11 @@ export class GraphExecutorService
             // it. A row that then fails takes the page back from every call
             // still running; one that settled in between keeps naming it.
             const callId = this.callBroker.callAnsweredBy(runId, caller);
+            const noteOn = this.callBroker.callToNoteOn(runId, caller);
             const unnote =
-              callId === null
+              noteOn === null
                 ? () => {}
-                : this.callBroker.notePublishedArtifact(runId, callId, {
+                : this.callBroker.notePublishedArtifact(runId, noteOn, {
                     artifact_id: row.artifactId,
                     title: row.title,
                     version: row.version,
@@ -1799,6 +1944,179 @@ export class GraphExecutorService
     this.artifactDisposers.set(runId, disposers);
   }
 
+  /**
+   * Give each agent node of this pass the button tools (`publish_action`,
+   * `remove_action`), on {@link registerArtifactPublishers}' terms. A button
+   * belongs to the conversation publishing it — the node's own, or one it
+   * answers calls in — and one published inside a call is named to that call
+   * and every call above it still running.
+   *
+   * `agentLabel` is stamped on every publisher but the run's sole
+   * trigger-fed agent in its own conversation: a press goes to every
+   * trigger-fed agent whoever published, so any other publisher says who it
+   * is, on the chip and in the message.
+   */
+  private registerActionPublishers(
+    runId: string,
+    nodes: readonly WorkflowAgentNode[],
+    roots: ReadonlySet<string>,
+  ): void {
+    const broker = this.actionSinks;
+    const publisher = this.actionPublisher;
+    if (broker === undefined || publisher === undefined) {
+      return;
+    }
+    for (const dispose of this.actionDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    const disposers: (() => void)[] = [];
+    for (const node of nodes) {
+      // Per call, not per registration: one node speaks in several
+      // conversations, and which call one answers changes as calls settle.
+      const contextOf = (caller: string): ActionPublishContext => {
+        const conversationId = callerConversationOf(caller) ?? '';
+        const callId = this.callBroker.callAnsweredBy(runId, caller);
+        const noteOn = this.callBroker.callToNoteOn(runId, caller);
+        const unattributed =
+          conversationId === '' && roots.size === 1 && roots.has(node.id);
+        return {
+          runId,
+          rowNodeId: node.id,
+          publisher: {
+            nodeId: node.id,
+            conversationId,
+            ...(callId === null ? {} : { callId }),
+            ...(unattributed ? {} : { agentLabel: node.name ?? node.id }),
+          },
+          notes: {
+            published: (key, action) =>
+              this.callBroker.notePublishedAction(runId, noteOn, key, {
+                action_id: action.actionId,
+                label: action.label,
+                kind: action.kind,
+              }),
+            removed: (key) => this.callBroker.forgetPublishedAction(runId, key),
+          },
+        };
+      };
+      disposers.push(
+        broker.register(runId, node.id, {
+          publish: (input, caller) =>
+            publisher.publish(contextOf(caller), input),
+          remove: (actionId, caller) =>
+            publisher.remove(contextOf(caller), actionId),
+        }),
+      );
+    }
+    this.actionDisposers.set(runId, disposers);
+  }
+
+  /**
+   * Give each agent node of this pass the monitor tools, on
+   * {@link registerActionPublishers}' terms: a monitor belongs to the
+   * conversation that started it, and one started inside a call is filed
+   * under that call. Offered only where calling a geniro tool is put to the
+   * user first, or the node runs unattended anyway — the command runs in no
+   * sandbox of its own (`AdapterConfig.hostToolCallUngatedReason`).
+   */
+  private registerMonitorSinks(
+    runId: string,
+    nodes: readonly WorkflowAgentNode[],
+    cwd: string,
+    approvalOf: (node: WorkflowAgentNode) => string,
+  ): void {
+    const broker = this.monitorSinks;
+    if (broker === undefined) {
+      return;
+    }
+    for (const dispose of this.monitorDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    const disposers: (() => void)[] = [];
+    for (const node of nodes) {
+      // Every pool member must pass, on the mode it actually runs: a call
+      // may land on any of them.
+      const offered = Array.from({ length: poolSize(node) }, (_, index) =>
+        index === 0 ? node : poolMemberNode(node, index + 1),
+      ).every(
+        (member) =>
+          member !== null &&
+          offersMonitorTools(
+            this.adapterFor(member.agent).getConfig(),
+            approvalOf(member),
+          ),
+      );
+      if (!offered) {
+        continue;
+      }
+      disposers.push(
+        broker.register(runId, node.id, {
+          ownerOf: (caller) => ({
+            owner: {
+              runId,
+              nodeId: node.id,
+              caller,
+              conversationId: callerConversationOf(caller),
+              callId: this.callBroker.callAnsweredBy(runId, caller),
+              target: 'workflow',
+            },
+            cwd,
+          }),
+        }),
+      );
+    }
+    this.monitorDisposers.set(runId, disposers);
+  }
+
+  /**
+   * Give each agent node of this pass the team-note tools (`team_note`,
+   * `team_notes`), on {@link registerArtifactPublishers}' terms. Every agent
+   * of the run shares one store whether or not it is wired to the others; a
+   * note is written into its author's own transcript and, when that
+   * conversation answers a call, filed in that call's card.
+   */
+  private registerTeamNoteSinks(
+    runId: string,
+    hostToolNodes: readonly WorkflowAgentNode[],
+    nodes: readonly WorkflowNode[],
+    persistItem: (
+      nodeId: string | null,
+      kind: ItemKind,
+      role: string | null,
+      payload: unknown,
+    ) => Promise<ItemWire>,
+  ): void {
+    const broker = this.teamNotes;
+    if (broker === undefined) {
+      return;
+    }
+    for (const dispose of this.teamNoteDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    const names = new Map<string, string>();
+    for (const node of nodes) {
+      if (node.kind === 'agent') {
+        names.set(node.id, node.name ?? node.id);
+      }
+    }
+    const disposers: (() => void)[] = [];
+    for (const node of hostToolNodes) {
+      disposers.push(
+        broker.register(runId, node.id, {
+          persistItem,
+          writer: (caller) => ({
+            nodeId: callerNodeOf(caller),
+            conversationId: callerConversationOf(caller),
+            callId: this.callBroker.callAnsweredBy(runId, caller),
+          }),
+          agentName: (nodeId) => names.get(nodeId) ?? nodeId,
+        }),
+      );
+    }
+    this.teamNoteDisposers.set(runId, disposers);
+    void broker.prime(runId);
+  }
+
   /** Drop every per-key fact of one run — its keys are `<runId>::…`. */
   private forgetCompactions(runId: string): void {
     const prefix = runSessionKeyPrefix(runId);
@@ -1827,9 +2145,12 @@ export class GraphExecutorService
    * the two halves of one list have to agree about how much of the archive they
    * are showing.
    */
-  async listRuns(scope: ChatListScope = 'active'): Promise<RunWire[]> {
+  async listRuns(
+    scope: ChatListScope = 'active',
+    page: RunListPage = {},
+  ): Promise<RunWire[]> {
     const em = this.em.fork();
-    const runs = await this.runDao.listWorkflowRuns(scope, em);
+    const runs = await this.runDao.listWorkflowRuns(scope, em, page);
     // The chat listing's own backfill, on the same terms: incremental and
     // error-swallowing by construction, so this is a `max(seq)` read per run in
     // the steady state and can never fail the listing. It is what recovers a
@@ -2055,37 +2376,83 @@ export class GraphExecutorService
       forNode.push(call);
       callsByNode.set(nodeId, forNode);
     };
+    // Each call's own tools, keyed by call and the node that ran it — counted
+    // by `in_call`, so the run's rows are stamped first.
+    await this.calls.ensureIndexed(runId);
+    const callTools = new Map(
+      (await this.itemDao.ownToolCallsByCall(runId, em)).map((count) => [
+        `${count.nodeId}\u0000${count.callId}`,
+        count,
+      ]),
+    );
+    const toolsOf = (
+      nodeId: string,
+      callId: string,
+    ): Pick<
+      NodeStateWire['callFigures'][number],
+      'toolCalls' | 'toolCallsThroughSeq'
+    > => {
+      const count = callTools.get(`${nodeId}\u0000${callId}`);
+      return {
+        toolCalls: count?.calls ?? 0,
+        toolCallsThroughSeq: count?.lastSeq ?? null,
+      };
+    };
+    // Every call's FIGURES, never capped: the maps above already cover every
+    // call of the run, so only the heavy listing below is bounded.
+    const callNodes = new Map<string, string>();
+    for (const [callId, started] of starts) {
+      callNodes.set(callId, started.nodeId);
+    }
+    for (const [callId, spent] of callTotals) {
+      if (!callNodes.has(callId)) {
+        callNodes.set(callId, spent.nodeId);
+      }
+    }
+    for (const count of callTools.values()) {
+      if (!callNodes.has(count.callId)) {
+        callNodes.set(count.callId, count.nodeId);
+      }
+    }
+    const figuresByNode = new Map<string, NodeStateWire['callFigures']>();
+    for (const [callId, nodeId] of [...callNodes].sort(
+      ([a], [b]) => (callNumber(a) ?? 0) - (callNumber(b) ?? 0),
+    )) {
+      const forNode = figuresByNode.get(nodeId) ?? [];
+      forNode.push({
+        callId,
+        totals: callTotals.get(callId)?.totals ?? emptyTotals(),
+        ...toolsOf(nodeId, callId),
+        promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
+      });
+      figuresByNode.set(nodeId, forNode);
+    }
     const readings = await this.callContextDao.listByRun(runId, em);
     for (const call of readings) {
       pushCall(call.nodeId, {
         callId: call.callId,
         contextTokens: call.contextTokens,
+        contextEstimated: call.contextEstimated === true,
         contextWindowTokens: call.contextWindowTokens,
-        totals: callTotals.get(call.callId)?.totals ?? emptyTotals(),
-        promptCacheExpiresAt: cacheExpiryOf(callCache.get(call.callId)),
         start: starts.get(call.callId)?.start ?? null,
       });
-      callTotals.delete(call.callId);
-      starts.delete(call.callId);
     }
-    // A call that has no `call_context` row — it spent without reporting a
-    // context reading, or has not reported anything yet — is still owed its
-    // spend and its start. Newest first and within the listing's own cap,
-    // which bounds what every re-read pays for.
-    const unread = [...new Set([...callTotals.keys(), ...starts.keys()])]
+    // A call that has no `call_context` row — it has not reported a context
+    // reading — is still owed its start. Newest first and within the listing's
+    // own cap, which bounds the briefs every re-read carries.
+    const read = new Set(readings.map((call) => call.callId));
+    const unread = [...callNodes.keys()]
+      .filter((callId) => !read.has(callId))
       .sort((a, b) => (callNumber(b) ?? 0) - (callNumber(a) ?? 0))
       .slice(0, Math.max(0, CALL_CONTEXT_SNAPSHOT_LIMIT - readings.length))
       .reverse();
     for (const callId of unread) {
-      const spent = callTotals.get(callId);
-      const started = starts.get(callId);
-      pushCall((spent?.nodeId ?? started?.nodeId)!, {
+      pushCall(callNodes.get(callId)!, {
         callId,
         contextTokens: null,
+        contextEstimated: false,
         contextWindowTokens: null,
-        totals: spent?.totals ?? emptyTotals(),
-        promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
-        start: started?.start ?? null,
+        start: starts.get(callId)?.start ?? null,
       });
     }
     return rows.map((row) => ({
@@ -2093,9 +2460,11 @@ export class GraphExecutorService
       nodeId: row.nodeId,
       status: row.status,
       contextTokens: row.contextTokens,
+      contextEstimated: row.contextEstimated === true,
       contextWindowTokens: row.contextWindowTokens,
       model: models.get(row.nodeId) ?? null,
       calls: callsByNode.get(row.nodeId) ?? [],
+      callFigures: figuresByNode.get(row.nodeId) ?? [],
       // A polled-spend node's turns carry no price; its polled bill stands for
       // them, beside whatever a self-pricing pool member's turns cost.
       totals: withNodePolledSpend(
@@ -2219,6 +2588,26 @@ export class GraphExecutorService
     }
   }
 
+  /**
+   * Everything a run start refuses a workflow for — the graph rules, a run
+   * order, and a model each CLI can run — asked without starting one, so a
+   * workflow can be judged runnable before it is saved. Resolves to the copy a
+   * run would execute, with the node settings its CLI cannot honour stripped,
+   * and what was stripped.
+   */
+  async assertRunnable(
+    workflow: Workflow,
+  ): Promise<{ workflow: Workflow; dropped: DroppedNodeSetting[] }> {
+    validateWorkflowGraph(workflow.nodes, workflow.edges);
+    validateRunnableGraph(workflow.nodes, workflow.edges);
+    computeRunOrder(workflow.nodes, workflow.edges);
+    const resolved = withResolvedNodeSettings(workflow, (kind) =>
+      this.adapterFor(kind),
+    );
+    await this.validateWorkflowModels(resolved.workflow);
+    return resolved;
+  }
+
   private async validateWorkflowModels(workflow: Workflow): Promise<void> {
     const onDemand = onDemandNodeIds(workflow.nodes, workflow.edges);
     const models = new Map<
@@ -2310,6 +2699,7 @@ export class GraphExecutorService
       cwd,
       seedPrompt,
       customInstructions,
+      replyLanguage,
       taskInstructions,
       agentOptions,
     } = run;
@@ -2326,52 +2716,10 @@ export class GraphExecutorService
     const dagNodes = nodes
       .filter(isExecutableNode)
       .filter((n) => !onDemand.has(n.id));
-    // The instruction text each agent node is wired to, in NODE-LIST order —
-    // the order the YAML file and the builder's own list already put the
-    // blocks in, so two blocks on one agent read the same way every run.
-    // Every block is sent whole, whatever its length: instruction text carries
-    // no size limit anywhere.
-    const blocksOf = new Map<string, string[]>();
-    for (const source of nodes) {
-      if (source.kind !== 'instruction') {
-        continue;
-      }
-      const text = source.instructions.trim();
-      if (!text) {
-        continue;
-      }
-      for (const edge of workflow.edges) {
-        if (edge.kind !== 'instruction' || edge.from !== source.id) {
-          continue;
-        }
-        const blocks = blocksOf.get(edge.to);
-        if (blocks) {
-          blocks.push(text);
-        } else {
-          blocksOf.set(edge.to, [text]);
-        }
-      }
-    }
-    const instructionsFor = (nodeId: string): string | null =>
-      blocksOf.get(nodeId)?.join(INSTRUCTION_BLOCK_SEPARATOR) ?? null;
+    const blocksOf = instructionBlocksByNode(workflow);
     // Caller → callee agent nodes, from the call edges. Drives the broker's
     // dispatch, each caller's MCP endpoint grant, and its awareness block.
-    const calleesOf = new Map<string, WorkflowAgentNode[]>();
-    for (const edge of workflow.edges) {
-      if (edge.kind !== 'call') {
-        continue;
-      }
-      const callee = nodesById.get(edge.to);
-      if (callee?.kind !== 'agent') {
-        continue;
-      }
-      const list = calleesOf.get(edge.from);
-      if (list) {
-        list.push(callee);
-      } else {
-        calleesOf.set(edge.from, [callee]);
-      }
-    }
+    const calleesOf = calleesByNode(workflow);
 
     const finalTexts = new Map<string, string>();
     const settled = new Map<string, NodeOutcome>();
@@ -2418,6 +2766,98 @@ export class GraphExecutorService
     const callMessages = new Map<string, string[]>();
     const noteCallMessage = (callId: string, text: string): void => {
       callMessages.set(callId, [...(callMessages.get(callId) ?? []), text]);
+    };
+    /**
+     * `message_agent` messages handed to a callee's running turn, by the
+     * delivery id they rode in with. A turn that reports one dropped
+     * (`follow_up_dropped`) has the broker record it undelivered, so its
+     * caller is told — a user message the same report names is a row instead.
+     */
+    const brokerDeliveries = new Map<
+      string,
+      { callId: string; text: string }
+    >();
+    /** A settled call's entries: nothing it was handed can be dropped now. */
+    const forgetCallDeliveries = (callId: string): void => {
+      for (const [deliveryId, delivery] of brokerDeliveries) {
+        if (delivery.callId === callId) {
+          brokerDeliveries.delete(deliveryId);
+        }
+      }
+    };
+    /**
+     * Prompts handed to a WORKING conversation's turn — a broker tell
+     * (`tellLiveNode`) or a wake that found the conversation working — by the
+     * delivery id they rode in with. A turn that drops one
+     * (`follow_up_dropped`) has its `redeliver` run once that turn has ended
+     * (`endConversationTurn`); one the turn ended without dropping, it took.
+     * Registered even with nothing to redeliver, so a dropped tell is never
+     * read as the user's own message.
+     */
+    const promptDeliveries = new Map<
+      string,
+      { caller: string; redeliver?: () => void }
+    >();
+    /** Dropped prompts' redeliveries, by the conversation whose turn ends. */
+    const droppedPrompts = new Map<string, (() => void)[]>();
+    const redeliverWhenEnded = (
+      caller: string,
+      redeliver: () => void,
+    ): void => {
+      droppedPrompts.set(caller, [
+        ...(droppedPrompts.get(caller) ?? []),
+        redeliver,
+      ]);
+    };
+    /**
+     * A run follow-up's per-root delivery ids. One message reaches several
+     * roots under ONE row, so nothing is said until every root has answered
+     * for it — dropped it, or ended its turn having taken it. All dropped:
+     * the row reads "not sent". Some: a note names each root that missed it.
+     */
+    interface SharedDelivery {
+      /** The `deliveryId` on the message's own row. */
+      rowDeliveryId: string;
+      /** Roots it went to, live or started fresh with it. */
+      roots: number;
+      /** Roots that took it: started fresh with it, or ended without a drop. */
+      took: number;
+      dropped: { nodeId: string; name: string }[];
+    }
+    const rootDeliveries = new Map<
+      string,
+      { delivery: SharedDelivery; nodeId: string; name: string }
+    >();
+    /** Say what became of a shared delivery once every root has answered. */
+    const settleSharedDelivery = async (
+      delivery: SharedDelivery,
+    ): Promise<string | null> => {
+      if (delivery.took + delivery.dropped.length < delivery.roots) {
+        return null;
+      }
+      if (delivery.took === 0) {
+        return delivery.rowDeliveryId;
+      }
+      for (const missed of delivery.dropped) {
+        await persistItem(missed.nodeId, 'system', null, {
+          message: `Not sent to ${missed.name} — its turn ended before it took the message. The other agents got it.`,
+          severity: 'warning',
+          caption: 'Not sent',
+          nodeId: missed.nodeId,
+        });
+      }
+      return null;
+    };
+    /** A root's own turn ended: what it was handed and did not drop, it took. */
+    const forgetRootDeliveries = async (nodeId: string): Promise<void> => {
+      for (const [deliveryId, rooted] of [...rootDeliveries]) {
+        if (rooted.nodeId !== nodeId) {
+          continue;
+        }
+        rootDeliveries.delete(deliveryId);
+        rooted.delivery.took += 1;
+        await settleSharedDelivery(rooted.delivery);
+      }
     };
     /**
      * Calls a CALLER asked to stop (`cancel_agent`), by call id.
@@ -2573,6 +3013,20 @@ export class GraphExecutorService
       // turn's prompt, not inside a wait of this one.
       this.callBroker.forgetUserMessage(runId, caller);
       this.callBroker.drainCaller(runId, caller);
+      // What the turn was handed and did not drop, it took. What it dropped is
+      // delivered again now — after the drain, so it joins any turn the drain
+      // opened rather than racing it.
+      for (const [deliveryId, prompted] of promptDeliveries) {
+        if (prompted.caller === caller) {
+          promptDeliveries.delete(deliveryId);
+        }
+      }
+      const dropped = droppedPrompts.get(caller) ?? [];
+      droppedPrompts.delete(caller);
+      for (const redeliver of dropped) {
+        redeliver();
+      }
+      this.notifyConversationTurnEnded(runId, caller);
     };
     let cancelRequested = false;
     /**
@@ -2593,6 +3047,13 @@ export class GraphExecutorService
     const endedByShutdown = (status: RunStatus): boolean =>
       status !== 'completed' && this.shuttingDown && !stoppedByUser;
     let runFinished = false;
+    /**
+     * Whether the run's current reopened stretch was started by a monitor's
+     * output alone — its settle is then a host turn's (`hostTurn`), which
+     * posts no banner. Set only by the wake that reopens the run; any other
+     * turn or user message in the stretch clears it for the rest of it.
+     */
+    let wokenOnlyByMonitors = false;
     let persistenceFailed = false;
 
     // One serialized write chain for the whole pass: persist-then-emit ordering
@@ -2707,6 +3168,8 @@ export class GraphExecutorService
     const closeStrandedWork = async (
       scope: { callId: string } | { nodeId: string } | null,
       withShells: boolean,
+      /** The user's Stop is what ended the process. */
+      stopped = false,
     ): Promise<void> => {
       const inScope = (unit: {
         nodeId: string | null;
@@ -2725,7 +3188,9 @@ export class GraphExecutorService
       )) {
         if (inScope(delegate)) {
           closes.push({
-            event: delegateCloseEvent(delegate.id, 'stopped'),
+            event: stopped
+              ? delegateCloseEvent(delegate.id, 'stopped')
+              : processEndedCloseEvent(delegate.id),
             owner: delegate,
           });
         }
@@ -2879,7 +3344,12 @@ export class GraphExecutorService
      * ({@link supersededByNextPass}) — decided in the same synchronous stretch
      * as the registration, since the claim lands during the awaits above it.
      */
-    const reopenRun = async (): Promise<'awake' | 'stopped' | 'superseded'> => {
+    const reopenRun = async (
+      opener: HostWakeOpener | 'other' = 'other',
+    ): Promise<'awake' | 'stopped' | 'superseded'> => {
+      if (opener === 'other') {
+        wokenOnlyByMonitors = false;
+      }
       // The roll-up writes this run's terminal status; waking ahead of it puts
       // `running` on the row and has it overwritten a moment later.
       await finalizing;
@@ -2920,6 +3390,7 @@ export class GraphExecutorService
         return 'superseded';
       }
       reopened = true;
+      wokenOnlyByMonitors = opener !== 'other';
       registerAggregate();
       // A user's message reaches an AWAKE run through the same control a live
       // pass offers — the wake holds the run's claim, so the walk a settled run
@@ -2968,7 +3439,9 @@ export class GraphExecutorService
           // working state is this announce's to end.
           await this.setRunStatus(em, runId, status, {
             noTerminalItem: true,
+            ...(wokenOnlyByMonitors ? { hostTurn: true } : {}),
           });
+          wokenOnlyByMonitors = false;
         }
       } finally {
         // The handle settles even if the write failed, as the pass's own does
@@ -3350,19 +3823,19 @@ export class GraphExecutorService
     };
 
     /**
-     * Whether this agent kind may hold the call tools in THIS run: a CLI whose
-     * tools need no machine trust always, one that does only on a probed pass
-     * (M3's cursor MCP-trust probe). The one predicate behind every admission
-     * surface — the endpoint grant, the token minting, the awareness block,
-     * and the self-check — so a change here cannot silently miss a sibling
-     * gate.
+     * Whether this agent kind may hold the call tools in THIS run — the shared
+     * `callToolsAdmitted` rule, which the "May call" block also reads through
+     * `holdsCallTools`, so a change there cannot silently miss a sibling gate.
      */
     const callCapable = (node: WorkflowAgentNode): boolean =>
-      !this.adapterFor(node.agent).getConfig().mcp.callToolsRequireTrustProbe;
+      callToolsAdmitted(this.adapterFor(node.agent).getConfig());
 
     /** Nodes that hold the call tools in THIS run (callers, not callees). */
     const isCaller = (node: WorkflowAgentNode): boolean =>
-      callCapable(node) && calleesOf.has(node.id);
+      holdsCallTools(
+        calleesOf.get(node.id),
+        this.adapterFor(node.agent).getConfig(),
+      );
 
     /**
      * Nodes handed the MCP endpoint: EVERY call-capable agent, not callers
@@ -3412,39 +3885,6 @@ export class GraphExecutorService
     };
 
     /**
-     * The caller's "May call" block, naming each callee and what that callee
-     * says it does, so the agent can route work from the graph alone — its own
-     * role never has to name the team. Callee ROLES stay private (see
-     * `calleeSummary`). Null for a non-caller.
-     *
-     * Kept out of the node's role prompt so an adapter that withholds the call
-     * endpoint can withhold this block with it — see `callSurfacePrompt`.
-     */
-    const callSurfaceFor = (
-      node: WorkflowAgentNode,
-      /** Whether this turn answers a call — see `ANSWERING_WITH_CALLS_OUT`. */
-      answeringACall: boolean,
-    ): string | null => {
-      const callees = calleesOf.get(node.id);
-      if (!callees || !isCaller(node)) {
-        return null;
-      }
-      const lines = callees.map(
-        (callee) => `- ${calleeSummary(callee, CALLEE_DESCRIPTION_MAX)}`,
-      );
-      // The escalation half differs per CLI, and the tool's NAME is the
-      // adapter's to spell: a caller whose CLI has a question channel can
-      // relay to the user; one without it can only answer-or-time-out.
-      const questionTool = this.adapterFor(node.agent).getConfig()
-        .questionToolName;
-      const questionLine =
-        questionTool !== null
-          ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
-          : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.\nBefore continuing an earlier conversation with call_agent(thread), above all after a pause, check it with list_agent_threads. ${COLD_RESUME_RULE}${answeringACall ? `\n${ANSWERING_WITH_CALLS_OUT}` : ''}`;
-    };
-
-    /**
      * Spawn one adapter turn for `node` and wire its event stream into the
      * transcript (session save, text/terminal capture, item persistence,
      * approval tracking). Shared by DAG launches and callee sub-turns — the
@@ -3478,6 +3918,7 @@ export class GraphExecutorService
         resumeSessionId?: string | null;
         images?: TurnImage[];
         poolMember?: number;
+        compaction?: boolean;
       } = {},
     ): Promise<{
       handle: AgentTurnHandle;
@@ -3518,6 +3959,11 @@ export class GraphExecutorService
         : nodeSessionKey(runId, node.id);
       // WHO this turn is, to the call broker: the node, in this conversation.
       const caller = callerKey(node.id, callContext?.conversationId ?? null);
+      const deliveryNotice =
+        extras.compaction || adapter.geniroCommandFor(prompt) !== null
+          ? null
+          : this.callBroker.messageDeliveryNotice(runId, caller);
+      let deliveryNoticeAcknowledged = false;
       // An automatic carried compaction replaced this conversation: its summary
       // rides this turn, once, and the session it replaced is not resumed.
       const carried = this.carriedSummaries.get(sessionKey) ?? null;
@@ -3549,16 +3995,12 @@ export class GraphExecutorService
       const endedAs = (): NodeOutcome =>
         outcome ?? (cancelRequested ? 'cancelled' : 'completed');
       /**
-       * Tool calls seen since the last `turn_complete`, counted here because no
+       * Tool calls not yet added to the node's total, counted here because no
        * CLI reports a total and the transcript a client loads is windowed.
        *
-       * Today this closure is built per TURN, so it starts at zero anyway and
-       * the zeroing below is unobservable — verified by mutation: removing it
-       * changes no test. It stays because the durable write ADDS, so the day a
-       * closure serves two turns (a kept session driving them, as the ACP
-       * transport already does for its own state) an un-zeroed counter would
-       * contribute the first turn's tools again on the second settle, and the
-       * figure would silently overcount rather than fail.
+       * The `turn_complete` write zeroes it in the same breath: the durable
+       * write ADDS, and `finish` adds whatever is left, so a count left
+       * standing would be added twice.
        */
       let toolCalls = 0;
       // Never zeroed, unlike the counter above: whether the turn ACTED at all,
@@ -3659,7 +4101,12 @@ export class GraphExecutorService
         .catch(() => false);
       const input: AgentTurnInput = {
         ...(streamPartials ? { streamPartials: true } : {}),
-        prompt: withCarriedContext(carried, prompt),
+        prompt: withCarriedContext(
+          carried,
+          deliveryNotice !== null
+            ? `${deliveryNotice.prompt}\n\n${prompt}`
+            : prompt,
+        ),
         ...(extras.images?.length ? { images: extras.images } : {}),
         cwd,
         model: node.model ?? null,
@@ -3693,26 +4140,29 @@ export class GraphExecutorService
           carried !== null
             ? null
             : (callContext?.resumeSessionId ?? extras.resumeSessionId ?? null),
-        systemPrompt: node.role ?? null,
+        // The role, wired blocks, answering-a-call note and "May call" block —
+        // built by the helper the inspector's size readout measures with.
+        // Blocks are joined there because the order of several blocks is a
+        // graph fact no adapter could recover; the rest are peers ranked by
+        // `turnInstructionParts`.
+        ...nodeInstructionFields(node, {
+          blocks: blocksOf.get(node.id),
+          callees: calleesOf.get(node.id),
+          answeringACall: callContext !== undefined,
+          config: adapter.getConfig(),
+        }),
         // A PEER of the role rather than something joined into it: the two are
         // composed by `AgentAdapter.composeSystemPrompt`, which ranks the
         // node's role after this so a node authored for one job still outranks
         // a standing preference. Joining them here would put that ordering in
         // the executor and leave the chat path free to disagree about it.
         customInstructions,
+        replyLanguage,
         // A peer on the same terms; ranked right after the user's own text.
         taskInstructions,
-        // Joined here because the order of several blocks is a graph fact no
-        // adapter could recover; ranked by `composeTurnInstructions`.
-        instructionBlocks: instructionsFor(node.id),
         // This node's own CLI's slice; an option it does not carry reads as
         // that option's declared default, never as off.
         agentOptions: agentOptions[node.agent],
-        // Every callee, a leaf included: one with no callees gets no "May
-        // call" block to carry it.
-        answeringACallPrompt:
-          callContext !== undefined ? ANSWERING_A_CALL : null,
-        callSurfacePrompt: callSurfaceFor(node, callContext !== undefined),
         // A questionCapable AUTO node spawns in ask mode when its CLI's
         // question channel COSTS that posture (the daemon auto-approves plain
         // permissions below, so unattended semantics survive).
@@ -3742,15 +4192,61 @@ export class GraphExecutorService
       // chat path's `compactions`, for a node's or a callee's own window.
       const compactions = new CompactionRows();
       const onEvent = (event: AgentEvent): void => {
-        const arrived = terminalStatus(event);
+        const promptTaken =
+          event.parentToolUseId === undefined &&
+          (event.type === 'text' ||
+            event.type === 'text_delta' ||
+            event.type === 'reasoning' ||
+            event.type === 'reasoning_delta' ||
+            event.type === 'thinking_progress' ||
+            event.type === 'tool_compose' ||
+            event.type === 'tool_call' ||
+            event.type === 'turn_complete');
+        if (promptTaken && callContext !== undefined && !extras.compaction) {
+          this.callBroker.confirmWakingMessages(runId, callContext.callId);
+        }
+        // Writing its reply: no longer in the gap between two waits.
         if (
+          event.parentToolUseId === undefined &&
+          (event.type === 'text' || event.type === 'text_delta')
+        ) {
+          this.callBroker.noteOwnerReplying(runId, caller);
+        }
+        const arrived = terminalStatus(event);
+        const ended =
           arrived === 'completed' ||
           arrived === 'failed' ||
-          arrived === 'cancelled'
-        ) {
+          arrived === 'cancelled';
+        if (ended) {
           outcome = arrived;
         }
+        // A trigger-fed agent whose turn is HELD has finished its reply and
+        // waits only on its background sub-agents; a message delivered into it
+        // ends the hold, so it stops counting in `rootsWorking` until the hold
+        // ends. A hold can also end with no `open: 0` (the silence deadline, an
+        // idle with units unreported), so the terminal counts it again: the
+        // compaction that may follow is work, and the walk's own idle mark is
+        // what announces the end. Only the agents a message goes to, and not
+        // their compaction turns: a held downstream node is still a step of
+        // the walk, and a compacting agent refuses messages.
+        if (
+          callContext === undefined &&
+          !extras.compaction &&
+          triggerFed.has(node.id)
+        ) {
+          if (event.type === 'turn_held') {
+            markRootWorking(node.id, event.open === 0);
+          } else if (ended) {
+            markRootWorking(node.id, true);
+          }
+        }
         enqueue(async () => {
+          if (ended && callContext === undefined) {
+            // On the chain, so a drop this turn reported ahead of its terminal
+            // has been matched first. A call sub-turn of the same node holds
+            // none of them.
+            await forgetRootDeliveries(node.id);
+          }
           // Whether THIS event's approval request is the agent asking something
           // — set by the routing branch below and read by the registry track
           // further down. Per-event, declared here because the two blocks that
@@ -3791,6 +4287,69 @@ export class GraphExecutorService
             }
             return;
           }
+          if (event.type === 'follow_up_dropped') {
+            // Each marker is written where the row it names lives: a run
+            // follow-up's at run level — under the root that answered last it
+            // opened an empty node block, since the row draws itself on the
+            // message — and a message into this turn's call in that call.
+            const runDeliveries: string[] = [];
+            const userDeliveries: string[] = [];
+            for (const deliveryId of event.deliveryIds) {
+              const prompted = promptDeliveries.get(deliveryId);
+              const brokered = brokerDeliveries.get(deliveryId);
+              const rooted = rootDeliveries.get(deliveryId);
+              if (prompted !== undefined) {
+                promptDeliveries.delete(deliveryId);
+                if (prompted.redeliver !== undefined) {
+                  redeliverWhenEnded(prompted.caller, prompted.redeliver);
+                }
+              } else if (brokered !== undefined) {
+                brokerDeliveries.delete(deliveryId);
+                this.callBroker.markMessageDropped(
+                  runId,
+                  brokered.callId,
+                  brokered.text,
+                  deliveryId,
+                );
+              } else if (rooted !== undefined) {
+                rootDeliveries.delete(deliveryId);
+                rooted.delivery.dropped.push({
+                  nodeId: rooted.nodeId,
+                  name: rooted.name,
+                });
+                const rowId = await settleSharedDelivery(rooted.delivery);
+                if (rowId !== null) {
+                  runDeliveries.push(rowId);
+                }
+              } else {
+                userDeliveries.push(deliveryId);
+              }
+            }
+            const runMarker =
+              runDeliveries.length === 0
+                ? null
+                : mapEventToItem({ ...event, deliveryIds: runDeliveries });
+            if (runMarker) {
+              await persistItem(
+                null,
+                runMarker.kind,
+                runMarker.role,
+                runMarker.payload,
+              );
+            }
+            const mapped =
+              userDeliveries.length === 0
+                ? null
+                : mapEventToItem({ ...event, deliveryIds: userDeliveries });
+            if (mapped) {
+              await persistItem(node.id, mapped.kind, mapped.role, {
+                ...(mapped.payload as Record<string, unknown>),
+                nodeId: node.id,
+                ...(callContext ? { callId: callContext.callId } : {}),
+              });
+            }
+            return;
+          }
           if (event.type === 'session') {
             capturedSessionId = event.sessionId;
             if (!callContext) {
@@ -3798,6 +4357,19 @@ export class GraphExecutorService
             }
             await saveSessionId(event.sessionId);
             return;
+          }
+          // Session creation alone does not mean the CLI took its prompt.
+          if (
+            deliveryNotice !== null &&
+            !deliveryNoticeAcknowledged &&
+            promptTaken
+          ) {
+            deliveryNoticeAcknowledged = true;
+            this.callBroker.acknowledgeMessageDeliveryNotice(
+              runId,
+              caller,
+              deliveryNotice,
+            );
           }
           if (event.type === 'slash_commands') {
             // The CLI's own invokable set for this run's cwd — feeds the
@@ -3858,7 +4430,13 @@ export class GraphExecutorService
             // under the same owner key — so a CALL's card adds its own running
             // turn to what its finished turns recorded, rather than showing the
             // finished turns alone as if they were the bill.
-            this.partials.cost(runId, ownerKey, node.id, event.costUsd);
+            this.partials.cost(
+              runId,
+              ownerKey,
+              node.id,
+              event.costUsd,
+              event.estimatedCostUsd ?? null,
+            );
             return;
           }
           if (event.type === 'context_progress') {
@@ -3917,8 +4495,10 @@ export class GraphExecutorService
                   .rememberContext(
                     runId,
                     node.id,
-                    event.contextTokens,
-                    windowTokens,
+                    {
+                      contextTokens: event.contextTokens,
+                      contextWindowTokens: windowTokens,
+                    },
                     em,
                   )
                   .catch(() => {}),
@@ -3934,8 +4514,10 @@ export class GraphExecutorService
                     runId,
                     callContext.callId,
                     node.id,
-                    event.contextTokens,
-                    windowTokens,
+                    {
+                      contextTokens: event.contextTokens,
+                      contextWindowTokens: windowTokens,
+                    },
                     em,
                   )
                   .catch(() => {}),
@@ -4009,8 +4591,11 @@ export class GraphExecutorService
                   .rememberContext(
                     runId,
                     node.id,
-                    event.usage?.contextTokens ?? null,
-                    settledWindowTokens,
+                    {
+                      contextTokens: event.usage?.contextTokens ?? null,
+                      contextWindowTokens: settledWindowTokens,
+                      contextEstimated: event.usage?.contextEstimated === true,
+                    },
                     em,
                   )
                   .catch(() => {}),
@@ -4023,8 +4608,11 @@ export class GraphExecutorService
                     runId,
                     callContext.callId,
                     node.id,
-                    event.usage?.contextTokens ?? null,
-                    settledWindowTokens,
+                    {
+                      contextTokens: event.usage?.contextTokens ?? null,
+                      contextWindowTokens: settledWindowTokens,
+                      contextEstimated: event.usage?.contextEstimated === true,
+                    },
                     em,
                   )
                   .catch(() => {}),
@@ -4261,7 +4849,7 @@ export class GraphExecutorService
               // Already decided above from this node's adapter — the registry
               // never re-derives it (`PendingApproval.question`).
               question: isQuestion,
-              respond: (allow, answer) => {
+              respond: (allow, answer, optionId) => {
                 openCards.delete(cardId);
                 // The card is gone whatever the delivery outcome, so the
                 // window restarts either way — a refused delivery leaves the
@@ -4278,7 +4866,13 @@ export class GraphExecutorService
                   event,
                   allow,
                   answer,
-                  (input) => handle.respondApproval(event.id, allow, input),
+                  // Arity-preserving: a one-time verdict keeps the
+                  // three-argument call it always made.
+                  (input, option) =>
+                    option === undefined
+                      ? handle.respondApproval(event.id, allow, input)
+                      : handle.respondApproval(event.id, allow, input, option),
+                  optionId,
                 );
                 if (delivered) {
                   enqueue(async () => {
@@ -4509,7 +5103,7 @@ export class GraphExecutorService
         calls.add(callContext.callId);
         callsBySessionKey.set(sessionKey, calls);
       }
-      this.sessionClosers.set(sessionKey, () => {
+      this.sessionClosers.set(sessionKey, (cause) => {
         // Read as the process CLOSES: the calls it served are the ones whose
         // work died with it, and a process spawned on this key later starts
         // its own list.
@@ -4525,7 +5119,7 @@ export class GraphExecutorService
             return;
           }
           for (const scope of scopes) {
-            await closeStrandedWork(scope, false);
+            await closeStrandedWork(scope, false, cause === 'user-stop');
           }
           // The process that owed this stretch's terminal event is gone, so
           // nothing else could ever end it — the second of the two endings
@@ -4540,6 +5134,22 @@ export class GraphExecutorService
         // or will be by a line this key no longer answers for — so the live
         // figure comes down with the turn, never to be added twice.
         this.partials.retireCost(runId, ownerKey, node.id);
+        // A turn that failed, was stopped, or exited with no terminal at all
+        // still called its tools; only `turn_complete` adds them earlier. No
+        // usage came with them, so the time stays unmeasured.
+        if (toolCalls > 0) {
+          const leftToolCalls = toolCalls;
+          toolCalls = 0;
+          enqueue(() =>
+            this.nodeStateDao
+              .rememberWork(runId, node.id, null, leftToolCalls, em)
+              .catch((err: unknown) => {
+                this.logger.warn(
+                  `run ${runId}: could not add ${leftToolCalls} tool calls to ${node.id}'s total: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }),
+          );
+        }
         // A clean exit with no result line still completes the node — the
         // synthetic-completion mirror of the chat turn's finalizer.
         const finalOutcome = endedAs();
@@ -4662,28 +5272,22 @@ export class GraphExecutorService
                 shell.callId !== null &&
                 calls.has(shell.callId),
             );
-            const words = new Map<string, string>();
-            for (const row of await this.itemDao.toolCallsByIds(
+            const launching = await this.itemDao.toolCallsByIds(
               runId,
               shells.flatMap((shell) =>
                 shell.toolCallId === null ? [] : [shell.toolCallId],
               ),
               em,
-            )) {
-              const id = asString(asRecord(parseJsonColumn(row.payload))?.id);
-              const command = shellCommandOf(row.payload);
-              if (id && command !== null) {
-                words.set(id, command);
-              }
-            }
+            );
             resolve(
-              shells.map((shell) => ({
-                command:
-                  shell.toolCallId === null
-                    ? null
-                    : (words.get(shell.toolCallId) ?? null),
-                callId: shell.callId,
-              })),
+              shells.map((shell) => {
+                const call = launchingCallOf(shell, launching);
+                return {
+                  command:
+                    call === undefined ? null : shellCommandOf(call.payload),
+                  callId: shell.callId,
+                };
+              }),
             );
           } catch (err) {
             this.logger.warn(
@@ -4783,7 +5387,10 @@ export class GraphExecutorService
           callContext
             ? { ...callContext, resumeSessionId: turn.sessionId }
             : undefined,
-          callContext ? {} : { resumeSessionId: turn.sessionId },
+          {
+            ...(callContext ? {} : { resumeSessionId: turn.sessionId }),
+            compaction: true,
+          },
         );
         compactionHandles.add(compaction.handle);
         try {
@@ -4900,16 +5507,30 @@ export class GraphExecutorService
         persistTurnStart(node, sessionKey);
         return beginAgentTurn(node, prompt, undefined, extras);
       }
-      const member = nodePoolMembers.get(node.id) ?? 1;
+      const cooldowns = this.callBroker.poolCooldowns;
+      const held = nodePoolMembers.get(node.id) ?? 1;
+      const heldSessionId = extras.resumeSessionId ?? null;
+      const heldWindow = nodeWindows.get(node.id);
+      const heldBaseline = this.compactionBaselines.get(sessionKey);
+      const site = { cwd, runId, nodeId: node.id };
+      const { standings, order } = cooldowns.order(node, site);
+      const start = nodeStartMember({
+        standings,
+        order,
+        held,
+        hasSession: heldSessionId !== null,
+        holdsWork: this.sessions.holdsWorkFor(sessionKey),
+      });
       const attempts = poolAttempts(node, [
-        member,
-        ...Array.from({ length: poolSize(node) }, (_, i) => i + 1).filter(
-          (other) => other !== member,
-        ),
+        start,
+        ...order.filter((member) => member !== start),
       ]);
       let index = 0;
       let stopped = false;
       let currentPrompt = prompt;
+      let resumeSessionId = heldSessionId;
+      /** Whether any attempt of this turn so far made a tool call. */
+      let turnDidWork = false;
       let finalResult: NodeTurnResult | null = null;
       const failureOf = (turn: NodeTurnResult): CalleeTurnOutcome => ({
         status: turn.outcome === 'skipped' ? 'failed' : turn.outcome,
@@ -4919,19 +5540,20 @@ export class GraphExecutorService
           this.adapterFor(attempts[index]!.node.agent).failureFrom(message),
         ),
       });
-      const handOn = async (
-        outcome: CalleeTurnOutcome,
-        retireCards?: () => () => Promise<void>,
+      /**
+       * Move the node's conversation to member `to`: its session belongs to
+       * the account it was opened on, so the next attempt starts a fresh one,
+       * and the row records which member now holds the node for later passes.
+       */
+      const moveConversation = async (
+        from: number,
+        to: number,
+        previousSessionId: string | null,
+        message: string,
+        retireReason: string,
+        recordRetired?: () => Promise<void>,
       ): Promise<void> => {
-        const from = attempts[index]!;
-        const next = attempts[++index]!;
-        // Keep the caller retained: its asynchronous calls must still wake
-        // this node, and must not be orphaned between accounts.
-        const recordRetired = retireCards?.();
-        this.sessions.retire(
-          sessionKey,
-          'its turn was handed to another pool member',
-        );
+        this.sessions.retire(sessionKey, retireReason);
         nodeSessionIds.delete(node.id);
         nodeWindows.delete(node.id);
         this.compactionBaselines.delete(sessionKey);
@@ -4942,17 +5564,11 @@ export class GraphExecutorService
               await this.nodeStateDao.clearConversation(runId, node.id, em);
               await persistItem(node.id, 'system', null, {
                 severity: 'info',
-                member: next.member,
+                member: to,
                 nodePoolHandOff: true,
-                fromMember: from.member,
-                previousSessionId: outcome.sessionId,
-                message: poolHandOffNotice(
-                  node.name ?? node.id,
-                  from.member,
-                  next.member,
-                  outcome,
-                  'turn',
-                ),
+                fromMember: from,
+                previousSessionId,
+                message,
               });
               resolve();
             } catch (err) {
@@ -4960,7 +5576,50 @@ export class GraphExecutorService
             }
           });
         });
-        nodePoolMembers.set(node.id, next.member);
+        nodePoolMembers.set(node.id, to);
+      };
+      const handOn = async (
+        outcome: CalleeTurnOutcome,
+        madeToolCalls: boolean,
+        retireCards?: () => () => Promise<void>,
+      ): Promise<void> => {
+        const from = attempts[index]!;
+        const next = attempts[++index]!;
+        turnDidWork ||= madeToolCalls;
+        cooldowns.record(from.node, site, outcome, true);
+        // Keep the caller retained: its asynchronous calls must still wake
+        // this node, and must not be orphaned between accounts.
+        const recordRetired = retireCards?.();
+        await moveConversation(
+          from.member,
+          next.member,
+          outcome.sessionId,
+          poolHandOffNotice(
+            node.name ?? node.id,
+            from.member,
+            next.member,
+            outcome,
+            'turn',
+          ),
+          'its turn was handed to another pool member',
+          recordRetired,
+        );
+        // Back on the member the conversation left before this turn: its own
+        // session still holds everything, so it resumes rather than starts
+        // over from a transcript excerpt — unless an attempt of this turn
+        // already did work, which that session never saw.
+        if (next.member === held && heldSessionId !== null && !turnDidWork) {
+          resumeSessionId = heldSessionId;
+          currentPrompt = prompt;
+          if (heldWindow !== undefined) {
+            nodeWindows.set(node.id, heldWindow);
+          }
+          if (heldBaseline !== undefined) {
+            this.compactionBaselines.set(sessionKey, heldBaseline);
+          }
+          return;
+        }
+        resumeSessionId = null;
         currentPrompt = nodePoolHandOffPrompt(
           prompt,
           node.id,
@@ -4988,24 +5647,44 @@ export class GraphExecutorService
               {
                 ...extras,
                 poolMember: attempt.member,
-                resumeSessionId: index === 0 ? extras.resumeSessionId : null,
+                resumeSessionId,
               },
             );
           } catch (err) {
             if (stopped || cancelRequested || index === attempts.length - 1) {
               throw err;
             }
-            await handOn({
-              status: 'failed',
-              finalText: null,
-              sessionId: null,
-              ...geniroSideFailure(
-                `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
-              ),
-            });
+            await handOn(
+              {
+                status: 'failed',
+                finalText: null,
+                sessionId: null,
+                ...geniroSideFailure(
+                  `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+                ),
+              },
+              false,
+            );
           }
         }
       };
+      if (start !== held) {
+        await moveConversation(
+          held,
+          start,
+          heldSessionId,
+          poolMoveNotice(node.name ?? node.id, held, start),
+          'its conversation moved to another pool member',
+        );
+        if (heldSessionId !== null) {
+          currentPrompt = nodePoolHandOffPrompt(
+            prompt,
+            node.id,
+            await this.itemDao.nodePoolContextRows(runId, node.id, em),
+          );
+          resumeSessionId = null;
+        }
+      }
       let current = await startAttempt();
       const done = (async (): Promise<void> => {
         for (;;) {
@@ -5019,11 +5698,12 @@ export class GraphExecutorService
             index === attempts.length - 1 ||
             !fallsThroughPool(outcome, turn.madeToolCalls)
           ) {
+            cooldowns.record(attempts[index]!.node, site, outcome, false);
             finalResult = turn;
             return;
           }
           try {
-            await handOn(outcome, current.retireCards);
+            await handOn(outcome, turn.madeToolCalls, current.retireCards);
             current = await startAttempt();
           } catch (err) {
             finalResult = {
@@ -5598,6 +6278,9 @@ export class GraphExecutorService
                   return;
                 }
               }
+              // Not held: the call settles now, and a monitor its callee
+              // started has nobody left to wake.
+              this.monitors?.stopConversation(runId, calleeCaller, 'teardown');
               // Stopped while its turn was ending with work of its own still
               // out: that work is being cancelled with it, so the call ends
               // cancelled rather than handing over an answer it never finished.
@@ -5676,6 +6359,9 @@ export class GraphExecutorService
         // Given back while the call is HELD and taken again for its wake — a
         // held call runs nothing, and its own calls may need the slot.
         let releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
+        let callWakes = 0;
+        let monitorWakes = 0;
+        let currentMessage = message;
         /**
          * The HELD loop: the call waits for the calls its callee made, and is
          * continued inside itself until a turn ends with none of them
@@ -5687,10 +6373,11 @@ export class GraphExecutorService
           first: CalleeTurnOutcome,
           firstHold: Promise<CallHoldRelease> | null,
           asReported: (outcome: CalleeTurnOutcome) => CalleeTurnOutcome,
-        ): Promise<CalleeTurnOutcome> => {
+          handsOn: Parameters<typeof runAttempt>[5],
+        ): Promise<{ outcome: CalleeTurnOutcome; handedOn: boolean }> => {
           let reported = first;
           let pending = firstHold;
-          for (let wakes = 1; pending !== null; wakes += 1) {
+          while (pending !== null) {
             const waiting = { node, messages: [] as string[] };
             waitingCalls.set(callId, waiting);
             releaseSlot?.();
@@ -5705,30 +6392,56 @@ export class GraphExecutorService
             if (release.kind === 'settle' && !callStopped()) {
               // Read again: a command can end while the call is held, and
               // the caller is told what is running when it actually settles.
-              return settleHeldCall(
-                node,
-                callId,
-                reported.status === 'completed'
-                  ? {
-                      ...reported,
-                      shellsStillOut: await shellsOutOfConversation(
-                        node.id,
-                        callId,
-                        conversationId,
-                      ),
-                    }
-                  : reported,
-                waiting.messages,
-              );
+              return {
+                outcome: await settleHeldCall(
+                  node,
+                  callId,
+                  reported.status === 'completed'
+                    ? {
+                        ...reported,
+                        shellsStillOut: await shellsOutOfConversation(
+                          node.id,
+                          callId,
+                          conversationId,
+                        ),
+                      }
+                    : reported,
+                  waiting.messages,
+                ),
+                handedOn: false,
+              };
             }
             if (release.kind !== 'wake' || callStopped()) {
-              return settleHeldCall(
-                node,
-                callId,
-                stoppedOutcome(reported.sessionId),
-                waiting.messages,
-              );
+              return {
+                outcome: await settleHeldCall(
+                  node,
+                  callId,
+                  stoppedOutcome(reported.sessionId),
+                  waiting.messages,
+                ),
+                handedOn: false,
+              };
             }
+            if (release.monitor === true) {
+              monitorWakes += 1;
+              if (monitorWakes >= MAX_MONITOR_WAKES) {
+                // The last wake it is given: the turn it starts settles the
+                // call, so nothing may be left running to wake it again.
+                this.monitors?.stopConversation(
+                  runId,
+                  callerKey(node.id, conversationId),
+                  'teardown',
+                );
+              }
+            } else {
+              callWakes += 1;
+            }
+            currentMessage = [
+              release.prompt,
+              ...this.callBroker.takeQueuedMessages(runId, callId),
+              ...waiting.messages,
+              release.note,
+            ].join('\n\n');
             const woken = await runAttempt(
               node,
               member,
@@ -5736,23 +6449,21 @@ export class GraphExecutorService
               // What was sent while the wake waited for its slot — the
               // caller's queued messages first, as a held wake orders them —
               // and the note that the reply is the result, said last.
-              [
-                release.prompt,
-                ...this.callBroker.takeQueuedMessages(runId, callId),
-                ...waiting.messages,
-                release.note,
-              ].join('\n\n'),
+              currentMessage,
               reported.sessionId,
-              null,
-              wakes < MAX_CALL_WAKES,
+              handsOn,
+              callWakes < MAX_CALL_WAKES && monitorWakes < MAX_MONITOR_WAKES,
             );
+            if (woken.handedOn) {
+              return { outcome: woken.outcome, handedOn: true };
+            }
             reported = asReported({
               ...woken.outcome,
               sessionId: woken.outcome.sessionId ?? reported.sessionId,
             });
             pending = woken.hold;
           }
-          return reported;
+          return { outcome: reported, handedOn: false };
         };
         try {
           if (cancelRequested || (runFinished && !reopened)) {
@@ -5771,6 +6482,21 @@ export class GraphExecutorService
             ...(pool?.fallbacks ?? []),
           ];
           const skipped: PoolSkip[] = [];
+          const recordAttempt = (
+            member: WorkflowAgentNode,
+            outcome: CalleeTurnOutcome,
+            handedPast: boolean,
+          ): void => {
+            if (pool !== undefined) {
+              this.callBroker.poolCooldowns.record(
+                member,
+                { cwd, runId, nodeId: callee.id },
+                outcome,
+                handedPast,
+              );
+            }
+          };
+          let attemptPrompt = message;
           for (let index = 0; ; index += 1) {
             const attempt = attempts[index]!;
             const isLast = index === attempts.length - 1;
@@ -5785,26 +6511,25 @@ export class GraphExecutorService
                     member: attempt.member,
                     ...(skipped.length > 0 ? { poolSkipped: skipped } : {}),
                   };
-            const { outcome, handedOn, hold } = await runAttempt(
+            const handsOn: Parameters<typeof runAttempt>[5] = isLast
+              ? null
+              : (result, madeToolCalls) =>
+                  !callStopped() && fallsThroughPool(result, madeToolCalls);
+            const attempted = await runAttempt(
               attempt.node,
               member,
               index === 0,
-              index === 0
-                ? message
-                : poolHandOffPrompt(message, callMessages.get(callId) ?? []),
+              attemptPrompt,
               // Only the first attempt continues a session: a fallback is
               // another account, which holds none of this conversation.
               index === 0 ? resumeSessionId : null,
-              isLast
-                ? null
-                : (result, madeToolCalls) =>
-                    !cancelRequested &&
-                    !cancelledCalls.has(callId) &&
-                    fallsThroughPool(result, madeToolCalls),
-              true,
+              handsOn,
+              callWakes < MAX_CALL_WAKES,
             );
+            let { outcome } = attempted;
+            const { handedOn, hold } = attempted;
             if (!handedOn) {
-              const reported = await followHold(
+              const followed = await followHold(
                 attempt.node,
                 member,
                 // Held on the session this turn RESUMED when it reported none
@@ -5821,10 +6546,19 @@ export class GraphExecutorService
                 ),
                 hold,
                 asReported,
+                handsOn,
               );
-              callMessages.delete(callId);
-              return reported;
+              if (!followed.handedOn) {
+                recordAttempt(attempt.node, followed.outcome, false);
+                callMessages.delete(callId);
+                forgetCallDeliveries(callId);
+                return followed.outcome;
+              }
+              outcome = followed.outcome;
             }
+            // Recorded as it is handed on, not when the call settles: until
+            // then every other run would still start new work on it.
+            recordAttempt(attempt.node, outcome, true);
             const next = attempts[index + 1]!;
             skipped.push({
               member: attempt.member,
@@ -5857,6 +6591,29 @@ export class GraphExecutorService
                 ),
               }).catch(() => {});
             });
+            await drained();
+            const calls = [
+              callId,
+              ...this.callBroker.recordedCallsOf(runId, conversationId),
+            ];
+            const [recent, briefs] = await Promise.all([
+              this.itemDao.getByRun(
+                runId,
+                -1,
+                em,
+                { limit: 200, take: 'newest' },
+                calls,
+              ),
+              this.itemDao.callRowsOf(runId, calls, em),
+            ]);
+            attemptPrompt = callPoolHandOffPrompt(
+              poolHandOffPrompt(currentMessage, callMessages.get(callId) ?? []),
+              [
+                ...new Map(
+                  [...briefs, ...recent].map((row) => [row.id, row]),
+                ).values(),
+              ].sort((a, b) => a.seq - b.seq),
+            );
           }
         } finally {
           releaseSlot?.();
@@ -5884,7 +6641,11 @@ export class GraphExecutorService
       node: WorkflowAgentNode,
       prompt: string,
       images: TurnImage[],
+      opener: HostWakeOpener | 'other' = 'other',
     ): Promise<void> => {
+      if (opener === 'other') {
+        wokenOnlyByMonitors = false;
+      }
       const starting = reserveContinuation(node.id);
       markRootWorking(node.id, true);
       liveSubTurns += 1;
@@ -6105,15 +6866,48 @@ export class GraphExecutorService
         );
       }
       const { stored, turnImages } = this.storeImages(runId, images);
+      // TWIN PARSER: the renderer reads the row's `deliveryId` back
+      // (`chats/not-sent-messages.ts`). Each root is told under its own id.
+      const deliveryId = randomUUID();
+      const shared: SharedDelivery = {
+        rowDeliveryId: deliveryId,
+        roots: roots.length,
+        took: 0,
+        dropped: [],
+      };
+      // The user drives this stretch now: its settle is theirs to hear about.
+      wokenOnlyByMonitors = false;
+      const told: string[] = [];
       for (const root of roots) {
         const running =
           runningHandles.get(root.id) ?? continuationHandles.get(root.id);
+        if (!running) {
+          // Started fresh with the message below: it cannot be dropped.
+          shared.took += 1;
+          continue;
+        }
+        const rootDeliveryId = randomUUID();
         // Told FIRST, recorded after: only a delivery the CLI confirmed may be
         // written to the transcript — the reverse leaves a message on screen
         // that no agent received.
-        if (running && !running.sendUserMessage({ text, images: turnImages })) {
+        if (
+          !running.sendUserMessage({
+            text,
+            images: turnImages,
+            deliveryId: rootDeliveryId,
+          })
+        ) {
+          for (const id of told) {
+            rootDeliveries.delete(id);
+          }
           throw busy(`${root.name ?? root.id} is finishing a turn`);
         }
+        told.push(rootDeliveryId);
+        rootDeliveries.set(rootDeliveryId, {
+          delivery: shared,
+          nodeId: root.id,
+          name: root.name ?? root.id,
+        });
       }
       // The roots this message will START a turn for are counted live from
       // NOW, across the write below: on an awake run the woken work can drain
@@ -6129,11 +6923,17 @@ export class GraphExecutorService
       let item: ItemWire;
       let persisted = false;
       try {
-        item = await persistUserMessage(null, messagePayload(text, stored));
+        item = await persistUserMessage(null, {
+          ...messagePayload(text, stored),
+          deliveryId,
+        });
         persisted = true;
       } finally {
         liveSubTurns -= starting.length;
         if (!persisted) {
+          for (const id of told) {
+            rootDeliveries.delete(id);
+          }
           for (const { root, reservation } of starting) {
             startingContinuations.delete(root.id);
             reservation.release();
@@ -6212,8 +7012,12 @@ export class GraphExecutorService
       }
       const { handle, callee, conversationId } = subTurn;
       const { stored, turnImages } = this.storeImages(runId, images);
+      // TWIN PARSER: the renderer reads it back off the row
+      // (`chats/not-sent-messages.ts`).
+      const deliveryId = randomUUID();
+      wokenOnlyByMonitors = false;
       // Told FIRST, recorded after, for `deliverFollowUp`'s reason.
-      if (!handle.sendUserMessage({ text, images: turnImages })) {
+      if (!handle.sendUserMessage({ text, images: turnImages, deliveryId })) {
         throw new ConflictException(
           'CALL_MESSAGE_REFUSED',
           `${callee.name ?? callee.id} can't take a message while it works — its CLI accepts none mid-turn, or the turn is ending`,
@@ -6227,6 +7031,7 @@ export class GraphExecutorService
         ...messagePayload(text, stored),
         nodeId: callee.id,
         callId,
+        deliveryId,
       });
     };
 
@@ -6331,16 +7136,117 @@ export class GraphExecutorService
         this.callTokens.ensure(runId, node.id);
       }
     }
+    const hostToolNodes = nodes.filter(
+      (node): node is WorkflowAgentNode =>
+        node.kind === 'agent' && callCapable(node),
+    );
     this.registerArtifactPublishers(
       runId,
-      nodes
-        .filter(
-          (node): node is WorkflowAgentNode =>
-            node.kind === 'agent' && callCapable(node),
-        )
-        .map((node) => node.id),
+      hostToolNodes.map((node) => node.id),
       persistItem,
     );
+    this.registerActionPublishers(runId, hostToolNodes, triggerFed);
+    this.registerMonitorSinks(
+      runId,
+      hostToolNodes,
+      cwd,
+      (node) => resolveApproval(node).mode,
+    );
+    this.registerTeamNoteSinks(runId, hostToolNodes, nodes, persistItem);
+    /**
+     * Open a turn of a node's OWN conversation on the write chain — what a
+     * wake (`wakeNode`) and a monitor's output share: counted live from now
+     * rather than from when the turn begins (the turn starts on the write
+     * chain, and a finalizer queued ahead of it would otherwise see nothing
+     * live and close the run under it), after any continuation still being
+     * reserved, waking a finished run first. `onStopped` runs when the run was
+     * cancelled meanwhile or refuses to wake — `stopped` (stopped, archived,
+     * being deleted) or `superseded` (a user's message claimed the run for its
+     * next pass meanwhile); `onBusy` when the conversation is working again,
+     * handed what opens this turn once more; `start` opens it.
+     */
+    const scheduleOwnTurn = (
+      nodeId: string,
+      caller: string,
+      opener: HostWakeOpener | 'other',
+      steps: {
+        onStopped: (why: 'stopped' | 'superseded') => void;
+        onBusy: (rewake: () => void) => void;
+        start: () => Promise<void> | void;
+      },
+    ): void => {
+      liveSubTurns += 1;
+      const deliver = async (): Promise<void> => {
+        const starting = startingContinuations.get(nodeId);
+        if (starting) {
+          // The reservation may depend on a later write in this chain.
+          void starting.ready.then(() => enqueue(deliver));
+          return;
+        }
+        liveSubTurns -= 1;
+        const woke = cancelRequested
+          ? 'stopped'
+          : runFinished
+            ? await reopenRun(opener)
+            : 'awake';
+        if (woke !== 'awake') {
+          steps.onStopped(woke);
+          await finishRunIfSettled();
+          return;
+        }
+        if (liveConversations.has(caller)) {
+          steps.onBusy(() => {
+            liveSubTurns += 1;
+            enqueue(deliver);
+          });
+          // This path opens NO turn, so nothing else would put a run that
+          // woke for it back to sleep.
+          await finishRunIfSettled();
+          return;
+        }
+        await steps.start();
+      };
+      enqueue(deliver);
+    };
+    // A monitor's output reaches a node's OWN conversation as a turn of its
+    // own once the one it is in has ended — `wakeNode`'s path, which exists
+    // only where the workflow can call — and a callee conversation inside the
+    // call it holds open.
+    this.monitorWakers.set(runId, (caller, prompt, row, onDropped, opener) => {
+      if (cancelRequested) {
+        return 'refused';
+      }
+      if (liveConversations.has(caller)) {
+        return 'busy';
+      }
+      if (callerConversationOf(caller) !== null) {
+        // Only a monitor's output reopens a call it holds; anything else
+        // geniro owes a callee waits for its next turn as a note.
+        if (opener !== 'monitor') {
+          return 'refused';
+        }
+        const woke = this.callBroker.wakeHeldCallee(runId, caller, prompt, row);
+        return woke === 'pending' ? 'busy' : woke;
+      }
+      const nodeId = callerNodeOf(caller);
+      const node = nodesById.get(nodeId);
+      if (node?.kind !== 'agent') {
+        return 'refused';
+      }
+      scheduleOwnTurn(nodeId, caller, opener, {
+        // Its delivery already let the output go: handed back, it holds it
+        // for the next pass's turn of this conversation, or records what
+        // ended when the run is stopped.
+        onStopped: (why) => onDropped(why === 'superseded'),
+        // A follow-up took the conversation meanwhile: never into its turn.
+        onBusy: (rewake) => redeliverWhenEnded(caller, rewake),
+        start: async () => {
+          await persistItem(nodeId, 'system', null, row);
+          void continueNode(node, prompt, [], opener);
+        },
+      });
+      return 'woken';
+    });
     /** The node a caller conversation runs as — its pool member, once known. */
     const agentNodeOfConversation = (
       caller: string,
@@ -6376,6 +7282,8 @@ export class GraphExecutorService
         runId,
         {
           calleesOf,
+          cwd,
+          messageTargets: triggerFed,
           launchCalleeTurn,
           persistItem: (nodeId, kind, role, payload) => {
             enqueue(async () => {
@@ -6384,6 +7292,17 @@ export class GraphExecutorService
           },
           isCancelled: () => cancelRequested,
           isSuperseded: supersededByNextPass,
+          monitorsOwed: (caller) =>
+            this.monitors?.isRunningFor(runId, caller) === true ||
+            this.monitorOutputHeld(runId, caller),
+          stopMonitors: (caller) =>
+            this.monitors?.stopConversation(runId, caller, 'thread-stop'),
+          callHeld: (caller) => this.notifyConversationTurnEnded(runId, caller),
+          unreadTeamNotes: (caller) =>
+            this.teamNotes?.unreadCount(runId, {
+              nodeId: callerNodeOf(caller),
+              conversationId: callerConversationOf(caller),
+            }) ?? 0,
           toolCallDeadlineMs: (caller) => {
             const node = agentNodeOfConversation(caller);
             return node !== null
@@ -6398,13 +7317,19 @@ export class GraphExecutorService
           },
           messageCallee: (callId, text) => {
             const subTurn = subTurns.get(callId);
-            if (subTurn === undefined || cancelRequested) {
+            if (
+              subTurn === undefined ||
+              cancelRequested ||
+              cancelledCalls.has(callId)
+            ) {
               return { delivered: false, reason: 'not_started' };
             }
             const { handle, callee, conversationId } = subTurn;
-            if (!handle.sendUserMessage({ text, images: [] })) {
+            const deliveryId = randomUUID();
+            if (!handle.sendUserMessage({ text, images: [], deliveryId })) {
               return { delivered: false, reason: 'refused' };
             }
+            brokerDeliveries.set(deliveryId, { callId, text });
             noteCallMessage(callId, text);
             // `deliverToCall`'s reason: a callee that is itself a caller may be
             // blocked waiting on ITS callees, and would read this only then.
@@ -6413,12 +7338,13 @@ export class GraphExecutorService
               delivered: true,
               interrupts: this.adapterFor(callee.agent).getConfig().followUp
                 .interrupts,
+              deliveryId,
             };
           },
           // Per CONVERSATION: a node's callee turns say nothing about whether
           // its own conversation — or another call's — has a turn to answer in.
           isNodeLive: (caller) => liveConversations.has(caller),
-          tellLiveNode: (caller, prompt) => {
+          tellLiveNode: (caller, prompt, redeliver) => {
             const node = agentNodeOfConversation(caller);
             if (
               node === null ||
@@ -6433,12 +7359,17 @@ export class GraphExecutorService
             // of the call it is answering, which the node-wide lookup this
             // replaced never reached, so a question for a working callee was
             // pushed nowhere and timed out.
-            return (
+            const deliveryId = randomUUID();
+            const told =
               conversationHandle(caller)?.sendUserMessage({
                 text: prompt,
                 images: [],
-              }) ?? false
-            );
+                deliveryId,
+              }) ?? false;
+            if (told) {
+              promptDeliveries.set(deliveryId, { caller, redeliver });
+            }
+            return told;
           },
           wakeNode: (caller, prompt) => {
             const nodeId = callerNodeOf(caller);
@@ -6459,48 +7390,39 @@ export class GraphExecutorService
             if (node?.kind !== 'agent' || cancelRequested) {
               return false;
             }
-            // Counted as live from NOW rather than from when the turn begins:
-            // the turn starts on the write chain, and a finalizer queued ahead
-            // of it would otherwise see nothing live and close the run under
-            // the wake.
-            liveSubTurns += 1;
-            const deliverWake = async (): Promise<void> => {
-              const starting = startingContinuations.get(nodeId);
-              if (starting) {
-                // The reservation may depend on a later write in this chain.
-                void starting.ready.then(() => enqueue(deliverWake));
-                return;
-              }
-              liveSubTurns -= 1;
-              // Cancelled meanwhile — every callee dies with the run, so there
-              // is nothing left for this turn to answer or collect — or the
-              // walk is over and the run refuses to wake (stopped, archived,
-              // being deleted).
-              if (
-                cancelRequested ||
-                (runFinished && (await reopenRun()) !== 'awake')
-              ) {
-                await finishRunIfSettled();
-                return;
-              }
-              if (liveConversations.has(caller)) {
-                // A follow-up raced the wake and the conversation is working
-                // again: hand it the message inside that turn rather than
-                // opening a second one on it. Asked of the CONVERSATION: a node
-                // "live" only through a callee turn has no handle here, and the
-                // prompt its wake was already counted as told went nowhere.
-                conversationHandle(caller)?.sendUserMessage({
-                  text: prompt,
-                  images: [],
-                });
-                // This path opens NO turn, so nothing else would put a run that
-                // woke for this wake back to sleep.
-                await finishRunIfSettled();
-                return;
-              }
-              continueNode(node, prompt, []);
-            };
-            enqueue(deliverWake);
+            // Cancelled meanwhile — every callee dies with the run, so there
+            // is nothing left for this turn to answer or collect — or a run
+            // that refuses to wake: nothing to do.
+            scheduleOwnTurn(nodeId, caller, 'other', {
+              onStopped: () => undefined,
+              // A follow-up raced the wake and the conversation is working
+              // again: hand it the message inside that turn rather than
+              // opening a second one on it. Asked of the CONVERSATION: a node
+              // "live" only through a callee turn has no handle here, and the
+              // prompt its wake was already counted as told went nowhere.
+              // A turn that drops it — or is already ending and refuses it —
+              // has it woken for again once that turn has ended.
+              onBusy: (rewake) => {
+                const deliveryId = randomUUID();
+                if (
+                  conversationHandle(caller)?.sendUserMessage({
+                    text: prompt,
+                    images: [],
+                    deliveryId,
+                  })
+                ) {
+                  promptDeliveries.set(deliveryId, {
+                    caller,
+                    redeliver: rewake,
+                  });
+                } else {
+                  redeliverWhenEnded(caller, rewake);
+                }
+              },
+              start: () => {
+                void continueNode(node, prompt, []);
+              },
+            });
             return true;
           },
         },

@@ -42,6 +42,8 @@ import type {
   CarrySessionResult,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
+  RecoveredSubagentOutcome,
+  SubagentRecoveryRef,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
@@ -128,6 +130,10 @@ import {
 import { codexTurnPolicy } from './utils/codex-policy.utils';
 import { carryCodexSession } from './utils/codex-session-carry.utils';
 import {
+  isCodexSubagentRecoveryRef,
+  recoverCodexSubagent,
+} from './utils/codex-subagent-recovery.utils';
+import {
   codexThreadHistory,
   readCodexThreads,
 } from './utils/codex-threads.utils';
@@ -202,6 +208,9 @@ export class CodexAdapter extends AgentAdapter {
       // geniro sets the tool timeout on its own server entry to a day, so a
       // question can wait on screen until it is answered.
       hostQuestionDeferredReason: null,
+      // Every MCP call outside approval policy `never` arrives as an
+      // `mcp_tool_call` elicitation (`CODEX_MCP_TOOL_APPROVAL_KIND`).
+      hostToolCallUngatedReason: null,
       subagents: {
         reports: true,
         unavailableReason: null,
@@ -1219,6 +1228,28 @@ export class CodexAdapter extends AgentAdapter {
     _input: AgentSessionImportInput,
   ): Promise<void> {
     return Promise.resolve();
+  }
+
+  override async recoverSubagent(
+    ref: SubagentRecoveryRef,
+  ): Promise<RecoveredSubagentOutcome | null> {
+    if (!isCodexSubagentRecoveryRef(ref)) {
+      return null;
+    }
+    try {
+      const result = await this.oneshot(
+        CODEX_METHODS.threadRead,
+        { threadId: ref.childSessionId, includeTurns: true },
+        // Metadata reads must outlive task worktrees that have been collected.
+        {
+          configDir: ref.configDir,
+          cwd: this.codexOptions.homeDir ?? homedir(),
+        },
+      );
+      return recoverCodexSubagent(ref, result);
+    } catch {
+      return null;
+    }
   }
 
   /** Bring the saved rollout along when the chat switches Codex homes. */

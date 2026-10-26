@@ -617,7 +617,7 @@ describe('useBoard', () => {
     expect(prune).toHaveBeenCalledWith('t1');
   });
 
-  it('starts a run carrying the user’s agent options, as a chat does', async () => {
+  it('starts a run carrying the user’s agent options and reply language, as a chat does', async () => {
     const agentOptions = { 'cursor-agent': { maxMode: false } };
     window.geniro = createPreloadStub({
       getSettings: () =>
@@ -625,6 +625,7 @@ describe('useBoard', () => {
           ...DEFAULT_SETTINGS,
           onboardingComplete: true,
           agentOptions,
+          replyLanguage: ' Russian ',
         }),
     });
     const { apis } = stubApis();
@@ -643,7 +644,10 @@ describe('useBoard', () => {
     expect(startTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: 't1',
-        startTaskRunDto: expect.objectContaining({ agentOptions }),
+        startTaskRunDto: expect.objectContaining({
+          agentOptions,
+          replyLanguage: 'Russian',
+        }),
       }),
     );
   });

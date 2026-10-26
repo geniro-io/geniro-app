@@ -29,11 +29,16 @@ import { closeInterruptedRuns } from './utils/interrupted-runs';
 import { writeCrashMark, writePidfile } from './utils/pidfile';
 import { consumeStopCause } from './utils/stop-cause';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
+import { ActionOutcomeSweep } from './v1/agents/services/action-outcome-sweep.service';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
+import { HostWakeChatDelivery } from './v1/agents/services/host-wake-chat-delivery.service';
 import { ItemCallIndexService } from './v1/agents/services/item-call-index.service';
+import { MonitorChatDelivery } from './v1/agents/services/monitor-chat-delivery.service';
+import { MonitorOutcomeSweep } from './v1/agents/services/monitor-outcome-sweep.service';
 import { PartialStreamService } from './v1/agents/services/partial-stream.service';
+import { PullRequestCaptureService } from './v1/agents/services/pull-request-capture.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
 import { WallWorkService } from './v1/agents/services/wall-work.service';
 import {
@@ -48,6 +53,8 @@ import { createPinoSinkStream } from './v1/diagnostics/utils/pino-sink-stream';
 import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
+import { WorkflowProposalService } from './v1/graphs/services/workflow-proposal.service';
+import { ShareService } from './v1/shares/services/share.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 
 installCrashGuards({
@@ -110,7 +117,11 @@ const bootstrapper = buildBootstrapper({
  * so this is always assigned by the time the listen callback fires.
  */
 let callIndex: ItemCallIndexService | null = null;
+let monitorChats: MonitorChatDelivery | null = null;
+let hostWakeChats: HostWakeChatDelivery | null = null;
+let shares: ShareService | null = null;
 let wallWork: WallWorkService | null = null;
+let pullRequests: PullRequestCaptureService | null = null;
 bootstrapper.addExtension(
   buildHttpServerExtension(
     {
@@ -167,10 +178,22 @@ bootstrapper.addExtension(
         // look hung on the first launch after an update. A run it has not
         // reached yet is stamped on its first read anyway.
         void callIndex?.indexAllQuietly();
+        // Only now can a woken chat turn be handed geniro's tools, and every
+        // boot reconcile it must not race has run — the interrupted-monitor
+        // wakes the boot sweep held go out from here.
+        monitorChats?.startDelivering();
+        // On the same terms: an agent still owed the outcome of a share that
+        // waited on the user's sign-in is woken again, once per boot.
+        hostWakeChats?.startDelivering();
+        void shares?.republishOwedWakes();
         // Off the boot path too: it folds every agent of every run settled
         // before the wall ledger existed, and the ledger's per-turn key makes
         // it safe beside the live catch-up.
         void wallWork?.sweepAllQuietly();
+        // Off the boot path for the same reason: it re-reads from the start
+        // every run scanned under an older pull-request rule — the one pass that
+        // does, since a listing only carries a run on from its marker.
+        void pullRequests?.rescanOutdatedQuietly();
       },
     },
     async (app: INestApplication) => {
@@ -218,7 +241,7 @@ bootstrapper.addExtension(
       // (after the schema sync, before listen) — not via an OnApplicationBootstrap
       // hook, which fires before this sync and would hit not-yet-created tables on
       // a fresh install, so a logged reconcile error always means a real failure.
-      await closeInterruptedRuns({
+      const stopCause = await closeInterruptedRuns({
         readCause: () => consumeStopCause(environment.userDataDir),
         chats: app.get(ChatService),
         workflows: app.get(GraphExecutorService),
@@ -235,6 +258,11 @@ bootstrapper.addExtension(
       // The same for detached commands: their close is announced by the CLI
       // process's own exit, which a SIGKILLed daemon never heard.
       await app.get(ChatService).reconcileStrandedShells();
+      // And the command actions a prior daemon was running: their finish row
+      // is written in-process, and their child died with it.
+      await app.get(ActionOutcomeSweep).sweep();
+      // And the monitors: their end row is written in-process too.
+      await app.get(MonitorOutcomeSweep).sweep(stopCause);
 
       // Put every STANDING question card back in the approval registry. Unlike
       // the reconciles above this restores something rather than closing it:
@@ -244,6 +272,8 @@ bootstrapper.addExtension(
       // answer that later" comes back. AFTER the schema sync for the same
       // reason as its neighbours; it reads the `runs` table.
       await app.get(ChatService).rehydrateDeferredQuestions();
+      // And every standing workflow proposal card, for the same reason.
+      await app.get(WorkflowProposalService).rehydrate();
 
       // Arm again every continue geniro PROMISED a workflow run at a
       // usage-limit reset. Its agents were told to wait for it rather than set
@@ -261,7 +291,11 @@ bootstrapper.addExtension(
       // the only line of it that may run before the server is up, and it only
       // reads the container.
       callIndex = app.get(ItemCallIndexService);
+      monitorChats = app.get(MonitorChatDelivery);
+      hostWakeChats = app.get(HostWakeChatDelivery);
+      shares = app.get(ShareService);
       wallWork = app.get(WallWorkService);
+      pullRequests = app.get(PullRequestCaptureService);
 
       // Sweep what a prior crash left behind — per-turn files and directories
       // whose disposer only runs on a clean settle. Each adapter knows its own;

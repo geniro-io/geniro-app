@@ -306,6 +306,7 @@ export class TaskRunsService {
         approval: this.chats.offeredApproval(target.agentKind, target.approval),
         configDir: target.configDir ?? undefined,
         customInstructions: input.customInstructions,
+        replyLanguage: input.replyLanguage,
         agentOptions: input.agentOptions,
         taskInstructions: this.composeTaskInstructions(
           labelInstructions,
@@ -362,6 +363,7 @@ export class TaskRunsService {
       cwd: input.cwd,
       prompt: this.brief(task, input),
       customInstructions: input.customInstructions,
+      replyLanguage: input.replyLanguage,
       agentOptions: input.agentOptions,
       startSha: input.startSha,
       startDirty: input.startDirty,
@@ -712,7 +714,7 @@ export class TaskRunsService {
    * a class of card, and the ask this run itself needs is the more specific.
    *
    * Stored as `Run.taskInstructions`, never joined into the user's own
-   * `customInstructions`: `composeTurnInstructions` places the pair directly
+   * `customInstructions`: `turnInstructionParts` places the pair directly
    * after that text, so the turn reads user's own → label block → report ask,
    * while the user's purge of their own text leaves this intact.
    *

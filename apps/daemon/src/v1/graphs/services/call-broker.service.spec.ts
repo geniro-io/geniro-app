@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import type { RunCallSeed } from '../../agents/chat.types';
@@ -12,12 +12,15 @@ import type {
   RunCallCapability,
   WorkflowAgentNode,
 } from '../graphs.types';
+import { poolMemberNode } from '../utils/agent-pool';
 import {
   LEFT_RUNNING_COMMAND_MAX,
+  PUBLISHED_ACTIONS_NOTE,
   PUBLISHED_PAGES_NOTE,
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
-import { CallBroker } from './call-broker.service';
+import { AWAIT_GAP_GRACE_MS, CallBroker } from './call-broker.service';
+import { PoolCooldowns } from './pool-cooldowns.store';
 
 const HELPER: WorkflowAgentNode = {
   id: 'helper',
@@ -58,7 +61,9 @@ function harness(options?: {
   /** Whether a caller can be woken; default: never (the pre-wake behaviour). */
   wakeNode?: (nodeId: string, prompt: string) => boolean;
   /** Whether a working caller takes a message; default: never. */
-  tellLiveNode?: (nodeId: string, prompt: string) => boolean;
+  tellLiveNode?: RunCallCapability['tellLiveNode'];
+  /** The agents a user's message goes to — `orch` unless named. */
+  messageTargets?: string[];
   /** What an earlier daemon's pass of the run left in the transcript. */
   seed?: RunCallSeed;
   /** Whether a running callee takes a message; default: yes, joining its turn. */
@@ -67,6 +72,12 @@ function harness(options?: {
   instantOutcome?: Partial<CalleeTurnOutcome>;
   /** The caller CLI's tool-call deadline; default: none (unbounded waits). */
   toolCallDeadlineMs?: RunCallCapability['toolCallDeadlineMs'];
+  /** The run's folder; default: none. */
+  cwd?: string;
+  /** The daemon-wide record of spent pool members; default: an empty one. */
+  poolCooldowns?: PoolCooldowns;
+  /** Each conversation's unread team notes; default: no team-note tools. */
+  unreadTeamNotes?: RunCallCapability['unreadTeamNotes'];
 }): {
   broker: CallBroker;
   capability: RunCallCapability;
@@ -98,6 +109,7 @@ function harness(options?: {
   const mode = options?.launch ?? 'instant';
   const capability: RunCallCapability = {
     calleesOf: options?.calleesOf ?? new Map([['orch', [HELPER, WRITER]]]),
+    ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
     launchCalleeTurn: (
       callee,
       message,
@@ -140,6 +152,7 @@ function harness(options?: {
     },
     isCancelled: () => options?.cancelled ?? false,
     isSuperseded: () => false,
+    messageTargets: new Set(options?.messageTargets ?? ['orch']),
     toolCallDeadlineMs: options?.toolCallDeadlineMs ?? (() => null),
     // Modelled on the executor's own: a LIVE turn is cancelled and settles
     // `cancelled`, and the answer says whether one was signalled. A stub merely
@@ -173,8 +186,11 @@ function harness(options?: {
     isNodeLive: options?.isNodeLive ?? (() => true),
     wakeNode: options?.wakeNode ?? (() => false),
     tellLiveNode: options?.tellLiveNode ?? (() => false),
+    ...(options?.unreadTeamNotes === undefined
+      ? {}
+      : { unreadTeamNotes: options.unreadTeamNotes }),
   };
-  const broker = new CallBroker();
+  const broker = new CallBroker(undefined, options?.poolCooldowns);
   broker.registerRun('run-1', capability, options?.seed ?? null);
   return {
     broker,
@@ -1494,6 +1510,43 @@ describe('CallBroker — parked questions (M4)', () => {
       call_id: 'call-1',
     });
     expect(errorOf(final)).toContain('QUESTION_ORPHANED');
+  });
+
+  it('says in a wake how many team notes the woken conversation has not read, and nothing at 0', async () => {
+    const wakeOf = (unread: number): string => {
+      const wakes: string[] = [];
+      const { broker } = harness({
+        launch: 'defer',
+        isNodeLive: () => false,
+        wakeNode: (_nodeId, prompt) => {
+          wakes.push(prompt);
+          return true;
+        },
+        unreadTeamNotes: (caller) => (caller === 'orch' ? unread : 0),
+      });
+      void broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      park(broker, { ttlMs: 60_000 });
+      return wakes[0]!;
+    };
+
+    expect(wakeOf(2)).toContain(
+      '2 team notes by other agents of this run are unread — read them with team_notes',
+    );
+    expect(wakeOf(0)).not.toContain('team note');
+  });
+
+  it('answers the unread team-note figure per conversation, and 0 for a run it does not hold', () => {
+    const { broker } = harness({
+      unreadTeamNotes: (caller) => (caller === 'orch' ? 3 : 0),
+    });
+    expect(broker.unreadTeamNotes('run-1', 'orch')).toBe(3);
+    expect(broker.unreadTeamNotes('run-1', 'helper')).toBe(0);
+    expect(broker.unreadTeamNotes('run-x', 'orch')).toBe(0);
   });
 
   it('WAKES a caller whose turn ended when its callee asks — the callee keeps its question', async () => {
@@ -3040,7 +3093,25 @@ describe('CallBroker — a caller waiting on its own calls', () => {
     return { broker, deferred, waits };
   }
 
-  it('announces the wait when a collection starts, and its end when the callee answers', async () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A callee's answer. */
+  const done = {
+    status: 'completed' as const,
+    finalText: 'done',
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: null,
+  };
+
+  it('announces the wait when a collection starts, and its end once the gap after the answer has passed', async () => {
     const { broker, deferred, waits } = busBroker({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
       title: 'why',
@@ -3060,18 +3131,67 @@ describe('CallBroker — a caller waiting on its own calls', () => {
     expect(broker.awaitingCalls('run-1')).toBe(1);
     expect(waits).toEqual([1]);
 
-    deferred[0]!.resolve({
-      status: 'completed',
-      finalText: 'done',
-      error: null,
-      failureClass: null,
-      resetsAt: null,
-      sessionId: null,
-    });
+    deferred[0]!.resolve(done);
     await collecting;
+    // The gap before a next wait still counts as waiting.
+    expect(broker.awaitingCalls('run-1')).toBe(1);
+    expect(waits).toEqual([1]);
 
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
     expect(broker.awaitingCalls('run-1')).toBe(0);
     expect(waits).toEqual([1, 0]);
+  });
+
+  it('announces NOTHING when the next wait starts inside the gap', async () => {
+    // A manager polling its callees: await, read, await again. Reported as
+    // sending "working one time in two" while the gap read as busy.
+    const { broker, deferred, waits } = busBroker({ launch: 'defer' });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    const first = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve(done);
+    await first;
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS - 1);
+    const second = broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
+    expect(waits).toEqual([1]);
+
+    deferred[1]!.resolve(done);
+    await second;
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
+    expect(waits).toEqual([1, 0]);
+  });
+
+  it('ends the wait AT ONCE when a user message released it, or the agent took one in the gap', async () => {
+    const { broker, deferred, waits } = busBroker({ launch: 'defer' });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    // Released for the user's message: the agent has work now.
+    const released = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    expect(broker.interruptWaits('run-1', 'orch')).toBe(true);
+    await released;
+    expect(waits).toEqual([1, 0]);
+
+    // In the gap, the agent took a message (or its turn ended).
+    const second = broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
+    deferred[1]!.resolve(done);
+    await second;
+    expect(waits).toEqual([1, 0, 1]);
+    broker.forgetUserMessage('run-1', 'orch');
+    expect(waits).toEqual([1, 0, 1, 0]);
+    expect(broker.awaitingCalls('run-1')).toBe(0);
   });
 
   it('announces once per RUN, not once per wait a caller opens', async () => {
@@ -3092,16 +3212,10 @@ describe('CallBroker — a caller waiting on its own calls', () => {
     expect(waits).toEqual([1]);
 
     for (const entry of deferred) {
-      entry.resolve({
-        status: 'completed',
-        finalText: 'done',
-        error: null,
-        failureClass: null,
-        resetsAt: null,
-        sessionId: null,
-      });
+      entry.resolve(done);
     }
     await Promise.all([first, second]);
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
 
     // And the END is announced only once the LAST of them has returned.
     expect(waits).toEqual([1, 0]);
@@ -3119,13 +3233,99 @@ describe('CallBroker — a caller waiting on its own calls', () => {
       message: 'm',
       mode: 'async',
     });
-    const pending = await broker.awaitAgent('run-1', 'orch', {
+    const collecting = broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
       timeout_ms: 1,
     });
-
+    vi.advanceTimersByTime(1);
+    const pending = await collecting;
     expect(pending.status).toBe('pending');
+    vi.advanceTimersByTime(AWAIT_GAP_GRACE_MS);
+
     expect(waits).toEqual([1, 0]);
+    expect(broker.awaitingCalls('run-1')).toBe(0);
+  });
+
+  it('ends the gap when the agent starts writing its reply', async () => {
+    const { broker, deferred, waits } = busBroker({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const collecting = broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    deferred[0]!.resolve(done);
+    await collecting;
+    expect(waits).toEqual([1]);
+
+    broker.noteOwnerReplying('run-1', 'orch');
+    expect(waits).toEqual([1, 0]);
+  });
+
+  it('opens no gap after a wait the CLI abandoned', async () => {
+    const { broker, waits } = busBroker({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const gone = new AbortController();
+    const awaiting = broker.awaitAgent(
+      'run-1',
+      'orch',
+      { call_id: 'call-1' },
+      gone.signal,
+    );
+    gone.abort();
+    await awaiting;
+    expect(waits).toEqual([1, 0]);
+  });
+
+  it('still tells a caller in the GAP that a call finished — the gap is not a wait', async () => {
+    const told: string[] = [];
+    const { broker, deferred } = busBroker({
+      launch: 'defer',
+      tellLiveNode: (_nodeId, prompt) => {
+        told.push(prompt);
+        return true;
+      },
+    });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    const first = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve(done);
+    await first;
+    expect(broker.awaitingCalls('run-1')).toBe(1);
+
+    broker.noteCalleeSettling('run-1', 'call-2');
+    expect(told.some((prompt) => prompt.includes('has finished call-2'))).toBe(
+      true,
+    );
+  });
+
+  it('counts only the waits of the agents a message goes to', async () => {
+    const { broker, waits } = busBroker({
+      launch: 'defer',
+      messageTargets: [],
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    void broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    expect(waits).toEqual([]);
     expect(broker.awaitingCalls('run-1')).toBe(0);
   });
 
@@ -3136,6 +3336,41 @@ describe('CallBroker — a caller waiting on its own calls', () => {
 });
 
 describe('CallBroker — message_agent', () => {
+  it('keeps failure notices separate for two conversations of the same node', () => {
+    const { broker } = harness({
+      seed: {
+        callSeq: 2,
+        records: [],
+        messageFailures: [
+          {
+            deliveryId: 'delivery-1',
+            callId: 'call-2',
+            callerNodeId: 'worker',
+            callerConversationId: 'call-1',
+            calleeNodeId: 'helper',
+            message: 'correction',
+            reason: 'stopped',
+          },
+        ],
+      },
+    });
+    expect(broker.messageDeliveryNotice('run-1', 'worker')).toBeNull();
+    expect(
+      broker.messageDeliveryNotice('run-1', callerKey('worker', 'call-other')),
+    ).toBeNull();
+    const notice = broker.messageDeliveryNotice(
+      'run-1',
+      callerKey('worker', 'call-1'),
+    )!;
+    broker.acknowledgeMessageDeliveryNotice(
+      'run-1',
+      callerKey('worker', 'call-other'),
+      notice,
+    );
+    expect(
+      broker.messageDeliveryNotice('run-1', callerKey('worker', 'call-1')),
+    ).toEqual(notice);
+  });
   it('hands the message to the RUNNING callee and records it as the caller’s', async () => {
     // REPORTED: a Manager held six user corrections "until the engineer
     // finishes", 8–32 minutes each, because nothing could reach a callee mid-call.
@@ -3214,7 +3449,7 @@ describe('CallBroker — message_agent', () => {
   });
 
   it('sends a PARKED callee to answer_agent instead of queueing a message behind its question', async () => {
-    const { broker, messages } = harness({ launch: 'defer' });
+    const { broker, messages, items } = harness({ launch: 'defer' });
     void broker.callAgent('run-1', 'orch', {
       title: 'why',
       agent: 'helper',
@@ -3238,6 +3473,16 @@ describe('CallBroker — message_agent', () => {
       ),
     ).toContain('answer_agent');
     expect(messages).toEqual([]);
+    expect(
+      items.find((item) => item.kind === 'call_answer')?.payload,
+    ).toMatchObject({
+      outcome: 'undelivered',
+      message: 'use red',
+      reason: expect.stringContaining('CALLEE_PARKED'),
+    });
+    expect(broker.messageDeliveryNotice('run-1', 'orch')?.prompt).toContain(
+      'use red',
+    );
   });
 
   it('HOLDS a message the callee cannot take yet and delivers it the moment it can, in order', async () => {
@@ -3329,7 +3574,7 @@ describe('CallBroker — message_agent', () => {
     // Manager sat on its user's question card, and steering the call then
     // read "UNKNOWN_CALL: no live call 'call-74' started by you" — about a
     // call the Manager had made and whose result was waiting for it.
-    const { broker, messages, deferred } = harness({ launch: 'defer' });
+    const { broker, messages, deferred, items } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
       title: 'build it',
       agent: 'helper',
@@ -3367,6 +3612,20 @@ describe('CallBroker — message_agent', () => {
     expect(collected).toMatch(/^CALL_FINISHED: /);
     expect(collected).toContain('nothing of it is left to collect');
     expect(collected).toContain("call_agent(thread: 'call-1')");
+    expect(
+      items
+        .filter((item) => item.kind === 'call_answer')
+        .map((item) => item.payload),
+    ).toEqual([
+      expect.objectContaining({
+        outcome: 'undelivered',
+        message: 'one more thing',
+      }),
+      expect.objectContaining({
+        outcome: 'undelivered',
+        message: 'one more thing',
+      }),
+    ]);
     // Ownership still reads as UNKNOWN_CALL: a caller does not learn that a
     // call it does not own exists, finished or not.
     expect(
@@ -3402,7 +3661,103 @@ describe('CallBroker — message_agent', () => {
         }),
       ),
     ).toMatch(/^CALL_FINISHED: .*await_agent\(call_id: 'call-1'\)/);
-    expect(items.some((item) => item.kind === 'call_answer')).toBe(false);
+    expect(
+      items.find((item) => item.kind === 'call_answer')?.payload,
+    ).toMatchObject({
+      outcome: 'undelivered',
+      message: 'too late',
+      reason: expect.stringContaining('CALL_FINISHED'),
+    });
+  });
+
+  it('never sends to a cancelled handle, and drops its queued messages before settlement', async () => {
+    vi.useFakeTimers();
+    try {
+      const deliver = vi.fn(() => ({
+        delivered: false as const,
+        reason: 'refused' as const,
+      }));
+      const { broker, items, capability } = harness({
+        launch: 'defer',
+        messageCallee: deliver,
+      });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'work',
+        mode: 'async',
+      });
+      broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        message: 'queued correction',
+      });
+      broker.cancelAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        reason: 'withdrawn',
+      });
+      expect(
+        errorOf(
+          broker.messageAgent('run-1', 'orch', {
+            call_id: 'call-1',
+            message: 'after cancel',
+          }),
+        ),
+      ).toContain('NOT_DELIVERED');
+      await vi.advanceTimersByTimeAsync(600);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(
+        items
+          .filter((item) => item.kind === 'call_answer')
+          .map((item) => item.payload),
+      ).toEqual([
+        expect.objectContaining({
+          outcome: 'undelivered',
+          message: 'queued correction',
+        }),
+        expect.objectContaining({
+          outcome: 'undelivered',
+          message: 'after cancel',
+        }),
+      ]);
+      const notice = broker.messageDeliveryNotice('run-1', 'orch')!;
+      expect(notice.prompt).toContain('queued correction');
+      expect(notice.prompt).toContain('after cancel');
+      expect(notice.prompt).toContain('withdrawn');
+      expect(broker.messageDeliveryNotice('run-1', 'writer')).toBeNull();
+      broker.registerRun('run-1', capability);
+      expect(broker.messageDeliveryNotice('run-1', 'orch')).toEqual(notice);
+      broker.acknowledgeMessageDeliveryNotice('run-1', 'orch', notice);
+      expect(broker.messageDeliveryNotice('run-1', 'orch')).toBeNull();
+      expect(items.at(-1)?.payload).toMatchObject({
+        severity: 'info',
+        messageDeliveryNotices: notice.ids,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records a failed send to an owned call whose launch failed without a thread', async () => {
+    const { broker, items } = harness({ launch: 'throw' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'work',
+      mode: 'async',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(
+      broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        message: 'too late',
+      }).status,
+    ).toBe('error');
+    expect(
+      items.find((item) => item.kind === 'call_answer')?.payload,
+    ).toMatchObject({ outcome: 'undelivered', message: 'too late' });
+    expect(broker.messageDeliveryNotice('run-1', 'orch')?.prompt).toContain(
+      'too late',
+    );
   });
 
   it('records a held message as UNDELIVERED when the call ends before it lands', async () => {
@@ -4087,6 +4442,39 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
 
     expect(told).toHaveLength(1);
     expect(wakeNode).not.toHaveBeenCalled();
+  });
+
+  it('wakes the caller with the news once the turn that dropped it has ended', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    let live = true;
+    let dropped: (() => void) | undefined;
+    const wakeNode = vi.fn(() => true);
+    const { broker } = harness({
+      isNodeLive: () => live,
+      tellLiveNode: (_node, _prompt, redeliver) => {
+        dropped = redeliver;
+        return true;
+      },
+      wakeNode,
+      instantOutcome: RATE_LIMITED,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    vi.advanceTimersByTime(72 * 60_000);
+    expect(wakeNode).not.toHaveBeenCalled();
+
+    // The executor runs this once the working turn ended without taking it.
+    live = false;
+    dropped!();
+
+    expect(wakeNode).toHaveBeenCalledExactlyOnceWith(
+      'orch',
+      expect.stringContaining('has reset'),
+    );
   });
 
   it('fires nothing into a run that was torn down meanwhile', async () => {
@@ -4902,18 +5290,6 @@ describe('CallBroker — agent pool', () => {
     node: WorkflowAgentNode = POOLED,
   ): Map<string, WorkflowAgentNode[]> => new Map([['orch', [node]]]);
 
-  function settled(patch: Partial<CalleeTurnOutcome>): CalleeTurnOutcome {
-    return {
-      status: 'completed',
-      finalText: 'ok',
-      error: null,
-      failureClass: null,
-      resetsAt: null,
-      sessionId: null,
-      ...patch,
-    };
-  }
-
   it('defaults to member 1 after an explicit selection and across run passes', async () => {
     const { broker, launches, capability } = harness({
       calleesOf: pooledCallees(),
@@ -4959,54 +5335,64 @@ describe('CallBroker — agent pool', () => {
     expect(launches).toHaveLength(1);
   });
 
-  it('tries a member signed out of its account last, and first again once it answers', async () => {
-    const { broker, launches, deferred } = harness({
+  it('starts a new call past a member the shared record holds spent, and on member 1 again once it answers', async () => {
+    const { broker, launches } = harness({
       calleesOf: pooledCallees({
         ...POOLED,
         pool: [{ agent: 'codex' }, { agent: 'cursor-agent' }],
       }),
-      launch: 'defer',
     });
+    const memberOne = poolMemberNode(POOLED, 1)!;
     const call = (title: string) =>
       broker.callAgent('run-1', 'orch', {
         title,
         agent: 'helper',
         message: title,
-        mode: 'async',
       });
 
-    // A: member 1 lapsed — no reset time named — and member 2 answered.
-    await call('a');
-    deferred[0]!.resolve(
-      settled({
-        member: 2,
-        poolSkipped: [
-          {
-            member: 1,
-            failureClass: 'auth_expired',
-            error: 'Not logged in',
-            resetsAt: null,
-          },
-        ],
-      }),
+    // Any run's attempt may have written it — the record is the daemon's.
+    broker.poolCooldowns.record(
+      memberOne,
+      { cwd: null, runId: 'run-1', nodeId: 'helper' },
+      { status: 'failed', failureClass: 'auth_expired', resetsAt: null },
+      true,
     );
-    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
-    // B and C use member 2 while higher-priority member 1 is cooling.
+    await call('a');
+    broker.poolCooldowns.record(
+      memberOne,
+      { cwd: null, runId: 'run-1', nodeId: 'helper' },
+      { status: 'completed', failureClass: null, resetsAt: null },
+      false,
+    );
     await call('b');
-    deferred[1]!.resolve(settled({ member: 2 }));
-    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
-    await call('c');
     expect(launches.map((launch) => launch.callee.agent)).toEqual([
+      'codex',
       'claude',
-      'codex',
-      'codex',
     ]);
-    // Member 1 is tried at C's fall-through and answers — no longer cooling,
-    // so D returns to the highest-priority member.
-    deferred[2]!.resolve(settled({ member: 1 }));
-    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-3' });
-    await call('d');
-    expect(launches[3]!.callee.agent).toBe('claude');
+  });
+
+  it('reads a member as the account its run’s folder pins', async () => {
+    const poolCooldowns = new PoolCooldowns((_agent, cwd) =>
+      cwd === '/work/pinned' ? '/profiles/pinned' : null,
+    );
+    const { broker, launches } = harness({
+      calleesOf: pooledCallees(),
+      cwd: '/work/pinned',
+      poolCooldowns,
+    });
+    // Spent under the pinned profile, as a member naming it outright ran.
+    poolCooldowns.record(
+      { ...poolMemberNode(POOLED, 1)!, configDir: '/profiles/pinned' },
+      { cwd: '/work/elsewhere', runId: 'run-0', nodeId: 'helper' },
+      { status: 'failed', failureClass: 'rate_limited', resetsAt: null },
+      false,
+    );
+    await broker.callAgent('run-1', 'orch', {
+      title: 'a',
+      agent: 'helper',
+      message: 'a',
+    });
+    expect(launches[0]!.callee.agent).toBe('codex');
   });
 
   it('a handed-on call’s silence watchdog is not held off by the failed attempt’s open tool call', async () => {
@@ -5129,8 +5515,10 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
   /** call-1 to the Engineer, and `modes` calls it made from inside it. */
   async function engineerDelegated(
     modes: ('async' | 'fire_and_forget')[] = ['async'],
+    unreadTeamNotes?: RunCallCapability['unreadTeamNotes'],
   ) {
     const h = harness({
+      unreadTeamNotes,
       launch: 'defer',
       // Only the Manager's own conversation has a turn: the Engineer's ended.
       isNodeLive: (caller) => caller === 'orch',
@@ -5218,6 +5606,28 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     expect(
       await h.broker.awaitAgent('run-1', ENGINEER, { call_id: 'call-2' }),
     ).toMatchObject({ status: 'ok', result: { text: 'the research' } });
+  });
+
+  it('tells a held callee, woken inside its call, how many team notes it has not read', async () => {
+    // Keyed on the woken CONVERSATION — the Engineer inside call-1 — never the
+    // Manager that is waiting on it.
+    const h = await engineerDelegated(['async'], (caller) =>
+      caller === ENGINEER ? 3 : 0,
+    );
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+    await finishSubCall(h, 1, 'the research');
+
+    const wake = release() as { kind: 'wake'; prompt: string };
+    expect(wake.prompt).toContain(
+      '3 team notes by other agents of this run are unread',
+    );
+
+    const quiet = await engineerDelegated(['async'], () => 0);
+    const quietRelease = released(quiet.broker.holdCall('run-1', 'call-1')!);
+    await finishSubCall(quiet, 1, 'the research');
+    expect(
+      (quietRelease() as { kind: 'wake'; prompt: string }).prompt,
+    ).not.toContain('team note');
   });
 
   it('waits for the LAST of its calls, and tells it about all of them at once', async () => {
@@ -5355,6 +5765,33 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     expect(h.cancelledTurns).toEqual(['call-2', 'call-1']);
   });
 
+  it('does not mark a held wake message delivered when it is cancelled before its prompt is taken', async () => {
+    const h = await engineerDelegated();
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+    h.broker.messageAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      message: 'changed requirement',
+    });
+    await flush();
+    expect(release()).toMatchObject({ kind: 'wake' });
+    h.broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'withdrawn before wake',
+    });
+    expect(
+      h.items
+        .filter(
+          (item) =>
+            item.kind === 'call_answer' &&
+            item.payload.message === 'changed requirement',
+        )
+        .map((item) => item.payload.outcome),
+    ).toEqual(['undelivered']);
+    expect(h.broker.messageDeliveryNotice('run-1', 'orch')?.prompt).toContain(
+      'changed requirement',
+    );
+  });
+
   it('wakes a HELD call with a message its caller sends it', async () => {
     const h = await engineerDelegated();
     const release = released(h.broker.holdCall('run-1', 'call-1')!);
@@ -5366,13 +5803,17 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
 
     expect(receipt).toMatchObject({
       status: 'ok',
-      result: { state: 'delivered' },
+      result: { state: 'queued' },
     });
     const wake = release() as { kind: 'wake'; prompt: string };
     expect(wake.prompt).toContain('use Postgres, not SQLite');
     expect(wake.prompt).toContain('1 other call(s) of yours are still running');
     // Through the wake, not into a turn that no longer exists.
     expect(h.messages).toEqual([]);
+    expect(h.items.some((item) => item.payload.outcome === 'message')).toBe(
+      false,
+    );
+    h.broker.confirmWakingMessages('run-1', 'call-1');
     expect(
       h.items.find(
         (item) =>
@@ -5500,6 +5941,94 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     expect(release()).toEqual({ kind: 'settle' });
   });
 
+  it('holds a call while its callee’s monitors run, wakes it with their output inside the call, and settles once they owe nothing', async () => {
+    const h = await engineerDelegated([]);
+    let owed = true;
+    const held: string[] = [];
+    h.capability.monitorsOwed = (caller) => caller === ENGINEER && owed;
+    h.capability.callHeld = (caller) => {
+      held.push(caller);
+    };
+    const hold = h.broker.holdCall('run-1', 'call-1');
+    expect(hold).not.toBeNull();
+    expect(held).toEqual([ENGINEER]);
+    const release = released(hold!);
+    // Its monitor still runs: reviewing the hold does not let it go.
+    h.broker.reviewHeldCallee('run-1', ENGINEER);
+    await flush();
+    expect(release()).toBeUndefined();
+
+    expect(
+      h.broker.wakeHeldCallee('run-1', ENGINEER, 'CI output', {
+        severity: 'info',
+        message: 'CI · monitor m1: 1 line.',
+        monitors: [
+          {
+            id: 'm1',
+            description: 'CI',
+            event: 'batch',
+            lines: ['ok'],
+            omitted: 0,
+          },
+        ],
+        woke: true,
+      }),
+    ).toBe('woken');
+    await flush();
+    expect(release()).toMatchObject({
+      kind: 'wake',
+      prompt: 'CI output',
+      monitor: true,
+      note: expect.stringContaining('while your monitors run'),
+    });
+    expect(
+      h.items.find((item) => Array.isArray(item.payload.monitors))?.payload,
+    ).toMatchObject({ callId: 'call-1', monitors: [{ id: 'm1' }] });
+
+    // The woken turn ends with nothing owed: the call settles.
+    owed = false;
+    const settled = released(
+      h.broker.holdCall('run-1', 'call-1') ?? Promise.resolve(null),
+    );
+    await flush();
+    expect(settled()).toBeNull();
+  });
+
+  const NO_ROW = {
+    severity: 'info' as const,
+    message: '',
+    monitors: [],
+    woke: true,
+  };
+
+  it('answers pending for a callee whose call is open but not yet held, and refuses a conversation with no call', async () => {
+    const h = await engineerDelegated([]);
+    expect(h.broker.wakeHeldCallee('run-1', ENGINEER, 'x', NO_ROW)).toBe(
+      'pending',
+    );
+    expect(
+      h.broker.wakeHeldCallee(
+        'run-1',
+        callerKey('helper', 'call-9'),
+        'x',
+        NO_ROW,
+      ),
+    ).toBe('refused');
+  });
+
+  it('stops the callee’s monitors with a cancelled call', async () => {
+    const h = await engineerDelegated([]);
+    const stopped: string[] = [];
+    h.capability.stopMonitors = (caller) => {
+      stopped.push(caller);
+    };
+    h.broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'not needed',
+    });
+    expect(stopped).toEqual([ENGINEER]);
+  });
+
   it('keeps holding for a usage-limit continue, and wakes INSIDE the call when the limit resets', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
@@ -5580,7 +6109,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
         call_id: 'call-3',
         message: 'one more thing',
       }),
-    ).toMatchObject({ result: { state: 'delivered' } });
+    ).toMatchObject({ result: { state: 'queued' } });
     await flush();
     expect(release()).toMatchObject({ kind: 'wake' });
     h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
@@ -5953,6 +6482,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
       expect(prompt.indexOf('QUEUED FIRST')).toBeLessThan(
         prompt.indexOf('USER SECOND'),
       );
+      h.broker.confirmWakingMessages('run-1', 'call-1');
       expect(
         h.items.find(
           (item) =>
@@ -6974,6 +7504,165 @@ describe('CallBroker — pages published inside a call', () => {
     expect(await pending).toMatchObject({
       status: 'error',
       artifacts: [{ artifact_id: 'plan', title: 'Plan', version: 1 }],
+    });
+  });
+});
+
+describe('CallBroker — buttons published inside a call', () => {
+  const completed = (finalText: string): CalleeTurnOutcome => ({
+    status: 'completed',
+    finalText,
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: 'sess-call-1',
+  });
+  const node = (id: string): WorkflowAgentNode => ({
+    id,
+    kind: 'agent',
+    agent: 'claude',
+    approval: 'auto',
+  });
+  const merged = {
+    action_id: 'pr-merged',
+    label: 'PR merged',
+    kind: 'message',
+  } as const;
+
+  it('names each live button a callee published, at its newest publish, in its envelope and its call_result row', async () => {
+    const { broker, deferred, items } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'open the PR',
+    });
+    expect(broker.callAnsweredBy('run-1', callerKey('helper', 'call-1'))).toBe(
+      'call-1',
+    );
+    broker.notePublishedAction('run-1', 'call-1', 'helper|call-1|pr-merged', {
+      ...merged,
+      label: 'Merged?',
+    });
+    broker.notePublishedAction(
+      'run-1',
+      'call-1',
+      'helper|call-1|pr-merged',
+      merged,
+    );
+    broker.notePublishedAction('run-1', 'call-1', 'helper|call-1|stop', {
+      action_id: 'stop',
+      label: 'Stop preview',
+      kind: 'message',
+    });
+    broker.forgetPublishedAction('run-1', 'helper|call-1|stop');
+    deferred[0]!.resolve(completed('opened'));
+    const envelope = await pending;
+    expect(envelope).toEqual({
+      status: 'ok',
+      result: {
+        call_id: 'call-1',
+        agent: 'helper',
+        text: 'opened',
+        // The newest publish of a key; a removed button is not named.
+        actions: [merged],
+        note: PUBLISHED_ACTIONS_NOTE,
+      },
+    });
+    const result = items.find((i) => i.kind === 'call_result')!;
+    expect(result.payload.result).toEqual(
+      (envelope as { result: unknown }).result,
+    );
+  });
+
+  it('names a button published deep in a chain on every call above it, beside the pages', async () => {
+    const { broker, deferred } = harness({
+      launch: 'defer',
+      calleesOf: new Map([
+        ['a', [node('b')]],
+        ['b', [node('c')]],
+      ]),
+    });
+    const outer = broker.callAgent('run-1', 'a', {
+      title: 'why',
+      agent: 'b',
+      message: 'm',
+    });
+    const inner = broker.callAgent('run-1', callerKey('b', 'call-1'), {
+      title: 'why',
+      agent: 'c',
+      message: 'm',
+    });
+    broker.notePublishedAction('run-1', 'call-2', 'c|call-2|pr-merged', merged);
+    broker.notePublishedArtifact('run-1', 'call-2', {
+      artifact_id: 'plan',
+      title: 'Plan',
+      version: 1,
+    });
+    deferred[1]!.resolve(completed('c done'));
+    deferred[0]!.resolve(completed('b done'));
+    expect(await inner).toMatchObject({ result: { actions: [merged] } });
+    const { result } = (await outer) as {
+      result: { actions: unknown; note: string };
+    };
+    expect(result.actions).toEqual([merged]);
+    expect(result.note).toBe(
+      `${PUBLISHED_PAGES_NOTE} ${PUBLISHED_ACTIONS_NOTE}`,
+    );
+  });
+
+  it('an undone note drops a button whose row failed, and leaves a newer publish alone', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    broker.notePublishedAction('run-1', 'call-1', 'k|lost', {
+      ...merged,
+      action_id: 'lost',
+    })();
+    const undo = broker.notePublishedAction('run-1', 'call-1', 'k|pr', {
+      ...merged,
+      label: 'old',
+    });
+    broker.notePublishedAction('run-1', 'call-1', 'k|pr', merged);
+    undo();
+    deferred[0]!.resolve(completed('done'));
+    expect(await pending).toMatchObject({ result: { actions: [merged] } });
+  });
+
+  it('a failed call still names the buttons it left in the user’s chat', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    broker.notePublishedAction('run-1', 'call-1', 'k|pr', merged);
+    deferred[0]!.resolve({
+      status: 'failed',
+      finalText: null,
+      error: 'exit 1',
+      failureClass: 'crashed',
+      resetsAt: null,
+      sessionId: null,
+    });
+    const envelope = await pending;
+    expect(envelope).toMatchObject({ status: 'error', actions: [merged] });
+    expect(envelope).not.toHaveProperty('artifacts');
+  });
+
+  it('names no button in the envelope of a call that published none', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const pending = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    deferred[0]!.resolve(completed('done'));
+    expect(await pending).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'done' },
     });
   });
 });

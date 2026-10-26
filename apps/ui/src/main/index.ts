@@ -18,6 +18,7 @@ import { installFetchDispatcher } from './fetch-dispatcher';
 import { readFinishedTasks } from './finished-tasks';
 import { readGitStamp } from './git-info';
 import { registerIpc } from './ipc';
+import { KeptSessionConfigPush } from './kept-session-config-push';
 import { flushWindowsThen } from './line-measurement-flush';
 import {
   applyTheme,
@@ -35,6 +36,7 @@ import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { teardownThenQuit } from './quit-teardown';
 import { RemoteAccess } from './remote/remote-access';
 import { onSettingsWritten, readSettings } from './settings';
+import { notifySettingsChanged } from './settings-changed-notify';
 import { ShareConfigPush } from './share-config-push';
 import { TerminalSessions } from './terminal-sessions';
 import { reportUncaughtErrors } from './uncaught-error-report';
@@ -152,8 +154,22 @@ const shareConfigPush = new ShareConfigPush((message) => {
     source: 'share-config',
   });
 });
+/**
+ * The kept-session idle window, the same way: the daemon holds it in memory
+ * (an hour until the first push), so every daemon is told on start, after a
+ * restart from Settings, and after any write that changed it.
+ */
+const keptSessionConfigPush = new KeptSessionConfigPush((message) => {
+  void reportMainLog(supervisor.getHandle(), 'warn', message, {
+    source: 'kept-session-config',
+  });
+});
 onSettingsWritten((settings) => {
+  notifySettingsChanged(BrowserWindow.getAllWindows());
   void shareConfigPush.pushIfChanged(supervisor.getHandle(), settings.sharing);
+  void keptSessionConfigPush.pushIfChanged(supervisor.getHandle(), {
+    idleMinutes: settings.keptSessionIdleMinutes,
+  });
 });
 
 /**
@@ -205,6 +221,7 @@ const autopilot = new AutopilotConductor({
   gitStamp: readGitStamp,
   agentOptions: () => readSettings().agentOptions,
   customInstructions: () => readSettings().customInstructions,
+  replyLanguage: () => readSettings().replyLanguage,
   log: (message) => {
     void reportMainLog(supervisor.getHandle(), 'info', message, {
       source: 'autopilot',
@@ -564,6 +581,15 @@ function reapWorktrees(handle: DaemonHandle): void {
     });
 }
 
+/** Hand a daemon that just came up every setting it holds in memory only. */
+function pushDaemonConfig(handle: DaemonHandle): void {
+  const settings = readSettings();
+  void shareConfigPush.push(handle, settings.sharing);
+  void keptSessionConfigPush.push(handle, {
+    idleMinutes: settings.keptSessionIdleMinutes,
+  });
+}
+
 /**
  * A daemon came up — hand the renderer its address, and do what waits on one.
  *
@@ -573,7 +599,7 @@ function reapWorktrees(handle: DaemonHandle): void {
  */
 function daemonCameUp(handle: DaemonHandle): void {
   notifyDaemonReady(mainWindow, handle);
-  void shareConfigPush.push(handle, readSettings().sharing);
+  pushDaemonConfig(handle);
   // The window is opened BEFORE the first one, so whatever it already reported
   // about its own load has been waiting for an address to send it to.
   void flushMainLogs(handle);
@@ -657,7 +683,7 @@ function main(): void {
       },
       (handle) => {
         if (handle !== null) {
-          void shareConfigPush.push(handle, readSettings().sharing);
+          pushDaemonConfig(handle);
         }
       },
     );

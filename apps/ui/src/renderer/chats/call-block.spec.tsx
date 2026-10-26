@@ -1140,6 +1140,7 @@ describe('CallBlock', () => {
         turns: 1,
         costedTurns: 0,
         costUsd: null,
+        estimatedCostUsd: null,
         inputTokens: null,
         outputTokens: null,
         cacheReadTokens: null,
@@ -1525,8 +1526,131 @@ describe('CallBlock', () => {
       ),
     );
     expect(container.querySelector('[data-slot="badge"]')?.textContent).toBe(
-      'cursor',
+      'cursor · 2/2',
     );
+    expect(
+      container.querySelector('[data-slot="badge"]')?.getAttribute('title'),
+    ).toBe('Pool member 2 of 2');
+  });
+
+  it('shows a same-CLI pool switch and its reason on the collapsed card after an anchored reload', () => {
+    const pooled: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
+      ['orch', { name: 'Orchestrator', kind: 'agent', agent: 'claude' }],
+      [
+        'poet',
+        {
+          name: 'Poet',
+          kind: 'agent',
+          agent: 'claude',
+          pool: ['claude', 'claude', 'cursor-agent'],
+        },
+      ],
+    ]);
+    const started = item(
+      'call_started',
+      {
+        callId: 'call-1',
+        calleeNodeId: 'poet',
+        member: 1,
+      },
+      'orch',
+    );
+    const previous = item(
+      'message',
+      {
+        callId: 'call-1',
+        text: 'Checking the metre.',
+      },
+      'poet',
+    );
+    const reason =
+      'Poet: pool member 1 hit a usage limit — handing the call to member 2.';
+    const handOff = item(
+      'system',
+      {
+        callId: 'call-1',
+        member: 2,
+        message: reason,
+      },
+      'poet',
+    );
+    const renderRows = (rows: ChatItem[], anchorIds?: Set<string>): void => {
+      const block = groupTranscript(rows, { anchorIds })[0] as CallBlockEntry;
+      act(() => root.render(<CallBlock block={block} nodes={pooled} />));
+    };
+    renderRows([started, previous]);
+    expect(container.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'claude · 1/3',
+    );
+
+    renderRows([started, previous, handOff]);
+    expect(container.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'claude · 2/3',
+    );
+    expect(
+      container.querySelector('[data-slot="badge"]')?.getAttribute('title'),
+    ).toBe('Pool member 2 of 3');
+    expect(container.textContent).toContain(reason);
+    expect(container.textContent).not.toContain('Checking the metre.');
+    expect(container.querySelector('[aria-expanded="false"]')).not.toBeNull();
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    renderRows([started, previous, handOff], new Set([handOff.id]));
+    expect(container.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'claude · 2/3',
+    );
+    expect(container.textContent).toContain(reason);
+
+    const spoken = item(
+      'message',
+      {
+        callId: 'call-1',
+        text: 'The second member is checking the metre.',
+      },
+      'poet',
+    );
+    renderRows([started, previous, handOff, spoken], new Set([handOff.id]));
+    expect(container.textContent).toContain(
+      'The second member is checking the metre.',
+    );
+    expect(
+      container.querySelector('[data-slot="call-pool-handoff"]')?.textContent,
+    ).toBe(reason);
+  });
+
+  it('keeps an anchored handoff reason visible when opened without duplicating a loaded notice', () => {
+    const started = item(
+      'call_started',
+      { callId: 'call-1', calleeNodeId: 'poet', member: 1 },
+      'orch',
+    );
+    const reason =
+      'Poet: pool member 1 hit a usage limit — handing the call to member 2.';
+    const handOff = item(
+      'system',
+      { callId: 'call-1', member: 2, severity: 'info', message: reason },
+      'poet',
+    );
+    const renderRows = (anchorIds?: Set<string>): void => {
+      const block = groupTranscript([started, handOff], {
+        anchorIds,
+      })[0] as CallBlockEntry;
+      act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    };
+    renderRows(new Set([handOff.id]));
+    expect(container.textContent).toContain(reason);
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-expanded="false"]',
+    )!;
+    act(() => toggle.click());
+    expect(
+      container.querySelector('button[aria-expanded="true"]'),
+    ).not.toBeNull();
+    expect(container.textContent?.split(reason)).toHaveLength(2);
+
+    renderRows();
+    expect(container.textContent?.split(reason)).toHaveLength(2);
   });
 
   it('a COMPLETED call ends with the "Result from X" section', () => {
@@ -1647,7 +1771,7 @@ describe('CallBlock', () => {
               contextTokens: null,
               contextWindowTokens: null,
               spend: { tokens: 3_000, costUsd: 1.25 },
-              liveCostUsd: 3,
+              liveCost: { costUsd: 3, estimatedCostUsd: null },
             })}>
             <CallBlock block={makeBlock()} nodes={NODES} />
           </CalleeContextResolverContext.Provider>,
@@ -1658,19 +1782,40 @@ describe('CallBlock', () => {
       expect(container.textContent).not.toContain('$1.25');
     });
 
-    it('counts every tool the AGENT ran, not the ones in this call’s rows', () => {
-      // The same reasoning as the spend above, one figure over: an agent asked
-      // again and again holds one conversation, and the fold can only count
-      // the rows of the latest call that are still in the loaded window. This
-      // block carries no tool rows at all, so a count on screen can only have
-      // come from the daemon's own running total.
+    it('marks the call’s spend and context geniro computed itself as estimates', () => {
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider
+            value={() => ({
+              contextTokens: 900,
+              contextWindowTokens: 200_000,
+              contextEstimated: true,
+              spend: { tokens: 3_000, costUsd: 1.25, estimatedCostUsd: 1.25 },
+            })}>
+            <CallBlock block={makeBlock()} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+
+      const cost = container.querySelector('[data-slot$="-cost"]');
+      expect(cost?.textContent).toBe('≈$1.25');
+      expect(cost?.getAttribute('title')).toContain("geniro's estimate");
+      const tokens = container.querySelector('[data-slot$="-tokens"]');
+      expect(tokens?.textContent).toBe('≈900 / 200k');
+    });
+
+    it('draws the conversation’s tool count from the resolver, not the window’s rows', () => {
+      // The same reasoning as the spend above, one figure over: the fold can
+      // only count the rows still in the loaded window. This block carries no
+      // tool rows at all, so a count on screen can only have come from the
+      // resolver — and the title says whose count it is.
       act(() =>
         root.render(
           <CalleeContextResolverContext.Provider
             value={() => ({
               contextTokens: null,
               contextWindowTokens: null,
-              toolCalls: 2_543,
+              toolCalls: 141,
             })}>
             <CallBlock block={makeBlock()} nodes={NODES} />
           </CalleeContextResolverContext.Provider>,
@@ -1679,7 +1824,10 @@ describe('CallBlock', () => {
       expand();
 
       const footer = container.querySelector('[data-slot="block-footer"]')!;
-      expect(footer.textContent).toContain('2543 tools');
+      expect(footer.textContent).toContain('141 tools');
+      expect(
+        footer.querySelector('[title*="in this conversation"]'),
+      ).not.toBeNull();
     });
 
     it('asks the resolver about the WHOLE conversation, not the drawn calls', () => {
@@ -2038,6 +2186,51 @@ describe("a call card's own conversation", () => {
     expect(landed?.textContent).not.toContain('An early line');
     expect(landed?.className).toContain('bg-accent/60');
     expect(keyed(`row:${first}`)?.className).not.toContain('bg-accent/60');
+  });
+
+  it('files a callee’s team note inside its call’s card, as a row a jump lands on and marks', () => {
+    const rows = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write.' },
+        'orch',
+      ),
+      item('message', { text: 'Drafting', callId: 'call-1' }, 'poet'),
+      item(
+        'team_note',
+        {
+          kind: 'contract',
+          text: 'Haiku lines are 5-7-5 syllables.',
+          nodeId: 'poet',
+          conversationId: 'call-1',
+          callId: 'call-1',
+        },
+        'poet',
+      ),
+    ];
+    const [block] = groupTranscript(rows);
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    const noteSeq = rows[2]!.seq;
+    const value = loader({
+      loading: false,
+      failed: false,
+      hasOlder: false,
+      oldestSeq: rows[1]!.seq,
+    });
+    renderBlock(block, value);
+    expand();
+
+    const anchor = container.querySelector<HTMLElement>(
+      `[data-jump-key$=":${noteSeq}"]`,
+    );
+    expect(anchor?.textContent).toContain('Haiku lines are 5-7-5 syllables.');
+    expect(anchor?.textContent).toContain('team note');
+    const key = anchor!.dataset.jumpKey!;
+
+    renderBlock(block, value, { seq: noteSeq, cardId: block.id, key });
+    expect(keyed(key)?.className).toContain('bg-accent/60');
   });
 
   it('marks only the anchor the landing names, never another drawn at the same seq', () => {

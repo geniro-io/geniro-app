@@ -336,6 +336,58 @@ describe('parseRunStatus — the run_status twin', () => {
     expect(skewed).not.toHaveProperty('seenAt');
   });
 
+  it('carries which announced pull requests the run opened, reading a missing mark as touched', () => {
+    const ref = (number: number) => ({
+      owner: 'o',
+      repo: 'r',
+      number,
+      url: `https://github.com/o/r/pull/${number}`,
+      seq: number,
+    });
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        pullRequests: [{ ...ref(1), opened: true }, ref(2)],
+      })?.pullRequests?.map((row) => ({
+        number: row.number,
+        opened: row.opened,
+      })),
+    ).toEqual([
+      { number: 1, opened: true },
+      { number: 2, opened: false },
+    ]);
+  });
+
+  it('admits an announced empty list, and drops one holding nothing usable', () => {
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, pullRequests: [] })
+        ?.pullRequests,
+    ).toEqual([]);
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        pullRequests: [{ url: '' }],
+      }),
+    ).not.toHaveProperty('pullRequests');
+  });
+
+  it('carries whether the stamped context count is geniro’s stand-in', () => {
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        contextTokens: 900,
+        contextWindowTokens: 200_000,
+        contextEstimated: true,
+      }),
+    ).toMatchObject({ contextTokens: 900, contextEstimated: true });
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, contextTokens: 900 }),
+    ).toMatchObject({ contextTokens: 900, contextEstimated: false });
+  });
+
   it('reads the prompt-cache expiry a settle carries, and drops one that is not an instant', () => {
     expect(
       parseRunStatus({
@@ -567,6 +619,25 @@ describe('parseRunStatus — the run_status twin', () => {
         noTerminalItem: 'yes',
       }),
     ).not.toHaveProperty('noTerminalItem');
+  });
+
+  it('reads the host-turn marker, and only when it is true', () => {
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        hostTurn: true,
+      }),
+    ).toMatchObject({ hostTurn: true });
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        hostTurn: 'yes',
+      }),
+    ).not.toHaveProperty('hostTurn');
   });
 
   it('reads the restored marker, and only when it is true', () => {

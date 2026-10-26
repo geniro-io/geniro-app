@@ -24,9 +24,12 @@ export interface PendingApproval {
    */
   question: boolean;
   /**
-   * Whether this card OUTLIVES the turn that raised it — a question whose
-   * agent was told to stop and wait, because its CLI's MCP client will not
-   * hold a call open for a person (`AdapterConfig.hostQuestionDeferredReason`).
+   * Whether this card OUTLIVES the turn that raised it — a question, a plan or
+   * a patch whose agent was told to stop and wait, because its CLI's MCP
+   * client will not hold a call open for a person
+   * (`AdapterConfig.hostQuestionDeferredReason`), or a card another module
+   * raised through `ChatService.raiseOwnedCard` (a workflow proposal), which
+   * never holds a call open at all.
    *
    * It is the one entry {@link ApprovalRegistry.sweepNode} leaves alone. Every
    * other pending card is a PARKED CALL, so a settled turn means nobody is on
@@ -40,16 +43,29 @@ export interface PendingApproval {
    */
   deferred?: boolean;
   /**
+   * Whether this deferred card stands ACROSS turns — a card another module owns
+   * (`ChatService.raiseOwnedCard`, a workflow proposal), which a new turn does
+   * not retire and which counts as `awaiting` only while no turn runs. Absent
+   * means false: a question, plan or patch is retired by the next turn.
+   *
+   * TWIN PARSER: the renderer's `standsAcrossTurns`
+   * (`apps/ui/src/renderer/chats/geniro-tool.ts`) names the tools whose card is
+   * one; a new owned card is added there too.
+   */
+  standing?: boolean;
+  /**
    * Delivers the verdict to the owning turn (persisting the verdict item on
    * success). Returns whether the turn was still live to receive it.
    * `answer` carries the user's picked option / typed text for a question
-   * card (AskUserQuestion) — absent for plain tool approvals.
+   * card (AskUserQuestion) — absent for plain tool approvals. `optionId` names
+   * the remembering option the user picked off a permission card ("allow for
+   * this session") — absent for a one-time Approve or Deny.
    *
    * On a {@link deferred} entry there is no turn to be live: it persists the
    * verdict and starts a new one, and its `true` means the answer was accepted
    * rather than that anything received it synchronously.
    */
-  respond: (allow: boolean, answer?: string) => boolean;
+  respond: (allow: boolean, answer?: string, optionId?: string) => boolean;
 }
 
 /**
@@ -117,6 +133,7 @@ export class ApprovalRegistry {
     requestId: string,
     allow: boolean,
     answer?: string,
+    optionId?: string,
   ): boolean {
     const key = this.key(runId, requestId);
     const entry = this.pending.get(key);
@@ -127,6 +144,9 @@ export class ApprovalRegistry {
     // Arity-preserving: a plain approve/deny keeps the historical one-arg
     // call shape — responders can't observe the difference, but call-shape
     // assertions (spies) on the pre-M4 wire stay byte-identical.
+    if (optionId !== undefined) {
+      return entry.respond(allow, answer, optionId);
+    }
     return answer === undefined
       ? entry.respond(allow)
       : entry.respond(allow, answer);
@@ -187,16 +207,23 @@ export class ApprovalRegistry {
    * `unanswerable` transcript item, or the card stays on screen answering into
    * nothing.
    *
-   * Two callers, and they are the two ways a standing question stops being the
+   * Two callers, and they are the two ways a standing card stops being the
    * thing the run is waiting on. A NEW TURN supersedes it — the user typed
    * something else, so the agent has already moved on and a card offering to
    * answer a question it is no longer asking is a trap. And a run TEARDOWN
    * takes it with everything else.
+   *
+   * `only` narrows the sweep: a new turn retires the run's deferred questions,
+   * plans and patches, while a {@link PendingApproval.standing} card (a
+   * workflow proposal) stays until its owner retires it.
    */
-  sweepDeferred(runId: string): PendingApproval[] {
+  sweepDeferred(
+    runId: string,
+    only: (entry: PendingApproval) => boolean = () => true,
+  ): PendingApproval[] {
     const swept: PendingApproval[] = [];
     for (const [key, entry] of this.pending) {
-      if (entry.runId === runId && entry.deferred === true) {
+      if (entry.runId === runId && entry.deferred === true && only(entry)) {
         this.pending.delete(key);
         swept.push(entry);
       }
@@ -219,10 +246,13 @@ export class ApprovalRegistry {
    * the same thing, but only a client subscribed to that run's room ever
    * receives them.
    */
-  awaitingFor(runId: string): RunAwaiting | null {
+  awaitingFor(
+    runId: string,
+    ignore: (entry: PendingApproval) => boolean = () => false,
+  ): RunAwaiting | null {
     let found: RunAwaiting | null = null;
     for (const entry of this.pending.values()) {
-      if (entry.runId !== runId) {
+      if (entry.runId !== runId || ignore(entry)) {
         continue;
       }
       if (entry.question) {

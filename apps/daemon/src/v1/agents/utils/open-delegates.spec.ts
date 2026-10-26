@@ -152,21 +152,18 @@ describe('strandedDelegates', () => {
 });
 
 describe('delegateCloseEvent', () => {
-  it('claims an OUTCOME only when the closer can say how the work ended', () => {
-    // Two closers, two different things known. The PROCESS going stopped work
-    // that lived inside it, so `stopped` is a measurement. A turn settling on a
-    // CLI that never reports an ending knows only that nothing more can be
-    // said — REPORTED as a QA node reading `completed · worked 2m 44s` beside
-    // `Sub-agents 16 running`, whose verdict had been written FROM those
-    // reviewers' output. Closing it `stopped` would swap one wrong claim for
-    // another; the honest row says the block is shut and says nothing else.
-    expect(delegateCloseEvent('d1')).toMatchObject({
-      backgroundOpen: false,
+  it('marks a missing ending untracked while preserving a reported outcome', () => {
+    for (const outcome of [undefined, null]) {
+      expect(delegateCloseEvent('d1', outcome)).toMatchObject({
+        backgroundOpen: false,
+        backgroundOutcome: 'untracked',
+      });
+    }
+    expect(delegateCloseEvent('d1', 'stopped')).toMatchObject({
       backgroundOutcome: 'stopped',
     });
-    expect(delegateCloseEvent('d1', null)).toMatchObject({
-      backgroundOpen: false,
-      backgroundOutcome: null,
+    expect(delegateCloseEvent('d1', 'completed')).toMatchObject({
+      backgroundOutcome: 'completed',
     });
   });
 

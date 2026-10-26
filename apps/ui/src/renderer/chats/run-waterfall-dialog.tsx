@@ -33,7 +33,12 @@ import {
   formatUsdAxis,
   NOT_MEASURED,
 } from '../stats/stats-format';
-import { formatTokens, formatUsd } from './agent-activity';
+import {
+  costEstimateTitle,
+  formatTokens,
+  formatUsd,
+  markEstimate,
+} from './agent-activity';
 import {
   type BreakdownBy,
   type BreakdownRow,
@@ -500,8 +505,15 @@ function Headline({
         value={
           data.totals.costUsd === null
             ? NOT_MEASURED
-            : formatUsd(data.totals.costUsd)
+            : markEstimate(
+                formatUsd(data.totals.costUsd),
+                data.totals.estimatedCostUsd,
+              )
         }
+        hint={costEstimateTitle(
+          data.totals.costUsd,
+          data.totals.estimatedCostUsd,
+        )}
         footnote={
           data.totals.costedTurns === data.totals.turns
             ? undefined
@@ -927,18 +939,34 @@ function FoldTable({
                       fraction={(row.costUsd ?? 0) / peak}
                       className="w-12"
                     />
-                    <span className="font-medium tabular-nums text-foreground">
+                    <span
+                      className="font-medium tabular-nums text-foreground"
+                      title={costEstimateTitle(
+                        row.costUsd,
+                        row.estimatedCostUsd,
+                      )}>
                       {row.costUsd === null
                         ? NOT_MEASURED
-                        : formatUsd(row.costUsd)}
+                        : markEstimate(
+                            formatUsd(row.costUsd),
+                            row.estimatedCostUsd,
+                          )}
                     </span>
                   </span>
                 </td>
                 {showCallees ? (
-                  <td className="h-9 px-3 text-right tabular-nums text-muted-foreground">
+                  <td
+                    className="h-9 px-3 text-right tabular-nums text-muted-foreground"
+                    title={costEstimateTitle(
+                      row.withCalleesUsd,
+                      row.withCalleesEstimatedUsd,
+                    )}>
                     {row.withCalleesUsd === null
                       ? NOT_MEASURED
-                      : formatUsd(row.withCalleesUsd)}
+                      : markEstimate(
+                          formatUsd(row.withCalleesUsd),
+                          row.withCalleesEstimatedUsd,
+                        )}
                   </td>
                 ) : null}
                 <td
@@ -1134,8 +1162,15 @@ function SpendCurve({
                   rows={[
                     {
                       label: 'spent so far',
-                      value: formatUsd(point.spentUsd),
+                      value: markEstimate(
+                        formatUsd(point.spentUsd),
+                        point.spentEstimatedUsd,
+                      ),
                       color: SERIES.spend,
+                      note: costEstimateTitle(
+                        point.spentUsd,
+                        point.spentEstimatedUsd,
+                      ),
                     },
                   ]}
                 />
@@ -1287,10 +1322,18 @@ function TopTurns({
                     colour={colour}
                   />
                 </td>
-                <td className="h-9 px-3 text-right font-medium tabular-nums text-foreground">
+                <td
+                  className="h-9 px-3 text-right font-medium tabular-nums text-foreground"
+                  title={costEstimateTitle(
+                    turn.costUsd,
+                    turn.estimatedCostUsd,
+                  )}>
                   {turn.costUsd === null
                     ? NOT_MEASURED
-                    : formatUsd(turn.costUsd)}
+                    : markEstimate(
+                        formatUsd(turn.costUsd),
+                        turn.estimatedCostUsd,
+                      )}
                 </td>
                 <td className="h-9 px-3 text-right tabular-nums text-muted-foreground">
                   {formatTurnDuration(turn.durationMs)}

@@ -25,6 +25,7 @@ function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
     nodeId: 'engineer',
     agentKind: 'claude',
     costUsd: 12.5,
+    estimatedCostUsd: null,
     turns: 2,
     toolCalls: 40,
     delegateToolCalls: 0,
@@ -48,6 +49,7 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
     timeToRequestMs: null,
     numTurns: null,
     costUsd: 3,
+    estimatedCostUsd: null,
     modelCosts: null,
     model: 'opus-5',
     inputTokens: null,
@@ -74,6 +76,7 @@ function dto(over: Partial<RunWaterfallDto> = {}): RunWaterfallDto {
       turns: 2,
       costedTurns: 2,
       costUsd: 12.5,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,
@@ -143,6 +146,71 @@ describe('RunWaterfallDialog', () => {
 
     expect(view.textContent).not.toContain('$0.00');
     expect(view.textContent).toContain('—');
+  });
+
+  it('marks the headline spend and the turn rows geniro priced, and only those', () => {
+    const view = show(
+      dto({
+        totals: { ...dto().totals, costUsd: 12.5, estimatedCostUsd: 12.5 },
+        turns: [
+          turn({ costUsd: 3, estimatedCostUsd: 3, model: 'est-model' }),
+          turn({ costUsd: 7, model: 'billed-model' }),
+        ],
+      }),
+    );
+
+    const spent = [...view.querySelectorAll('[data-slot="stat"]')].find(
+      (stat) =>
+        stat.querySelector('[data-slot="stat-label"]')?.textContent === 'spent',
+    );
+    expect(spent?.querySelector('[data-slot="stat-value"]')?.textContent).toBe(
+      '≈$12.50',
+    );
+    expect(spent?.getAttribute('title')).toContain("geniro's estimate");
+    const rows = [...view.querySelectorAll('tr')];
+    const rowOf = (model: string) =>
+      rows.find((row) => row.textContent?.includes(model));
+    expect(rowOf('est-model')?.textContent).toContain('≈$3.00');
+    expect(rowOf('billed-model')?.textContent).toContain('$7.00');
+    expect(rowOf('billed-model')?.textContent).not.toContain('≈');
+  });
+
+  it('says in the hover panel which part of a turn’s cost is an estimate', () => {
+    const view = show(
+      dto({ turns: [turn({ costUsd: 3, estimatedCostUsd: 3 })] }),
+    );
+
+    const bar = view.querySelector('[data-slot="waterfall-turn"]');
+    act(() => {
+      bar?.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 10,
+          clientY: 10,
+        }),
+      );
+    });
+
+    expect(view.textContent).toContain('≈$3.00');
+    expect(view.textContent).toContain("geniro's estimate");
+  });
+
+  it('names an estimated turn and its lane as geniro-priced for a screen reader and a hover', () => {
+    const view = show(
+      dto({
+        lanes: [lane({ costUsd: 3, estimatedCostUsd: 3 })],
+        turns: [turn({ costUsd: 3, estimatedCostUsd: 3 })],
+      }),
+    );
+
+    const bar = view.querySelector('[data-slot="waterfall-turn"]');
+    expect(bar?.getAttribute('aria-label')).toContain('≈$3.00');
+    expect(bar?.getAttribute('aria-label')).toContain("geniro's estimate");
+    const label = view.querySelector('[data-slot="waterfall-lane-label"]');
+    expect(label?.textContent).toContain('≈$3.00');
+    expect(label?.querySelector('[title]')?.getAttribute('title')).toContain(
+      "geniro's estimate",
+    );
   });
 
   it('replaces the curve with a sentence when no turn reported a price', () => {

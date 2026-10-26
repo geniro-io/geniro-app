@@ -19,6 +19,7 @@ import {
   type ShareSegment,
   ShareStack,
 } from './process-figures';
+import { TITLE_BAR_CONTROL } from './title-bar';
 import { Popover } from './ui/popover';
 import { SegmentedControl } from './ui/segmented-control';
 import { cn } from './ui/utils';
@@ -113,7 +114,8 @@ export function AppUsageButton({
         title="How the app's CPU and memory divide across threads"
         onClick={() => onOpenChange(!open)}
         className={cn(
-          'app-no-drag flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/50',
+          TITLE_BAR_CONTROL,
+          'flex size-6 items-center justify-center',
           open && 'bg-sidebar-accent text-foreground',
         )}>
         <Activity aria-hidden="true" className="size-3.5" />

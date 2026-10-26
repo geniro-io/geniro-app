@@ -103,7 +103,21 @@ describe('UnrecordedSpendStore (in-memory sqlite)', () => {
 
     const loaded = await store.loadAll();
 
-    expect([...loaded]).toEqual([['r2', new Map([['agent', 3]])]]);
+    expect([...loaded]).toEqual([
+      ['r2', { spend: new Map([['agent', 3]]), estimates: new Map() }],
+    ]);
+  });
+
+  it('writes the part geniro priced beside the dollars, and clears it with them', async () => {
+    store.set('r1', 'agent', 0.4, 0.4);
+    await store.flushed('r1');
+    expect(JSON.parse((await column()) ?? '{}')).toEqual({
+      agent: { costUsd: 0.4, estimatedCostUsd: 0.4 },
+    });
+
+    store.set('r1', 'agent', 0.5);
+    await store.flushed('r1');
+    expect(JSON.parse((await column()) ?? '{}')).toEqual({ agent: 0.5 });
   });
 
   it('keeps going after a run is deleted, writing nothing for it', async () => {

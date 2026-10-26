@@ -725,7 +725,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       expect.arrayContaining(['--dangerously-skip-permissions']),
     );
     // The role now rides BEHIND the host preamble every user-facing turn
-    // carries. Spelled out rather than rebuilt with composeTurnInstructions,
+    // carries. Spelled out rather than rebuilt with turnInstructionParts,
     // which is the function under test one layer down — asserting against it
     // here would pass whatever that function did.
     expect(captured.args).toEqual(
@@ -1134,6 +1134,68 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       .filter(Boolean)
       .at(-1)!;
     expect(JSON.parse(responseLine).response.response.behavior).toBe('deny');
+    child.emit('close', 0, null);
+    await handle.done;
+  });
+
+  it("sends a picked option's permission updates with the allow, and none without one", async () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'ask' },
+      (e) => events.push(e),
+    );
+    const request = (id: string): string =>
+      `${JSON.stringify({
+        type: 'control_request',
+        request_id: id,
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Bash',
+          input: { command: 'touch a' },
+          permission_suggestions: [
+            {
+              type: 'addRules',
+              rules: [{ toolName: 'Bash', ruleContent: 'touch a' }],
+              behavior: 'allow',
+              destination: 'localSettings',
+            },
+          ],
+        },
+      })}\n`;
+    const lastResponse = (): Record<string, unknown> =>
+      JSON.parse(child.stdin.written.split('\n').filter(Boolean).at(-1)!)
+        .response.response;
+
+    child.stdout.emitData(request('req-s'));
+    const card = events.at(-1);
+    const session =
+      card?.type === 'approval_request'
+        ? card.options?.find((option) => option.scope === 'session')
+        : undefined;
+    expect(session).toBeDefined();
+    handle.respondApproval('req-s', true, { command: 'touch a' }, session);
+    expect(lastResponse()).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'touch a' },
+      updatedPermissions: [
+        {
+          type: 'addRules',
+          rules: [{ toolName: 'Bash', ruleContent: 'touch a' }],
+          behavior: 'allow',
+          destination: 'session',
+        },
+      ],
+    });
+
+    // A one-time allow — which is all an auto-approval ever sends — teaches
+    // the CLI nothing.
+    child.stdout.emitData(request('req-o'));
+    handle.respondApproval('req-o', true, { command: 'touch a' });
+    expect(lastResponse()).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'touch a' },
+    });
     child.emit('close', 0, null);
     await handle.done;
   });
@@ -2273,6 +2335,8 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
 
     expect(captured.args).toEqual([
       ...CLAUDE_BASE_ARGS,
+      '--disallowedTools',
+      'Monitor',
       CLAUDE_MCP_CONFIG_FLAG,
       CLAUDE_EMPTY_MCP_CONFIG,
       CLAUDE_STRICT_MCP_CONFIG_FLAG,
@@ -2789,6 +2853,26 @@ describe('ClaudeAdapter — fast mode', () => {
     expect(unset.captured.args).not.toContain(CLAUDE_SETTINGS_FLAG);
   });
 
+  it('hands the CLI the run’s reply language in the same one --settings as fast mode', () => {
+    const both = fakeSpawn();
+    new ClaudeAdapter({ spawn: both.spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        model: 'claude-opus-5-5',
+        modelParameters: { [CLAUDE_FAST_MODE_PARAMETER_ID]: 'true' },
+        replyLanguage: 'Russian',
+      },
+      () => {},
+    );
+    const args = both.captured.args!;
+    expect(args.filter((arg) => arg === CLAUDE_SETTINGS_FLAG)).toHaveLength(1);
+    expect(JSON.parse(args[args.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!)).toEqual({
+      fastMode: true,
+      language: 'Russian',
+    });
+  });
+
   it('respawns the kept process when fast mode flips, and reuses it when it does not', async () => {
     // Mirrors the base class's own "sessions separate on…" pattern
     // (`agent-adapter.spec.ts`): a session refuses a turn whose key differs
@@ -2826,7 +2910,7 @@ describe('ClaudeAdapter — fast mode', () => {
     expect(session.startTurn({ ...input }, () => {})).not.toBeNull();
   });
 
-  it('withholds a node’s switched-off MCP servers with --disallowedTools, never geniro’s own', () => {
+  it('withholds claude’s own Monitor and a node’s switched-off MCP servers with one --disallowedTools, never geniro’s own', () => {
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       {
@@ -2844,10 +2928,12 @@ describe('ClaudeAdapter — fast mode', () => {
     const args = captured.args!;
     const at = args.indexOf('--disallowedTools');
     expect(at).toBeGreaterThan(-1);
-    expect(args.slice(at + 1, at + 3)).toEqual([
+    expect(args.slice(at + 1, at + 4)).toEqual([
+      'Monitor',
       'mcp__codegraph',
       'mcp__claude_ai_Gmail',
     ]);
+    expect(args.filter((arg) => arg === '--disallowedTools')).toHaveLength(1);
     expect(args).not.toContain('mcp__geniro-run-1');
 
     const none = fakeSpawn();
@@ -2855,7 +2941,10 @@ describe('ClaudeAdapter — fast mode', () => {
       { prompt: 'go', cwd: '/proj' },
       () => {},
     );
-    expect(none.captured.args).not.toContain('--disallowedTools');
+    const bare = none.captured.args!;
+    expect(bare.slice(bare.indexOf('--disallowedTools') + 1)[0]).toBe(
+      'Monitor',
+    );
   });
 
   it('respawns the kept process when the switched-off servers change, not when only their order does', async () => {

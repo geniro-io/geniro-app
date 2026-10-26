@@ -2,6 +2,7 @@ import {
   type AgentDisplay,
   type AgentThread,
   MAIN_THREAD_ID,
+  subagentMayStillRun,
 } from './agent-activity';
 import { isSettledRunStatus } from './run-status';
 import type { ShellRun } from './shell-activity';
@@ -143,9 +144,10 @@ export function agentInstances(
     if (threadId === MAIN_THREAD_ID || known.has(threadId)) {
       continue;
     }
+    // A call inferred from rows alone has no ending of its own, so it reads
+    // as working exactly while something in it may still be.
     const working =
-      content.shells.length > 0 ||
-      content.subagents.some((thread) => !isSettledRunStatus(thread.status));
+      content.shells.length > 0 || content.subagents.some(subagentMayStillRun);
     take(
       {
         id: threadId,
@@ -180,7 +182,7 @@ export function isInstanceLive(instance: AgentInstance): boolean {
   return (
     !isSettledRunStatus(instance.thread.status) ||
     instance.shells.length > 0 ||
-    instance.subagents.some((thread) => !isSettledRunStatus(thread.status))
+    instance.subagents.some(subagentMayStillRun)
   );
 }
 

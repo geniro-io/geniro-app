@@ -16,6 +16,7 @@ import type {
   VerdictAck,
 } from '../daemon-client';
 import type { LiveTextEvent } from './live-text';
+import { RUN_LIST_MAX, RUN_LIST_PAGE } from './run-list-pages';
 import { type ChatRunState, HISTORY_PAGE, useChatRun } from './use-chat-run';
 import { ANCHOR_ASK_DELAY_MS } from './use-live-anchor-asks';
 
@@ -48,6 +49,7 @@ const run1: ChatRun = {
   autoCompactPercent: null,
   modelParameters: {},
   contextTokens: null,
+  contextEstimated: false,
   contextWindowTokens: null,
   configDir: null,
   configDirPin: null,
@@ -227,6 +229,8 @@ interface Harness {
   swapDraft: ReturnType<typeof vi.fn>;
   resetSteerStatus: ReturnType<typeof vi.fn>;
   drain: ReturnType<typeof vi.fn>;
+  /** What the hook reported of "not sent" rows arriving live. */
+  liveUnsent: ReturnType<typeof vi.fn>;
   /** Which runs the composer is holding follow-ups for. */
   queued: Set<string>;
   unmount: () => void;
@@ -243,6 +247,8 @@ async function mount(
   const drain = vi.fn();
   const queued = new Set<string>();
   const drainQueueRef = { current: drain };
+  const liveUnsent = vi.fn();
+  const onLiveUnsentRef = { current: liveUnsent };
   function Probe(): null {
     latest = useChatRun({
       client,
@@ -252,6 +258,7 @@ async function mount(
       resetSteerStatus,
       hasQueuedMessages: (runId) => queued.has(runId),
       drainQueueRef,
+      onLiveUnsentRef,
       historyPageSize,
     });
     return null;
@@ -272,6 +279,7 @@ async function mount(
     swapDraft,
     resetSteerStatus,
     drain,
+    liveUnsent,
     queued,
     unmount: () => {
       act(() => {
@@ -443,12 +451,22 @@ describe('useChatRun', () => {
     // from the BOARD exists before this window hears of it, and the row update
     // is a `prev.map` — so its announcements were dropped and the thread
     // worked away unlisted.
+    const at = (iso: string) => ({ createdAt: iso });
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, ...at('2026-02-02T00:00:00.000Z') },
+      { ...run2, ...at('2026-02-01T00:00:00.000Z') },
+    ]);
     const { client, emitRunStatus } = makeClient();
     const harness = await mount(client);
     expect(harness.state().runs.map((run) => run.id)).toEqual(['r1', 'r2']);
 
-    const fromTheBoard = { ...run1, id: 'r9', title: 'Test task' };
-    chatApi.listChats.mockResolvedValue([fromTheBoard, run1, run2]);
+    const fromTheBoard = {
+      ...run1,
+      id: 'r9',
+      title: 'Test task',
+      ...at('2026-03-01T00:00:00.000Z'),
+    };
+    chatApi.listChats.mockResolvedValue([fromTheBoard]);
     await act(async () => {
       emitRunStatus({ runId: 'r9', status: null, activity: 'Bash' });
     });
@@ -458,6 +476,11 @@ describe('useChatRun', () => {
       'r1',
       'r2',
     ]);
+    // The one run is asked for, never the whole listing again.
+    expect(chatApi.listChats).toHaveBeenLastCalledWith({
+      scope: 'all',
+      runId: 'r9',
+    });
   });
 
   it('moves a run\u2019s last ACTIVITY with an announce that wrote the row', async () => {
@@ -496,6 +519,521 @@ describe('useChatRun', () => {
     }
 
     expect(chatApi.listChats.mock.calls.length).toBe(before + 1);
+  });
+
+  it('never fetches an unknown run for a pull-request-only announce, even while a listing is in flight', async () => {
+    // A listing's own pull-request pass announces the threads it captures in
+    // (`status: null` + `pullRequests`), and none of them is in the rows still
+    // on screen while that listing is in flight.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    const pending: ((rows: ChatRun[]) => void)[] = [];
+    chatApi.listChats.mockImplementation(
+      () => new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+    );
+    const before = chatApi.listChats.mock.calls.length;
+
+    act(() => {
+      harness.state().showScope('archived');
+    });
+    for (const runId of ['a1', 'a2', 'a3', 'a4', 'a5']) {
+      await act(async () => {
+        emitRunStatus({
+          runId,
+          status: null,
+          pullRequests: [
+            {
+              owner: 'o',
+              repo: 'r',
+              number: 1,
+              url: 'https://github.com/o/r/pull/1',
+              seq: 1,
+              opened: true,
+            },
+          ],
+        });
+      });
+    }
+
+    // The scope switch's own listing, and nothing asked about any announced run.
+    expect(chatApi.listChats.mock.calls.slice(before)).toEqual([
+      [{ scope: 'archived', limit: RUN_LIST_PAGE + 1 }],
+    ]);
+  });
+
+  it('runs one listing per scope at a time, and one more after it however often it was asked', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client);
+    const pending: ((rows: ChatRun[]) => void)[] = [];
+    chatApi.listChats.mockImplementation(
+      () => new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+    );
+    const before = chatApi.listChats.mock.calls.length;
+
+    act(() => {
+      harness.state().refreshRuns();
+      harness.state().refreshRuns();
+      harness.state().refreshRuns();
+    });
+    expect(chatApi.listChats.mock.calls.length - before).toBe(1);
+
+    await act(async () => {
+      pending[0]?.([run1, run2]);
+    });
+    expect(chatApi.listChats.mock.calls.length - before).toBe(2);
+
+    await act(async () => {
+      pending[1]?.([run1, run2]);
+    });
+    expect(chatApi.listChats.mock.calls.length - before).toBe(2);
+  });
+
+  it('lets a scope switch supersede a listing of the scope it left', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client);
+    chatApi.listChats.mockImplementation(
+      () => new Promise<ChatRun[]>(() => undefined),
+    );
+    const before = chatApi.listChats.mock.calls.length;
+
+    act(() => {
+      harness.state().refreshRuns();
+      harness.state().showScope('archived');
+    });
+
+    expect(chatApi.listChats.mock.calls.slice(before)).toEqual([
+      [{}],
+      [{ scope: 'archived', limit: RUN_LIST_PAGE + 1 }],
+    ]);
+  });
+
+  it('asks for each unknown WORKING run by itself, never the whole listing again', async () => {
+    const { client, emitRunStatus } = makeClient();
+    await mount(client);
+    chatApi.listChats.mockResolvedValue([]);
+    const before = chatApi.listChats.mock.calls.length;
+
+    for (const runId of ['w1', 'w2', 'w3']) {
+      await act(async () => {
+        emitRunStatus({ runId, status: 'running' } as RunStatusEvent);
+      });
+    }
+
+    expect(chatApi.listChats.mock.calls.slice(before)).toEqual([
+      [{ scope: 'all', runId: 'w1' }],
+      [{ scope: 'all', runId: 'w2' }],
+      [{ scope: 'all', runId: 'w3' }],
+    ]);
+  });
+
+  it('keeps an adopted run the scope on show does not hold off the list, and still follows it', async () => {
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    const shelved = {
+      ...run1,
+      id: 'r8',
+      archivedAt: '2026-01-01T00:00:00.000Z',
+    };
+    chatApi.listChats.mockResolvedValue([shelved]);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r8', status: null, activity: 'Bash' });
+    });
+
+    expect(harness.state().runs.map((run) => run.id)).toEqual(['r1', 'r2']);
+    expect(harness.state().offScopeRuns.map((run) => run.id)).toEqual(['r8']);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r8', status: 'completed' } as RunStatusEvent);
+    });
+    expect(harness.state().offScopeRuns[0]?.status).toBe('completed');
+  });
+
+  it('keeps a run taken in while an older listing was in flight when that listing lands', async () => {
+    // The listing read its rows before the board started the run, so it is
+    // silent about it — never a witness that it is gone.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    const pending: ((rows: ChatRun[]) => void)[] = [];
+    chatApi.listChats.mockImplementation((params?: { runId?: string }) =>
+      params?.runId === 'r9'
+        ? Promise.resolve([{ ...run1, id: 'r9' }])
+        : new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+    );
+
+    act(() => {
+      harness.state().refreshRuns();
+    });
+    await act(async () => {
+      emitRunStatus({ runId: 'r9', status: 'running' } as RunStatusEvent);
+    });
+    await act(async () => {
+      pending[0]?.([run1, run2]);
+    });
+
+    expect(harness.state().runs.map((run) => run.id)).toContain('r9');
+    expect(harness.state().offScopeRuns.map((run) => run.id)).not.toContain(
+      'r9',
+    );
+  });
+
+  it('adds an adopted run’s snapshot facts without clearing any other run’s', async () => {
+    chatApi.listChats.mockResolvedValue([{ ...run1, shellsOpen: 1 }, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    expect([...harness.state().shellsOut]).toEqual(['r1']);
+
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, id: 'r9', holdingFor: 1, shellsOpen: 1 },
+    ]);
+    await act(async () => {
+      emitRunStatus({ runId: 'r9', status: 'running' } as RunStatusEvent);
+    });
+
+    expect([...harness.state().shellsOut].sort()).toEqual(['r1', 'r9']);
+    expect(harness.state().holding.has('r9')).toBe(true);
+  });
+
+  it('keeps a run this window created while an older listing was in flight', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client);
+    const pending: ((rows: ChatRun[]) => void)[] = [];
+    chatApi.listChats.mockImplementation(
+      () => new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+    );
+
+    act(() => {
+      harness.state().refreshRuns();
+      harness.state().addRun({ ...run1, id: 'r9' });
+    });
+    await act(async () => {
+      pending[0]?.([run1, run2]);
+    });
+
+    expect(harness.state().runs.map((run) => run.id)).toContain('r9');
+    expect(harness.state().offScopeRuns.map((run) => run.id)).not.toContain(
+      'r9',
+    );
+  });
+
+  it('lets a deleted run go when a listing taken before the delete lands', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client);
+    const pending: ((rows: ChatRun[]) => void)[] = [];
+    chatApi.listChats.mockImplementation(
+      () => new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+    );
+
+    act(() => {
+      harness.state().refreshRuns();
+      harness.state().dropRun('r2', () => undefined);
+    });
+    await act(async () => {
+      pending[0]?.([run1, run2]);
+    });
+
+    expect(harness.state().runs.map((run) => run.id)).toEqual(['r1']);
+  });
+
+  describe('paging the archive', () => {
+    /** A shelved run created `day` days into 2026. */
+    function runOn(
+      id: string,
+      day: number,
+      extra: Partial<ChatRun> = {},
+    ): ChatRun {
+      return {
+        ...run1,
+        id,
+        archivedAt: '2026-12-31T00:00:00.000Z',
+        createdAt: new Date(Date.UTC(2026, 0, day)).toISOString(),
+        ...extra,
+      };
+    }
+    /** A full page of chats and its probe row, days `from` down. */
+    function fullChatPage(from: number): ChatRun[] {
+      return Array.from({ length: RUN_LIST_PAGE + 1 }, (_, i) =>
+        runOn(`c${from - i}`, from - i),
+      );
+    }
+
+    it('lists the archive a page at a time and asks for the next page below the last row', async () => {
+      const { client } = makeClient();
+      const harness = await mount(client);
+      const page = fullChatPage(200);
+      chatApi.listChats.mockResolvedValue(page);
+
+      await act(async () => {
+        harness.state().showScope('archived');
+      });
+      expect(harness.state().hasOlderRuns).toBe(true);
+      expect(harness.state().runs).toHaveLength(RUN_LIST_PAGE);
+
+      chatApi.listChats.mockResolvedValue([runOn('c100', 100)]);
+      await act(async () => {
+        harness.state().loadOlderRuns();
+      });
+
+      const oldest = page[RUN_LIST_PAGE - 1]!;
+      expect(chatApi.listChats).toHaveBeenLastCalledWith({
+        scope: 'archived',
+        limit: RUN_LIST_PAGE + 1,
+        beforeCreatedAt: oldest.createdAt,
+        beforeId: oldest.id,
+      });
+      expect(harness.state().runs.at(-1)?.id).toBe('c100');
+      expect(harness.state().hasOlderRuns).toBe(false);
+    });
+
+    it('holds back rows of the deeper half until the other half reaches them', async () => {
+      // Fifty chats span days 200..151; the one workflow run is from day 3.
+      // Shown now, it would sit under a gap where chats of days 4..150 belong.
+      const { client } = makeClient();
+      const harness = await mount(client);
+      chatApi.listChats.mockResolvedValue(fullChatPage(200));
+      workflowApi.listWorkflowRuns.mockResolvedValue([
+        runOn('old-workflow', 3, { workflowId: 'wf' }),
+      ]);
+
+      await act(async () => {
+        harness.state().showScope('archived');
+      });
+      expect(harness.state().runs.map((run) => run.id)).not.toContain(
+        'old-workflow',
+      );
+
+      chatApi.listChats.mockResolvedValue([runOn('c4', 4)]);
+      await act(async () => {
+        harness.state().loadOlderRuns();
+      });
+      expect(
+        harness
+          .state()
+          .runs.map((run) => run.id)
+          .slice(-2),
+      ).toEqual(['c4', 'old-workflow']);
+    });
+
+    it('keeps the depth already read when it lists again', async () => {
+      const { client } = makeClient();
+      const harness = await mount(client);
+      chatApi.listChats.mockResolvedValue(fullChatPage(200));
+      await act(async () => {
+        harness.state().showScope('archived');
+      });
+      chatApi.listChats.mockResolvedValue(fullChatPage(150));
+      await act(async () => {
+        harness.state().loadOlderRuns();
+      });
+
+      await act(async () => {
+        harness.state().refreshRuns();
+      });
+
+      expect(chatApi.listChats).toHaveBeenLastCalledWith({
+        scope: 'archived',
+        limit: 2 * RUN_LIST_PAGE + 1,
+      });
+    });
+
+    it('drops an older page that lands after the user left the scope', async () => {
+      const { client } = makeClient();
+      const harness = await mount(client);
+      chatApi.listChats.mockResolvedValue(fullChatPage(200));
+      await act(async () => {
+        harness.state().showScope('archived');
+      });
+      let landOlder: (rows: ChatRun[]) => void = () => undefined;
+      chatApi.listChats.mockImplementation((params?: { beforeId?: string }) =>
+        params?.beforeId === undefined
+          ? Promise.resolve([run1, run2])
+          : new Promise<ChatRun[]>((resolve) => {
+              landOlder = resolve;
+            }),
+      );
+
+      act(() => {
+        harness.state().loadOlderRuns();
+      });
+      await act(async () => {
+        harness.state().showScope('active');
+      });
+      await act(async () => {
+        landOlder([runOn('c100', 100)]);
+      });
+
+      expect(harness.state().runs.map((run) => run.id)).toEqual(['r1', 'r2']);
+    });
+
+    it('does not offer more once the end was read, when it lists again', async () => {
+      const { client } = makeClient();
+      const harness = await mount(client);
+      const rows = fullChatPage(200).slice(0, 30);
+      chatApi.listChats.mockResolvedValue(rows);
+      await act(async () => {
+        harness.state().showScope('archived');
+      });
+      expect(harness.state().hasOlderRuns).toBe(false);
+
+      await act(async () => {
+        harness.state().refreshRuns();
+      });
+
+      expect(harness.state().hasOlderRuns).toBe(false);
+    });
+
+    it('brings back a known shelved run under Show all when the page does not reach it', async () => {
+      // Filed off the desk earlier, then opened from search: the first page of
+      // Show all is newer than it, and the thread on screen needs its row.
+      const { client } = makeClient();
+      const harness = await mount(client);
+      const shelved = runOn('old-shelved', 2);
+      act(() => {
+        harness.state().placeRun(shelved, () => undefined);
+      });
+      expect(harness.state().offScopeRuns.map((run) => run.id)).toEqual([
+        'old-shelved',
+      ]);
+      chatApi.listChats.mockResolvedValue(fullChatPage(200));
+
+      await act(async () => {
+        harness.state().showScope('all');
+      });
+
+      expect(harness.state().runs.map((run) => run.id)).toContain(
+        'old-shelved',
+      );
+      expect(harness.state().offScopeRuns.map((run) => run.id)).not.toContain(
+        'old-shelved',
+      );
+    });
+
+    it('reads an exactly-full last page as the end, on the first page and below it', async () => {
+      const { client } = makeClient();
+      const harness = await mount(client);
+      chatApi.listChats.mockResolvedValue(
+        fullChatPage(200).slice(0, RUN_LIST_PAGE),
+      );
+      await act(async () => {
+        harness.state().showScope('archived');
+      });
+      expect(harness.state().hasOlderRuns).toBe(false);
+
+      chatApi.listChats.mockResolvedValue(fullChatPage(200));
+      await act(async () => {
+        harness.state().refreshRuns();
+      });
+      expect(harness.state().hasOlderRuns).toBe(true);
+      chatApi.listChats.mockResolvedValue(
+        fullChatPage(149).slice(0, RUN_LIST_PAGE),
+      );
+      await act(async () => {
+        harness.state().loadOlderRuns();
+      });
+      expect(harness.state().hasOlderRuns).toBe(false);
+    });
+
+    it('keeps the rows read past what one request may ask for, and the way below them', async () => {
+      const { client } = makeClient();
+      const harness = await mount(client);
+      chatApi.listChats.mockResolvedValue(fullChatPage(3_000));
+      await act(async () => {
+        harness.state().showScope('archived');
+      });
+      for (let page = 1; page < 25; page += 1) {
+        chatApi.listChats.mockResolvedValue(
+          fullChatPage(3_000 - page * RUN_LIST_PAGE),
+        );
+        await act(async () => {
+          harness.state().loadOlderRuns();
+        });
+      }
+      const deep = harness.state().runs.length;
+      expect(deep).toBe(25 * RUN_LIST_PAGE);
+
+      // The daemon answers the capped re-list with its newest rows and a probe.
+      chatApi.listChats.mockImplementation((params?: { limit?: number }) =>
+        Promise.resolve(
+          Array.from({ length: params?.limit ?? 0 }, (_, i) =>
+            runOn(`c${3_000 - i}`, 3_000 - i),
+          ),
+        ),
+      );
+      await act(async () => {
+        harness.state().refreshRuns();
+      });
+
+      expect(chatApi.listChats).toHaveBeenLastCalledWith({
+        scope: 'archived',
+        limit: RUN_LIST_MAX,
+      });
+      expect(harness.state().runs).toHaveLength(deep);
+      expect(harness.state().hasOlderRuns).toBe(true);
+
+      // The next page continues below the deepest row read, not the re-list's.
+      chatApi.listChats.mockResolvedValue([]);
+      await act(async () => {
+        harness.state().loadOlderRuns();
+      });
+      expect(chatApi.listChats).toHaveBeenLastCalledWith(
+        expect.objectContaining({ beforeId: `c${3_000 - deep + 1}` }),
+      );
+    });
+
+    it('refiles a held row another client changed, and drops one that left the scope', async () => {
+      const { client } = makeClient();
+      const harness = await mount(client);
+      chatApi.listChats.mockResolvedValue(fullChatPage(200));
+      workflowApi.listWorkflowRuns.mockResolvedValue([
+        runOn('old-workflow', 3, { workflowId: 'wf' }),
+        runOn('older-workflow', 2, { workflowId: 'wf' }),
+      ]);
+      await act(async () => {
+        harness.state().showScope('archived');
+      });
+      const before = chatApi.listChats.mock.calls.length;
+
+      act(() => {
+        harness.state().refileChangedRuns(
+          [
+            runOn('old-workflow', 3, { workflowId: 'wf', title: 'Renamed' }),
+            runOn('older-workflow', 2, {
+              workflowId: 'wf',
+              archivedAt: null,
+            }),
+          ],
+          () => undefined,
+        );
+      });
+      chatApi.listChats.mockResolvedValue([runOn('c4', 4)]);
+      await act(async () => {
+        harness.state().loadOlderRuns();
+      });
+
+      const shown = harness.state().runs;
+      expect(shown.find((run) => run.id === 'old-workflow')?.title).toBe(
+        'Renamed',
+      );
+      expect(shown.map((run) => run.id)).not.toContain('older-workflow');
+      expect(
+        chatApi.listChats.mock.calls
+          .slice(before)
+          .some(([params]) => params?.runId !== undefined),
+      ).toBe(false);
+    });
+
+    it('never pages the desk', async () => {
+      const { client } = makeClient();
+      const harness = await mount(client);
+      chatApi.listChats.mockResolvedValue(fullChatPage(200));
+
+      await act(async () => {
+        harness.state().refreshRuns();
+      });
+
+      expect(chatApi.listChats).toHaveBeenLastCalledWith({});
+      expect(harness.state().hasOlderRuns).toBe(false);
+    });
   });
 
   it('takes an unlisted run into the sidebar when the board opens it directly', async () => {
@@ -693,6 +1231,27 @@ describe('useChatRun', () => {
     expect(harness.swapDraft).not.toHaveBeenCalled();
   });
 
+  it('reports a "not sent" row that arrives live, and never one replayed on open', async () => {
+    const marker = (seq: number): ChatItem => ({
+      ...msg('r1', seq, 'assistant', ''),
+      kind: 'system',
+      role: null,
+      payload: { message: 'not sent', unsentMessages: [`d-${seq}`] },
+    });
+    chatApi.listRunItems.mockResolvedValue([marker(0)]);
+    const { client, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    expect(harness.liveUnsent).not.toHaveBeenCalled();
+
+    await act(async () => {
+      emitItem(marker(1));
+    });
+
+    expect(harness.liveUnsent).toHaveBeenCalledTimes(1);
+    expect(harness.liveUnsent).toHaveBeenCalledWith('r1', ['d-1'], 'r1-i1');
+  });
+
   it('renders a live item for the open run and drops one for another', async () => {
     const { client, emitItem } = makeClient();
     const harness = await mount(client);
@@ -884,6 +1443,97 @@ describe('useChatRun', () => {
 
     expect(harness.state().streaming).toBe(false);
     expect(harness.drain.mock.calls).toEqual([['r1']]);
+  });
+
+  it.each([
+    ['nothing', []],
+    [
+      'only bookkeeping',
+      [{ ...msg('r1', 3, 'assistant', ''), kind: 'shell_info' }],
+    ],
+  ] as const)(
+    'leaves the working state down when a stray `running` lands between the turn end and its settle, with %s after the turn end',
+    async (_label, after) => {
+      // The daemon's order when an off-turn row restates the run between the
+      // turn's `turn_complete` row and its settle: the settle carries no
+      // `noTerminalItem`, since its row already landed.
+      const { client, emitItem, emitRunStatus } = makeClient();
+      chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+      const harness = await mount(client);
+      await open(harness, 'r1');
+      expect(harness.state().streaming).toBe(true);
+
+      await act(async () => {
+        emitItem({ ...msg('r1', 1, 'assistant', ''), kind: 'subagent_info' });
+        emitItem(turnEnd('r1', 2));
+        for (const row of after) {
+          emitItem(row);
+        }
+        emitRunStatus({
+          runId: 'r1',
+          status: 'running',
+          activity: 'still working',
+        } as RunStatusEvent);
+        emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
+      });
+
+      expect(harness.state().runs.find((run) => run.id === 'r1')?.status).toBe(
+        'completed',
+      );
+      expect(harness.state().streaming).toBe(false);
+    },
+  );
+
+  it('ends no other run’s working state on a settle after a turn end', async () => {
+    const { client, emitItem, emitRunStatus } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitItem(turnEnd('r1', 1));
+      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r2', status: 'completed' } as RunStatusEvent);
+    });
+
+    expect(harness.state().streaming).toBe(true);
+  });
+
+  it('forgets a turn end when another thread is opened', async () => {
+    const { client, emitItem, emitRunStatus } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      emitItem(turnEnd('r1', 1));
+    });
+
+    chatApi.listRunItems.mockResolvedValue([msg('r2', 0, 'user', 'go')]);
+    await open(harness, 'r2');
+    expect(harness.state().streaming).toBe(true);
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed' } as RunStatusEvent);
+    });
+
+    expect(harness.state().streaming).toBe(true);
+  });
+
+  it('leaves a settle without a terminal row to its row once the run wrote past its turn end', async () => {
+    // The CLI carried on after the turn: its rows are live again, so only its
+    // own terminal row (or a `noTerminalItem` settle) may end the working state.
+    const { client, emitItem, emitRunStatus } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitItem(turnEnd('r1', 1));
+      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitItem(msg('r1', 2, 'assistant', 'carrying on'));
+      emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
+    });
+
+    expect(harness.state().streaming).toBe(true);
   });
 
   it('does not drain behind an item-less settle the user STOPPED', async () => {
@@ -1258,6 +1908,26 @@ describe('useChatRun', () => {
     expect(harness.drain).toHaveBeenCalledWith('r1');
   });
 
+  it('keeps the queue of a run still mid-reply on opening it, whatever background work is out', async () => {
+    // Background sub-agents and a detached command do not end the reply; a
+    // drain here would send the queued message into the turn in flight.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, subagentsOut: 2, shellsOpen: 1 },
+      run2,
+    ]);
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 1, 'user', 'go'),
+      msg('r1', 2, 'assistant', 'started the server, now reading the logs'),
+    ]);
+    const { client } = makeClient();
+    const harness = await mount(client);
+    harness.queued.add('r1');
+
+    await open(harness, 'r1');
+
+    expect(harness.drain).not.toHaveBeenCalled();
+  });
+
   it('fetches only the delta past the last rendered seq after a reconnect', async () => {
     const { client, emitItem, fireDisconnect, fireReconnect } = makeClient();
     const harness = await mount(client);
@@ -1301,6 +1971,27 @@ describe('useChatRun', () => {
       fireDisconnect();
       fireReconnect();
       await Promise.resolve();
+    });
+
+    expect(harness.state().streaming).toBe(false);
+  });
+
+  it('leaves the working state down past a stray running when the turn end arrived by replay', async () => {
+    const { client, emitRunStatus, fireDisconnect, fireReconnect } =
+      makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    chatApi.listRunItems.mockResolvedValue([turnEnd('r1', 1)]);
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
     });
 
     expect(harness.state().streaming).toBe(false);
@@ -1464,6 +2155,89 @@ describe('useChatRun', () => {
 
     expect(harness.state().runs.find((r) => r.id === 'r1')?.status).toBe(
       'completed',
+    );
+  });
+
+  it('takes what a run is parked on from a reconnect’s listing even when its own copy is fresher', async () => {
+    // REPORTED from a phone: workflow threads read `running · Working…` while
+    // each sat on a question. Safari slept through the question's announce, and
+    // the reconnect's listing that said so lost to the held copy, which a
+    // status announce had dated after the row's own write.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, updatedAt: '2026-09-27T10:00:00.000Z' },
+      run2,
+    ]);
+    const { client, emitRunStatus, fireDisconnect, fireReconnect } =
+      makeClient();
+    const harness = await mount(client);
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'running',
+        activity: null,
+        awaiting: null,
+        at: '2026-09-27T10:00:00.002Z',
+      });
+    });
+    chatApi.listChats.mockResolvedValue([
+      {
+        ...run1,
+        awaiting: 'question',
+        holdingFor: 1,
+        updatedAt: '2026-09-27T10:00:00.000Z',
+      },
+      run2,
+    ]);
+
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+    });
+
+    const row = harness.state().runs.find((r) => r.id === 'r1');
+    expect(row?.awaiting).toBe('question');
+    expect(row?.holdingFor).toBe(1);
+    expect(harness.state().holding.has('r1')).toBe(true);
+    // The rest of the fresher copy is still the one kept.
+    expect(row?.updatedAt).toBe('2026-09-27T10:00:00.002Z');
+  });
+
+  it('keeps what a run is parked on when it was announced while the listing was in flight', async () => {
+    // The listing's reading was taken before this announce went out, so
+    // taking it would put the badge back to `running` over an open question.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, updatedAt: '2026-09-27T10:00:00.000Z' },
+      run2,
+    ]);
+    const { client, emitRunStatus, fireDisconnect, fireReconnect } =
+      makeClient();
+    const harness = await mount(client);
+    let list: (runs: ChatRun[]) => void = () => undefined;
+    chatApi.listChats.mockReturnValue(
+      new Promise<ChatRun[]>((resolve) => {
+        list = resolve;
+      }),
+    );
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        awaiting: 'question',
+        at: '2026-09-27T10:00:05.000Z',
+      });
+    });
+
+    await act(async () => {
+      list([{ ...run1, updatedAt: '2026-09-27T10:00:00.000Z' }, run2]);
+      await Promise.resolve();
+    });
+
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.awaiting).toBe(
+      'question',
     );
   });
 

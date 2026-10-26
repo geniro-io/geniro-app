@@ -21,6 +21,7 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
+import { ActionCommandRegistry } from '../../agents/services/action-command.registry';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
@@ -134,6 +135,7 @@ describe('usage ledger retention across a run delete', () => {
       // table from a unit test.
       { reapInBackground: () => undefined } as unknown as RunProcessReaper,
       new WallTurnDao(em),
+      new ActionCommandRegistry(),
     );
   });
 
@@ -156,6 +158,7 @@ describe('usage ledger retention across a run delete', () => {
       cwd: '/work',
       workflowName: null,
       costUsd: 2.5,
+      estimatedCostUsd: null,
       inputTokens: 900,
       outputTokens: 120,
       cacheReadTokens: null,
@@ -223,6 +226,7 @@ describe('usage ledger retention across a run delete', () => {
       cwd: '/work',
       workflowName: null,
       costUsd: null,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,
@@ -281,6 +285,7 @@ describe('usage ledger retention across a run delete', () => {
       cwd: null,
       workflowName: null,
       costUsd: 2.5,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,

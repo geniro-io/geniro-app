@@ -9,7 +9,6 @@ import type {
 import type { AgentThread } from './agent-activity';
 import {
   callEndedPerDaemon,
-  withDaemonDelegateEndings,
   withDurableDelegates,
   withDurableShells,
   withoutDaemonEndedShells,
@@ -26,7 +25,9 @@ const delegate = (
   label: null,
   kind: null,
   status: 'running',
+  processEnded: false,
   launchSeq: 1,
+  toolCalls: 0,
   startedAt: '2026-10-01T00:00:00.000Z',
   ...extra,
 });
@@ -41,6 +42,23 @@ const thread = (id: string): AgentThread => ({
 });
 
 describe('withDurableDelegates', () => {
+  it('carries the daemon’s word that a delegate’s process ended onto its thread', () => {
+    const merged = withDurableDelegates(
+      new Map(),
+      [
+        delegate('ended', { status: 'untracked', processEnded: true }),
+        delegate('lost', { status: 'untracked' }),
+      ],
+      'chat',
+    );
+    expect(
+      merged.get('chat')!.map((t) => [t.id, t.processEnded ?? false]),
+    ).toEqual([
+      ['ended', true],
+      ['lost', false],
+    ]);
+  });
+
   it('adds the daemon’s delegates the window holds no block for, ahead of the window’s', () => {
     const merged = withDurableDelegates(
       new Map([['chat', [thread('toolu_seen')]]]),
@@ -87,44 +105,6 @@ describe('withDurableShells', () => {
       [open('s1', 'engineer')],
     );
     expect(merged.get('engineer')).toBeUndefined();
-  });
-});
-
-describe('withDaemonDelegateEndings', () => {
-  const running = (id: string): AgentThread => ({
-    ...thread(id),
-    status: 'running',
-  });
-
-  it('ends a delegate the page reads as running once the daemon read that covers its launch says it is over', () => {
-    const merged = withDaemonDelegateEndings(
-      new Map([['chat', [running('d1'), running('d2'), running('d3')]]]),
-      {
-        throughSeq: 50,
-        delegates: [
-          delegate('d1', { status: 'completed', launchSeq: 10 }),
-          // Launched after the read: the page's word stands until the next.
-          delegate('d2', { status: 'completed', launchSeq: 60 }),
-          delegate('d3', { status: 'running', launchSeq: 10 }),
-        ],
-      },
-    );
-    expect(merged.get('chat')!.map((t) => [t.id, t.status])).toEqual([
-      ['d1', 'completed'],
-      ['d2', 'running'],
-      ['d3', 'running'],
-    ]);
-  });
-
-  it('never brings back a delegate the page saw end', () => {
-    const merged = withDaemonDelegateEndings(
-      new Map([['chat', [thread('d1')]]]),
-      {
-        throughSeq: 50,
-        delegates: [delegate('d1', { status: 'running', launchSeq: 10 })],
-      },
-    );
-    expect(merged.get('chat')![0]!.status).toBe('completed');
   });
 });
 

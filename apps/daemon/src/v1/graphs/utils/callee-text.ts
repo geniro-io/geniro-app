@@ -1,4 +1,4 @@
-import { redactSecrets } from '../../diagnostics/utils/redact';
+import { maskedCommand } from '../../agents/utils/command-text';
 import type { WorkflowAgentNode } from '../graphs.types';
 import { poolMemberLabel, poolMembersOf, poolSize } from './agent-pool';
 
@@ -35,7 +35,7 @@ export const ANSWERING_WITH_CALLS_OUT =
 /**
  * What a caller is told about the pages its callees publish — said in both
  * `call_agent`'s and `await_agent`'s descriptions, since either returns the
- * finished envelope. The broker's `withPublishedPages` is what keeps it true.
+ * finished envelope. The broker's `withPublished` is what keeps it true.
  */
 export const CALL_RESULT_PAGES =
   'A finished call\'s envelope — its result, or the envelope itself when the call failed — lists under "artifacts" every page the callee — or an agent it called — published with show_artifact during the call, by artifact_id, title and version. Those pages are already in the user\'s chat: point the user at them by title, and never publish them again or restate their content.';
@@ -46,6 +46,18 @@ export const PUBLISHED_PAGES_NOTE =
   'Point the user at a page by its title instead of publishing it again or restating what it shows.';
 
 /**
+ * What a caller is told about the buttons its callees publish — said beside
+ * {@link CALL_RESULT_PAGES}, and kept true by the broker's `withPublished`.
+ */
+export const CALL_RESULT_ACTIONS =
+  'It also lists under "actions" every button the callee — or an agent it called — published with publish_action during the call and has not removed, by action_id, label and kind. Those buttons were put in the user\'s chat for the user to press (the user may have pressed or dismissed one since); a press of a message button is delivered to the agent the user\'s messages go to, naming who published it. Mention one by its label when the user needs it; never publish it again.';
+
+/** The same promise, as the `note` of an envelope that carries `actions`. */
+export const PUBLISHED_ACTIONS_NOTE =
+  'The buttons in "actions" were put in the user\'s chat for the user to press, and may have been pressed or dismissed since. ' +
+  'Mention one by its label when the user needs it instead of publishing it again.';
+
+/**
  * How much of each command a call left running its caller is shown — enough
  * to recognise `pnpm dev:web` behind its `cd` prefix, short enough that a
  * fan-out of servers cannot swamp the result text it sits beside.
@@ -53,27 +65,12 @@ export const PUBLISHED_PAGES_NOTE =
 export const LEFT_RUNNING_COMMAND_MAX = 160;
 
 /**
- * A shell word `NAME=value` wherever a word starts — in front of a command,
- * after `&&` / `;` / `|`, behind `env` or `export` — with its whole value: quoted
- * runs, escapes, `$(…)` and backtick substitutions as one value.
- */
-const ENV_ASSIGNMENT =
-  /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=(?:'[^']*'|"(?:[^"\\]|\\.)*"|`[^`]*`|\$\([^)]*\)|\\.|[^\s'"`\\;&|()])*/g;
-
-/**
  * A command a callee left running, as its caller is shown it — on one line,
- * capped, with every env assignment's value shown as `…` and registered
- * secrets masked. The words go to the CALLER's provider, which need not be the
- * callee's, and an assignment is where an unregistered token sits
- * (`GITHUB_TOKEN=… pnpm dev`); its name still says what was set. Assignments
- * go first, so a mask's own words are never cut as a value.
+ * capped and masked ({@link maskedCommand}). The words go to the CALLER's
+ * provider, which need not be the callee's.
  */
 export function quotedCommand(command: string): string {
-  const assignmentsMasked = command.replace(ENV_ASSIGNMENT, '$1$2=…');
-  return flattenText(
-    redactSecrets(assignmentsMasked),
-    LEFT_RUNNING_COMMAND_MAX,
-  );
+  return flattenText(maskedCommand(command), LEFT_RUNNING_COMMAND_MAX);
 }
 
 /**

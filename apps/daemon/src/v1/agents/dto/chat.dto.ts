@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
+  ActionPressWireSchema,
   AgentOptionsSchema,
   AppProcessesWireSchema,
   AttachmentMediaTypeSchema,
@@ -24,10 +25,12 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_RUN_NOTES_LENGTH,
   RecommendationApplySchema,
+  ReplyLanguageSchema,
   RunArtifactsWireSchema,
   RunProcessesWireSchema,
   RunSeenWireSchema,
   RunStateWireSchema,
+  RunTeamNotesWireSchema,
   RunWaterfallWireSchema,
   RunWireSchema,
   ShellKillWireSchema,
@@ -142,6 +145,11 @@ export const createChatSchema = z.object({
    * and far over any plausible prose.
    */
   customInstructions: CustomInstructionsSchema.optional(),
+  /**
+   * The language the user wants replies in, snapshotted onto this run at
+   * creation ({@link Run.replyLanguage}); sent for `customInstructions`' reason.
+   */
+  replyLanguage: ReplyLanguageSchema.optional(),
   /** The user's per-CLI switches, snapshotted onto the run ({@link Run.agentOptions}). */
   agentOptions: AgentOptionsSchema.optional(),
   /**
@@ -183,6 +191,7 @@ export const analyzeThreadSchema = z.object({
     .optional()
     .describe("The user's focus or extra instructions for this analysis"),
   customInstructions: CustomInstructionsSchema.optional(),
+  replyLanguage: ReplyLanguageSchema.optional(),
   agentOptions: AgentOptionsSchema.optional(),
 });
 export class AnalyzeThreadDto extends createZodDto(analyzeThreadSchema) {}
@@ -201,6 +210,21 @@ export const applyRecommendationsSchema = z.object({
 export class ApplyRecommendationsDto extends createZodDto(
   applyRecommendationsSchema,
 ) {}
+
+/** `POST /v1/chats/:runId/actions/:seq/press` — one press of an agent's button. */
+export const pressActionSchema = z.object({
+  clientMessageId: z
+    .string()
+    .min(1)
+    .max(128)
+    .describe(
+      'ID generated once per press and reused when the press is retried after RUN_BUSY',
+    ),
+});
+export class PressActionDto extends createZodDto(pressActionSchema) {}
+
+/** What a press or a dismissal wrote. */
+export class ActionPressDto extends createZodDto(ActionPressWireSchema) {}
 
 export const updateChatSettingsSchema = z
   .object({
@@ -368,20 +392,47 @@ export const historyQuerySchema = z
   );
 export class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
 
-export const listChatsQuerySchema = z.object({
-  /**
-   * How much of the archive to list. Absent means `active` — the desk, with
-   * everything shelved held back, which is the only reading under which
-   * archiving a thread does anything to the list it was filed out of.
-   *
-   * An ENUM rather than the boolean this started as: a boolean can only ever
-   * name two of the three answers, and the one it cannot name (`all`) is the
-   * one a user reaches for to find a shelved thread among the live ones. It is
-   * also what stops a query string from deciding by truthiness — `?archived=false`
-   * under `z.coerce.boolean()` reads as TRUE and hands back the shelf.
-   */
-  scope: ChatListScopeSchema.optional(),
-});
+export const listChatsQuerySchema = z
+  .object({
+    /**
+     * How much of the archive to list. Absent means `active` — the desk, with
+     * everything shelved held back, which is the only reading under which
+     * archiving a thread does anything to the list it was filed out of.
+     *
+     * An ENUM rather than the boolean this started as: a boolean can only ever
+     * name two of the three answers, and the one it cannot name (`all`) is the
+     * one a user reaches for to find a shelved thread among the live ones. It is
+     * also what stops a query string from deciding by truthiness — `?archived=false`
+     * under `z.coerce.boolean()` reads as TRUE and hands back the shelf.
+     */
+    scope: ChatListScopeSchema.optional(),
+    /**
+     * At most this many runs, newest first. Absent lists the whole scope — the
+     * desk, which every client needs whole. The archive grows without bound and
+     * is the one listing a client should page.
+     *
+     * TWIN: `RUN_LIST_MAX` in apps/ui/src/renderer/chats/run-list-pages.ts —
+     * the renderer's deepest re-list asks for exactly this many.
+     */
+    limit: z.coerce.number().int().min(1).max(1000).optional(),
+    /**
+     * Page BACKWARDS from the last row of the previous page: only runs older
+     * than it in `(createdAt, id)` order. Both halves or neither — a time
+     * alone would skip or repeat a run created in the same millisecond.
+     */
+    beforeCreatedAt: z.iso.datetime().optional(),
+    beforeId: z.string().min(1).max(200).optional(),
+    /**
+     * Only this run, projected exactly as the listing projects it — how a
+     * client takes in a row it was never handed.
+     */
+    runId: z.string().min(1).max(200).optional(),
+  })
+  .refine(
+    (query) =>
+      (query.beforeCreatedAt === undefined) === (query.beforeId === undefined),
+    { message: 'beforeCreatedAt and beforeId name one cursor together' },
+  );
 export class ListChatsQueryDto extends createZodDto(listChatsQuerySchema) {}
 
 export const searchChatQuerySchema = z.object({
@@ -697,6 +748,9 @@ export class ChatTimelineDto extends createZodDto(ChatTimelineWireSchema) {}
 
 /** The pages this run published — see `RunArtifactsWireSchema`. */
 export class RunArtifactsDto extends createZodDto(RunArtifactsWireSchema) {}
+
+/** Every team note of one run — see `RunTeamNotesWireSchema`. */
+export class RunTeamNotesDto extends createZodDto(RunTeamNotesWireSchema) {}
 
 /** One run as money, order and timing — see `RunWaterfallWireSchema`. */
 export class RunWaterfallDto extends createZodDto(RunWaterfallWireSchema) {}

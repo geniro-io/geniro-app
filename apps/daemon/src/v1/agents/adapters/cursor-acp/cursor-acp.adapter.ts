@@ -68,6 +68,8 @@ import type {
   AgentTurnInput,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
+  RecoveredSubagentOutcome,
+  SubagentRecoveryRef,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
@@ -86,10 +88,12 @@ import {
   CURSOR_ACP_CLIENT_META,
   CURSOR_ACP_CLIENT_NAME,
   CURSOR_ACP_SESSIONS_DIR_NAME,
+  CURSOR_ALWAYS_ANSWER_SCOPE,
   CURSOR_API_HOST,
   CURSOR_ASK_QUESTION_METHOD,
   CURSOR_CONFIG_DIR_ENV,
   CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
+  CURSOR_CREATE_PLAN_METHOD,
   CURSOR_CREDENTIAL_ENV_KEYS,
   CURSOR_DATA_DIR_ENV,
   CURSOR_HOME_DIR_NAME,
@@ -186,7 +190,7 @@ import {
   readCursorTask,
   readCursorTaskInput,
 } from './utils/cursor-task.utils';
-import { parseCursorTodos } from './utils/cursor-todos.utils';
+import { parseCursorPlan, parseCursorTodos } from './utils/cursor-todos.utils';
 import { cursorTransientResumePrompt } from './utils/cursor-transient-resume.utils';
 import {
   cursorUsagePageLength,
@@ -405,6 +409,10 @@ export class CursorAcpAdapter extends AgentAdapter {
        */
       hostQuestionDeferredReason:
         'cursor-agent gives every MCP tool call a fixed 60-second deadline it offers no way to raise, so a question left open on screen is abandoned before most people have finished reading it',
+      // `ask`, the only other mode, asks about every permission request — an
+      // MCP call included (`isHostToolCall`'s measured title form) — and geniro
+      // starts cursor with no shell sandbox.
+      hostToolCallUngatedReason: null,
       subagents: {
         /**
          * True — and it read `false` here for two milestones on a measurement
@@ -3110,6 +3118,34 @@ export class CursorAcpAdapter extends AgentAdapter {
     return join(this.cursorOptions.homeDir ?? homedir(), CURSOR_HOME_DIR_NAME);
   }
 
+  override async recoverSubagent(
+    ref: SubagentRecoveryRef,
+  ): Promise<RecoveredSubagentOutcome | null> {
+    if (
+      !isPlainSessionId(ref.sessionId) ||
+      !isPlainSessionId(ref.toolCallId) ||
+      (ref.childSessionId !== null && !isPlainSessionId(ref.childSessionId))
+    ) {
+      return null;
+    }
+    // A brief alone can identify several simultaneous or resumed delegates.
+    if (ref.childSessionId === null) {
+      return null;
+    }
+    const ending = await readCursorDelegateEnding(
+      {
+        conversationId: ref.childSessionId,
+        cwd: ref.cwd,
+        sessionId: ref.sessionId,
+        notBeforeMs: ref.launchedAtMs,
+      },
+      this.cursorHome(),
+    );
+    return ending?.state === 'ended' && ending.outcome !== 'untracked'
+      ? ending.outcome
+      : null;
+  }
+
   protected override createTurnDriver(input: AgentTurnInput): TurnDriver {
     return new AcpSession(
       {
@@ -3117,8 +3153,34 @@ export class CursorAcpAdapter extends AgentAdapter {
         clientVersion: this.clientVersion,
         // What unlocks the separate effort control; see CURSOR_ACP_CLIENT_META.
         clientMeta: CURSOR_ACP_CLIENT_META,
+        // This CLI binds a turn's model and every parameter when the PROMPT
+        // arrives; a frame still in flight then is accepted, confirmed in its
+        // reply, and lost for that turn (it sticks from the next one).
+        //
+        // - The context window, measured on 2026.08.11-e8db854: pipelined, the
+        //   turn ran at the default 300,000; awaited, at the 1,000,000 asked
+        //   for. The reply confirmed `context = 1m` either way.
+        // - Billing on 2026.10.01-e373342 (`GetFilteredUsageEvents`, by
+        //   conversation): pipelined `reasoning=high` on `gpt-5.6-sol` billed
+        //   `-medium` (3/3), `fast=false` on `grok-4.7` billed `-high-fast`, and
+        //   a model switch to `gpt-5.5` with nothing else set billed
+        //   `gpt-5.6-sol-medium` (2/2). Awaited, each billed what was asked.
+        //   Re-sending an unchanged value pipelined was harmless.
+        //
+        // It costs one `set_config_option` round trip per turn that sends a
+        // frame, ~1.7–2.0s on that build.
+        promptAwaitsConfig: true,
+        // Verified against billing on 2026.10.19-6bbf2c4: a load reporting
+        // reasoning=high ran at gpt-5.6-sol-high without any config frame.
+        // Skipping that frame saved 2.23s. A fresh turn profile seeded with
+        // default parameters instead loaded medium and billed medium — trust
+        // THIS reply, never the value requested by the preceding turn.
+        skipUnchangedParameters: true,
         turnOptions: (turnInput) => this.acpTurnOptions(turnInput),
         declinedWithoutNotice: CURSOR_SILENTLY_DECLINED_METHODS,
+        // cursor's "Allow always" lands in the config directory geniro seeds
+        // per conversation process — see CURSOR_ALWAYS_ANSWER_SCOPE.
+        alwaysAnswerScope: CURSOR_ALWAYS_ANSWER_SCOPE,
         question: {
           method: CURSOR_ASK_QUESTION_METHOD,
           toolName: this.getConfig().questionToolName ?? '',
@@ -3160,6 +3222,10 @@ export class CursorAcpAdapter extends AgentAdapter {
         todos: {
           method: CURSOR_TODOS_METHOD,
           read: parseCursorTodos,
+          // The plan's ids, which its `plan` update lacks and every later
+          // `cursor/update_todos` patch keys on — see the task-list block in
+          // `cursor-acp.const.ts`.
+          plan: { method: CURSOR_CREATE_PLAN_METHOD, read: parseCursorPlan },
         },
         // This CLI catches its own failure, writes the sentence out as an
         // assistant message and answers `end_turn` regardless — so without this

@@ -12,6 +12,9 @@ import type { CliKind } from '../shared/contracts';
 import type { DaemonHandle } from '../shared/contracts';
 import { AgentIdentityContext } from './agent-identity';
 import { Chats } from './chats/Chats';
+import { useNextWaitingShortcut } from './chats/use-next-waiting-shortcut';
+import { nextWaiting, type WaitReading, waitsOnUser } from './chats/waiting';
+import { WaitingStatus } from './chats/waiting-status';
 import { AppUsageButton } from './components/app-usage-button';
 import { BottomTabBar } from './components/bottom-tab-bar';
 import { ConnectionBanner } from './components/connection-banner';
@@ -122,6 +125,8 @@ export function App(): React.JSX.Element {
   const [guideOpen, setGuideOpen] = useState(false);
   const [chatLaunch, setChatLaunch] = useState<CliKind | null>(null);
   const [teamLaunch, setTeamLaunch] = useState<TeamLaunch | null>(null);
+  // A library workflow the chat screen asked the builder to open.
+  const [workflowRequest, setWorkflowRequest] = useState<string | null>(null);
   const [view, setView] = useState<AppView>(
     () => initialRoute?.view ?? 'chats',
   );
@@ -154,6 +159,8 @@ export function App(): React.JSX.Element {
   const [openRunId, setOpenRunId] = useState<string | null>(() =>
     initialRoute?.view === 'chats' ? initialRoute.runId : null,
   );
+  /** Every thread's wait, ranked, as `Chats` reports it. */
+  const [waiting, setWaiting] = useState<readonly WaitReading[]>([]);
   // Workflows mounts lazily on first visit, then stays mounted (hidden) like
   // Chats — unmounting on nav used to silently discard every unsaved builder
   // edit when the user glanced at Chats/Settings mid-composition.
@@ -471,6 +478,39 @@ export function App(): React.JSX.Element {
     ),
   );
 
+  /** The reading the last jump went to — where the cycle continues from. */
+  const lastJumpRef = useRef<WaitReading | null>(null);
+  const jumpToNextWaiting = useCallback(() => {
+    // The cycle continues only from the thread on show: from the board, or
+    // after the user wandered to another thread, it starts at the longest wait.
+    const onShow = view === 'chats' ? openRunId : null;
+    const cursor =
+      waiting.find(
+        (reading) => reading.runId === onShow && waitsOnUser(reading.state),
+      ) ?? (lastJumpRef.current?.runId === onShow ? lastJumpRef.current : null);
+    const next = nextWaiting(waiting, cursor);
+    // Re-opening the thread on show would reload its transcript and lose the
+    // place the user scrolled to, for nothing.
+    if (next === null || next.runId === onShow) {
+      return;
+    }
+    lastJumpRef.current = next;
+    setThreadRequest(next.runId);
+    setView('chats');
+  }, [waiting, view, openRunId]);
+  useNextWaitingShortcut(jumpToNextWaiting);
+  // A thread opened any other way ends the cycle: coming back to the last
+  // jump's thread by hand later starts again at the longest wait.
+  useEffect(() => {
+    if (openRunId !== lastJumpRef.current?.runId) {
+      lastJumpRef.current = null;
+    }
+  }, [openRunId]);
+  const waitingByRun = useMemo(
+    () => new Map(waiting.map((reading) => [reading.runId, reading.state])),
+    [waiting],
+  );
+
   /**
    * Keep the address bar naming the open view/thread. `history.replaceState`
    * rather than `location.hash =` or `pushState`: assigning the hash raises a
@@ -584,6 +624,13 @@ export function App(): React.JSX.Element {
               void update.install();
             }}
             onRelaunchUpdate={() => void update.relaunch()}
+            // Not on a phone, for the usage control's reason below — and a
+            // phone has no keyboard for the chord the line names.
+            waiting={
+              narrowViewport || showStartup ? null : (
+                <WaitingStatus readings={waiting} onJump={jumpToNextWaiting} />
+              )
+            }
             // Not on a phone, for the update control's reason: the bar's
             // trailing edge there belongs to the run-details opener, which
             // floats over it and would cover this glyph.
@@ -686,7 +733,12 @@ export function App(): React.JSX.Element {
                       setSettingsSectionOpen(true);
                       setView('settings');
                     }}
+                    onOpenWorkflow={(slug) => {
+                      setWorkflowRequest(slug);
+                      setView('workflows');
+                    }}
                     onPhoneDetailChange={setChatsPhoneDetail}
+                    onWaitingChange={setWaiting}
                     phoneHomeSignal={chatsHomeSignal}
                     openRunId={threadRequest}
                     onRunOpened={() => {
@@ -712,6 +764,8 @@ export function App(): React.JSX.Element {
                       active={view === 'workflows'}
                       firstLaunch={teamLaunch}
                       onFirstLaunchHandled={() => setTeamLaunch(null)}
+                      openRequest={workflowRequest}
+                      onOpenRequestHandled={() => setWorkflowRequest(null)}
                     />
                   ) : null}
                 </div>
@@ -725,6 +779,7 @@ export function App(): React.JSX.Element {
                       handle={handle}
                       client={clientRef.current}
                       active={view === 'tasks'}
+                      waitingByRun={waitingByRun}
                       // Both writes, in this order: the request is what `Chats`
                       // acts on, and switching first would show the previous
                       // thread for a frame.

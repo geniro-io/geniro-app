@@ -124,6 +124,106 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(chats.map((run) => run.id)).toEqual([active.id, archived.id]);
     });
 
+    it('pages the archive newest first, a page after the last row of the one before', async () => {
+      const archivedAt = new Date(9_000);
+      const ids = [];
+      for (let at = 1; at <= 5; at += 1) {
+        ids.push(
+          (await dao.create({ createdAt: new Date(at * 1_000), archivedAt }))
+            .id,
+        );
+      }
+      const [oldest, , middle, , newest] = ids;
+
+      const first = await dao.listChats('archived', undefined, { limit: 2 });
+      const last = first.at(-1)!;
+      const second = await dao.listChats('archived', undefined, {
+        limit: 2,
+        before: { createdAt: last.createdAt, id: last.id },
+      });
+
+      expect(first.map((run) => run.id)).toEqual([newest, ids[3]]);
+      expect(second.map((run) => run.id)).toEqual([middle, ids[1]]);
+      const third = await dao.listChats('archived', undefined, {
+        limit: 2,
+        before: { createdAt: second[1]!.createdAt, id: second[1]!.id },
+      });
+      expect(third.map((run) => run.id)).toEqual([oldest]);
+    });
+
+    it('neither skips nor repeats runs created in the same millisecond across a page edge', async () => {
+      const same = new Date(5_000);
+      const created = [];
+      for (const id of ['a', 'b', 'c']) {
+        created.push((await dao.create({ id, createdAt: same })).id);
+      }
+
+      const first = await dao.listChats('active', undefined, { limit: 2 });
+      const second = await dao.listChats('active', undefined, {
+        limit: 2,
+        before: { createdAt: same, id: first.at(-1)!.id },
+      });
+
+      expect([...first, ...second].map((run) => run.id)).toEqual([
+        'c',
+        'b',
+        'a',
+      ]);
+    });
+
+    it('answers one run, on the scope it is asked under', async () => {
+      const wanted = await dao.create({
+        createdAt: new Date(1_000),
+        archivedAt: new Date(9_000),
+      });
+      await dao.create({ createdAt: new Date(2_000) });
+
+      expect(
+        (await dao.listChats('all', undefined, { runId: wanted.id })).map(
+          (run) => run.id,
+        ),
+      ).toEqual([wanted.id]);
+      expect(
+        await dao.listChats('active', undefined, { runId: wanted.id }),
+      ).toEqual([]);
+    });
+
+    it('lists every run scanned under another pull-request rule, never-scanned ones included', async () => {
+      const never = await dao.create({ createdAt: new Date(1_000) });
+      const older = await dao.create({
+        createdAt: new Date(2_000),
+        pullRequestsScannedSeq: 4,
+        pullRequestsScanVersion: 1,
+      });
+      await dao.create({
+        createdAt: new Date(3_000),
+        pullRequestsScannedSeq: 4,
+        pullRequestsScanVersion: 2,
+      });
+
+      const outdated = await dao.listOutdatedPullRequestScans(2);
+
+      expect(outdated.map((run) => run.id)).toEqual([older.id, never.id]);
+    });
+
+    it('pages workflow runs by the same cursor', async () => {
+      const older = await dao.create({
+        workflowId: 'wf-1',
+        createdAt: new Date(1_000),
+      });
+      const newer = await dao.create({
+        workflowId: 'wf-1',
+        createdAt: new Date(2_000),
+      });
+
+      const page = await dao.listWorkflowRuns('all', undefined, {
+        limit: 1,
+        before: { createdAt: newer.createdAt, id: newer.id },
+      });
+
+      expect(page.map((run) => run.id)).toEqual([older.id]);
+    });
+
     it('leaves the builder’s workflow-editing chat out of EVERY scope', async () => {
       // It is a chat by every column the listing filters on — no workflowId, no
       // archive — so only `editsWorkflowSlug` keeps it off the sidebar, and
@@ -360,6 +460,26 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('clearPendingQuestionIf', () => {
+    it('clears the column only while it still holds the expected card', async () => {
+      // The compare-and-swap a deferred verdict clears its own card with: a
+      // different card that went up meanwhile must survive the clear.
+      const mine = await dao.create({ pendingQuestion: 'MINE' });
+      const other = await dao.create({ pendingQuestion: 'OTHER' });
+
+      await expect(dao.clearPendingQuestionIf(mine.id, 'MINE')).resolves.toBe(
+        true,
+      );
+      await expect(dao.clearPendingQuestionIf(other.id, 'MINE')).resolves.toBe(
+        false,
+      );
+
+      const reader = new RunDao(orm.em.fork());
+      expect((await reader.getById(mine.id))?.pendingQuestion).toBeNull();
+      expect((await reader.getById(other.id))?.pendingQuestion).toBe('OTHER');
+    });
+  });
+
   describe('retitle', () => {
     // The predicate is the whole no-clobber guarantee, and it lives in SQL —
     // the service's own read is only an early exit, so a fake cannot stand in
@@ -481,6 +601,34 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(stored?.groupId).toBeNull();
       expect(stored?.pinnedPosition).toBeNull();
       expect(stored?.updatedAt.getTime()).toBe(LAST_WORKED.getTime());
+    });
+  });
+
+  describe('rememberContext', () => {
+    const readBack = async (id: string) =>
+      new RunDao(orm.em.fork()).getById(id);
+
+    it('marks a stand-in count until a stated one or a compaction clears it', async () => {
+      const run = await dao.create({});
+
+      await dao.rememberContext(run.id, {
+        contextTokens: 900,
+        contextEstimated: true,
+      });
+      expect((await readBack(run.id))?.contextEstimated).toBe(true);
+
+      await dao.rememberContext(run.id, { contextTokens: 1_200 });
+      expect((await readBack(run.id))?.contextEstimated).toBeNull();
+
+      await dao.rememberContext(run.id, {
+        contextTokens: 1_500,
+        contextEstimated: true,
+      });
+      await dao.forgetContext(run.id);
+      expect(await readBack(run.id)).toMatchObject({
+        contextTokens: null,
+        contextEstimated: null,
+      });
     });
   });
 

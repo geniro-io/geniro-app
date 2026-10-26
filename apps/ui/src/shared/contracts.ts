@@ -229,6 +229,18 @@ export const HISTORY_PAGE_SIZES = [250, 500, 1000, 2000] as const;
 export type HistoryPageSize = (typeof HISTORY_PAGE_SIZES)[number];
 export const DEFAULT_HISTORY_PAGE_SIZE: HistoryPageSize = 1000;
 
+/**
+ * How long, in minutes, a run's CLI process (and every MCP server it started)
+ * is kept after its last turn — `Settings.keptSessionIdleMinutes`.
+ *
+ * TWIN: `DEFAULT_KEPT_SESSION_IDLE_MINUTES`, `MIN_KEPT_SESSION_IDLE_MINUTES`
+ * and `MAX_KEPT_SESSION_IDLE_MINUTES` in `apps/daemon/src/v1/agents/chat.types.ts`,
+ * whose route refuses a value outside these bounds.
+ */
+export const DEFAULT_KEPT_SESSION_IDLE_MINUTES = 60;
+export const MIN_KEPT_SESSION_IDLE_MINUTES = 5;
+export const MAX_KEPT_SESSION_IDLE_MINUTES = 180;
+
 /** Persisted, non-secret application settings. Secrets never live here. */
 export interface OnboardingProgress {
   step: 0 | 1 | 2 | 3;
@@ -284,6 +296,12 @@ export type ShareDestination =
       /** argv tokens; `{file}` and `{object}` are substituted, nothing runs through a shell. */
       upload: string[];
       remove: string[];
+      /**
+       * How to sign the CLI in again (argv) and which output means it is
+       * signed out (case-insensitive substrings). Without it a program named
+       * `gcloud` or `aws` borrows that CLI's own sign-in.
+       */
+      signIn?: { login?: string[]; patterns?: string[] };
     };
 
 export interface SharingSettings {
@@ -292,12 +310,15 @@ export interface SharingSettings {
   defaultDestinationId: string | null;
   /** Whether an agent's `show_artifact(share: true)` may upload. Off unless turned on. */
   agentsMayShare: boolean;
+  /** Revoke a page this many days after it was first shared; null never does. */
+  autoRevokeAfterDays: number | null;
 }
 
 export const DEFAULT_SHARING: SharingSettings = {
   destinations: [],
   defaultDestinationId: null,
   agentsMayShare: false,
+  autoRevokeAfterDays: null,
 };
 
 export interface Settings {
@@ -479,6 +500,16 @@ export interface Settings {
    */
   historyPageSize: HistoryPageSize;
   /**
+   * How long a run's CLI process is kept after its last turn, in minutes,
+   * the same for a chat and a card's run. Main pushes it to every daemon
+   * (`kept-session-config-push.ts`); the daemon holds it in memory only.
+   *
+   * An hour by default: claude keeps a subscription's prompt cache for an
+   * hour, and a fresh `--resume` misses it once `git status` has changed, so a
+   * shorter window pays a cache rewrite and a cold MCP start on the next turn.
+   */
+  keptSessionIdleMinutes: number;
+  /**
    * Each CLI's own switches — cursor's Max Mode, claude's browser tools, and
    * whatever a CLI declares next — as `{agentKind: {optionId: on}}`. The
    * daemon publishes every CLI's options (label, description, default) on
@@ -546,6 +577,16 @@ export interface Settings {
    */
   customInstructions: string;
   /**
+   * The language every agent is told to reply in ("Russian"); `''` when the
+   * user has set none, which leaves the choice to the model.
+   *
+   * A name, not prose: the daemon writes it into one sentence of its own and
+   * into claude's `--settings`, and refuses one past
+   * {@link REPLY_LANGUAGE_MAX_LENGTH}. Snapshotted per run like
+   * `customInstructions`.
+   */
+  replyLanguage: string;
+  /**
    * Which theme the app paints, or `'system'` to follow the OS.
    *
    * The names and their values live in `shared/themes.ts` and
@@ -596,6 +637,60 @@ export function hasControlCharacters(value: string): boolean {
   return false;
 }
 
+/**
+ * The longest reply-language name `Settings.replyLanguage` holds. TWIN of the
+ * daemon's `REPLY_LANGUAGE_MAX_LENGTH` (`v1/agents/chat.types.ts`), for
+ * {@link hasControlCharacters}' reason: a value stored here and refused there
+ * fails every new run.
+ */
+export const REPLY_LANGUAGE_MAX_LENGTH = 64;
+
+/**
+ * Whether `value` can be stored as `Settings.replyLanguage`: within the bound
+ * and one line, with no control, invisible or bidirectional character. TWIN of
+ * the daemon's `ReplyLanguageSchema` (over `utils/hidden-text.ts`), stricter
+ * only on emoji sequences, which a language's name never needs.
+ */
+export function isReplyLanguage(value: string): boolean {
+  return (
+    value.trim().length <= REPLY_LANGUAGE_MAX_LENGTH &&
+    !/[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029]/u.test(value)
+  );
+}
+
+/** The settings every run snapshots at creation, as a create-payload fragment. */
+export interface RunSettings {
+  customInstructions?: string;
+  replyLanguage?: string;
+  agentOptions?: Partial<Record<CliKind, Record<string, boolean>>>;
+}
+
+/**
+ * The run-start fragment for these settings — the one normalisation every run
+ * start uses (the renderer's `currentRunSettings`, main's autopilot). Each key
+ * is present only when set: blank collapses to absent so an untouched box and
+ * a cleared one reach the daemon identically. `agentOptions` is sent whenever
+ * the map exists, even all `false` — the daemon reads an absent id as that
+ * option's default, so a declined switch must not look untouched.
+ */
+export function runSettingsOf(
+  settings: Partial<
+    Pick<Settings, 'customInstructions' | 'replyLanguage' | 'agentOptions'>
+  >,
+): RunSettings {
+  const {
+    customInstructions = '',
+    replyLanguage = '',
+    agentOptions,
+  } = settings;
+  const language = replyLanguage.trim();
+  return {
+    ...(customInstructions.trim() ? { customInstructions } : {}),
+    ...(language === '' ? {} : { replyLanguage: language }),
+    ...(agentOptions === undefined ? {} : { agentOptions }),
+  };
+}
+
 /** Default settings written on first launch when no settings file exists. */
 export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
@@ -623,10 +718,12 @@ export const DEFAULT_SETTINGS: Settings = {
   sharing: DEFAULT_SHARING,
   archiveRetentionDays: null,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
+  keptSessionIdleMinutes: DEFAULT_KEPT_SESSION_IDLE_MINUTES,
   agentOptions: {},
   collapseToolSteps: false,
   daemonInspect: null,
   customInstructions: '',
+  replyLanguage: '',
   theme: DEFAULT_THEME_PREFERENCE,
 };
 
@@ -827,8 +924,10 @@ export const CHAT_LIST_WIDTH = 260;
  * the renderer never reads the toggle. That is what makes a flipped switch take
  * effect at once instead of whenever a screen last cached its settings, and it
  * keeps the one place that can post a banner the one place that gates it.
+ * `share-sign-in` is an agent's share waiting on the user signing in to the
+ * place it shares to.
  */
-export type RunNotificationKind = 'question' | 'turn-end';
+export type RunNotificationKind = 'question' | 'turn-end' | 'share-sign-in';
 
 /** One notification the renderer asks main to post. */
 export interface RunNotification {
@@ -1455,6 +1554,11 @@ export interface GeniroApi {
    */
   onFlushLineMeasurements(listener: (requestId: string) => void): () => void;
   /**
+   * The settings file was just written — by any window or a paired phone. No
+   * payload: a view that shows figures derived from settings re-reads them.
+   */
+  onSettingsChanged(listener: () => void): () => void;
+  /**
    * Open the native folder picker; returns the chosen absolute path or null.
    *
    * `defaultPath` is where the dialog OPENS — pass the folder the field already
@@ -1894,6 +1998,7 @@ export const IPC = {
   onDaemonRestarted: 'geniro:onDaemonRestarted',
   onClearAgentCaches: 'geniro:onClearAgentCaches',
   onFlushLineMeasurements: 'geniro:onFlushLineMeasurements',
+  onSettingsChanged: 'geniro:onSettingsChanged',
   pickProjectFolder: 'geniro:pickProjectFolder',
   pickAgentBinary: 'geniro:pickAgentBinary',
   pickTaskFiles: 'geniro:pickTaskFiles',

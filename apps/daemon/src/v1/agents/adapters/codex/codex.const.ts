@@ -96,6 +96,11 @@ export const CODEX_METHODS = {
   turnStart: 'turn/start',
   turnSteer: 'turn/steer',
   turnInterrupt: 'turn/interrupt',
+  // Experimental (codex 0.162.0; needs `experimentalApi`, which the handshake
+  // already declares): the only way to end a command `turn/interrupt` leaves
+  // running.
+  backgroundTerminalsList: 'thread/backgroundTerminals/list',
+  backgroundTerminalsTerminate: 'thread/backgroundTerminals/terminate',
   modelList: 'model/list',
   skillsList: 'skills/list',
   rateLimitsRead: 'account/rateLimits/read',
@@ -141,6 +146,40 @@ export const CODEX_SERVER_REQUESTS = {
  */
 export const CODEX_MCP_TOOL_APPROVAL_KIND = 'mcp_tool_call';
 
+// ── Remembered approvals ──────────────────────────────────────────────────────
+//
+// What codex keeps of an approval past the one call, by request kind, read off
+// `codex app-server generate-json-schema` on 0.162.0 and then MEASURED there
+// (2026-10-21): a thread answered twice with the same command or patch, under
+// `untrusted` + `read-only`.
+//
+// - command: `decision: "acceptForSession"` — asked once, the repeat ran with no
+//   request; `accept` asked twice.
+// - file change: `decision: "acceptForSession"` — asked once for two edits of
+//   the same file.
+// - MCP tool call: the elicitation's `_meta.persist` lists what it accepts
+//   (`["session","always"]` measured); answering `_meta: {persist: "session"}`
+//   asked once for two calls.
+// - permissions: `scope: "session"` instead of `"turn"` (schema only — no
+//   build was seen to raise this request).
+//
+// Only the SESSION scope is offered. codex's longer-lived answers
+// (`acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`, MCP
+// `persist: "always"`) write the user's own `~/.codex` rules and config, and
+// geniro has not measured one without changing that config for real.
+
+/** The card option id, and the scope, of codex's session-long approval. */
+export const CODEX_SESSION_APPROVAL_OPTION_ID = 'session';
+
+/** The command / file-change decision that remembers for the session. */
+export const CODEX_ACCEPT_FOR_SESSION_DECISION = 'acceptForSession';
+
+/** The permissions grant scope that lasts the session (`"turn"` otherwise). */
+export const CODEX_PERMISSION_SESSION_SCOPE = 'session';
+
+/** The MCP approval elicitation's `_meta` key listing / naming persistence. */
+export const CODEX_MCP_APPROVAL_PERSIST_KEY = 'persist';
+
 /**
  * codex's own question tool — what a card for `item/tool/requestUserInput` is
  * named. Also `AdapterConfig.questionToolName`.
@@ -178,8 +217,54 @@ export const CODEX_REASONING_SUMMARY = 'auto';
 /** The longest a delegate's label (its brief's first line) is drawn. */
 export const CODEX_DELEGATE_LABEL_MAX_CHARS = 80;
 
+/**
+ * The results a tool call is closed with when its turn was stopped, or failed,
+ * before the call reported back. The close is the call's only ending — see
+ * `CodexSession.endedTurns`. A command a Stop could not end gets a notice of
+ * its own (`CodexTurnDriver.endStoppedCommands`), so these never claim more
+ * than that the step's turn ended.
+ */
+export const CODEX_STOPPED_TOOL_RESULT =
+  'Stopped — its turn was stopped before this step reported back.';
+export const CODEX_FAILED_TOOL_RESULT =
+  'Cut off — the turn this step ran in failed before its result came back.';
+
+/** The longest a command is quoted in the notice that it may still be running. */
+export const CODEX_STOPPED_COMMAND_PREVIEW_MAX_CHARS = 80;
+
+/** Background-terminal listing pages a Stop follows before giving up. */
+export const CODEX_TERMINAL_LIST_MAX_PAGES = 20;
+
 /** The longest a refused follow-up is quoted back in the notice that says so. */
 export const CODEX_STEER_PREVIEW_MAX_CHARS = 60;
+
+/**
+ * How long a finished turn's ending is held for steers codex has not answered
+ * yet, so a refusal is reported as its message dropped while the turn it was
+ * sent into is still open. Past it the turn ends, and a later refusal is a
+ * notice quoting the message.
+ */
+export const CODEX_STEER_ANSWER_GRACE_MS = 5000;
+
+/**
+ * How long a turn stays announced held after its last `wait` on sub-agents
+ * returns — the gap in which the agent reads what it got and waits again
+ * (its note tells it to, on a timeout). A message typed in that gap goes
+ * straight in rather than into the queue. The twin of the call broker's
+ * `AWAIT_GAP_GRACE_MS` for `await_agent`.
+ */
+export const CODEX_WAIT_GAP_GRACE_MS = 15_000;
+
+/**
+ * How long closing a session waits for a STOPPED turn to finish before the
+ * process is signalled, while a steer's fate is still unknown (see
+ * `CodexTurnDriver.closeGraceMs`). PROBED on codex 0.162.0: allowed to finish,
+ * codex answers the interrupt and sends `turn/completed` within ~15 ms, and a
+ * steer it had not yet taken never appears as a `userMessage` item — while a
+ * process signalled at once kept such a steer in 3 of 4 runs and lost it in 1,
+ * with nothing geniro could read to tell which.
+ */
+export const CODEX_STOP_CLOSE_GRACE_MS = 1000;
 
 /**
  * The words codex refuses a `thread/resume` with while ANOTHER codex process

@@ -5,13 +5,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../__tests__/temp-dir';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
-import type { AcpSessionOptions, AcpTurnOptions } from './acp-driver';
+import type {
+  AcpDelegateProtocol,
+  AcpSessionOptions,
+  AcpTurnOptions,
+} from './acp-driver';
 import {
   CUT_OFF_TOOL_RESULT,
   HOST_CONTEXT_NOTE,
   HOST_CONTEXT_TAG,
   INTERRUPT_ACK_DEADLINE_MS,
   INTERRUPTED_TOOL_RESULT,
+  permissionAnswerOptionId,
   selectPermissionOption,
 } from './acp-driver';
 import { AcpSession } from './acp-session';
@@ -55,6 +60,14 @@ interface Harness {
   ) => void;
 }
 
+const UNWATCHABLE_DELEGATE: AcpDelegateProtocol = {
+  method: 'test/task',
+  launchMarker: { key: '_toolName', value: 'task' },
+  read: () => null,
+  resultIsBookkeeping: true,
+  stepsUnavailableReason: null,
+};
+
 const BASE_INPUT: AgentTurnInput = { prompt: 'do the thing', cwd: '/work' };
 
 function harness(
@@ -82,7 +95,7 @@ function harness(
     // pin what the DRIVER does with the callback's result — that it prepends
     // it, and that it passes the right `granted` — never how the text is
     // composed. The real join (host preamble, custom instructions, role, call
-    // surface) is `composeTurnInstructions`, covered directly by
+    // surface) is `turnInstructionParts`, covered directly by
     // `utils/agent-instructions.spec.ts` and end-to-end through the real
     // adapter in `cursor-acp.adapter.spec.ts`.
     composeSystemPrompt: (granted) =>
@@ -2436,7 +2449,11 @@ describe('AcpSession session updates', () => {
   it('ignores updates the transcript does not model', () => {
     const h = harness();
     expect(h.feed(chunk('user_message_chunk', 'our own prompt'))).toEqual([]);
-    expect(h.feed(update({ sessionUpdate: 'plan', entries: [] }))).toEqual([]);
+    expect(
+      h.feed(
+        update({ sessionUpdate: 'config_option_update', configOptions: [] }),
+      ),
+    ).toEqual([]);
   });
 
   it('records a mode the AGENT switched to, and draws no row for it', () => {
@@ -2715,6 +2732,35 @@ describe('AcpSession turn completion', () => {
       rawInput: { command: 'pnpm test' },
     });
 
+    it('marks an unwatchable delegate untracked when its parent request fails', () => {
+      const h = primed({ ...resumable(), delegate: UNWATCHABLE_DELEGATE });
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'delegate',
+          title: 'Review',
+          status: 'in_progress',
+          rawInput: { _toolName: 'task' },
+        }),
+      );
+      h.feed(chunk('agent_message_chunk', DROP));
+      const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'subagent_info',
+          id: 'delegate',
+          backgroundOutcome: 'untracked',
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_result',
+          id: 'delegate',
+          isError: false,
+        }),
+      );
+    });
+
     it('closes a step the failed request left open, which the agent never will', () => {
       // Read out of cursor-agent 2026.10.01-e373342: when its run throws it
       // writes `Error: …`, answers `end_turn`, and sends no `tool_call_update`
@@ -2903,6 +2949,8 @@ describe('AcpSession turn completion', () => {
         costUsd: 0.42,
       },
     });
+    // The occupancy the agent stated is not an estimate.
+    expect(event).not.toHaveProperty('usage.contextEstimated');
   });
 
   it('falls back to the input count when no usage_update ever arrived', () => {
@@ -2914,7 +2962,9 @@ describe('AcpSession turn completion', () => {
         usage: { inputTokens: 77, outputTokens: 1 },
       },
     });
-    expect(event).toMatchObject({ usage: { contextTokens: 77 } });
+    expect(event).toMatchObject({
+      usage: { contextTokens: 77, contextEstimated: true },
+    });
   });
 
   it('refuses to report a non-USD cost in the costUsd field', () => {
@@ -3184,12 +3234,13 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     };
   }
 
-  function turnAsking(applyBeforePrompt: boolean): Partial<AcpDriverOptions> {
+  function turnAsking(promptAwaitsConfig: boolean): Partial<AcpDriverOptions> {
     return {
+      promptAwaitsConfig,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
-        parameters: [{ id: 'context', value: '1m', applyBeforePrompt }],
+        parameters: [{ id: 'context', value: '1m' }],
       },
     };
   }
@@ -3215,9 +3266,10 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     expect(methods(h.sent)).toContain('session/prompt');
   });
 
-  it('sends the prompt straight away for a parameter that does not ask', () => {
-    // Every other frame stays pipelined — one ordered stdio stream already puts
-    // them in order, and deferring behind a reply was priced at ~1.4s per turn.
+  it('sends the prompt straight away for an agent that does not ask', () => {
+    // An agent that reads its settings per request keeps the pipeline — one
+    // ordered stdio stream already puts the frames in order, and deferring
+    // behind a reply costs a round trip (~1.7–2.0s on cursor) per turn.
     const h = harness(turnAsking(false));
     h.feed(initializeReply(1));
     h.feed({ id: 2, result: sessionOfferingContext() });
@@ -3289,8 +3341,8 @@ describe('AcpSession — a parameter the turn must not start without', () => {
 
   it('stays silent for a frame that never held the prompt', () => {
     // Every parameter goes out under the one `set_model_parameter` kind while
-    // only an `applyBeforePrompt` one blocks, so most armed frames have nothing
-    // to rescue. Speaking anyway is worse than silence: an event emitted after
+    // the last one blocks only for a `promptAwaitsConfig` agent, so on any
+    // other the armed frame has nothing to rescue. Speaking anyway is worse than silence: an event emitted after
     // the turn settles reaches the off-turn handler, which reads a `notice` as
     // the run working again with no terminal left to take the badge back down.
     vi.useFakeTimers();
@@ -3343,12 +3395,13 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     vi.useFakeTimers();
     try {
       const h = harness({
+        promptAwaitsConfig: true,
         input: { ...BASE_INPUT, model: 'claude-opus-5' },
         modelSelection: {
           model: 'claude-opus-5',
           parameters: [
-            { id: 'effort', value: 'xhigh', applyBeforePrompt: false },
-            { id: 'context', value: '1m', applyBeforePrompt: true },
+            { id: 'effort', value: 'xhigh' },
+            { id: 'context', value: '1m' },
           ],
         },
       });
@@ -3441,14 +3494,15 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     // 256K "only sometimes". Probed on cursor-agent 2026.09.10-fd3934a, the
     // pipelined frames landed right one run in three; one at a time, three of
     // three. The order is the adapter's: effort first, the context window
-    // (which also holds the prompt) after it.
+    // (which, being last, also holds the prompt) after it.
     const h = harness({
+      promptAwaitsConfig: true,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
         parameters: [
-          { id: 'effort', value: 'xhigh', applyBeforePrompt: false },
-          { id: 'context', value: '1m', applyBeforePrompt: true },
+          { id: 'effort', value: 'xhigh' },
+          { id: 'context', value: '1m' },
         ],
       },
     });
@@ -3504,14 +3558,65 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     ]);
   });
 
+  describe('a model switch that sets nothing else', () => {
+    // The model frame is then the LAST frame, so whether the prompt waits is
+    // the agent's answer alone — no parameter is there to ask for it. cursor
+    // binds the model when the prompt arrives too (a pipelined switch to
+    // `gpt-5.5` billed as the old `gpt-5.6-sol`, though the reply confirmed it).
+    function switching(promptAwaitsConfig: boolean): Harness {
+      const h = harness({
+        promptAwaitsConfig,
+        input: { ...BASE_INPUT, model: 'claude-opus-5' },
+        modelSelection: { model: 'claude-opus-5', parameters: [] },
+      });
+      h.feed(initializeReply(1));
+      h.feed({
+        id: 2,
+        result: {
+          sessionId: 's-1',
+          configOptions: [
+            {
+              id: 'model',
+              category: 'model',
+              currentValue: 'grok-4.6',
+              options: [
+                { value: 'grok-4.6', name: 'grok' },
+                { value: 'claude-opus-5', name: 'opus' },
+              ],
+            },
+          ],
+        },
+      });
+      return h;
+    }
+
+    it('holds the prompt until the model frame is answered', () => {
+      const h = switching(true);
+      expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+      expect(methods(h.sent)).not.toContain('session/prompt');
+
+      h.feed({ id: 3, result: { configOptions: [] } });
+      expect(methods(h.sent)).toContain('session/prompt');
+    });
+
+    it('pipelines the prompt behind it for an agent that does not ask', () => {
+      const h = switching(false);
+      expect(methods(h.sent).slice(-2)).toEqual([
+        'session/set_config_option',
+        'session/prompt',
+      ]);
+    });
+  });
+
   it('drops the parameters queued behind a model the agent refused', () => {
     // They belong to the refused model; set on whichever model the agent kept,
     // they would apply half of a selection the user never made.
     const h = harness({
+      promptAwaitsConfig: true,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
-        parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+        parameters: [{ id: 'context', value: '1m' }],
       },
     });
     h.feed(initializeReply(1));
@@ -3721,6 +3826,60 @@ describe('AcpSession permissions', () => {
     });
   });
 
+  it("offers the agent's *_always option on the card, worded by the reach the adapter declares", () => {
+    const h = harness({ alwaysAnswerScope: 'session' });
+    expect(h.feed(permissionRequest(5))).toEqual([
+      {
+        type: 'approval_request',
+        id: 'n:5',
+        toolName: 'write_file',
+        input: { path: 'a.ts' },
+        // Under the agent's own id, so the verdict answers with it; never
+        // under the agent's own "Always" when geniro keeps it for a session.
+        options: [
+          {
+            id: 'o-always',
+            label: 'Allow for this session',
+            allow: true,
+            scope: 'session',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('answers a picked *_always option with that option, and a plain verdict with *_once', () => {
+    const picked = harness({ alwaysAnswerScope: 'session' });
+    const [card] = picked.feed(permissionRequest(5));
+    const option =
+      card?.type === 'approval_request' ? card.options?.[0] : undefined;
+    expect(option?.id).toBe('o-always');
+    expect(
+      JSON.parse(
+        picked.driver.buildApprovalResponse('n:5', true, undefined, option) ??
+          '',
+      ).result,
+    ).toEqual({ outcome: { outcome: 'selected', optionId: 'o-always' } });
+
+    const plain = harness({ alwaysAnswerScope: 'session' });
+    plain.feed(permissionRequest(5));
+    expect(
+      JSON.parse(plain.driver.buildApprovalResponse('n:5', true) ?? '').result,
+    ).toEqual({ outcome: { outcome: 'selected', optionId: 'o-allow' } });
+  });
+
+  it('auto-approves with *_once even where *_always is offered', () => {
+    // Nothing the daemon decides on its own may be remembered past the run.
+    const h = harness({
+      alwaysAnswerScope: 'session',
+      autoDecide: () => 'allow',
+    });
+    expect(h.feed(permissionRequest(5))).toEqual([]);
+    expect(h.sent.find((frame) => frame.id === 5)?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'o-allow' },
+    });
+  });
+
   it('refuses to answer an unknown or already-answered request', () => {
     const h = harness();
     h.feed(permissionRequest(5));
@@ -3750,6 +3909,33 @@ describe('selectPermissionOption', () => {
         false,
       ),
     ).toBeNull();
+  });
+});
+
+describe('permissionAnswerOptionId', () => {
+  const options = [
+    { optionId: 'a', name: 'Allow', kind: 'allow_once' as const },
+    { optionId: 'aa', name: 'Always', kind: 'allow_always' as const },
+    { optionId: 'r', name: 'Reject', kind: 'reject_once' as const },
+  ];
+  const always = {
+    id: 'aa',
+    label: 'Allow for this session',
+    allow: true,
+    scope: 'session' as const,
+  };
+
+  it('answers with the picked always option in its own direction', () => {
+    expect(permissionAnswerOptionId(options, true, always)).toBe('aa');
+  });
+
+  it('falls back to the once option for a pick pointing the other way or not offered', () => {
+    // An allow-always id riding a Deny is answered as the Deny it was pressed as.
+    expect(permissionAnswerOptionId(options, false, always)).toBe('r');
+    expect(
+      permissionAnswerOptionId(options, true, { ...always, id: 'gone' }),
+    ).toBe('a');
+    expect(permissionAnswerOptionId(options, true, undefined)).toBe('a');
   });
 });
 
@@ -4150,6 +4336,167 @@ describe('AcpSession task list', () => {
   });
 });
 
+describe('AcpSession plan updates', () => {
+  /** Baseline ACP's `plan` update, as cursor-agent 2026.10.19 sends one. */
+  const planUpdate = update({
+    sessionUpdate: 'plan',
+    entries: [
+      { content: 'Create a.txt', priority: 'medium', status: 'completed' },
+      { content: 'Create b.txt', priority: 'medium', status: 'in_progress' },
+      { content: '', priority: 'low', status: 'pending' },
+      { content: 'Create c.txt', priority: 'high', status: 'cancelled' },
+    ],
+  });
+  const fromPlan = [
+    {
+      id: 'plan-1',
+      title: 'Create a.txt',
+      status: 'completed',
+      activeForm: null,
+    },
+    {
+      id: 'plan-2',
+      title: 'Create b.txt',
+      status: 'in_progress',
+      activeForm: null,
+    },
+    // The blank entry is not a step; the next one keeps a contiguous id, and
+    // a status outside ACP's three reads as unknown rather than coerced.
+    { id: 'plan-3', title: 'Create c.txt', status: null, activeForm: null },
+  ];
+
+  it('draws the plan as the whole task list, after the words before it', () => {
+    const h = harness();
+    h.feed(chunk('agent_message_chunk', 'Here is the plan.'));
+
+    // A snapshot — ACP: "the client MUST replace the current plan completely" —
+    // and tied to no tool call, so it replaces no row. The text block closes
+    // first, or the list would be written ahead of the words introducing it.
+    expect(h.feed(planUpdate)).toEqual([
+      { type: 'text', text: 'Here is the plan.' },
+      {
+        type: 'task_list',
+        mode: 'snapshot',
+        tasks: fromPlan,
+        toolCallId: null,
+      },
+    ]);
+  });
+
+  it('draws nothing for a plan update with no entries list', () => {
+    // An unreadable plan is not an empty one: an empty snapshot would wipe the
+    // list the user is watching.
+    const h = harness();
+    expect(h.feed(update({ sessionUpdate: 'plan' }))).toEqual([]);
+  });
+
+  it('drops a plan the session/load replay streams back', () => {
+    const h = harness({
+      input: { ...BASE_INPUT, resumeSessionId: 'prior-7' },
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+    expect(h.feed(planUpdate)).toEqual([]);
+  });
+
+  describe('for an agent that restates its plan with ids', () => {
+    const PLAN = 'vendor/create_plan';
+    const restated = [
+      {
+        id: 'make-a',
+        title: 'Create a.txt',
+        status: 'pending',
+        activeForm: null,
+      },
+    ] as const;
+    const todos = {
+      method: 'vendor/update_todos',
+      read: () => null,
+      plan: {
+        method: PLAN,
+        read: (params: unknown) => {
+          const rows = (params as { rows?: unknown } | null)?.rows;
+          return Array.isArray(rows) ? (rows as never[]) : null;
+        },
+      },
+    };
+    const options = { todos, declinedWithoutNotice: [PLAN] };
+
+    it('holds the plan update and draws the restatement, keyed by its ids', () => {
+      // The duplication this prevents: the agent's later patches name the
+      // tasks by ITS ids, so a list drawn with positional ids gains a second
+      // copy of every task as soon as the agent works through it.
+      const h = harness(options);
+      expect(h.feed(planUpdate)).toEqual([]);
+
+      const events = h.feed({
+        id: 9,
+        method: PLAN,
+        params: { rows: restated },
+      });
+
+      expect(events).toEqual([
+        {
+          type: 'task_list',
+          mode: 'snapshot',
+          tasks: restated,
+          toolCallId: null,
+        },
+      ]);
+      // Still REFUSED: the reply is a verdict on the plan, never ours to give.
+      expect(h.sent.find((frame) => frame.id === 9)?.error).toEqual({
+        code: -32601,
+        message: `${PLAN} is not implemented by this client`,
+      });
+    });
+
+    it('falls back to the held plan update when the restatement is unreadable', () => {
+      const warn = vi.fn();
+      const h = harness({ ...options, logger: { warn } });
+      h.feed(planUpdate);
+
+      expect(h.feed({ id: 9, method: PLAN, params: { rows: 'nope' } })).toEqual(
+        [
+          {
+            type: 'task_list',
+            mode: 'snapshot',
+            tasks: fromPlan,
+            toolCallId: null,
+          },
+        ],
+      );
+      expect(warn).toHaveBeenCalledWith(
+        `acp: ${PLAN} arrived in an unrecognized shape — its plan is drawn from the plan update instead`,
+      );
+      expect(h.sent.find((frame) => frame.id === 9)?.error).toBeDefined();
+    });
+
+    it('falls back to the held plan update, quietly, when the restatement names no tasks', () => {
+      // cursor's CreatePlan with no todos still sends one stand-in entry naming
+      // the plan on the `plan` update, while its restatement's list is empty.
+      const warn = vi.fn();
+      const h = harness({ ...options, logger: { warn } });
+      h.feed(planUpdate);
+
+      const events = h.feed({ id: 9, method: PLAN, params: { rows: [] } });
+
+      expect(events[0]?.type === 'task_list' && events[0].tasks).toEqual(
+        fromPlan,
+      );
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('draws a held plan once, not again on a later restatement', () => {
+      const h = harness(options);
+      h.feed(planUpdate);
+      h.feed({ id: 9, method: PLAN, params: { rows: 'nope' } });
+
+      expect(h.feed({ id: 10, method: PLAN, params: { rows: [] } })).toEqual(
+        [],
+      );
+    });
+  });
+});
+
 describe('AcpSession — a message delivered into the running turn', () => {
   /** Drive the driver to a live session with its own prompt (id 3) already out. */
   function running(overrides: Partial<AcpDriverOptions> = {}): Harness {
@@ -4281,6 +4628,35 @@ describe('AcpSession — a message delivered into the running turn', () => {
     });
   });
 
+  it('marks an unwatchable delegate untracked when a follow-up interrupts its parent', () => {
+    const h = running({ delegate: UNWATCHABLE_DELEGATE });
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'delegate',
+        title: 'Review',
+        status: 'in_progress',
+        rawInput: { _toolName: 'task' },
+      }),
+    );
+    h.driver.sendFollowUp({ text: 'do something else' });
+    const events = h.feed(STOPPED);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'delegate',
+        backgroundOutcome: 'untracked',
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_result',
+        id: 'delegate',
+        isError: false,
+      }),
+    );
+  });
+
   it('closes the tool calls the stopped prompt left running, and only those', () => {
     // MEASURED: an interrupt aborts a running shell and a foreground
     // sub-agent, and the agent sends no update for either — so the row read as
@@ -4342,6 +4718,66 @@ describe('AcpSession — a message delivered into the running turn', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /** Where the drop sits relative to the event that ends the turn. */
+  function dropBeforeTerminal(events: AgentEvent[]): void {
+    const types = events.map((event) => event.type);
+    const terminal = types.findIndex(
+      (type) =>
+        type === 'turn_cancelled' ||
+        type === 'turn_complete' ||
+        type === 'error',
+    );
+    expect(types.indexOf('follow_up_dropped')).toBeGreaterThanOrEqual(0);
+    expect(types.indexOf('follow_up_dropped')).toBeLessThan(terminal);
+  }
+
+  // A message accepted while the cancel is in flight has already been written
+  // as a sent row by its caller; a Stop landing before the agent confirms
+  // drops it, so the turn has to say which messages never reached the agent.
+  it.each([
+    ['answers `cancelled`', STOPPED],
+    ['fails', { id: 3, error: { code: -32603, message: 'Internal error' } }],
+    ['ends normally', { id: 3, result: { stopReason: 'end_turn' } }],
+  ])(
+    'reports every message a Stop dropped from the cancel window when the stopped prompt %s',
+    (_reply, reply) => {
+      const h = running();
+      const first = { text: 'do X instead', deliveryId: 'delivery-1' };
+      const second = { text: 'and then Y', deliveryId: 'delivery-2' };
+      expect(h.driver.sendFollowUp(first)).toBe(true);
+      expect(h.driver.sendFollowUp(second)).toBe(true);
+      h.driver.buildInterruptPayload();
+
+      const events = h.feed(reply);
+
+      expect(prompts(h)).toHaveLength(1);
+      expect(events).toContainEqual({
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1', 'delivery-2'],
+      });
+      dropBeforeTerminal(events);
+    },
+  );
+
+  it('reports the dropped message ahead of the failure the stopped prompt reported', () => {
+    const h = running({
+      agentFailure: {
+        read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+      },
+    });
+    h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' });
+    h.driver.buildInterruptPayload();
+    h.feed(chunk('agent_message_chunk', '\n\nError: ProviderError: gone'));
+
+    const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+    expect(events).toContainEqual({
+      type: 'follow_up_dropped',
+      deliveryIds: ['delivery-1'],
+    });
+    dropBeforeTerminal(events);
   });
 
   it('sends the message anyway, and says so, when the agent never confirms', () => {
@@ -4443,10 +4879,11 @@ describe('AcpSession — a message delivered into the running turn', () => {
     // the message queued, which is safe and is what the chat route turns into
     // the RUN_BUSY the composer already handles.
     const h = harness({
+      promptAwaitsConfig: true,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
-        parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+        parameters: [{ id: 'context', value: '1m' }],
       },
     });
     h.feed(initializeReply(1));
@@ -4476,6 +4913,59 @@ describe('AcpSession — a message delivered into the running turn', () => {
   it('refuses before there is a session at all', () => {
     const h = harness();
     expect(h.driver.sendFollowUp({ text: 'too early' })).toBe(false);
+  });
+
+  it('hands back the message waiting behind an unconfirmed cancel when the process ends under the turn', () => {
+    const h = running();
+    h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' });
+    h.driver.buildInterruptPayload();
+
+    expect(h.driver.onProcessEnded()).toEqual([
+      { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+    ]);
+  });
+
+  it('reports the waiting message dropped when its prompt cannot be written after the agent confirms', () => {
+    let writable = true;
+    const h = harness({}, () => writable);
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    expect(
+      h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' }),
+    ).toBe(true);
+    writable = false;
+
+    const events = h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+
+    expect(prompts(h)).toHaveLength(1);
+    expect(events).toContainEqual({
+      type: 'follow_up_dropped',
+      deliveryIds: ['delivery-1'],
+    });
+    dropBeforeTerminal(events);
+  });
+
+  it('reports the waiting message dropped when the agent never confirms and the late prompt cannot be written', () => {
+    vi.useFakeTimers();
+    try {
+      let writable = true;
+      const h = harness({}, () => writable);
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+      h.driver.sendFollowUp({ text: 'do X instead', deliveryId: 'delivery-1' });
+      writable = false;
+
+      vi.advanceTimersByTime(INTERRUPT_ACK_DEADLINE_MS);
+
+      expect(prompts(h)).toHaveLength(1);
+      expect(h.emitted).toContainEqual({
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1'],
+      });
+      dropBeforeTerminal(h.emitted);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('answers FALSE when the cancel does not land, and stays settleable', () => {
@@ -4926,10 +5416,11 @@ describe('AcpSession — a Stop that lands before the prompt went out', () => {
   /** A turn whose prompt waits on a parameter frame the agent has not answered. */
   function heldBehindConfig(): Harness {
     const h = harness({
+      promptAwaitsConfig: true,
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
         model: 'claude-opus-5',
-        parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+        parameters: [{ id: 'context', value: '1m' }],
       },
     });
     h.feed(initializeReply(1));
@@ -5021,5 +5512,157 @@ describe('AcpSession — whether the process can serve another turn', () => {
     h.feed(initializeReply(1));
     h.feed({ id: 2, result: { sessionId: 'sess-1' } });
     expect(h.driver.canOpenTurn()).toBe(true);
+  });
+});
+
+describe('AcpSession — skipping unchanged parameters', () => {
+  const selection = {
+    model: 'gpt-5.6-sol',
+    parameters: [{ id: 'effort', alternateIds: ['reasoning'], value: 'high' }],
+  };
+  function options(
+    model: string,
+    currentValue: string | null,
+  ): Record<string, unknown> {
+    return {
+      sessionId: 's-1',
+      configOptions: [
+        {
+          id: 'model',
+          category: 'model',
+          currentValue: model,
+          options: [{ value: 'gpt-5.6-sol' }, { value: 'other-model' }],
+        },
+        {
+          id: 'reasoning',
+          category: 'thought_level',
+          currentValue,
+          options: [{ value: 'medium' }, { value: 'high' }],
+        },
+      ],
+    };
+  }
+  function open(
+    currentValue: string | null,
+    overrides: Partial<AcpDriverOptions> = {},
+  ): Harness {
+    const h = harness({
+      promptAwaitsConfig: true,
+      skipUnchangedParameters: true,
+      modelSelection: selection,
+      ...overrides,
+    });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: options('gpt-5.6-sol', currentValue) });
+    return h;
+  }
+
+  it('skips the resolved option when it already matches, even when prompts await config', () => {
+    const h = open('high');
+    expect(h.sentAll('session/set_config_option')).toEqual([]);
+    expect(h.sentAll('session/prompt')).toHaveLength(1);
+  });
+
+  it('sends a differing value, holds the prompt, and skips it on the next live turn after confirmation', () => {
+    const h = open('medium');
+    expect(h.sentMethod('session/set_config_option')?.params).toEqual({
+      sessionId: 's-1',
+      configId: 'reasoning',
+      value: 'high',
+    });
+    expect(h.sentAll('session/prompt')).toEqual([]);
+    h.feed({ id: 3, result: options('gpt-5.6-sol', 'high') });
+    const prompt = h.sentMethod('session/prompt')!;
+    h.feed({ id: prompt.id, result: { stopReason: 'end_turn' } });
+    h.openTurn(BASE_INPUT);
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+    expect(h.sentAll('session/prompt')).toHaveLength(2);
+  });
+
+  it('uses the model frame reply at send time in both directions, rather than the session reply', () => {
+    for (const [before, after] of [
+      ['medium', 'high'],
+      ['high', 'medium'],
+    ] as const) {
+      const h = open(before, {
+        modelSelection: { ...selection, model: 'other-model' },
+      });
+      expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+      expect(h.sentAll('session/prompt')).toEqual([]);
+      h.feed({ id: 3, result: options('other-model', after) });
+      if (after === 'high') {
+        expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+        expect(h.sentAll('session/prompt')).toHaveLength(1);
+      } else {
+        expect(h.sentAll('session/set_config_option')).toHaveLength(2);
+        expect(h.sentAll('session/prompt')).toEqual([]);
+        h.feed({ id: 4, result: options('other-model', 'high') });
+        expect(h.sentAll('session/prompt')).toHaveLength(1);
+      }
+    }
+  });
+
+  it('sends again when a parameter reply describes no current values', () => {
+    const h = open('high', {
+      modelSelection: {
+        ...selection,
+        parameters: [
+          ...selection.parameters,
+          { id: 'reasoning', value: 'medium' },
+        ],
+      },
+    });
+    // The first frame is skipped. The second frame's reply says nothing about
+    // current values, so a later turn must send again rather than reuse high.
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+    expect(h.sentMethod('session/set_config_option')?.params).toEqual({
+      sessionId: 's-1',
+      configId: 'reasoning',
+      value: 'medium',
+    });
+    h.feed({ id: 3, result: {} });
+    const prompt = h.sentMethod('session/prompt')!;
+    h.feed({ id: prompt.id, result: { stopReason: 'end_turn' } });
+    h.openTurn(BASE_INPUT, { modelSelection: selection });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(2);
+    expect(h.sentAll('session/prompt')).toHaveLength(1);
+  });
+
+  it('uses each parameter reply for the next queued comparison', () => {
+    const h = open('high', {
+      modelSelection: {
+        ...selection,
+        parameters: [
+          ...selection.parameters,
+          { id: 'reasoning', value: 'medium' },
+          { id: 'reasoning', value: 'high' },
+        ],
+      },
+    });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+    h.feed({ id: 3, result: options('gpt-5.6-sol', 'medium') });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(2);
+    expect(h.sentAll('session/prompt')).toEqual([]);
+    h.feed({ id: 4, result: options('gpt-5.6-sol', 'high') });
+    expect(h.sentAll('session/prompt')).toHaveLength(1);
+  });
+
+  it('keeps sending equal values for an agent that has not opted in', () => {
+    expect(open('high').sentAll('session/set_config_option')).toEqual([]);
+    const h = open('high', { skipUnchangedParameters: false });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+    expect(h.sentAll('session/prompt')).toEqual([]);
+  });
+
+  it('skips only a known match, still sending an option with no current value', () => {
+    const known = open('high');
+    expect(known.sentAll('session/set_config_option')).toEqual([]);
+    const unknown = open(null);
+    expect(unknown.sentMethod('session/set_config_option')?.params).toEqual({
+      sessionId: 's-1',
+      configId: 'reasoning',
+      value: 'high',
+    });
+    expect(unknown.sentAll('session/prompt')).toEqual([]);
   });
 });

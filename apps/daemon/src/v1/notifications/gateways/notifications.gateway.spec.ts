@@ -8,7 +8,9 @@ import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-u
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
+import type { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
@@ -44,6 +46,10 @@ function fakeSocket(token: unknown): {
  */
 function debugLog(): DebugLogService {
   return new DebugLogService(new AgentEventBus());
+}
+
+function subagents(): SubagentRecoveryService {
+  return { schedule: vi.fn() } as unknown as SubagentRecoveryService;
 }
 
 /**
@@ -85,6 +91,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -104,6 +112,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -116,6 +126,7 @@ describe('NotificationsGateway', () => {
   });
 
   it('join reads the runId from {runId} and string payloads, ignores empty', async () => {
+    const recovery = subagents();
     const gw = new NotificationsGateway(
       runtime,
       new AgentEventBus(),
@@ -125,6 +136,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      recovery,
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -135,12 +148,14 @@ describe('NotificationsGateway', () => {
       data: { runId: 'r1' },
     });
     expect(socket.join).toHaveBeenCalledWith('run:r1');
+    expect(recovery.schedule).toHaveBeenCalledWith('r1');
 
     await expect(gw.join(socket as unknown as Socket, 'r2')).resolves.toEqual({
       event: 'joined',
       data: { runId: 'r2' },
     });
     expect(socket.join).toHaveBeenCalledWith('run:r2');
+    expect(recovery.schedule).toHaveBeenCalledWith('r2');
 
     // An empty/garbage payload yields a null runId and joins no room.
     await expect(
@@ -150,6 +165,7 @@ describe('NotificationsGateway', () => {
       data: { runId: null },
     });
     expect(socket.join).toHaveBeenCalledTimes(2);
+    expect(recovery.schedule).toHaveBeenCalledTimes(2);
   });
 
   it('hands a joining socket the live plane as it stands, before `joined`', async () => {
@@ -171,6 +187,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       live,
+      subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -206,6 +224,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -215,6 +235,7 @@ describe('NotificationsGateway', () => {
   });
 
   it('does not acknowledge joined until Socket.IO room membership completes', async () => {
+    const recovery = subagents();
     const gw = new NotificationsGateway(
       runtime,
       new AgentEventBus(),
@@ -224,6 +245,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      recovery,
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -241,6 +264,7 @@ describe('NotificationsGateway', () => {
 
     await Promise.resolve();
     expect(settled).toBe(false);
+    expect(recovery.schedule).not.toHaveBeenCalled();
     resolveJoin();
     await expect(response).resolves.toEqual({
       event: 'joined',
@@ -258,6 +282,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -279,6 +305,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -315,6 +343,8 @@ describe('NotificationsGateway', () => {
       usage,
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a usage event must never take it — the Stats page
@@ -350,6 +380,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       tasks,
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a task write must never take it — a board is not
@@ -370,6 +402,75 @@ describe('NotificationsGateway', () => {
     expect(emit).toHaveBeenCalledTimes(1);
   });
 
+  it('broadcasts a share write to EVERY client, and stops on destroy', () => {
+    const shares = new ShareEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      shares,
+    );
+    const emit = vi.fn();
+    const roomEmit = vi.fn();
+    const to = vi.fn(() => ({ emit: roomEmit }));
+    gw.afterInit({ emit, to } as unknown as Server);
+
+    const change = {
+      runId: 'r1',
+      shareId: 's1',
+      status: 'awaiting-sign-in' as const,
+      title: 'Report',
+      destinationName: 'Company',
+      askedByAgent: true,
+      signInRequested: true,
+    };
+    shares.publish(change);
+
+    // To the Mac's own windows only, never a broadcast a paired phone hears.
+    expect(to).toHaveBeenCalledWith('desktop');
+    expect(roomEmit).toHaveBeenCalledWith('shares_changed', change);
+    expect(emit).not.toHaveBeenCalled();
+
+    gw.onModuleDestroy();
+    shares.publish({ ...change, shareId: 's2' });
+    expect(roomEmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts the Mac’s own sockets in the desktop room and a paired device’s outside it', () => {
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+    );
+    const desktop = fakeSocket('good-token');
+    const phone = {
+      ...fakeSocket('good-token'),
+      handshake: {
+        auth: { token: 'good-token' },
+        headers: { 'x-geniro-via': 'remote' },
+      },
+    };
+
+    gw.handleConnection(desktop as unknown as Socket);
+    gw.handleConnection(phone as unknown as Socket);
+
+    expect(desktop.join).toHaveBeenCalledWith('desktop');
+    expect(phone.join).not.toHaveBeenCalledWith('desktop');
+  });
+
   it('broadcasts a deleted run to EVERY client, and stops on destroy', () => {
     const bus = new AgentEventBus();
     const gw = new NotificationsGateway(
@@ -381,6 +482,8 @@ describe('NotificationsGateway', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a deletion must never take it — every OTHER
@@ -421,6 +524,8 @@ describe('runs_changed broadcast', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -469,6 +574,8 @@ describe('verdict round-trip', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -477,6 +584,56 @@ describe('verdict round-trip', () => {
       data: { runId: 'r1', requestId: 'req-1', status: 'applied' },
     });
     expect(respond).toHaveBeenCalledWith(true);
+  });
+
+  it('forwards a picked option id, and refuses a malformed one without consuming the card', () => {
+    const approvals = new ApprovalRegistry();
+    const respond = vi.fn(() => true);
+    const track = (requestId: string): void =>
+      approvals.track({
+        runId: 'r1',
+        nodeId: 'n1',
+        requestId,
+        toolName: 'Bash',
+        input: {},
+        question: false,
+        respond,
+      });
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      approvals,
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+    );
+
+    track('req-o');
+    expect(
+      gw.verdict({
+        runId: 'r1',
+        requestId: 'req-o',
+        allow: true,
+        optionId: 'session',
+      }).data.status,
+    ).toBe('applied');
+    expect(respond).toHaveBeenLastCalledWith(true, undefined, 'session');
+
+    track('req-bad');
+    for (const optionId of ['', 7, 'x'.repeat(257)]) {
+      expect(
+        gw.verdict({ runId: 'r1', requestId: 'req-bad', allow: true, optionId })
+          .data.status,
+      ).toBe('invalid');
+    }
+    // Still open: a malformed pick is not a plain approve.
+    expect(approvals.listByRun('r1').map((p) => p.requestId)).toEqual([
+      'req-bad',
+    ]);
   });
 
   it('distinguishes expired requests from malformed verdicts', () => {
@@ -489,6 +646,8 @@ describe('verdict round-trip', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -522,6 +681,8 @@ describe('verdict round-trip', () => {
       new UsageEventBus(),
       new TaskEventBus(),
       partials(),
+      subagents(),
+      new ShareEventBus(),
     );
 
     track('req-a');

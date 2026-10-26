@@ -122,6 +122,7 @@ export function createPreloadStub(
     onDaemonRestarted: () => noSubscription('onDaemonRestarted'),
     onClearAgentCaches: () => noSubscription('onClearAgentCaches'),
     onFlushLineMeasurements: () => noSubscription('onFlushLineMeasurements'),
+    onSettingsChanged: () => noSubscription('onSettingsChanged'),
 
     pickProjectFolder: () => {
       note('pickProjectFolder');

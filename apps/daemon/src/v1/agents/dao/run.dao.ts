@@ -1,11 +1,13 @@
-import { EntityManager } from '@mikro-orm/sqlite';
+import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { Run } from '../../runs/entity/run.entity';
 import type {
   ChatListScope,
+  ContextLevel,
   PromptCacheTtlReason,
+  RunListPage,
   RunPullRequest,
   SettleFigures,
 } from '../chat.types';
@@ -40,19 +42,55 @@ export class RunDao extends BaseDao<Run> {
    * it belongs to the thread it reads, opens in that thread's popup, and is
    * found through {@link listAnalysesOf}. Nothing else is hidden by kind.
    */
-  async listChats(scope: ChatListScope, txEm?: EntityManager): Promise<Run[]> {
-    return this.getRepo(txEm).find(
+  async listChats(
+    scope: ChatListScope,
+    txEm?: EntityManager,
+    page: RunListPage = {},
+  ): Promise<Run[]> {
+    return this.listPage(
       {
         workflowId: null,
         editsWorkflowSlug: null,
         analysisSourceRunId: null,
-        ...(scope === 'all'
-          ? {}
-          : { archivedAt: scope === 'archived' ? { $ne: null } : null }),
+        ...scopeFilter(scope),
       },
+      page,
+      txEm,
+    );
+  }
+
+  /**
+   * One page of a listing, newest first. `id` breaks a `createdAt` tie so the
+   * cursor names one place in the order and no row is skipped or repeated
+   * across pages.
+   */
+  private listPage(
+    where: FilterQuery<Run>,
+    page: RunListPage,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    const { before, runId, limit } = page;
+    const narrowed: FilterQuery<Run>[] = [where];
+    if (runId !== undefined) {
+      narrowed.push({ id: runId });
+    }
+    if (before !== undefined) {
+      narrowed.push({
+        $or: [
+          { createdAt: { $lt: before.createdAt } },
+          { createdAt: before.createdAt, id: { $lt: before.id } },
+        ],
+      });
+    }
+    return this.getRepo(txEm).find(
+      narrowed.length === 1 ? where : { $and: narrowed },
       // Read-only list paths: skip identity-map tracking so a long run history
       // doesn't accumulate managed entities in the forked EM (see item.dao).
-      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+      {
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        ...(limit === undefined ? {} : { limit }),
+        disableIdentityMap: true,
+      },
     );
   }
 
@@ -222,15 +260,13 @@ export class RunDao extends BaseDao<Run> {
    */
   async rememberContext(
     runId: string,
-    reading: {
-      contextTokens?: number | null;
-      contextWindowTokens?: number | null;
-    },
+    reading: ContextLevel,
     txEm?: EntityManager,
   ): Promise<void> {
     const data: Partial<Run> = {};
     if (positive(reading.contextTokens)) {
       data.contextTokens = reading.contextTokens;
+      data.contextEstimated = reading.contextEstimated === true ? true : null;
     }
     if (positive(reading.contextWindowTokens)) {
       data.contextWindowTokens = reading.contextWindowTokens;
@@ -368,6 +404,25 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Every run whose pull-request marker was reached under a capture rule other
+   * than `version`, never-scanned runs included, newest first.
+   */
+  async listOutdatedPullRequestScans(
+    version: number,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      {
+        $or: [
+          { pullRequestsScanVersion: null },
+          { pullRequestsScanVersion: { $ne: version } },
+        ],
+      },
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
    * Which pull requests each of these runs OPENED, keyed by run id.
    *
    * ONE query for a whole board. The tasks module draws a card's pull requests
@@ -430,7 +485,7 @@ export class RunDao extends BaseDao<Run> {
   async forgetContext(runId: string, txEm?: EntityManager): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
       { id: runId },
-      { contextTokens: null },
+      { contextTokens: null, contextEstimated: null },
     );
   }
 
@@ -451,6 +506,29 @@ export class RunDao extends BaseDao<Run> {
       { id: runId },
       { pendingQuestion: value },
     );
+  }
+
+  /**
+   * Forget the deferred card this run is parked on, but only if the column
+   * still holds exactly `expected` — the text the caller just read and
+   * checked. Answers whether it cleared it.
+   *
+   * A compare-and-swap rather than {@link setPendingQuestion}'s bare write,
+   * because the caller is an answer delivery that awaited a file write first:
+   * in that window the user may have typed on, and a new turn put a DIFFERENT
+   * card in the column. Clearing that one would leave it on screen with
+   * nothing to bring it back after a restart.
+   */
+  async clearPendingQuestionIf(
+    runId: string,
+    expected: string,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const cleared = await this.getRepo(txEm).nativeUpdate(
+      { id: runId, pendingQuestion: expected },
+      { pendingQuestion: null },
+    );
+    return cleared > 0;
   }
 
   /**
@@ -536,6 +614,31 @@ export class RunDao extends BaseDao<Run> {
   async listRunsWithPendingQuestion(txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
       { pendingQuestion: { $ne: null } },
+      { disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * Record — or, with null, forget — the standing workflow proposal card
+   * (`Run.pendingWorkflowProposal`), on {@link setPendingQuestion}'s terms.
+   */
+  async setPendingWorkflowProposal(
+    runId: string,
+    value: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { pendingWorkflowProposal: value },
+    );
+  }
+
+  /** Every run standing on a workflow proposal card — the boot rehydration's read. */
+  async listRunsWithPendingWorkflowProposal(
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { pendingWorkflowProposal: { $ne: null } },
       { disableIdentityMap: true },
     );
   }
@@ -809,15 +912,12 @@ export class RunDao extends BaseDao<Run> {
   async listWorkflowRuns(
     scope: ChatListScope,
     txEm?: EntityManager,
+    page: RunListPage = {},
   ): Promise<Run[]> {
-    return this.getRepo(txEm).find(
-      {
-        workflowId: { $ne: null },
-        ...(scope === 'all'
-          ? {}
-          : { archivedAt: scope === 'archived' ? { $ne: null } : null }),
-      },
-      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    return this.listPage(
+      { workflowId: { $ne: null }, ...scopeFilter(scope) },
+      page,
+      txEm,
     );
   }
 
@@ -848,4 +948,13 @@ export class RunDao extends BaseDao<Run> {
       { disableIdentityMap: true },
     );
   }
+}
+
+/** The archive half of a listing's filter; `all` states no condition. */
+function scopeFilter(scope: ChatListScope): {
+  archivedAt?: { $ne: null } | null;
+} {
+  return scope === 'all'
+    ? {}
+    : { archivedAt: scope === 'archived' ? { $ne: null } : null };
 }

@@ -43,6 +43,7 @@ import type {
   AgentSessionsInput,
   AgentTitleInput,
   AgentTurnInput,
+  ApprovalOption,
   CarrySessionInput,
   CarrySessionResult,
   ConfigDirPin,
@@ -51,8 +52,10 @@ import type {
   FollowUpMessage,
   InstalledApprovalSupport,
   NO_PLAN_LIMITS,
+  RecoveredSubagentOutcome,
   SessionPullRequest,
   SessionPullRequestsInput,
+  SubagentRecoveryRef,
   TurnDriver,
   TurnImage,
 } from '../adapter.types';
@@ -138,6 +141,7 @@ import {
   CLAUDE_RESUME_FLAG,
   CLAUDE_SESSION_STATE_EVENTS_ENV,
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
+  CLAUDE_SETTINGS_FLAG,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
   CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES,
@@ -166,7 +170,6 @@ import {
 } from './utils/claude-cost-state.utils';
 import { ClaudeCostTotalsFile } from './utils/claude-cost-totals.utils';
 import {
-  fastModeArgs,
   fastModeParameter,
   isFastModeCapable,
 } from './utils/claude-fast-mode.utils';
@@ -188,7 +191,7 @@ import {
   readDisabledServers,
   withDisabledServer,
 } from './utils/claude-mcp-toggle.utils';
-import { claudeDisallowedMcpArgs } from './utils/claude-mcp-tool-name.utils';
+import { claudeDisallowedToolArgs } from './utils/claude-mcp-tool-name.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
 import {
@@ -198,6 +201,7 @@ import {
   readModelResolutions,
 } from './utils/claude-model-resolution.utils';
 import { claudeModels } from './utils/claude-models.utils';
+import { claudeUpdatedPermissions } from './utils/claude-permission-options.utils';
 import {
   readPlanLimitsReply,
   usageRequestLine,
@@ -214,6 +218,8 @@ import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
+import { claudeSettingsArgs } from './utils/claude-settings.utils';
+import { recoverClaudeSubagent } from './utils/claude-subagent-recovery.utils';
 import {
   sweepStaleTurnSystemPrompts,
   writeTurnSystemPrompt,
@@ -272,7 +278,7 @@ export class ClaudeAdapter extends AgentAdapter {
           CLAUDE_CODE_USE_FOUNDRY: '0',
         },
         baseUrlEnv: 'ANTHROPIC_BASE_URL',
-        envSettingsFlag: '--settings',
+        envSettingsFlag: CLAUDE_SETTINGS_FLAG,
         modelEnvKeys: [
           'ANTHROPIC_DEFAULT_OPUS_MODEL',
           'ANTHROPIC_DEFAULT_SONNET_MODEL',
@@ -363,6 +369,10 @@ export class ClaudeAdapter extends AgentAdapter {
        * PARKING host tool this CLI is handed, not only the question one.
        */
       hostQuestionDeferredReason: null,
+      // MEASURED on 2.1.295 (2026-10-21) against a stub MCP server: a call
+      // under `default` and `acceptEdits` is held for permission (answered on
+      // the stdio permission channel), and `plan` refuses it outright.
+      hostToolCallUngatedReason: null,
       subagents: {
         /**
          * The Task tool's delegates ride the SAME stream-json stream as the
@@ -590,7 +600,7 @@ export class ClaudeAdapter extends AgentAdapter {
         toggleUnavailableReason: null,
         /**
          * Null: a workflow node's switched-off servers ride
-         * `--disallowedTools mcp__<server>` (`claudeDisallowedMcpArgs`).
+         * `--disallowedTools mcp__<server>` (`claudeDisallowedToolArgs`).
          * MEASURED on 2.1.284: `--disallowedTools mcp__codegraph
          * mcp__plugin_playwright_playwright` took the turn's `system/init`
          * tool list from 125 to 96, every `mcp__codegraph__*` and
@@ -1344,7 +1354,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
   /**
    * FAST MODE, this CLI's one further model setting — see
-   * {@link fastModeArgs} for the argv it turns into.
+   * {@link claudeSettingsArgs} for the argv it turns into.
    *
    * Support is per MODEL, not per CLI ({@link isFastModeCapable}), so an
    * unsupported model gets no row rather than a control the CLI would
@@ -1492,6 +1502,12 @@ export class ClaudeAdapter extends AgentAdapter {
       sessionId: input.sessionId,
       limit: input.limit,
     });
+  }
+
+  override recoverSubagent(
+    ref: SubagentRecoveryRef,
+  ): Promise<RecoveredSubagentOutcome | null> {
+    return recoverClaudeSubagent(this.profileDir(ref.configDir), ref);
   }
 
   /** The `pr-link` lines the session's transcript carries. */
@@ -2109,11 +2125,12 @@ export class ClaudeAdapter extends AgentAdapter {
       // `listEfforts()`, so the flag only carries a level claude accepts.
       args.push(CLAUDE_EFFORT_FLAG, input.effort);
     }
-    // A model parameter like effort, and checked against nothing here for the
-    // same reason `listEfforts` guards effort: `listModelParameters` already
-    // withholds the row from a model that cannot use it, so a value reaching
-    // this field is one the caller offered honestly.
-    args.push(...fastModeArgs(input.modelParameters));
+    // Fast mode, the reply language and an Ollama model's env, in the one
+    // object `claudeSettingsArgs` builds. Fast mode is checked against nothing
+    // here for the same reason `listEfforts` guards effort:
+    // `listModelParameters` already withholds the row from a model that cannot
+    // use it, so a value reaching this field is one the caller offered honestly.
+    args.push(...this.settingsArgs(input));
     // Before the resume flag deliberately: the window this asks for governs the
     // conversation being resumed, not just what is said this turn.
     args.push(...this.autoCompactArgs(input));
@@ -2163,11 +2180,11 @@ export class ClaudeAdapter extends AgentAdapter {
     } else if (input.approvalMode === 'auto') {
       args.push(CLAUDE_SKIP_PERMISSIONS_FLAG);
     }
-    // A workflow node's own switched-off servers: their tools are withheld for
-    // this process. The only `--disallowedTools` this adapter passes, so there
-    // is nothing to merge with; geniro's own server is filtered out inside.
+    // claude's own tools geniro replaces, and a workflow node's switched-off
+    // servers, ride one variadic `--disallowedTools`; geniro's own server is
+    // filtered out inside.
     args.push(
-      ...claudeDisallowedMcpArgs(
+      ...claudeDisallowedToolArgs(
         input.mcpDisabled,
         input.mcpEndpoint?.serverName ?? null,
       ),
@@ -2284,8 +2301,8 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * Fast mode rides {@link CLAUDE_SETTINGS_FLAG} — argv, like everything else
-   * the base key already covers — so a kept process spawned without it cannot
+   * The turn's settings object rides {@link CLAUDE_SETTINGS_FLAG} — argv, like
+   * everything else the base key already covers — so a kept process spawned without it cannot
    * serve a turn that just asked for it, and the reverse: a flip must
    * respawn rather than silently keep running on the value the process
    * started with.
@@ -2293,8 +2310,16 @@ export class ClaudeAdapter extends AgentAdapter {
   protected override sessionKey(input: AgentTurnInput): string {
     return JSON.stringify([
       super.sessionKey(input),
-      fastModeArgs(input.modelParameters).join(' '),
+      this.settingsArgs(input).join(' '),
     ]);
+  }
+
+  private settingsArgs(input: AgentTurnInput): string[] {
+    return claudeSettingsArgs({
+      modelParameters: input.modelParameters,
+      replyLanguage: input.replyLanguage,
+      env: this.modelConfiguration(input.model).env,
+    });
   }
 
   /**
@@ -2396,14 +2421,23 @@ export class ClaudeAdapter extends AgentAdapter {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string {
+    // A picked "this session" / "always" option carries the permission updates
+    // claude suggested on the request; a one-time allow carries none, so an
+    // auto-approval (which never passes an option) teaches the CLI nothing.
+    const updatedPermissions = allow ? claudeUpdatedPermissions(option) : null;
     return `${JSON.stringify({
       type: 'control_response',
       response: {
         subtype: 'success',
         request_id: id,
         response: allow
-          ? { behavior: 'allow', updatedInput: updatedInput ?? {} }
+          ? {
+              behavior: 'allow',
+              updatedInput: updatedInput ?? {},
+              ...(updatedPermissions === null ? {} : { updatedPermissions }),
+            }
           : { behavior: 'deny', message: CLAUDE_DENY_MESSAGE },
       },
     })}\n`;
@@ -2542,8 +2576,8 @@ export class ClaudeAdapter extends AgentAdapter {
     return new ClaudeTurnDriver({
       requestedModel: input.model,
       mapMessage: (obj) => this.mapMessage(obj),
-      buildApprovalResponse: (id, allow, updatedInput) =>
-        this.buildApprovalResponse(id, allow, updatedInput),
+      buildApprovalResponse: (id, allow, updatedInput, option) =>
+        this.buildApprovalResponse(id, allow, updatedInput, option),
       logger: this.options.logger,
     });
   }

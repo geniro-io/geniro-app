@@ -1,16 +1,19 @@
 import { awakeTimeout, type AwakeTimer } from '../../../../utils/sleep-watch';
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
-import { delegateCloseEvent } from '../../utils/open-delegates';
+import { delegateDeclarationEvent } from '../../utils/open-delegates';
 import type {
   AgentEvent,
   AgentReportedCommand,
   AgentTask,
   AgentTurnInput,
   AgentUsage,
+  ApprovalOption,
+  ApprovalOptionScope,
   BackgroundUnitOutcome,
   CardQuestion,
   FollowUpMessage,
 } from '../adapter.types';
+import { approvalOption } from '../utils/approval-options.utils';
 import {
   decodeRequestId,
   encodeError,
@@ -145,6 +148,8 @@ export interface AcpDelegateRef {
   cwd: string;
   /** The PARENT session's id, when it is known yet. */
   sessionId: string | null;
+  /** Recovery must not accept a previous execution's terminal record. */
+  notBeforeMs?: number;
 }
 
 /** What is known about a delegate that has no address yet. */
@@ -320,8 +325,8 @@ export interface AcpDelegateProtocol {
   /**
    * How a delegate the launching call said is still running can be seen to
    * end — see {@link AcpDelegateEndings}. An adapter that declares none has its
-   * background delegates closed, with no outcome claimed, when the turn that
-   * launched them completes: nothing more about them could ever be learned.
+   * background delegates marked untracked when the launching turn completes,
+   * because no further observation channel is available.
    */
   endings?: AcpDelegateEndings;
   /**
@@ -389,8 +394,8 @@ export interface AcpResumeContext {
 }
 
 /**
- * How ONE agent reports its own task list, since baseline ACP's `plan` update
- * is not what the shipped agents actually send.
+ * How ONE agent reports its own task list beyond baseline ACP's `plan` update,
+ * which carries no ids and so cannot be joined to anything the agent says later.
  *
  * Supplied by the adapter — the method name and the params shape are that
  * vendor's facts. What the driver owns is the LIFECYCLE, and there is one thing
@@ -412,6 +417,28 @@ export interface AcpTodoProtocol {
    * we could not parse is worse than not having one.
    */
   read(params: unknown): AcpTodoUpdate | null;
+  /**
+   * Where this agent states the plan it just sent as a `plan` update AGAIN,
+   * this time with its own ids — absent for an agent that does not.
+   *
+   * The ids are the whole point. A `plan` entry has none, so the rows it draws
+   * carry ids made up from their position; when the agent later works through
+   * that plan, its patches name the tasks by ITS ids, match none of those rows,
+   * and land as a second copy of every task. Measured on cursor-agent
+   * 2026.10.19: a plan of three todos became six rows across the plan turn and
+   * the turn that executed it. So when this is declared, the `plan` update is
+   * HELD and this request is the plan's one announcement — the held entries are
+   * drawn only when the request's payload cannot be read.
+   *
+   * The request itself is still DECLINED after it is read: its reply is a
+   * verdict on the plan (accept or reject) that this client does not give on
+   * the user's behalf.
+   */
+  plan?: {
+    method: string;
+    /** The plan as a whole list, or null when the shape is unrecognized. */
+    read(params: unknown): AgentTask[] | null;
+  };
 }
 
 /**
@@ -544,6 +571,18 @@ export interface AcpSessionOptions {
   /** How this agent reports its own task list, or absent when it does not. */
   todos?: AcpTodoProtocol;
   /**
+   * How long this agent keeps an `*_always` permission answer, as geniro runs
+   * it — which is what decides whether such an option reaches the card, and
+   * the reach its button claims. Absent: never offered, and every verdict is
+   * answered with a `*_once` option as before.
+   *
+   * The adapter's fact, never the protocol's: ACP says only that `*_always`
+   * is remembered, not where. cursor keeps it in its config directory, which
+   * geniro gives each conversation's process afresh, so for cursor "always"
+   * lasts exactly one session.
+   */
+  alwaysAnswerScope?: ApprovalOptionScope;
+  /**
    * How this agent reports its OWN failure inside the conversation, or absent
    * when its failures reach the protocol.
    */
@@ -599,6 +638,36 @@ export interface AcpSessionOptions {
    * An agent that does not know the key ignores it, so sending it is free.
    */
   clientMeta?: Readonly<Record<string, unknown>>;
+  /**
+   * Whether a turn's prompt must WAIT for the reply to its last config frame —
+   * the model or a parameter, whichever went last — rather than follow it
+   * straight down the pipe.
+   *
+   * Without it the prompt is pipelined behind the last frame, on the reasoning
+   * that one ordered stdio stream already puts them in order. That holds for
+   * an agent that reads a setting per REQUEST, and it does not hold for one
+   * that binds the turn's settings when the PROMPT arrives: a frame still in
+   * flight then is accepted, its reply names the new value, and the turn runs
+   * on the old one. Nothing but the timing tells the two apart.
+   *
+   * A fact about the CLI, not about one setting, so it is one switch: which
+   * frame ends up last depends on what the turn happens to name, and a model
+   * switch with no parameter is a turn whose last frame is the model's.
+   *
+   * The cost is one round trip per turn that sends a frame, however many it
+   * sends: they already go out one at a time ({@link
+   * AcpTurnDriver.configSteps}), so only the last can still be in flight when
+   * the prompt is written. A turn that sends none pays nothing. A frame
+   * refused, or unanswered past its deadline, releases the prompt the way an
+   * answered one does.
+   */
+  promptAwaitsConfig?: boolean;
+  /**
+   * Trust the current values in config replies and omit a parameter frame
+   * whose resolved option already has the requested value. Opt-in because a
+   * CLI's reported value must first be verified against the turn it runs.
+   */
+  skipUnchangedParameters?: boolean;
 }
 
 /**
@@ -685,28 +754,6 @@ export interface AcpModelParameter {
    * hold more than one axis.
    */
   category?: string;
-  /**
-   * Whether the prompt must WAIT for this frame's reply.
-   *
-   * Every other frame this driver sends before a prompt is pipelined, on the
-   * reasoning that one ordered stdio stream already puts them in order — see
-   * {@link AcpTurnDriver.applyModel}. That holds for anything the agent reads
-   * per REQUEST, and it does not hold for a setting the agent binds when the
-   * TURN begins.
-   *
-   * Measured on cursor-agent 2026.08.11-e8db854, same profile, same frames,
-   * same values, only the waiting differing: with the `context` reply awaited
-   * the CLI's own accounting reports a 1,000,000-token window; with the frame
-   * and the prompt sent back to back it reports 300,000 — the model's default —
-   * even though the reply confirms `context = 1m`. So the option was set and
-   * the turn had already started without it.
-   *
-   * The cost is one round trip on the turns that ask, and only those. It is not
-   * set on the effort axis: nothing has measured that one to bind at turn
-   * start, and the deferral was priced at ~1.4s per turn when it was considered
-   * for the model frame.
-   */
-  applyBeforePrompt?: boolean;
 }
 
 function textOf(content: unknown): string | null {
@@ -808,6 +855,48 @@ function readToolLocations(value: unknown): AcpToolLocation[] | null {
   return locations.length > 0 ? locations : null;
 }
 
+/**
+ * ACP `PlanEntry[]` — the agent's plan, as the task list it is.
+ *
+ * Null for an absent or non-array `entries`: an unreadable plan is not an empty
+ * one, and reading it as empty would wipe a list the user is watching.
+ *
+ * An entry carries no id (ACP's schema has `content`, `priority`, `status` and
+ * nothing else), so each row is given one from its position. `plan-` keeps them
+ * apart from the numbers an agent gives its own todo list (`"1"`, `"2"`, …),
+ * which a later patch would otherwise mistake for these rows. `priority` is not
+ * carried: the task list has no place for it, and the one agent seen sending
+ * plans writes `"medium"` for every entry whatever the model said.
+ */
+function readAcpPlan(entries: unknown): AgentTask[] | null {
+  if (!Array.isArray(entries)) {
+    return null;
+  }
+  const tasks: AgentTask[] = [];
+  for (const entry of entries) {
+    const record = asRecord(entry);
+    const content = record ? asString(record.content) : null;
+    if (content === null || content.length === 0) {
+      // A step that says nothing is not a step the user can follow.
+      continue;
+    }
+    const status = asString(record?.status);
+    tasks.push({
+      id: `plan-${tasks.length + 1}`,
+      title: content,
+      // ACP's own three words; anything else reads as unknown, never coerced.
+      status:
+        status === 'pending' ||
+        status === 'in_progress' ||
+        status === 'completed'
+          ? status
+          : null,
+      activeForm: null,
+    });
+  }
+  return tasks;
+}
+
 function readToolCall(source: Record<string, unknown>): AcpToolCall {
   return {
     toolCallId: asString(source.toolCallId) ?? '',
@@ -843,9 +932,10 @@ function readPermissionOptions(value: unknown): AcpPermissionOption[] {
 /**
  * Pick the option to answer a permission request with. Only `*_once` kinds are
  * eligible: selecting an `*_always` option would persist a decision beyond the
- * turn that the user was never asked to make at that scope. Returns null when
- * the agent offered nothing matching, which the caller reports as a `cancelled`
- * outcome rather than guessing.
+ * turn that the user was never asked to make at that scope — the one path to
+ * one is the user picking it off the card ({@link permissionAnswerOptionId}).
+ * Returns null when the agent offered nothing matching, which the caller
+ * reports as a `cancelled` outcome rather than guessing.
  */
 export function selectPermissionOption(
   options: AcpPermissionOption[],
@@ -853,6 +943,48 @@ export function selectPermissionOption(
 ): string | null {
   const wanted: AcpPermissionOptionKind = allow ? 'allow_once' : 'reject_once';
   return options.find((option) => option.kind === wanted)?.optionId ?? null;
+}
+
+/**
+ * The card's remembering options for one permission request: each `*_always`
+ * option the agent offered, under the id the agent gave it, worded by the
+ * reach geniro actually gives it (`scope`). Empty when the adapter declares no
+ * scope — `*_always` is then never offered.
+ */
+export function acpApprovalOptions(
+  options: readonly AcpPermissionOption[],
+  scope: ApprovalOptionScope | undefined,
+): ApprovalOption[] {
+  if (scope === undefined) {
+    return [];
+  }
+  return options.flatMap((option) =>
+    option.kind === 'allow_always' || option.kind === 'reject_always'
+      ? [approvalOption(option.optionId, option.kind === 'allow_always', scope)]
+      : [],
+  );
+}
+
+/**
+ * The option id a verdict answers a parked permission with: the picked card
+ * option when it is one of this request's own `*_always` options pointing the
+ * verdict's way, else the `*_once` option of {@link selectPermissionOption}.
+ */
+export function permissionAnswerOptionId(
+  options: readonly AcpPermissionOption[],
+  allow: boolean,
+  picked: ApprovalOption | undefined,
+): string | null {
+  const wanted: AcpPermissionOptionKind = allow
+    ? 'allow_always'
+    : 'reject_always';
+  const remembered =
+    picked === undefined
+      ? undefined
+      : options.find(
+          (option) => option.optionId === picked.id && option.kind === wanted,
+        );
+  return remembered?.optionId ?? selectPermissionOption([...options], allow);
 }
 
 /**
@@ -1089,15 +1221,6 @@ export class AcpTurnDriver {
   private readonly configSteps: ConfigStep[] = [];
   /** The config frame awaiting its reply, or null when none is. */
   private configInFlight: JsonRpcId | null = null;
-  /**
-   * Whether the prompt waits for the LAST config frame's reply too, rather than
-   * following it straight down the pipe.
-   *
-   * Only for a parameter the adapter marked `applyBeforePrompt` — see that
-   * field for the measurement. Every other turn sends its prompt right behind
-   * its last frame, which is the one round-trip pipelining still saves.
-   */
-  private configBlocksPrompt = false;
   /** The prompt, not yet sent because a config frame is still ahead of it. */
   private promptHeld = false;
   /**
@@ -1188,6 +1311,12 @@ export class AcpTurnDriver {
    * updates are dropped until the load reply lands.
    */
   private replaying = false;
+  /**
+   * The newest `plan` update, held for an agent that restates its plan with ids
+   * — see {@link AcpTodoProtocol.plan}. Drawn only when that restatement cannot
+   * be read; turn-scoped because both frames come from one tool call.
+   */
+  private heldPlan: AgentTask[] | null = null;
   /**
    * Replay accounting for a resumed turn. `session/load` streams the whole
    * prior conversation back before the prompt can be sent, and nothing in the
@@ -1394,9 +1523,9 @@ export class AcpTurnDriver {
    * between two messages would otherwise silently keep the first turn's value
    * for the life of the conversation.
    *
-   * The stored session reply is what it reads them against. Modes, models and
-   * config options are properties of the SESSION, restated by no later frame,
-   * so turn 1's reply is still the agent's own answer about what it offers.
+   * The stored session reply supplies the opening vocabulary. An agent that
+   * opts into comparing current parameters uses the latest config reply for
+   * those, since a previous turn can have changed them.
    */
   openOnLiveSession(): AgentEvent[] {
     const events: AgentEvent[] = [];
@@ -1424,6 +1553,7 @@ export class AcpTurnDriver {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined {
     const requestId = decodeRequestId(id);
     if (this.session.parkedQuestions.has(id)) {
@@ -1443,7 +1573,7 @@ export class AcpTurnDriver {
       return undefined;
     }
     this.session.parkedPermissions.delete(id);
-    const optionId = selectPermissionOption(options, allow);
+    const optionId = permissionAnswerOptionId(options, allow, option);
     return encodeResult(requestId, {
       outcome:
         optionId === null
@@ -1487,9 +1617,11 @@ export class AcpTurnDriver {
         // The NEW model's option list, which the parameters queued behind this
         // frame are resolved and checked against when they go out.
         this.modelReply = result;
+        this.session.lastConfigReply = result;
         return this.onConfigAnswered(id);
       case 'set_model_parameter':
         // Silent too — but the next frame, or the prompt, waits on it.
+        this.session.lastConfigReply = result;
         return this.onConfigAnswered(id);
       case 'prompt':
         return this.onPromptComplete(result, id);
@@ -1645,12 +1777,14 @@ export class AcpTurnDriver {
       this.dropSupersededFailure(id);
       return this.flushPending();
     }
+    const events: AgentEvent[] = [];
     if (kind === 'prompt') {
       this.promptOutstanding = false;
       this.clearInterrupt();
-      this.queuedFollowUps.length = 0;
+      events.push(...this.dropped(this.queuedFollowUps.splice(0)));
     }
-    return [{ type: 'error', message: `acp ${kind} failed: ${message}` }];
+    events.push({ type: 'error', message: `acp ${kind} failed: ${message}` });
+    return events;
   }
 
   private onInitialized(result: unknown): AgentEvent[] {
@@ -1812,11 +1946,10 @@ export class AcpTurnDriver {
     const openedIn = asString(asRecord(root?.modes)?.currentModeId);
     this.session.defaultModeId = openedIn;
     this.session.currentModeId = openedIn;
-    // KEPT for the turns after this one. Modes, models and config options are
-    // properties of the session and are restated by no later frame, so this
-    // reply stays the agent's own answer about what it offers for as long as
-    // the process lives — see {@link openOnLiveSession}.
+    // Keep the opening vocabulary and seed the current parameter snapshot;
+    // config acceptances replace the latter — see `openOnLiveSession`.
     this.session.lastSessionReply = root;
+    this.session.lastConfigReply = root;
     if (this.options.input.resumeOnly === true) {
       // The load reply IS the settle for this turn — the in-repo precedent is
       // `acpSessionLoadSettled` (`acp-sessions.ts`), which ends its spawned
@@ -1907,9 +2040,10 @@ export class AcpTurnDriver {
   /**
    * Send the next queued config frame — or, with none left, the prompt.
    *
-   * The prompt follows the LAST frame straight down the pipe unless a queued
-   * parameter asked for it to wait (`configBlocksPrompt`), in which case it
-   * goes when that frame is answered. A step that sends nothing is skipped.
+   * The prompt follows the LAST frame straight down the pipe unless the agent
+   * binds its settings when the prompt arrives
+   * ({@link AcpSessionOptions.promptAwaitsConfig}), in which case it goes when
+   * that frame is answered. A step that sends nothing is skipped.
    */
   private advanceConfig(events: AgentEvent[]): void {
     for (
@@ -1922,7 +2056,10 @@ export class AcpTurnDriver {
         continue;
       }
       this.configInFlight = id;
-      if (this.configSteps.length === 0 && !this.configBlocksPrompt) {
+      if (
+        this.configSteps.length === 0 &&
+        this.session.options.promptAwaitsConfig !== true
+      ) {
         this.sendHeldPrompt(events);
       }
       return;
@@ -2002,9 +2139,11 @@ export class AcpTurnDriver {
    * open block is closed at the interrupt, as a Stop closes one.
    *
    * True means ACCEPTED, and a message accepted while the cancel is in flight
-   * is sent when the agent confirms: the caller commits its row either way,
-   * and the only way it goes unsent is a Stop pressed in that window, which
-   * ends the turn it was addressed to.
+   * is sent when the agent confirms: the caller commits its row either way.
+   * When it never goes out — a Stop pressed in that window, the process ending
+   * under the turn, or the prompt failing to write — the turn emits
+   * `follow_up_dropped` naming its `deliveryId`, ahead of its terminal, so the
+   * owner can mark that row unsent.
    */
   sendFollowUp(message: FollowUpMessage): boolean {
     // No session yet, or a prompt still held behind a parameter frame: in both
@@ -2108,7 +2247,7 @@ export class AcpTurnDriver {
       ...this.flushPending(),
       ...this.closeInterruptedToolCalls(),
     ];
-    this.sendFollowUpPrompt(this.queuedFollowUps.splice(0), events);
+    events.push(...this.sendQueuedFollowUps());
     return events;
   }
 
@@ -2143,12 +2282,22 @@ export class AcpTurnDriver {
             'The agent did not confirm it had stopped before your message — it was sent anyway, and the agent may carry on with its earlier work beside it.',
         },
       ];
-      this.sendFollowUpPrompt(this.queuedFollowUps.splice(0), events);
+      events.push(...this.sendQueuedFollowUps());
       for (const event of events) {
         this.session.emit(event);
       }
     }, INTERRUPT_ACK_DEADLINE_MS);
     this.interruptTimer.unref?.();
+  }
+
+  /**
+   * The process ended before this turn's last prompt answered — Stop's group
+   * kill when the agent never confirmed the cancel, or a crash. Whatever was
+   * waiting behind the cancel goes with it — `TurnDriver.onProcessEnded`.
+   */
+  onProcessEnded(): AgentEvent[] {
+    this.clearInterrupt();
+    return this.dropped(this.queuedFollowUps.splice(0));
   }
 
   /** Forget an interrupt in flight — confirmed, or overtaken by a Stop. */
@@ -2160,20 +2309,29 @@ export class AcpTurnDriver {
     }
   }
 
-  /**
-   * Close every tool call the stopped prompt left open — see
-   * {@link openToolCalls} for why everything open is that prompt's.
-   */
-  private closeInterruptedToolCalls(): AgentEvent[] {
-    const events: AgentEvent[] = [];
-    for (const id of this.openToolCalls) {
-      events.push({
+  /** A parent request stopping is not a report about its delegate's outcome. */
+  private cutOffToolCall(id: string, result: string): AgentEvent[] {
+    const delegate = this.session.delegateToolCalls.has(id);
+    const events: AgentEvent[] = [
+      {
         type: 'tool_result',
         id,
         name: this.session.toolNames.get(id) ?? null,
-        result: INTERRUPTED_TOOL_RESULT,
-        isError: true,
-      });
+        result: delegate ? null : result,
+        isError: !delegate,
+      },
+    ];
+    if (delegate) {
+      events.push(this.session.closeCutOffDelegate(id));
+    }
+    return events;
+  }
+
+  /** Close the calls the stopped prompt left open. */
+  private closeInterruptedToolCalls(): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    for (const id of this.openToolCalls) {
+      events.push(...this.cutOffToolCall(id, INTERRUPTED_TOOL_RESULT));
     }
     this.openToolCalls.clear();
     return events;
@@ -2238,6 +2396,33 @@ export class AcpTurnDriver {
     }
     events.push(...this.flushPending());
     return true;
+  }
+
+  /**
+   * Send what waited behind the cancel. A send that fails reports its messages
+   * dropped AHEAD of the error it ends the turn with: anything after a
+   * terminal reaches the owner as off-turn work, after the run has settled.
+   */
+  private sendQueuedFollowUps(): AgentEvent[] {
+    const waiting = this.queuedFollowUps.splice(0);
+    const events: AgentEvent[] = [];
+    return this.sendFollowUpPrompt(waiting, events)
+      ? events
+      : [...this.dropped(waiting), ...events];
+  }
+
+  /**
+   * Report accepted follow-ups that will never reach the agent. Their owner
+   * wrote each row when {@link sendFollowUp} answered true, so without this the
+   * transcript shows them as sent.
+   */
+  private dropped(messages: readonly FollowUpMessage[]): AgentEvent[] {
+    const deliveryIds = messages.flatMap((message) =>
+      message.deliveryId === undefined ? [] : [message.deliveryId],
+    );
+    return deliveryIds.length === 0
+      ? []
+      : [{ type: 'follow_up_dropped', deliveryIds }];
   }
 
   /**
@@ -2375,9 +2560,9 @@ export class AcpTurnDriver {
   ): AgentEvent[] {
     // Only the frame the queue is waiting on has anything to rescue — the
     // frames behind it and, until the queue drains, the prompt. Once the prompt
-    // has gone out (it follows the last frame down the pipe unless that frame
-    // blocks it) the turn has run on regardless of what this reply would have
-    // said.
+    // has gone out (it follows the last frame down the pipe unless the agent
+    // asks it to wait, `promptAwaitsConfig`) the turn has run on regardless of
+    // what this reply would have said.
     //
     // Speaking anyway is worse than silence: an event emitted once the turn has
     // settled reaches the off-turn handler, which reads a `notice` as the run
@@ -2430,10 +2615,10 @@ export class AcpTurnDriver {
   /**
    * Put the turn on the model it asked for, before the prompt goes out.
    *
-   * Sent rather than awaited, exactly as `session/set_mode` above is: the
-   * frames leave on one ordered stdio stream, so the agent applies the model
-   * before it reads the prompt. Waiting for the reply would cost a round-trip
-   * on every turn to learn something the ordering already guarantees.
+   * Queued ahead of its parameters (`configSteps`), with the prompt behind the
+   * last of them — pipelined, unless the agent binds its settings when the
+   * prompt arrives ({@link AcpSessionOptions.promptAwaitsConfig}); then the
+   * prompt waits for this frame's reply when it is the last one.
    *
    * A turn that names no model is left alone — the agent's own default is the
    * right answer, and forcing the id it just reported as current would spend a
@@ -2610,9 +2795,6 @@ export class AcpTurnDriver {
       return;
     }
     for (const parameter of parameters) {
-      if (parameter.applyBeforePrompt) {
-        this.configBlocksPrompt = true;
-      }
       this.configSteps.push({
         send: (events) => {
           // Read at SEND time: by then the model frame ahead of this one has
@@ -2636,6 +2818,13 @@ export class AcpTurnDriver {
           ) {
             return null;
           }
+          if (
+            this.session.options.skipUnchangedParameters === true &&
+            readAcpConfigOption(describing, configId)?.currentValue ===
+              parameter.value
+          ) {
+            return null;
+          }
           this.requestedParameter = `${configId}=${parameter.value}`;
           return this.session.sendRequest(
             ACP_AGENT_METHODS.sessionSetConfigOption,
@@ -2650,13 +2839,20 @@ export class AcpTurnDriver {
 
   /**
    * The option list that describes the model this turn's parameters land on,
-   * or null when none on hand does: the model frame's own reply when it listed
-   * options, else the session reply when the turn is not switching models.
+   * or null when none on hand does. Agents that compare current values use
+   * the latest reply, including parameter replies and earlier live turns.
    */
   private optionsDescribingTurnModel(
     sessionResult: unknown,
     describesTurnModel: boolean,
   ): unknown {
+    if (this.session.options.skipUnchangedParameters === true) {
+      // Only a confirmed model reply can replace the old model's list during
+      // a switch. After that, each parameter reply is the newest snapshot.
+      return describesTurnModel || this.modelReply !== null
+        ? this.session.lastConfigReply
+        : null;
+    }
     if (readAcpConfigOptions(this.modelReply).length > 0) {
       return this.modelReply;
     }
@@ -2965,10 +3161,11 @@ export class AcpTurnDriver {
       return this.flushPending();
     }
     // The turn's own last prompt has answered. A mid-turn message still
-    // waiting here was overtaken by a Stop, which ends the turn it was for.
+    // waiting here was overtaken by a Stop, which ends the turn it was for —
+    // reported, since its row already reads as sent.
     this.promptOutstanding = false;
     this.clearInterrupt();
-    this.queuedFollowUps.length = 0;
+    const dropped = this.dropped(this.queuedFollowUps.splice(0));
     const root = asRecord(result);
     const rawStopReason = root ? asString(root.stopReason) : null;
     const stopReason = (ACP_STOP_REASONS as readonly string[]).includes(
@@ -2982,7 +3179,7 @@ export class AcpTurnDriver {
       // final answer downstream nodes would then consume. What the user
       // ALREADY SAW is a different question: the open block is still written,
       // so cancelling does not erase the words that reached the screen.
-      return [...this.flushPending(), { type: 'turn_cancelled' }];
+      return [...this.flushPending(), ...dropped, { type: 'turn_cancelled' }];
     }
 
     if (this.agentFailure !== null) {
@@ -2999,7 +3196,7 @@ export class AcpTurnDriver {
       // transport error as this node's output.
       const message = this.agentFailure;
       this.agentFailure = null;
-      const events: AgentEvent[] = [...this.flushPending()];
+      const events: AgentEvent[] = [...this.flushPending(), ...dropped];
       // Whatever the request left open, the agent will never close — whether
       // the turn is resumed or ends here.
       const stillRunning = this.settleCutOffToolCalls(events);
@@ -3015,7 +3212,7 @@ export class AcpTurnDriver {
     }
     // The prompt is over, so the last block has no more chunks coming — this
     // is the ONLY close for a reply that ended without a tool call after it.
-    const events: AgentEvent[] = [...this.flushPending()];
+    const events: AgentEvent[] = [...this.flushPending(), ...dropped];
     if (this.holdForDelegates(rawStopReason, events)) {
       return events;
     }
@@ -3090,6 +3287,9 @@ export class AcpTurnDriver {
       severity: 'info',
       message: `Waiting for ${out} background sub-agent${out === 1 ? '' : 's'} to finish — the agent is told when ${out === 1 ? 'it does' : 'they do'}, and this turn ends on its answer.`,
     });
+    // The same fact spawn-cli announces for its own holds: the reply is over,
+    // so the composer sends a message straight in, which ends this hold.
+    events.push({ type: 'turn_held', open: out });
     this.session.awaitDelegates(() => this.onDelegatesEnded());
     this.armHoldTimer();
     return true;
@@ -3110,7 +3310,10 @@ export class AcpTurnDriver {
     }
     // Something moved, so the idle bound starts over.
     this.armHoldTimer();
-    if (this.session.watchedDelegatesOut(this.launchedHere) > 0) {
+    const remaining = this.session.watchedDelegatesOut(this.launchedHere);
+    if (remaining > 0) {
+      // Still held, by fewer: re-announced so the badge counts down.
+      this.session.emit({ type: 'turn_held', open: remaining });
       return;
     }
     this.endHold();
@@ -3197,6 +3400,7 @@ export class AcpTurnDriver {
   /** Leave the hold — the delegates ended, or a Stop or a message ended it. */
   private endHold(): void {
     this.awaitingDelegates = false;
+    this.session.emit({ type: 'turn_held', open: 0 });
     if (this.holdTimer !== null) {
       this.holdTimer.clear();
       this.holdTimer = null;
@@ -3358,8 +3562,7 @@ export class AcpTurnDriver {
    * cut off would draw a verifier that went on to finish as one that did not;
    * it is closed the way a background launch closes — its call answered, its
    * block left open — and its own record says when it is over. One that cannot
-   * be watched (no brief, no reader) is closed like any other step, since
-   * nothing would ever close it otherwise.
+   * be watched (no brief, no reader) is marked untracked.
    */
   private settleCutOffToolCalls(events: AgentEvent[]): string[] {
     const stillRunning: string[] = [];
@@ -3384,7 +3587,7 @@ export class AcpTurnDriver {
             result: null,
             isError: false,
           },
-          delegateCloseEvent(id, this.session.wireEndings.get(id) ?? null),
+          this.session.closeCutOffDelegate(id),
         );
         continue;
       }
@@ -3418,13 +3621,7 @@ export class AcpTurnDriver {
         );
         continue;
       }
-      events.push({
-        type: 'tool_result',
-        id,
-        name: this.session.toolNames.get(id) ?? null,
-        result: CUT_OFF_TOOL_RESULT,
-        isError: true,
-      });
+      events.push(...this.cutOffToolCall(id, CUT_OFF_TOOL_RESULT));
     }
     return stillRunning;
   }
@@ -3708,6 +3905,8 @@ export class AcpTurnDriver {
   }
 
   private buildUsage(): AgentUsage {
+    const statedContext =
+      this.usage.contextUsed ?? this.contextReading?.usedTokens ?? null;
     return {
       inputTokens: this.usage.inputTokens,
       outputTokens: this.usage.outputTokens,
@@ -3728,10 +3927,12 @@ export class AcpTurnDriver {
       // prompt of a single request, which is a different quantity that merely
       // beats nothing. Putting the reading here is what keeps the ring drawn
       // between turns rather than only during one; see {@link contextReading}.
-      contextTokens:
-        this.usage.contextUsed ??
-        this.contextReading?.usedTokens ??
-        this.usage.inputTokens,
+      contextTokens: statedContext ?? this.usage.inputTokens,
+      // The plain input count is geniro's stand-in for an occupancy nobody
+      // stated, so the meter says so.
+      ...(statedContext === null && this.usage.inputTokens !== null
+        ? { contextEstimated: true }
+        : {}),
       // The denominator comes from the off-protocol reading because no shipped
       // ACP agent here has been observed SENDING a window, not because the
       // protocol has none: `usage_update` defines `size` as required beside
@@ -3846,11 +4047,59 @@ export class AcpTurnDriver {
         `acp: ${method} arrived in an unrecognized shape — declined rather than recorded as a task list`,
       );
     }
-    // Everything else is a client capability we deliberately did not advertise
-    // (`fs/*`, `terminal/*`) or a vendor extension we don't implement. A
-    // blocking request MUST be answered or the agent parks forever, so refuse
-    // it in-protocol — and say so once, since a refused extension can change
-    // what the agent is able to do this turn.
+    const plan = todos?.plan;
+    if (plan !== undefined && method === plan.method) {
+      // READ, then declined like any other below — see `AcpTodoProtocol.plan`.
+      return [
+        ...this.onPlanRestated(method, plan.read(params)),
+        ...this.decline(id, method),
+      ];
+    }
+    return this.decline(id, method);
+  }
+
+  /**
+   * The plan an agent restated with its own ids, drawn in place of the `plan`
+   * update held for it — or that held update, when the restatement could not be
+   * read or named no tasks (cursor's `plan` update then carries one stand-in
+   * entry naming the plan, which is still worth a row).
+   */
+  private onPlanRestated(
+    method: string,
+    tasks: AgentTask[] | null,
+  ): AgentEvent[] {
+    if (tasks === null) {
+      this.session.options.logger?.warn(
+        `acp: ${method} arrived in an unrecognized shape — its plan is drawn from the plan update instead`,
+      );
+    }
+    const drawn = tasks !== null && tasks.length > 0 ? tasks : this.heldPlan;
+    this.heldPlan = null;
+    return drawn === null ? [] : [this.planEvent(drawn)];
+  }
+
+  /**
+   * A plan, announced as the agent's whole task list — ACP's own rule for the
+   * `plan` update ("the client MUST replace the current plan completely"), and
+   * true of a restatement for the same reason. No `toolCallId`: a list that
+   * names one is drawn INSTEAD of that tool's row, and the row a plan rides on
+   * (cursor's `Create Plan`) carries the plan's document, which the list does
+   * not.
+   */
+  private planEvent(tasks: AgentTask[]): AgentEvent {
+    return { type: 'task_list', mode: 'snapshot', tasks, toolCallId: null };
+  }
+
+  /**
+   * Refuse a request this client does not take.
+   *
+   * It is a client capability we deliberately did not advertise (`fs/*`,
+   * `terminal/*`) or a vendor extension we don't implement. A blocking request
+   * MUST be answered or the agent parks forever, so refuse it in-protocol — and
+   * say so once, since a refused extension can change what the agent is able
+   * to do this turn.
+   */
+  private decline(id: JsonRpcId, method: string): AgentEvent[] {
     if (
       !this.session.write(
         encodeError(
@@ -4078,12 +4327,17 @@ export class AcpTurnDriver {
 
     const encodedId = encodeRequestId(id);
     this.session.parkedPermissions.set(encodedId, options);
+    const remembering = acpApprovalOptions(
+      options,
+      this.session.options.alwaysAnswerScope,
+    );
     return [
       {
         type: 'approval_request',
         id: encodedId,
         toolName: toolCall.name,
         input: toolCall.rawInput,
+        ...(remembering.length > 0 ? { options: remembering } : {}),
       },
     ];
   }
@@ -4202,7 +4456,11 @@ export class AcpTurnDriver {
       }
       this.session.childSessions.set(spawn.childSessionId, launch);
       this.session.noteDelegateLaunch(launch);
-      return [];
+      return [
+        delegateDeclarationEvent(launch, {
+          subagentSessionId: spawn.childSessionId,
+        }),
+      ];
     }
     const end = readSubagentEnd(update);
     if (end === null) {
@@ -4679,9 +4937,30 @@ export class AcpTurnDriver {
         }
         return [];
       }
+      case 'plan': {
+        // The agent's plan — sent whatever capabilities the client declares
+        // (cursor-agent 2026.10.19 sends one from every CreatePlan, before its
+        // own `cursor/create_plan`). History during a replay, like any row.
+        if (this.replaying) {
+          return [];
+        }
+        const tasks = readAcpPlan(update.entries);
+        if (tasks === null) {
+          return [];
+        }
+        if (this.session.options.todos?.plan !== undefined) {
+          // The agent restates this plan with ids — see `AcpTodoProtocol.plan`.
+          this.heldPlan = tasks;
+          return [];
+        }
+        // A row, so the text before it is a finished block — the same close a
+        // tool call makes, without which the list would be written ahead of
+        // the words that introduced it.
+        return [...this.flushTextBlock(), this.planEvent(tasks)];
+      }
       default:
-        // plan/plan_update, config_option_update, session_info_update — all
-        // real ACP updates this transcript does not model.
+        // config_option_update, session_info_update — real ACP updates this
+        // transcript does not model.
         //
         // `session_info_update` carries a `title` and nothing else, and the
         // agent WRITES that same name into its own session store before

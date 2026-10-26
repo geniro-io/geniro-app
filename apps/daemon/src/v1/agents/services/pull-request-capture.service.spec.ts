@@ -21,11 +21,26 @@ import {
 } from '../utils/pull-request-capture';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
-import {
-  PULL_REQUEST_RESCAN_BUDGET_MS,
-  PullRequestCaptureService,
-} from './pull-request-capture.service';
+import type { ItemSeqAllocator } from './item-seq.allocator';
+import { PullRequestCaptureService } from './pull-request-capture.service';
 import type { SessionTranscriptsService } from './session-transcripts.service';
+
+// The boot sweep's pause between batches, held until a case releases it — a
+// real 50 ms timer would race the assertion on a loaded machine.
+const pauses = vi.hoisted(() => ({
+  held: false,
+  release: [] as (() => void)[],
+}));
+vi.mock('node:timers/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:timers/promises')>();
+  return {
+    ...real,
+    setTimeout: (ms?: number) =>
+      pauses.held
+        ? new Promise<void>((resolve) => pauses.release.push(resolve))
+        : real.setTimeout(ms),
+  };
+});
 
 // `fork` because the SETTLE path takes its own context — the listing runs
 // inside the request's, this one has no request to borrow. The daos are
@@ -87,28 +102,57 @@ function result(
  * count is the only way to say that.
  */
 function daos(rows: Row[]) {
-  const counts = { max: 0, candidates: 0, placed: 0 };
+  const counts = {
+    max: 0,
+    candidates: 0,
+    placed: 0,
+    /** Each `(afterSeq, throughSeq]` the thread was read over for a pull request. */
+    named: [] as [number, number][],
+  };
   const itemDao = {
     maxSeq: async () => {
       counts.max += 1;
       return rows.reduce((top, row) => Math.max(top, row.seq), -1);
     },
-    pullRequestCandidates: async (_runId: string, afterSeq: number) => {
+    pullRequestCandidates: async (
+      _runId: string,
+      afterSeq: number,
+      _em?: unknown,
+      throughSeq = Number.POSITIVE_INFINITY,
+    ) => {
       counts.candidates += 1;
       return rows.filter(
         (row) =>
           row.kind === 'tool_result' &&
           row.seq > afterSeq &&
+          row.seq <= throughSeq &&
           row.payload.includes('/pull/'),
       ) as unknown as Pick<Item, 'seq' | 'payload'>[];
     },
-    findToolCallPair: async (_runId: string, callId: string) => ({
-      call:
-        (rows.find(
-          (row) => row.kind === 'tool_call' && row.payload.includes(callId),
-        ) as unknown as Item) ?? null,
-      result: null,
-    }),
+    // Exact id, seq order and the optional range, as the real DAO answers —
+    // pinned against it in item.dao.spec.ts.
+    rowsByPayloadId: async (
+      _runId: string,
+      kinds: readonly string[],
+      ids: readonly string[],
+      range?: { before: number } | { after: number },
+    ) =>
+      rows.filter((row) => {
+        if (
+          range !== undefined &&
+          ('before' in range ? row.seq >= range.before : row.seq <= range.after)
+        ) {
+          return false;
+        }
+        try {
+          return (
+            kinds.includes(row.kind) &&
+            ids.includes((JSON.parse(row.payload) as { id: string }).id)
+          );
+        } catch {
+          return false;
+        }
+      }) as unknown as Item[],
     // Where a CLI's own record lands: the newest tool result written at or
     // before its time, else the oldest after — the real DAO's answer, pinned in
     // item.dao.spec.ts.
@@ -139,6 +183,20 @@ function daos(rows: Row[]) {
             : [[seq, row.createdAt ?? WRITTEN_AT] as const];
         }),
       ),
+    // Every row in `(afterSeq, throughSeq]` as a candidate: the real DAO only
+    // narrows them (pinned in item.dao.spec.ts), and the service's own
+    // `textNamesPullRequest` decides, so it runs here as in production.
+    pullRequestNamingCandidates: async (
+      _runId: string,
+      _pullRequest: unknown,
+      afterSeq: number,
+      throughSeq: number,
+    ) => {
+      counts.named.push([afterSeq, throughSeq]);
+      return rows
+        .filter((row) => row.seq > afterSeq && row.seq <= throughSeq)
+        .map((row) => row.payload);
+    },
   } as unknown as ItemDao;
   return { itemDao, counts };
 }
@@ -197,6 +255,7 @@ function settleDeps(): {
     runId: string;
     item: { nodeId: string | null; kind: string };
   }) => void)[];
+  deleted: ((runId: string) => void)[];
 } {
   const published: unknown[] = [];
   const captured: PullRequestsCapturedEvent[] = [];
@@ -204,6 +263,7 @@ function settleDeps(): {
     runId: string;
     item: { nodeId: string | null; kind: string };
   }) => void)[] = [];
+  const deleted: ((runId: string) => void)[] = [];
   const bus = {
     all: () => ({
       subscribe: (fn: (event: never) => void) => {
@@ -211,11 +271,17 @@ function settleDeps(): {
         return { unsubscribe: () => undefined };
       },
     }),
+    allDeleted: () => ({
+      subscribe: (fn: (runId: string) => void) => {
+        deleted.push(fn);
+        return { unsubscribe: () => undefined };
+      },
+    }),
     publishRunStatus: (status: unknown) => published.push(status),
     publishPullRequestsCaptured: (event: PullRequestsCapturedEvent) =>
       captured.push(event),
   } as unknown as AgentEventBus;
-  return { em: em, bus, published, captured, listeners };
+  return { em: em, bus, published, captured, listeners, deleted };
 }
 
 /**
@@ -254,8 +320,13 @@ function sessionRecords(
       },
     }),
   } as unknown as AgentAdapterRegistry;
-  return { deps: [sessionTranscripts, adapters] as const, asked };
+  return { deps: [sessionTranscripts, adapters, allWritten] as const, asked };
 }
+
+/** A seq allocator with nothing reserved and unwritten. */
+const allWritten = {
+  writtenThrough: (_runId: string, maxSeq: number) => maxSeq,
+} as unknown as ItemSeqAllocator;
 
 /** `acme/platform#<number>` as a conversation's record names it. */
 function touchedRecord(number: number, at: string | null): SessionPullRequest {
@@ -501,7 +572,7 @@ describe('PullRequestCaptureService', () => {
       const { itemDao } = daos([
         call(1, 'toolu_1', 'gh pr checkout 7', '2026-10-13T20:36:00.000Z'),
         result(2, 'toolu_1', 'ok', '2026-10-13T20:36:40.000Z'),
-        call(3, 'toolu_2', 'ls', '2026-10-13T20:38:00.000Z'),
+        call(3, 'toolu_2', 'gh pr checkout 8', '2026-10-13T20:38:00.000Z'),
         result(4, 'toolu_2', 'a', '2026-10-13T20:38:01.000Z'),
       ]);
       const { dao, writes } = runDao();
@@ -624,13 +695,21 @@ describe('PullRequestCaptureService', () => {
         runId: 'run-1',
         status: null,
         pullRequests: [
-          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: CREATED,
+            seq: 2,
+            opened: true,
+          },
           {
             owner: 'acme',
             repo: 'platform',
             number: 6841,
             url: 'https://github.com/acme/platform/pull/6841',
             seq: 4,
+            opened: false,
           },
         ],
       },
@@ -669,6 +748,7 @@ describe('PullRequestCaptureService', () => {
             number: 6841,
             url: 'https://github.com/acme/platform/pull/6841',
             seq: 2,
+            opened: false,
           },
         ],
       },
@@ -751,6 +831,214 @@ describe('PullRequestCaptureService', () => {
     expect(readRunPullRequests(writes[0]?.touchedPullRequests ?? null)).toEqual(
       [carried],
     );
+  });
+
+  it('keeps only the touched pull requests the thread itself names, never one claude read off the branch its folder had checked out', async () => {
+    // A workflow node pushes a worktree's branch with `git -C`, from a shared
+    // checkout that sits on ANOTHER pull request's head branch. claude 2.1.295
+    // answers every push with `gh pr view --json url` in its own folder, so its
+    // record names that other pull request (#7207) — which nothing in this
+    // thread mentions. The pull request the thread was sent to review (#6502)
+    // is named in its transcript and stays.
+    const { itemDao } = daos([
+      result(
+        1,
+        'toolu_0',
+        'Review PR https://github.com/acme/platform/pull/6502 and give me visuals',
+        '2026-10-22T09:50:00.000Z',
+      ),
+      call(
+        2,
+        'toolu_1',
+        'git -C "$WT" push origin "$REFSPEC"',
+        '2026-10-22T09:54:00.000Z',
+      ),
+      result(
+        3,
+        'toolu_1',
+        'To github.com:acme/platform.git\n * [new branch]  assets/pr-6502',
+        '2026-10-22T09:54:05.000Z',
+      ),
+    ]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...sessionRecords([
+        touchedRecord(6502, '2026-10-22T09:51:00.000Z'),
+        touchedRecord(7207, '2026-10-22T09:54:06.358Z'),
+      ]).deps,
+    ).sync([chatRun()], em);
+
+    expect(
+      readRunPullRequests(writes[0]?.touchedPullRequests ?? null).map(
+        (row) => row.number,
+      ),
+    ).toEqual([6502]);
+  });
+
+  it('reads the thread again for a record it left unnamed only over the rows written since, and keeps it once they name it', async () => {
+    const rows = [
+      call(1, 'toolu_1', 'git -C "$WT" push', '2026-10-22T09:54:00.000Z'),
+      result(2, 'toolu_1', 'Everything up-to-date', '2026-10-22T09:54:05.000Z'),
+    ];
+    const { itemDao, counts } = daos(rows);
+    const { dao, writes } = runDao();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...sessionRecords([touchedRecord(7207, '2026-10-22T09:54:06.000Z')]).deps,
+    );
+    const run = chatRun();
+
+    await service.sync([run], em);
+    rows.push(
+      call(
+        3,
+        'toolu_2',
+        'gh pr view 7207 --json url',
+        '2026-10-22T10:00:00.000Z',
+      ),
+      result(4, 'toolu_2', 'ok', '2026-10-22T10:00:01.000Z'),
+    );
+    await service.sync([run], em);
+
+    expect(writes[0]?.touchedPullRequests).toBeNull();
+    expect(counts.named).toEqual([
+      [-1, 2],
+      [2, 4],
+    ]);
+    expect(
+      readRunPullRequests(writes[1]?.touchedPullRequests ?? null).map(
+        (row) => row.number,
+      ),
+    ).toEqual([7207]);
+  });
+
+  it('keeps a touched pull request it carried from an older rule when the thread names it', async () => {
+    const { itemDao } = daos([
+      call(
+        1,
+        'toolu_1',
+        'gh pr view 7207 --json url',
+        '2026-10-22T09:54:00.000Z',
+      ),
+      result(2, 'toolu_1', 'ok', '2026-10-22T09:54:05.000Z'),
+    ]);
+    const { dao, writes } = runDao();
+    const carried = {
+      owner: 'acme',
+      repo: 'platform',
+      number: 7207,
+      url: 'https://github.com/acme/platform/pull/7207',
+      seq: 2,
+    };
+    const run = chatRun({
+      pullRequestsScannedSeq: 2,
+      pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION - 1,
+      touchedPullRequests: JSON.stringify([carried]),
+    });
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () =>
+          run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION
+            ? []
+            : [run],
+      }),
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+
+    await service.rescanOutdatedQuietly();
+
+    expect(readRunPullRequests(writes[0]?.touchedPullRequests ?? null)).toEqual(
+      [carried],
+    );
+  });
+
+  it('announces the emptied list when a rescan drops the only pull request a run showed', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'git -C "$WT" push', '2026-10-22T09:54:00.000Z'),
+      result(2, 'toolu_1', 'Everything up-to-date', '2026-10-22T09:54:05.000Z'),
+    ]);
+    const { dao } = runDao();
+    const deps = settleDeps();
+    const run = chatRun({
+      pullRequestsScannedSeq: 2,
+      pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION - 1,
+      touchedPullRequests: JSON.stringify([
+        {
+          owner: 'acme',
+          repo: 'platform',
+          number: 7207,
+          url: 'https://github.com/acme/platform/pull/7207',
+          seq: 2,
+        },
+      ]),
+    });
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () =>
+          run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION
+            ? []
+            : [run],
+      }),
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+
+    await service.rescanOutdatedQuietly();
+
+    expect(deps.published).toEqual([
+      { runId: 'run-1', status: null, pullRequests: [] },
+    ]);
+  });
+
+  it('drops a touched pull request it carried from an older rule when the thread never names it', async () => {
+    // The rows a rescan finds already stored: records taken before the thread
+    // was checked for naming them must not outlive the rule that rejects them.
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'git -C "$WT" push', '2026-10-22T09:54:00.000Z'),
+      result(2, 'toolu_1', 'Everything up-to-date', '2026-10-22T09:54:05.000Z'),
+    ]);
+    const { dao, writes } = runDao();
+    const carried = {
+      owner: 'acme',
+      repo: 'platform',
+      number: 7207,
+      url: 'https://github.com/acme/platform/pull/7207',
+      seq: 2,
+    };
+    const run = chatRun({
+      pullRequestsScannedSeq: 2,
+      pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION - 1,
+      touchedPullRequests: JSON.stringify([carried]),
+    });
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () =>
+          run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION
+            ? []
+            : [run],
+      }),
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+
+    await service.rescanOutdatedQuietly();
+
+    expect(writes[0]?.touchedPullRequests).toBeNull();
   });
 
   it('still captures the transcript when the conversations cannot be listed', async () => {
@@ -847,7 +1135,7 @@ describe('PullRequestCaptureService', () => {
     expect(writes).toEqual([]);
   });
 
-  it('reads a run scanned under an older capture rule again from the start, once', async () => {
+  it('re-reads a run scanned under an older capture rule from the start on the boot sweep, once', async () => {
     const { itemDao, counts } = daos([
       call(1, 'toolu_1', 'URL=$(gh pr create --fill); echo "url=$URL"'),
       result(2, 'toolu_1', `url=${CREATED}`),
@@ -865,17 +1153,22 @@ describe('PullRequestCaptureService', () => {
       pullRequestsScanVersion: null,
       pullRequests: JSON.stringify([carried]),
     });
+    const outdated = vi.fn(async () =>
+      run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION ? [] : [run],
+    );
+    const deps = settleDeps();
     const service = new PullRequestCaptureService(
       itemDao,
-      dao,
-      settleDeps().em,
-      settleDeps().bus,
+      Object.assign(dao, { listOutdatedPullRequestScans: outdated }),
+      deps.em,
+      deps.bus,
       ...noSessionRecords(),
     );
 
-    await service.sync([run], em);
-    await service.sync([run], em);
+    await service.rescanOutdatedQuietly();
+    await service.rescanOutdatedQuietly();
 
+    expect(outdated).toHaveBeenCalledWith(PULL_REQUEST_SCAN_VERSION, em);
     expect(counts.candidates).toBe(1);
     expect(writes).toHaveLength(1);
     expect(writes[0]?.pullRequestsScanVersion).toBe(PULL_REQUEST_SCAN_VERSION);
@@ -884,48 +1177,416 @@ describe('PullRequestCaptureService', () => {
         (row) => `${row.repo}#${row.number}`,
       ),
     ).toEqual(['api#5', 'platform#87']);
+    expect(deps.published).toHaveLength(1);
   });
 
-  it('re-reads outdated runs on a listing only until its budget is spent', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
+  it('never re-reads an outdated run from the start on a listing', async () => {
+    // A re-read announces what it finds; only the boot sweep and a turn's end
+    // may re-read, never a listing.
+    const { itemDao, counts } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const { dao, writes } = runDao();
+    const deps = settleDeps();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    ).sync(
+      [chatRun({ pullRequestsScannedSeq: 2, pullRequestsScanVersion: 1 })],
+      em,
+    );
+
+    expect(counts.candidates).toBe(0);
+    expect(writes).toEqual([]);
+    expect(deps.published).toEqual([]);
+  });
+
+  it('carries an outdated run on from its marker on a listing, keeping its old rule', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'ls'),
+      result(2, 'toolu_1', 'a'),
+      call(3, 'toolu_2', 'gh pr create --fill'),
+      result(4, 'toolu_2', CREATED),
+    ]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    ).sync(
+      [chatRun({ pullRequestsScannedSeq: 2, pullRequestsScanVersion: 1 })],
+      em,
+    );
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.pullRequestsScannedSeq).toBe(4);
+    expect(writes[0]?.pullRequestsScanVersion).toBe(1);
+    expect(readRunPullRequests(writes[0]?.pullRequests ?? null)).toHaveLength(
+      1,
+    );
+  });
+
+  it('announces a run once when listings holding the same stale row reach it together or later', async () => {
+    // Each request reads its rows when it starts, so an overlapping listing
+    // holds a copy another pass has already moved on.
+    const { itemDao, counts } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const { dao, writes } = runDao();
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+    await Promise.all([
+      service.sync([chatRun()], em),
+      service.sync([chatRun()], em),
+    ]);
+    const later = chatRun();
+    await service.sync([later], em);
+
+    expect(deps.published).toHaveLength(1);
+    expect(writes).toHaveLength(1);
+    expect(counts.candidates).toBe(1);
+    // A later listing's stale copy projects what the first one captured.
+    expect(readRunPullRequests(later.pullRequests)).toHaveLength(1);
+  });
+
+  it('remembers nothing for a run deleted while its pass was writing', async () => {
+    const { itemDao, counts } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    let landWrite: () => void = () => undefined;
+    const dao = {
+      updateWithoutActivity: () =>
+        new Promise<number>((resolve) => {
+          landWrite = () => resolve(1);
+        }),
+    } as unknown as RunDao;
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+    service.onModuleInit();
+
+    const pass = service.sync([chatRun()], em);
+    await new Promise((resolve) => setImmediate(resolve));
+    deps.deleted[0]?.('run-1');
+    landWrite();
+    await pass;
+    const later = service.sync([chatRun()], em);
+    await new Promise((resolve) => setImmediate(resolve));
+    landWrite();
+    await later;
+
+    expect(counts.candidates).toBe(2);
+  });
+
+  it('forgets what it wrote for a run once the run is deleted', async () => {
+    const { itemDao, counts } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const { dao } = runDao();
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+    service.onModuleInit();
+    await service.sync([chatRun()], em);
+
+    deps.deleted[0]?.('run-1');
+    // A stale copy is read on its own terms again: nothing remembered stands in.
+    await service.sync([chatRun()], em);
+
+    expect(counts.candidates).toBe(2);
+  });
+
+  it('pauses between batches of the boot sweep', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const { dao, writes } = runDao();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () =>
+          Array.from({ length: 6 }, (_, i) =>
+            chatRun({ id: `run-${i}`, pullRequestsScanVersion: null }),
+          ),
+      }),
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+    pauses.held = true;
     try {
-      const base = daos([
-        call(1, 'toolu_1', 'gh pr create --fill'),
-        result(2, 'toolu_1', CREATED),
-      ]).itemDao;
-      const scannedFrom: number[] = [];
-      const itemDao = {
-        ...base,
-        // Each run's first read takes longer than the whole budget.
-        maxSeq: async () => {
-          vi.setSystemTime(Date.now() + PULL_REQUEST_RESCAN_BUDGET_MS + 1);
-          return 2;
-        },
-        pullRequestCandidates: async (runId: string, afterSeq: number) => {
-          scannedFrom.push(afterSeq);
-          return base.pullRequestCandidates(runId, afterSeq);
-        },
-      } as unknown as ItemDao;
-      const { dao, writes } = runDao();
-      const outdated = (id: string) =>
-        chatRun({ id, pullRequestsScannedSeq: 1, pullRequestsScanVersion: 1 });
+      const done = service.rescanOutdatedQuietly();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(writes).toHaveLength(5);
+      expect(pauses.release).toHaveLength(1);
 
-      await new PullRequestCaptureService(
-        itemDao,
-        dao,
-        settleDeps().em,
-        settleDeps().bus,
-        ...noSessionRecords(),
-      ).sync([outdated('run-1'), outdated('run-2')], em);
-
-      expect(scannedFrom).toEqual([-1, 1]);
-      expect(writes.map((write) => write.pullRequestsScanVersion)).toEqual([
-        PULL_REQUEST_SCAN_VERSION,
-        1,
-      ]);
+      pauses.release[0]?.();
+      await done;
+      expect(writes).toHaveLength(6);
     } finally {
-      vi.useRealTimers();
+      pauses.held = false;
+      pauses.release.length = 0;
     }
+  });
+
+  it('never moves its marker past a result whose row is reserved but not yet written', async () => {
+    // The `gh pr create` result at seq 2 is reserved while a later row (3) is
+    // already on disk; a marker at 3 would leave seq 2 unread for good.
+    const rows = [
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(3, 'toolu_9', 'done'),
+    ];
+    const { itemDao } = daos(rows);
+    const { dao, writes } = runDao();
+    let reservedAt2 = true;
+    const seqs = {
+      writtenThrough: (_runId: string, maxSeq: number) =>
+        reservedAt2 ? Math.min(maxSeq, 1) : maxSeq,
+    } as unknown as ItemSeqAllocator;
+    const [sessionTranscripts, adapters] = sessionRecords([]).deps;
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      sessionTranscripts,
+      adapters,
+      seqs,
+    );
+    const run = chatRun();
+
+    await service.sync([run], em);
+    rows.push(result(2, 'toolu_1', CREATED));
+    reservedAt2 = false;
+    await service.sync([run], em);
+
+    expect(writes[0]?.pullRequestsScannedSeq).toBe(1);
+    expect(readRunPullRequests(run.pullRequests)).toHaveLength(1);
+  });
+
+  it('pairs each result with its own call by exact id, never one whose id merely contains it', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr view 87 --web'),
+      result(2, 'toolu_1', CREATED),
+      call(3, 'toolu_10', 'gh pr create --fill'),
+      result(4, 'toolu_10', 'https://github.com/acme/api/pull/9'),
+    ]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    ).sync([chatRun()], em);
+
+    expect(
+      readRunPullRequests(writes[0]?.pullRequests ?? null).map(
+        (row) => `${row.repo}#${row.number}`,
+      ),
+    ).toEqual(['api#9']);
+  });
+
+  it('captures a result whose call was written before the marker', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    ).sync([chatRun({ pullRequestsScannedSeq: 1 })], em);
+
+    expect(readRunPullRequests(writes[0]?.pullRequests ?? null)).toHaveLength(
+      1,
+    );
+  });
+
+  it('reads a long history in windows, and misses nothing across their edges', async () => {
+    const { itemDao, counts } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      // The last seq of the first window, and the first of the second.
+      result(1_999, 'toolu_1', CREATED),
+      call(1_998, 'toolu_2', 'gh pr create --fill'),
+      result(2_000, 'toolu_2', 'https://github.com/acme/api/pull/9'),
+      call(4_500, 'toolu_3', 'gh pr create --fill'),
+      result(4_501, 'toolu_3', 'https://github.com/acme/web/pull/3'),
+    ]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    ).sync([chatRun()], em);
+
+    expect(counts.candidates).toBe(3);
+    expect(
+      readRunPullRequests(writes[0]?.pullRequests ?? null).map(
+        (row) => `${row.repo}#${row.number}`,
+      ),
+    ).toEqual(['platform#87', 'api#9', 'web#3']);
+  });
+
+  it('marks a run with nothing to read as read under the current rule', async () => {
+    const { itemDao } = daos([]);
+    const { dao, writes } = runDao();
+    const run = chatRun({
+      pullRequestsScanVersion: null,
+      touchedPullRequests: null,
+    });
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () =>
+          run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION
+            ? []
+            : [run],
+      }),
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+
+    await service.rescanOutdatedQuietly();
+    await service.rescanOutdatedQuietly();
+
+    expect(writes).toEqual([
+      {
+        pullRequests: null,
+        touchedPullRequests: null,
+        pullRequestsScannedSeq: -1,
+        pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION,
+      },
+    ]);
+  });
+
+  it('never throws out of the boot sweep when the outdated runs cannot be listed', async () => {
+    const { itemDao } = daos([]);
+    const { dao } = runDao();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () => {
+          throw new Error('database is locked');
+        },
+      }),
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+
+    await expect(service.rescanOutdatedQuietly()).resolves.toBeUndefined();
+  });
+
+  it('lets a listing answer at once while a slow pass over the same run is in flight', async () => {
+    const base = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]).itemDao;
+    let release: () => void = () => undefined;
+    const slow = {
+      ...base,
+      pullRequestCandidates: (
+        ...args: Parameters<ItemDao['pullRequestCandidates']>
+      ) =>
+        new Promise((resolve) => {
+          release = () => resolve(base.pullRequestCandidates(...args));
+        }),
+    } as unknown as ItemDao;
+    const { dao } = runDao();
+    const service = new PullRequestCaptureService(
+      slow,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () => [
+          chatRun({ pullRequestsScanVersion: null }),
+        ],
+      }),
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+
+    const sweep = service.rescanOutdatedQuietly();
+    await new Promise((resolve) => setImmediate(resolve));
+    const first = await Promise.race([
+      service.sync([chatRun()], em).then(() => 'listed'),
+      new Promise((resolve) => setImmediate(() => resolve('waited'))),
+    ]);
+
+    expect(first).toBe('listed');
+    release();
+    await sweep;
+  });
+
+  it('keeps sweeping the other outdated runs when one cannot be re-read', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const maxSeq = itemDao.maxSeq;
+    const flaky = {
+      ...itemDao,
+      maxSeq: async (runId: string) => {
+        if (runId === 'run-1') {
+          throw new Error('disk went away');
+        }
+        return maxSeq(runId);
+      },
+    } as unknown as ItemDao;
+    const { dao, writes } = runDao();
+    const service = new PullRequestCaptureService(
+      flaky,
+      Object.assign(dao, {
+        listOutdatedPullRequestScans: async () => [
+          chatRun({ pullRequestsScanVersion: null }),
+          chatRun({ id: 'run-2', pullRequestsScanVersion: null }),
+        ],
+      }),
+      settleDeps().em,
+      settleDeps().bus,
+      ...noSessionRecords(),
+    );
+
+    await expect(service.rescanOutdatedQuietly()).resolves.toBeUndefined();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.pullRequestsScanVersion).toBe(PULL_REQUEST_SCAN_VERSION);
   });
 
   it('keeps listing the other runs when one transcript cannot be read', async () => {
@@ -1268,15 +1929,22 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
         // read the run must not assert whether it is still going.
         status: null,
         pullRequests: [
-          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: CREATED,
+            seq: 2,
+            opened: true,
+          },
         ],
       },
     ]);
   });
 
   it('re-reads its run from the start when the run was scanned under an older rule', async () => {
-    // A listing re-reads such runs only within its budget; a turn's end is the
-    // run's own pass and always does.
+    // A listing never re-reads such runs; a turn's end is the run's own pass
+    // and does, like the boot sweep.
     const { itemDao } = daos([
       call(1, 'toolu_1', 'URL=$(gh pr create --fill); echo "url=$URL"'),
       result(2, 'toolu_1', `url=${CREATED}`),
@@ -1344,7 +2012,14 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
         runId: 'run-1',
         status: null,
         pullRequests: [
-          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: CREATED,
+            seq: 2,
+            opened: true,
+          },
         ],
       },
     ]);
@@ -1410,7 +2085,14 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
         runId: 'run-1',
         status: null,
         pullRequests: [
-          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: CREATED,
+            seq: 2,
+            opened: true,
+          },
         ],
       },
     ]);

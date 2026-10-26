@@ -51,7 +51,7 @@ ${
 A user-instruction change reaches every project that agent works in: recommend one only for a habit that does not belong to this repository, and never for an agent whose file \`path\` is null (it keeps none; the reason says where its rules live instead).`,
     `## Method
 
-1. Timeline. Read view=overview first. Note wall time, active time, time waiting on the user, the critical path, and the tokens and cost spent.
+1. Timeline. Read view=overview first. Note wall time, active time, time waiting on the user, the critical path, and the tokens and cost spent. \`estimatedCostUsd\` is the part of a cost geniro priced from token counts at list price, not the CLI's own bill.
 2. Critical path. Name the three spans that held it longest (view=spans kinds=["critical"]). Time off the critical path is not worth optimising first.
 3. Serial work. Find calls or steps that ran one after another with no data dependency, and nodes that sat idle while another worked.
 4. Loops. Same-intent re-calls, review↔fix ping-pong, retries, the same file read again and again, steps repeated after the goal was met.
@@ -76,6 +76,15 @@ Put each repo or user fix on the first rung that works:
 4. AGENTS.md / CLAUDE.md or the user's own file — only for a pointer to where something lives, or a rule that truly holds everywhere.
 
 Deleting a line is a fix too: prefer it whenever a line is a no-op or contradicts the code.`,
+    `## Two territories: process and domain
+
+Every item belongs to exactly one territory, named in \`territory\`, and keeps to it:
+- process — how the agents work: the commands they run, retries, the order they read things in, hand-offs between agents, the checks they run, parallelism, model and effort.
+- domain — knowledge, procedures and constraints of the work itself: facts about the project the thread worked on (its code, its product, its APIs, its conventions) and how a task in it is done correctly.
+
+A command or a check is filed by what it carries: one that exists only because of this project (its scripts, its invariants, a new check enforcing a fact about it) is domain; when, whether and in what order the agents run commands and checks is process.
+
+Never mix the two in one item: a process fix carries no project facts, and a domain item changes no way of working. When one root cause needs both, file two items, each with its own evidence. Look for both kinds — time is usually lost to process, mistakes often to missing domain knowledge.`,
     `## The bar for a recommendation
 
 Keep an item only if all four hold; when unsure, drop it:
@@ -96,7 +105,7 @@ Then stop. Change nothing until the user applies.`,
 A later message lists the items the user selected, in full. Apply exactly those and nothing else:
 ${
   workflow
-    ? `- Workflow items: read view=workflow, edit the JSON, and save it with \`${HOST_WORKFLOW_CHANGE_TOOL}\` passing the hash you read (dryRun first if unsure). Never write the workflow file yourself. If the save is refused because the hash changed, read it again and re-apply.\n`
+    ? `- Workflow items: read view=workflow, then save only your edits with \`${HOST_WORKFLOW_CHANGE_TOOL}\` passing the hash you read (dryRun first if unsure) — never re-send the whole workflow. Never write the workflow file yourself. If the save is refused because the hash changed, read it again and re-apply.\n`
     : ''
 }- Repo items: edit the files in your working folder with your own tools. Do not commit.
 - User items: edit exactly the file the item names — one listed under \`userInstructions\` — and nothing else outside your working folder.

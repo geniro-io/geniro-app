@@ -14,19 +14,30 @@ import { ZodResponse } from 'nestjs-zod';
 
 import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
 import {
+  CheckShareDestinationDto,
   CreateShareDto,
-  ProbeShareDestinationDto,
+  RevokeAllSharesDto,
   RevokeShareDto,
+  RevokeSharesDto,
+  ShareCheckResultDto,
   ShareConfigAckDto,
   ShareConfigDto,
   ShareCreatedDto,
   ShareLinkDto,
   ShareListDto,
   ShareListQueryDto,
-  ShareProbeResultDto,
+  ShareSignInSessionDto,
+  StartShareSignInDto,
 } from '../dto/shares.dto';
 import { ShareService } from '../services/share.service';
-import type { RevokeOutcome, Share } from '../shares.types';
+import { ShareSignInService } from '../services/share-sign-in.service';
+import type {
+  RevokeManyOutcome,
+  RevokeOutcome,
+  Share,
+  ShareCheckResult,
+  ShareSignInSession,
+} from '../shares.types';
 
 /**
  * Encrypted share links for artifacts. Desktop only: every route acts with the
@@ -38,7 +49,10 @@ import type { RevokeOutcome, Share } from '../shares.types';
 @ApiBearerAuth()
 @UseGuards(DesktopOnlyGuard)
 export class SharesController {
-  constructor(private readonly shares: ShareService) {}
+  constructor(
+    private readonly shares: ShareService,
+    private readonly signIns: ShareSignInService,
+  ) {}
 
   @Put('config')
   @ApiOperation({ operationId: 'setShareConfig' })
@@ -47,13 +61,32 @@ export class SharesController {
     return this.shares.setConfig(body);
   }
 
-  @Post('probe')
-  @ApiOperation({ operationId: 'probeShareDestination' })
-  @ZodResponse({ status: 201, type: ShareProbeResultDto })
-  probe(
-    @Body() body: ProbeShareDestinationDto,
-  ): Promise<{ ok: boolean; detail: string }> {
-    return this.shares.probe(body.destination);
+  @Post('check')
+  @ApiOperation({ operationId: 'checkShareDestination' })
+  @ZodResponse({ status: 201, type: ShareCheckResultDto })
+  check(@Body() body: CheckShareDestinationDto): Promise<ShareCheckResult> {
+    return this.shares.check(body.destination);
+  }
+
+  @Post('sign-in')
+  @ApiOperation({ operationId: 'startShareSignIn' })
+  @ZodResponse({ status: 201, type: ShareSignInSessionDto })
+  startSignIn(@Body() body: StartShareSignInDto): Promise<ShareSignInSession> {
+    return this.signIns.start(body.destinationId);
+  }
+
+  @Get('sign-in/:signInId')
+  @ApiOperation({ operationId: 'readShareSignIn' })
+  @ZodResponse({ status: 200, type: ShareSignInSessionDto })
+  signInStatus(@Param('signInId') signInId: string): ShareSignInSession {
+    return this.signIns.status(signInId);
+  }
+
+  @Delete('sign-in/:signInId')
+  @ApiOperation({ operationId: 'cancelShareSignIn' })
+  @ZodResponse({ status: 200, type: ShareSignInSessionDto })
+  cancelSignIn(@Param('signInId') signInId: string): ShareSignInSession {
+    return this.signIns.cancel(signInId);
   }
 
   @Get()
@@ -71,8 +104,17 @@ export class SharesController {
   @Post()
   @ApiOperation({ operationId: 'shareArtifact' })
   @ZodResponse({ status: 201, type: ShareCreatedDto })
-  share(@Body() body: CreateShareDto): Promise<{ share: Share; url: string }> {
+  share(
+    @Body() body: CreateShareDto,
+  ): Promise<{ share: Share; url: string | null }> {
     return this.shares.share({ ...body, by: 'user' });
+  }
+
+  @Post('revoke-all')
+  @ApiOperation({ operationId: 'revokeAllShares' })
+  @ZodResponse({ status: 201, type: RevokeAllSharesDto })
+  revokeAll(@Body() body: RevokeSharesDto): Promise<RevokeManyOutcome> {
+    return this.shares.revokeAll(body.shareIds);
   }
 
   @Get(':shareId/link')

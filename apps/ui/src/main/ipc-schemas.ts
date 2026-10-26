@@ -7,15 +7,18 @@ import {
   type CliKind,
   hasControlCharacters,
   HISTORY_PAGE_SIZES,
+  isReplyLanguage,
   MAX_AUTO_COMPACT_PERCENT,
   MAX_CONFIG_PROFILE_NAME,
   MAX_CONFIG_PROFILES,
   MAX_FAST_ACTION_NAME,
   MAX_FAST_ACTION_TEXT,
   MAX_FAST_ACTIONS,
+  MAX_KEPT_SESSION_IDLE_MINUTES,
   MAX_RUN_CONFIG_NAME,
   MAX_RUN_CONFIGS,
   MIN_AUTO_COMPACT_PERCENT,
+  MIN_KEPT_SESSION_IDLE_MINUTES,
   PROFILE_COLORS,
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_ROWS,
@@ -184,6 +187,12 @@ const objectPrefixSchema = z
 
 const bucketSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/);
 
+/** A custom destination's sign-in: login argv and the output that means "signed out". */
+export const shareSignInSchema = z.strictObject({
+  login: shareArgvSchema.optional(),
+  patterns: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+});
+
 const destinationBase = {
   id: z.string().min(1).max(64),
   name: z.string().trim().min(1).max(80),
@@ -229,15 +238,27 @@ export const shareDestinationSchema = z.discriminatedUnion('kind', [
     ...destinationBase,
     upload: shareArgvSchema,
     remove: shareArgvSchema,
+    signIn: shareSignInSchema.optional(),
   }),
 ]);
 
 export const MAX_SHARE_DESTINATIONS = 20;
 
+/** Twin of `MAX_AUTO_REVOKE_DAYS` in `apps/daemon/src/v1/shares/shares.types.ts`. */
+export const MAX_AUTO_REVOKE_DAYS = 3650;
+
+export const autoRevokeAfterDaysSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_AUTO_REVOKE_DAYS)
+  .nullable();
+
 export const sharingSchema = z.strictObject({
   destinations: z.array(shareDestinationSchema).max(MAX_SHARE_DESTINATIONS),
   defaultDestinationId: z.string().min(1).max(64).nullable(),
   agentsMayShare: z.boolean(),
+  autoRevokeAfterDays: autoRevokeAfterDaysSchema,
 });
 
 /**
@@ -339,6 +360,14 @@ export const settingsPatchSchema = z.strictObject({
   // ENUMERATED, like `theme`: a size outside the list is one the screen never
   // offered, and a file written by another build falls back to the default.
   historyPageSize: z.literal(HISTORY_PAGE_SIZES).optional(),
+  // Bounded to exactly what the daemon's `KeptSessionConfigSchema` accepts, so
+  // a value this side lets through is never one the push is refused for.
+  keptSessionIdleMinutes: z
+    .number()
+    .int()
+    .min(MIN_KEPT_SESSION_IDLE_MINUTES)
+    .max(MAX_KEPT_SESSION_IDLE_MINUTES)
+    .optional(),
   // Each CLI's own switches (`AdapterConfig.options` in the daemon), as
   // `{optionId: on}`. The ids are the CLI's, published on the capabilities
   // wire, so this side bounds them and enumerates none.
@@ -361,6 +390,14 @@ export const settingsPatchSchema = z.strictObject({
     .refine(
       (value) => !hasControlCharacters(value),
       'must not contain control characters',
+    )
+    .optional(),
+  // Checked for the same reason, against the daemon's own twin.
+  replyLanguage: z
+    .string()
+    .refine(
+      isReplyLanguage,
+      'must be one short line, without control, invisible or bidirectional characters',
     )
     .optional(),
   // ENUMERATED, unlike the CLI-vocabulary fields above, because this
@@ -603,7 +640,7 @@ export const artifactSaveSchema = z.strictObject({
  * tampered with cannot hand the window server a megabyte.
  */
 export const notificationSchema = z.strictObject({
-  kind: z.enum(['question', 'turn-end']),
+  kind: z.enum(['question', 'turn-end', 'share-sign-in']),
   runId: z.string().min(1).max(128),
   title: z.string().min(1).max(120),
   body: z.string().max(240),

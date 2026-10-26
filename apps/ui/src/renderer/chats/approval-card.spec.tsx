@@ -2397,3 +2397,169 @@ describe('ApprovalCard — hazardous-character warning', () => {
     });
   });
 });
+
+describe("ApprovalCard — the agent's remembering options", () => {
+  const SESSION = {
+    id: 'session',
+    label: 'Allow for this session',
+    allow: true,
+    scope: 'session',
+  };
+
+  it("warns on geniro's monitor that remembering covers every later command, and only there", () => {
+    const warning = 'Remembering this approves every command a monitor runs';
+    for (const toolName of [
+      'mcp__geniro-1a2b3c4d__monitor',
+      'geniro-1a2b3c4d-monitor: monitor',
+      // codex's name for a geniro call it cannot pin to one tool
+      'mcp__geniro-1a2b3c4d',
+    ]) {
+      const el = render(
+        <ApprovalCard
+          toolName={toolName}
+          input={{ command: 'gh run watch 1' }}
+          options={[SESSION]}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(el.textContent).toContain(warning);
+    }
+    const bash = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: 'npm test' }}
+        options={[SESSION]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(bash.textContent).not.toContain(warning);
+    const noRemember = render(
+      <ApprovalCard
+        toolName="mcp__geniro-1a2b3c4d__monitor"
+        input={{ command: 'gh run watch 1' }}
+        options={[]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(noRemember.textContent).not.toContain(warning);
+  });
+
+  it('draws each offered option between Approve and Deny, and sends its id when pressed', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: 'npm test' }}
+        options={[SESSION]}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    expect(
+      [...el.querySelectorAll('button')].map((button) => button.textContent),
+    ).toEqual(['Approve', 'Allow for this session', 'Deny']);
+
+    click(buttonNamed(el, 'Allow for this session'));
+    expect(onRespond).toHaveBeenLastCalledWith(
+      true,
+      undefined,
+      undefined,
+      'session',
+    );
+    // One-shot, like Approve: the card freezes until the verdict round-trips.
+    expect(el.textContent).toContain('Sending…');
+    expect(buttonNamed(el, 'Approve')).toBeUndefined();
+  });
+
+  it('keeps Approve a one-time answer that names no option', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: 'npm test' }}
+        options={[SESSION]}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    click(buttonNamed(el, 'Approve'));
+    expect(onRespond).toHaveBeenLastCalledWith(true);
+  });
+
+  it('says on a settled card how long the answer lasts', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: 'npm test' }}
+        options={[SESSION]}
+        verdict={true}
+        verdictOption="Allow for this session"
+        onRespond={() => {}}
+      />,
+    );
+    expect(el.textContent).toContain('✓ approved — Allow for this session');
+    expect(buttonNamed(el, 'Allow for this session')).toBeUndefined();
+  });
+
+  it('drops an option it cannot read rather than drawing a guessed one', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: 'npm test' }}
+        options={[
+          { ...SESSION, scope: 'forever' },
+          { ...SESSION, id: '' },
+          { ...SESSION, allow: 'yes' },
+          { ...SESSION, label: '   ' },
+          'junk',
+          { ...SESSION, id: 'always', label: 'Always allow', scope: 'always' },
+        ]}
+        verdict={null}
+        onRespond={() => {}}
+      />,
+    );
+    expect(
+      [...el.querySelectorAll('button')].map((button) => button.textContent),
+    ).toEqual(['Approve', 'Always allow', 'Deny']);
+  });
+
+  it('gates an allowing option on the hazard tick exactly as Approve', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: `rm -rf ${String.fromCodePoint(0x202e)}tmp` }}
+        options={[SESSION]}
+        verdict={null}
+        onRespond={() => {}}
+      />,
+    );
+    expect(buttonNamed(el, 'Approve').disabled).toBe(true);
+    expect(buttonNamed(el, 'Allow for this session').disabled).toBe(true);
+    expect(buttonNamed(el, 'Deny').disabled).toBe(false);
+  });
+
+  it('offers no options on a question card — a question is answered, not remembered', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        {...cardRow({
+          questions: [
+            {
+              question: 'Which?',
+              header: null,
+              options: [{ label: 'A' }, { label: 'B' }],
+              multiSelect: false,
+            },
+          ],
+        })}
+        options={[SESSION]}
+        verdict={null}
+        onRespond={() => {}}
+      />,
+    );
+    expect(buttonNamed(el, 'Allow for this session')).toBeUndefined();
+  });
+});

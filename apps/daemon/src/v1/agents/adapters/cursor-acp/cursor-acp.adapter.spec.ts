@@ -758,6 +758,45 @@ describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => 
     expect(methods).not.toContain('session/prompt');
     expect(child.kills).toBe(0);
   });
+
+  it('reports a follow-up waiting behind an unanswered cancel dropped when Stop falls back to killing the process', () => {
+    vi.useFakeTimers();
+    try {
+      const { spawn, child } = fakeSpawn();
+      const events: AgentEvent[] = [];
+      const session = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).startSession(BASE, { runScoped: true });
+      const handle = session.startTurn(BASE, (event) => events.push(event));
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(stdoutLine({ id: 2, result: { sessionId: 's' } }));
+      expect(
+        handle?.sendUserMessage({
+          text: 'do X instead',
+          deliveryId: 'delivery-1',
+        }),
+      ).toBe(true);
+
+      handle?.cancel();
+      vi.advanceTimersByTime(5_000);
+      expect(child.kills).toBeGreaterThan(0);
+      child.emit('close', null, 'SIGTERM');
+
+      const types = events.map((event) => event.type);
+      expect(events).toContainEqual({
+        type: 'follow_up_dropped',
+        deliveryIds: ['delivery-1'],
+      });
+      expect(types.indexOf('follow_up_dropped')).toBeLessThan(
+        types.indexOf('turn_cancelled'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('CursorAcpAdapter turn shaping', () => {
@@ -778,7 +817,7 @@ describe('CursorAcpAdapter turn shaping', () => {
       (frame) => frame.method === 'session/prompt',
     )?.params as { prompt: { text: string }[] };
     // The node role still leads the user's message; the host preamble sits
-    // ahead of both, per composeTurnInstructions' general → specific order.
+    // ahead of both, per turnInstructionParts' general → specific order.
     expect(prompt.prompt[0]?.text).toBe(
       `ship it\n\n${hostBlock(`${HOST_BLOCK}\n\nYou are a reviewer.`)}`,
     );
@@ -961,6 +1000,256 @@ describe('CursorAcpAdapter turn shaping', () => {
         .filter((frame) => frame.method === 'session/set_config_option')
         .map((frame) => (frame.params as { configId: string }).configId),
     ).toEqual(['effort']);
+  });
+
+  describe('the prompt waits for the LAST setting to be answered', () => {
+    // REPORTED from billing: a card run on `gpt-5.6-sol` with effort `high` was
+    // billed as `gpt-5.6-sol-medium` — that model's own default (probed on
+    // 2026.10.01-e373342: `thought_level/reasoning current=medium`, and a
+    // `reasoning=high` frame on its own is answered `current=high`). A card
+    // names no context window, so its effort was the LAST frame, and the
+    // prompt followed it down the pipe before cursor had applied it — the
+    // timing `context` was already measured to need. A chat that also sends a
+    // context window never showed it, because that frame held the prompt.
+    //
+    // Measured since by billing on the same build: a pipelined `reasoning=high`,
+    // `fast=false` AND a model switch were each lost on that turn, every reply
+    // confirming the new value. So the wait belongs to the CLI, not to a
+    // parameter, and it covers the model frame too.
+    const SESSION_ON_DEFAULT_MODEL = {
+      sessionId: 's',
+      configOptions: [
+        {
+          id: 'model',
+          category: 'model',
+          currentValue: 'auto-smart',
+          options: [
+            { value: 'gpt-5.6-sol' },
+            { value: 'grok-4.7' },
+            { value: 'auto-smart' },
+          ],
+        },
+      ],
+    };
+
+    /** A `session/set_config_option` reply listing a model's own options. */
+    function modelOptions(
+      options: {
+        id: string;
+        category: string;
+        current: string;
+        values: string[];
+      }[],
+    ): Record<string, unknown> {
+      return {
+        configOptions: options.map(({ id, category, current, values }) => ({
+          id,
+          category,
+          currentValue: current,
+          options: values.map((value) => ({ value, name: value })),
+        })),
+      };
+    }
+
+    const methodsOn = (child: FakeChild): unknown[] =>
+      framesOn(child).map((frame) => frame.method);
+
+    const settingsOn = (child: FakeChild): [string, string][] =>
+      framesOn(child)
+        .filter((frame) => frame.method === 'session/set_config_option')
+        .map((frame) => frame.params as { configId: string; value: string })
+        .map(({ configId, value }) => [configId, value]);
+
+    /** The id of the newest `set_config_option` frame on the wire. */
+    const lastSettingId = (child: FakeChild): unknown =>
+      framesOn(child)
+        .filter((frame) => frame.method === 'session/set_config_option')
+        .at(-1)?.id;
+
+    it('sends a resumed prompt at once when the load reply already reports the requested effort', () => {
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start(
+        { ...BASE, resumeSessionId: 's', model: 'gpt-5.6-sol', effort: 'high' },
+        () => {},
+      );
+      child.stdout.emitData(
+        stdoutLine({
+          id: 1,
+          result: {
+            protocolVersion: 1,
+            agentCapabilities: { loadSession: true },
+          },
+        }),
+      );
+      expect(methodsOn(child)).toContain('session/load');
+      child.stdout.emitData(
+        stdoutLine({
+          id: 2,
+          result: modelOptions([
+            {
+              id: 'model',
+              category: 'model',
+              current: 'gpt-5.6-sol',
+              values: ['gpt-5.6-sol'],
+            },
+            {
+              id: 'reasoning',
+              category: 'thought_level',
+              current: 'high',
+              values: ['medium', 'high'],
+            },
+          ]),
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([]);
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
+
+    it('holds a card’s prompt until its effort frame is answered', () => {
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start({ ...BASE, model: 'gpt-5.6-sol', effort: 'high' }, () => {});
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(
+        stdoutLine({ id: 2, result: SESSION_ON_DEFAULT_MODEL }),
+      );
+
+      // The model frame's reply is the Sol option list as cursor sends it.
+      child.stdout.emitData(
+        stdoutLine({
+          id: lastSettingId(child),
+          result: modelOptions([
+            {
+              id: 'context',
+              category: 'model_config',
+              current: '272k',
+              values: ['272k', '1m'],
+            },
+            {
+              id: 'reasoning',
+              category: 'thought_level',
+              current: 'medium',
+              values: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+            },
+            {
+              id: 'fast',
+              category: 'model_config',
+              current: 'false',
+              values: ['false', 'true'],
+            },
+          ]),
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([
+        ['model', 'gpt-5.6-sol'],
+        ['reasoning', 'high'],
+      ]);
+      // The effort is on the wire and unanswered: the prompt must not be.
+      expect(methodsOn(child)).not.toContain('session/prompt');
+
+      child.stdout.emitData(
+        stdoutLine({ id: lastSettingId(child), result: {} }),
+      );
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
+
+    it('holds the prompt behind a model setting too, when that is the last frame', () => {
+      // Grok runs as Fast unless told otherwise (`fast current=true`, probed),
+      // and a card asking `fast=false` is that setting's whole point — so it
+      // must land before the turn starts, for the same reason the effort must.
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start(
+        { ...BASE, model: 'grok-4.7', modelParameters: { fast: 'false' } },
+        () => {},
+      );
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(
+        stdoutLine({ id: 2, result: SESSION_ON_DEFAULT_MODEL }),
+      );
+      child.stdout.emitData(
+        stdoutLine({
+          id: lastSettingId(child),
+          result: modelOptions([
+            {
+              id: 'reasoning_effort',
+              category: 'thought_level',
+              current: 'high',
+              values: ['low', 'medium', 'high', 'xhigh'],
+            },
+            {
+              id: 'fast',
+              category: 'model_config',
+              current: 'true',
+              values: ['false', 'true'],
+            },
+          ]),
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([
+        ['model', 'grok-4.7'],
+        ['fast', 'false'],
+      ]);
+      expect(methodsOn(child)).not.toContain('session/prompt');
+
+      child.stdout.emitData(
+        stdoutLine({ id: lastSettingId(child), result: {} }),
+      );
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
+
+    it('holds the prompt behind a model switch that sets nothing else', () => {
+      // Measured by billing: a pipelined switch to `gpt-5.5` with no parameter
+      // ran on the session's old `gpt-5.6-sol`, though the reply confirmed the
+      // switch. The model frame is the LAST frame here, so it is the one the
+      // prompt waits on — the case a per-parameter flag could never reach.
+      const { spawn, child } = fakeSpawn();
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start({ ...BASE, model: 'gpt-5.5' }, () => {});
+      child.stdout.emitData(
+        stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+      );
+      child.stdout.emitData(
+        stdoutLine({
+          id: 2,
+          result: {
+            sessionId: 's',
+            configOptions: [
+              {
+                id: 'model',
+                category: 'model',
+                currentValue: 'gpt-5.6-sol',
+                options: [{ value: 'gpt-5.6-sol' }, { value: 'gpt-5.5' }],
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(settingsOn(child)).toEqual([['model', 'gpt-5.5']]);
+      expect(methodsOn(child)).not.toContain('session/prompt');
+
+      child.stdout.emitData(
+        stdoutLine({ id: lastSettingId(child), result: {} }),
+      );
+      expect(methodsOn(child)).toContain('session/prompt');
+    });
   });
 
   it('points the child at its OWN config dir, never the user’s ~/.cursor', () => {
@@ -1501,6 +1790,56 @@ describe('CursorAcpAdapter permission round-trip', () => {
       outcome: { outcome: 'selected', optionId: 'o-allow' },
     });
   });
+
+  it('offers "Allow always" as the session-long answer it is under geniro, and answers it with that option', () => {
+    // The options cursor-agent 2026.10.19 puts on every request it raises. Its
+    // "always" lands in the per-conversation profile geniro seeds, so the card
+    // must not promise more than one session.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, approvalMode: 'ask' }, (event) => events.push(event));
+    handshake(child);
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 8,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 's',
+          toolCall: { toolCallId: 't-2', title: '`touch a`', kind: 'execute' },
+          options: [
+            { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+            {
+              optionId: 'allow-always',
+              name: 'Allow always',
+              kind: 'allow_always',
+            },
+            { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+          ],
+        },
+      }),
+    );
+    const card = events.find((event) => event.type === 'approval_request');
+    const options = card?.type === 'approval_request' ? card.options : [];
+    expect(options).toEqual([
+      {
+        id: 'allow-always',
+        label: 'Allow for this session',
+        allow: true,
+        scope: 'session',
+      },
+    ]);
+
+    expect(handle.respondApproval('n:8', true, undefined, options?.[0])).toBe(
+      true,
+    );
+    expect(framesOn(child).find((frame) => frame.id === 8)?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'allow-always' },
+    });
+  });
 });
 
 describe('CursorAcpAdapter — no mid-turn user message', () => {
@@ -1633,6 +1972,12 @@ describe('CursorAcpAdapter — background sub-agents', () => {
         ),
         backgroundOpen: null,
         backgroundOutcome: null,
+        recovery: expect.objectContaining({
+          agentKind: 'cursor-agent',
+          sessionId: 's',
+          toolCallId: 'toolu_018bc',
+          launchedAtMs: expect.any(Number),
+        }),
       },
     ]);
     // AFTER the tool call it anchors to, so a consumer replaying in seq order
@@ -1705,6 +2050,11 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       stepsUnavailableReason: expect.stringContaining('not the work inside it'),
       backgroundOpen: null,
       backgroundOutcome: null,
+      recovery: expect.objectContaining({
+        agentKind: 'cursor-agent',
+        sessionId: 's',
+        toolCallId: 'toolu_018bc',
+      }),
     });
     // Answered, not declined. The refusal is what this whole feature was lost
     // behind: the agent discards the outcome either way, so a `-32601` cost the
@@ -2016,10 +2366,12 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       expect(events.some((event) => event.type === 'turn_complete')).toBe(
         false,
       );
-      expect(events.at(-1)).toMatchObject({
+      expect(events.at(-2)).toMatchObject({
         type: 'notice',
         message: expect.stringContaining('Waiting for 1 background sub-agent'),
       });
+      // Announced as a hold, so the composer sends a message straight in.
+      expect(events.at(-1)).toEqual({ type: 'turn_held', open: 1 });
       expect(wakes(child)).toEqual([]);
     });
 
@@ -2040,6 +2392,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
         expect(wakes(child)).toHaveLength(1);
       });
 
+      expect(events).toContainEqual({ type: 'turn_held', open: 0 });
       const text = wakeText(wakes(child)[0]);
       // What the delegate said, under its own description — the parent has no
       // other way to receive it — and where the rest of it can be read.
@@ -2107,7 +2460,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       ).toBe(false);
     });
 
-    it('hands a transcript to the delegate RESUMING it, and closes the cut-off one as stopped', async () => {
+    it('hands a transcript to the delegate RESUMING it, and closes the cut-off one as stopped with recovery off', async () => {
       // Run `bd1e43ae`: a reviewer cut off by a dropped stream never wrote
       // `turn_ended`, and its relaunch appended a new brief to its transcript.
       const { child, events } = launchInBackground();
@@ -2147,6 +2500,7 @@ ${RESUMED}
       expect(closes(events)[0]).toMatchObject({
         id: 'toolu_018bc',
         backgroundOutcome: 'stopped',
+        recovery: null,
       });
 
       // And the transcript's ending is now the continuation's.
@@ -2200,7 +2554,10 @@ ${RESUMED}
       await vi.advanceTimersByTimeAsync(5_000);
       endTurn(child);
 
+      expect(events.at(-1)).toEqual({ type: 'turn_held', open: 1 });
       expect(handle?.sendUserMessage({ text: 'status?' })).toBe(true);
+      // The hold is over the moment the message is written.
+      expect(events).toContainEqual({ type: 'turn_held', open: 0 });
       const sent = wakes(child);
       expect(sent).toHaveLength(1);
       expect(wakeText(sent[0])).toBe('status?');
@@ -2299,7 +2656,7 @@ ${RESUMED}
       ).toBeGreaterThanOrEqual(10_000);
     });
 
-    it('closes a delegate with nothing to find it by with the turn, claiming no outcome', () => {
+    it('marks a delegate with nothing to find it by untracked when its turn ends', () => {
       // No id and no brief: nothing can watch it, so the turn completing is the
       // last moment anything can be said — the behaviour every delegate had
       // before the reader.
@@ -2309,7 +2666,7 @@ ${RESUMED}
       expect(closes(events)).toEqual([
         expect.objectContaining({
           id: 'toolu_018bc',
-          backgroundOutcome: null,
+          backgroundOutcome: 'untracked',
         }),
       ]);
       const kinds = events.map((event) => event.type);
@@ -2331,7 +2688,7 @@ ${RESUMED}
 
       endTurn(child);
       expect(closes(events)).toEqual([
-        expect.objectContaining({ backgroundOutcome: null }),
+        expect.objectContaining({ backgroundOutcome: 'untracked' }),
       ]);
     });
 
@@ -2452,12 +2809,13 @@ ${RESUMED}
         expect(events.some((event) => event.type === 'turn_complete')).toBe(
           false,
         );
-        expect(events.at(-1)).toMatchObject({
+        expect(events.at(-2)).toMatchObject({
           type: 'notice',
           message: expect.stringContaining(
             'Waiting for 1 background sub-agent',
           ),
         });
+        expect(events.at(-1)).toEqual({ type: 'turn_held', open: 1 });
 
         // …and its report reaches the agent once its own record says it ended.
         writeTranscript('agent-wrap', [
@@ -2799,6 +3157,26 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
     );
   });
 
+  it('names the native child session on the recovery reference of its delegate', () => {
+    const { child, events } = start();
+    launch(child, false);
+
+    const info = events.filter(
+      (event) => event.type === 'subagent_info' && event.id === 'tool_A',
+    );
+    expect(info.length).toBeGreaterThan(0);
+    for (const event of info) {
+      expect(event).toMatchObject({
+        recovery: {
+          agentKind: 'cursor-agent',
+          sessionId: 's',
+          toolCallId: 'tool_A',
+          childSessionId: 'agent-1',
+        },
+      });
+    }
+  });
+
   it('drops the steps of a sub-agent it cannot place, rather than reading them as the parent’s', () => {
     const { child, events } = start();
     // Announced, but with no launching call to draw its steps under.
@@ -2911,6 +3289,83 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
     expect(framesOn(child).map((frame) => frame.method)).toContain(
       'session/cancel',
     );
+  });
+
+  it('accepts a late foreground ending when disconnection preceded a parent failure', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { child, events } = start();
+    launch(child, false);
+    ends(child, 'disconnected');
+    parentSays(
+      child,
+      '\n\nError: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)',
+    );
+    endTurn(child);
+    const closes = () =>
+      events.filter(
+        (event) =>
+          event.type === 'subagent_info' && event.backgroundOpen === false,
+      );
+    expect(closes().at(-1)).toMatchObject({
+      id: 'tool_A',
+      backgroundOutcome: 'untracked',
+    });
+    ends(child, 'completed');
+    expect(
+      closes().map((event) =>
+        event.type === 'subagent_info' ? event.backgroundOutcome : null,
+      ),
+    ).toEqual(['untracked', 'completed']);
+  });
+
+  it('accepts a late foreground child ending after its parent was interrupted', () => {
+    const { child, events, handle } = start();
+    launch(child, false);
+    expect(handle?.sendUserMessage({ text: 'work on the other task' })).toBe(
+      true,
+    );
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 3,
+        result: { stopReason: 'cancelled' },
+      }),
+    );
+    const closes = () =>
+      events.filter(
+        (event) =>
+          event.type === 'subagent_info' && event.backgroundOpen === false,
+      );
+    expect(closes().at(-1)).toMatchObject({
+      id: 'tool_A',
+      backgroundOutcome: 'untracked',
+    });
+    ends(child, 'completed');
+    expect(
+      closes().map((event) =>
+        event.type === 'subagent_info' ? event.backgroundOutcome : null,
+      ),
+    ).toEqual(['untracked', 'completed']);
+  });
+
+  it('reports disconnection as untracked and replaces it when a completion arrives later', () => {
+    const { child, events } = start();
+    launch(child, true);
+    ends(child, 'disconnected');
+    const closes = () =>
+      events.filter(
+        (event) =>
+          event.type === 'subagent_info' && event.backgroundOpen === false,
+      );
+    expect(closes().at(-1)).toMatchObject({
+      id: 'tool_A',
+      backgroundOutcome: 'untracked',
+    });
+    ends(child, 'completed');
+    expect(closes().at(-1)).toMatchObject({
+      id: 'tool_A',
+      backgroundOutcome: 'completed',
+    });
   });
 
   it('closes a sub-agent’s open steps when the agent says it was cancelled', () => {

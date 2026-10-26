@@ -22,6 +22,7 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
+import { ActionCommandRegistry } from './action-command.registry';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
@@ -29,6 +30,7 @@ import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
 import type { ChatUploadStoreService } from './chat-upload-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
+import { MonitorRegistry } from './monitor.registry';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import type { RunProcessReaper } from './run-process-reaper.service';
@@ -56,6 +58,8 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let removedArtifactRuns: string[];
   /** The run's CLIs closing and its detached processes being reaped, in order. */
   let processEnds: string[];
+  let commands: ActionCommandRegistry;
+  let monitors: MonitorRegistry;
   /** Every CLI transcript the teardown asked an adapter to delete. */
   let deletedTranscripts: (DeleteSessionTranscriptInput & { agent: string })[];
   /**
@@ -94,6 +98,8 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await orm.schema.clear();
     removedArtifactRuns = [];
     processEnds = [];
+    commands = new ActionCommandRegistry();
+    monitors = new MonitorRegistry(new ProcessRegistry());
     referencedTexts = [];
     deletedTranscripts = [];
     const em = orm.em.fork();
@@ -152,6 +158,8 @@ describe('RunTeardownService (in-memory sqlite)', () => {
         reapInBackground: (runId: string) => processEnds.push(`reap ${runId}`),
       } as unknown as RunProcessReaper,
       wallTurnDao,
+      commands,
+      monitors,
     );
   });
 
@@ -159,20 +167,14 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   const seedRun = async (runId: string): Promise<void> => {
     await runDao.create({ id: runId, agentKind: 'claude', cwd: '/work' });
     await nodeStateDao.createPending(runId, 'node-a');
-    await callContextDao.rememberContext(
-      runId,
-      'call-1',
-      'node-a',
-      4200,
-      200000,
-    );
-    await callContextDao.rememberContext(
-      runId,
-      'call-2',
-      'node-a',
-      91000,
-      200000,
-    );
+    await callContextDao.rememberContext(runId, 'call-1', 'node-a', {
+      contextTokens: 4200,
+      contextWindowTokens: 200000,
+    });
+    await callContextDao.rememberContext(runId, 'call-2', 'node-a', {
+      contextTokens: 91000,
+      contextWindowTokens: 200000,
+    });
   };
 
   it('closes the run’s CLIs, then reaps what its agents left running — that run’s only', async () => {
@@ -182,6 +184,108 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await teardown.purge(orm.em.fork(), 'run-a', undefined);
 
     expect(processEnds).toEqual(['closeRun run-a', 'reap run-a']);
+  });
+
+  it('ends the command actions the run has running — that run’s only', () => {
+    const ours = commands.start('run-a');
+    const theirs = commands.start('run-b');
+
+    teardown.endProcesses('run-a');
+
+    expect(ours.signal.aborted).toBe(true);
+    expect(theirs.signal.aborted).toBe(false);
+  });
+
+  it('a command started right after its run was ended starts already ended', () => {
+    teardown.endProcesses('run-a');
+
+    expect(commands.start('run-a').signal.aborted).toBe(true);
+    expect(commands.start('run-b').signal.aborted).toBe(false);
+  });
+
+  it('stops the run’s monitors as teardown, waking nobody, and starts none until the run is back', async () => {
+    const ends: { stoppedBy: string | null; wake: boolean }[] = [];
+    monitors.subscribe((event) => {
+      if (event.type === 'end') {
+        ends.push({ stoppedBy: event.stoppedBy, wake: event.wake });
+      }
+    });
+    const owner = {
+      runId: 'run-a',
+      nodeId: 'agent',
+      caller: 'agent',
+      conversationId: null,
+      callId: null,
+      target: 'chat' as const,
+    };
+    const start = () =>
+      monitors.start({
+        owner,
+        command: 'while true; do sleep 1; done',
+        description: 'loop',
+        timeoutMs: 60_000,
+      });
+    expect(start().status).toBe('started');
+
+    teardown.endProcesses('run-a');
+    await monitors.settled('run-a', 5000);
+
+    expect(ends).toEqual([{ stoppedBy: 'teardown', wake: false }]);
+    expect(start().status).toBe('refused');
+    teardown.resumeProcesses('run-a');
+    expect(start().status).toBe('started');
+    monitors.stopRun('run-a', 'teardown');
+    await monitors.settled('run-a', 5000);
+  });
+
+  it('a run back from the archive starts its commands normally again', () => {
+    teardown.endProcesses('run-a');
+
+    teardown.resumeProcesses('run-a');
+
+    expect(commands.start('run-a').signal.aborted).toBe(false);
+  });
+
+  it('starts nothing once the app is stopping', () => {
+    commands.beforeApplicationShutdown();
+
+    const slot = commands.start('run-a');
+
+    expect(slot.signal.aborted).toBe(true);
+    expect(slot.signal.reason).toBe('shutdown');
+  });
+
+  it('stops waiting for a command that never writes its last row', async () => {
+    commands.start('run-a');
+
+    await expect(commands.settled('run-a', 20)).resolves.toBeUndefined();
+  });
+
+  it('deletes a run’s rows only after its ended command actions have written theirs', async () => {
+    await seedRun('run-a');
+    const slot = commands.start('run-a');
+    let rowWritten = false;
+    slot.signal.addEventListener('abort', () => {
+      setTimeout(() => {
+        void itemDao
+          .create({
+            runId: 'run-a',
+            seq: 50,
+            kind: 'action_outcome',
+            role: null,
+            payload: JSON.stringify({ state: 'interrupted' }),
+          })
+          .then(() => {
+            rowWritten = true;
+            slot.release();
+          });
+      }, 50);
+    });
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(rowWritten).toBe(true);
+    expect(await itemDao.rowsOfKinds('run-a', ['action_outcome'])).toEqual([]);
   });
 
   it('destroys the per-call context rows of the run it deletes', async () => {

@@ -72,6 +72,26 @@ describe('parseLiveText', () => {
     });
   });
 
+  it('reads the part of the live spend geniro priced itself', () => {
+    expect(
+      parseLiveText({
+        runId: 'run-1',
+        nodeId: null,
+        text: '',
+        spentCostUsd: 0.5,
+        spentEstimatedCostUsd: 0.5,
+      })?.spentEstimatedCostUsd,
+    ).toBe(0.5);
+    expect(
+      parseLiveText({
+        runId: 'run-1',
+        nodeId: null,
+        text: '',
+        spentCostUsd: 0.5,
+      }),
+    ).not.toHaveProperty('spentEstimatedCostUsd');
+  });
+
   it('reads the reasoning TEXT a CLI that discloses its thinking sends', () => {
     expect(
       parseLiveText({

@@ -15,13 +15,17 @@
 
 import * as runtime from '../runtime';
 import type {
+  ActionPressDto,
   CancelledDto,
   CreateWorkflowDto,
   ExportWorkflowDto,
   ExportedDto,
   ImportWorkflowDto,
+  InstructionSizesDto,
   ItemDto,
+  MeasureInstructionSizesDto,
   NodeStateDto,
+  PressActionDto,
   ResetWakesCancelledDto,
   RunDto,
   RunWorkflowDto,
@@ -59,6 +63,11 @@ export interface WorkflowsApiDiscardWorkflowChatRequest {
     slug: string;
 }
 
+export interface WorkflowsApiDismissWorkflowActionRequest {
+    runId: string;
+    seq: number;
+}
+
 export interface WorkflowsApiExportWorkflowRequest {
     slug: string;
     exportWorkflowDto: ExportWorkflowDto;
@@ -82,11 +91,25 @@ export interface WorkflowsApiListWorkflowRunNodesRequest {
 
 export interface WorkflowsApiListWorkflowRunsRequest {
     scope?: ListWorkflowRunsScopeEnum;
+    limit?: number;
+    beforeCreatedAt?: string;
+    beforeId?: string;
+    runId?: string;
+}
+
+export interface WorkflowsApiMeasureInstructionSizesRequest {
+    measureInstructionSizesDto: MeasureInstructionSizesDto;
 }
 
 export interface WorkflowsApiOpenWorkflowChatRequest {
     slug: string;
     startWorkflowChatDto: StartWorkflowChatDto;
+}
+
+export interface WorkflowsApiPressWorkflowActionRequest {
+    runId: string;
+    seq: number;
+    pressActionDto: PressActionDto;
 }
 
 export interface WorkflowsApiSaveWorkflowRequest {
@@ -391,6 +414,59 @@ export class WorkflowsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async dismissWorkflowActionRaw(requestParameters: WorkflowsApiDismissWorkflowActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ActionPressDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling dismissWorkflowAction().'
+            );
+        }
+
+        if (requestParameters['seq'] == null) {
+            throw new runtime.RequiredError(
+                'seq',
+                'Required parameter "seq" was null or undefined when calling dismissWorkflowAction().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}/actions/{seq}/dismiss`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"seq"}}`, encodeURIComponent(String(requestParameters['seq'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async dismissWorkflowAction(requestParameters: WorkflowsApiDismissWorkflowActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionPressDto> {
+        const response = await this.dismissWorkflowActionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async exportWorkflowRaw(requestParameters: WorkflowsApiExportWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ExportedDto>> {
         if (requestParameters['slug'] == null) {
             throw new runtime.RequiredError(
@@ -635,6 +711,22 @@ export class WorkflowsApi extends runtime.BaseAPI {
             queryParameters['scope'] = requestParameters['scope'];
         }
 
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        if (requestParameters['beforeCreatedAt'] != null) {
+            queryParameters['beforeCreatedAt'] = requestParameters['beforeCreatedAt'];
+        }
+
+        if (requestParameters['beforeId'] != null) {
+            queryParameters['beforeId'] = requestParameters['beforeId'];
+        }
+
+        if (requestParameters['runId'] != null) {
+            queryParameters['runId'] = requestParameters['runId'];
+        }
+
         const headerParameters: runtime.HTTPHeaders = {};
 
         if (this.configuration && this.configuration.accessToken) {
@@ -706,6 +798,53 @@ export class WorkflowsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async measureInstructionSizesRaw(requestParameters: WorkflowsApiMeasureInstructionSizesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<InstructionSizesDto>> {
+        if (requestParameters['measureInstructionSizesDto'] == null) {
+            throw new runtime.RequiredError(
+                'measureInstructionSizesDto',
+                'Required parameter "measureInstructionSizesDto" was null or undefined when calling measureInstructionSizes().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/instruction-sizes`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['measureInstructionSizesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async measureInstructionSizes(requestParameters: WorkflowsApiMeasureInstructionSizesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<InstructionSizesDto> {
+        const response = await this.measureInstructionSizesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async openWorkflowChatRaw(requestParameters: WorkflowsApiOpenWorkflowChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
         if (requestParameters['slug'] == null) {
             throw new runtime.RequiredError(
@@ -755,6 +894,69 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async openWorkflowChat(requestParameters: WorkflowsApiOpenWorkflowChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.openWorkflowChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async pressWorkflowActionRaw(requestParameters: WorkflowsApiPressWorkflowActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ActionPressDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling pressWorkflowAction().'
+            );
+        }
+
+        if (requestParameters['seq'] == null) {
+            throw new runtime.RequiredError(
+                'seq',
+                'Required parameter "seq" was null or undefined when calling pressWorkflowAction().'
+            );
+        }
+
+        if (requestParameters['pressActionDto'] == null) {
+            throw new runtime.RequiredError(
+                'pressActionDto',
+                'Required parameter "pressActionDto" was null or undefined when calling pressWorkflowAction().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}/actions/{seq}/press`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"seq"}}`, encodeURIComponent(String(requestParameters['seq'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['pressActionDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async pressWorkflowAction(requestParameters: WorkflowsApiPressWorkflowActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionPressDto> {
+        const response = await this.pressWorkflowActionRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

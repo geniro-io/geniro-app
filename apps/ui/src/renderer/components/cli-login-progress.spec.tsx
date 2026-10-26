@@ -276,4 +276,70 @@ describe('CliLoginProgress', () => {
     expect(container.textContent).toContain('OAuth failed');
     expect(container.querySelector('.animate-spin')).toBeNull();
   });
+
+  it('keeps an inline ending on one line: the CLI’s line beside the headline, and none that only repeats it', () => {
+    render(
+      <CliLoginProgress
+        session={session({ status: 'failed', message: 'OAuth failed' })}
+        variant="inline"
+        error="daemon refused"
+        {...noop}
+      />,
+    );
+
+    const row = container.querySelector(
+      '[data-slot="cli-login-progress"] > div',
+    );
+    expect(row?.textContent).toContain('Sign-in did not complete');
+    expect(row?.textContent).toContain('— OAuth failed');
+    expect(row?.textContent).toContain('daemon refused');
+    expect(
+      container.querySelector('[data-slot="cli-login-progress"] > p'),
+    ).toBeNull();
+
+    render(
+      <CliLoginProgress
+        session={{
+          status: 'timed-out',
+          url: null,
+          message: 'Sign-in timed out.',
+        }}
+        scope="share"
+        variant="inline"
+        error={null}
+        {...noop}
+      />,
+    );
+
+    expect(container.textContent).toContain('Not shared — sign-in timed out');
+    expect(container.textContent).not.toContain('Sign-in timed out.');
+  });
+
+  it.each([
+    ['waiting', 'Waiting for you to finish in the browser…'],
+    ['verifying', 'Signed in — sharing…'],
+    ['succeeded', 'Signed in'],
+    ['cancelled', 'Not shared — sign-in cancelled'],
+    ['timed-out', 'Not shared — sign-in timed out'],
+    ['failed', 'Not shared — sign-in did not complete'],
+  ] as const)(
+    'words a share destination’s %s sign-in for what it means to the share',
+    (status, headline) => {
+      render(
+        <CliLoginProgress
+          session={{ status, url: null, message: null }}
+          scope="share"
+          onSubmitCode={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+          error={null}
+        />,
+      );
+
+      expect(container.textContent).toContain(headline);
+      expect(container.textContent).toContain(
+        status === 'waiting' || status === 'verifying' ? 'Cancel' : 'Dismiss',
+      );
+    },
+  );
 });

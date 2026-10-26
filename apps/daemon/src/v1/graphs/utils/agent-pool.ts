@@ -1,6 +1,13 @@
+import {
+  asRecord,
+  asString,
+  parseJsonColumn,
+} from '../../agents/utils/json-util';
+import { redactSecrets } from '../../diagnostics/utils/redact';
 import type {
   CalleePoolAttempt,
   CalleeTurnOutcome,
+  PoolStanding,
   WorkflowAgentNode,
   WorkflowAgentPoolMember,
 } from '../graphs.types';
@@ -113,20 +120,47 @@ export function poolAttempts(
 }
 
 /**
- * The order a NEW conversation tries a pool's members in: member 1 first,
- * then later members in pool order, with every member `isCooling` says is
- * spent moved to the back — still tried in priority order, since a limit may
- * have reset unseen.
+ * The order a NEW conversation tries a pool's members in, from each member's
+ * standing (index 0 is member 1): unspent members in pool order, then those
+ * spent on an ordinary failure, whose cooldown is only a guess, then those a
+ * limit spent — still tried, in pool order, since a limit may have reset
+ * unseen.
  */
 export function poolAttemptOrder(
-  size: number,
-  isCooling: (member: number) => boolean,
+  standings: readonly (PoolStanding | null)[],
 ): number[] {
-  const members = Array.from({ length: size }, (_, i) => i + 1);
-  return [
-    ...members.filter((member) => !isCooling(member)),
-    ...members.filter((member) => isCooling(member)),
-  ];
+  const members = standings.map((_, i) => i + 1);
+  const having = (standing: PoolStanding | null): number[] =>
+    members.filter((member) => standings[member - 1] === standing);
+  return [...having(null), ...having('unavailable'), ...having('limit')];
+}
+
+/**
+ * The member a pooled node's turn starts on. Its conversation's session stays
+ * with the member it was opened on, so a node that has one moves only when it
+ * gains something: off a member a limit spent (unless every other member is
+ * limited too), or back to an earlier unspent member — never while the member
+ * it is on still runs work of its own, which leaving would stop. A member
+ * spent on an ordinary failure keeps the conversation it has.
+ */
+export function nodeStartMember(input: {
+  standings: readonly (PoolStanding | null)[];
+  order: readonly number[];
+  held: number;
+  hasSession: boolean;
+  holdsWork: boolean;
+}): number {
+  const { standings, order, held, hasSession, holdsWork } = input;
+  const first = order[0]!;
+  if (!hasSession) {
+    return first;
+  }
+  if (standings[held - 1] === 'limit') {
+    return standings[first - 1] === 'limit' ? held : first;
+  }
+  return first < held && standings[first - 1] === null && !holdsWork
+    ? first
+    : held;
 }
 
 /**
@@ -177,6 +211,21 @@ export function poolHandOffNotice(
 }
 
 /**
+ * The transcript sentence for a node turn that starts on another member than
+ * the one its conversation last ran on: an earlier member is available again,
+ * or the one it ran on is not.
+ */
+export function poolMoveNotice(
+  nodeName: string,
+  from: number,
+  to: number,
+): string {
+  return to < from
+    ? `${nodeName}: pool member ${to} is available again — moving the conversation back to it from member ${from}.`
+    : `${nodeName}: pool member ${from} is unavailable — starting the turn on member ${to}.`;
+}
+
+/**
  * The task a handed-on call opens its next member with: the call's own
  * message, then everything said into the call while the failed attempt ran —
  * the next member starts a conversation of its own and heard none of it.
@@ -207,24 +256,54 @@ export function nodePoolHandOffPrompt(
     payload: string;
   }[],
 ): string {
-  const history = rows
-    .filter(
+  return poolTranscriptPrompt(
+    prompt,
+    rows.filter(
       (row) =>
-        (row.nodeId === nodeId ||
-          (row.nodeId === null && row.role === 'user')) &&
-        [
-          'message',
-          'tool_call',
-          'tool_result',
-          'call_started',
-          'call_result',
-        ].includes(row.kind),
+        row.nodeId === nodeId || (row.nodeId === null && row.role === 'user'),
+    ),
+  );
+}
+
+/** Rows are scoped to this call's conversation by the caller, including its original brief. */
+export function callPoolHandOffPrompt(
+  prompt: string,
+  rows: readonly { kind: string; role: string | null; payload: string }[],
+): string {
+  const firstAsk = rows.find((row) => row.kind === 'call_started');
+  const original = asString(
+    asRecord(parseJsonColumn(firstAsk?.payload))?.message,
+  );
+  return poolTranscriptPrompt(
+    original === null
+      ? prompt
+      : `${prompt}\n\nOriginal task:\n${redactSecrets(original).slice(0, 8_000)}`,
+    rows,
+  );
+}
+
+function poolTranscriptPrompt(
+  prompt: string,
+  rows: readonly { kind: string; role: string | null; payload: string }[],
+): string {
+  const history = rows
+    .filter((row) =>
+      [
+        'message',
+        'tool_call',
+        'tool_result',
+        'call_started',
+        'call_result',
+      ].includes(row.kind),
     )
     .map((row) => {
+      // Masked before the cut, which could otherwise leave part of a secret
+      // showing — the next member may be another vendor's model.
+      const masked = redactSecrets(row.payload);
       const payload =
-        row.payload.length > 8_000
-          ? `${row.payload.slice(0, 4_000)}\n[transcript item truncated]\n${row.payload.slice(-4_000)}`
-          : row.payload;
+        masked.length > 8_000
+          ? `${masked.slice(0, 4_000)}\n[transcript item truncated]\n${masked.slice(-4_000)}`
+          : masked;
       return `${row.kind}${row.role ? ` (${row.role})` : ''}: ${payload}`;
     });
   // Large file reads must not fill the backup's first prompt. Carry the

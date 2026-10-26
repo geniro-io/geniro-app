@@ -26,6 +26,7 @@ const marker = (seq: number, preview: string): ChatTimelineMarker =>
         turns: 1,
         costedTurns: 1,
         costUsd: 0.1,
+        estimatedCostUsd: null,
         inputTokens: 10,
         outputTokens: 5,
         cacheReadTokens: null,

@@ -74,6 +74,7 @@ function doc(items: ItemDto[]): ChatExportDto {
       configDir: null,
       groupId: null,
       customInstructions: null,
+      replyLanguage: null,
       workflowInstructions: null,
       taskInstructions: null,
       agentOptions: null,
@@ -86,6 +87,7 @@ function doc(items: ItemDto[]): ChatExportDto {
       turns: 2,
       costedTurns: 1,
       costUsd: 0.42,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,
@@ -99,6 +101,52 @@ function doc(items: ItemDto[]): ChatExportDto {
 }
 
 describe('chatToMarkdown', () => {
+  it('omits internal delivery acknowledgements while keeping the failed message and other notices', () => {
+    const acknowledgement = row('system', {
+      severity: 'info',
+      message: 'Delivery receipts for your earlier message_agent sends',
+      messageDeliveryNotices: ['delivery-1'],
+    });
+    const out = chatToMarkdown(
+      doc([
+        row('call_answer', {
+          outcome: 'undelivered',
+          message: 'keep the old labels',
+        }),
+        acknowledgement,
+        row('system', { severity: 'info', message: 'An unrelated notice' }),
+      ]),
+    );
+    expect(out).toContain('not delivered');
+    expect(out).toContain('keep the old labels');
+    expect(out).toContain('An unrelated notice');
+    expect(out).not.toContain('Delivery receipts for your earlier');
+    expect(out).not.toContain(` · seq ${acknowledgement.seq} · `);
+  });
+
+  it('marks the cost geniro priced itself on the total, each turn and the spend table', () => {
+    const exported = doc([
+      row(ItemKind.TurnComplete, {
+        usage: { costUsd: 0.42, estimatedCostUsd: 0.42 },
+      }),
+      row(ItemKind.TurnComplete, { usage: { costUsd: 0.1 } }),
+    ]);
+    exported.totals = {
+      ...exported.totals,
+      costUsd: 0.52,
+      estimatedCostUsd: 0.42,
+    };
+    const out = chatToMarkdown(exported);
+
+    expect(out).toContain(
+      '**Cost:** $0.5200 (includes ≈$0.42 geniro estimated',
+    );
+    expect(out).toContain('≈$0.4200');
+    // The CLI's own bill stays plain.
+    expect(out).toContain('— $0.1000');
+    expect(out).toMatch(/\| claude \| 2 \| ≈\$0\.52 \|/);
+  });
+
   it('gives EVERY kind a section, including the ones with no prose form', () => {
     // The milestone's own criterion, and the reason the fallback exists: a
     // serializer that quietly dropped what it did not recognise produces a
@@ -112,6 +160,24 @@ describe('chatToMarkdown', () => {
       expect(out).toContain(`#### ${kind} ·`);
     }
     expect(kinds.length).toBeGreaterThan(25);
+  });
+
+  it('exports a team note as its kind, author, number and text, naming the note it replaces', () => {
+    const note = nodeRow('engineer', 'team_note', {
+      kind: 'pitfall',
+      text: '`npm ci` fails here — use `pnpm install`.',
+      supersedes: 3,
+      nodeId: 'engineer',
+      conversationId: null,
+    });
+    const out = chatToMarkdown(workflowDoc([note]));
+
+    expect(out).toContain(
+      `**📝 team note · pitfall** — engineer — note ${note.seq} — replaces note 3`,
+    );
+    expect(out).toContain('`npm ci` fails here — use `pnpm install`.');
+    // A note in words, never the payload dumped as JSON.
+    expect(out).not.toContain('"conversationId"');
   });
 
   it('keeps the settle of a turn answered inside a continuation, but not as a second completed turn', () => {
@@ -160,7 +226,9 @@ describe('chatToMarkdown', () => {
       ]),
     );
 
-    expect(out).toContain('**💬 message to the running call**\n\nstop after 3');
+    expect(out).toContain(
+      '**💬 message to the running call — delivered**\n\nstop after 3',
+    );
     expect(out).toContain(
       '**✗ message to the call — not delivered**\n\ntoo late',
     );

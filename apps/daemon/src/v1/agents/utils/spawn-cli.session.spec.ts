@@ -1,9 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent, TurnIo } from '../adapters/adapter.types';
-import { runCliSession, runHeadlessCli, type SessionLogger } from './spawn-cli';
+import type { PlainProcess } from './run-process-scan';
+import {
+  COMMAND_GROUP_READ_DELAY_MS,
+  COMMAND_GROUP_REFRESH_MS,
+  CUT_OFF_COMMAND_RESULT,
+  runCliSession,
+  runHeadlessCli,
+  type SessionLogger,
+} from './spawn-cli';
 
 const noopMapper = (): AgentEvent[] => [];
 
@@ -44,6 +52,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     taken?: string;
     /** What a `done` line's segment cost, for the cases that fold two. */
     cost?: number;
+    /** Of {@link cost}, the part geniro priced itself. */
+    estimated?: number;
     /** Whose thread it came from: absent is the main one, a value a delegate's. */
     parent?: string;
     /** How the settling unit ended, when the fake line states it. */
@@ -60,6 +70,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     owned?: boolean;
     /** The CLI's running cost since its last `result` (claude's `get_usage`). */
     live?: number;
+    /** Of {@link live}, the part geniro priced itself (codex's list price). */
+    liveEstimated?: number;
     /** A tool call with this id — a delegate's own when `parent` is set. */
     run?: string;
     /** The command line that `run` call ran. */
@@ -77,7 +89,15 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     ];
   }
   if (typeof row.live === 'number') {
-    return [{ type: 'cost_progress', costUsd: row.live }];
+    return [
+      {
+        type: 'cost_progress',
+        costUsd: row.live,
+        ...(row.liveEstimated === undefined
+          ? {}
+          : { estimatedCostUsd: row.liveEstimated }),
+      },
+    ];
   }
   if (row.state !== undefined) {
     return [{ type: 'session_state', idle: row.state === 'idle' }];
@@ -127,6 +147,9 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
           contextWindowTokens: null,
           contextModel: null,
           costUsd: row.cost,
+          ...(row.estimated === undefined
+            ? {}
+            : { estimatedCostUsd: row.estimated }),
           durationMs: null,
           apiMs: null,
           ttftMs: null,
@@ -204,6 +227,8 @@ function openSession(
     spawn,
     logger,
     onBetweenTurnEvent,
+    // Never the machine's real table: a fake pid may name a real process.
+    listProcessGroups: () => Promise.resolve(null),
   });
   return { session, child: c, captured };
 }
@@ -876,6 +901,91 @@ describe('cancelling a session turn', () => {
     ]);
   });
 
+  it('counts a delegate’s command as detached only once it is moved to the background', () => {
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    line(child, { run: 't9', cmd: 'cargo test', parent: 'agent-1' });
+    line(child, {
+      work: 'b9',
+      phase: 'started',
+      unit: 'other',
+      call: 't9',
+      owned: true,
+      fore: true,
+    });
+
+    // Still waited on: it keeps the process from being reaped, but a close
+    // stops no command the agent left running.
+    expect(session.shellsRunning).toBe(1);
+    expect(session.detachedRunning).toBe(0);
+    expect(session.runningCommands).toEqual([]);
+
+    line(child, { work: 'b9', phase: 'backgrounded', unit: 'other' });
+
+    expect(session.detachedRunning).toBe(1);
+    expect(session.runningCommands).toEqual(['cargo test']);
+  });
+
+  describe('a command the CLI never answered when its process died', () => {
+    it('is answered as cut off ahead of the turn’s ending, under its delegate', async () => {
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession();
+      const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+      line(child, { run: 't1', cmd: 'pnpm test' });
+      line(child, { run: 't2', cmd: 'ls' });
+      line(child, { tool: 't2' });
+      line(child, { run: 't3', cmd: 'cargo build', parent: 'agent-1' });
+
+      // An OOM kill: nobody asked for it.
+      child.emit('close', null, 'SIGKILL');
+      await handle?.done;
+
+      const cut = events.filter(
+        (e) => e.type === 'tool_result' && e.result === CUT_OFF_COMMAND_RESULT,
+      );
+      expect(cut).toEqual([
+        {
+          type: 'tool_result',
+          id: 't1',
+          name: 'Bash',
+          result: CUT_OFF_COMMAND_RESULT,
+          isError: true,
+        },
+        {
+          type: 'tool_result',
+          id: 't3',
+          name: 'Bash',
+          result: CUT_OFF_COMMAND_RESULT,
+          isError: true,
+          parentToolUseId: 'agent-1',
+        },
+      ]);
+      expect(events.indexOf(cut[1]!)).toBeLessThan(
+        events.findIndex((e) => e.type === 'error'),
+      );
+    });
+
+    it('is left alone on a Stop, which the transcript already reads as one', async () => {
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession();
+      const handle = session.startTurn({
+        onEvent: (e) => events.push(e),
+        buildInterruptPayload: () => 'INTERRUPT\n',
+      });
+      line(child, { run: 't1', cmd: 'pnpm test' });
+      handle?.cancel();
+      child.emit('close', null, 'SIGTERM');
+      await handle?.done;
+
+      expect(
+        events.filter(
+          (e) =>
+            e.type === 'tool_result' && e.result === CUT_OFF_COMMAND_RESULT,
+        ),
+      ).toEqual([]);
+    });
+  });
+
   it('remembers what was running when the process ended', () => {
     // Read by a holder told of the end through `closed`, by which time the
     // live readings are empty.
@@ -892,6 +1002,7 @@ describe('cancelling a session turn', () => {
     expect(session.endedRunning).toEqual({
       running: 2,
       commands: ['pnpm dev'],
+      groups: [],
     });
   });
 
@@ -1311,6 +1422,217 @@ describe('cancelling a session turn', () => {
     expect(child.killSignal).toBe('SIGTERM');
   });
 
+  it('emits what the driver still held ahead of the cancel when the interrupt fallback kills the process', () => {
+    // A follow-up accepted behind an interrupt the CLI never acknowledged has
+    // a row that reads as sent; only the driver knows it now never will be.
+    vi.useFakeTimers();
+    const { session, child } = openSession();
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn({
+      onEvent: (event) => events.push(event),
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      onProcessEnded: () => [
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ],
+    });
+
+    handle?.cancel();
+    vi.advanceTimersByTime(5_000);
+    child.emit('close', null, 'SIGTERM');
+
+    expect(events).toEqual([
+      { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      { type: 'turn_cancelled' },
+    ]);
+  });
+
+  it('refuses a follow-up into a turn that has been asked to stop, writing nothing', () => {
+    // A message sent right after Stop belongs to the NEXT turn: written into
+    // the stopping one, codex refused it ("no active turn to steer") and
+    // claude's queue died with the closed session.
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      onEvent: () => {},
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      buildFollowUpPayload: (message) => `${message.text}\n`,
+    });
+    expect(
+      handle?.sendUserMessage({ text: 'before stop', images: undefined }),
+    ).toBe(true);
+    handle?.cancel();
+
+    expect(
+      handle?.sendUserMessage({ text: 'after stop', images: undefined }),
+    ).toBe(false);
+    expect(child.stdin.written).toContain('before stop');
+    expect(child.stdin.written).not.toContain('after stop');
+  });
+
+  describe('closing a session whose turn asks for a grace', () => {
+    it('lets the stopped turn end on its own, then signals the group', async () => {
+      vi.useFakeTimers();
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn({
+        onEvent: (event) => events.push(event),
+        buildInterruptPayload: () => 'INTERRUPT\n',
+        closeGraceMs: () => 1000,
+      });
+
+      handle?.cancel();
+      session.close();
+      expect(child.kills).toBe(0);
+      line(child, { failed: true });
+      await handle?.done;
+      await Promise.resolve();
+
+      expect(events.map((event) => event.type)).toEqual(['turn_cancelled']);
+      expect(child.kills).toBe(1);
+    });
+
+    it('signals the group at the deadline when the turn never ends', () => {
+      vi.useFakeTimers();
+      const { session, child } = openSession();
+      const handle = session.startTurn({
+        onEvent: () => {},
+        buildInterruptPayload: () => 'INTERRUPT\n',
+        closeGraceMs: () => 1000,
+      });
+
+      handle?.cancel();
+      session.close();
+      vi.advanceTimersByTime(999);
+      expect(child.kills).toBe(0);
+      vi.advanceTimersByTime(1);
+
+      expect(child.kills).toBe(1);
+    });
+
+    it('signals at once when the turn asks for no grace', () => {
+      const { session, child } = openSession();
+      const handle = session.startTurn({
+        onEvent: () => {},
+        buildInterruptPayload: () => 'INTERRUPT\n',
+        closeGraceMs: () => 0,
+      });
+
+      handle?.cancel();
+      session.close();
+
+      expect(child.kills).toBe(1);
+    });
+  });
+
+  describe('a follow-up written into the CLI and not yet taken when the process ends', () => {
+    // PROBED on claude 2.1.295 in the app: a message written just before Stop
+    // was logged `enqueue` by the CLI, then the chat closed the session and
+    // the message died queued — its row still read as sent.
+    const consuming = (events: AgentEvent[]) => ({
+      onEvent: (event: AgentEvent) => events.push(event),
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      buildFollowUpPayload: (message: { text: string }) => `${message.text}\n`,
+      followUpConsumptionReported: true,
+    });
+
+    it('is reported dropped ahead of the cancel', () => {
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn(consuming(events));
+      expect(
+        handle?.sendUserMessage({
+          text: 'also the docs',
+          images: undefined,
+          deliveryId: 'delivery-1',
+        }),
+      ).toBe(true);
+
+      handle?.cancel();
+      child.emit('close', null, 'SIGTERM');
+
+      expect(events).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+        { type: 'turn_cancelled' },
+      ]);
+    });
+
+    it('is reported ahead of the CLI’s own cancel result when the process was already told to go', () => {
+      // The order measured in the app: Stop interrupts AND closes the session
+      // in one tick, and claude prints its cancel result before it exits.
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn(consuming(events));
+      handle?.sendUserMessage({
+        text: 'also the docs',
+        images: undefined,
+        deliveryId: 'delivery-1',
+      });
+
+      handle?.cancel();
+      session.close();
+      line(child, { failed: true });
+
+      expect(events.slice(0, 2)).toEqual([
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+        expect.objectContaining({ type: 'turn_cancelled' }),
+      ]);
+    });
+
+    it('is not reported for a turn the CLI cancels while its process lives on', () => {
+      // claude keeps a queued message across an interrupt and runs it as a
+      // turn of its own (probed on 2.1.295) — nothing is lost while it lives.
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn(consuming(events));
+      handle?.sendUserMessage({
+        text: 'also the docs',
+        images: undefined,
+        deliveryId: 'delivery-1',
+      });
+
+      handle?.cancel();
+      line(child, { failed: true });
+
+      expect(events.some((event) => event.type === 'follow_up_dropped')).toBe(
+        false,
+      );
+    });
+
+    it('is not reported once the CLI echoed it as taken', () => {
+      const { session, child } = openSession();
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn(consuming(events));
+      handle?.sendUserMessage({
+        text: 'also the docs',
+        images: undefined,
+        deliveryId: 'delivery-1',
+      });
+      line(child, { taken: 'also the docs' });
+
+      handle?.cancel();
+      child.emit('close', null, 'SIGTERM');
+
+      expect(events).toEqual([{ type: 'turn_cancelled' }]);
+    });
+  });
+
+  it('emits what the driver still held ahead of the error when the process errors under the turn', () => {
+    const { session, child } = openSession();
+    const events: AgentEvent[] = [];
+    session.startTurn({
+      onEvent: (event) => events.push(event),
+      onProcessEnded: () => [
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ],
+    });
+
+    child.emit('error', new Error('write EPIPE'));
+
+    expect(events.map((event) => event.type)).toEqual([
+      'follow_up_dropped',
+      'error',
+    ]);
+  });
+
   it('does not let a second Stop skip the interrupt grace', () => {
     // Found by this test: the second press used to fall straight through to
     // the group kill, destroying the MCP servers immediately — the exact
@@ -1368,6 +1690,131 @@ describe('cancelling a session turn', () => {
     await handle?.done;
     await session.closed;
     expect(session.alive).toBe(false);
+  });
+});
+
+describe('closing an idle session gracefully', () => {
+  /** An idle session over a child whose pid is its own group's id. */
+  async function idleSession(): Promise<{
+    session: ReturnType<typeof runCliSession>;
+    child: FakeChild;
+    kill: MockInstance<typeof process.kill>;
+  }> {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const { session, child } = openSession(new FakeChild(4242));
+    const handle = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await handle?.done;
+    return { session, child, kill };
+  }
+
+  it('closes stdin first and SIGTERMs only the CLI’s own group once it exits', async () => {
+    // A SIGTERM to the CLI alone left an MCP server's inner worker orphaned
+    // at ppid 1; the group signal after the exit is what reaches it.
+    const { session, child, kill } = await idleSession();
+    try {
+      session.close(undefined, { graceful: true });
+      expect(child.stdin.ended).toBe(true);
+      expect(kill).not.toHaveBeenCalled();
+
+      child.emit('exit', 0, null);
+      expect(kill.mock.calls).toEqual([[-4242, 'SIGTERM']]);
+      vi.advanceTimersByTime(2000);
+      // Never the daemon's own process or group — the group is the child's.
+      const targets = kill.mock.calls.map(([pid]) => pid);
+      expect(targets).not.toContain(process.pid);
+      expect(targets).not.toContain(-process.pid);
+      expect(targets.every((pid) => pid === -4242)).toBe(true);
+      child.emit('close', 0, null);
+      await session.closed;
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('SIGTERMs the group 2s on when the CLI ignores EOF', async () => {
+    // `cursor-agent acp` does not exit on EOF — the deadline is what ends it.
+    const { session, kill } = await idleSession();
+    try {
+      session.close(undefined, { graceful: true });
+      vi.advanceTimersByTime(1999);
+      expect(kill).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(kill).toHaveBeenCalledWith(-4242, 'SIGTERM');
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('signals at once when a turn is still in flight', () => {
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+
+    session.close(undefined, { graceful: true });
+
+    expect(child.killSignal).toBe('SIGTERM');
+    expect(child.stdin.ended).toBe(false);
+  });
+
+  it('signals an idle process at once when the close is not graceful', async () => {
+    // Eviction, a teardown and shutdown want the memory back now.
+    const { session, child, kill } = await idleSession();
+    try {
+      session.close();
+      expect(kill).toHaveBeenCalledWith(-4242, 'SIGTERM');
+      expect(child.stdin.ended).toBe(false);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('keeps a Stop’s cause for the exit it waits for, so a delegate still out ends stopped', async () => {
+    // The exit, not the close, settles the delegates still out — and it reads
+    // the cause the close recorded before returning without a signal.
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession(
+        new FakeChild(4242),
+        undefined,
+        (event) => events.push(event),
+      );
+      const handle = session.startTurn({ onEvent: () => {} });
+      line(child, { done: true });
+      await handle?.done;
+      // Launched between turns: no turn is in flight, so the close is graceful.
+      line(child, {
+        work: 'a-delegate',
+        phase: 'started',
+        unit: 'agent',
+        call: 'toolu_launch',
+      });
+      const last = () =>
+        events
+          .filter(
+            (e): e is Extract<AgentEvent, { type: 'subagent_info' }> =>
+              e.type === 'subagent_info' && e.id === 'toolu_launch',
+          )
+          .at(-1);
+      expect(last()?.backgroundOpen).toBe(true);
+
+      session.close('user-stop', { graceful: true });
+      expect(child.stdin.ended).toBe(true);
+      expect(session.closeCause).toBe('user-stop');
+
+      child.emit('exit', 0, null);
+      child.emit('close', 0, null);
+      await session.closed;
+      expect(last()).toMatchObject({
+        backgroundOpen: false,
+        backgroundOutcome: 'stopped',
+      });
+      expect(last()).not.toHaveProperty('trackingLost');
+    } finally {
+      kill.mockRestore();
+    }
   });
 });
 
@@ -1686,14 +2133,17 @@ describe('a delegate whose own detached command outlives its turn', () => {
   }
 
   it('closes only once the last of its commands has ended', async () => {
-    const { child, last, launch, finish } = openDelegateSession();
+    const { session, child, last, launch, finish } = openDelegateSession();
     launch('b-1', 'b-2');
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(true);
     line(child, { work: 'a-delegate', phase: 'settled', outcome: 'completed' });
     line(child, { work: 'b-1', phase: 'settled' });
     expect(last()?.backgroundOpen).toBe(true);
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(true);
 
     line(child, { work: 'b-2', phase: 'settled' });
     expect(last()?.backgroundOpen).toBe(false);
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(false);
     await finish();
   });
 
@@ -1816,7 +2266,7 @@ describe('a delegate whose own detached command outlives its turn', () => {
     await finish();
   });
 
-  it('announces the held settle as STOPPED, figures kept, when the process ends under its command', () => {
+  it('announces the held settle as stopped, figures kept, when the process ends under its command', () => {
     const { child, last, launch } = openDelegateSession();
     launch('b-1');
     line(child, {
@@ -1832,6 +2282,57 @@ describe('a delegate whose own detached command outlives its turn', () => {
       backgroundOpen: false,
       backgroundOutcome: 'stopped',
       tokens: 1234,
+    });
+    expect(last()).not.toHaveProperty('trackingLost');
+  });
+
+  it('closes a delegate still out when the process ends as untracked, saying the process ended', () => {
+    const { child, last, launch } = openDelegateSession();
+    launch();
+    expect(last()?.backgroundOpen).toBe(true);
+
+    child.emit('close', 0, null);
+    expect(last()).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked',
+      trackingLost: 'process-ended',
+    });
+  });
+
+  it('closes a delegate still out as stopped when the user’s Stop closed the process', () => {
+    const { session, child, last, launch } = openDelegateSession();
+    launch();
+
+    session.close('user-stop');
+    child.emit('close', null, 'SIGTERM');
+    expect(last()).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'stopped',
+    });
+    expect(last()).not.toHaveProperty('trackingLost');
+  });
+
+  it('closes them as stopped when a recorded Stop ends the process by any other way', () => {
+    // A workflow Stop is recorded ahead of the cancel; the process can then
+    // end from its own kill after a refused interrupt, with no close() at all.
+    const { session, child, last, launch } = openDelegateSession();
+    launch();
+
+    session.noteCloseCause?.('user-stop');
+    child.emit('close', null, 'SIGKILL');
+    expect(last()).toMatchObject({ backgroundOutcome: 'stopped' });
+  });
+
+  it('forgets a recorded Stop once it is withdrawn', () => {
+    const { session, child, last, launch } = openDelegateSession();
+    launch();
+
+    session.noteCloseCause?.('user-stop');
+    session.noteCloseCause?.(null);
+    child.emit('close', 0, null);
+    expect(last()).toMatchObject({
+      backgroundOutcome: 'untracked',
+      trackingLost: 'process-ended',
     });
   });
 
@@ -2179,6 +2680,39 @@ describe('a turn whose background work outlives its result', () => {
     expect(zeroAt).toBeGreaterThan(-1);
     expect(zeroAt).toBeLessThan(endAt);
     expect(events[endAt]).toMatchObject({ usage: { costUsd: 1.75 } });
+  });
+
+  it('carries the part of a held segment’s cost geniro priced onto the LIVE plane', async () => {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    const live = ():
+      Extract<AgentEvent, { type: 'cost_progress' }> | undefined =>
+      events.findLast(
+        (e): e is Extract<AgentEvent, { type: 'cost_progress' }> =>
+          e.type === 'cost_progress',
+      );
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, cost: 1.25, estimated: 1.25 });
+    // The held segment was list-priced; the continuation's running figure is
+    // the CLI's own, so only the held part is an estimate.
+    line(child, { says: 'back to work' });
+    line(child, { live: 0.4 });
+    expect(live()).toMatchObject({ costUsd: 1.65, estimatedCostUsd: 1.25 });
+    line(child, { live: 0.5, liveEstimated: 0.5 });
+    expect(live()?.estimatedCostUsd).toBeCloseTo(1.75);
+
+    await reportAndGoIdle(child, 'task-1');
+    line(child, { live: 0 });
+    line(child, { done: true, cost: 0.5 });
+    await handle?.done;
+
+    // The zero that takes the figure down carries no estimate of its own.
+    expect(live()).toEqual({ type: 'cost_progress', costUsd: 0 });
+    expect(events.find((e) => e.type === 'turn_complete')).toMatchObject({
+      usage: { costUsd: 1.75, estimatedCostUsd: 1.25 },
+    });
   });
 
   it('keeps what the superseded result cost when the resumed turn then FAILS', async () => {
@@ -2623,22 +3157,45 @@ describe('a turn whose background work outlives its result', () => {
     ]);
   });
 
-  it('announces a shell settle the started of which was never seen', async () => {
-    // A session that resumed after the launch, or a channel that omitted the
-    // pairing. The work id alone still names the command, which is the whole
-    // reason both ride every announcement.
+  it('announces no shell settle the started of which this process never saw', async () => {
+    // A session resumed after the launch: the process that opened the shell
+    // closed it as it ended, and claude, resumed after a crash, reports such a
+    // task `stopped` once more (measured on 2.1.295). A second close would be
+    // a durable duplicate.
     const events: AgentEvent[] = [];
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
+    line(child, { work: 'bash_9', phase: 'settled', call: 't-old' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events).toEqual([COMPLETE]);
+  });
+
+  it('announces the settle of a shell whose settle channel names no call', async () => {
+    // The work id alone still names the command, which is the whole reason
+    // both ride every announcement.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { run: 't1', cmd: 'sleep 9' });
+    line(child, {
+      work: 'bash_9',
+      phase: 'started',
+      unit: 'other',
+      call: 't1',
+    });
     line(child, { work: 'bash_9', phase: 'settled' });
     line(child, { done: true });
     await handle?.done;
 
-    expect(events).toEqual([
-      { type: 'shell_info', toolCallId: null, workId: 'bash_9' },
-      COMPLETE,
-    ]);
+    expect(events).toContainEqual({
+      type: 'shell_info',
+      toolCallId: 't1',
+      workId: 'bash_9',
+    });
   });
 
   it('never announces a DELEGATE as a shell', async () => {
@@ -2788,10 +3345,7 @@ describe('a turn whose background work outlives its result', () => {
     await handle?.done;
 
     expect(events.filter((e) => e.type === 'background_work')).toEqual([]);
-    expect(events).toEqual([
-      { type: 'shell_info', toolCallId: null, workId: 'task-1' },
-      COMPLETE,
-    ]);
+    expect(events).toEqual([COMPLETE]);
   });
 
   it('does NOT hold a cancel or a failure back', async () => {
@@ -2837,6 +3391,51 @@ describe('a turn whose background work outlives its result', () => {
     expect(events).toEqual([{ type: 'turn_held', open: 1 }, COMPLETE]);
     expect(session.alive).toBe(false);
   });
+
+  it.each(['idle', 'silence'] as const)(
+    'marks missing delegate reports untracked on %s and accepts a late completion',
+    async (ending) => {
+      vi.useFakeTimers();
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (event) =>
+        events.push(event),
+      );
+      const handle = session.startTurn({
+        onEvent: (event) => events.push(event),
+      });
+      line(child, {
+        work: 'task-1',
+        phase: 'started',
+        unit: 'agent',
+        call: 'toolu_a',
+      });
+      line(child, { done: true });
+      if (ending === 'idle') {
+        line(child, { state: 'idle' });
+      } else {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      }
+      await handle?.done;
+      expect(
+        events.filter((event) => event.type === 'subagent_info').at(-1),
+      ).toMatchObject({
+        id: 'toolu_a',
+        backgroundOpen: false,
+        backgroundOutcome: 'untracked',
+      });
+      // The process still runs, so the delegate may too.
+      expect(
+        events.filter((event) => event.type === 'subagent_info').at(-1),
+      ).not.toHaveProperty('trackingLost');
+      expect(events.at(-1)?.type).toBe('turn_complete');
+      line(child, { work: 'task-1', phase: 'settled', outcome: 'completed' });
+      expect(events.at(-1)).toMatchObject({
+        type: 'subagent_info',
+        id: 'toolu_a',
+        backgroundOutcome: 'completed',
+      });
+    },
+  );
 
   it('releases the held result when the work goes silent too', async () => {
     // The bound, and it is the turn's existing silence deadline rather than a
@@ -2994,11 +3593,31 @@ describe('a turn whose background work outlives its result', () => {
     const logger = { warn: vi.fn(), debug: vi.fn() };
     const { child } = openSession(undefined, logger, (e) => between.push(e));
 
-    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
     line(child, { done: true });
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
 
-    expect(between).toEqual([COMPLETE]);
+    expect(between.map((event) => event.type)).toEqual([
+      'subagent_info',
+      'subagent_info',
+      'turn_complete',
+    ]);
+    expect(between.at(-2)).toMatchObject({
+      id: 'toolu_a',
+      backgroundOpen: false,
+      backgroundOutcome: 'untracked',
+    });
+    line(child, { work: 'task-1', phase: 'settled', outcome: 'completed' });
+    expect(between.at(-1)).toMatchObject({
+      type: 'subagent_info',
+      id: 'toolu_a',
+      backgroundOutcome: 'completed',
+    });
     expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
       'never reported',
     );
@@ -4367,6 +4986,7 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
       spawn,
       detectDetachedShells: true,
       listProcesses: processes,
+      listProcessGroups: () => Promise.resolve(null),
       onBetweenTurnEvent: (event) => offTurn.push(event),
     });
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
@@ -4857,6 +5477,24 @@ describe('a request the CLI stops waiting on, or that outlives the turn it was r
 });
 
 describe('a stdin that breaks under a turn in flight', () => {
+  it('emits what the driver still held ahead of the error', () => {
+    const { session, child } = openSession();
+    const events: AgentEvent[] = [];
+    session.startTurn({
+      onEvent: (e) => events.push(e),
+      onProcessEnded: () => [
+        { type: 'follow_up_dropped', deliveryIds: ['delivery-1'] },
+      ],
+    });
+
+    child.stdin.breakPipe();
+
+    expect(events.map((event) => event.type)).toEqual([
+      'follow_up_dropped',
+      'error',
+    ]);
+  });
+
   it('signals the process group and escalates, instead of forgetting a live process', () => {
     // `endProcess` marks the session gone and resolves `closed`, so its owner
     // forgets it. Without a signal, a CLI that had only stopped reading its
@@ -4900,5 +5538,644 @@ describe('a stdin that breaks under a turn in flight', () => {
     vi.advanceTimersByTime(5000);
 
     expect(child.kills).toBe(1);
+  });
+});
+
+describe('where a session’s detached commands run', () => {
+  const row = (
+    pid: number,
+    ppid: number,
+    pgid: number,
+    args: string,
+    startedAt = 1_000_000,
+  ): PlainProcess => ({
+    pid,
+    ppid,
+    pgid,
+    uid: 501,
+    tty: null,
+    startedAt,
+    args,
+  });
+
+  /** The CLI (pid 100, its own group) and an MCP server in that group. */
+  const CLI_AND_MCP = [
+    row(100, 1, 100, 'claude'),
+    row(101, 100, 100, 'node mcp.js'),
+  ];
+
+  function openRecordingSession(
+    table: () => PlainProcess[],
+    logger?: SessionLogger,
+  ) {
+    let reads = 0;
+    const { spawn, child } = fakeSpawn(new FakeChild(100));
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: resultOnDone,
+      spawn,
+      logger,
+      commandGroupReadDelayMs: 0,
+      listProcessGroups: () => {
+        reads += 1;
+        return Promise.resolve().then(table);
+      },
+    });
+    session.startTurn({ onEvent: () => {} });
+    return { session, child, reads: () => reads };
+  }
+
+  function background(
+    child: FakeChild,
+    work: string,
+    call: string,
+    cmd: string,
+  ): void {
+    line(child, { run: call, cmd });
+    line(child, { work, phase: 'started', unit: 'other', call });
+  }
+
+  /** Until the session has read the table `n` times and filed what it read. */
+  async function afterReading(reads: () => number, n: number): Promise<void> {
+    await vi.waitFor(() => expect(reads()).toBeGreaterThanOrEqual(n));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  /** The groups the session hands over when its process dies right now. */
+  function groupsAtDeath(
+    session: ReturnType<typeof runCliSession>,
+    child: FakeChild,
+  ) {
+    child.emit('close', null, 'SIGKILL');
+    return session.endedRunning?.groups;
+  }
+
+  it('records the group a background command runs in, with every member of it', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, "/bin/zsh -c eval 'pnpm dev'"),
+      row(201, 200, 200, 'node /opt/homebrew/bin/pnpm dev', 2_000_000),
+    ]);
+    background(child, 'b1', 't1', 'pnpm dev');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      {
+        pgid: 200,
+        members: [
+          { pid: 200, startedAt: 1_000_000 },
+          { pid: 201, startedAt: 2_000_000 },
+        ],
+      },
+    ]);
+  });
+
+  it('answers where the command a call launched runs — nothing before a reading, null for a call running none', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c pnpm dev'),
+    ]);
+    background(child, 'b1', 't1', 'pnpm dev');
+    expect(session.recordedGroupsOf('t1')).toEqual([]);
+    await afterReading(reads, 1);
+
+    expect(session.recordedGroupsOf('t1')).toEqual([
+      { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+    ]);
+    expect(session.recordedGroupsOf('t-other')).toBeNull();
+  });
+
+  it('never records the CLI’s own group, where its MCP servers run', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 100, "/bin/zsh -c eval 'pnpm dev'"),
+    ]);
+    background(child, 'b1', 't1', 'pnpm dev');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('hands over the groups of the commands still running when the process ends', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c sleep 600'),
+      row(300, 100, 300, '/bin/sh -c tail -f build.log'),
+    ]);
+    background(child, 'b1', 't1', 'sleep 600');
+    background(child, 'b2', 't2', 'tail -f build.log');
+    await afterReading(reads, 1);
+
+    line(child, { work: 'b2', phase: 'settled', unit: 'other' });
+
+    expect(groupsAtDeath(session, child)?.map((group) => group.pgid)).toEqual([
+      200,
+    ]);
+  });
+
+  it('keeps a recorded group whose wrapper has exited, with what has joined it since', async () => {
+    let table = [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c sleep 600; :'),
+      row(201, 200, 200, 'sleep 600', 1_500_000),
+    ];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'sleep 600; :');
+    await afterReading(reads, 1);
+
+    // The wrapper is gone: its command now hangs off launchd, outside the
+    // CLI's tree, and has started a helper in its own group.
+    table = [
+      ...CLI_AND_MCP,
+      row(201, 1, 200, 'sleep 600', 1_500_000),
+      row(202, 201, 200, 'sleep-helper', 1_600_000),
+    ];
+    background(child, 'b2', 't2', 'echo unrelated work');
+    await afterReading(reads, 2);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      {
+        pgid: 200,
+        members: [
+          { pid: 201, startedAt: 1_500_000 },
+          { pid: 202, startedAt: 1_600_000 },
+        ],
+      },
+    ]);
+  });
+
+  /** A session reading the table after the real {@link COMMAND_GROUP_READ_DELAY_MS}. */
+  function openDelayedSession() {
+    let reads = 0;
+    const { spawn, child } = fakeSpawn(new FakeChild(100));
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: resultOnDone,
+      spawn,
+      listProcessGroups: () => {
+        reads += 1;
+        return Promise.resolve([
+          ...CLI_AND_MCP,
+          row(200, 100, 200, '/bin/sh -c sleep 600'),
+        ]);
+      },
+    });
+    session.startTurn({ onEvent: () => {} });
+    return { child, reads: () => reads };
+  }
+
+  it('reads the table once for a burst, a moment after its first command', async () => {
+    vi.useFakeTimers();
+    const { child, reads } = openDelayedSession();
+    background(child, 'b1', 't1', 'sleep 600');
+    background(child, 'b2', 't2', 'tail -f build.log');
+
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS - 1);
+    expect(reads()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+    expect(reads()).toBe(1);
+  });
+
+  it('reads once more, a full delay later, for a command reported after the burst’s reading was armed', async () => {
+    // That reading can come before the later command has spawned.
+    vi.useFakeTimers();
+    const { child, reads } = openDelayedSession();
+    background(child, 'b1', 't1', 'sleep 600');
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS - 100);
+    background(child, 'b2', 't2', 'tail -f build.log');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reads()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS - 1);
+    expect(reads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads()).toBe(2);
+  });
+
+  it.each([
+    ['the user', 'held'],
+    ['the run’s standing posture', 'posture'],
+  ] as const)(
+    'reads the table again once %s allows a request between turns',
+    async (_who, path) => {
+      // The command it asked about runs only once allowed.
+      vi.useFakeTimers();
+      let reads = 0;
+      let answer: ((allow: boolean) => boolean) | null = null;
+      const { spawn, child } = fakeSpawn(new FakeChild(100));
+      const session = runCliSession({
+        command: 'claude',
+        args: [],
+        cwd: '/proj',
+        stdinLifetime: 'session',
+        mapper: resultOnDone,
+        spawn,
+        betweenTurnApproval: () => (path === 'posture' ? true : null),
+        onHeldApproval: (_event, respond) => {
+          answer = respond;
+          return true;
+        },
+        listProcessGroups: () => {
+          reads += 1;
+          return Promise.resolve([...CLI_AND_MCP]);
+        },
+      });
+      const turn = session.startTurn({
+        onEvent: () => {},
+        buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+      });
+      background(child, 'b1', 't1', 'pnpm dev');
+      line(child, { done: true });
+      await turn?.done;
+      await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+      expect(reads).toBe(1);
+
+      line(child, { ask: 'card-1' });
+      if (path === 'held') {
+        expect(answer!(true)).toBe(true);
+      }
+      await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it('reads the table again while a command runs, and not once none does', async () => {
+    vi.useFakeTimers();
+    let table = [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c sleep 600; :')];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'sleep 600; :');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toBe(1);
+
+    // Forked into the group after the first reading.
+    table = [...table, row(201, 200, 200, 'sleep-helper', 2_000_000)];
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_REFRESH_MS);
+    expect(reads()).toBe(2);
+    background(child, 'b2', 't2', 'tail -f build.log');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads()).toBe(3);
+
+    line(child, { work: 'b1', phase: 'settled', unit: 'other' });
+    line(child, { work: 'b2', phase: 'settled', unit: 'other' });
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_REFRESH_MS * 4);
+    expect(reads()).toBe(3);
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('files what a refresh found joined the group since the first reading', async () => {
+    vi.useFakeTimers();
+    let table = [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c sleep 600; :')];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'sleep 600; :');
+    await vi.advanceTimersByTimeAsync(0);
+
+    table = [...table, row(201, 200, 200, 'sleep-helper', 2_000_000)];
+    await vi.advanceTimersByTimeAsync(COMMAND_GROUP_REFRESH_MS);
+    expect(reads()).toBe(2);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      {
+        pgid: 200,
+        members: [
+          { pid: 200, startedAt: 1_000_000 },
+          { pid: 201, startedAt: 2_000_000 },
+        ],
+      },
+    ]);
+  });
+
+  it('records a delegate’s own command, and drops it when that command ends', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c pnpm test --watch'),
+    ]);
+    line(child, { run: 'agent-1', cmd: undefined });
+    line(child, {
+      work: 'd1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'agent-1',
+    });
+    line(child, { run: 't9', cmd: 'pnpm test --watch', parent: 'agent-1' });
+    line(child, {
+      work: 'b9',
+      phase: 'started',
+      unit: 'other',
+      call: 't9',
+      owned: true,
+    });
+    await afterReading(reads, 1);
+    expect(reads()).toBe(1);
+
+    line(child, { work: 'b9', phase: 'settled', unit: 'other' });
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('hands over a delegate’s own command still running when the process ends', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, '/bin/sh -c pnpm test --watch'),
+    ]);
+    line(child, { run: 'agent-1', cmd: undefined });
+    line(child, {
+      work: 'd1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'agent-1',
+    });
+    line(child, { run: 't9', cmd: 'pnpm test --watch', parent: 'agent-1' });
+    line(child, {
+      work: 'b9',
+      phase: 'started',
+      unit: 'other',
+      call: 't9',
+      owned: true,
+    });
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+    ]);
+  });
+
+  function waitedOn(child: FakeChild): void {
+    line(child, { run: 't1', cmd: 'pnpm test' });
+    line(child, {
+      work: 'f1',
+      phase: 'started',
+      unit: 'other',
+      call: 't1',
+      fore: true,
+    });
+  }
+  const TESTING = [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c pnpm test')];
+
+  it('records a command the agent waits on, from its start', async () => {
+    const { session, child, reads } = openRecordingSession(() => TESTING);
+    waitedOn(child);
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+    ]);
+  });
+
+  it('drops a waited-on command once it settles', async () => {
+    const { session, child, reads } = openRecordingSession(() => TESTING);
+    waitedOn(child);
+    await afterReading(reads, 1);
+
+    line(child, { work: 'f1', phase: 'settled', unit: 'other' });
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('opens no shell for a waited-on command whose move to the background arrives after its end', async () => {
+    const opened: AgentEvent[] = [];
+    const { spawn, child } = fakeSpawn(new FakeChild(100));
+    const session = runCliSession({
+      command: 'codex',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: resultOnDone,
+      spawn,
+      listProcessGroups: () => Promise.resolve(null),
+    });
+    session.startTurn({ onEvent: (event) => opened.push(event) });
+    line(child, { run: 't1', cmd: 'pnpm dev' });
+    line(child, {
+      work: 'u1',
+      phase: 'started',
+      unit: 'other',
+      call: 't1',
+      fore: true,
+    });
+    // codex held its turn's ending while a steer went unanswered, and the
+    // command completed inside that hold.
+    line(child, { work: 'u1', phase: 'settled', unit: 'other' });
+    line(child, { work: 'u1', phase: 'backgrounded', unit: 'other' });
+
+    expect(opened.filter((event) => event.type === 'shell_open')).toEqual([]);
+    expect(session.shellsRunning).toBe(0);
+  });
+
+  it('records a command in the CLI’s own session but not its group leader’s group', async () => {
+    // The CLI (pid 100) runs in group 90 — a wrapper leads it — and a command
+    // matched in that group shares it with the CLI and its MCP servers.
+    const { session, child, reads } = openRecordingSession(() => [
+      row(90, 1, 90, 'node /usr/local/bin/claude'),
+      row(100, 90, 90, 'claude'),
+      row(200, 100, 90, '/bin/sh -c pnpm dev'),
+    ]);
+    background(child, 'b1', 't1', 'pnpm dev');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  it('matches a command whose line ps escapes', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      // `ps` writes the em dash's three UTF-8 bytes as `M-bM^@M^T`.
+      row(200, 100, 200, 'node ./serveM-bM^@M^Tall.js'),
+    ]);
+    background(child, 'b1', 't1', 'node ./serve—all.js');
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)?.map((group) => group.pgid)).toEqual([
+      200,
+    ]);
+  });
+
+  it('drops a record once a reading finds nothing of the command', async () => {
+    let table = [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c sleep 600')];
+    const { session, child, reads } = openRecordingSession(() => table);
+    background(child, 'b1', 't1', 'sleep 600');
+    await afterReading(reads, 1);
+
+    table = [...CLI_AND_MCP];
+    background(child, 'b2', 't2', 'echo unrelated work');
+    await afterReading(reads, 2);
+
+    expect(groupsAtDeath(session, child)).toEqual([]);
+  });
+
+  describe('for a CLI that reports no units (cursor)', () => {
+    const executeMapper = (obj: unknown): AgentEvent[] => {
+      const row = obj as { run?: string; id?: string; answered?: string };
+      if (typeof row.run === 'string') {
+        return [
+          {
+            type: 'tool_call',
+            id: row.id ?? 'call-1',
+            name: 'Shell',
+            input: { command: row.run },
+            kind: 'execute',
+          },
+        ];
+      }
+      if (typeof row.answered === 'string') {
+        return [
+          {
+            type: 'tool_result',
+            id: row.answered,
+            name: null,
+            result: { exitCode: 0, stdout: '', stderr: '' },
+            isError: false,
+          },
+        ];
+      }
+      return [];
+    };
+
+    function openExecuteSession(table: () => PlainProcess[]) {
+      let reads = 0;
+      const { spawn, child } = fakeSpawn(new FakeChild(100));
+      const session = runCliSession({
+        command: 'cursor-agent',
+        args: [],
+        cwd: '/proj',
+        stdinLifetime: 'session',
+        mapper: executeMapper,
+        spawn,
+        detectDetachedShells: true,
+        listProcesses: () => Promise.resolve([]),
+        commandGroupReadDelayMs: 0,
+        listProcessGroups: () => {
+          reads += 1;
+          return Promise.resolve().then(table);
+        },
+      });
+      session.startTurn({ onEvent: () => {} });
+      return { session, child, reads: () => reads };
+    }
+
+    it('reads the table again once an approval lets the command it asked about run', async () => {
+      vi.useFakeTimers();
+      let reads = 0;
+      const { spawn, child } = fakeSpawn(new FakeChild(100));
+      const session = runCliSession({
+        command: 'cursor-agent',
+        args: [],
+        cwd: '/proj',
+        stdinLifetime: 'session',
+        mapper: (obj) => {
+          const ask = (obj as { ask?: string }).ask;
+          return typeof ask === 'string'
+            ? [
+                {
+                  type: 'approval_request',
+                  id: ask,
+                  toolName: 'Shell',
+                  input: {},
+                },
+              ]
+            : executeMapper(obj);
+        },
+        spawn,
+        detectDetachedShells: true,
+        listProcesses: () => Promise.resolve([]),
+        listProcessGroups: () => {
+          reads += 1;
+          return Promise.resolve([...CLI_AND_MCP]);
+        },
+      });
+      const handle = session.startTurn({
+        onEvent: () => {},
+        buildApprovalResponse: (id, allow) =>
+          `${JSON.stringify({ verdict: id, allow })}\n`,
+      });
+      line(child, { run: 'sleep 600', id: 'call-1' });
+      line(child, { ask: 'card-1' });
+      await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+      expect(reads).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(handle?.respondApproval('card-1', true, undefined)).toBe(true);
+      await vi.advanceTimersByTimeAsync(COMMAND_GROUP_READ_DELAY_MS);
+      expect(reads).toBe(2);
+    });
+
+    it('records a command from its call, and keeps it once answered while it runs on', async () => {
+      const { session, child, reads } = openExecuteSession(() => [
+        ...CLI_AND_MCP,
+        row(200, 100, 200, '/bin/zsh -c sleep 600'),
+      ]);
+      line(child, { run: 'sleep 600', id: 'call-1' });
+      await afterReading(reads, 1);
+      // cursor answers a command it backgrounded as finished, exit code 0.
+      line(child, { answered: 'call-1' });
+      await afterReading(reads, 2);
+
+      expect(groupsAtDeath(session, child)).toEqual([
+        { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+      ]);
+    });
+
+    it('keeps no leftover the answered call’s group held once it has left the tree', async () => {
+      let table = [
+        ...CLI_AND_MCP,
+        row(200, 100, 200, '/bin/zsh -c make serve'),
+        row(201, 200, 200, 'node leftover.js', 2_000_000),
+      ];
+      const { session, child, reads } = openExecuteSession(() => table);
+      line(child, { run: 'make serve', id: 'call-1' });
+      await afterReading(reads, 1);
+
+      // The call is answered; its shell is gone and what it left hangs off
+      // launchd, still in its group.
+      table = [...CLI_AND_MCP, row(201, 1, 200, 'node leftover.js', 2_000_000)];
+      line(child, { answered: 'call-1' });
+      await afterReading(reads, 2);
+
+      expect(groupsAtDeath(session, child)).toEqual([]);
+    });
+
+    it('drops an answered command that no longer runs', async () => {
+      let table = [...CLI_AND_MCP, row(200, 100, 200, '/bin/zsh -c make')];
+      const { session, child, reads } = openExecuteSession(() => table);
+      line(child, { run: 'make', id: 'call-1' });
+      await afterReading(reads, 1);
+
+      table = [...CLI_AND_MCP];
+      line(child, { answered: 'call-1' });
+      await afterReading(reads, 2);
+
+      expect(groupsAtDeath(session, child)).toEqual([]);
+    });
+  });
+
+  it('keeps the last record, and says so, when a later reading fails', async () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    let fail = false;
+    const { session, child, reads } = openRecordingSession(() => {
+      if (fail) {
+        throw new Error('ps exploded');
+      }
+      return [...CLI_AND_MCP, row(200, 100, 200, '/bin/sh -c sleep 600; :')];
+    }, logger);
+    background(child, 'b1', 't1', 'sleep 600; :');
+    await afterReading(reads, 1);
+
+    fail = true;
+    background(child, 'b2', 't2', 'tail -f build.log');
+    await afterReading(reads, 2);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'claude: could not record where its background commands run: ps exploded',
+    );
+    expect(groupsAtDeath(session, child)).toEqual([
+      { pgid: 200, members: [{ pid: 200, startedAt: 1_000_000 }] },
+    ]);
   });
 });

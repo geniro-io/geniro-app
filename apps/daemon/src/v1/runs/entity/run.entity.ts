@@ -165,6 +165,14 @@ export class Run extends TimestampsEntity {
   contextTokens: number | null = null;
 
   /**
+   * Whether {@link contextTokens} is geniro's stand-in rather than an
+   * occupancy the CLI stated (`AgentUsage.contextEstimated`). Written with
+   * every count and cleared with it; null reads as stated.
+   */
+  @Property({ type: 'boolean', nullable: true })
+  contextEstimated: boolean | null = null;
+
+  /**
    * The last reading taken from this run's own agent process before it was
    * closed — the context breakdown and the plan limits, as JSON, with the
    * moment and the transcript position they were taken at.
@@ -302,6 +310,16 @@ export class Run extends TimestampsEntity {
   customInstructions: string | null = null;
 
   /**
+   * The language the user wanted replies in when this run was created
+   * (`Settings.replyLanguage`); null when none was set, and for every row
+   * predating the setting. A snapshot for {@link customInstructions}' reason:
+   * it is argv (the composed block, and claude's `--settings`), so a live read
+   * would respawn the kept CLI mid-conversation.
+   */
+  @Property({ type: 'text', nullable: true })
+  replyLanguage: string | null = null;
+
+  /**
    * What the board card this run works asks of its agent — the card's LABEL
    * instructions and geniro's own report ask, already composed; null for every
    * run no card started.
@@ -316,15 +334,17 @@ export class Run extends TimestampsEntity {
    * snapshot is never re-read that way.
    *
    * Composed onto the turn right after {@link customInstructions}
-   * (`composeTurnInstructions`), and hashed by `AgentAdapter.sessionKey` on the
+   * (`turnInstructionParts`), and hashed by `AgentAdapter.sessionKey` on the
    * same terms. TEXT so the `safe: true` schema sync adds it additively.
    */
   @Property({ type: 'text', nullable: true })
   taskInstructions: string | null = null;
 
   /**
-   * The DEFERRED question card this run is parked on, as JSON
-   * (`PendingQuestionSnapshot`), or null when it is parked on none.
+   * The DEFERRED card this run is parked on, as JSON
+   * (`PendingCardSnapshot` — a question, a plan or a patch), or null when it
+   * is parked on none. Every row names its `kind`; one that does not is
+   * cleared at boot.
    *
    * It is the one card that OUTLIVES its turn — put up for a CLI whose MCP
    * client will not hold a call open for a person, answered by starting a new
@@ -348,6 +368,20 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'text', nullable: true })
   pendingQuestion: string | null = null;
+
+  /**
+   * The standing `propose_workflow` card, as JSON (`PendingWorkflowProposal`:
+   * the card's id and the workflow it would write), or null.
+   *
+   * Durable for the reason {@link pendingQuestion} is — the card waits on a
+   * person, and the daemon routinely exits before they answer — and a column of
+   * its own because the two cards stand independently: a typed message retires
+   * a question but not a proposal. Cleared BEFORE an approved proposal is
+   * written, so a crash between the press and the write reads as an expired
+   * card at the next boot, never as a second write.
+   */
+  @Property({ type: 'text', nullable: true })
+  pendingWorkflowProposal: string | null = null;
 
   /**
    * The library workflow this chat EDITS — the slug of a `*.geniro.yaml` file
@@ -754,7 +788,8 @@ export class Run extends TimestampsEntity {
 
   /**
    * What this run's agents have SPENT that no durable row records yet — JSON,
-   * live-plane owner key → dollars (`agents/utils/unrecorded-spend.ts`), null
+   * live-plane owner key → dollars, or `{costUsd, estimatedCostUsd}` when part
+   * of them was priced by geniro (`agents/utils/unrecorded-spend.ts`), null
    * when nothing is outstanding.
    *
    * A turn's cost reaches `items` only with its `turn_complete`, so a callee

@@ -9,10 +9,15 @@ import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { rowsWithId, workflowEdgeRows } from '../utils/history-anchors';
 import { itemToWire } from '../utils/item-wire';
-import { parseJsonColumn, payloadString } from '../utils/json-util';
-import { foldRunCalls, foldRunDelegates } from '../utils/run-state-folds';
+import { payloadString } from '../utils/json-util';
+import {
+  foldRunCalls,
+  foldRunDelegates,
+  turnEndingOf,
+} from '../utils/run-state-folds';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ApprovalRegistry } from './approval-registry';
+import { ChatActionsService } from './chat-actions.service';
 import { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 
@@ -39,6 +44,7 @@ export class RunStateService {
     private readonly shells: ChatShellsService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly seqs: ItemSeqAllocator,
+    private readonly actions: ChatActionsService,
   ) {}
 
   async read(runId: string): Promise<RunStateWire> {
@@ -137,20 +143,29 @@ export class RunStateService {
           );
 
     const delegateReplies = rowsWithId(replies, delegateIds);
-    const delegates = foldRunDelegates({
+    const lifecycles = foldRunDelegates({
       declarations,
       launches: delegationCalls,
       replies: delegateReplies,
       runSettled,
-      endings: runSettled
-        ? []
-        : await this.endingsAfterUnanswered(
-            runId,
-            [...delegationCalls, ...declarations],
-            idsOf(delegateReplies),
-            em,
-          ),
+      runCancelled: run.status === 'cancelled',
+      endings: await this.endingsAfterUnanswered(
+        runId,
+        [...delegationCalls, ...declarations],
+        idsOf(delegateReplies),
+        em,
+      ),
     });
+    // Counted over every row through this read: a delegate with none counted
+    // made none.
+    const toolCalls =
+      lifecycles.length === 0
+        ? new Map<string, number>()
+        : await this.itemDao.delegateToolCallCounts(runId, throughSeq, em);
+    const delegates = lifecycles.map((delegate) => ({
+      ...delegate,
+      toolCalls: toolCalls.get(delegate.id) ?? 0,
+    }));
     const workflowRows = [
       ...workflowEdgeRows(announcements, workflowIds),
       ...workflowLaunches,
@@ -178,6 +193,7 @@ export class RunStateService {
       workflowRows,
       artifactRows,
       shells: (await this.shells.read(runId)).shells,
+      actions: await this.actions.live(runId, em),
       turnStartedAt,
     };
   }
@@ -251,11 +267,7 @@ export class RunStateService {
       return [];
     }
     return (await this.itemDao.turnEndingsAfter(runId, oldest, em)).map(
-      (row) => ({
-        seq: row.seq,
-        nodeId: row.nodeId,
-        callId: payloadString(parseJsonColumn(row.payload), 'callId'),
-      }),
+      turnEndingOf,
     );
   }
 }

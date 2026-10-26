@@ -2,7 +2,15 @@ import { type ChildProcess, spawn } from 'node:child_process';
 
 import type { RemoteTunnelState, TunnelProviderId } from '../../shared/remote';
 import { resolveBinary } from '../resolve-binary';
-import { TUNNEL_OUTPUT_KEPT, TUNNEL_URL_WAIT_MS } from './remote.types';
+import {
+  TUNNEL_ANSWER_GAP_MS,
+  TUNNEL_EXPIRED_AFTER_MS,
+  TUNNEL_EXPIRY_CONFIRM_MS,
+  TUNNEL_LIVENESS_POLL_MS,
+  TUNNEL_OUTPUT_KEPT,
+  TUNNEL_READY_PROBE_TIMEOUT_MS,
+  TUNNEL_URL_WAIT_MS,
+} from './remote.types';
 
 /**
  * One tunnel client geniro knows how to drive.
@@ -24,6 +32,14 @@ interface TunnelProvider {
    * has one (ngrok's URL is a JSON field), else the whole match.
    */
   url: RegExp;
+  /**
+   * The client's own readiness endpoint, which answers 200 only while the
+   * client holds a connection to the provider: `address` captures (group 1)
+   * its `127.0.0.1:port` in the client's output — loopback only, since the
+   * public address is never probed — and `path` is where it answers. A
+   * provider without one is watched for its exit alone.
+   */
+  readiness?: { address: RegExp; path: string };
 }
 
 /**
@@ -46,14 +62,23 @@ const PROVIDERS: readonly TunnelProvider[] = [
     bin: 'cloudflared',
     // `--no-autoupdate`: the client otherwise replaces its own binary and
     // restarts mid-session, which drops the tunnel under a URL already on the
-    // user's screen.
+    // user's screen. `--metrics 127.0.0.1:0`: the default listens on
+    // `localhost` in a port range every cloudflared on the machine shares, so
+    // the readiness endpoint is pinned to loopback and its port read back
+    // from the client's own log line.
     args: (port) => [
       'tunnel',
       '--no-autoupdate',
+      '--metrics',
+      '127.0.0.1:0',
       '--url',
       `http://127.0.0.1:${port}`,
     ],
     url: /(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/i,
+    readiness: {
+      address: /Starting metrics server on (127\.0\.0\.1:\d+)\/metrics/,
+      path: '/ready',
+    },
   },
   {
     id: 'ngrok',
@@ -113,6 +138,51 @@ export interface RemoteTunnelOptions {
   resolveBin?: (name: string) => string | null;
   /** Test seam for the URL wait; defaults to {@link TUNNEL_URL_WAIT_MS}. */
   urlWaitMs?: number;
+  /** Test seam for the liveness poll; defaults to {@link TUNNEL_LIVENESS_POLL_MS}. */
+  livenessPollMs?: number;
+  /** Test seam for the readiness request; defaults to {@link probeReady}. */
+  probeReady?: (url: string) => Promise<boolean>;
+}
+
+/** End a client; resolves once it has exited or been SIGKILLed. Never throws. */
+async function reap(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const done = (): void => {
+      clearTimeout(escalate);
+      resolve();
+    };
+    // SIGTERM lets the client close its connection to the provider; the
+    // escalation is what stops a wedged one from holding up a quit.
+    const escalate = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve();
+    }, 2_000);
+    escalate.unref?.();
+    child.once('exit', done);
+    child.kill('SIGTERM');
+  });
+}
+
+/**
+ * Whether the client's readiness endpoint at `url` answers 200. Never throws:
+ * an unreachable endpoint is a client without a connection, not an error.
+ */
+export async function probeReady(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(TUNNEL_READY_PROBE_TIMEOUT_MS),
+    });
+    const ok = res.ok;
+    // Unread, the body would hold the socket until garbage collection; the
+    // cleanup failing (the timeout firing meanwhile) leaves the answer alone.
+    await res.body?.cancel().catch(() => undefined);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -138,11 +208,16 @@ export class RemoteTunnel {
   private readonly spawnProcess: typeof spawn;
   private readonly resolveBin: (name: string) => string | null;
   private readonly urlWaitMs: number;
+  private readonly livenessPollMs: number;
+  private readonly probeReadyFn: (url: string) => Promise<boolean>;
+  private liveness: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: RemoteTunnelOptions = {}) {
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.resolveBin = options.resolveBin ?? ((name) => resolveBinary(name));
     this.urlWaitMs = options.urlWaitMs ?? TUNNEL_URL_WAIT_MS;
+    this.livenessPollMs = options.livenessPollMs ?? TUNNEL_LIVENESS_POLL_MS;
+    this.probeReadyFn = options.probeReady ?? probeReady;
   }
 
   state(): RemoteTunnelState {
@@ -185,24 +260,10 @@ export class RemoteTunnel {
     const child = this.child;
     this.child = null;
     this.current = OFF;
-    if (!child || child.exitCode !== null || child.signalCode !== null) {
-      return this.current;
+    this.stopLiveness();
+    if (child) {
+      await reap(child);
     }
-    await new Promise<void>((resolve) => {
-      const done = (): void => {
-        clearTimeout(escalate);
-        resolve();
-      };
-      // SIGTERM lets the client close its connection to the provider; the
-      // escalation is what stops a wedged one from holding up a quit.
-      const escalate = setTimeout(() => {
-        child.kill('SIGKILL');
-        resolve();
-      }, 2_000);
-      escalate.unref?.();
-      child.once('exit', done);
-      child.kill('SIGTERM');
-    });
     return this.current;
   }
 
@@ -241,6 +302,7 @@ export class RemoteTunnel {
       // words rather than as a bare exit code the user can do nothing with.
       const output: string[] = [];
       let settled = false;
+      let watching = false;
       const finish = (next: RemoteTunnelState): void => {
         if (settled) {
           return;
@@ -251,13 +313,17 @@ export class RemoteTunnel {
         resolve(next);
       };
 
-      const read = (chunk: Buffer): void => {
-        const text = chunk.toString();
-        output.push(text);
-        if (output.length > TUNNEL_OUTPUT_KEPT) {
-          output.shift();
+      const readLine = (line: string): void => {
+        const address = chosen.readiness?.address.exec(line)?.[1];
+        if (address && chosen.readiness && !watching) {
+          watching = true;
+          this.watchLiveness(
+            child,
+            chosen,
+            `http://${address}${chosen.readiness.path}`,
+          );
         }
-        const found = chosen.url.exec(text);
+        const found = chosen.url.exec(line);
         const url = found?.[1] ?? found?.[0];
         if (!url) {
           return;
@@ -275,26 +341,45 @@ export class RemoteTunnel {
         finish(this.current);
       };
 
-      child.stdout?.on('data', read);
-      child.stderr?.on('data', read);
+      // One reader per stream. A pipe read can end mid-line, so lines are
+      // matched whole: a URL or readiness line split across two reads would
+      // otherwise go unseen.
+      const readStream = (): ((chunk: Buffer) => void) => {
+        let partial = '';
+        return (chunk) => {
+          // Output a stopped or replaced client still had buffered must not
+          // reopen the state or start a watcher for it.
+          if (this.child !== child) {
+            return;
+          }
+          const text = chunk.toString();
+          output.push(text);
+          if (output.length > TUNNEL_OUTPUT_KEPT) {
+            output.shift();
+          }
+          const lines = (partial + text).split('\n');
+          partial = lines.pop() ?? '';
+          for (const line of lines) {
+            readLine(line);
+          }
+        };
+      };
+      child.stdout?.on('data', readStream());
+      child.stderr?.on('data', readStream());
 
-      const fail = (reason: string): void => {
-        this.child = null;
-        finish({
-          status: 'error',
-          provider: chosen.id,
-          url: null,
-          error: reason,
-        });
+      // Settles a start that is still waiting, with whatever state `end`
+      // left: an error, or `off` when `stop()` got there first.
+      const fail = (reason: string, reapClient = false): void => {
+        this.end(child, chosen, reason, reapClient);
+        finish(this.current);
       };
 
       child.once('error', (err: Error) => {
         fail(`${chosen.label} could not be started: ${err.message}`);
       });
+      // Reached after an address was handed out too: the client died, so the
+      // address it served is dead with it.
       child.once('exit', (code, signal) => {
-        // Reached after a successful start too, when the client dies later —
-        // `finish` has already settled by then, so this only ever reports a
-        // start that never produced an address.
         fail(
           `${chosen.label} stopped (${signal ?? `exit ${String(code)}`}): ${
             output.join('').trim().split('\n').slice(-3).join(' ') ||
@@ -304,15 +389,113 @@ export class RemoteTunnel {
       });
 
       const timer = setTimeout(() => {
-        child.kill('SIGTERM');
         fail(
           `${chosen.label} did not report an address within ${String(
             Math.round(this.urlWaitMs / 1000),
           )}s.`,
+          true,
         );
       }, this.urlWaitMs);
       timer.unref?.();
     });
+  }
+
+  /**
+   * The one way a tunnel ends on its own: release `child`, stop watching it
+   * and report `error`. A no-op once `child` is no longer the current client —
+   * `stop()` lets go of the child before reaping it, so its own exit, a late
+   * probe or late output can never overwrite the state that came after.
+   */
+  private end(
+    child: ChildProcess,
+    provider: TunnelProvider,
+    error: string,
+    reapClient: boolean,
+  ): void {
+    if (this.child !== child) {
+      return;
+    }
+    this.child = null;
+    this.stopLiveness();
+    this.current = { status: 'error', provider: provider.id, url: null, error };
+    if (reapClient) {
+      void reap(child);
+    }
+  }
+
+  /**
+   * Reports the address as expired, and reaps the client, once the client has
+   * held no connection for {@link TUNNEL_EXPIRED_AFTER_MS}. The client never
+   * says so itself: cloudflared retries a deleted quick tunnel forever.
+   *
+   * Measured on the wall clock rather than counted in polls, because the case
+   * this exists for is a Mac asleep overnight, when no timer runs. For a few
+   * seconds after wake the client still reports the connection it held before
+   * sleeping, so a connection counts only when two answers in a row, within
+   * {@link TUNNEL_ANSWER_GAP_MS} of each other, report it.
+   */
+  private watchLiveness(
+    child: ChildProcess,
+    provider: TunnelProvider,
+    readinessUrl: string,
+  ): void {
+    this.stopLiveness();
+    let connectedAt = Date.now();
+    let failingSince = Date.now();
+    let last: { at: number; ready: boolean } | null = null;
+    let probing = false;
+    const timer = setInterval(() => {
+      if (probing) {
+        return;
+      }
+      probing = true;
+      void this.probeReadyFn(readinessUrl)
+        .catch(() => false)
+        .then((ready) => {
+          probing = false;
+          // A probe answered after the client was stopped or replaced, or
+          // before it reported an address, decides nothing.
+          if (this.child !== child || this.current.status !== 'open') {
+            return;
+          }
+          const now = Date.now();
+          const previous =
+            last && now - last.at <= TUNNEL_ANSWER_GAP_MS ? last : null;
+          last = { at: now, ready };
+          if (ready) {
+            if (previous?.ready) {
+              connectedAt = now;
+            }
+            return;
+          }
+          if (!previous || previous.ready) {
+            failingSince = now;
+          }
+          if (
+            now - failingSince < TUNNEL_EXPIRY_CONFIRM_MS ||
+            now - connectedAt < TUNNEL_EXPIRED_AFTER_MS
+          ) {
+            return;
+          }
+          this.end(
+            child,
+            provider,
+            `The public address expired: ${provider.label} had no connection for over ${String(
+              Math.round(TUNNEL_EXPIRED_AFTER_MS / 60_000),
+            )} minutes (this Mac slept or went offline). Get a new address.`,
+            true,
+          );
+        });
+    }, this.livenessPollMs);
+    timer.unref?.();
+    this.liveness = timer;
+  }
+
+  private stopLiveness(): void {
+    if (this.liveness) {
+      clearInterval(this.liveness);
+      this.liveness = null;
+    }
   }
 
   private pickProvider(): { provider: TunnelProvider; bin: string } | null {

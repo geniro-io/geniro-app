@@ -20,9 +20,11 @@ import {
   type SharingSettings,
 } from '../shared/contracts';
 import {
+  autoRevokeAfterDaysSchema,
   MAX_SHARE_DESTINATIONS,
   settingsPatchSchema,
   shareDestinationSchema,
+  shareSignInSchema,
 } from './ipc-schemas';
 
 /**
@@ -222,7 +224,9 @@ function salvageSharing(value: unknown): SharingSettings {
   for (const candidate of Array.isArray(record.destinations)
     ? record.destinations
     : []) {
-    const parsed = shareDestinationSchema.safeParse(candidate);
+    const parsed = shareDestinationSchema.safeParse(
+      withSalvagedSignIn(candidate),
+    );
     if (!parsed.success || seen.has(parsed.data.id)) {
       continue;
     }
@@ -238,7 +242,40 @@ function salvageSharing(value: unknown): SharingSettings {
         ? defaultId
         : null,
     agentsMayShare: record.agentsMayShare === true,
+    autoRevokeAfterDays: autoRevokeAfterDaysSchema
+      .catch(null)
+      .parse(record.autoRevokeAfterDays ?? null),
   };
+}
+
+/**
+ * A destination with its optional `signIn` cut down to the fields that still
+ * parse, so a broken login command or pattern list costs only that field —
+ * never the destination agents share to.
+ */
+function withSalvagedSignIn(candidate: unknown): unknown {
+  if (
+    typeof candidate !== 'object' ||
+    candidate === null ||
+    !('signIn' in candidate)
+  ) {
+    return candidate;
+  }
+  const { signIn, ...rest } = candidate as Record<string, unknown>;
+  if (typeof signIn !== 'object' || signIn === null) {
+    return rest;
+  }
+  const fields = signIn as Record<string, unknown>;
+  const kept: Record<string, unknown> = {};
+  for (const field of ['login', 'patterns'] as const) {
+    if (
+      fields[field] !== undefined &&
+      shareSignInSchema.safeParse({ [field]: fields[field] }).success
+    ) {
+      kept[field] = fields[field];
+    }
+  }
+  return Object.keys(kept).length === 0 ? rest : { ...rest, signIn: kept };
 }
 
 /**

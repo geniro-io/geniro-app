@@ -5,20 +5,24 @@ import {
   type AgentFailureClass,
 } from '../agents/adapters/adapter.types';
 import {
+  type ActionSpec,
   AgentApprovalProbeSchema,
   AgentOptionSpecSchema,
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
   ChatTotalsWireSchema,
   CustomInstructionsSchema,
+  PendingOwnedCardSchema,
   type PersistedResetWake,
 } from '../agents/chat.types';
 import { createChatSchema } from '../agents/dto/chat.dto';
+import { TURN_INSTRUCTION_SOURCES } from '../agents/utils/agent-instructions';
 import {
   AgentKindSchema,
   type ItemKind,
   NodeStatusSchema,
 } from '../runs/runs.types';
+import type { WorkflowDiff } from './utils/workflow-diff';
 
 /**
  * The workflow domain model — the zod half of the Geniro graph-core port
@@ -449,10 +453,10 @@ export const WorkflowAgentNodeSchema = z
      * A call that opens a new conversation uses member 1 first, trying later
      * members in priority order when earlier ones are unavailable or fail on a
      * usage limit, a lapsed sign-in, or before doing any work. A caller may
-     * also name a member at the user's request. A continued thread stays on
-     * the member that holds its session, since a CLI session cannot move
-     * between CLIs or accounts. The node's own conversation — including a
-     * trigger-fed root — also falls through the pool and continues on the
+     * also pin a member at the user's request. A continued thread starts on
+     * the member holding its latest session; fallback carries its original
+     * task and recent conversation into a fresh session. The node's own
+     * conversation — including a trigger-fed root — also falls through the pool and continues on the
      * member that answered. A hand-off opens a fresh CLI session with the
      * recent workflow transcript and keeps the node's outstanding calls.
      * See `utils/agent-pool.ts`.
@@ -485,7 +489,7 @@ export const WorkflowTriggerNodeSchema = z
  *
  * It is NOT an execution step: it runs no CLI, holds no slot, never enters the
  * run order and never settles. Each wired agent's turn is composed with this
- * text in it; `composeTurnInstructions` owns where it ranks against the user's
+ * text in it; `turnInstructionParts` owns where it ranks against the user's
  * global instructions and that node's own `role`.
  */
 export const WorkflowInstructionNodeSchema = z
@@ -668,6 +672,70 @@ export const WorkflowWireSchema = z.object({
 });
 export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
 
+/** How long an agent's one-line `summary` for a proposal card may be. */
+export const WORKFLOW_SUMMARY_MAX = 200;
+
+const WorkflowProposalBaseSchema = z.object({
+  workflow: WorkflowSchema,
+  /** The library file the approval writes, fixed when the card was raised. */
+  slug: z.string(),
+  /** The agent's one line for the card — its own words, never trusted. */
+  summary: z.string().optional(),
+  /**
+   * Every agent that would run tools without asking — `approval: 'auto'` only,
+   * a pool member's own or inherited; an `acceptEdits` agent, which edits files
+   * unasked but asks for the rest, is not listed — as the card names it,
+   * worked out by the daemon from `workflow` because the agent's own summary
+   * may leave one out.
+   */
+  autoAgents: z.array(z.string()),
+});
+
+/**
+ * One `propose_workflow` card: the `input` of its `approval_request` row and,
+ * with the card's id, what `Run.pendingWorkflowProposal` holds so the card
+ * outlives a restart.
+ *
+ * A replacement quotes the hash the file was read at, so an approval pressed
+ * after the file changed is refused rather than written over the newer copy.
+ *
+ * TWIN PARSER: `readWorkflowProposal` in
+ * `apps/ui/src/renderer/chats/workflow-proposal-payload.ts`.
+ */
+export const WorkflowProposalSchema = z.discriminatedUnion('mode', [
+  WorkflowProposalBaseSchema.extend({ mode: z.literal('create') }),
+  WorkflowProposalBaseSchema.extend({
+    mode: z.literal('replace'),
+    replacesName: z.string(),
+    baseHash: z.string(),
+    diff: z.custom<WorkflowDiff>(
+      (value) => typeof value === 'object' && value !== null,
+    ),
+  }),
+]);
+export type WorkflowProposal = z.infer<typeof WorkflowProposalSchema>;
+
+/** What an agent sends `propose_workflow`. */
+export interface WorkflowProposalRequest {
+  workflow: unknown;
+  /** The library slug this proposal replaces; absent for a new workflow. */
+  replaces?: string;
+  summary?: string;
+}
+
+/** What `propose_workflow` tells the agent. */
+export type ProposalOutcome =
+  | { status: 'shown'; proposal: WorkflowProposal }
+  | { status: 'refused'; code: string; message: string };
+
+/** `Run.pendingWorkflowProposal`: the standing card and what it proposes. */
+export const PendingWorkflowProposalSchema = PendingOwnedCardSchema.extend({
+  proposal: WorkflowProposalSchema,
+});
+export type PendingWorkflowProposal = z.infer<
+  typeof PendingWorkflowProposalSchema
+>;
+
 /** Where one workflow's file sits on disk (`WorkflowStoreService.locate`). */
 export interface WorkflowLocation {
   /** The library directory — what an editing agent is given as its cwd. */
@@ -698,6 +766,7 @@ export const StartWorkflowChatSchema = createChatSchema
     modelParameters: true,
     configDir: true,
     customInstructions: true,
+    replyLanguage: true,
     agentOptions: true,
   })
   .meta({ id: 'StartWorkflowChat' });
@@ -741,6 +810,11 @@ export const NodeStateWireSchema = z.object({
    * has reported none.
    */
   contextTokens: z.number().nullable(),
+  contextEstimated: z
+    .boolean()
+    .describe(
+      "Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it",
+    ),
   contextWindowTokens: z.number().nullable(),
   /**
    * The model the node's newest turn reported running on (`usage.contextModel`
@@ -754,6 +828,10 @@ export const NodeStateWireSchema = z.object({
    * node called several times needs these to draw one ring per call thread
    * rather than one flickering between windows.
    *
+   * CAPPED at the newest `CALL_CONTEXT_SNAPSHOT_LIMIT` calls of the run: it
+   * carries the heavy parts (the start brief). A call's FIGURES are never
+   * here — they are in the uncapped {@link callFigures}.
+   *
    * Nested, so it carries a `.meta({ id })` of its own to land as a named
    * component, exactly as `AgentCount` above does.
    */
@@ -762,15 +840,12 @@ export const NodeStateWireSchema = z.object({
       .object({
         callId: z.string(),
         contextTokens: z.number().nullable(),
+        contextEstimated: z
+          .boolean()
+          .describe(
+            "Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it",
+          ),
         contextWindowTokens: z.number().nullable(),
-        /** What this call's own turns spent, over the whole run. */
-        totals: ChatTotalsWireSchema,
-        /**
-         * When this call's prompt cache lapses (ISO): the end of its newest
-         * turn plus the lifetime its CLI reported. Null when its CLI reports
-         * none — never a guessed expiry.
-         */
-        promptCacheExpiresAt: z.string().nullable(),
         /**
          * What the call's `call_started` row said — who asked, the title, the
          * brief (capped at {@link CALL_START_BRIEF_MAX} characters) and the
@@ -796,6 +871,39 @@ export const NodeStateWireSchema = z.object({
           .nullable(),
       })
       .meta({ id: 'CallContextReading' }),
+  ),
+  /**
+   * EVERY call this node ran, with what the daemon measured of it over the
+   * whole run — never capped, so a card's figures do not depend on how many
+   * calls the run has made since.
+   */
+  callFigures: z.array(
+    z
+      .object({
+        callId: z.string(),
+        /** What this call's own turns spent, over the whole run. */
+        totals: ChatTotalsWireSchema,
+        toolCalls: z
+          .number()
+          .int()
+          .describe(
+            "The tools the node itself called inside this call, its CLI sub-agents' excluded, counted from the transcript as of toolCallsThroughSeq",
+          ),
+        toolCallsThroughSeq: z
+          .number()
+          .int()
+          .nullable()
+          .describe(
+            'The seq of the newest tool call counted in toolCalls; a later tool_call row of this call is not in it. Null when none was counted',
+          ),
+        /**
+         * When this call's prompt cache lapses (ISO): the end of its newest
+         * turn plus the lifetime its CLI reported. Null when its CLI reports
+         * none — never a guessed expiry.
+         */
+        promptCacheExpiresAt: z.string().nullable(),
+      })
+      .meta({ id: 'CallFigures' }),
   ),
   /**
    * What this node has spent over the WHOLE run, summed from every
@@ -900,7 +1008,15 @@ export const ALWAYS_LOADED_TOOL_META = {
 
 /** What became of a caller's message into one running call. */
 export type CalleeMessageOutcome =
-  | { delivered: true; interrupts: boolean }
+  | {
+      delivered: true;
+      interrupts: boolean;
+      /**
+       * The `FollowUpMessage.deliveryId` it rode into the turn with, which a
+       * later drop names (`CallBroker.markMessageDropped`).
+       */
+      deliveryId?: string;
+    }
   | { delivered: false; reason: 'not_started' | 'refused' };
 
 /** One command a callee left running, as {@link CalleeTurnOutcome} names it. */
@@ -1010,7 +1126,13 @@ export interface CalleeTurnOutcome {
  * - `cancelled` — the call, or the run, was stopped while it waited.
  */
 export type CallHoldRelease =
-  | { kind: 'wake'; prompt: string; note: string }
+  | {
+      kind: 'wake';
+      prompt: string;
+      note: string;
+      /** Woken by its monitors' output — counted against their own budget. */
+      monitor?: true;
+    }
   | { kind: 'settle' }
   | { kind: 'cancelled' };
 
@@ -1031,7 +1153,7 @@ export interface CalleePoolPlan {
   /**
    * The members to hand the call to, in order, when an attempt fails in a way
    * another account could get past (`fallsThroughPool`). Empty for a call
-   * pinned to one member — a continued thread, or a member the caller named.
+   * pinned to a member the caller explicitly named.
    */
   fallbacks: readonly CalleePoolAttempt[];
 }
@@ -1043,6 +1165,14 @@ export interface PoolSkipWire {
   resets_at?: string;
   error?: string;
 }
+
+/**
+ * Why a pool member is spent (`PoolCooldowns`). `limit` is its ACCOUNT's — a
+ * usage window or a lapsed sign-in, which reopens at a known instant or not
+ * soon — and is what moves a conversation off it; `unavailable` is any other
+ * failure it was handed past for, which only puts it later for new work.
+ */
+export type PoolStanding = 'limit' | 'unavailable';
 
 /** A pool member a call was handed past. */
 export interface PoolSkip {
@@ -1064,6 +1194,17 @@ export interface CallPublishedPage {
   version: number;
 }
 
+/**
+ * One button (`publish_action`) published inside a call — by its callee, or
+ * by any call made inside it — as the caller's envelope names it: its newest
+ * publish, and only while it is still live.
+ */
+export interface CallPublishedAction {
+  action_id: string;
+  label: string;
+  kind: ActionSpec['kind'];
+}
+
 /** The `result` of a COMPLETED call's ok envelope. */
 export interface CallSettledResult {
   call_id: string;
@@ -1081,6 +1222,7 @@ export interface CallSettledResult {
   /** What the text alone would leave the caller to misread. */
   note?: string;
   artifacts?: CallPublishedPage[];
+  actions?: CallPublishedAction[];
 }
 
 /**
@@ -1113,6 +1255,8 @@ export type CallEnvelope =
       call_id?: string;
       /** Pages the call published before it failed — they stay in the user's chat. */
       artifacts?: CallPublishedPage[];
+      /** Buttons the call published before it failed — they stay in the user's chat. */
+      actions?: CallPublishedAction[];
       /** The callee pool member the failure came from; absent without a pool. */
       member?: number;
       /** Pool members the call was handed past before failing. */
@@ -1492,6 +1636,69 @@ export const CapabilitiesWireSchema = z.object({
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 
+/** One instruction node's text, as it reaches a wired agent. */
+export interface InstructionBlock {
+  /** The instruction node the text was written in. */
+  nodeId: string;
+  text: string;
+}
+
+export const InstructionSizeSourceSchema = z
+  .enum(TURN_INSTRUCTION_SOURCES)
+  .meta({ id: 'InstructionSizeSource' });
+
+/** One part of an agent node's always-on instruction block, measured. */
+export const InstructionSizePartSchema = z
+  .object({
+    source: InstructionSizeSourceSchema,
+    instructionNodeId: z
+      .string()
+      .optional()
+      .describe(
+        'For an instructionBlocks part: the instruction node whose text it is (one part per wired block)',
+      ),
+    chars: z.number().int().nonnegative(),
+    approxTokens: z.number().int().nonnegative(),
+  })
+  .meta({ id: 'InstructionSizePart' });
+export type InstructionSizePart = z.infer<typeof InstructionSizePartSchema>;
+
+/** What one agent node's turns pay for before the prompt, every turn. */
+export const NodeInstructionSizeSchema = z
+  .object({
+    nodeId: z.string(),
+    agent: AgentKindSchema.describe(
+      'The CLI measured — the node’s own, a pool’s first member',
+    ),
+    turn: z
+      .enum(['own', 'call'])
+      .describe(
+        'Which turn was measured: the node’s own turn, or — for a node only ever called — a turn answering a call',
+      ),
+    totalChars: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('Length of the composed block, exactly'),
+    approxTokens: z.number().int().nonnegative(),
+    separatorChars: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe(
+        'The paragraph breaks between parts — totalChars less the parts',
+      ),
+    parts: z.array(InstructionSizePartSchema),
+  })
+  .meta({ id: 'NodeInstructionSize' });
+export type NodeInstructionSize = z.infer<typeof NodeInstructionSizeSchema>;
+
+/** POST /v1/workflows/instruction-sizes — one entry per agent node. */
+export const InstructionSizesWireSchema = z.object({
+  nodes: z.array(NodeInstructionSizeSchema),
+});
+export type InstructionSizesWire = z.infer<typeof InstructionSizesWireSchema>;
+
 /** What calling off a run's promised continues answers. */
 export const ResetWakesCancelledSchema = z.object({
   cancelledCallIds: z
@@ -1529,6 +1736,16 @@ export interface ResetWakeHooks {
 export interface RunCallCapability {
   /** Callees each caller may invoke: caller node id → callee agent nodes. */
   readonly calleesOf: ReadonlyMap<string, readonly WorkflowAgentNode[]>;
+  /**
+   * The run's folder, whose account pin decides which account a pool member
+   * runs on (`PoolCooldowns`). Absent: no folder, so nothing is pinned.
+   */
+  readonly cwd?: string;
+  /**
+   * The agents a user's message goes to (the trigger-fed ones) — the only
+   * nodes whose waits `awaitingCalls` counts.
+   */
+  readonly messageTargets: ReadonlySet<string>;
   /**
    * Spawn one callee turn; resolves once the turn fully settles.
    * `depth` is the call's chain depth (1 = a top-level caller's callee): the
@@ -1630,6 +1847,23 @@ export interface RunCallCapability {
    */
   isNodeLive(caller: string): boolean;
   /**
+   * Whether a conversation's monitors still owe it output — one running, or
+   * output held until it can be delivered. A callee turn ending while this
+   * holds is held in its call, as for a call of its own still running.
+   * Absent for a capability with no monitor tools.
+   */
+  monitorsOwed?(caller: string): boolean;
+  /** Stop a conversation's monitors — its call is being cancelled. */
+  stopMonitors?(caller: string): void;
+  /** A callee conversation's call is now held — output waiting for it can go. */
+  callHeld?(caller: string): void;
+  /**
+   * How many of the run's team notes a conversation has not been shown and
+   * did not write — said on its call replies and in its wakes. Absent for a
+   * capability with no team-note tools.
+   */
+  unreadTeamNotes?(caller: string): number;
+  /**
    * Start another turn of a node's OWN conversation whose turns have all
    * ended, carrying `prompt` — how a question or a result that arrives after
    * the caller stopped still reaches it. False when the run cannot take a turn
@@ -1645,8 +1879,13 @@ export interface RunCallCapability {
    * turn, the CLI refused the message, or the CLI's follow-up would INTERRUPT
    * the turn (`AdapterConfig.followUp.interrupts`): stopping a caller's tool
    * call to relay a question costs more than letting its next wait deliver it.
+   *
+   * A turn can still end before it takes a message it accepted
+   * (`follow_up_dropped`). `redeliver` then runs once that turn has ended;
+   * without one the drop is let go — right for a question or a result, which
+   * a tell leaves untold, so the conversation's drain wakes it with them.
    */
-  tellLiveNode(caller: string, prompt: string): boolean;
+  tellLiveNode(caller: string, prompt: string, redeliver?: () => void): boolean;
 }
 
 /**

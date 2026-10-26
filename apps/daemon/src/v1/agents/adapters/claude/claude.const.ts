@@ -97,14 +97,24 @@ export const CLAUDE_AUTOCOMPACT_MAX_TOKENS = 1_000_000;
  * the settings key WORKS (unlike `enableArtifact` beside {@link
  * CLAUDE_ARTIFACT_ENV}, which this CLI silently ignores) and the toggle is
  * offered regardless of that account gate.
+ *
+ * A second `--settings` REPLACES the first rather than merging with it
+ * (measured on 2.1.295: `{"language":"russian"}` then `{"env":…}` answered in
+ * English, the reverse order in Russian), so the LAST one must carry every
+ * key the turn needs: `claudeSettingsArgs` repeats an Ollama model's env,
+ * because the base's env-only flag sits ahead of it on the same command line.
  */
 export const CLAUDE_SETTINGS_FLAG = '--settings';
 /** The id a turn's `modelParameters` carries this axis under — the CLI's own settings key, never translated. */
 export const CLAUDE_FAST_MODE_PARAMETER_ID = 'fastMode';
 export const CLAUDE_FAST_MODE_ON_VALUE = 'true';
 export const CLAUDE_FAST_MODE_OFF_VALUE = 'false';
-/** The literal argv value for {@link CLAUDE_SETTINGS_FLAG} once fast mode is ON — see {@link CLAUDE_SETTINGS_FLAG}'s doc block for why this is the only value ever sent (turning it off is simply omitting the flag). */
-export const CLAUDE_FAST_MODE_SETTINGS_JSON = '{"fastMode":true}';
+/**
+ * The CLI's own reply-language setting. Set, it adds a `# Language` section to
+ * the system prompt ("Always respond in <value>…"); probed on 2.1.295, an
+ * English question under `{"language":"russian"}` was answered in Russian.
+ */
+export const CLAUDE_LANGUAGE_SETTING_KEY = 'language';
 
 // ── The conversations this CLI keeps on disk ───────────────────────────────
 /**
@@ -307,13 +317,25 @@ export const CLAUDE_CONTROL_REQUEST_ID_PREFIX = 'geniro-';
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
 /**
- * Tools the CLI withholds from the model for this process — how a workflow
- * node's switched-off MCP servers are applied (`AgentTurnInput.mcpDisabled`).
- * Variadic: one flag followed by every rule. A rule naming a server alone
- * (`mcp__<server>`) is server-level and takes every tool of that server — see
- * `claudeDisallowedMcpArgs` for the bundle reading and the measurement.
+ * Tools the CLI withholds from the model for this process — claude's own
+ * tools geniro replaces ({@link CLAUDE_WITHHELD_TOOLS}) and a workflow node's
+ * switched-off MCP servers (`AgentTurnInput.mcpDisabled`). Variadic: one flag
+ * followed by every rule. A rule naming a server alone (`mcp__<server>`) is
+ * server-level and takes every tool of that server — see
+ * `claudeDisallowedToolArgs` for the bundle reading and the measurement.
  */
 export const CLAUDE_DISALLOWED_TOOLS_FLAG = '--disallowedTools';
+
+/**
+ * claude's own tools withheld from every geniro turn, because geniro serves
+ * the same capability on its MCP endpoint for every CLI.
+ *
+ * `Monitor` — geniro's `monitor` tool. MEASURED on 2.1.295 (2026-10-21),
+ * `claude -p --output-format stream-json --verbose`, read to `system/init`:
+ * 147 tools with `Monitor` without the flag; `--disallowedTools Monitor` →
+ * 146 and no `Monitor`, also with an `mcp__<server>` rule after it.
+ */
+export const CLAUDE_WITHHELD_TOOLS: readonly string[] = ['Monitor'];
 
 /** The prefix the CLI names every MCP tool under: `mcp__<server>__<tool>`. */
 export const CLAUDE_MCP_TOOL_PREFIX = 'mcp__';
@@ -1520,6 +1542,16 @@ export const CLAUDE_TASK_UPDATED_SUBTYPE = 'task_updated';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */
 export const CLAUDE_TASK_NOTIFICATION_SUBTYPE = 'task_notification';
 
+/** Persisted session-task provenance, measured on Claude Code 2.1.295. */
+export const CLAUDE_PERSISTED_TASK_ORIGIN_KIND = 'task-notification';
+export const CLAUDE_PERSISTED_TASK_PRODUCER = 'session-task';
+export const CLAUDE_PERSISTED_TASK_PROMPT_SOURCE = 'system';
+export const CLAUDE_PERSISTED_TASK_TOOL_ID =
+  /<tool-use-id>([^<>]+)<\/tool-use-id>/g;
+export const CLAUDE_PERSISTED_TASK_ID = /<task-id>([^<>]+)<\/task-id>/g;
+export const CLAUDE_PERSISTED_TASK_STATUS = /<status>([^<>]+)<\/status>/g;
+export const CLAUDE_PERSISTED_DELEGATE_COMPLETED = 'completed';
+
 /**
  * `system/session_state_changed` — `state: 'idle' | 'running' |
  * 'requires_action'`. The bundle's own schema describes `idle` as firing "after
@@ -1704,6 +1736,43 @@ export const CLAUDE_TURN_ABORTED_MESSAGE =
 
 /** What the CLI is told when the user denies a permission request. */
 export const CLAUDE_DENY_MESSAGE = 'Denied by the user in Geniro';
+
+// ── Remembered approvals ──────────────────────────────────────────────────────
+//
+// A `can_use_tool` request carries `permission_suggestions`: the permission
+// updates claude's own terminal offers as "Yes, and don't ask again …". An
+// allow answer that echoes them as `updatedPermissions` applies them. MEASURED
+// on 2.1.295 (2026-10-21), `claude -p --permission-prompt-tool stdio`, one
+// process asked twice to run `touch probe-marker.txt`:
+//
+// - The request carried three suggestions: `addRules` (`Bash(touch …)`,
+//   `destination: "localSettings"`), `addDirectories` (the cwd, `"session"`)
+//   and `setMode` (`acceptEdits`, `"session"`).
+// - A plain allow asked twice.
+// - The rules and directories with `destination` rewritten to `"session"`
+//   asked ONCE, and wrote no file.
+// - The same two as given asked once and wrote `.claude/settings.local.json`
+//   in the cwd (`{"permissions":{"allow":["Bash(touch probe-marker.txt)"]}}`) —
+//   claude's own "always", kept in the project past the conversation.
+//
+// `setMode` is never echoed. It moves the whole session to another permission
+// mode behind geniro's back, so the chat's approval chip would say "ask" while
+// the CLI stopped asking about every edit — not an answer about THIS tool.
+
+/** The suggestion kinds an option may carry back (see the block above). */
+export const CLAUDE_REMEMBERED_SUGGESTION_TYPES: ReadonlySet<string> = new Set([
+  'addRules',
+  'addDirectories',
+]);
+
+/** The `destination` that keeps a permission update for the session only. */
+export const CLAUDE_SESSION_PERMISSION_DESTINATION = 'session';
+
+/** The card option ids of claude's two remembered answers. */
+export const CLAUDE_APPROVAL_OPTION_IDS = {
+  session: 'session',
+  always: 'always',
+} as const;
 
 /**
  * How the CLI reports that its own permission channel died under it.

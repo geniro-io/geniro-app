@@ -7,8 +7,10 @@ import { asRecord, asString, parseJsonColumn } from './json-util';
  * `open-delegates.ts` for the other kind of background unit.
  *
  * A shell's end is ordinarily written by `spawn-cli` itself: when the CLI
- * process dies, every command it still had out dies with its group, and the
- * exit announces a close for each. That announcement reaches the transcript
+ * process ends, every command it still had out ends with it — its own
+ * shutdown stops them, and what a CLI that died without one left is stopped
+ * from the groups its session recorded — and the exit announces a close for
+ * each. That announcement reaches the transcript
  * only through the owner's between-turn sink, and two owners are not listening
  * when it comes — a workflow run that has FINISHED, whose sink stops at
  * `runFinished` one step before its teardown kills the processes, and a daemon
@@ -93,6 +95,47 @@ export function shellCommandOf(toolCallPayload: unknown): string | null {
   const command =
     asString(asRecord(record?.input)?.command) ?? asString(record?.name);
   return command === null || command === '' ? null : command;
+}
+
+/**
+ * The tool call that launched a shell, from the run's calls oldest first: the
+ * newest with the shell's call id under the same node and workflow call. An
+ * ACP CLI numbers its calls from one in every session, so another
+ * conversation can reuse the id; a delegate's call is taken only when no call
+ * of the agent's own matches. Every reader that pairs a shell with its call
+ * goes through here.
+ */
+export function launchingCallOf<
+  T extends { payload: unknown; nodeId: string | null },
+>(
+  shell: {
+    toolCallId: string | null;
+    nodeId: string | null;
+    callId: string | null;
+  },
+  calls: readonly T[],
+): T | undefined {
+  if (shell.toolCallId === null) {
+    return undefined;
+  }
+  const matching = calls.filter((row) => {
+    const payload = asRecord(parseJsonColumn(row.payload));
+    return (
+      row.nodeId === shell.nodeId &&
+      asString(payload?.id) === shell.toolCallId &&
+      (asString(payload?.callId) || null) === shell.callId
+    );
+  });
+  return (
+    matching.filter((row) => !isDelegateCall(row)).at(-1) ?? matching.at(-1)
+  );
+}
+
+/** Whether a tool call row is a delegate's rather than the agent's own. */
+export function isDelegateCall(row: { payload: unknown }): boolean {
+  return Boolean(
+    asString(asRecord(parseJsonColumn(row.payload))?.parentToolUseId),
+  );
 }
 
 /** The close `spawn-cli` would have written had its process exit been heard. */

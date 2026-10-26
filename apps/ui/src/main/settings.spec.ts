@@ -110,6 +110,24 @@ describe('readSettings', () => {
     expect(readSettings().historyPageSize).toBe(250);
   });
 
+  it('keeps a run’s CLI for an hour by default, and a stored window survives a read', () => {
+    expect(readSettings().keptSessionIdleMinutes).toBe(60);
+
+    writeRaw({ keptSessionIdleMinutes: 5 });
+
+    expect(readSettings().keptSessionIdleMinutes).toBe(5);
+  });
+
+  it('an idle window outside 5–180 whole minutes costs only that key', () => {
+    for (const keptSessionIdleMinutes of [4, 181, 12.5, '30']) {
+      writeRaw({ keptSessionIdleMinutes, onboardingComplete: true });
+
+      const settings = readSettings();
+      expect(settings.keptSessionIdleMinutes).toBe(60);
+      expect(settings.onboardingComplete).toBe(true);
+    }
+  });
+
   it("a future agent kind inside cliPaths costs only that entry — this build's known CLI paths survive", () => {
     // The salvage exists for version skew (a settings.json written by a NEWER
     // build under the notify-only brew flow). The most likely schema growth is
@@ -510,6 +528,7 @@ describe('sharing settings', () => {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
   });
 
@@ -531,6 +550,7 @@ describe('sharing settings', () => {
         ],
         defaultDestinationId: 'company',
         agentsMayShare: true,
+        autoRevokeAfterDays: 30,
       },
     });
 
@@ -538,7 +558,40 @@ describe('sharing settings', () => {
       destinations: [GCS],
       defaultDestinationId: 'company',
       agentsMayShare: true,
+      autoRevokeAfterDays: 30,
     });
+  });
+
+  it('a broken sign-in field costs only that field, never the destination agents share to', () => {
+    const COMMAND = {
+      kind: 'command',
+      id: 'team',
+      name: 'Team bucket',
+      linkBase: 'https://x.example',
+      upload: ['gcloud', 'storage', 'cp', '{file}', 'gs://b/{object}'],
+      remove: ['gcloud', 'storage', 'rm', 'gs://b/{object}'],
+    };
+    writeRaw({
+      sharing: {
+        destinations: [
+          {
+            ...COMMAND,
+            signIn: {
+              login: ['/bin/sh', '-c', 'login'],
+              patterns: ['expired'],
+            },
+          },
+          { ...COMMAND, id: 'whole', signIn: 'not an object' },
+        ],
+        defaultDestinationId: 'team',
+        agentsMayShare: true,
+      },
+    });
+
+    expect(readSettings().sharing.destinations).toEqual([
+      { ...COMMAND, signIn: { patterns: ['expired'] } },
+      { ...COMMAND, id: 'whole' },
+    ]);
   });
 
   it('a default naming a dropped destination falls back to none', () => {
@@ -554,8 +607,30 @@ describe('sharing settings', () => {
       destinations: [GCS],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     });
   });
+
+  it.each([0, 2.5, '30', 3651])(
+    'an auto-revoke window of %j reads as never, keeping the rest',
+    (days) => {
+      writeRaw({
+        sharing: {
+          destinations: [GCS],
+          defaultDestinationId: 'company',
+          agentsMayShare: true,
+          autoRevokeAfterDays: days,
+        },
+      });
+
+      expect(readSettings().sharing).toEqual({
+        destinations: [GCS],
+        defaultDestinationId: 'company',
+        agentsMayShare: true,
+        autoRevokeAfterDays: null,
+      });
+    },
+  );
 });
 
 describe('onSettingsWritten', () => {
@@ -570,6 +645,7 @@ describe('onSettingsWritten', () => {
         destinations: [],
         defaultDestinationId: null,
         agentsMayShare: true,
+        autoRevokeAfterDays: null,
       },
     });
     stop();

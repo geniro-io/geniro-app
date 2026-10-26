@@ -8,6 +8,7 @@ import {
   ScrollText,
   Sparkles,
   Table2,
+  Workflow,
 } from 'lucide-react';
 
 import { cn } from '../components/ui/utils';
@@ -60,6 +61,7 @@ const KIND_META: Record<
   },
   patch: { icon: FileDiff, noun: 'a change', label: 'Proposed change' },
   plan: { icon: ListChecks, noun: 'a plan', label: 'Proposed plan' },
+  workflow: { icon: Workflow, noun: 'a workflow', label: 'Proposed workflow' },
 };
 
 /**
@@ -202,6 +204,29 @@ function Skeleton({ kind }: { kind: GeniroCardKind }): React.JSX.Element {
                 delay={index * 100 + 50}
               />
             </div>
+          ))}
+        </div>
+      );
+    case 'workflow':
+      // A graph: three node boxes on one row over the roster's lines — the
+      // card that lands opens on a preview of the team, then lists it.
+      return (
+        <div className="flex flex-col gap-2.5">
+          <div className="flex items-center gap-3">
+            {[0, 1, 2].map((index) => (
+              <Bar
+                key={index}
+                className="h-9 flex-1 rounded-md"
+                delay={index * 140}
+              />
+            ))}
+          </div>
+          {[0, 1].map((index) => (
+            <Bar
+              key={index}
+              className={cn('h-2', index === 0 ? 'w-3/4' : 'w-1/2')}
+              delay={420 + index * 120}
+            />
           ))}
         </div>
       );

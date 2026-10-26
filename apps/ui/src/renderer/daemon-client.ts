@@ -2,11 +2,11 @@ import { io, type Socket } from 'socket.io-client';
 
 import { type DaemonHandle } from '../shared/contracts';
 import {
+  type DisplayedPullRequest,
   type ItemDto as ChatItem,
   PromptCacheTtlReason,
   RunAwaiting,
   type RunDto,
-  type RunPullRequest,
   type RunResetWake,
   RunStatus,
   type RunTaskGroup,
@@ -144,13 +144,16 @@ function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
  * a half-ref renders as a chip pointing nowhere — and this is the one place the
  * shapes arrive untyped, the generated client covering every other route.
  */
-function readPullRequestRefs(rows: readonly unknown[]): RunPullRequest[] {
-  const refs: RunPullRequest[] = [];
+function readPullRequestRefs(rows: readonly unknown[]): DisplayedPullRequest[] {
+  const refs: DisplayedPullRequest[] = [];
   for (const row of rows) {
     if (row === null || typeof row !== 'object') {
       continue;
     }
-    const { owner, repo, number, url, seq } = row as Record<string, unknown>;
+    const { owner, repo, number, url, seq, opened } = row as Record<
+      string,
+      unknown
+    >;
     if (
       typeof owner === 'string' &&
       owner !== '' &&
@@ -172,6 +175,9 @@ function readPullRequestRefs(rows: readonly unknown[]): RunPullRequest[] {
         url,
         seq:
           typeof seq === 'number' && Number.isFinite(seq) ? seq : refs.length,
+        // Only a stated `true` claims the run opened it: a row that cannot say
+        // so is drawn as touched, which names nothing as the thread's own work.
+        opened: opened === true,
       });
     }
   }
@@ -351,7 +357,7 @@ export interface RunStatusEvent {
    * alone, which is one fetch per window: a thread that opened a pull request
    * during the session it was opened in never showed a chip for it.
    */
-  pullRequests?: RunPullRequest[];
+  pullRequests?: DisplayedPullRequest[];
   /**
    * Each agent's own task list as the DAEMON folded it, over the whole
    * transcript.
@@ -405,6 +411,8 @@ export interface RunStatusEvent {
    */
   contextTokens?: number | null;
   contextWindowTokens?: number | null;
+  /** Whether that count is geniro's stand-in; rides with the pair. */
+  contextEstimated?: boolean;
   /**
    * What the run said as it reached this status — the agent's closing words, or
    * a failure's message.
@@ -461,6 +469,12 @@ export interface RunStatusEvent {
    * from the real settle is left standing rather than blanked.
    */
   restored?: boolean;
+  /**
+   * True when geniro started the turn itself with a monitor's output — a settle
+   * that posts no banner (one per batch would be noise), though it still marks
+   * the thread unread.
+   */
+  hostTurn?: boolean;
   /**
    * True when this settle has no terminal ROW behind it (an off-turn stretch
    * handing its badge back, a workflow woken by a call going quiet again, a
@@ -586,10 +600,12 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     toolCalls,
     contextTokens,
     contextWindowTokens,
+    contextEstimated,
     summary,
     notify,
     preview,
     housekeeping,
+    hostTurn,
     restored,
     noTerminalItem,
     title,
@@ -680,18 +696,17 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
       : {}),
     // Every entry checked, not merely the array: this arrives as a socket
     // payload rather than through the generated client, and a half-shaped ref
-    // reaches `gh pr view` as a URL. An array that is present but holds nothing
-    // usable is dropped whole rather than admitted empty, which would blank a
-    // thread's chips on a turn that simply had nothing to say.
-    ...(Array.isArray(pullRequests) && readPullRequestRefs(pullRequests).length
+    // reaches `gh pr view` as a URL. An EMPTY array is the daemon's reading
+    // that the run holds none now (a pass dropped a record it no longer keeps);
+    // one holding entries of which none is usable is a malformed payload, and
+    // is dropped whole rather than blanking the thread's chips.
+    ...(Array.isArray(pullRequests) &&
+    (pullRequests.length === 0 || readPullRequestRefs(pullRequests).length > 0)
       ? { pullRequests: readPullRequestRefs(pullRequests) }
       : {}),
-    // Admitted whenever it is an ARRAY, including an empty one — unlike the
-    // pull requests above, where empty is dropped. The two differ because the
-    // daemon announces this only when the fold MOVED, and a list moving to
-    // nothing (a snapshot that cleared it) is a real reading the chip has to
-    // act on; a pull-request announce carrying nothing usable is only ever a
-    // malformed payload, since a run that opened none is never announced.
+    // Admitted whenever it is an ARRAY, including an empty one: the daemon
+    // announces this only when the fold MOVED, and a list moving to nothing (a
+    // snapshot that cleared it) is a real reading the chip has to act on.
     ...(Array.isArray(taskList) ? { taskList: readTaskGroups(taskList) } : {}),
     // An array whatever it holds, the empty one included — see the field.
     ...(Array.isArray(resetWakes)
@@ -721,6 +736,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
             Number.isFinite(contextWindowTokens)
               ? Math.max(0, Math.trunc(contextWindowTokens))
               : null,
+          contextEstimated: contextEstimated === true,
         }
       : {}),
     // Three states, and the empty string is deliberately one of the CLEARING
@@ -739,6 +755,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // is — a skewed value leaves the line where it was.
     ...(typeof preview === 'string' && preview !== '' ? { preview } : {}),
     ...(housekeeping === true ? { housekeeping: true } : {}),
+    ...(hostTurn === true ? { hostTurn: true } : {}),
     ...(restored === true ? { restored: true } : {}),
     ...(noTerminalItem === true ? { noTerminalItem: true } : {}),
     // An empty string is dropped rather than applied: a blank title would
@@ -938,6 +955,56 @@ export function parseTaskChanged(data: unknown): TaskChangedEvent | null {
   };
 }
 
+/** One share row written or removed — never its link. */
+export interface SharesChangedEvent {
+  runId: string;
+  shareId: string;
+  /** A `ShareStatus`, or `removed`; opaque here, the daemon owns it. */
+  status: string;
+  title: string;
+  destinationName: string;
+  askedByAgent: boolean;
+  /** The one write that put an agent's share into waiting on the user's sign-in. */
+  signInRequested: boolean;
+}
+
+/**
+ * Read a `shares_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `ShareChangedEvent`
+ * (`apps/daemon/src/v1/shares/shares.types.ts`). Change one and change the other.
+ */
+export function parseSharesChanged(data: unknown): SharesChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const {
+    runId,
+    shareId,
+    status,
+    title,
+    destinationName,
+    askedByAgent,
+    signInRequested,
+  } = data as Record<string, unknown>;
+  if (
+    typeof runId !== 'string' ||
+    typeof shareId !== 'string' ||
+    typeof status !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    runId,
+    shareId,
+    status,
+    title: typeof title === 'string' ? title : '',
+    destinationName: typeof destinationName === 'string' ? destinationName : '',
+    askedByAgent: askedByAgent === true,
+    signInRequested: signInRequested === true,
+  };
+}
+
 const JOIN_TIMEOUT_MS = 5_000;
 
 interface JoinWaiter {
@@ -980,6 +1047,9 @@ export class DaemonClient {
   private readonly groupsChangedListeners = new Set<() => void>();
   private readonly taskChangedListeners = new Set<
     (event: TaskChangedEvent) => void
+  >();
+  private readonly sharesChangedListeners = new Set<
+    (event: SharesChangedEvent) => void
   >();
   private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
   private readonly debugListeners = new Set<(entry: DebugLogEntry) => void>();
@@ -1145,6 +1215,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'shares_changed') {
+        const share = parseSharesChanged(data);
+        if (share) {
+          for (const listener of this.sharesChangedListeners) {
+            listener(share);
+          }
+        }
+      }
       if (event === 'debug') {
         const entry = parseDebugEntry(data);
         if (entry) {
@@ -1282,6 +1360,18 @@ export class DaemonClient {
     };
   }
 
+  /**
+   * Subscribe to every share written or removed, client-wide like
+   * {@link onTaskChanged}: an agent's share waiting on sign-in must reach the
+   * window that will ask the user, whichever thread it has open.
+   */
+  onSharesChanged(listener: (event: SharesChangedEvent) => void): () => void {
+    this.sharesChangedListeners.add(listener);
+    return () => {
+      this.sharesChangedListeners.delete(listener);
+    };
+  }
+
   /** Subscribe to streamed run items; returns an unsubscribe function. */
   onItem(listener: (item: ChatItem) => void): () => void {
     this.itemListeners.add(listener);
@@ -1331,26 +1421,32 @@ export class DaemonClient {
    * the immediate `verdict_ack` reply only reports routing (`expired` means
    * already settled; `invalid` remains retryable).
    * `answer` carries the user's picked option / typed text for a question
-   * card (AskUserQuestion) — omitted for plain tool approvals.
+   * card (AskUserQuestion) — omitted for plain tool approvals. `optionId`
+   * names the remembering option picked off a permission card ("allow for this
+   * session") — one of the ids the card's own row offered; omitted for a
+   * one-time Approve or Deny.
    *
    * TWIN PARSER: the daemon parses this `verdict` envelope in
    * `extractVerdict`
    * (apps/daemon/src/v1/notifications/gateways/notifications.gateway.ts) —
-   * `{runId, requestId, allow, answer?}`, `answer` honored only as a
-   * non-empty string ≤ MAX_ANSWER_LENGTH. A shape change here must be
-   * mirrored there, and vice versa.
+   * `{runId, requestId, allow, answer?, optionId?}`, `answer` honored only as
+   * a non-empty string ≤ MAX_ANSWER_LENGTH, `optionId` only as a non-empty
+   * string ≤ MAX_OPTION_ID_LENGTH. A shape change here must be mirrored
+   * there, and vice versa.
    */
   sendVerdict(
     runId: string,
     requestId: string,
     allow: boolean,
     answer?: string,
+    optionId?: string,
   ): void {
     this.socket?.emit('verdict', {
       runId,
       requestId,
       allow,
       ...(answer !== undefined ? { answer } : {}),
+      ...(optionId !== undefined ? { optionId } : {}),
     });
   }
 

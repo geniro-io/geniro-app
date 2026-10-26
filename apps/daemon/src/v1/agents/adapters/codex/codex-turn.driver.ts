@@ -6,6 +6,7 @@ import type {
   AgentTaskStatus,
   AgentTurnInput,
   AgentUsage,
+  ApprovalOption,
   FollowUpMessage,
 } from '../adapter.types';
 import {
@@ -22,13 +23,20 @@ import {
   CODEX_ACTIVE_WRITER_RETRY_MS,
   CODEX_COMPACT_PROMPT,
   CODEX_DELEGATE_LABEL_MAX_CHARS,
+  CODEX_FAILED_TOOL_RESULT,
   CODEX_METHODS,
   CODEX_MODEL_MISMATCH_MESSAGE,
   CODEX_NOTIFICATIONS,
   CODEX_OLLAMA_PROVIDER,
   CODEX_REASONING_SUMMARY,
   CODEX_SERVER_REQUESTS,
+  CODEX_STEER_ANSWER_GRACE_MS,
   CODEX_STEER_PREVIEW_MAX_CHARS,
+  CODEX_STOP_CLOSE_GRACE_MS,
+  CODEX_STOPPED_COMMAND_PREVIEW_MAX_CHARS,
+  CODEX_STOPPED_TOOL_RESULT,
+  CODEX_TERMINAL_LIST_MAX_PAGES,
+  CODEX_WAIT_GAP_GRACE_MS,
 } from './codex.const';
 import type {
   CodexItem,
@@ -54,8 +62,10 @@ import {
   subAgentActivityOf,
   subagentOutcomeOf,
   subagentState,
+  waitsOnSubagents,
 } from './utils/codex-items.utils';
 import { codexTurnMcpOverrides } from './utils/codex-mcp.utils';
+import { userMessageText } from './utils/codex-threads.utils';
 import {
   baselineOf,
   type CodexSpend,
@@ -75,7 +85,15 @@ export type CodexPendingKind =
   | 'turn_start'
   | 'compact'
   | 'turn_steer'
-  | 'turn_interrupt';
+  | 'turn_interrupt'
+  | 'terminals_list'
+  | 'terminal_terminate';
+
+/** A steer in flight: the row id it carries, and the words codex echoes back. */
+interface PendingSteer {
+  deliveryId: string | null;
+  text: string;
+}
 
 /** Everything about ONE turn, derived from that turn's own input. */
 export interface CodexTurnOptions {
@@ -108,6 +126,26 @@ const PLAN_STATUS: Readonly<Record<string, AgentTaskStatus>> = {
 };
 
 /**
+ * What a notification tagged with an ENDED turn may no longer say: the words,
+ * tool calls and plan of the turn now open would otherwise carry it. Readings
+ * (usage, reroutes) and errors stay out of this set — a usage reading is a
+ * level of the thread, whichever turn it names.
+ */
+const ENDED_TURN_FENCED: ReadonlySet<string> = new Set([
+  CODEX_NOTIFICATIONS.itemStarted,
+  CODEX_NOTIFICATIONS.itemCompleted,
+  CODEX_NOTIFICATIONS.agentMessageDelta,
+  CODEX_NOTIFICATIONS.reasoningTextDelta,
+  CODEX_NOTIFICATIONS.reasoningSummaryDelta,
+  CODEX_NOTIFICATIONS.planUpdated,
+]);
+
+/** A command unit's later phase, keyed — like its start — by the item id. */
+function unitPhase(id: string, phase: 'backgrounded' | 'settled'): AgentEvent {
+  return { type: 'background_work', id, phase, unit: 'other', toolCallId: id };
+}
+
+/**
  * ONE turn of a codex conversation — the state that must not outlive it.
  *
  * Built fresh per turn by {@link CodexSession}, which holds what does outlive
@@ -130,10 +168,64 @@ export class CodexTurnDriver {
   private compactingFrom: number | null = null;
   /** A terminal event has been emitted; everything after it is the next turn's. */
   private settled = false;
+  /**
+   * Tool calls this turn opened that have no result yet, by item id → tool
+   * name — what a stopped turn closes ({@link endUnfinishedTurn}).
+   * `session.items` cannot answer it: it holds every turn's items and the
+   * sub-agents' too.
+   */
+  private readonly openToolItems = new Map<string, string>();
+  /**
+   * Commands this turn left running when it was stopped, by item id → their
+   * words, until `thread/backgroundTerminals/list` has shown which to end.
+   */
+  private readonly stoppedCommands = new Map<string, string>();
+  /** Listing pages already asked for, so a repeating cursor cannot loop. */
+  private readonly listedCursors = new Set<string>();
   /** This turn's `turn/start` carried a collaboration-mode switch. */
   private switchesPlanMode = false;
   /** Times this turn's resume was asked again after an active-writer refusal. */
   private writerRetries = 0;
+  /**
+   * Steers sent into this turn that codex has not answered yet, each with the
+   * `deliveryId` it carried (null for one with no row) and its words.
+   */
+  private readonly steersOut: PendingSteer[] = [];
+  /**
+   * Steers codex ACCEPTED that it has not yet shown taking. An accepted steer
+   * is only queued: codex takes it as a `userMessage` item at its next step
+   * (probed on 0.162.0, ~55 ms later), and an interrupt that lands first
+   * discards it — no item, and no trace in the thread. So a turn that ends
+   * stopped or failed with one still here dropped it.
+   */
+  private readonly steersAccepted: PendingSteer[] = [];
+  /** `userMessage` words this turn has shown, for an item ahead of its reply. */
+  private readonly userMessagesSeen: string[] = [];
+  /** The turn ended stopped or failed — what it held of a steer is lost. */
+  private endedUnfinished = false;
+  /**
+   * The turn's ending while a steer is unanswered: a refusal must reach the
+   * owner AHEAD of the terminal, as every owner matches a dropped message by
+   * the turn it was sent into. Released when the last steer is answered, on a
+   * Stop, or after {@link CODEX_STEER_ANSWER_GRACE_MS}.
+   */
+  private heldEnding: AgentEvent[] | null = null;
+  /** The ending has gone out: a refusal now is no longer this turn's. */
+  private endingReleased = false;
+  /**
+   * This turn's open `wait` calls on its sub-agents. While any is open the
+   * turn is announced HELD (`turn_held`), as spawn-cli announces claude's
+   * hold: the agent produces nothing until a sub-agent reports, so the
+   * composer sends a message straight in.
+   */
+  private readonly openWaits = new Set<string>();
+  /** Whether the turn is announced held for {@link openWaits}. */
+  private waitHeld = false;
+  /** The sub-agent count the hold last announced. */
+  private waitHeldFor = 0;
+  /** The pending end of the hold after the last wait returned, voided by a
+   *  next wait, a message the agent took, or the turn's ending. */
+  private waitGap: symbol | null = null;
   /**
    * The thread config that leaves this node's switched-off MCP servers out,
    * once codex's own config has been read — null until then (and for good on a
@@ -272,9 +364,23 @@ export class CodexTurnDriver {
 
   // ── Replies ───────────────────────────────────────────────────────────────
 
-  onReply(kind: CodexPendingKind, result: unknown): AgentEvent[] {
+  onReply(
+    kind: CodexPendingKind,
+    result: unknown,
+    detail: string | null = null,
+    deliveryId: string | null = null,
+  ): AgentEvent[] {
     const events: AgentEvent[] = [];
     switch (kind) {
+      case 'terminals_list':
+        return this.onTerminalsListed(result);
+      case 'terminal_terminate':
+        return asRecord(result)?.terminated === true
+          ? []
+          : this.stillRunningNotices(
+              detail === null ? [] : [detail],
+              'codex reported it could not end it',
+            );
       case 'config_read': {
         const { config, unreachable } = codexTurnMcpOverrides(
           result,
@@ -356,16 +462,129 @@ export class CodexTurnDriver {
         }
         break;
       }
+      case 'turn_steer':
+        events.push(...this.steerAnswered(deliveryId, true));
+        break;
       default:
         break;
     }
     return events;
   }
 
+  /**
+   * A steer was answered — `accepted` by codex, or refused. An accepted one is
+   * owed its `userMessage` item unless that already came. The held ending goes
+   * out once no steer is left unanswered.
+   */
+  private steerAnswered(
+    deliveryId: string | null,
+    accepted: boolean,
+  ): AgentEvent[] {
+    const index = this.steersOut.findIndex(
+      (steer) => steer.deliveryId === deliveryId,
+    );
+    const [steer] = this.steersOut.splice(index === -1 ? 0 : index, 1);
+    if (accepted && steer !== undefined) {
+      const seen = this.userMessagesSeen.indexOf(steer.text);
+      if (seen === -1) {
+        this.steersAccepted.push(steer);
+      } else {
+        this.userMessagesSeen.splice(seen, 1);
+      }
+    }
+    return this.steersOut.length === 0 ? this.releaseEnding() : [];
+  }
+
+  /** codex showed a user message taken into the turn: a steer it matches landed. */
+  private noteUserMessage(text: string): void {
+    const index = this.steersAccepted.findIndex((steer) => steer.text === text);
+    if (index === -1) {
+      this.userMessagesSeen.push(text);
+    } else {
+      this.steersAccepted.splice(index, 1);
+    }
+  }
+
+  /**
+   * The steers in `lists` this turn will never deliver, emptied into one
+   * `follow_up_dropped` said ahead of whatever ends the turn.
+   */
+  private dropSteers(lists: PendingSteer[][]): AgentEvent[] {
+    const dropped = lists
+      .flatMap((list) => list.splice(0))
+      .flatMap((steer) =>
+        steer.deliveryId === null ? [] : [steer.deliveryId],
+      );
+    return dropped.length === 0
+      ? []
+      : [{ type: 'follow_up_dropped', deliveryIds: dropped }];
+  }
+
+  /**
+   * The process ended under this turn: every steer codex never answered, and
+   * every one it accepted but never took, died with it. Its ending — held for
+   * those answers — will never be released: the session's process-end path
+   * writes the terminal instead.
+   */
+  onProcessEnded(): AgentEvent[] {
+    this.heldEnding = null;
+    this.endingReleased = true;
+    return this.dropSteers([this.steersOut, this.steersAccepted]);
+  }
+
+  /**
+   * How long a session closed under this turn should let it finish first: a
+   * Stop's interrupt is on its way, and while a steer's fate is unknown the
+   * only honest answer about it is the one codex gives on finishing
+   * ({@link CODEX_STOP_CLOSE_GRACE_MS}). Zero when there is nothing to learn.
+   */
+  closeGraceMs(): number {
+    return !this.settled &&
+      this.steersOut.length + this.steersAccepted.length > 0
+      ? CODEX_STOP_CLOSE_GRACE_MS
+      : 0;
+  }
+
+  /**
+   * The held ending, once — `[]` when nothing is held, or when another turn has
+   * opened since: its stream is no longer this turn's to end.
+   */
+  private releaseEnding(): AgentEvent[] {
+    const ending = this.heldEnding;
+    if (ending === null) {
+      return [];
+    }
+    this.heldEnding = null;
+    this.endingReleased = true;
+    if (!this.session.isCurrentTurn(this)) {
+      return [];
+    }
+    // A steer accepted while the stopped turn's ending was held can no longer
+    // be taken: the turn is over.
+    return this.endedUnfinished
+      ? [...this.dropSteers([this.steersAccepted]), ...ending]
+      : ending;
+  }
+
+  /**
+   * A Stop while the ending is held: the turn has finished, so there is
+   * nothing to interrupt — its ending goes out now, which settles the turn, and
+   * the caller is told nothing is left to stop.
+   */
+  withdrawHeldPrompt(): boolean {
+    const ending = this.releaseEnding();
+    if (ending.length === 0) {
+      return false;
+    }
+    this.session.emitNow(ending);
+    return true;
+  }
+
   onErrorReply(
     kind: CodexPendingKind,
     message: string,
     detail: string | null = null,
+    deliveryId: string | null = null,
   ): AgentEvent[] {
     switch (kind) {
       case 'config_read': {
@@ -414,18 +633,45 @@ export class CodexTurnDriver {
           },
         ];
       }
-      case 'turn_steer':
-        // The message is quoted because this can arrive after the turn it was
-        // sent into has ended — even after the next one has opened.
-        return [
-          {
-            type: 'notice',
-            message: `codex did not take your message${detail ? ` "${detail}"` : ''} into the turn it was sent during (${message}) — send it again.`,
-          },
-        ];
+      case 'turn_steer': {
+        // The message's row was written when the steer went out, so a
+        // refusal inside its turn is the message dropped: its row is marked
+        // not sent. A steer with no row, or a refusal after the turn's ending
+        // went out, says so in words, quoting the message.
+        const events: AgentEvent[] =
+          deliveryId !== null && !this.endingReleased
+            ? [
+                {
+                  type: 'follow_up_dropped',
+                  deliveryIds: [deliveryId],
+                  reason: message,
+                },
+              ]
+            : [
+                {
+                  type: 'notice',
+                  message: `codex did not take your message${detail ? ` "${detail}"` : ''} into the turn it was sent during (${message}) — send it again.`,
+                },
+              ];
+        this.session.log(`codex: turn/steer was refused (${message})`);
+        return [...events, ...this.steerAnswered(deliveryId, false)];
+      }
       case 'turn_interrupt':
         this.session.log(`codex: turn/interrupt was refused: ${message}`);
         return [];
+      case 'terminals_list': {
+        const commands = [...this.stoppedCommands.values()];
+        this.stoppedCommands.clear();
+        return this.stillRunningNotices(
+          commands,
+          `codex refused to list its running commands (${message})`,
+        );
+      }
+      case 'terminal_terminate':
+        return this.stillRunningNotices(
+          detail === null ? [] : [detail],
+          `codex refused to end it (${message})`,
+        );
       default:
         // A failed handshake fails every frame pipelined behind it; the first
         // failure is the turn's, the rest would only repeat it.
@@ -481,6 +727,10 @@ export class CodexTurnDriver {
         return 'adding the message to the turn';
       case 'turn_interrupt':
         return 'stopping the turn';
+      case 'terminals_list':
+        return 'listing its running commands';
+      case 'terminal_terminate':
+        return 'ending a stopped command';
     }
   }
 
@@ -540,6 +790,9 @@ export class CodexTurnDriver {
         ...(card.questions && card.questions.length > 0
           ? { questions: card.questions }
           : {}),
+        ...(card.options && card.options.length > 0
+          ? { options: card.options }
+          : {}),
       },
     ];
   }
@@ -553,6 +806,7 @@ export class CodexTurnDriver {
     encodedId: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined {
     const parked = this.session.parked.get(encodedId);
     const id = decodeRequestId(encodedId);
@@ -562,7 +816,13 @@ export class CodexTurnDriver {
     this.session.parked.delete(encodedId);
     return encodeResult(
       id,
-      encodeCodexReply(parked.method, parked.params, allow, updatedInput),
+      encodeCodexReply(
+        parked.method,
+        parked.params,
+        allow,
+        updatedInput,
+        option,
+      ),
     );
   }
 
@@ -581,7 +841,7 @@ export class CodexTurnDriver {
     if (threadId === null || this.turnId === null || this.settled) {
       return false;
     }
-    return this.session.request(
+    const sent = this.session.request(
       CODEX_METHODS.turnSteer,
       {
         threadId,
@@ -591,7 +851,16 @@ export class CodexTurnDriver {
       'turn_steer',
       [],
       firstLine(message.text, CODEX_STEER_PREVIEW_MAX_CHARS),
+      this,
+      message.deliveryId ?? null,
     );
+    if (sent) {
+      this.steersOut.push({
+        deliveryId: message.deliveryId ?? null,
+        text: message.text,
+      });
+    }
+    return sent;
   }
 
   /**
@@ -624,6 +893,14 @@ export class CodexTurnDriver {
       }
       return this.onSubagentNotification(threadId, method, record);
     }
+    const turnId = asString(record.turnId);
+    if (
+      turnId !== null &&
+      this.session.endedTurns.has(turnId) &&
+      ENDED_TURN_FENCED.has(method)
+    ) {
+      return this.onEndedTurnNotification(method, record);
+    }
     switch (method) {
       case CODEX_NOTIFICATIONS.threadStarted: {
         // A sub-agent's thread announces itself with the model it runs on,
@@ -646,7 +923,9 @@ export class CodexTurnDriver {
       }
       case CODEX_NOTIFICATIONS.agentMessageDelta: {
         const delta = asString(record.delta);
-        return delta ? [{ type: 'text_delta', text: delta }] : [];
+        return delta
+          ? [...this.endWaitGap(), { type: 'text_delta', text: delta }]
+          : [];
       }
       case CODEX_NOTIFICATIONS.reasoningSummaryDelta:
       case CODEX_NOTIFICATIONS.reasoningTextDelta: {
@@ -683,6 +962,15 @@ export class CodexTurnDriver {
       return [];
     }
     this.session.items.set(item.id, item);
+    // The agent took a message or is writing its reply: it is busy, not
+    // between two waits.
+    const released =
+      item.type === 'userMessage' || item.type === 'agentMessage'
+        ? this.endWaitGap()
+        : [];
+    if (item.type === 'userMessage') {
+      this.noteUserMessage(userMessageText(item.record));
+    }
     if (item.type === 'contextCompaction') {
       this.compactingFrom = this.session.lastUsage?.last.totalTokens ?? null;
       return [
@@ -695,8 +983,19 @@ export class CodexTurnDriver {
         },
       ];
     }
-    const events = itemStartedEvents(item);
+    const events = [...released, ...itemStartedEvents(item)];
+    // Not a delegate launch (either shape): its delegate's block is keyed by
+    // this call, an `isError` close outranks every later ending the renderer
+    // reads for it, and the real ending arrives through sub-agent tracking.
+    if (!spawnsSubagent(item) && subAgentActivityOf(item)?.kind !== 'started') {
+      for (const event of events) {
+        if (event.type === 'tool_call') {
+          this.openToolItems.set(event.id, event.name);
+        }
+      }
+    }
     events.push(...this.trackSubAgentActivity(item));
+    events.push(...this.startCommandUnit(item, null));
     if (spawnsSubagent(item)) {
       const prompt = asString(item.record.prompt);
       events.push(
@@ -709,7 +1008,60 @@ export class CodexTurnDriver {
         }),
       );
     }
+    events.push(...this.beginSubagentWait(item));
     return events;
+  }
+
+  /** A `wait` on sub-agents opened: the turn is held, if it was not yet. */
+  private beginSubagentWait(item: CodexItem): AgentEvent[] {
+    if (!waitsOnSubagents(item)) {
+      return [];
+    }
+    this.openWaits.add(item.id);
+    this.waitGap = null;
+    const open = Math.max(1, receiverThreadsOf(item).length);
+    if (this.waitHeld && open === this.waitHeldFor) {
+      return [];
+    }
+    this.waitHeld = true;
+    this.waitHeldFor = open;
+    return [{ type: 'turn_held', open }];
+  }
+
+  /** A `wait` returned: the hold ends after the gap, unless voided first. */
+  private endSubagentWait(item: CodexItem): void {
+    if (
+      !this.openWaits.delete(item.id) ||
+      this.openWaits.size > 0 ||
+      !this.waitHeld
+    ) {
+      return;
+    }
+    const gap = Symbol('wait-gap');
+    this.waitGap = gap;
+    this.session.schedule(this, CODEX_WAIT_GAP_GRACE_MS, (events) => {
+      if (this.waitGap === gap && !this.settled) {
+        events.push(...this.releaseWaitHold());
+      }
+    });
+  }
+
+  /** End the hold now if it stands only for the gap after a wait. */
+  private endWaitGap(): AgentEvent[] {
+    return this.waitGap !== null && this.openWaits.size === 0
+      ? this.releaseWaitHold()
+      : [];
+  }
+
+  /** End the hold {@link beginSubagentWait} announced, if it stands. */
+  private releaseWaitHold(): AgentEvent[] {
+    this.waitGap = null;
+    if (!this.waitHeld) {
+      return [];
+    }
+    this.waitHeld = false;
+    this.waitHeldFor = 0;
+    return [{ type: 'turn_held', open: 0 }];
   }
 
   private onItemCompleted(item: CodexItem | null): AgentEvent[] {
@@ -717,6 +1069,7 @@ export class CodexTurnDriver {
       return [];
     }
     this.session.items.delete(item.id);
+    this.openToolItems.delete(item.id);
     if (item.type === 'contextCompaction') {
       const after = this.session.lastUsage?.last.totalTokens ?? null;
       return [
@@ -735,11 +1088,142 @@ export class CodexTurnDriver {
         this.finalText = text;
       }
     }
-    const events = itemCompletedEvents(item);
+    const events = this.endCommandUnit(item.id, itemCompletedEvents(item));
     if (item.type === 'collabAgentToolCall') {
       events.push(...this.trackSubagents(item));
     }
+    this.endSubagentWait(item);
     return events;
+  }
+
+  /**
+   * A notification about a turn codex has already ended — a stopped turn's
+   * command finishing late, most often. Nothing of it reaches the turn now
+   * open; what stays is the session's own bookkeeping: the item map an
+   * approval card reads, sub-agent tracking, since a sub-agent belongs to the
+   * conversation rather than to any one turn, and a command's end
+   * ({@link endCommandUnit}).
+   */
+  private onEndedTurnNotification(
+    method: string,
+    record: Record<string, unknown>,
+  ): AgentEvent[] {
+    const item = readCodexItem(record.item);
+    if (item === null) {
+      return [];
+    }
+    if (method === CODEX_NOTIFICATIONS.itemStarted) {
+      this.session.items.set(item.id, item);
+      return this.trackSubAgentActivity(item);
+    }
+    if (method === CODEX_NOTIFICATIONS.itemCompleted) {
+      this.session.items.delete(item.id);
+      // A command the turn left running keeps its call open for this result;
+      // any other call of the turn was closed with it.
+      return [
+        ...(item.type === 'collabAgentToolCall'
+          ? this.trackSubagents(item)
+          : []),
+        ...this.endCommandUnit(
+          item.id,
+          this.session.leftRunning.has(item.id)
+            ? itemCompletedEvents(item)
+            : [],
+        ),
+      ];
+    }
+    return [];
+  }
+
+  /**
+   * A command codex runs, reported from its start as work the agent is
+   * waiting on, so `spawn-cli` records where it runs while the CLI lives. One
+   * codex holds in its process store — its item carries the store's
+   * `processId`, what `terminate` names it by — may outlive its turn and then
+   * becomes background work ({@link backgroundLeftRunning}); a one-shot one
+   * ends with its turn ({@link settleOneShots}). A sub-agent's is its
+   * delegate's own: recorded, and never a shell row.
+   */
+  private startCommandUnit(
+    item: CodexItem,
+    subagentThread: string | null,
+  ): AgentEvent[] {
+    if (item.type !== 'commandExecution') {
+      return [];
+    }
+    this.session.commandUnits.set(item.id, subagentThread);
+    return [
+      {
+        type: 'background_work',
+        id: item.id,
+        phase: 'started',
+        unit: 'other',
+        toolCallId: item.id,
+        foreground: true,
+        ...(subagentThread === null ? {} : { ownedByDelegate: true as const }),
+      },
+    ];
+  }
+
+  /** Whether codex holds this command in its process store. */
+  private heldInStore(id: string): boolean {
+    return (
+      (asString(this.session.items.get(id)?.record.processId) ?? '') !== ''
+    );
+  }
+
+  /**
+   * The turn ended with these commands still running, and codex runs them
+   * on: moved to the background, each is counted and listed as a shell. Their
+   * calls stay open for the result codex reports when they end, so a failed
+   * turn closes only the rest.
+   */
+  private backgroundLeftRunning(): AgentEvent[] {
+    const moved: AgentEvent[] = [];
+    for (const id of [...this.openToolItems.keys()]) {
+      if (!this.session.commandUnits.has(id) || !this.heldInStore(id)) {
+        continue;
+      }
+      this.openToolItems.delete(id);
+      this.session.leftRunning.add(id);
+      moved.push(unitPhase(id, 'backgrounded'));
+    }
+    return moved;
+  }
+
+  /**
+   * A one-shot command still open as its turn ends goes with it: codex holds
+   * it in no process store, and a Stop kills it with the turn.
+   */
+  private settleOneShots(): AgentEvent[] {
+    const settled: AgentEvent[] = [];
+    for (const id of this.openToolItems.keys()) {
+      if (this.session.commandUnits.has(id) && !this.heldInStore(id)) {
+        this.session.commandUnits.delete(id);
+        settled.push(unitPhase(id, 'settled'));
+      }
+    }
+    return settled;
+  }
+
+  /**
+   * A command's end, once codex completes its item: the unit's settle after
+   * the item's own completion `events` — the result of one its turn left
+   * running marked as that end, since it often lands with no turn open.
+   */
+  private endCommandUnit(id: string, events: AgentEvent[]): AgentEvent[] {
+    if (!this.session.commandUnits.delete(id)) {
+      return events;
+    }
+    const left = this.session.leftRunning.delete(id);
+    return [
+      ...events.map((event) =>
+        left && event.type === 'tool_result'
+          ? { ...event, endsBackgroundWork: true as const }
+          : event,
+      ),
+      unitPhase(id, 'settled'),
+    ];
   }
 
   /**
@@ -755,7 +1239,15 @@ export class CodexTurnDriver {
       }
       if (receiverThreadsOf(item).length > 0) {
         this.session.openSubagent(item.id);
-        events.push(subagentState(item.id, { open: true }));
+        events.push(
+          subagentState(item.id, {
+            open: true,
+            childSessionId:
+              receiverThreadsOf(item).length === 1
+                ? receiverThreadsOf(item)[0]
+                : undefined,
+          }),
+        );
       }
     }
     for (const { threadId, outcome } of finishedAgentsOf(item)) {
@@ -779,7 +1271,13 @@ export class CodexTurnDriver {
     if (activity.kind === 'started') {
       this.session.subagents.set(activity.threadId, item.id);
       this.session.openSubagent(item.id);
-      return [subagentState(item.id, { open: true, label: activity.name })];
+      return [
+        subagentState(item.id, {
+          open: true,
+          label: activity.name,
+          childSessionId: activity.threadId,
+        }),
+      ];
     }
     const outcome = subagentOutcomeOf(activity.kind);
     return outcome === null
@@ -810,10 +1308,10 @@ export class CodexTurnDriver {
           return [];
         }
         this.session.items.set(item.id, item);
-        return itemStartedEvents(item).map((event) => ({
-          ...event,
-          ...origin,
-        }));
+        return [
+          ...itemStartedEvents(item).map((event) => ({ ...event, ...origin })),
+          ...this.startCommandUnit(item, threadId),
+        ];
       }
       case CODEX_NOTIFICATIONS.itemCompleted: {
         const item = readCodexItem(record.item);
@@ -821,17 +1319,36 @@ export class CodexTurnDriver {
           return [];
         }
         this.session.items.delete(item.id);
-        return itemCompletedEvents(item).map((event) => ({
-          ...event,
-          ...origin,
-        }));
+        return this.endCommandUnit(
+          item.id,
+          itemCompletedEvents(item).map((event) => ({ ...event, ...origin })),
+        );
       }
       case CODEX_NOTIFICATIONS.turnCompleted: {
+        // What the sub-agent's turn left in codex's process store runs on,
+        // whatever ended it — no Stop of geniro's reaches a sub-agent's
+        // commands — and is background work from here; a one-shot one ended.
+        const left: AgentEvent[] = [];
+        for (const [id, owner] of this.session.commandUnits) {
+          if (owner !== threadId) {
+            continue;
+          }
+          if (this.heldInStore(id)) {
+            this.session.leftRunning.add(id);
+            left.push(unitPhase(id, 'backgrounded'));
+          } else {
+            this.session.commandUnits.delete(id);
+            left.push(unitPhase(id, 'settled'));
+          }
+        }
         const status = asString(asRecord(record.turn)?.status);
-        return this.session.closeSubagent(
-          threadId,
-          subagentOutcomeOf(status) ?? 'failed',
-        );
+        return [
+          ...left,
+          ...this.session.closeSubagent(
+            threadId,
+            subagentOutcomeOf(status) ?? 'untracked',
+          ),
+        ];
       }
       default:
         return [];
@@ -936,7 +1453,12 @@ export class CodexTurnDriver {
       if (cost > 0) {
         this.session.liveCostReported = true;
       }
-      events.push({ type: 'cost_progress', costUsd: cost });
+      // List-priced like the turn's own cost, so all of it is an estimate.
+      events.push({
+        type: 'cost_progress',
+        costUsd: cost,
+        ...(cost > 0 ? { estimatedCostUsd: cost } : {}),
+      });
     }
     return events;
   }
@@ -1079,12 +1601,166 @@ export class CodexTurnDriver {
     ];
   }
 
+  /**
+   * Fence a turn that ended stopped or failed, and close every tool call it
+   * left open: their completions, if codex ever sends them, arrive under this
+   * turn's id and are fenced off ({@link onEndedTurnNotification}), so without
+   * the close a call would read as running for good.
+   */
+  private endUnfinishedTurn(id: string | null, result: string): AgentEvent[] {
+    if (id !== null) {
+      this.session.endedTurns.add(id);
+    }
+    const events: AgentEvent[] = [...this.openToolItems].map(
+      ([callId, name]) => ({
+        type: 'tool_result',
+        id: callId,
+        name,
+        result,
+        isError: true,
+      }),
+    );
+    this.openToolItems.clear();
+    return events;
+  }
+
+  /** The commands among this turn's open tool calls, by item id → their words. */
+  private runningCommands(): Map<string, string> {
+    const commands = new Map<string, string>();
+    for (const id of this.openToolItems.keys()) {
+      const item = this.session.items.get(id);
+      if (item?.type === 'commandExecution') {
+        commands.set(id, asString(item.record.command) ?? 'a command');
+      }
+    }
+    return commands;
+  }
+
+  /**
+   * End the commands a Stop left running. codex keeps them alive by design —
+   * `turn/interrupt` stops only the model — so a Stop that should stop the
+   * work asks codex to end them, matching each by the item id its
+   * background-terminal listing carries. Only this turn's own running
+   * commands: anything an earlier turn left running (a dev server) stays.
+   */
+  private endStoppedCommands(commands: Map<string, string>): AgentEvent[] {
+    if (commands.size === 0) {
+      return [];
+    }
+    for (const [id, command] of commands) {
+      this.stoppedCommands.set(id, command);
+    }
+    return this.listRunningCommands(null);
+  }
+
+  private listRunningCommands(cursor: string | null): AgentEvent[] {
+    const threadId = this.session.threadId;
+    const sent =
+      threadId !== null &&
+      this.session.request(
+        CODEX_METHODS.backgroundTerminalsList,
+        { threadId, ...(cursor === null ? {} : { cursor }) },
+        'terminals_list',
+        [],
+        null,
+        this,
+      );
+    if (sent) {
+      return [];
+    }
+    const commands = [...this.stoppedCommands.values()];
+    this.stoppedCommands.clear();
+    return this.stillRunningNotices(commands, 'geniro could not ask codex');
+  }
+
+  private onTerminalsListed(result: unknown): AgentEvent[] {
+    const record = asRecord(result);
+    const threadId = this.session.threadId;
+    const events: AgentEvent[] = [];
+    for (const entry of asArray(record?.data)) {
+      const terminal = asRecord(entry);
+      const itemId = asString(terminal?.itemId);
+      const processId = asString(terminal?.processId);
+      if (itemId === null || processId === null || threadId === null) {
+        continue;
+      }
+      const command = this.stoppedCommands.get(itemId);
+      if (command === undefined) {
+        continue;
+      }
+      this.stoppedCommands.delete(itemId);
+      const sent = this.session.request(
+        CODEX_METHODS.backgroundTerminalsTerminate,
+        { threadId, processId },
+        'terminal_terminate',
+        [],
+        command,
+        this,
+      );
+      if (!sent) {
+        events.push(
+          ...this.stillRunningNotices([command], 'geniro could not ask codex'),
+        );
+      }
+    }
+    const next = asString(record?.nextCursor);
+    if (
+      next !== null &&
+      this.stoppedCommands.size > 0 &&
+      !this.listedCursors.has(next) &&
+      this.listedCursors.size < CODEX_TERMINAL_LIST_MAX_PAGES
+    ) {
+      this.listedCursors.add(next);
+      return [...events, ...this.listRunningCommands(next)];
+    }
+    // Not listed: out of codex's reach — unless it finished by itself in the
+    // meantime, which its fenced `item/completed` took out of `session.items`.
+    const unlisted = [...this.stoppedCommands]
+      .filter(([id]) => this.session.items.has(id))
+      .map(([, command]) => command);
+    this.stoppedCommands.clear();
+    return [
+      ...events,
+      ...this.stillRunningNotices(unlisted, 'codex did not list it as running'),
+    ];
+  }
+
+  private stillRunningNotices(
+    commands: readonly string[],
+    reason: string,
+  ): AgentEvent[] {
+    return commands.map((command) => ({
+      type: 'notice',
+      severity: 'warning',
+      message: `The Stop did not end \`${firstLine(command, CODEX_STOPPED_COMMAND_PREVIEW_MAX_CHARS)}\` — ${reason}. It may still be running.`,
+    }));
+  }
+
+  /**
+   * The turn's ending — held while a steer is unanswered (see
+   * {@link heldEnding}), else at once.
+   */
   private onTurnCompleted(turn: Record<string, unknown> | null): AgentEvent[] {
+    const ending = this.endingOf(turn);
+    if (ending.length === 0 || this.steersOut.length === 0) {
+      this.endingReleased = ending.length > 0 || this.endingReleased;
+      return ending;
+    }
+    this.heldEnding = ending;
+    this.session.schedule(this, CODEX_STEER_ANSWER_GRACE_MS, (events) => {
+      events.push(...this.releaseEnding());
+    });
+    return [];
+  }
+
+  private endingOf(turn: Record<string, unknown> | null): AgentEvent[] {
     const id = asString(turn?.id);
     if (this.settled || (this.turnId !== null && id !== this.turnId)) {
       return [];
     }
     this.settled = true;
+    this.openWaits.clear();
+    const released = this.releaseWaitHold();
     const modelEvents = this.onReportedModel(asString(turn?.model));
     const status = asString(turn?.status);
     // Every ending carries what the turn spent: a stopped or failed codex turn
@@ -1093,7 +1769,29 @@ export class CodexTurnDriver {
     // chat 00ffe314 had spent $0.48 that no row carried). The live figure is
     // zeroed FIRST, because from the next event on that money is durable.
     const usage = this.settleUsage(asNumber(turn?.durationMs));
-    const events = [...modelEvents, ...this.retireLiveCost()];
+    const events = [...released, ...modelEvents, ...this.retireLiveCost()];
+    // A command still running at the turn's end runs on: codex ends a turn
+    // without waiting on a backgrounded command. A Stop ends this turn's own
+    // ({@link endStoppedCommands}); any other ending leaves them running.
+    if (status === 'interrupted') {
+      const running = this.runningCommands();
+      events.push(...this.settleOneShots());
+      events.push(...this.endUnfinishedTurn(id, CODEX_STOPPED_TOOL_RESULT));
+      events.push(...this.endStoppedCommands(running));
+    } else {
+      events.push(...this.backgroundLeftRunning());
+      events.push(...this.settleOneShots());
+      if (status === 'failed') {
+        events.push(...this.endUnfinishedTurn(id, CODEX_FAILED_TOOL_RESULT));
+      }
+    }
+    // A stopped or failed turn takes no more input: a steer codex accepted and
+    // never took is gone, said ahead of the terminal. One still unanswered is
+    // the held ending's business ({@link releaseEnding}).
+    if (status === 'interrupted' || status === 'failed') {
+      this.endedUnfinished = true;
+      events.push(...this.dropSteers([this.steersAccepted]));
+    }
     if (status === 'interrupted') {
       events.push({
         type: 'turn_cancelled',

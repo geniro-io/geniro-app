@@ -35,6 +35,12 @@ function harness(settle: () => Promise<void> = async () => undefined) {
 }
 
 describe('closeInterruptedRuns', () => {
+  it('hands back the cause it read, so the boot never reads the removed note again', async () => {
+    const { deps, reads } = harness();
+    expect(await closeInterruptedRuns(deps)).toBe('crash');
+    expect(reads()).toBe(1);
+  });
+
   it('reads the note once, hands its cause to both reconciles, then settles every board', async () => {
     // A second read would find the note already gone and call every
     // workflow's stop `unknown`; settling first would find no run closed yet.
@@ -56,7 +62,7 @@ describe('closeInterruptedRuns', () => {
       throw new Error('database is locked');
     });
 
-    await expect(closeInterruptedRuns(h.deps)).resolves.toBeUndefined();
+    await expect(closeInterruptedRuns(h.deps)).resolves.toBe('crash');
 
     expect(h.errors).toEqual([
       'boot settle of interrupted task cards failed: database is locked',

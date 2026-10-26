@@ -4,15 +4,22 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { RunDao } from '../dao/run.dao';
 import {
   isOutstanding,
+  readUnrecordedEstimates,
   readUnrecordedSpend,
   writeUnrecordedSpend,
 } from '../utils/unrecorded-spend';
 import { AgentEventBus } from './agent-events.bus';
 
+/** One run's outstanding dollars per owner, and the part of them priced here. */
+export interface OutstandingSpend {
+  spend: Map<string, number>;
+  estimates: Map<string, number>;
+}
+
 /** One run's half of the store: its entries once read, and its write queue. */
 interface RunSpend {
   /** Null until this process has read the row (or after a write failed). */
-  spend: Map<string, number> | null;
+  spend: OutstandingSpend | null;
   /** Every write for this run, in order — see {@link UnrecordedSpendStore}. */
   chain: Promise<void>;
 }
@@ -55,20 +62,31 @@ export class UnrecordedSpendStore implements OnModuleInit {
   }
 
   /** Record one owner's outstanding figure; null or zero means none. */
-  set(runId: string, ownerKey: string, costUsd: number | null): void {
-    this.update(runId, (spend) => {
+  set(
+    runId: string,
+    ownerKey: string,
+    costUsd: number | null,
+    estimatedCostUsd: number | null = null,
+  ): void {
+    this.update(runId, ({ spend, estimates }) => {
       if (isOutstanding(costUsd)) {
         spend.set(ownerKey, costUsd);
       } else {
         spend.delete(ownerKey);
+      }
+      if (isOutstanding(costUsd) && isOutstanding(estimatedCostUsd)) {
+        estimates.set(ownerKey, estimatedCostUsd);
+      } else {
+        estimates.delete(ownerKey);
       }
     });
   }
 
   /** Drop every owner's figure — the run's turn or pass is over. */
   clearRun(runId: string): void {
-    this.update(runId, (spend) => {
+    this.update(runId, ({ spend, estimates }) => {
       spend.clear();
+      estimates.clear();
     });
   }
 
@@ -77,17 +95,20 @@ export class UnrecordedSpendStore implements OnModuleInit {
    * rehydration seeds the live plane from. Primes this store's copy too, so
    * the first change after a restart does not read the row again.
    */
-  async loadAll(): Promise<Map<string, Map<string, number>>> {
-    const out = new Map<string, Map<string, number>>();
+  async loadAll(): Promise<Map<string, OutstandingSpend>> {
+    const out = new Map<string, OutstandingSpend>();
     const rows = await this.runDao.listRunsWithUnrecordedSpend(this.em.fork());
     for (const row of rows) {
-      const spend = readUnrecordedSpend(row.unrecordedSpend);
-      if (spend.size === 0) {
+      const spend = outstandingOf(row.unrecordedSpend);
+      if (spend.spend.size === 0) {
         continue;
       }
       out.set(row.id, spend);
       const entry = this.entryOf(row.id);
-      entry.spend ??= new Map(spend);
+      entry.spend ??= {
+        spend: new Map(spend.spend),
+        estimates: new Map(spend.estimates),
+      };
     }
     return out;
   }
@@ -99,18 +120,24 @@ export class UnrecordedSpendStore implements OnModuleInit {
 
   private update(
     runId: string,
-    mutate: (spend: Map<string, number>) => void,
+    mutate: (spend: OutstandingSpend) => void,
   ): void {
     const entry = this.entryOf(runId);
     entry.chain = entry.chain
       .then(async () => {
         const em = this.em.fork();
-        entry.spend ??= readUnrecordedSpend(
+        entry.spend ??= outstandingOf(
           await this.runDao.unrecordedSpendOf(runId, em),
         );
-        const before = writeUnrecordedSpend(entry.spend);
+        const before = writeUnrecordedSpend(
+          entry.spend.spend,
+          entry.spend.estimates,
+        );
         mutate(entry.spend);
-        const after = writeUnrecordedSpend(entry.spend);
+        const after = writeUnrecordedSpend(
+          entry.spend.spend,
+          entry.spend.estimates,
+        );
         if (after !== before) {
           await this.runDao.setUnrecordedSpend(runId, after, em);
         }
@@ -133,4 +160,11 @@ export class UnrecordedSpendStore implements OnModuleInit {
     }
     return entry;
   }
+}
+
+function outstandingOf(json: string | null): OutstandingSpend {
+  return {
+    spend: readUnrecordedSpend(json),
+    estimates: readUnrecordedEstimates(json),
+  };
 }

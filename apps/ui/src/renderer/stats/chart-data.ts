@@ -18,6 +18,8 @@ export interface DayPoint {
   title: string;
   turns: number;
   costUsd: number | null;
+  /** Of `costUsd`, the part geniro priced itself from token counts; null when none. */
+  estimatedCostUsd: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
   /** Input + output, null only when NEITHER was reported. */
@@ -31,6 +33,8 @@ export interface DayPoint {
    * would read as "the total is unknown from here on".
    */
   cumulativeUsd: number;
+  /** Of `cumulativeUsd`, the part geniro priced itself; null while none of it is. */
+  cumulativeEstimatedUsd: number | null;
   /** Threads created on the day. A count, so a quiet day is a measured zero. */
   threadsCreated: number;
   /** Pull requests a thread captured on the day. */
@@ -61,8 +65,10 @@ export function toDayPoints(
   days: readonly Pick<UsageBucket, 'date' | 'totals' | 'activity'>[],
 ): DayPoint[] {
   let running = 0;
+  let runningEstimated = 0;
   return days.map(({ date, totals, activity }) => {
     running += totals.costUsd ?? 0;
+    runningEstimated += totals.estimatedCostUsd ?? 0;
     // A day on which NOTHING RAN is a measured zero, not a hole. The daemon
     // reports every figure as null for such a day simply because it had no
     // events to sum, and reading that as "not measured" broke the line across
@@ -81,12 +87,14 @@ export function toDayPoints(
       title: formatDayTitle(date),
       turns: totals.turns,
       costUsd: measured(totals.costUsd),
+      estimatedCostUsd: totals.estimatedCostUsd,
       inputTokens: measured(totals.inputTokens),
       outputTokens: measured(totals.outputTokens),
       totalTokens: idle
         ? 0
         : sumMeasured(totals.inputTokens, totals.outputTokens),
       cumulativeUsd: running,
+      cumulativeEstimatedUsd: runningEstimated > 0 ? runningEstimated : null,
       // The activity figures are NOT run through `measured`: an idle day has
       // no turns, and that says nothing about whether a thread was measured.
       threadsCreated: activity.threadsCreated,
@@ -147,6 +155,8 @@ export interface RankedRow {
   display: string;
   turns: number;
   costUsd: number | null;
+  /** Of `costUsd`, the part geniro priced itself from token counts; null when none. */
+  estimatedCostUsd: number | null;
   /**
    * Input + output for this group, or null when nothing measured either.
    *
@@ -175,6 +185,7 @@ export function toRankedRows(
   labelOf: (key: string | null, group: UsageGroup) => string,
   formatValue: (row: {
     costUsd: number | null;
+    estimatedCostUsd: number | null;
     turns: number;
     tokens: number | null;
   }) => string,
@@ -194,6 +205,7 @@ export function toRankedRows(
     value: costed ? (group.totals.costUsd ?? 0) : group.totals.turns,
     turns: group.totals.turns,
     costUsd: group.totals.costUsd,
+    estimatedCostUsd: group.totals.estimatedCostUsd,
     tokens: sumTokens(group.totals.inputTokens, group.totals.outputTokens),
   }));
   // The largest row, not the SUM: these are bars, and a bar reads against the

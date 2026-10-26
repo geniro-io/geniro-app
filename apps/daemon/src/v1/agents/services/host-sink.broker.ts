@@ -13,6 +13,20 @@ export interface HostSinkUnavailable {
   reason: string;
 }
 
+/** How a sink was installed, beside the sink itself. */
+export interface HostSinkOptions {
+  /**
+   * The turn's CLI will not hold the call open for the user, so a parking tool
+   * answers at once and its listing says so (`hostQuestionDeferredReason`).
+   */
+  answersAtOnce?: boolean;
+}
+
+interface HostSinkEntry<TSink> {
+  sink: TSink;
+  answersAtOnce: boolean;
+}
+
 /**
  * The rendezvous behind every one of geniro's OWN tools — the half that is the
  * same for all of them.
@@ -43,7 +57,7 @@ export abstract class HostSinkBroker<TSink> {
    * without every subclass declaring its own logger.
    */
   private readonly logger = new Logger(this.constructor.name);
-  private readonly sinks = new Map<string, TSink>();
+  private readonly sinks = new Map<string, HostSinkEntry<TSink>>();
 
   private key(runId: string, nodeId: string): string {
     return `${runId}::${nodeId}`;
@@ -56,13 +70,26 @@ export abstract class HostSinkBroker<TSink> {
    * distinction is load-bearing: settle paths run late and out of order, so a
    * keyed removal would silently tear down the sink a LATER turn of the same run
    * had already installed. The identity check is what makes a stale disposer a
-   * no-op instead.
+   * no-op instead. It compares the entry, not the sink, so re-registering the
+   * same function still gets a disposer of its own.
+   *
+   * `options` live in the entry and go with it, so a later turn of the same
+   * run never inherits them.
    */
-  register(runId: string, nodeId: string, sink: TSink): () => void {
+  register(
+    runId: string,
+    nodeId: string,
+    sink: TSink,
+    options: HostSinkOptions = {},
+  ): () => void {
     const key = this.key(runId, nodeId);
-    this.sinks.set(key, sink);
+    const entry: HostSinkEntry<TSink> = {
+      sink,
+      answersAtOnce: options.answersAtOnce ?? false,
+    };
+    this.sinks.set(key, entry);
     return () => {
-      if (this.sinks.get(key) === sink) {
+      if (this.sinks.get(key) === entry) {
         this.sinks.delete(key);
       }
     };
@@ -75,6 +102,14 @@ export abstract class HostSinkBroker<TSink> {
    */
   protected has(runId: string, nodeId: string): boolean {
     return this.sinks.has(this.key(runId, nodeId));
+  }
+
+  /**
+   * Whether this node's sink was installed for a CLI that will not hold the
+   * call open (see {@link HostSinkOptions.answersAtOnce}). False with no sink.
+   */
+  protected sinkAnswersAtOnce(runId: string, nodeId: string): boolean {
+    return this.sinks.get(this.key(runId, nodeId))?.answersAtOnce ?? false;
   }
 
   /**
@@ -105,7 +140,7 @@ export abstract class HostSinkBroker<TSink> {
     failure: string,
     call: (sink: TSink) => Promise<TOutcome>,
   ): Promise<TOutcome | HostSinkUnavailable> {
-    const sink = this.sinks.get(this.key(runId, nodeId));
+    const sink = this.sinks.get(this.key(runId, nodeId))?.sink;
     if (!sink) {
       return { status: 'unavailable', reason: absent };
     }

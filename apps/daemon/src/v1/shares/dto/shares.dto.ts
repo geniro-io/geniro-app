@@ -7,9 +7,12 @@ import {
   MAX_ARTIFACT_TITLE_LENGTH,
 } from '../../agents/chat.types';
 import {
+  RevokeManyOutcomeSchema,
+  ShareCheckResultSchema,
   ShareConfigSchema,
   ShareDestinationSchema,
   ShareSchema,
+  ShareSignInSessionSchema,
   ShareThemeVarsSchema,
 } from '../shares.types';
 
@@ -48,9 +51,13 @@ export class CreateShareDto extends createZodDto(
   }),
 ) {}
 
-/** The link carries the key in its fragment — show it to the user, never log it. */
+/**
+ * The link carries the key in its fragment — show it to the user, never log
+ * it. Null when the share waits on the user signing in to its destination's
+ * CLI (`share.status` `awaiting-sign-in`).
+ */
 export class ShareCreatedDto extends createZodDto(
-  z.object({ share: ShareSchema, url: z.string() }),
+  z.object({ share: ShareSchema, url: z.string().nullable() }),
 ) {}
 
 export class ShareLinkDto extends createZodDto(z.object({ url: z.string() })) {}
@@ -62,10 +69,25 @@ export class RevokeShareDto extends createZodDto(
   }),
 ) {}
 
-export class ProbeShareDestinationDto extends createZodDto(
+/** The pages the user saw listed; one shared after the list was read is not among them. */
+export class RevokeSharesDto extends createZodDto(
+  z.object({
+    shareIds: z.array(z.string().min(1).max(64)).min(1),
+  }),
+) {}
+
+export class RevokeAllSharesDto extends createZodDto(RevokeManyOutcomeSchema) {}
+
+export class CheckShareDestinationDto extends createZodDto(
   z.object({ destination: ShareDestinationSchema }),
 ) {}
 
-export class ShareProbeResultDto extends createZodDto(
-  z.object({ ok: z.boolean(), detail: z.string() }),
+export class ShareCheckResultDto extends createZodDto(ShareCheckResultSchema) {}
+
+export class StartShareSignInDto extends createZodDto(
+  z.object({ destinationId: z.string().min(1).max(64) }),
+) {}
+
+export class ShareSignInSessionDto extends createZodDto(
+  ShareSignInSessionSchema,
 ) {}

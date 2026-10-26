@@ -1371,6 +1371,7 @@ describe('ChatMetricsService', () => {
       turns: 2,
       costedTurns: 2,
       costUsd: 0.5,
+      estimatedCostUsd: null,
       inputTokens: 5,
       outputTokens: 40,
       cacheReadTokens: 1000,
@@ -1638,6 +1639,95 @@ describe('ChatMetricsService — plan limits are the ACCOUNT’s', () => {
     expect(second.plan?.estimated).toBe(false);
     // Dated, since it is not this chat's answer from just now.
     expect(second.planTakenAt).toBe(first.planTakenAt);
+  });
+
+  it('serves a pressed refresh the agent’s newer estimate over a real reading under five minutes old', async () => {
+    // REPORTED as a refresh press that left the panel on "Updated 3m ago": the
+    // agent answered with its estimate, and the held real reading outranked
+    // it. Ordinary reads keep that ranking (the test above); a press is the
+    // user asking for now.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-19T12:49:07Z'));
+      const readPlanLimits = vi
+        .fn()
+        .mockResolvedValueOnce(reading(9, false))
+        .mockResolvedValueOnce(reading(12, true));
+      const { service } = build({
+        planReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: {},
+        readPlanLimits,
+      });
+      await service.read('run-1');
+
+      vi.setSystemTime(new Date('2026-10-19T12:52:07Z'));
+      const pressed = await service.read('run-1', null, null, true);
+
+      expect(readPlanLimits).toHaveBeenCalledTimes(2);
+      expect(pressed.plan?.windows[0]?.percent).toBe(12);
+      expect(pressed.plan?.estimated).toBe(true);
+      expect(pressed.planTakenAt).toBe('2026-10-19T12:52:07.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never lets a press put this chat’s STORED reading over a newer one, when the agent gave no answer', async () => {
+    // Only the agent's own answer from just now earns the press's preference.
+    // The stored reading offered in its place is older than what the account
+    // already holds, and serving it would roll every chat on it back.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-19T12:49:00Z'));
+      const readPlanLimits = vi
+        .fn()
+        .mockResolvedValueOnce(reading(70, false))
+        .mockResolvedValueOnce(null);
+      const { service } = build({
+        planReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: {},
+        readPlanLimits,
+        // Taken three minutes before run-2's answer — too old to be served
+        // in place of a live ask, still offered when the ask comes back empty.
+        lastMetricsReading: JSON.stringify({
+          takenAt: '2026-10-19T12:46:00.000Z',
+          atSeq: 7,
+          configDir: null,
+          context: BREAKDOWN,
+          plan: reading(100, false),
+        }),
+      });
+      await service.read('run-2');
+
+      vi.setSystemTime(new Date('2026-10-19T12:50:00Z'));
+      const pressed = await service.read('run-1', null, null, true);
+
+      expect(readPlanLimits).toHaveBeenCalledTimes(2);
+      expect(pressed.plan?.windows[0]?.percent).toBe(70);
+      expect(pressed.planTakenAt).toBe('2026-10-19T12:49:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the real reading over the turn-end prewarm’s estimate — the prewarm is no press', async () => {
+    const readPlanLimits = vi
+      .fn()
+      .mockResolvedValueOnce(reading(81, false))
+      .mockResolvedValueOnce(reading(40, true));
+    const { service, farewell } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: (key) => (key === 'run-1' ? {} : null),
+      readPlanLimits,
+    });
+
+    await service.read('run-1');
+    await farewell();
+    const other = await service.read('run-2');
+
+    expect(readPlanLimits).toHaveBeenCalledTimes(2);
+    expect(other.plan?.windows[0]?.percent).toBe(81);
+    expect(other.plan?.estimated).toBe(false);
   });
 
   it('gives a chat whose agent is closed the account’s reading from another chat', async () => {

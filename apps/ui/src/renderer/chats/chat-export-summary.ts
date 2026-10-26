@@ -30,6 +30,8 @@ export interface ExportAgentTotals {
   agent: string;
   turns: number;
   costUsd: number | null;
+  /** Of {@link costUsd}, the part geniro priced itself; null when none. */
+  estimatedCostUsd: number | null;
   workedMs: number | null;
 }
 
@@ -44,6 +46,8 @@ export interface ExportCall {
   durationMs: number | null;
   /** Summed from the `turn_complete` rows carrying this call's id. */
   costUsd: number | null;
+  /** Of {@link costUsd}, the part geniro priced itself; null when none. */
+  estimatedCostUsd: number | null;
   /** `ok`, or the error envelope's own machine-prefixed one-liner. */
   outcome: string;
 }
@@ -154,6 +158,7 @@ export function chatExportSummary(
       agent,
       turns: 0,
       costUsd: null,
+      estimatedCostUsd: null,
       workedMs: null,
     };
     agents.set(agent, fresh);
@@ -170,6 +175,8 @@ export function chatExportSummary(
       const totals = agentTotals(agentOf(item));
       totals.turns += 1;
       totals.costUsd = addFigure(totals.costUsd, usageNumber(item, 'costUsd'));
+      const estimated = usageNumber(item, 'estimatedCostUsd');
+      totals.estimatedCostUsd = addFigure(totals.estimatedCostUsd, estimated);
       totals.workedMs = addFigure(
         totals.workedMs,
         usageNumber(item, 'durationMs'),
@@ -180,6 +187,7 @@ export function chatExportSummary(
       const call = callId === null ? undefined : calls.get(callId);
       if (call !== undefined) {
         call.costUsd = addFigure(call.costUsd, usageNumber(item, 'costUsd'));
+        call.estimatedCostUsd = addFigure(call.estimatedCostUsd, estimated);
       }
       continue;
     }
@@ -195,6 +203,7 @@ export function chatExportSummary(
         calleeNodeId: payloadString(item.payload, 'calleeNodeId'),
         durationMs: null,
         costUsd: null,
+        estimatedCostUsd: null,
         outcome: 'unsettled',
       });
       const began = Date.parse(item.createdAt);

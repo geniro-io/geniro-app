@@ -145,6 +145,21 @@ afterEach(() => {
   }
 });
 
+/**
+ * The signals a `process.kill` spy saw for ONE process group. The spy is
+ * process-wide, so it also catches a stray from another spec's real-time
+ * escalation timer landing in this one's window (seen on a slow CI runner) —
+ * counting only this group's pins what the test claims.
+ */
+function signalsTo(
+  killSpy: { mock: { calls: unknown[][] } },
+  pgid: number,
+): unknown[] {
+  return killSpy.mock.calls
+    .filter(([pid]) => pid === -pgid)
+    .map(([, signal]) => signal);
+}
+
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'adapter-probe-root-'));
   dirs.push(dir);
@@ -1042,6 +1057,96 @@ class InterruptibleSessionAdapter extends SessionWithoutModeChangeAdapter {
   }
 }
 
+/**
+ * The same fake CLI, with a vocabulary for a delegate that runs a command of
+ * its own: a launch, the delegate's tool call, and the command's start and
+ * end — the lines that make the underlying session hold a delegate's command.
+ */
+class DelegateCommandAdapter extends SessionWithoutModeChangeAdapter {
+  protected override mapMessage(obj: unknown): AgentEvent[] {
+    const row = obj as {
+      launch?: string;
+      run?: string;
+      parent?: string;
+      command?: string;
+      settle?: string;
+    };
+    if (typeof row.launch === 'string') {
+      return [
+        {
+          type: 'background_work',
+          id: 'delegate-work',
+          phase: 'started',
+          unit: 'agent',
+          toolCallId: row.launch,
+        },
+      ];
+    }
+    if (typeof row.run === 'string') {
+      return [
+        {
+          type: 'tool_call',
+          id: row.run,
+          name: 'Bash',
+          input: {},
+          parentToolUseId: row.parent,
+        },
+      ];
+    }
+    if (typeof row.command === 'string') {
+      return [
+        {
+          type: 'background_work',
+          id: row.command,
+          phase: 'started',
+          unit: 'other',
+          toolCallId: `toolu_${row.command}`,
+          ownedByDelegate: true,
+        },
+      ];
+    }
+    if (typeof row.settle === 'string') {
+      return [
+        {
+          type: 'background_work',
+          id: row.settle,
+          phase: 'settled',
+          unit: 'other',
+          toolCallId: null,
+        },
+      ];
+    }
+    return super.mapMessage(obj);
+  }
+}
+
+describe('AgentAdapter session — the delegate-command hold reaches the registry', () => {
+  // The subagent recovery service writes a terminal row for a delegate unless
+  // the registry's session says the delegate's command is still running, and
+  // the registry can only ask the object the adapter handed it.
+  it('answers subagentRecoveryBlocked with what the underlying CLI session says', () => {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = { prompt: 'first', cwd: '/proj' };
+    const session = new DelegateCommandAdapter(spawn).startSession(input, {
+      runScoped: true,
+    });
+    session.startTurn(input, () => {});
+
+    child.stdout.emitData('{"launch":"toolu_launch"}\n');
+    child.stdout.emitData(
+      '{"run":"toolu_build","parent":"toolu_launch"}\n{"command":"build"}\n',
+    );
+
+    // The delegate named by the launching call is blocked; another is not.
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(true);
+    expect(session.subagentRecoveryBlocked?.('toolu_unrelated')).toBe(false);
+
+    child.stdout.emitData('{"settle":"build"}\n');
+
+    expect(session.subagentRecoveryBlocked?.('toolu_launch')).toBe(false);
+  });
+});
+
 describe('AgentAdapter keeps a stopped session serving turns', () => {
   it('does not retire a session whose stopped turn the CLI ended itself', async () => {
     // Stop leaves the process RUNNING — pressing it must not take the user's
@@ -1128,6 +1233,22 @@ describe('AgentAdapter sessions separate on the custom instructions', () => {
         () => {},
       ),
     ).not.toBeNull();
+  });
+
+  it('refuses to serve a turn whose reply language differs from the spawn’s', async () => {
+    const session = await sessionAfterFirstTurn('BE TERSE');
+
+    expect(
+      session.startTurn(
+        {
+          prompt: 'second',
+          cwd: '/proj',
+          customInstructions: 'BE TERSE',
+          replyLanguage: 'Russian',
+        },
+        () => {},
+      ),
+    ).toBeNull();
   });
 });
 
@@ -1449,7 +1570,12 @@ class RealSpawnAdapter extends BareAdapter {
   }
 
   run(args: string[], options: AgentCommandOptions): Promise<string | null> {
-    return this.runCommand(args, options);
+    // The suite runs under Electron, and `buildChildEnv` no longer passes the
+    // daemon's `ELECTRON_RUN_AS_NODE` down, so the child asks for it itself.
+    return this.runCommand(args, {
+      ...options,
+      env: { ELECTRON_RUN_AS_NODE: '1', ...options.env },
+    });
   }
 }
 
@@ -2136,8 +2262,7 @@ describe('AgentAdapter.runCommand spawn options', () => {
       await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' });
 
       // ONE reap, which is ONE escalation: SIGTERM now…
-      expect(killSpy).toHaveBeenCalledTimes(1);
-      expect(killSpy).toHaveBeenCalledWith(-4243, 'SIGTERM');
+      expect(signalsTo(killSpy, 4243)).toEqual(['SIGTERM']);
 
       await vi.advanceTimersByTimeAsync(60_000);
 
@@ -2145,8 +2270,7 @@ describe('AgentAdapter.runCommand spawn options', () => {
       // signals from one reap, not two reaps: the deadline was cleared rather
       // than merely outrun, and `exit`/`close` did not each arm their own
       // escalation.
-      expect(killSpy).toHaveBeenCalledTimes(2);
-      expect(killSpy).toHaveBeenNthCalledWith(2, -4243, 'SIGKILL');
+      expect(signalsTo(killSpy, 4243)).toEqual(['SIGTERM', 'SIGKILL']);
     } finally {
       killSpy.mockRestore();
       vi.useRealTimers();
@@ -2254,7 +2378,7 @@ describe('AgentAdapter.runCommand spawn options', () => {
       fake.close(0); // the child's own exit lands afterwards
       await pending;
 
-      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(signalsTo(killSpy, 4248)).toEqual(['SIGTERM']);
     } finally {
       killSpy.mockRestore();
       vi.useRealTimers();

@@ -1,4 +1,9 @@
-import type { DaemonHandle, GitStamp, Settings } from '../shared/contracts';
+import {
+  type DaemonHandle,
+  type GitStamp,
+  runSettingsOf,
+  type Settings,
+} from '../shared/contracts';
 import { gitFailureLine } from './git-failure';
 
 /**
@@ -111,6 +116,8 @@ export interface ConductorDeps {
    * under the same instructions whoever pressed it.
    */
   customInstructions: () => Settings['customInstructions'];
+  /** The reply language, read and sent on the same terms. */
+  replyLanguage: () => Settings['replyLanguage'];
   log: (message: string) => void;
   /** Injectable so a spec drives the tick without a real clock. */
   intervalMs?: number;
@@ -239,7 +246,11 @@ export class AutopilotConductor {
       return;
     }
 
-    const customInstructions = this.deps.customInstructions();
+    const runSettings = runSettingsOf({
+      customInstructions: this.deps.customInstructions(),
+      replyLanguage: this.deps.replyLanguage(),
+      agentOptions: this.deps.agentOptions(),
+    });
     // A reading that fails costs the run its changes view, never its start.
     const stamp = await this.deps.gitStamp(worktree.path).catch(() => null);
     try {
@@ -249,9 +260,8 @@ export class AutopilotConductor {
         from: task.status,
         approval: AUTOPILOT_APPROVAL,
         startedBy: 'autopilot',
-        agentOptions: this.deps.agentOptions(),
-        customInstructions:
-          customInstructions.trim() === '' ? undefined : customInstructions,
+        // The same snapshot a hand-pressed Run takes.
+        ...runSettings,
         startSha: stamp?.sha ?? undefined,
         startDirty: stamp?.dirty ?? undefined,
       });

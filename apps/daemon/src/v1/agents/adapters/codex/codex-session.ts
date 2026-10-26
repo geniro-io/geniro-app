@@ -3,6 +3,7 @@ import type { SessionLogger } from '../../utils/spawn-cli';
 import type {
   AgentEvent,
   AgentTurnInput,
+  ApprovalOption,
   BackgroundUnitOutcome,
   FollowUpMessage,
   TurnDriver,
@@ -31,11 +32,20 @@ import { subagentState } from './utils/codex-items.utils';
 import { CodexSubagentSpend } from './utils/codex-usage.utils';
 
 /**
- * A refused `turn/steer` is the one reply that still matters after its turn has
- * ended: it is how the user learns that a message they sent was not taken.
+ * Ending a stopped turn's commands is asked AFTER that turn ended, often while
+ * the next one runs, so its replies — answers and refusals — must still reach
+ * the turn that asked.
+ */
+function outlivesItsTurn(kind: CodexPendingKind): boolean {
+  return kind === 'terminals_list' || kind === 'terminal_terminate';
+}
+
+/**
+ * A refused `turn/steer` also still matters after its turn has ended: it is how
+ * the user learns that a message they sent was not taken.
  */
 function refusalOutlivesItsTurn(kind: CodexPendingKind): boolean {
-  return kind === 'turn_steer';
+  return kind === 'turn_steer' || outlivesItsTurn(kind);
 }
 
 /** What a {@link CodexSession} needs from the adapter that built it. */
@@ -100,6 +110,36 @@ export class CodexSession implements TurnDriver {
    */
   readonly items = new Map<string, CodexItem>();
   /**
+   * The codex turn ids that ended stopped or failed — the turns whose frames
+   * may still arrive after them.
+   *
+   * codex does not end a command on `turn/interrupt`: the command runs on and
+   * reports under the stopped turn's id, often after the next turn opened.
+   * Notifications go to whichever driver is current, so the next turn would
+   * take that report as its own; a frame naming one of these turns does only
+   * the session's bookkeeping instead. On the session because the frames
+   * outlive the driver they belong to, and keyed by codex's id because they
+   * can land before the next turn's own id is known.
+   */
+  readonly endedTurns = new Set<string>();
+  /**
+   * Every command codex runs, by item id → the sub-agent thread that runs it
+   * (null for this conversation's own), from the item's start until codex
+   * completes it — or, for one held in no process store, until its turn (or
+   * its sub-agent's turn) ends. Each is reported as a unit of work from its
+   * first moment, so `spawn-cli` records where it runs while the CLI lives.
+   * On the session: a command outlives the turn that started it.
+   */
+  readonly commandUnits = new Map<string, string | null>();
+  /**
+   * Of {@link commandUnits}, the ones codex holds in its process store that
+   * were still running when their turn ended — codex ends a turn without
+   * waiting on a command it has backgrounded. Their
+   * completion, under the old turn's id and usually with no turn open, is
+   * that command's end rather than the agent at work again.
+   */
+  readonly leftRunning = new Set<string>();
+  /**
    * Server requests awaiting the user's verdict, by encoded id. Thread-scoped
    * rather than per-turn: a request left unanswered when its turn settles is
    * re-offered to the next turn, and its verdict has to find it there.
@@ -109,6 +149,7 @@ export class CodexSession implements TurnDriver {
   readonly subagents = new Map<string, string>();
   /** Spawning calls whose delegate this session has announced as running. */
   private readonly openSubagents = new Set<string>();
+  private readonly untrackedSubagents = new Set<string>();
   /**
    * The thread is in plan mode, as codex last confirmed it. codex keeps a
    * turn's collaboration mode for the turns after it — across processes too,
@@ -191,10 +232,15 @@ export class CodexSession implements TurnDriver {
     const message = classifyMessage(obj);
     switch (message.kind) {
       case 'response': {
-        const entry = this.pending.take(message.id, this.turn);
+        const entry = this.pending.take(message.id, this.turn, outlivesItsTurn);
         return entry === null
           ? []
-          : entry.turn.onReply(entry.kind, message.result);
+          : entry.turn.onReply(
+              entry.kind,
+              message.result,
+              entry.detail,
+              entry.deliveryId,
+            );
       }
       case 'error': {
         const entry = this.pending.take(
@@ -204,7 +250,12 @@ export class CodexSession implements TurnDriver {
         );
         return entry === null
           ? []
-          : entry.turn.onErrorReply(entry.kind, message.message, entry.detail);
+          : entry.turn.onErrorReply(
+              entry.kind,
+              message.message,
+              entry.detail,
+              entry.deliveryId,
+            );
       }
       case 'request':
         return this.turn.onServerRequest(
@@ -223,12 +274,37 @@ export class CodexSession implements TurnDriver {
     id: string,
     allow: boolean,
     updatedInput?: unknown,
+    option?: ApprovalOption,
   ): string | undefined {
-    return this.turn.buildApprovalResponse(id, allow, updatedInput);
+    return this.turn.buildApprovalResponse(id, allow, updatedInput, option);
   }
 
   sendFollowUp(message: FollowUpMessage): boolean {
     return this.turn.sendFollowUp(message);
+  }
+
+  withdrawHeldPrompt(): boolean {
+    return this.turn.withdrawHeldPrompt();
+  }
+
+  onProcessEnded(): AgentEvent[] {
+    return this.turn.onProcessEnded();
+  }
+
+  closeGraceMs(): number {
+    return this.turn.closeGraceMs();
+  }
+
+  /** Whether `turn` is the one this session is serving now. */
+  isCurrentTurn(turn: CodexTurnDriver): boolean {
+    return this.turn === turn;
+  }
+
+  /** Emit to the turn now open, outside any reply — the held ending's release. */
+  emitNow(events: readonly AgentEvent[]): void {
+    for (const event of events) {
+      this.io?.emit(event);
+    }
   }
 
   buildInterruptPayload(): string | undefined {
@@ -274,16 +350,25 @@ export class CodexSession implements TurnDriver {
   }
 
   /**
-   * End one sub-agent: announce its spawning call closed, once, with how it
-   * ended — whichever report of its ending arrives first.
+   * Publish the first known ending, allowing it to replace tracking loss.
    */
   closeSubagent(
     threadId: string,
     outcome: BackgroundUnitOutcome,
   ): AgentEvent[] {
     const parent = this.subagents.get(threadId);
-    if (parent === undefined || !this.openSubagents.delete(parent)) {
+    if (parent === undefined) {
       return [];
+    }
+    const wasOpen = this.openSubagents.delete(parent);
+    const wasUntracked = this.untrackedSubagents.has(parent);
+    if (!wasOpen && !wasUntracked) {
+      return [];
+    }
+    if (outcome === 'untracked') {
+      this.untrackedSubagents.add(parent);
+    } else {
+      this.untrackedSubagents.delete(parent);
     }
     return [subagentState(parent, { open: false, outcome })];
   }
@@ -291,6 +376,7 @@ export class CodexSession implements TurnDriver {
   /** Mark a spawning call's delegate as running, so its ending is owed. */
   openSubagent(spawnItemId: string): void {
     this.openSubagents.add(spawnItemId);
+    this.untrackedSubagents.delete(spawnItemId);
   }
 
   /**
@@ -321,7 +407,9 @@ export class CodexSession implements TurnDriver {
 
   /**
    * Send one request, answering whether it actually went out. `detail` is what
-   * the turn wants said if the reply is a refusal.
+   * the turn wants said about the reply. `owner` is the turn the reply goes to:
+   * the current one, unless an ended turn is still finishing its own work.
+   * `deliveryId` is the message's own, for a `turn/steer` refusal to name.
    */
   request(
     method: string,
@@ -329,14 +417,17 @@ export class CodexSession implements TurnDriver {
     kind: CodexPendingKind,
     events: AgentEvent[],
     detail: string | null = null,
+    owner: CodexTurnDriver = this.turn,
+    deliveryId: string | null = null,
   ): boolean {
     const id = this.pending.send(
       method,
       params,
       kind,
-      this.turn,
+      owner,
       (frame) => this.write(frame),
       detail,
+      deliveryId,
     );
     if (id === null) {
       events.push({

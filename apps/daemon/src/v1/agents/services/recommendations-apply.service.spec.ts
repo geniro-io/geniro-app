@@ -17,6 +17,7 @@ function item(id: string, title: string): RecommendationItem {
   return {
     id,
     target: id.startsWith('W') ? 'workflow' : 'repo',
+    territory: id.startsWith('W') ? 'process' : 'domain',
     kind: id.startsWith('W') ? 'parallelize' : 'ADD',
     location: id.startsWith('W') ? 'reviewer' : 'AGENTS.md:12',
     title,
@@ -100,6 +101,9 @@ describe('RecommendationsApplyService.apply', () => {
     expect(runId).toBe('analysis');
     expect(images).toEqual([]);
     expect(text).toContain('### W-1 · Run reviewers in parallel');
+    expect(text).toContain(
+      'Target: workflow · process · parallelize · reviewer',
+    );
     expect(text).toContain('the exact change for W-1');
     expect(text).not.toContain('the exact change for R-1');
     expect(text).toContain('Not selected — leave alone: R-1.');
@@ -109,6 +113,22 @@ describe('RecommendationsApplyService.apply', () => {
       clientMessageId: 'press-1',
       apply: { cardSeq: 5, ids: ['W-1'] },
     });
+  });
+
+  it('refuses a card whose items name no territory, and sends nothing', async () => {
+    const untagged = CARD.items.map(({ territory: _omitted, ...rest }) => rest);
+    const { service, sendMessage } = build({
+      card: { payload: JSON.stringify({ ...CARD, items: untagged }) },
+    });
+
+    await expect(
+      service.apply('analysis', {
+        cardSeq: 5,
+        ids: ['W-1'],
+        clientMessageId: 'press-3',
+      }),
+    ).rejects.toMatchObject({ errorCode: 'RECOMMENDATIONS_UNREADABLE' });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it('refuses a second Apply of the same card, and sends nothing', async () => {

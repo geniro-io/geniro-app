@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  RunMonitor,
   RunProcess,
   RunProcessesDto,
   RunProcessTree,
@@ -71,6 +72,7 @@ function reading(over: Partial<RunProcessesDto> = {}): RunProcessesDto {
     sampledAt: '2026-10-04T12:00:00.000Z',
     trees: [tree()],
     detached: [],
+    monitors: [],
     processes: 3,
     cpuPercent: 16.8,
     rssBytes: 380 * 1024 * 1024 + 512 * 1024,
@@ -299,6 +301,7 @@ describe('RunProcesses — what the agents left detached', () => {
       });
       expect(stop).toHaveBeenCalledExactlyOnceWith(
         all ? [500, 501, 600] : [500, 501],
+        [],
       );
       expect(document.querySelector('[role="dialog"]')).toBeNull();
     },
@@ -388,6 +391,156 @@ describe('RunProcesses — what the agents left detached', () => {
     ).toBe(true);
     await act(async () => resolveStop());
     expect(stop).toHaveBeenCalledOnce();
+  });
+});
+
+describe('RunProcesses — monitors', () => {
+  function monitor(over: Partial<RunMonitor> = {}): RunMonitor {
+    return {
+      id: 'm1',
+      description: 'dev server log',
+      command: 'tail -f /tmp/dev.log',
+      startedAt: '2026-10-04T11:55:00.000Z',
+      endsAt: '2026-10-04T12:05:00.000Z',
+      pid: 700,
+      processes: [
+        proc({
+          pid: 700,
+          name: 'zsh',
+          args: '/bin/zsh -c tail -f /tmp/dev.log',
+          cpuPercent: 0.5,
+          rssBytes: 4 * 1024 * 1024,
+        }),
+        proc({
+          pid: 701,
+          ppid: 700,
+          depth: 1,
+          link: 'child',
+          name: 'tail',
+          args: 'tail -f /tmp/dev.log',
+          cpuPercent: 0.5,
+          rssBytes: 1024 * 1024,
+        }),
+      ],
+      cpuPercent: 1,
+      rssBytes: 5 * 1024 * 1024,
+      ...over,
+    };
+  }
+
+  const DEV_SERVER = proc({ pid: 500, name: 'pnpm', args: 'pnpm dev' });
+
+  function mountMonitors(
+    over: Partial<RunProcessesDto> = {},
+    stop?: Parameters<typeof RunProcesses>[0]['onStopDetached'],
+  ): HTMLDivElement {
+    return mount({
+      data: reading({
+        trees: [],
+        monitors: [monitor()],
+        processes: 2,
+        ...over,
+      }),
+      loading: false,
+      error: null,
+      onStopDetached: stop,
+    });
+  }
+
+  it('shows a monitor as one row, badged, with how long it ran and what it watches', () => {
+    const el = mountMonitors();
+    const section = el.querySelector('[data-slot="processes-detached"]');
+    expect(section?.textContent).toContain('Detached1');
+    const rows = section?.querySelectorAll('[data-slot="process-group"]');
+    expect(rows).toHaveLength(1);
+    const row = rows?.[0] as HTMLElement;
+    expect(row.textContent).toContain('tail -f /tmp/dev.log');
+    expect(
+      row.querySelector('[data-slot="process-command-detail"]')?.textContent,
+    ).toBe('up 5m · dev server logmonitor');
+    expect(row.textContent).not.toContain('detached');
+    // Its own totals, not the sum of its processes.
+    expect(row.textContent).toContain('5.0 MB');
+  });
+
+  it('carries the id and the time left until its timeout on hover', () => {
+    const el = mountMonitors();
+    const title = el
+      .querySelector('[data-slot="process-group"] [title]')
+      ?.getAttribute('title');
+    expect(title).toContain('monitor m1 · 5m left');
+  });
+
+  it('counts a monitor beside a detached command in the section', () => {
+    const el = mountMonitors({
+      detached: [DEV_SERVER],
+      processes: 3,
+    });
+    const section = el.querySelector('[data-slot="processes-detached"]');
+    expect(section?.textContent).toContain('Detached2');
+    expect(
+      [...(section?.querySelectorAll('[data-slot="process-group"]') ?? [])].map(
+        (row) => row.getAttribute('data-role'),
+      ),
+    ).toEqual(['command', 'command']);
+    expect(
+      el.querySelector('[data-slot="processes-summary"]')?.textContent,
+    ).toContain('1 detached · 1 monitor');
+  });
+
+  it('is not the empty state when only a monitor is running', () => {
+    const el = mountMonitors();
+    expect(el.textContent).not.toContain('no agent process is running');
+  });
+
+  it('stops a monitor by its id, after saying the agent will be told', async () => {
+    const stop = vi.fn(async () => undefined);
+    const el = mountMonitors({}, stop);
+    act(() =>
+      (
+        el.querySelector(
+          '[aria-label="Stop dev server log"]',
+        ) as HTMLButtonElement
+      ).click(),
+    );
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
+    expect(dialog.textContent).toContain(
+      'This stops the monitor. The agent will be told it was stopped.',
+    );
+    expect(stop).not.toHaveBeenCalled();
+    await act(async () => {
+      (
+        [...dialog.querySelectorAll('button')].find(
+          (button) => button.textContent === 'Stop monitor',
+        ) as HTMLButtonElement
+      ).click();
+    });
+    expect(stop).toHaveBeenCalledExactlyOnceWith([], ['m1']);
+  });
+
+  it('stops every detached pid and every monitor id on Stop all', async () => {
+    const stop = vi.fn(async () => undefined);
+    const el = mountMonitors(
+      {
+        detached: [DEV_SERVER],
+        monitors: [monitor(), monitor({ id: 'm2', description: 'build' })],
+        processes: 5,
+      },
+      stop,
+    );
+    act(() =>
+      [...el.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Stop all')
+        ?.click(),
+    );
+    await act(async () => {
+      (
+        [...document.querySelectorAll('[role="dialog"] button')].find(
+          (button) => button.textContent === 'Stop all',
+        ) as HTMLButtonElement
+      ).click();
+    });
+    expect(stop).toHaveBeenCalledExactlyOnceWith([500], ['m1', 'm2']);
   });
 });
 

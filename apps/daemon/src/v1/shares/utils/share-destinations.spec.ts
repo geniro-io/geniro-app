@@ -151,6 +151,22 @@ describe('probeArgv', () => {
 });
 
 describe('ShareDestinationSchema', () => {
+  it('keeps a custom destination’s sign-in, and refuses a login run through a shell', () => {
+    const signIn = {
+      login: ['/usr/local/bin/put', 'login'],
+      patterns: ['session expired'],
+    };
+    expect(ShareDestinationSchema.parse({ ...COMMAND, signIn })).toMatchObject({
+      signIn,
+    });
+    expect(
+      ShareDestinationSchema.safeParse({
+        ...COMMAND,
+        signIn: { login: ['/bin/sh', '-c', 'login'] },
+      }).success,
+    ).toBe(false);
+  });
+
   it('refuses a link base that is not https', () => {
     expect(
       ShareDestinationSchema.safeParse({ ...GCS, linkBase: 'http://x.example' })

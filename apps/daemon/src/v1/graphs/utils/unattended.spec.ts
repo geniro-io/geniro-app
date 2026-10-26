@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Workflow } from '../graphs.types';
-import { nodesThatAsk } from './unattended';
+import { agentsThatRunAuto, nodesThatAsk } from './unattended';
 
 const workflow = (nodes: Workflow['nodes']): Workflow => ({
   name: 'Team',
@@ -66,5 +66,38 @@ describe('nodesThatAsk', () => {
         ] as Workflow['nodes']),
       ),
     ).toEqual(['engineer']);
+  });
+});
+
+describe('agentsThatRunAuto', () => {
+  it('names each auto agent by its unique id, and a pool member by its number', () => {
+    const workflow: Workflow = {
+      name: 'team',
+      nodes: [
+        {
+          id: 'a',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'ask',
+          name: 'Reviewer',
+          pool: [{ agent: 'codex', approval: 'auto' }, { agent: 'claude' }],
+        },
+        {
+          id: 'b',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          name: 'Reviewer',
+        },
+        { id: 'c', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [],
+    };
+
+    expect(agentsThatRunAuto(workflow)).toEqual([
+      'Reviewer (a) — pool member 2',
+      'Reviewer (b)',
+      'c',
+    ]);
   });
 });

@@ -9,6 +9,7 @@ import {
   type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
+import { hasHiddenText } from './utils/hidden-text';
 import { RUN_PROCESS_CAP } from './utils/run-process-scan';
 
 /**
@@ -154,8 +155,8 @@ export const AgentOptionSpecSchema = z
   .meta({ id: 'AgentOptionSpec' });
 
 /**
- * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
- * MAX_ANSWER_LENGTH.
+ * TWIN LIMIT: apps/ui/src/renderer/chats/verdict-note.tsx
+ * MAX_ANSWER_LENGTH (the question card's answer and the proposal cards' note).
  *
  * Sanity cap on a question answer (M4) — it travels as ONE stdin control
  * line into the paused CLI turn. Enforced at BOTH ingress points of the
@@ -163,6 +164,13 @@ export const AgentOptionSpecSchema = z
  * remains pending) and the MCP answer_agent tool (oversize → INVALID_ARGS).
  */
 export const MAX_ANSWER_LENGTH = 32_768;
+
+/**
+ * Sanity cap on a WS verdict's `optionId`. It only ever names one of the ids an
+ * adapter put on the card (a protocol option id, or a scope word), so anything
+ * past this is not a pick of ours and the verdict is refused `invalid`.
+ */
+export const MAX_OPTION_ID_LENGTH = 256;
 
 /**
  * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
@@ -371,6 +379,63 @@ export const HOST_RECOMMENDATIONS_TOOL = 'report_recommendations';
 export const HOST_RECOMMENDATION_MARKS_TOOL = 'mark_recommendations';
 export const HOST_WORKFLOW_CHANGE_TOOL = 'save_workflow_change';
 
+/**
+ * The workflow tools of an ordinary chat: read the library, and propose a whole
+ * workflow on a card the user approves. The daemon writes the file, never the
+ * agent.
+ */
+export const HOST_READ_WORKFLOWS_TOOL = 'read_workflows';
+export const HOST_PROPOSE_WORKFLOW_TOOL = 'propose_workflow';
+
+/**
+ * What every owned card's durable column holds at least — the card's id. The
+ * one reading of the envelope both modules share: `v1/agents` reads only this
+ * (the boot reconcile), and the owner extends it with what it needs.
+ */
+export const PendingOwnedCardSchema = z.object({ requestId: z.string() });
+
+/** A deferred card raised by another module through `ChatService.raiseOwnedCard`. */
+export interface DeferredCard {
+  toolName: string;
+  input: unknown;
+}
+
+/**
+ * Called once with the user's verdict on a {@link DeferredCard}; `answer` is
+ * the note they typed, on either button.
+ */
+export type DeferredCardResponder = (allow: boolean, answer?: string) => void;
+
+/**
+ * How a `propose_workflow` card was answered, as the agent is told it; `note`
+ * is what the user typed on either button.
+ */
+export type WorkflowProposalVerdict =
+  | { kind: 'saved'; slug: string; backup: string | null; note: string | null }
+  | { kind: 'declined'; note: string | null }
+  | {
+      kind: 'not-saved';
+      cause: WorkflowNotSavedCause;
+      reason: string;
+      note: string | null;
+    };
+
+/** Why an approved `propose_workflow` card wrote nothing. */
+export type WorkflowNotSavedCause =
+  'changed' | 'exists' | 'gone' | 'not-closed' | 'write-failed';
+
+/**
+ * What became of an APPROVED `propose_workflow` card, on its verdict row: the
+ * card shows it at once, while the message telling the agent may wait for a
+ * running turn to end. A declined card carries none.
+ *
+ * TWIN PARSER: `readProposalOutcome` in
+ * `apps/ui/src/renderer/chats/workflow-proposal-payload.ts`.
+ */
+export type WorkflowProposalOutcome =
+  | { kind: 'saved'; slug: string }
+  | { kind: 'not-saved'; cause: WorkflowNotSavedCause };
+
 export const ANALYSIS_VIEWS = [
   'overview',
   'spans',
@@ -458,6 +523,13 @@ export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   user: 'U-',
 };
 
+/**
+ * The territory a recommendation keeps to: how the agents work (`process`),
+ * or what the work itself needs to know (`domain`). One item never mixes the
+ * two, so a pick on the card is never half a process fix and half a fact.
+ */
+export const RECOMMENDATION_TERRITORIES = ['process', 'domain'] as const;
+
 /** At most this many items per target on one card; zero is a valid report. */
 export const MAX_RECOMMENDATIONS_PER_TARGET = 5;
 
@@ -496,6 +568,11 @@ export const RecommendationItemSchema = z.object({
     'W-1, W-2… workflow; R-1, R-2… repo; U-1, U-2… user-instructions file',
   ),
   target: RecommendationTargetSchema,
+  territory: z
+    .enum(RECOMMENDATION_TERRITORIES)
+    .describe(
+      'process: how the agents work (commands, retries, reading order, hand-offs, running or wiring the checks they have, parallelism, model and effort); domain: knowledge, procedures and constraints of the work itself, a new check enforcing a project fact included. One item keeps to one',
+    ),
   kind: z
     .string()
     .min(1)
@@ -646,6 +723,15 @@ export interface ToolCallTime {
   delegate: boolean;
   /** A `tool_result` the CLI marked as an error; always false on a call. */
   isError: boolean;
+}
+
+/** One agent's own tool calls inside one call — `ItemDao.ownToolCallsByCall`. */
+export interface OwnToolCallCount {
+  nodeId: string;
+  callId: string;
+  calls: number;
+  /** The newest counted row's seq. */
+  lastSeq: number;
 }
 
 /** A tool call and how long it took to be answered. */
@@ -1410,6 +1496,9 @@ export interface HostPatch {
   summary?: string;
 }
 
+/** The whole-file target's byte state when its patch card was raised. */
+export type HostPatchFingerprint = 'absent' | { sha256: string };
+
 /**
  * What a proposed patch resolves to.
  *
@@ -1420,11 +1509,16 @@ export interface HostPatch {
  * rejected when it was in fact accepted, and folding it into `unavailable`
  * would hide that the right move is to look at the file again and re-propose.
  * The `reason` is what separates the cases.
+ *
+ * `posted` is the fifth, and it is not an ending — the same arm a deferred
+ * question has. A CLI that will not hold the call open is told the card is up;
+ * Apply or Reject arrives later, as the run's next message.
  */
 export type HostPatchOutcome =
   | { status: 'applied'; path: string }
   | { status: 'declined' }
   | { status: 'stale'; reason: string }
+  | { status: 'posted' }
   | { status: 'unavailable'; reason: string };
 
 /**
@@ -1492,10 +1586,15 @@ export interface HostPlan {
  * action, so nothing can go `stale` between the press and the effect. The note
  * hangs off BOTH verdicts because a user who approves with a caveat is telling
  * the agent something it must not lose.
+ *
+ * `posted` is the fourth, shared with the question and the patch: the card is
+ * on screen and the verdict will arrive as the run's next message, because
+ * this CLI will not hold the call open for a person.
  */
 export type HostPlanOutcome =
   | { status: 'approved'; note?: string }
   | { status: 'declined'; note?: string }
+  | { status: 'posted' }
   | { status: 'unavailable'; reason: string };
 
 /**
@@ -1601,6 +1700,25 @@ export const CustomInstructionsSchema = z
   .refine(
     (value) => !hasControlCharacters(value),
     'must not contain control characters',
+  );
+
+/** The longest reply-language name accepted — a language's name, not prose. */
+export const REPLY_LANGUAGE_MAX_LENGTH = 64;
+
+/**
+ * The ONE validator for a reply-language value arriving on the wire
+ * (`Settings.replyLanguage`: "Russian", "Deutsch"). Bounded and one line,
+ * unlike {@link CustomInstructionsSchema}: it lands inside a sentence geniro
+ * writes and in claude's `--settings` JSON, so it is a name, never a
+ * paragraph — a line break would open a new instruction line of its own.
+ */
+export const ReplyLanguageSchema = z
+  .string()
+  .trim()
+  .max(REPLY_LANGUAGE_MAX_LENGTH)
+  .refine(
+    (value) => !hasHiddenText(value, false),
+    'must be one line, without control, invisible or bidirectional characters',
   );
 
 /**
@@ -1926,6 +2044,12 @@ export const ChatTotalsWireSchema = z
         'of those, how many reported a COST — the denominator for an average spend, since a turn on a CLI that reports no cost would otherwise dilute it',
       ),
     costUsd: z.number().nullable(),
+    estimatedCostUsd: z
+      .number()
+      .nullable()
+      .describe(
+        "of `costUsd`, the part geniro priced itself from token counts at list price rather than a CLI's own bill — equal to it when all of it was, null when none of it was",
+      ),
     inputTokens: z.number().nullable(),
     outputTokens: z.number().nullable(),
     cacheReadTokens: z.number().nullable(),
@@ -1940,6 +2064,17 @@ export const ChatTotalsWireSchema = z
   })
   .meta({ id: 'ChatTotals' });
 export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
+
+/**
+ * One context reading as the run, node and call rows file it. Each half may be
+ * absent — a reading that omits one says nothing about it — and
+ * `contextEstimated` travels with the count (`AgentUsage.contextEstimated`).
+ */
+export interface ContextLevel {
+  contextTokens?: number | null;
+  contextWindowTokens?: number | null;
+  contextEstimated?: boolean;
+}
 
 /**
  * One wall-clock stretch in which some agent of a run was working, in epoch
@@ -2374,6 +2509,12 @@ export const RunWaterfallTurnSchema = z
       .nullable()
       .describe('model round-trips inside this one turn'),
     costUsd: z.number().nullable(),
+    estimatedCostUsd: z
+      .number()
+      .nullable()
+      .describe(
+        "of costUsd, the part geniro priced itself from token counts at list price rather than the CLI's own bill; null when none of it was",
+      ),
     modelCosts: z
       .array(RunWaterfallModelCostSchema)
       .nullable()
@@ -2476,6 +2617,12 @@ export const RunWaterfallLaneSchema = z
     nodeId: z.string().nullable(),
     agentKind: AgentKindSchema.nullable(),
     costUsd: z.number().nullable(),
+    estimatedCostUsd: z
+      .number()
+      .nullable()
+      .describe(
+        "of costUsd, the part of its turns' cost geniro priced itself; null when none of it was",
+      ),
     turns: z
       .number()
       .int()
@@ -2621,6 +2768,35 @@ export interface KeptProcessRoot {
   pid: number;
 }
 
+/**
+ * How long a run's CLI process is kept after its last turn, in minutes, until
+ * Electron main pushes the user's own window — see `SESSION_IDLE_MS`.
+ */
+export const DEFAULT_KEPT_SESSION_IDLE_MINUTES = 60;
+
+/**
+ * The window a user may set (`Settings.keptSessionIdleMinutes`). Bounded the
+ * same in `apps/ui/src/main/ipc-schemas.ts`, so a value main lets through is
+ * never one the route refuses.
+ */
+export const MIN_KEPT_SESSION_IDLE_MINUTES = 5;
+export const MAX_KEPT_SESSION_IDLE_MINUTES = 180;
+
+/**
+ * TWIN PARSER: the body `apps/ui/src/main/kept-session-config-push.ts` sends,
+ * built from `Settings.keptSessionIdleMinutes`.
+ */
+export const KeptSessionConfigSchema = z
+  .object({
+    idleMinutes: z
+      .number()
+      .int()
+      .min(MIN_KEPT_SESSION_IDLE_MINUTES)
+      .max(MAX_KEPT_SESSION_IDLE_MINUTES),
+  })
+  .meta({ id: 'KeptSessionConfig' });
+export type KeptSessionConfig = z.infer<typeof KeptSessionConfigSchema>;
+
 /** A command line longer than this is cut — a full prompt can ride argv. */
 export const MAX_PROCESS_ARGS_CHARS = 2_000;
 
@@ -2687,6 +2863,31 @@ export const RunProcessTreeSchema = z
 export type RunProcessTree = z.infer<typeof RunProcessTreeSchema>;
 
 /**
+ * One `monitor` tool command a run has running: what the agent said it
+ * watches, and its process group.
+ */
+export const RunMonitorSchema = z
+  .object({
+    id: z.string().describe('the id the agent knows it by, e.g. `m1`'),
+    description: z.string(),
+    command: z.string().max(MAX_PROCESS_ARGS_CHARS),
+    startedAt: z.string(),
+    endsAt: z.string().describe('when its timeout stops it, ISO-8601'),
+    pid: z
+      .number()
+      .int()
+      .nullable()
+      .describe("the shell's pid, which is also its process group's id"),
+    processes: z
+      .array(RunProcessSchema)
+      .describe('the shell first, then its group depth-first'),
+    cpuPercent: z.number(),
+    rssBytes: z.number().int(),
+  })
+  .meta({ id: 'RunMonitor' });
+export type RunMonitor = z.infer<typeof RunMonitorSchema>;
+
+/**
  * Every process a run has running RIGHT NOW, and what each costs.
  *
  * Attribution starts from the pids this daemon spawned for the run (the kept
@@ -2704,10 +2905,17 @@ export const RunProcessesWireSchema = z.object({
     .describe(
       "what the run's agents left running with no CLI of theirs above it — a `nohup` dev server, a watcher, a browser — found by the run's tag; each top process is `root`, depth-first under it. The same set archiving or deleting the run stops",
     ),
+  monitors: z
+    .array(RunMonitorSchema)
+    .describe(
+      "the run's agents' `monitor` commands, each with its process group — never listed again under `detached`",
+    ),
   processes: z
     .number()
     .int()
-    .describe('every process listed, the trees and `detached` together'),
+    .describe(
+      'every process listed, the trees, `detached` and `monitors` together',
+    ),
   cpuPercent: z.number(),
   rssBytes: z.number().int(),
   unavailableReason: z
@@ -2719,11 +2927,22 @@ export const RunProcessesWireSchema = z.object({
 });
 export type RunProcessesWire = z.infer<typeof RunProcessesWireSchema>;
 
-export const StopDetachedProcessesSchema = z.object({
-  pids: z.array(z.number().int().min(2)).min(1).max(RUN_PROCESS_CAP),
-});
+export const StopDetachedProcessesSchema = z
+  .object({
+    pids: z.array(z.number().int().min(2)).max(RUN_PROCESS_CAP).optional(),
+    monitorIds: z
+      .array(z.string().regex(/^m\d+$/))
+      .max(RUN_PROCESS_CAP)
+      .optional()
+      .describe('monitors to stop; each ends `stopped` and wakes its agent'),
+  })
+  .refine(
+    (body) => (body.pids?.length ?? 0) + (body.monitorIds?.length ?? 0) > 0,
+    { message: 'name at least one pid or monitor id' },
+  );
 export const StoppedDetachedProcessesSchema = z.object({
   stoppedPids: z.array(z.number().int()),
+  stoppedMonitorIds: z.array(z.string()),
 });
 export type StoppedDetachedProcesses = z.infer<
   typeof StoppedDetachedProcessesSchema
@@ -2876,7 +3095,12 @@ export const RunCallStateSchema = z
   .meta({ id: 'RunCallState' });
 export type RunCallState = z.infer<typeof RunCallStateSchema>;
 
-/** One delegate (sub-agent) a run launched or declared, over the whole conversation. */
+/** Tracking loss is distinct from any observed terminal outcome. */
+export const RunDelegateStatusSchema = z
+  .enum([...RunWorkStatusSchema.options, 'untracked'])
+  .meta({ id: 'RunDelegateStatus' });
+
+/** One delegate (sub-agent) over the whole conversation. */
 export const RunDelegateStateSchema = z
   .object({
     id: z.string().describe('the launching tool call — the block id'),
@@ -2887,12 +3111,579 @@ export const RunDelegateStateSchema = z
       .describe('the call it was launched in; null for its node’s own'),
     label: z.string().nullable(),
     kind: z.string().nullable(),
-    status: RunWorkStatusSchema,
+    status: RunDelegateStatusSchema,
+    processEnded: z
+      .boolean()
+      .describe(
+        'an untracked delegate whose hosting process is gone: its work is over, only its outcome is unknown',
+      ),
     launchSeq: z.number().int(),
     startedAt: z.string(),
+    toolCalls: z
+      .number()
+      .int()
+      .describe(
+        "the tool calls this delegate made (rows carrying its id as parentToolUseId), over every row of the run up to the read's throughSeq",
+      ),
   })
   .meta({ id: 'RunDelegateState' });
 export type RunDelegateState = z.infer<typeof RunDelegateStateSchema>;
+/** A delegate as its rows say it went; the run-state read adds its tool count. */
+export type DelegateLifecycle = Omit<RunDelegateState, 'toolCalls'>;
+
+/** geniro's own tools that put a button in the chat and take one away. */
+export const HOST_PUBLISH_ACTION_TOOL = 'publish_action';
+export const HOST_REMOVE_ACTION_TOOL = 'remove_action';
+
+/**
+ * Caps on one action. They REFUSE rather than truncate: a label cut short is a
+ * different button than the one the agent meant. The live cap is per chat — the
+ * shelf is one line, and past it the overflow stops being a list a person reads.
+ */
+export const ACTION_LABEL_MAX = 40;
+export const ACTION_ID_MAX = 40;
+export const ACTION_DESCRIPTION_MAX = 200;
+export const ACTION_MESSAGE_MAX = 4000;
+export const ACTION_LIVE_MAX = 20;
+/** A command's argv, all tokens together — what its confirm dialog shows in full. */
+export const ACTION_COMMAND_MAX = 4000;
+export const ACTION_COMMAND_TIMEOUT_DEFAULT_MINUTES = 10;
+export const ACTION_COMMAND_TIMEOUT_MAX_MINUTES = 60;
+/** The end of a command's output its outcome row keeps. */
+export const ACTION_OUTPUT_TAIL_MAX = 64 * 1024;
+/** The end of that output `notify_agent` hands the agent. */
+export const ACTION_NOTIFY_TAIL_MAX = 2 * 1024;
+
+/** geniro's own tools that run a command and wake the agent with its output. */
+export const HOST_MONITOR_TOOL = 'monitor';
+export const HOST_STOP_MONITOR_TOOL = 'stop_monitor';
+export const HOST_LIST_MONITORS_TOOL = 'list_monitors';
+
+/** Monitor limits. Out-of-range arguments are refused, never clamped. */
+export const MONITOR_RUN_MAX = 8;
+export const MONITOR_DESCRIPTION_MAX = 60;
+export const MONITOR_COMMAND_MAX = 4000;
+export const MONITOR_TIMEOUT_MIN_MS = 1000;
+export const MONITOR_TIMEOUT_DEFAULT_MS = 600_000;
+export const MONITOR_TIMEOUT_MAX_MS = 3_600_000;
+
+/** geniro's own tools that write a team note and read the run's team notes. */
+export const HOST_TEAM_NOTE_TOOL = 'team_note';
+export const HOST_TEAM_NOTES_TOOL = 'team_notes';
+
+/**
+ * Team-note limits. They REFUSE rather than truncate: a note cut short can say
+ * the opposite of what was meant. The reply budget keeps one `team_notes` answer
+ * inside the smallest CLI tool-result cap (claude's ~25k tokens); the per-run
+ * cap bounds a looping agent, not ordinary use.
+ */
+export const TEAM_NOTE_MAX_CHARS = 16_000;
+export const TEAM_NOTES_DEFAULT_LIMIT = 50;
+export const TEAM_NOTES_MAX_LIMIT = 200;
+export const TEAM_NOTES_REPLY_BUDGET_CHARS = 60_000;
+export const TEAM_NOTES_PER_RUN = 5_000;
+
+/** What a team note is about — the only five things worth writing down for the team. */
+export const TeamNoteKindSchema = z
+  .enum(['contract', 'decision', 'fact', 'pitfall', 'pointer'])
+  .meta({ id: 'TeamNoteKind' });
+export type TeamNoteKind = z.infer<typeof TeamNoteKindSchema>;
+
+/**
+ * The payload of a `team_note` row. `nodeId` / `conversationId` name the
+ * writing conversation (the row's own `nodeId` is the node alone); `callId` is
+ * the call that conversation was answering, which files the row in that call's
+ * card.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/team-note-payload.ts
+ * (`readTeamNotePayload`), which draws the transcript row from these rows.
+ */
+export const TeamNotePayloadSchema = z.object({
+  kind: TeamNoteKindSchema,
+  text: z.string(),
+  supersedes: z.number().int().optional(),
+  nodeId: z.string(),
+  conversationId: z.string().nullable(),
+  callId: z.string().optional(),
+});
+export type TeamNotePayload = z.infer<typeof TeamNotePayloadSchema>;
+
+/** One team note with its supersede pair folded in — what readers are shown. */
+export const TeamNoteSchema = z
+  .object({
+    seq: z.number().int().describe('the row that holds it; its id'),
+    kind: TeamNoteKindSchema,
+    text: z.string(),
+    nodeId: z.string().describe('the agent that wrote it'),
+    conversationId: z
+      .string()
+      .nullable()
+      .describe("the writing conversation; null for the node's own"),
+    callId: z
+      .string()
+      .nullable()
+      .describe('the call the writing conversation was answering'),
+    createdAt: z.string().describe('ISO-8601'),
+    supersedes: z
+      .number()
+      .int()
+      .nullable()
+      .describe('the earlier note this one replaces'),
+    supersededBy: z
+      .number()
+      .int()
+      .nullable()
+      .describe('the newest note that replaces this one'),
+  })
+  .meta({ id: 'TeamNote' });
+export type TeamNote = z.infer<typeof TeamNoteSchema>;
+
+/**
+ * Every team note of one run, newest first, superseded ones included and
+ * marked. A daemon route on `RunArtifactsWireSchema`'s reason: a client holds
+ * one page of the transcript, and the panel lists the whole set.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const RunTeamNotesWireSchema = z.object({
+  notes: z.array(TeamNoteSchema),
+});
+export type RunTeamNotesWire = z.infer<typeof RunTeamNotesWireSchema>;
+
+/** A `team_note` call as its reader hands it over. */
+export interface TeamNoteWriteInput {
+  kind: TeamNoteKind;
+  text: string;
+  supersedes?: number;
+}
+
+/** A `team_notes` call as its reader hands it over. */
+export interface TeamNotesQuery {
+  /** Empty = every kind. */
+  kinds: TeamNoteKind[];
+  /** An agent's name or node id; null = every author. */
+  author: string | null;
+  /** Only notes after this seq. */
+  since: number | null;
+  /** Only notes before this seq — the paging cursor a reply hands back. */
+  before: number | null;
+  limit: number;
+  includeSuperseded: boolean;
+}
+
+export type TeamNoteWriteOutcome =
+  | { status: 'written'; seq: number; unread: number }
+  | { status: 'refused'; reason: string };
+
+/** A note as a reader is shown it: who wrote it, by name. */
+export interface TeamNoteEntry extends TeamNote {
+  author: string;
+}
+
+export interface TeamNotesReadOutcome {
+  status: 'read';
+  /** Newest first. */
+  notes: TeamNoteEntry[];
+  /** Matching notes older than the last one shown, left out by the limit or the reply budget. */
+  olderRemaining: number;
+  /** The `before` that fetches them; null when none remain. */
+  nextBefore: number | null;
+  /** Notes the reading conversation has still not been shown. */
+  unread: number;
+}
+
+/** A `monitor` call as its reader hands it over. */
+export interface MonitorStartInput {
+  command: string;
+  description: string;
+  timeoutMs: number;
+}
+
+/** How a monitor ended. */
+export type MonitorEndKind =
+  'exit' | 'signal' | 'timeout' | 'stopped' | 'flooded' | 'interrupted';
+
+export interface MonitorEnd {
+  kind: MonitorEndKind;
+  /** `exit` only. */
+  code?: number;
+  /** `signal` only. */
+  signal?: string;
+}
+
+/**
+ * One entry of a monitor `system` row's `monitors` (see {@link HostRowWire}):
+ * one start, batch or end of a monitor, with the lines it delivered
+ * (`omitted` more were not sent).
+ *
+ * TWIN PARSER: read by the renderer's `readMonitorNotice` in
+ * `apps/ui/src/renderer/chats/monitor-payload.ts`.
+ */
+export interface MonitorRowPayload {
+  id: string;
+  description: string;
+  event: 'start' | 'batch' | 'end';
+  end?: MonitorEnd;
+  lines: string[];
+  omitted: number;
+}
+
+/**
+ * One entry of a share wake's `shares` (see {@link HostRowWire}): a share an
+ * agent asked for that waited on the user's sign-in, and what became of it.
+ * Never the link — that goes to the agent in the turn's prompt only.
+ */
+export interface ShareRowPayload {
+  shareId: string;
+  title: string;
+  outcome: 'shared' | 'not-shared';
+  /** `not-shared` only. */
+  reason?: string;
+}
+
+/**
+ * A `system` row geniro writes about its own work: a monitor's start, a
+ * silent end, or the messages one turn was started with (`woke`) — a
+ * monitor's output (`monitors`) or a share the agent asked for (`shares`).
+ * Filed under `callId` inside a call.
+ *
+ * TWIN PARSER: read by the renderer's `readMonitorNotice` in
+ * `apps/ui/src/renderer/chats/monitor-payload.ts`.
+ */
+export interface HostRowWire {
+  severity: 'info';
+  message: string;
+  monitors?: MonitorRowPayload[];
+  shares?: ShareRowPayload[];
+  woke: boolean;
+  callId?: string;
+  /** The callee conversation the monitor belongs to — what a restart's note is owed to. */
+  conversationId?: string;
+}
+
+/**
+ * What woke a conversation for a turn of geniro's own: a monitor's output, or
+ * a host wake such as a share finished after the user signed in. Both settle
+ * as host turns (no turn-end banner); only a monitor reopens a held call.
+ */
+export type HostWakeOpener = 'monitor' | 'host';
+
+/** The conversation a host wake is for: the one whose agent asked. */
+export interface HostWakeOwner {
+  runId: string;
+  nodeId: string;
+  /** The callee conversation it speaks in, or null for the node's own. */
+  conversationId: string | null;
+  /** `callerKey(nodeId, conversationId)`. */
+  caller: string;
+  /** Which kind of run delivers it — each delivery service takes its own. */
+  target: 'chat' | 'workflow';
+}
+
+/**
+ * Something geniro owes an agent, delivered as a turn of its own once its
+ * conversation is free — never into a running turn (`HostWakeBus`).
+ */
+export interface HostWake {
+  /** One per thing woken about (`share:<id>`): a newer wake replaces a held one. */
+  key: string;
+  owner: HostWakeOwner;
+  /** What the agent reads. The only place a share's link goes. */
+  prompt: string;
+  /** The turn's opening row: what the transcript shows, never the link. */
+  row: HostRowWire;
+  /**
+   * What the conversation's next turn is owed instead when no turn can be
+   * started for it (an archived chat, a callee whose call has settled).
+   */
+  note: string;
+  /**
+   * Told once the wake is settled: a turn opened on it, or its note was owed
+   * to the conversation's next turn instead (held in memory, so lost if the
+   * daemon stops first — the share's card still carries the link).
+   */
+  onDelivered: () => void;
+  /**
+   * True once what the wake carries may no longer be sent (a share link after
+   * the user stopped letting agents share): it is dropped unsent — neither a
+   * turn nor a note — and never settled. Asked at every attempt.
+   */
+  withdrawn?: () => boolean;
+}
+
+/** One running monitor, as `list_monitors` and the process panel see it. */
+export interface MonitorListing {
+  id: string;
+  description: string;
+  command: string;
+  startedAt: string;
+  endsAt: string;
+  timeoutMs: number;
+  /** Batches delivered so far. */
+  events: number;
+  /** The shell's pid, which is also its process group's id. */
+  pid: number | null;
+}
+
+/** Lines for the agent, plus how many more there were that it is not sent. */
+export interface MonitorBatch {
+  lines: string[];
+  omitted: number;
+}
+
+/**
+ * Why a monitor was stopped before its command ended.
+ *
+ * - `user` — Stop in the process panel: the agent is woken with `stopped`.
+ * - `agent` — the agent's own `stop_monitor`: it already knows.
+ * - `thread-stop` — the thread's Stop: the user is stopping the agent too.
+ * - `teardown` — archive or delete.
+ */
+export type MonitorStopCause = 'user' | 'agent' | 'thread-stop' | 'teardown';
+
+/** Where a monitor's output goes: the conversation that started it. */
+export interface MonitorOwner {
+  runId: string;
+  nodeId: string;
+  /** The conversation's caller key (`callerKey(nodeId, conversationId)`). */
+  caller: string;
+  /** The callee conversation it speaks in, or null for the node's own. */
+  conversationId: string | null;
+  /** The call that conversation was answering when the monitor started — its rows are filed under it. */
+  callId: string | null;
+  /** Which kind of run delivers it — each delivery service takes its own. */
+  target: 'chat' | 'workflow';
+}
+
+export interface MonitorSnapshot extends MonitorListing {
+  owner: MonitorOwner;
+}
+
+export type MonitorEvent =
+  | { type: 'start'; monitor: MonitorSnapshot }
+  | { type: 'batch'; monitor: MonitorSnapshot; batch: MonitorBatch }
+  | {
+      type: 'end';
+      monitor: MonitorSnapshot;
+      end: MonitorEnd;
+      /** What the command printed since the last batch, if anything. */
+      batch: MonitorBatch | null;
+      /** Whether the agent is told: false for a stop it or the user already knows of. */
+      wake: boolean;
+      /** Who stopped it, or null when its command ended (or flooded) on its own. */
+      stoppedBy: MonitorStopCause | null;
+    };
+
+export interface MonitorStartRequest {
+  owner: MonitorOwner;
+  command: string;
+  description: string;
+  timeoutMs: number;
+  cwd?: string;
+}
+
+/** What a `monitor` call came to. */
+export type MonitorStartOutcome =
+  { status: 'started'; id: string } | { status: 'refused'; reason: string };
+
+/** What a `stop_monitor` call came to. */
+export type MonitorStopOutcome =
+  { status: 'stopped' } | { status: 'refused'; reason: string };
+
+/**
+ * A `publish_action` call as its reader hands it over: the shape is checked,
+ * the rules (caps, characters, exactly one kind) are `ActionPublishService`'s.
+ */
+export interface ActionPublishInput {
+  label: string;
+  description?: string;
+  actionId?: string;
+  once?: boolean;
+  message?: string;
+  stop?: ActionStopInput;
+  command?: ActionCommandInput;
+}
+
+/** What a command action names when it is published. */
+export interface ActionCommandInput {
+  argv: string[];
+  cwd?: string;
+  timeoutMinutes?: number;
+  notifyAgent?: boolean;
+}
+
+/**
+ * What a stop action names when it is published: a background command by the
+ * id its shell tool gave it, or a pid. Exactly one, which the service checks.
+ */
+export interface ActionStopInput {
+  shell?: string;
+  pid?: number;
+}
+
+/** What either action tool answers; `text` is the receipt the agent reads. */
+export type ActionToolOutcome =
+  | { status: 'published' | 'removed'; text: string }
+  | { status: 'refused'; reason: string };
+
+/**
+ * What a press does. Flat rather than a union so the generated client reads it
+ * without a discriminator: `kind` says which of the other fields are set, and
+ * a reader takes only that kind's fields.
+ */
+export const ActionSpecSchema = z
+  .object({
+    kind: z.enum(['message', 'stop', 'command']),
+    text: z
+      .string()
+      .optional()
+      .describe('message: what a press sends into the chat'),
+    shellId: z
+      .string()
+      .optional()
+      .describe('stop: the background command it was published against'),
+    targets: z
+      .array(
+        z.object({
+          pid: z.number().int(),
+          startedAt: z
+            .string()
+            .describe(
+              'the start time recorded at publish, re-checked at press',
+            ),
+          command: z.string(),
+        }),
+      )
+      .optional()
+      .describe('stop: the processes a press stops'),
+    argv: z
+      .array(z.string())
+      .optional()
+      .describe('command: never a shell line'),
+    cwd: z.string().optional(),
+    timeoutMs: z.number().int().optional(),
+    notifyAgent: z.boolean().optional(),
+  })
+  .meta({ id: 'ActionSpec' });
+export type ActionSpec = z.infer<typeof ActionSpecSchema>;
+
+/** What a stop action records about the processes it will stop. */
+export type ActionStopSpec = Pick<ActionSpec, 'shellId' | 'targets'>;
+
+/** What a command action records: always every field, `cwd` resolved. */
+export interface ActionCommandSpec {
+  argv: [string, ...string[]];
+  cwd: string;
+  timeoutMs: number;
+  notifyAgent: boolean;
+}
+
+/** Who published an action — which conversation its id is scoped to. */
+export const ActionPublisherSchema = z
+  .object({
+    nodeId: z.string(),
+    conversationId: z.string(),
+    callId: z.string().optional(),
+    agentLabel: z.string().optional(),
+  })
+  .meta({ id: 'ActionPublisher' });
+export type ActionPublisher = z.infer<typeof ActionPublisherSchema>;
+
+/**
+ * The payload of an `action` row: one publish of one button.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/action-payload.ts (`readActionPayload`),
+ * which draws the transcript card from these rows.
+ */
+export const ActionPayloadSchema = z
+  .object({
+    actionId: z.string(),
+    label: z.string(),
+    description: z.string().optional(),
+    once: z.boolean().describe('a successful press retires it'),
+    spec: ActionSpecSchema,
+    publisher: ActionPublisherSchema,
+  })
+  .meta({ id: 'ActionPayload' });
+export type ActionPayload = z.infer<typeof ActionPayloadSchema>;
+
+export const ActionOutcomeStateSchema = z
+  .enum([
+    'pressed',
+    'running',
+    'succeeded',
+    'failed',
+    'stopped',
+    'removed',
+    'dismissed',
+    'interrupted',
+  ])
+  .meta({ id: 'ActionOutcomeState' });
+export type ActionOutcomeState = z.infer<typeof ActionOutcomeStateSchema>;
+
+/** Which side of the gateway a press came from. */
+export const ActionViaSchema = z.enum(['desktop', 'remote']);
+export type ActionVia = z.infer<typeof ActionViaSchema>;
+
+/**
+ * The payload of an `action_outcome` row: what happened to the publish at
+ * `actionSeq`.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/action-payload.ts (`readActionOutcome`).
+ */
+export const ActionOutcomePayloadSchema = z
+  .object({
+    actionSeq: z.number().int(),
+    actionId: z.string(),
+    nodeId: z.string(),
+    conversationId: z.string(),
+    state: ActionOutcomeStateSchema,
+    via: ActionViaSchema.optional(),
+    exitCode: z.number().int().nullable().optional(),
+    outputTail: z.string().optional(),
+    error: z.string().optional(),
+    alreadyStopped: z
+      .boolean()
+      .optional()
+      .describe(
+        'stop: every process it named had exited before the press reached it',
+      ),
+  })
+  .meta({ id: 'ActionOutcomePayload' });
+export type ActionOutcomePayload = z.infer<typeof ActionOutcomePayloadSchema>;
+
+/** What a press decided, for its `action_outcome` row. */
+export type ActionPressResult = Pick<
+  ActionOutcomePayload,
+  'state' | 'alreadyStopped' | 'error' | 'exitCode' | 'outputTail'
+>;
+
+/** One button still pressable, as `ChatActionsService` folds it. */
+export const LiveActionSchema = z
+  .object({
+    seq: z.number().int().describe('the publish row — what a press addresses'),
+    actionId: z.string(),
+    nodeId: z.string(),
+    conversationId: z.string(),
+    label: z.string(),
+    description: z.string().optional(),
+    once: z.boolean(),
+    spec: ActionSpecSchema,
+    publisher: ActionPublisherSchema,
+    pending: z.boolean().describe('a press is under way'),
+    lastOutcome: ActionOutcomePayloadSchema.optional(),
+  })
+  .meta({ id: 'LiveAction' });
+export type LiveAction = z.infer<typeof LiveActionSchema>;
+
+/**
+ * What a press or a dismissal wrote. No `.meta({ id })` on this root, for
+ * `ChatTimelineWireSchema`'s reason.
+ */
+export const ActionPressWireSchema = z.object({
+  outcome: ActionOutcomePayloadSchema,
+});
+export type ActionPressWire = z.infer<typeof ActionPressWireSchema>;
 
 /**
  * What a run holds AS A WHOLE, for every readout that is not the transcript's
@@ -2932,6 +3723,11 @@ export const RunStateWireSchema = z.object({
   shells: z
     .array(OpenShellSchema)
     .describe('every DETACHED command still running'),
+  actions: z
+    .array(LiveActionSchema)
+    .describe(
+      'the buttons agents published that can still be pressed, newest first',
+    ),
   openToolCalls: z
     .array(ItemWireSchema)
     .describe(
@@ -3035,6 +3831,12 @@ export const ChatExportRunSchema = z
       .nullable()
       .describe(
         "The user's standing instructions AS THIS RUN SNAPSHOTTED THEM — not what the settings box says now",
+      ),
+    replyLanguage: z
+      .string()
+      .nullable()
+      .describe(
+        'The reply language this run snapshotted at creation; null when the user had set none',
       ),
     taskInstructions: z
       .string()
@@ -3845,7 +4647,9 @@ export interface RunStatusEvent {
    * the trigger-fed ones a user's message goes to, compacting included, and
    * any node the walk has reached downstream of them — or `undefined` when
    * this event says nothing about it. CALLS are never counted: they are what
-   * runs on past an idle Manager.
+   * runs on past an idle Manager. Nor is a trigger-fed agent whose turn is
+   * HELD for its background sub-agents: its reply is over, and a message
+   * delivered into it ends the hold.
    *
    * What decides whether a workflow message queues. The run's own status
    * cannot: a run stays `running` for as long as any call it started is out,
@@ -4051,6 +4855,13 @@ export interface RunStatusEvent {
    */
   restored?: boolean;
   /**
+   * True when the turn that reached this status was one geniro started itself,
+   * with a monitor's output (`sendMessage`'s `hostRow`). Not a banner: a watch
+   * reporting step after step would post one per batch. Still news for the
+   * sidebar's unread mark — the agent said something new.
+   */
+  hostTurn?: boolean;
+  /**
    * True when this settle has no terminal ROW behind it — an off-turn stretch
    * handing its badge back, a workflow woken by a call going quiet again, or a
    * send that failed while a window showed the run working.
@@ -4092,6 +4903,8 @@ export interface RunStatusEvent {
    * against a window from before a model change.
    */
   contextTokens?: number | null;
+  /** Whether `contextTokens` is geniro's stand-in — travels with the count. */
+  contextEstimated?: boolean;
   contextWindowTokens?: number | null;
   title?: string;
   /**
@@ -4109,7 +4922,7 @@ export interface RunStatusEvent {
    * The same shape of problem as `title`, and it takes the same answer: the
    * broadcast that reaches every client for every run carries it.
    */
-  pullRequests?: RunPullRequest[];
+  pullRequests?: DisplayedPullRequest[];
   /**
    * The run's pending usage-limit continues as they stand now, announced when
    * one is scheduled, made or cancelled — the whole list, so the client
@@ -4361,7 +5174,7 @@ export interface RunDeltaEvent {
    * the input side of any resumed conversation — folded in, the figure would
    * say a cheap turn was an expensive one.
    *
-   * CLAUDE ONLY today, and null everywhere else. Cursor exposes no token
+   * claude and codex, and null everywhere else. Cursor exposes no token
    * accounting a client can reach: measured 2026-09-06 on 2026.08.31-4057e58 —
    * its ACP wire declares `usage_update` in the schema union and emits it
    * nowhere, its session store holds the context breakdown and nothing else,
@@ -4382,10 +5195,15 @@ export interface RunDeltaEvent {
    * the two, and that sum is what a running call has cost so far. It is not
    * derived from the token fields above: those are counts, and a model with no
    * price-table row (the model the report was about) has no price to multiply
-   * them by. CLAUDE ONLY today, and null everywhere else — see the
-   * `cost_progress` agent event.
+   * them by. claude and codex (list-priced, so {@link spentEstimatedCostUsd}),
+   * null everywhere else — see the `cost_progress` agent event.
    */
   spentCostUsd: number | null;
+  /**
+   * Of {@link spentCostUsd}, the part geniro priced itself from token counts
+   * rather than the CLI's own ledger; null when none of it was.
+   */
+  spentEstimatedCostUsd: number | null;
 }
 
 /**
@@ -4524,6 +5342,18 @@ export const RunPullRequestSchema = z
   })
   .meta({ id: 'RunPullRequest' });
 export type RunPullRequest = z.infer<typeof RunPullRequestSchema>;
+
+/**
+ * One pull request on a run's display list, which merges the ones the run
+ * opened with the ones its CLI recorded it touching — `opened` says which, so
+ * a surface naming ONE pull request for the thread can name its own work.
+ */
+export const DisplayedPullRequestSchema = RunPullRequestSchema.extend({
+  opened: z
+    .boolean()
+    .describe('The run opened it, rather than only touching it'),
+}).meta({ id: 'DisplayedPullRequest' });
+export type DisplayedPullRequest = z.infer<typeof DisplayedPullRequestSchema>;
 
 /**
  * A continue geniro has promised and not yet made: calls a usage limit stopped,
@@ -4674,7 +5504,8 @@ export const RunWireSchema = z.object({
     ),
   /**
    * How many of a WORKFLOW run's DAG agents (never its calls) are inside a
-   * turn — 0 for every chat run. On the snapshot for {@link awaitingCalls}'s reason: the
+   * turn, a trigger-fed agent whose turn is held for its background
+   * sub-agents not counted — 0 for every chat run. On the snapshot for {@link awaitingCalls}'s reason: the
    * composer acts on it, and a window opened while a call runs has no other
    * way to learn that the Manager itself is idle.
    */
@@ -4788,6 +5619,11 @@ export const RunWireSchema = z.object({
     .describe(
       "How full the conversation's context window was when the CLI last reported — updated DURING a turn, so a client with no live reading draws the ring from this rather than from the last settled turn; null = never reported",
     ),
+  contextEstimated: z
+    .boolean()
+    .describe(
+      "Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it",
+    ),
   contextWindowTokens: z
     .number()
     .nullable()
@@ -4899,7 +5735,7 @@ export const RunWireSchema = z.object({
    * the branch a folder happens to have checked out cannot answer this.
    */
   pullRequests: z
-    .array(RunPullRequestSchema)
+    .array(DisplayedPullRequestSchema)
     .describe(
       'Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first',
     ),
@@ -5064,6 +5900,18 @@ export const ChatListScopeSchema = z.enum(['active', 'all', 'archived']);
 export type ChatListScope = z.infer<typeof ChatListScopeSchema>;
 
 /**
+ * Which part of a run listing to answer, newest first by `(createdAt, id)`.
+ * Every field absent is the whole listing. `before` is the last row of the
+ * previous page; `runId` narrows the listing to that one run, which is how a
+ * client takes in a row it was never handed without listing everything again.
+ */
+export interface RunListPage {
+  limit?: number;
+  before?: { createdAt: Date; id: string };
+  runId?: string;
+}
+
+/**
  * What a run's newest transcript rows say about it, for the list projection:
  * the preview line and the moment of its last activity (`RunWire.lastMessage`,
  * `RunWire.lastActivityAt`). Null halves are a run with no such row yet.
@@ -5108,6 +5956,8 @@ export interface TurnEnding {
   seq: number;
   nodeId: string | null;
   callId: string | null;
+  /** The turn was stopped (`turn_cancelled`) rather than finished or failed. */
+  cancelled: boolean;
 }
 
 /**
@@ -5255,6 +6105,27 @@ export interface RunCallSeed {
   callSeq: number;
   /** Every earlier call, in transcript order (a continuation after its parent). */
   records: CallSeedRecord[];
+  messageFailures?: MessageDeliveryFailure[];
+}
+
+/**
+ * A `message_agent` message that never reached its callee, kept until the
+ * caller has been told (a `messageDeliveryNotices` row acknowledges it).
+ */
+export interface MessageDeliveryFailure {
+  /**
+   * The FAILURE's own id, minted by the broker — not a
+   * `FollowUpMessage.deliveryId`, the id a message rides into a running turn
+   * with and a user row carries. Persisted on `call_answer` rows, so renaming
+   * it would leave earlier transcripts unread.
+   */
+  deliveryId: string;
+  callId: string;
+  callerNodeId: string;
+  callerConversationId?: string;
+  calleeNodeId: string;
+  message: string;
+  reason: string;
 }
 
 /**

@@ -12,6 +12,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
+  InternalException,
   NotFoundException,
 } from '@packages/common';
 
@@ -378,6 +379,25 @@ export class WorkflowStoreService {
   }
 
   /**
+   * The slug {@link create} would derive for `name` if it ran now — the same
+   * reserved-base and `-N` walk as {@link createDerivedSlug}, asked by `stat`
+   * and writing nothing. It describes the present only: a create landing
+   * between this answer and the write takes the slug, and the later
+   * `create(workflow, slug)` is refused `WORKFLOW_EXISTS`.
+   */
+  async freeDerivedSlug(name: string): Promise<string> {
+    for (const candidate of derivedSlugCandidates(slugifyWorkflowName(name))) {
+      if (!(await this.exists(this.fileFor(candidate)))) {
+        return candidate;
+      }
+    }
+    throw new InternalException(
+      'WORKFLOW_SLUG_EXHAUSTED',
+      'derived slug candidates never run out',
+    );
+  }
+
+  /**
    * Land `content` at the first free suffixed candidate of `base` through the
    * exclusive {@link atomicCreate} commit — the one slug-allocation path shared
    * by create() and importFrom(), so no sibling reintroduces the
@@ -391,8 +411,7 @@ export class WorkflowStoreService {
     base: string,
     content: string,
   ): Promise<string> {
-    let candidate = isReservedWorkflowSlug(base) ? `${base}-1` : base;
-    for (let attempt = 2; ; attempt++) {
+    for (const candidate of derivedSlugCandidates(base)) {
       try {
         await atomicCreate(this.fileFor(candidate), content);
         return candidate;
@@ -400,8 +419,23 @@ export class WorkflowStoreService {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
           throw err;
         }
-        candidate = `${base}-${attempt}`;
       }
     }
+    throw new InternalException(
+      'WORKFLOW_SLUG_EXHAUSTED',
+      'derived slug candidates never run out',
+    );
+  }
+}
+
+/**
+ * The slugs a derived name is tried under, in order — the one walk
+ * {@link WorkflowStoreService.createDerivedSlug} and `freeDerivedSlug` share,
+ * so the slug a card names is the slug a create would pick.
+ */
+function* derivedSlugCandidates(base: string): Generator<string> {
+  yield isReservedWorkflowSlug(base) ? `${base}-1` : base;
+  for (let attempt = 2; ; attempt++) {
+    yield `${base}-${attempt}`;
   }
 }

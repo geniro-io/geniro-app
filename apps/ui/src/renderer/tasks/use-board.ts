@@ -19,6 +19,7 @@ import {
   describeDaemonError,
 } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import { currentRunSettings } from '../run-settings';
 import type { NewTaskAttachments } from './new-task-dialog';
 import {
   readAsBase64,
@@ -1081,7 +1082,7 @@ export function useBoard(
           // point the chat's diff view measures against, exactly as the
           // composer takes it when a chat is opened by hand.
           const stamp = await window.geniro.getGitStamp(made.path);
-          const settings = await window.geniro.getSettings();
+          const runSettings = await currentRunSettings();
           const started = await apis.tasks.startTaskRun({
             taskId,
             startTaskRunDto: {
@@ -1092,13 +1093,8 @@ export function useBoard(
               from: task.status,
               startSha: stamp.sha ?? undefined,
               startDirty: stamp.dirty ?? undefined,
-              customInstructions:
-                settings.customInstructions.trim() === ''
-                  ? undefined
-                  : settings.customInstructions,
-              // Each CLI's own switches, snapshotted onto the run exactly as a
-              // chat and the autopilot's start snapshot them.
-              agentOptions: settings.agentOptions,
+              // The same snapshot every other run start takes.
+              ...runSettings,
               // What the user added to THIS press. Omitted rather than sent
               // blank: absent is what the daemon reads as "the press said
               // nothing", and a card being continued then gets its own brief

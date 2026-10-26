@@ -69,12 +69,18 @@ function turnComplete(id: string): ChatItem {
   return item({ id, kind: 'turn_complete', payload: {} });
 }
 
+function turnCancelled(id: string): ChatItem {
+  return item({ id, kind: 'turn_cancelled', payload: {} });
+}
+
 describe('useWorkflowChat', () => {
   let container: HTMLDivElement | null = null;
   let root: Root | null = null;
   let latest: WorkflowChatState | null = null;
 
   let openWorkflowChat: ReturnType<typeof vi.fn>;
+  let replyLanguage: string;
+  let customInstructions: string;
   let discardWorkflowChat: ReturnType<typeof vi.fn>;
   let listRunItems: ReturnType<typeof vi.fn>;
   let sendChatMessage: ReturnType<typeof vi.fn>;
@@ -159,6 +165,11 @@ describe('useWorkflowChat', () => {
     liveListeners = [];
     reconnectListeners = [];
     disconnectListeners = [];
+    replyLanguage = '';
+    customInstructions = '';
+    (window as unknown as { geniro: unknown }).geniro = {
+      getSettings: vi.fn(async () => ({ replyLanguage, customInstructions })),
+    };
     openWorkflowChat = vi.fn().mockResolvedValue(runDto());
     discardWorkflowChat = vi.fn().mockResolvedValue({ deleted: 1 });
     listRunItems = vi.fn().mockResolvedValue([item()]);
@@ -246,6 +257,21 @@ describe('useWorkflowChat', () => {
     expect(state().run?.id).toBe('run-1');
     expect(state().items).toHaveLength(1);
     expect(joinRun).toHaveBeenCalledWith('run-1');
+  });
+
+  it('opens the chat with the run settings every other run snapshots', async () => {
+    replyLanguage = ' Russian ';
+    customInstructions = 'Prefer small diffs.';
+    await mount();
+
+    expect(openWorkflowChat).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      startWorkflowChatDto: {
+        ...CHIPS,
+        replyLanguage: 'Russian',
+        customInstructions: 'Prefer small diffs.',
+      },
+    });
   });
 
   // A room joined after the history read drops anything produced in between;
@@ -388,7 +414,22 @@ describe('useWorkflowChat', () => {
     await emitItem(turnComplete('done-1'));
 
     expect(state().settledTurns).toBe(1);
+    expect(state().settledAs).toBe('completed');
     expect(state().working).toBe(false);
+  });
+
+  // The dock's queue reads this: a Stop leaves it standing.
+  it('records a Stop as how the turn ended, and the next ending as its own', async () => {
+    await mount();
+    expect(state().settledAs).toBeNull();
+
+    await emitItem(turnCancelled('stop-1'));
+    expect(state().settledTurns).toBe(1);
+    expect(state().settledAs).toBe('cancelled');
+
+    await emitItem(turnComplete('done-2'));
+    expect(state().settledTurns).toBe(2);
+    expect(state().settledAs).toBe('completed');
   });
 
   it('reports the agent as working again on the next turn', async () => {
@@ -423,9 +464,25 @@ describe('useWorkflowChat', () => {
 
     await emitStatus({
       runId: 'run-1',
-      status: 'completed',
+      status: 'cancelled',
       noTerminalItem: true,
     } as RunStatusEvent);
+
+    expect(state().working).toBe(false);
+    expect(state().settledTurns).toBe(1);
+    expect(state().settledAs).toBe('cancelled');
+  });
+
+  it('lowers working on a settle that follows its turn’s terminal row past a stray running', async () => {
+    // The daemon's order when an off-turn row restates the run between the
+    // turn's `turn_complete` row and its settle: the settle carries no
+    // `noTerminalItem`, since its row already landed.
+    await mount();
+    await emitItem(turnComplete('done-1'));
+    await emitStatus({ runId: 'run-1', status: 'running' } as RunStatusEvent);
+    expect(state().working).toBe(true);
+
+    await emitStatus({ runId: 'run-1', status: 'completed' } as RunStatusEvent);
 
     expect(state().working).toBe(false);
     expect(state().settledTurns).toBe(1);
@@ -793,7 +850,7 @@ describe('useWorkflowChat', () => {
     expect(state().working).toBe(true);
     listRunItems.mockResolvedValueOnce([
       item({ id: 'offline-1', seq: 2 }),
-      { ...turnComplete('offline-end'), seq: 3 },
+      { ...turnCancelled('offline-end'), seq: 3 },
     ]);
 
     await act(async () => {
@@ -813,6 +870,7 @@ describe('useWorkflowChat', () => {
     ]);
     expect(state().working).toBe(false);
     expect(state().settledTurns).toBe(1);
+    expect(state().settledAs).toBe('cancelled');
   });
 
   const reconnect = async (error?: Error): Promise<void> => {
@@ -822,6 +880,18 @@ describe('useWorkflowChat', () => {
       }
     });
   };
+
+  it('lowers working on a settle past a stray running when the turn end arrived by replay', async () => {
+    await mount();
+    listRunItems.mockResolvedValueOnce([{ ...turnComplete('end-1'), seq: 2 }]);
+    await reconnect();
+    await emitStatus({ runId: 'run-1', status: 'running' } as RunStatusEvent);
+    expect(state().working).toBe(true);
+
+    await emitStatus({ runId: 'run-1', status: 'completed' } as RunStatusEvent);
+
+    expect(state().working).toBe(false);
+  });
 
   it('counts a turn ending once when the socket and the replay both deliver it', async () => {
     // Each count re-reads the builder's canvas.
@@ -903,13 +973,14 @@ describe('useWorkflowChat', () => {
       await state().send('go');
     });
     listRunItems.mockResolvedValueOnce([]);
-    openWorkflowChat.mockResolvedValueOnce(runDto({ status: 'completed' }));
+    openWorkflowChat.mockResolvedValueOnce(runDto({ status: 'cancelled' }));
 
     await reconnect();
 
     expect(state().working).toBe(false);
     expect(state().settledTurns).toBe(1);
-    expect(state().run?.status).toBe('completed');
+    expect(state().settledAs).toBe('cancelled');
+    expect(state().run?.status).toBe('cancelled');
   });
 
   it('opens the new chat when the old one was discarded while the socket was down', async () => {

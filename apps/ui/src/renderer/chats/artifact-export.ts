@@ -40,7 +40,7 @@ export const ARTIFACT_FILE_CSP = [
  * re-rank the kit against Tailwind in the saved file alone.
  */
 export const ARTIFACT_LAYER_ORDER =
-  '@layer theme, base, geniro-base, geniro, components, utilities;';
+  '@layer geniro-elements, theme, base, geniro-base, geniro, components, utilities;';
 
 /**
  * A `:root` block pinning the tokens an artifact reads to the values they have

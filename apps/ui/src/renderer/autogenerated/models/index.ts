@@ -3,6 +3,237 @@
 /**
  * 
  * @export
+ * @interface ActionOutcomePayload
+ */
+export interface ActionOutcomePayload {
+    /**
+     * 
+     * @type {number}
+     * @memberof ActionOutcomePayload
+     */
+    actionSeq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    actionId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    conversationId: string;
+    /**
+     * 
+     * @type {ActionOutcomeState}
+     * @memberof ActionOutcomePayload
+     */
+    state: ActionOutcomeState;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    via?: ActionOutcomePayloadViaEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActionOutcomePayload
+     */
+    exitCode?: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    outputTail?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionOutcomePayload
+     */
+    error?: string;
+    /**
+     * stop: every process it named had exited before the press reached it
+     * @type {boolean}
+     * @memberof ActionOutcomePayload
+     */
+    alreadyStopped?: boolean;
+}
+
+
+/**
+ * @export
+ */
+export const ActionOutcomePayloadViaEnum = {
+    Desktop: 'desktop',
+    Remote: 'remote'
+} as const;
+export type ActionOutcomePayloadViaEnum = typeof ActionOutcomePayloadViaEnum[keyof typeof ActionOutcomePayloadViaEnum];
+
+
+/**
+ * 
+ * @export
+ */
+export const ActionOutcomeState = {
+    Pressed: 'pressed',
+    Running: 'running',
+    Succeeded: 'succeeded',
+    Failed: 'failed',
+    Stopped: 'stopped',
+    Removed: 'removed',
+    Dismissed: 'dismissed',
+    Interrupted: 'interrupted'
+} as const;
+export type ActionOutcomeState = typeof ActionOutcomeState[keyof typeof ActionOutcomeState];
+
+/**
+ * 
+ * @export
+ * @interface ActionPressDto
+ */
+export interface ActionPressDto {
+    /**
+     * 
+     * @type {ActionOutcomePayload}
+     * @memberof ActionPressDto
+     */
+    outcome: ActionOutcomePayload;
+}
+/**
+ * 
+ * @export
+ * @interface ActionPublisher
+ */
+export interface ActionPublisher {
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionPublisher
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionPublisher
+     */
+    conversationId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionPublisher
+     */
+    callId?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionPublisher
+     */
+    agentLabel?: string;
+}
+/**
+ * 
+ * @export
+ * @interface ActionSpec
+ */
+export interface ActionSpec {
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionSpec
+     */
+    kind: ActionSpecKindEnum;
+    /**
+     * message: what a press sends into the chat
+     * @type {string}
+     * @memberof ActionSpec
+     */
+    text?: string;
+    /**
+     * stop: the background command it was published against
+     * @type {string}
+     * @memberof ActionSpec
+     */
+    shellId?: string;
+    /**
+     * stop: the processes a press stops
+     * @type {Array<ActionSpecTargetsInner>}
+     * @memberof ActionSpec
+     */
+    targets?: Array<ActionSpecTargetsInner>;
+    /**
+     * command: never a shell line
+     * @type {Array<string>}
+     * @memberof ActionSpec
+     */
+    argv?: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionSpec
+     */
+    cwd?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActionSpec
+     */
+    timeoutMs?: number;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ActionSpec
+     */
+    notifyAgent?: boolean;
+}
+
+
+/**
+ * @export
+ */
+export const ActionSpecKindEnum = {
+    Message: 'message',
+    Stop: 'stop',
+    Command: 'command'
+} as const;
+export type ActionSpecKindEnum = typeof ActionSpecKindEnum[keyof typeof ActionSpecKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface ActionSpecTargetsInner
+ */
+export interface ActionSpecTargetsInner {
+    /**
+     * 
+     * @type {number}
+     * @memberof ActionSpecTargetsInner
+     */
+    pid: number;
+    /**
+     * the start time recorded at publish, re-checked at press
+     * @type {string}
+     * @memberof ActionSpecTargetsInner
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ActionSpecTargetsInner
+     */
+    command: string;
+}
+/**
+ * 
+ * @export
  * @interface ActiveSpan
  */
 export interface ActiveSpan {
@@ -1340,6 +1571,12 @@ export interface AnalyzeThreadDto {
     customInstructions?: string;
     /**
      * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof AnalyzeThreadDto
      */
@@ -1600,6 +1837,12 @@ export interface CallContextReading {
      */
     contextTokens: number | null;
     /**
+     * Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it
+     * @type {boolean}
+     * @memberof CallContextReading
+     */
+    contextEstimated: boolean;
+    /**
      * 
      * @type {number}
      * @memberof CallContextReading
@@ -1607,22 +1850,47 @@ export interface CallContextReading {
     contextWindowTokens: number | null;
     /**
      * 
-     * @type {ChatTotals}
-     * @memberof CallContextReading
-     */
-    totals: ChatTotals;
-    /**
-     * 
-     * @type {string}
-     * @memberof CallContextReading
-     */
-    promptCacheExpiresAt: string | null;
-    /**
-     * 
      * @type {CallStartReading}
      * @memberof CallContextReading
      */
     start: CallStartReading | null;
+}
+/**
+ * 
+ * @export
+ * @interface CallFigures
+ */
+export interface CallFigures {
+    /**
+     * 
+     * @type {string}
+     * @memberof CallFigures
+     */
+    callId: string;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof CallFigures
+     */
+    totals: ChatTotals;
+    /**
+     * The tools the node itself called inside this call, its CLI sub-agents' excluded, counted from the transcript as of toolCallsThroughSeq
+     * @type {number}
+     * @memberof CallFigures
+     */
+    toolCalls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallFigures
+     */
+    toolCallsThroughSeq: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallFigures
+     */
+    promptCacheExpiresAt: string | null;
 }
 /**
  * 
@@ -2010,6 +2278,12 @@ export interface ChatExportRun {
      * @type {string}
      * @memberof ChatExportRun
      */
+    replyLanguage: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
     taskInstructions: string | null;
     /**
      * 
@@ -2343,6 +2617,12 @@ export interface ChatTotals {
      * @type {number}
      * @memberof ChatTotals
      */
+    estimatedCostUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTotals
+     */
     inputTokens: number | null;
     /**
      * 
@@ -2425,6 +2705,25 @@ export interface ChatUploadDto {
      */
     bytes: number;
 }
+/**
+ * 
+ * @export
+ * @interface CheckShareDestinationDto
+ */
+export interface CheckShareDestinationDto {
+    /**
+     * 
+     * @type {CheckShareDestinationDtoShareDestination}
+     * @memberof CheckShareDestinationDto
+     */
+    destination: CheckShareDestinationDtoShareDestination;
+}
+/**
+ * @type CheckShareDestinationDtoShareDestination
+ * 
+ * @export
+ */
+export type CheckShareDestinationDtoShareDestination = ShareConfigDtoShareDestinationOneOf | ShareConfigDtoShareDestinationOneOf1 | ShareConfigDtoShareDestinationOneOf2;
 /**
  * 
  * @export
@@ -2752,6 +3051,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    replyLanguage?: string;
     /**
      * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
@@ -3380,6 +3685,49 @@ export interface DiagnosticsReportDtoRuns {
      */
     liveSessions: number;
 }
+/**
+ * 
+ * @export
+ * @interface DisplayedPullRequest
+ */
+export interface DisplayedPullRequest {
+    /**
+     * 
+     * @type {string}
+     * @memberof DisplayedPullRequest
+     */
+    owner: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DisplayedPullRequest
+     */
+    repo: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DisplayedPullRequest
+     */
+    number: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof DisplayedPullRequest
+     */
+    url: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DisplayedPullRequest
+     */
+    seq: number;
+    /**
+     * The run opened it, rather than only touching it
+     * @type {boolean}
+     * @memberof DisplayedPullRequest
+     */
+    opened: boolean;
+}
 
 /**
  * 
@@ -3633,6 +3981,71 @@ export interface ImportWorkflowDto {
 /**
  * 
  * @export
+ * @interface InstructionSizePart
+ */
+export interface InstructionSizePart {
+    /**
+     * 
+     * @type {InstructionSizeSource}
+     * @memberof InstructionSizePart
+     */
+    source: InstructionSizeSource;
+    /**
+     * For an instructionBlocks part: the instruction node whose text it is (one part per wired block)
+     * @type {string}
+     * @memberof InstructionSizePart
+     */
+    instructionNodeId?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof InstructionSizePart
+     */
+    chars: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof InstructionSizePart
+     */
+    approxTokens: number;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const InstructionSizeSource = {
+    Preamble: 'preamble',
+    BackgroundWorkNote: 'backgroundWorkNote',
+    ReplyLanguage: 'replyLanguage',
+    CustomInstructions: 'customInstructions',
+    TaskInstructions: 'taskInstructions',
+    WorkflowInstructions: 'workflowInstructions',
+    InstructionBlocks: 'instructionBlocks',
+    Role: 'role',
+    AnsweringACall: 'answeringACall',
+    CallSurface: 'callSurface'
+} as const;
+export type InstructionSizeSource = typeof InstructionSizeSource[keyof typeof InstructionSizeSource];
+
+/**
+ * 
+ * @export
+ * @interface InstructionSizesDto
+ */
+export interface InstructionSizesDto {
+    /**
+     * 
+     * @type {Array<NodeInstructionSize>}
+     * @memberof InstructionSizesDto
+     */
+    nodes: Array<NodeInstructionSize>;
+}
+/**
+ * 
+ * @export
  * @interface ItemDto
  */
 export interface ItemDto {
@@ -3728,10 +4141,39 @@ export const ItemKind = {
     ShowGallery: 'show_gallery',
     ShowArtifact: 'show_artifact',
     Recommendations: 'recommendations',
-    RecommendationOutcome: 'recommendation_outcome'
+    RecommendationOutcome: 'recommendation_outcome',
+    Action: 'action',
+    ActionOutcome: 'action_outcome',
+    TeamNote: 'team_note'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
+/**
+ * 
+ * @export
+ * @interface KeptSessionConfigAckDto
+ */
+export interface KeptSessionConfigAckDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof KeptSessionConfigAckDto
+     */
+    idleMinutes: number;
+}
+/**
+ * 
+ * @export
+ * @interface KeptSessionConfigDto
+ */
+export interface KeptSessionConfigDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof KeptSessionConfigDto
+     */
+    idleMinutes: number;
+}
 /**
  * 
  * @export
@@ -3913,6 +4355,79 @@ export interface LineSnapshotDto {
 /**
  * 
  * @export
+ * @interface LiveAction
+ */
+export interface LiveAction {
+    /**
+     * the publish row — what a press addresses
+     * @type {number}
+     * @memberof LiveAction
+     */
+    seq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    actionId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    conversationId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    label: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LiveAction
+     */
+    description?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof LiveAction
+     */
+    once: boolean;
+    /**
+     * 
+     * @type {ActionSpec}
+     * @memberof LiveAction
+     */
+    spec: ActionSpec;
+    /**
+     * 
+     * @type {ActionPublisher}
+     * @memberof LiveAction
+     */
+    publisher: ActionPublisher;
+    /**
+     * a press is under way
+     * @type {boolean}
+     * @memberof LiveAction
+     */
+    pending: boolean;
+    /**
+     * 
+     * @type {ActionOutcomePayload}
+     * @memberof LiveAction
+     */
+    lastOutcome?: ActionOutcomePayload;
+}
+/**
+ * 
+ * @export
  * @interface LocalImageDto
  */
 export interface LocalImageDto {
@@ -4032,6 +4547,31 @@ export interface LogoutResultDto {
 /**
  * 
  * @export
+ * @interface MeasureInstructionSizesDto
+ */
+export interface MeasureInstructionSizesDto {
+    /**
+     * 
+     * @type {Workflow}
+     * @memberof MeasureInstructionSizesDto
+     */
+    workflow: Workflow;
+    /**
+     * 
+     * @type {string}
+     * @memberof MeasureInstructionSizesDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MeasureInstructionSizesDto
+     */
+    replyLanguage?: string;
+}
+/**
+ * 
+ * @export
  * @interface MoveTaskStatusDto
  */
 export interface MoveTaskStatusDto {
@@ -4076,6 +4616,66 @@ export interface NamedPathsResultDto {
      */
     named: Array<string>;
 }
+/**
+ * 
+ * @export
+ * @interface NodeInstructionSize
+ */
+export interface NodeInstructionSize {
+    /**
+     * 
+     * @type {string}
+     * @memberof NodeInstructionSize
+     */
+    nodeId: string;
+    /**
+     * The CLI measured — the node’s own, a pool’s first member
+     * @type {AgentKind}
+     * @memberof NodeInstructionSize
+     */
+    agent: AgentKind;
+    /**
+     * Which turn was measured: the node’s own turn, or — for a node only ever called — a turn answering a call
+     * @type {string}
+     * @memberof NodeInstructionSize
+     */
+    turn: NodeInstructionSizeTurnEnum;
+    /**
+     * Length of the composed block, exactly
+     * @type {number}
+     * @memberof NodeInstructionSize
+     */
+    totalChars: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof NodeInstructionSize
+     */
+    approxTokens: number;
+    /**
+     * The paragraph breaks between parts — totalChars less the parts
+     * @type {number}
+     * @memberof NodeInstructionSize
+     */
+    separatorChars: number;
+    /**
+     * 
+     * @type {Array<InstructionSizePart>}
+     * @memberof NodeInstructionSize
+     */
+    parts: Array<InstructionSizePart>;
+}
+
+
+/**
+ * @export
+ */
+export const NodeInstructionSizeTurnEnum = {
+    Own: 'own',
+    Call: 'call'
+} as const;
+export type NodeInstructionSizeTurnEnum = typeof NodeInstructionSizeTurnEnum[keyof typeof NodeInstructionSizeTurnEnum];
+
 /**
  * 
  * @export
@@ -4126,6 +4726,12 @@ export interface NodeStateDto {
      */
     contextTokens: number | null;
     /**
+     * Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it
+     * @type {boolean}
+     * @memberof NodeStateDto
+     */
+    contextEstimated: boolean;
+    /**
      * 
      * @type {number}
      * @memberof NodeStateDto
@@ -4143,6 +4749,12 @@ export interface NodeStateDto {
      * @memberof NodeStateDto
      */
     calls: Array<CallContextReading>;
+    /**
+     * 
+     * @type {Array<CallFigures>}
+     * @memberof NodeStateDto
+     */
+    callFigures: Array<CallFigures>;
     /**
      * 
      * @type {ChatTotals}
@@ -4324,22 +4936,16 @@ export interface PlanWindow {
 /**
  * 
  * @export
- * @interface ProbeShareDestinationDto
+ * @interface PressActionDto
  */
-export interface ProbeShareDestinationDto {
+export interface PressActionDto {
     /**
-     * 
-     * @type {ProbeShareDestinationDtoShareDestination}
-     * @memberof ProbeShareDestinationDto
+     * ID generated once per press and reused when the press is retried after RUN_BUSY
+     * @type {string}
+     * @memberof PressActionDto
      */
-    destination: ProbeShareDestinationDtoShareDestination;
+    clientMessageId: string;
 }
-/**
- * @type ProbeShareDestinationDtoShareDestination
- * 
- * @export
- */
-export type ProbeShareDestinationDtoShareDestination = ShareConfigDtoShareDestinationOneOf | ShareConfigDtoShareDestinationOneOf1 | ShareConfigDtoShareDestinationOneOf2;
 
 /**
  * 
@@ -4810,6 +5416,31 @@ export interface RetriedDto {
 /**
  * 
  * @export
+ * @interface RevokeAllSharesDto
+ */
+export interface RevokeAllSharesDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof RevokeAllSharesDto
+     */
+    revoked: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RevokeAllSharesDto
+     */
+    failed: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RevokeAllSharesDto
+     */
+    detail: string | null;
+}
+/**
+ * 
+ * @export
  * @interface RevokeShareDto
  */
 export interface RevokeShareDto {
@@ -4837,6 +5468,19 @@ export const RevokeShareDtoStatusEnum = {
 } as const;
 export type RevokeShareDtoStatusEnum = typeof RevokeShareDtoStatusEnum[keyof typeof RevokeShareDtoStatusEnum];
 
+/**
+ * 
+ * @export
+ * @interface RevokeSharesDto
+ */
+export interface RevokeSharesDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof RevokeSharesDto
+     */
+    shareIds: Array<string>;
+}
 /**
  * 
  * @export
@@ -5029,10 +5673,16 @@ export interface RunDelegateState {
     kind: string | null;
     /**
      * 
-     * @type {RunWorkStatus}
+     * @type {RunDelegateStatus}
      * @memberof RunDelegateState
      */
-    status: RunWorkStatus;
+    status: RunDelegateStatus;
+    /**
+     * an untracked delegate whose hosting process is gone: its work is over, only its outcome is unknown
+     * @type {boolean}
+     * @memberof RunDelegateState
+     */
+    processEnded: boolean;
     /**
      * 
      * @type {number}
@@ -5045,8 +5695,28 @@ export interface RunDelegateState {
      * @memberof RunDelegateState
      */
     startedAt: string;
+    /**
+     * the tool calls this delegate made (rows carrying its id as parentToolUseId), over every row of the run up to the read's throughSeq
+     * @type {number}
+     * @memberof RunDelegateState
+     */
+    toolCalls: number;
 }
 
+
+
+/**
+ * 
+ * @export
+ */
+export const RunDelegateStatus = {
+    Running: 'running',
+    Completed: 'completed',
+    Failed: 'failed',
+    Cancelled: 'cancelled',
+    Untracked: 'untracked'
+} as const;
+export type RunDelegateStatus = typeof RunDelegateStatus[keyof typeof RunDelegateStatus];
 
 /**
  * 
@@ -5181,6 +5851,12 @@ export interface RunDto {
      */
     contextTokens: number | null;
     /**
+     * Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it
+     * @type {boolean}
+     * @memberof RunDto
+     */
+    contextEstimated: boolean;
+    /**
      * 
      * @type {number}
      * @memberof RunDto
@@ -5266,10 +5942,10 @@ export interface RunDto {
     lastActivityAt: string | null;
     /**
      * Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first
-     * @type {Array<RunPullRequest>}
+     * @type {Array<DisplayedPullRequest>}
      * @memberof RunDto
      */
-    pullRequests: Array<RunPullRequest>;
+    pullRequests: Array<DisplayedPullRequest>;
     /**
      * Calls a usage limit stopped that geniro continues when the window reopens
      * @type {Array<RunResetWake>}
@@ -5426,6 +6102,67 @@ export interface RunGroupDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface RunMonitor
+ */
+export interface RunMonitor {
+    /**
+     * the id the agent knows it by, e.g. `m1`
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    description: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    command: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    startedAt: string;
+    /**
+     * when its timeout stops it, ISO-8601
+     * @type {string}
+     * @memberof RunMonitor
+     */
+    endsAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunMonitor
+     */
+    pid: number | null;
+    /**
+     * the shell first, then its group depth-first
+     * @type {Array<RunProcess>}
+     * @memberof RunMonitor
+     */
+    processes: Array<RunProcess>;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunMonitor
+     */
+    cpuPercent: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunMonitor
+     */
+    rssBytes: number;
+}
 /**
  * 
  * @export
@@ -5587,7 +6324,13 @@ export interface RunProcessesDto {
      */
     detached: Array<RunProcess>;
     /**
-     * every process listed, the trees and `detached` together
+     * the run's agents' `monitor` commands, each with its process group — never listed again under `detached`
+     * @type {Array<RunMonitor>}
+     * @memberof RunProcessesDto
+     */
+    monitors: Array<RunMonitor>;
+    /**
+     * every process listed, the trees, `detached` and `monitors` together
      * @type {number}
      * @memberof RunProcessesDto
      */
@@ -5747,6 +6490,12 @@ export interface RunStateDto {
      */
     shells: Array<OpenShell>;
     /**
+     * the buttons agents published that can still be pressed, newest first
+     * @type {Array<LiveAction>}
+     * @memberof RunStateDto
+     */
+    actions: Array<LiveAction>;
+    /**
      * the unanswered tool calls of every conversation's open turn — the commands running in the foreground, whatever page a client holds
      * @type {Array<ChatHistoryDtoItemsInner>}
      * @memberof RunStateDto
@@ -5853,6 +6602,19 @@ export const RunTaskRowStatusEnum = {
 } as const;
 export type RunTaskRowStatusEnum = typeof RunTaskRowStatusEnum[keyof typeof RunTaskRowStatusEnum];
 
+/**
+ * 
+ * @export
+ * @interface RunTeamNotesDto
+ */
+export interface RunTeamNotesDto {
+    /**
+     * 
+     * @type {Array<TeamNote>}
+     * @memberof RunTeamNotesDto
+     */
+    notes: Array<TeamNote>;
+}
 /**
  * 
  * @export
@@ -6086,6 +6848,12 @@ export interface RunWaterfallLane {
      */
     costUsd: number | null;
     /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallLane
+     */
+    estimatedCostUsd: number | null;
+    /**
      * how many turns this lane TOOK — the larger of its `turn_complete` rows and the status rows recording a turn opening, never the spans the card can draw. Each of the three is short in a different case: a CLI reporting no timing draws no span, a cancelled turn writes no completion, and a chat writes no status row at all
      * @type {number}
      * @memberof RunWaterfallLane
@@ -6248,6 +7016,12 @@ export interface RunWaterfallTurn {
     costUsd: number | null;
     /**
      * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    estimatedCostUsd: number | null;
+    /**
+     * 
      * @type {Array<RunWaterfallModelCost>}
      * @memberof RunWaterfallTurn
      */
@@ -6403,6 +7177,12 @@ export interface RunWorkflowDto {
      * @memberof RunWorkflowDto
      */
     customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWorkflowDto
+     */
+    replyLanguage?: string;
     /**
      * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
@@ -6661,6 +7441,18 @@ export interface Share {
     lastError: string | null;
     /**
      * 
+     * @type {ShareSignInLabel}
+     * @memberof Share
+     */
+    signIn: ShareSignInLabel | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof Share
+     */
+    askedByAgent: boolean;
+    /**
+     * 
      * @type {string}
      * @memberof Share
      */
@@ -6684,6 +7476,46 @@ export const ShareActor = {
     Agent: 'agent'
 } as const;
 export type ShareActor = typeof ShareActor[keyof typeof ShareActor];
+
+/**
+ * 
+ * @export
+ * @interface ShareCheckResultDto
+ */
+export interface ShareCheckResultDto {
+    /**
+     * 
+     * @type {ShareCheckState}
+     * @memberof ShareCheckResultDto
+     */
+    state: ShareCheckState;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareCheckResultDto
+     */
+    detail?: string;
+    /**
+     * 
+     * @type {ShareSignInLabel}
+     * @memberof ShareCheckResultDto
+     */
+    signIn: ShareSignInLabel | null;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const ShareCheckState = {
+    SignedIn: 'signed-in',
+    SignInRequired: 'sign-in-required',
+    CheckFailed: 'check-failed',
+    NotSetUp: 'not-set-up'
+} as const;
+export type ShareCheckState = typeof ShareCheckState[keyof typeof ShareCheckState];
 
 /**
  * 
@@ -6722,6 +7554,12 @@ export interface ShareConfigDto {
      * @memberof ShareConfigDto
      */
     agentsMayShare: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof ShareConfigDto
+     */
+    autoRevokeAfterDays: number | null;
 }
 /**
  * @type ShareConfigDtoShareDestination
@@ -6889,6 +7727,12 @@ export interface ShareConfigDtoShareDestinationOneOf2 {
      * @memberof ShareConfigDtoShareDestinationOneOf2
      */
     remove: Array<string>;
+    /**
+     * 
+     * @type {ShareConfigDtoShareDestinationOneOf2SignIn}
+     * @memberof ShareConfigDtoShareDestinationOneOf2
+     */
+    signIn?: ShareConfigDtoShareDestinationOneOf2SignIn;
 }
 
 
@@ -6900,6 +7744,25 @@ export const ShareConfigDtoShareDestinationOneOf2KindEnum = {
 } as const;
 export type ShareConfigDtoShareDestinationOneOf2KindEnum = typeof ShareConfigDtoShareDestinationOneOf2KindEnum[keyof typeof ShareConfigDtoShareDestinationOneOf2KindEnum];
 
+/**
+ * 
+ * @export
+ * @interface ShareConfigDtoShareDestinationOneOf2SignIn
+ */
+export interface ShareConfigDtoShareDestinationOneOf2SignIn {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareConfigDtoShareDestinationOneOf2SignIn
+     */
+    login?: Array<string>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareConfigDtoShareDestinationOneOf2SignIn
+     */
+    patterns?: Array<string>;
+}
 /**
  * 
  * @export
@@ -6917,7 +7780,7 @@ export interface ShareCreatedDto {
      * @type {string}
      * @memberof ShareCreatedDto
      */
-    url: string;
+    url: string | null;
 }
 /**
  * 
@@ -6954,22 +7817,100 @@ export interface ShareListDto {
 /**
  * 
  * @export
- * @interface ShareProbeResultDto
+ * @interface ShareSignInLabel
  */
-export interface ShareProbeResultDto {
-    /**
-     * 
-     * @type {boolean}
-     * @memberof ShareProbeResultDto
-     */
-    ok: boolean;
+export interface ShareSignInLabel {
     /**
      * 
      * @type {string}
-     * @memberof ShareProbeResultDto
+     * @memberof ShareSignInLabel
      */
-    detail: string;
+    cli: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInLabel
+     */
+    label: string;
 }
+/**
+ * 
+ * @export
+ * @interface ShareSignInSessionDto
+ */
+export interface ShareSignInSessionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    destinationId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    label: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    cli: string;
+    /**
+     * 
+     * @type {ShareSignInStatus}
+     * @memberof ShareSignInSessionDto
+     */
+    status: ShareSignInStatus;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareSignInSessionDto
+     */
+    lines: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    url: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShareSignInSessionDto
+     */
+    message: string | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ShareSignInSessionDto
+     */
+    retried: Array<string>;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const ShareSignInStatus = {
+    Waiting: 'waiting',
+    Verifying: 'verifying',
+    Succeeded: 'succeeded',
+    Failed: 'failed',
+    Cancelled: 'cancelled',
+    TimedOut: 'timed-out'
+} as const;
+export type ShareSignInStatus = typeof ShareSignInStatus[keyof typeof ShareSignInStatus];
+
 
 /**
  * 
@@ -6977,7 +7918,9 @@ export interface ShareProbeResultDto {
  */
 export const ShareStatus = {
     Live: 'live',
-    RevokeFailed: 'revoke-failed'
+    RevokeFailed: 'revoke-failed',
+    AwaitingSignIn: 'awaiting-sign-in',
+    Failed: 'failed'
 } as const;
 export type ShareStatus = typeof ShareStatus[keyof typeof ShareStatus];
 
@@ -7024,6 +7967,19 @@ export interface ShellOutputDto {
      * @memberof ShellOutputDto
      */
     unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface StartShareSignInDto
+ */
+export interface StartShareSignInDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof StartShareSignInDto
+     */
+    destinationId: string;
 }
 /**
  * 
@@ -7111,6 +8067,12 @@ export interface StartTaskRunDto {
     customInstructions?: string;
     /**
      * 
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof StartTaskRunDto
      */
@@ -7195,6 +8157,12 @@ export interface StartWorkflowChatDto {
     customInstructions?: string;
     /**
      * 
+     * @type {string}
+     * @memberof StartWorkflowChatDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof StartWorkflowChatDto
      */
@@ -7213,7 +8181,13 @@ export interface StopDetachedProcessesDto {
      * @type {Array<number>}
      * @memberof StopDetachedProcessesDto
      */
-    pids: Array<number>;
+    pids?: Array<number>;
+    /**
+     * monitors to stop; each ends `stopped` and wakes its agent
+     * @type {Array<string>}
+     * @memberof StopDetachedProcessesDto
+     */
+    monitorIds?: Array<string>;
 }
 /**
  * 
@@ -7227,6 +8201,12 @@ export interface StoppedDetachedProcessesDto {
      * @memberof StoppedDetachedProcessesDto
      */
     stoppedPids: Array<number>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof StoppedDetachedProcessesDto
+     */
+    stoppedMonitorIds: Array<string>;
 }
 /**
  * 
@@ -7573,6 +8553,83 @@ export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
 /**
  * 
  * @export
+ * @interface TeamNote
+ */
+export interface TeamNote {
+    /**
+     * the row that holds it; its id
+     * @type {number}
+     * @memberof TeamNote
+     */
+    seq: number;
+    /**
+     * 
+     * @type {TeamNoteKind}
+     * @memberof TeamNote
+     */
+    kind: TeamNoteKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamNote
+     */
+    text: string;
+    /**
+     * the agent that wrote it
+     * @type {string}
+     * @memberof TeamNote
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamNote
+     */
+    conversationId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamNote
+     */
+    callId: string | null;
+    /**
+     * ISO-8601
+     * @type {string}
+     * @memberof TeamNote
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamNote
+     */
+    supersedes: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamNote
+     */
+    supersededBy: number | null;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const TeamNoteKind = {
+    Contract: 'contract',
+    Decision: 'decision',
+    Fact: 'fact',
+    Pitfall: 'pitfall',
+    Pointer: 'pointer'
+} as const;
+export type TeamNoteKind = typeof TeamNoteKind[keyof typeof TeamNoteKind];
+
+/**
+ * 
+ * @export
  * @interface ThreadAnalysisDto
  */
 export interface ThreadAnalysisDto {
@@ -7766,6 +8823,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      */
     contextTokens: number | null;
     /**
+     * Whether contextTokens is geniro's stand-in for an occupancy the CLI did not state; false when the CLI stated it
+     * @type {boolean}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    contextEstimated: boolean;
+    /**
      * 
      * @type {number}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
@@ -7851,10 +8914,10 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
     lastActivityAt: string | null;
     /**
      * Pull requests this run opened, as captured from the agent output, and those its CLI recorded it touching; oldest first
-     * @type {Array<RunPullRequest>}
+     * @type {Array<DisplayedPullRequest>}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
-    pullRequests: Array<RunPullRequest>;
+    pullRequests: Array<DisplayedPullRequest>;
     /**
      * Calls a usage limit stopped that geniro continues when the window reopens
      * @type {Array<RunResetWake>}
@@ -7979,6 +9042,12 @@ export interface ThreadOverviewDtoState {
      * @memberof ThreadOverviewDtoState
      */
     shells: Array<OpenShell>;
+    /**
+     * the buttons agents published that can still be pressed, newest first
+     * @type {Array<LiveAction>}
+     * @memberof ThreadOverviewDtoState
+     */
+    actions: Array<LiveAction>;
     /**
      * the unanswered tool calls of every conversation's open turn — the commands running in the foreground, whatever page a client holds
      * @type {Array<ChatHistoryDtoItemsInner>}

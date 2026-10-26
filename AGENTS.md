@@ -13,7 +13,7 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor) working in this repos
 
 ## Repository rules
 
-The rules under `.claude/rules/` are part of this file's contract. Claude Code loads each one by itself when a file under its `paths:` is touched. Cursor reads each one through `.cursor/rules/<name>.mdc`, a tracked symlink to the rule; it ignores `paths:` and offers the rule to its agent by its `description:`, so it does not load one by itself when a matching file is touched. Codex never reads `.claude/rules/`. So on Codex, and on Cursor when the rule is not already in context, open the matching rule and follow it before editing a file under its paths.
+The rules under `.claude/rules/` are part of this file's contract. Claude Code loads each one by itself when a file under its `paths:` is touched. Cursor reads each one through `.cursor/rules/<name>.mdc`, a committed file generated from the rule: its `paths:` become Cursor's `globs:`, so Cursor attaches the rule by itself when a matching file is in context, and a rule without `paths:` becomes `alwaysApply: true`. Codex never reads `.claude/rules/`. So on Codex, and on Cursor when the rule is not already in context, open the matching rule and follow it before editing a file under its paths.
 
 <!-- prettier-ignore -->
 | Rule | Applies to | What it holds |
@@ -28,8 +28,9 @@ The rules under `.claude/rules/` are part of this file's contract. Claude Code l
 | [`renderer-stories.md`](.claude/rules/renderer-stories.md) | `apps/ui/src/renderer/**/*.stories.tsx`, `apps/ui/.storybook/**` | How to write a component's Storybook story |
 | [`packaging-config.md`](.claude/rules/packaging-config.md) | `scripts/**`, `apps/ui/electron-builder.yml` | An env-signal branch owns every config value it controls |
 | [`testing.md`](.claude/rules/testing.md) | `**/*.spec.ts`, `**/*.spec.tsx` | No false pins: a claimed behaviour has an assertion that fails when it breaks |
+| [`run-statistics.md`](.claude/rules/run-statistics.md) | `apps/daemon/src/**`, `apps/ui/src/renderer/**` | Run, thread, conversation, agent and sub-agent statistics are counted by the daemon over every row, never folded from the loaded window or bounded by a listing cap |
 
-Add a new rule file to this table in the same change, with the paths its frontmatter declares, and give it its `.cursor/rules/<name>.mdc` symlink (`ln -s ../../.claude/rules/<name>.md .cursor/rules/<name>.mdc`). The table is the only way a rule reaches Codex.
+Add a new rule file to this table in the same change, with the paths its frontmatter declares, then run `pnpm sync:cursor-rules` and commit the `.cursor/rules/<name>.mdc` it writes; never edit a generated file by hand. A rule's frontmatter holds only a one-line `description:` and an optional `paths:` block list with no brace group (Cursor splits `globs:` on commas), and the script refuses anything else. `pnpm sync:cursor-rules --check` (in CI and `full-check`) fails on a missing, stale or extra file. The table is the only way a rule reaches Codex.
 
 ---
 
@@ -77,7 +78,7 @@ geniro-app is a local-first macOS desktop app for composing and running a DAG of
 - Every fact about one CLI lives in its own adapter: `v1/agents/adapters/<cli>/` in the daemon, `main/agents/<cli>.ts` in Electron main. The renderer reads per-agent facts from `GET /v1/capabilities` and never spells an agent's name.
 - Scope and milestones live in `.geniro/planning/geniro-app-v1/` (local, gitignored).
 
-Stack: TypeScript 6, Node 24+, NestJS 12 (Fastify), MikroORM + better-sqlite3, React 19 + Tailwind v4 (electron-vite), pnpm 11 + Turbo, swc, Vitest, ESLint + Prettier.
+Stack: TypeScript 6, Node 24.15+, NestJS 12 (Fastify), MikroORM + better-sqlite3, React 19 + Tailwind v4 (electron-vite), pnpm 11 + Turbo, swc, Vitest, ESLint + Prettier.
 
 ---
 
@@ -215,7 +216,7 @@ pnpm commit             # conventional commit via commitizen
 ## Testing conventions
 
 - Vitest, transformed by swc (`vitest.base.ts`); tests run from source.
-- `@geniro/daemon` and `@packages/mikroorm` run their suites under Electron, so `pnpm rebuild:native` must have run.
+- `@geniro/daemon`, `@packages/mikroorm` and `@geniro/ui` run their suites under Electron's Node (`ELECTRON_RUN_AS_NODE`), the runtime the code ships on. The daemon and mikroorm suites open better-sqlite3, so `pnpm rebuild:native` must have run; the UI suite needs Electron's Node APIs, which the system Node can lack (`net.Socket#setTypeOfService` is missing from Node 24.14).
 - Unit tests are co-located `*.spec.{ts,tsx}`. Run them through the package scripts, never `vitest` directly.
 - Specs are type-checked: `check-types` uses `tsconfig.json`, which includes specs and `__tests__/`. Never narrow it to the spec-excluding `tsconfig.build.json`.
 - React component tests put `// @vitest-environment jsdom` on line 1. Wrap module-scope spies used in a `vi.mock` factory in `vi.hoisted(() => ({ … }))`.
@@ -247,7 +248,8 @@ pnpm commit             # conventional commit via commitizen
 6. **An encrypted artifact page, to a place the user configured, through the user's own CLI** (`apps/daemon/src/v1/shares/`).
    - Only the AES-256-GCM envelope leaves the Mac; the page is encrypted in the daemon and the key travels in the link's `#fragment`, which no browser sends (and, for an agent's own share, in that agent's transcript — see *Storage split*). Never upload plaintext.
    - The destination is one the user added in Settings → Sharing (`gcloud`, `aws`, or their own program as argv, never a shell). geniro holds no credential and runs no host of its own.
-   - Only on a press, or by an agent's `show_artifact(share: true)` while the user's "Let agents share pages" switch is on (off by default).
+   - Only on a press, or by an agent's `show_artifact(share: true)` while the user's "Let agents share pages" switch is on (off by default). A share that failed because the destination's CLI is signed out waits (`awaiting-sign-in`) and is retried once, after the user's own "Sign in to …" press runs that CLI's login (`ShareSignInService`); nothing retries on its own.
+   - A revoke (deleting the remote object through the same CLI) also runs unattended from the auto-revoke sweep, only while the user has set `Settings.sharing.autoRevokeAfterDays` (off by default): the daemon's own timer, a minute after it starts and every 6 h.
    - The share routes and settings are desktop only: the gateway stamps proxied requests `x-geniro-via: remote` (`main/remote/daemon-proxy.ts`), the daemon's `DesktopOnlyGuard` refuses them, and a paired device may not write `Settings.sharing`. Accepted by decision: while agents may share, a message sent from a paired device can still ask an agent to share, because the agent's own MCP call is loopback.
 
 **LAN gateway** (`apps/ui/src/main/remote/`, `Settings.remoteAccessEnabled`) is the one inbound exception: the Mac serves the app to the user's own devices on the same network.
@@ -270,11 +272,11 @@ pnpm commit             # conventional commit via commitizen
 
 - No Python runtime; the whole stack is TypeScript.
 - Secrets live in the macOS Keychain only, never SQLite or a file. The one kind the app stores is a share key (service `geniro.share`, account = share id), written through `/usr/bin/security -i` on stdin so it never rides argv. The loopback token in `daemon.json` is not a user secret.
-- Child env: `buildChildEnv` (`utils/child-env.ts`) strips every `GENIRO_`-prefixed key and every adapter's `auth.isolatedEnvKeys`, then each adapter re-injects only its own `auth.inheritedEnvKeys`. Never un-strip a name: an inherited user credential must not reach another CLI's child.
+- Child env: `buildChildEnv` (`utils/child-env.ts`) strips every `GENIRO_`-prefixed key, the daemon's own `ELECTRON_RUN_AS_NODE` (inherited, it makes every Electron app an agent starts boot as plain Node) and every adapter's `auth.isolatedEnvKeys`, then each adapter re-injects only its own `auth.inheritedEnvKeys`. Never un-strip a name: an inherited user credential must not reach another CLI's child.
 - Every child process the daemon spawns registers with `ProcessRegistry` (claim → register → auto-unregister on settle). Never spawn an unmanaged child.
-- Every detached child group is also recorded in the child journal (`v1/agents/utils/child-journal.ts` → `<userData>/children.json`) inside the spawn helper itself (`defaultSpawn`, `AgentAdapter.runAsProcessGroup`, `runManagedCommand`). The next boot reaps survivors (`services/stranded-child-reaper.service.ts`, first in `main.ts`).
+- Every detached child group is also recorded in the child journal (`v1/agents/utils/child-journal.ts` → `<userData>/children.json`) inside the spawn helper itself (`defaultSpawn`, `AgentAdapter.runAsProcessGroup`, `runManagedCommand`, `startManagedStream`). The next boot reaps survivors (`services/stranded-child-reaper.service.ts`, first in `main.ts`).
 - The reaper never kills on a pid alone: it re-confirms identity through `utils/process-identity`, and leaves an unconfirmable entry alone. A plain short `execFile` utility child is not journaled.
-- Run-scoped CLIs carry a deliberate run tag (`GENIRO_RUN_ID` + `GENIRO_RUN_OWNER`, set after `buildChildEnv`'s strip). Archive, delete and the leftover sweep stop what a run's agents left running by that tag, with explicit pids only. The safety rules (never the daemon, pid 1, another uid, anything on an open terminal, system or installed-app executables, the container VM; cap; start-time check) are in `apps/daemon/AGENTS.md` → _Run processes_; never widen the kill past them.
+- Run-scoped CLIs carry a deliberate run tag (`GENIRO_RUN_ID` + `GENIRO_RUN_OWNER`, set after `buildChildEnv`'s strip). Archive, delete, the leftover sweep and a run sitting unused for the kept-session window stop what a run's agents left running by that tag, with explicit pids only. The safety rules (never the daemon, pid 1, another uid, anything on an open terminal, system or installed-app executables, the container VM; cap; start-time check) are in `apps/daemon/AGENTS.md` → _Run processes_; never widen the kill past them. The one recorded exception: what a CLI left running when it ended without stopping it is found by the process groups its session recorded while it lived, not by the tag, and is not fenced for being on a terminal (_Run processes_ → Left commands).
 - Workflow definitions are YAML; SQLite holds runtime/history only.
 - The daemon binds `127.0.0.1` only and gates every non-public route with the per-launch token.
 - No tmux or PTY scraping for graph execution. Inspection is a handoff to the user's own terminal (`v1/handoff/`).
@@ -314,14 +316,15 @@ Full guide: `apps/ui/AGENTS.md` (main process, renderer, chats, workflows, setti
 
 ### Agent instructions — the host preamble and the user's own
 
-- Every turn's instruction block is composed at one seam: `AgentAdapter.composeSystemPrompt` → `composeTurnInstructions` (`v1/agents/utils/agent-instructions.ts`). Adapters never join the parts themselves (`.claude/rules/agent-adapters.md`).
-- Order, general → specific: host preamble (`GENIRO_UI_PREAMBLE`), the CLI's background-work note (`AdapterConfig.backgroundWork.agentNote`), the user's custom instructions, a board card's `taskInstructions`, wired `instructionBlocks`, the node's `role`, the callee sentence (`ANSWERING_A_CALL`, on every turn that answers a call, a leaf callee included), then the "May call" block.
+- Every turn's instruction block is composed at one seam: `AgentAdapter.composeSystemPrompt` joins `AgentAdapter.turnInstructionParts` → `turnInstructionParts` (`v1/agents/utils/agent-instructions.ts`). Adapters never join the parts themselves (`.claude/rules/agent-adapters.md`).
+- Order, general → specific: host preamble (`GENIRO_UI_PREAMBLE`), the CLI's background-work note (`AdapterConfig.backgroundWork.agentNote`), the user's reply language (`replyLanguageInstruction`, from `Settings.replyLanguage`), the user's custom instructions, a board card's `taskInstructions`, wired `instructionBlocks`, the node's `role`, the callee sentence (`ANSWERING_A_CALL`, on every turn that answers a call, a leaf callee included), then the "May call" block.
 - The background-work note is per CLI because the truth differs: a claude or cursor turn (and the call it answers) is held while its background sub-agents run and the agent is started again with their reports, so it is told to end its turn rather than poll; a codex turn is not held, so it is told to `wait_agent`. Every sentence must stay true of its adapter's hold; never inject a reminder mid-turn instead (it arrives as a user message).
 - Delivery: claude on `--append-system-prompt`; codex as the thread's `developerInstructions`; ACP inside the prompt text, after the user's words, wrapped in `<host-context>` (`HOST_CONTEXT_TAG`). Never lead the ACP prompt with it: the CLI names the chat from the prompt text.
 - On ACP the block is sent once per session and re-sent only when its text changes (`apps/daemon/AGENTS.md` → **ACP instruction delivery**).
 - The preamble exists to contradict the CLI's own claim that output goes to a terminal. Every claim in it must match this renderer: GFM renders, local-path images render, remote images do not (CSP `img-src 'self' data:`). Never promise remote images or image output blocks, and say nothing about response length.
-- `internalProbe` turns get no preamble and no background-work note.
-- The Settings screen reads the preamble and the per-CLI notes from `GET /v1/capabilities` (`hostPreamble`, `backgroundWorkNotes`); never restate them in the renderer.
+- `internalProbe` turns get no preamble, no background-work note and no reply-language line.
+- The reply language is snapshotted onto `Run.replyLanguage` like custom instructions (it joins `sessionKey`). claude also gets it as its own `language` setting, in the turn's own `--settings` object (`claudeSettingsArgs`). A later `--settings` replaces an earlier one, so the last one carries every key — fast mode, the language, and a repeat of the Ollama env the base's env-only flag carries ahead of it.
+- The Settings screen reads the preamble and the per-CLI notes from `GET /v1/capabilities` (`hostPreamble`, `backgroundWorkNotes`), and the workflow inspector reads each agent node's block sizes from `POST /v1/workflows/instruction-sizes` (measured through the same parts); never restate either in the renderer.
 - Custom instructions are one global value, `Settings.customInstructions`, sent on chat create and workflow start under `CustomInstructionsSchema` (no length limit; refuses C0 control characters, since a NUL in argv makes `spawn` throw on every turn).
 - They are snapshotted onto `Run.customInstructions`, never read live: `AgentAdapter.sessionKey` hashes them, so a live read would respawn the kept CLI and its MCP servers mid-conversation. Editing them affects the next chat.
 - A node's `role` outranks them; keep them as peer fields, not one joined string.
@@ -357,19 +360,20 @@ Daemon side of the contract (`v1/*`):
 ### Storage split
 
 - **Workflow (graph) definitions → YAML.** Never in SQLite.
-  - Workflow backups → `<userData>/workflows/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written by `WorkflowChangeService` before every save an analysis applies. Never named `*.geniro.yaml`, so the library never lists them; restore by copying one over `<slug>.geniro.yaml`.
+  - Workflow backups → `<userData>/workflows/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written before every save an analysis applies (`WorkflowChangeService`) and before an approved `propose_workflow` replaces a file (`WorkflowProposalService`). Never named `*.geniro.yaml`, so the library never lists them; restore by copying one over `<slug>.geniro.yaml`.
 - **Settings → `settings.json`** in the Electron userData dir. The key list is `apps/ui/AGENTS.md` → **Settings keys (`settings.json`).**
   - Removing or renaming a schema key destroys what it held (`readSettings` keeps only known keys; `writeSettings` rewrites the file). Migrate or export the data first.
   - An unparseable file is copied aside to `settings.json.corrupt-<timestamp>` before any write; never write over a file that cannot be read.
   - Hand-managed lists (`fastActions`, `runConfigs`, `configProfiles`) are salvaged entry by entry on read and keep the user's order.
   - `archiveRetentionDays` defaults to `null` because it arms a sweep that permanently deletes archived chats. The daemon only executes it (`POST /v1/chats/sweep-archived`).
+  - `sharing.autoRevokeAfterDays` defaults to `null` because it arms a sweep that revokes shared links. Unlike the archive sweep, the daemon owns its timer (`ShareService.revokeExpired`), so a paired device never runs it.
   - Values whose vocabulary belongs to the daemon stay opaque strings on the Electron side (`shared/contracts.ts` holds no daemon shapes).
 - **MCP config → each CLI's own config files**, the one exception to "geniro writes only its own files". Toggles and server definitions are written only on the user's press, through each CLI's own mechanism and lock, refusing an unparseable file and keeping no copy. Rules: `apps/daemon/AGENTS.md` → **MCP config writes**.
 - **Secrets → the Keychain only.** Every CLI authenticates from its own login. Share keys are the one secret geniro keeps (see _Constraints_).
 - **SQLite (`geniro.db`) → runtime and history only**: `runs`, `items`, `node_state`, and the usage tables.
   - Archive uses its own `archivedAt` column, never `deletedAt`: the `softDelete` filter is global and default-on, so an archived row would vanish from the read that unarchives it.
   - `usage_events`, `usage_activity` and `line_baselines` are exempt from run teardown so lifetime totals survive deleting a chat. `usage_events` is append-only and denormalizes agent/model/folder at write time.
-  - `artifact_shares` is exempt too: a shared link outlives its chat, and the row (with the destination it was shared to) is the only way to revoke it. Its key is in the Keychain, never the row. One accepted exception: an agent's `show_artifact(share: true)` receipt carries the whole link, so the key also lives in that agent's transcript: the `items` row (readable from a paired device), the CLI's own session file, and the model provider's copy of the conversation — the agent needs the link to place it where it was asked to.
+  - `artifact_shares` is exempt too: a shared link outlives its chat, and the row (with the destination it was shared to) is the only way to revoke it. Only a share never uploaded (waiting on sign-in, or failed after it) is dropped with its run, on delete or archive. Its key is in the Keychain, never the row. One accepted exception: an agent's `show_artifact(share: true)` receipt carries the whole link — or, for a share that waited on the user's sign-in, the prompt of the turn the agent is woken with (`HostWakeBus`; its opening row carries no link) — so the key also lives in that agent's transcript: the `items` row of the receipt (readable from a paired device), the CLI's own session file, and the model provider's copy of the conversation — the agent needs the link to place it where it was asked to. `shares_changed` and the sign-in notification never carry it.
 - **Pasted images → `<userData>/attachments/<runId>/`.** Only `{id, mediaType}` rides the item payload; never put blobs in the DB.
   - On ACP, send image blocks only to an agent that advertised `promptCapabilities.image`; otherwise send the text plus a `notice` naming what was withheld.
 - **Uploaded files (phone) → `<userData>/chat-uploads/<uuid>/<name>`** (`POST /v1/chats/uploads`), collected by the teardown of the run whose user messages name them.

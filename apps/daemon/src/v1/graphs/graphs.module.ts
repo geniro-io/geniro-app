@@ -1,15 +1,22 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { ConfigDirPinService } from '../agents/services/config-dir-pin.service';
 import { CapabilitiesController } from './controllers/capabilities.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
 import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
 import { GraphExecutorService } from './services/graph-executor.service';
+import { HostWakeGraphDelivery } from './services/host-wake-graph-delivery.service';
+import { InstructionSizesService } from './services/instruction-sizes.service';
+import { MonitorGraphDelivery } from './services/monitor-graph-delivery.service';
+import { PoolCooldowns } from './services/pool-cooldowns.store';
 import { RunWorkflowService } from './services/run-workflow.service';
 import { TaskBoardBroker } from './services/task-board.broker';
+import { WorkflowActionsService } from './services/workflow-actions.service';
 import { WorkflowChangeService } from './services/workflow-change.service';
 import { WorkflowChatService } from './services/workflow-chat.service';
+import { WorkflowProposalService } from './services/workflow-proposal.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
 
 /**
@@ -33,12 +40,27 @@ import { WorkflowStoreService } from './services/workflow-store.service';
       useFactory: () => new WorkflowStoreService(),
     },
     CapabilitiesService,
+    InstructionSizesService,
+    MonitorGraphDelivery,
+    HostWakeGraphDelivery,
+    {
+      // One record for the daemon: a limit belongs to an account, whichever
+      // run met it.
+      provide: PoolCooldowns,
+      useFactory: (pins: ConfigDirPinService) =>
+        new PoolCooldowns(
+          (agent, cwd) => pins.forRun(agent, cwd)?.effective ?? null,
+        ),
+      inject: [ConfigDirPinService],
+    },
     GraphExecutorService,
     CallBroker,
     TaskBoardBroker,
     RunWorkflowService,
     WorkflowChatService,
     WorkflowChangeService,
+    WorkflowActionsService,
+    WorkflowProposalService,
   ],
   // `GraphExecutorService` is exported for `TasksModule`, whose cards may name
   // a workflow instead of an agent — the graph twin of the `ChatService` export
@@ -50,6 +72,8 @@ import { WorkflowStoreService } from './services/workflow-store.service';
   // `RunWorkflowService` is exported for every reader of an EXISTING run's
   // graph outside this module (the handoff): a run's workflow is its snapshot,
   // and reading the library there is how an edit would reach a run it must not.
+  // `WorkflowProposalService` is exported for the MCP host's `propose_workflow`
+  // and for `main.ts`'s boot rehydration of standing proposal cards.
   exports: [
     WorkflowStoreService,
     GraphExecutorService,
@@ -57,6 +81,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     TaskBoardBroker,
     RunWorkflowService,
     WorkflowChangeService,
+    WorkflowProposalService,
   ],
 })
 export class GraphsModule {}

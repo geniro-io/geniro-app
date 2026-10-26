@@ -15,6 +15,7 @@ const NOTHING_MEASURED: ChatTotals = {
   turns: 0,
   costedTurns: 0,
   costUsd: null,
+  estimatedCostUsd: null,
   inputTokens: null,
   outputTokens: null,
   cacheReadTokens: null,
@@ -218,6 +219,23 @@ describe('ConversationTimeline', () => {
     const text = segmentText()[0]!;
     expect(text).toBe('2 messages · 5s');
     expect(text).not.toContain('$');
+  });
+
+  it('marks a segment’s cost geniro priced itself, and says so in the detail', () => {
+    render([
+      marker(1, 'ask', {
+        aiMessages: 1,
+        totals: { ...NOTHING_MEASURED, costUsd: 0.42, estimatedCostUsd: 0.42 },
+      }),
+    ]);
+    open();
+
+    expect(segmentText()[0]).toBe('1 message · ≈$0.42');
+    const detail =
+      document.body
+        .querySelector('[data-slot="timeline-segment"]')
+        ?.getAttribute('title') ?? '';
+    expect(detail).toContain("geniro's estimate");
   });
 
   it('says so in the detail when a figure was never measured', () => {

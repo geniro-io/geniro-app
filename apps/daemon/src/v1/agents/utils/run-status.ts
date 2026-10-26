@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 
 import { isTerminalRunStatus, type RunStatus } from '../../runs/runs.types';
+import type { RunAwaiting } from '../chat.types';
 import type { RunDao } from '../dao/run.dao';
 import type { WallTurnDao } from '../dao/wall-turn.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
@@ -35,6 +36,12 @@ export interface RunStatusAnnounce {
   /** What the run is doing right now, for a badge nobody is looking at. */
   activity?: string | null;
   /**
+   * What the run is parked on, when a card outlives the turns around it — a
+   * standing workflow proposal (`ChatService.awaitingOf`). Absent reads as
+   * null, the answer for every other run; see the note in `writeRunStatus`.
+   */
+  awaiting?: RunAwaiting | null;
+  /**
    * What the run has to SAY about this status — the agent's closing words, or
    * the failure's own message.
    *
@@ -55,6 +62,8 @@ export interface RunStatusAnnounce {
    * a compaction that a working turn ran mid-flight is not what this names.
    */
   housekeeping?: boolean;
+  /** A turn geniro started for a monitor — see {@link RunStatusEvent.hostTurn}. */
+  hostTurn?: boolean;
   /**
    * True when this write hands a status BACK rather than reaching a new one —
    * see {@link RunStatusEvent.restored}. Keeps the announce out of the client's
@@ -94,6 +103,12 @@ export async function writeRunStatus(
   // and saying so here is what keeps a `needs-input` badge from outliving the
   // turn it belonged to — the card is gone from the screen, and the badge would
   // have gone on claiming the user was the blocker.
+  //
+  // A deferred card is the exception `sweepNode` leaves standing. The null
+  // here is still right for a question, plan or patch — the status write does
+  // not know about that card — and the chat finalizer re-announces `awaiting`
+  // afterwards when one remains. A standing workflow proposal, which outlives
+  // every turn, is said by its caller through `announce.awaiting`.
   // A TERMINAL status always carries `summary`, null included; a non-terminal
   // one never does. The two are different statements and the wire has to keep
   // them apart: the client holds the last sentence it was given, so omitting a
@@ -101,8 +116,10 @@ export async function writeRunStatus(
   // wordless turn announced them as its own — see `RunStatusEvent.summary`.
   const {
     activity = null,
+    awaiting = null,
     summary = null,
     housekeeping = false,
+    hostTurn = false,
     restored = false,
     noTerminalItem = false,
   } = announce;
@@ -153,7 +170,7 @@ export async function writeRunStatus(
     runId,
     status,
     activity,
-    awaiting: null,
+    awaiting,
     at,
     ...(work === null
       ? {}
@@ -172,6 +189,7 @@ export async function writeRunStatus(
     ...(settled && !restored ? { summary } : {}),
     // Only ever said out loud, never as a `false` nobody reads.
     ...(settled && housekeeping ? { housekeeping } : {}),
+    ...(settled && hostTurn ? { hostTurn } : {}),
     ...(settled && restored ? { restored } : {}),
     ...(settled && noTerminalItem ? { noTerminalItem } : {}),
   });

@@ -3,16 +3,25 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Put,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
+import { cameViaRemote } from '../../../auth/remote-marker';
 import type {
+  ActionPressWire,
   AppProcessesWire,
   AttachmentDataWire,
   ChatExportWire,
@@ -28,6 +37,7 @@ import type {
   RunProcessesWire,
   RunSeenWire,
   RunStateWire,
+  RunTeamNotesWire,
   RunWaterfallWire,
   RunWire,
   ShellKillWire,
@@ -37,6 +47,7 @@ import type {
   ThreadOverviewWire,
 } from '../chat.types';
 import {
+  ActionPressDto,
   AnalyzeThreadDto,
   ApplyRecommendationsDto,
   AppProcessesDto,
@@ -60,6 +71,7 @@ import {
   LocalImageQueryDto,
   NamedPathsDto,
   NamedPathsResultDto,
+  PressActionDto,
   RenameRunDto,
   RetriedDto,
   RunArtifactsDto,
@@ -67,6 +79,7 @@ import {
   RunProcessesDto,
   RunSeenDto,
   RunStateDto,
+  RunTeamNotesDto,
   RunWaterfallDto,
   SearchChatQueryDto,
   SendMessageDto,
@@ -88,6 +101,7 @@ import {
 import { SetRunColorDto } from '../dto/run-color.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ReorderPinnedDto, SetRunPinnedDto } from '../dto/run-pin.dto';
+import { ActionPressService } from '../services/action-press.service';
 import { ChatService } from '../services/chat.service';
 import { ChatArtifactsService } from '../services/chat-artifacts.service';
 import { ChatExportService } from '../services/chat-export.service';
@@ -95,6 +109,7 @@ import { ChatHistoryService } from '../services/chat-history.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
 import { ChatSearchService } from '../services/chat-search.service';
 import { ChatShellsService } from '../services/chat-shells.service';
+import { ChatTeamNotesService } from '../services/chat-team-notes.service';
 import { ChatTimelineService } from '../services/chat-timeline.service';
 import { ChatUploadStoreService } from '../services/chat-upload-store.service';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
@@ -107,6 +122,7 @@ import { ShellOutputService } from '../services/shell-output.service';
 import { ThreadAnalysisService } from '../services/thread-analysis.service';
 import { ThreadOverviewService } from '../services/thread-overview.service';
 import { historyConversationOf } from '../utils/history-conversation';
+import { runListPageOf } from '../utils/run-list-page';
 
 /**
  * Loopback chat REST surface (token-gated by the global LoopbackTokenGuard).
@@ -122,6 +138,7 @@ import { historyConversationOf } from '../utils/history-conversation';
 export class ChatController {
   constructor(
     private readonly artifacts: ChatArtifactsService,
+    private readonly teamNotes: ChatTeamNotesService,
     private readonly chatService: ChatService,
     private readonly chatExport: ChatExportService,
     private readonly history: ChatHistoryService,
@@ -139,6 +156,7 @@ export class ChatController {
     private readonly analyses: ThreadAnalysisService,
     private readonly overview: ThreadOverviewService,
     private readonly recommendations: RecommendationsApplyService,
+    private readonly actionPresses: ActionPressService,
   ) {}
 
   @Post()
@@ -152,7 +170,10 @@ export class ChatController {
   @ApiOperation({ operationId: 'listChats' })
   @ZodResponse({ status: 200, type: [RunDto] })
   listChats(@Query() query: ListChatsQueryDto): Promise<RunWire[]> {
-    return this.chatService.listChats(query.scope ?? 'active');
+    return this.chatService.listChats(
+      query.scope ?? 'active',
+      runListPageOf(query),
+    );
   }
 
   /**
@@ -458,7 +479,7 @@ export class ChatController {
     @Param('runId') runId: string,
     @Body() dto: StopDetachedProcessesDto,
   ): Promise<StoppedDetachedProcesses> {
-    return this.processes.stopDetached(runId, dto.pids);
+    return this.processes.stopDetached(runId, dto);
   }
 
   /**
@@ -471,6 +492,17 @@ export class ChatController {
   @ZodResponse({ status: 200, type: RunArtifactsDto })
   readArtifacts(@Param('runId') runId: string): Promise<RunArtifactsWire> {
     return this.artifacts.read(runId);
+  }
+
+  /**
+   * Every team note this run's agents wrote, superseded ones marked — a
+   * daemon fold on `:runId/artifacts`' reason.
+   */
+  @Get(':runId/team-notes')
+  @ApiOperation({ operationId: 'readRunTeamNotes' })
+  @ZodResponse({ status: 200, type: RunTeamNotesDto })
+  readTeamNotes(@Param('runId') runId: string): Promise<RunTeamNotesWire> {
+    return this.teamNotes.read(runId);
   }
 
   /**
@@ -531,6 +563,47 @@ export class ChatController {
     @Body() dto: ApplyRecommendationsDto,
   ): Promise<ItemWire> {
     return this.recommendations.apply(runId, dto);
+  }
+
+  /**
+   * A press of an agent's button. 409 `ACTION_CHANGED` when the agent has
+   * republished it since, `ACTION_GONE` when it is no longer live,
+   * `ACTION_BUSY` mid-press, `RUN_ARCHIVED` for an archived chat, and the
+   * chat's own `RUN_BUSY`, after which the same press may be repeated.
+   */
+  @Post(':runId/actions/:seq/press')
+  @ApiOperation({ operationId: 'pressChatAction' })
+  @ApiParam({ name: 'seq', type: Number })
+  @ZodResponse({ status: 201, type: ActionPressDto })
+  pressAction(
+    @Param('runId') runId: string,
+    @Param('seq', ParseIntPipe) seq: number,
+    @Body() dto: PressActionDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ): Promise<ActionPressWire> {
+    return this.actionPresses.pressChat(
+      runId,
+      seq,
+      dto.clientMessageId,
+      cameViaRemote(headers) ? 'remote' : 'desktop',
+    );
+  }
+
+  /** Takes an agent's button off the chat; the agent is not told. */
+  @Post(':runId/actions/:seq/dismiss')
+  @ApiOperation({ operationId: 'dismissChatAction' })
+  @ApiParam({ name: 'seq', type: Number })
+  @ZodResponse({ status: 201, type: ActionPressDto })
+  dismissAction(
+    @Param('runId') runId: string,
+    @Param('seq', ParseIntPipe) seq: number,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ): Promise<ActionPressWire> {
+    return this.actionPresses.dismissChat(
+      runId,
+      seq,
+      cameViaRemote(headers) ? 'remote' : 'desktop',
+    );
   }
 
   @Post(':runId/messages')

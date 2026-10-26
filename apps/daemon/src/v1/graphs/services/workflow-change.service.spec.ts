@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { Workflow } from '../graphs.types';
+import { WORKFLOW_BACKUP_DIR } from '../utils/workflow-backup';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import {
-  WORKFLOW_BACKUP_DIR,
   type WorkflowChange,
   WorkflowChangeService,
 } from './workflow-change.service';
@@ -81,7 +81,7 @@ describe('WorkflowChangeService', () => {
     return service.save({
       analysisRunId: 'analysis',
       slug: 'dev-team',
-      workflow: FASTER,
+      edits: [{ path: 'nodes/reviewer/model', value: 'sonnet' }],
       baseHash: await hash(),
       ids: ['W-1'],
       dryRun: false,
@@ -183,14 +183,44 @@ describe('WorkflowChangeService', () => {
 
   it('refuses an invalid graph and writes nothing', async () => {
     const result = await change({
-      workflow: {
-        ...WF,
-        edges: [...WF.edges, { from: 'reviewer', to: 'builder', kind: 'data' }],
-      },
+      edits: [
+        {
+          path: 'edges/-',
+          value: { from: 'reviewer', to: 'builder', kind: 'data' },
+        },
+      ],
     });
 
     expect(result).toMatchObject({ saved: false, error: 'INVALID_WORKFLOW' });
     await expect(readdir(dir)).resolves.not.toContain(WORKFLOW_BACKUP_DIR);
+  });
+
+  it('refuses an edit that does not apply and writes nothing', async () => {
+    const result = await change({
+      edits: [{ find: 'not in the workflow', replace: 'x' }],
+    });
+
+    expect(result).toMatchObject({ saved: false, error: 'INVALID_EDIT' });
+    expect(result.message).toMatch(/^edit 1: `find` matches no text/);
+    expect((await store.get('dev-team')).workflow).toEqual(WF);
+    await expect(readdir(dir)).resolves.not.toContain(WORKFLOW_BACKUP_DIR);
+  });
+
+  it('changes text inside a string value without the agent sending the rest', async () => {
+    await store.save('dev-team', {
+      ...WF,
+      description: 'Builds, then reviews. Slow on purpose.',
+    });
+
+    const result = await change({
+      edits: [{ find: ' Slow on purpose.', replace: '' }],
+    });
+
+    expect(result).toMatchObject({ saved: true });
+    expect((await store.get('dev-team')).workflow).toEqual({
+      ...WF,
+      description: 'Builds, then reviews.',
+    });
   });
 
   it('answers the diff on a dry run and writes nothing', async () => {

@@ -58,6 +58,7 @@ function totals(overrides: Partial<ChatTotals> = {}): ChatTotals {
     turns: 4,
     costedTurns: 4,
     costUsd: 2.5,
+    estimatedCostUsd: null,
     inputTokens: 1_000,
     outputTokens: 200,
     cacheReadTokens: 3_000,
@@ -212,6 +213,40 @@ describe('Stats', () => {
     expect(cards(el).Spent).toBe('—');
     expect(cards(el)['Agent time']).toBe('—');
     expect(cards(el)['Cost per turn']).toBe('—');
+  });
+
+  it('marks the headline spend as an estimate, and says which part, when geniro priced some of it', async () => {
+    mocks.readUsageStats.mockResolvedValue(
+      stats({
+        totals: totals({
+          turns: 4,
+          costedTurns: 4,
+          costUsd: 8,
+          estimatedCostUsd: 2,
+        }),
+      }),
+    );
+
+    const el = await render(<Stats handle={HANDLE} />);
+
+    expect(cards(el).Spent).toBe('≈$8.00');
+    expect(cards(el)['Cost per turn']).toBe('≈$2.00');
+    const spent = [...el.querySelectorAll('[data-slot="stat"]')].find(
+      (stat) =>
+        stat.querySelector('[data-slot="stat-label"]')?.textContent === 'Spent',
+    );
+    expect(spent?.getAttribute('title')).toContain('geniro estimated');
+  });
+
+  it('leaves the headline spend plain when none of it was geniro’s estimate', async () => {
+    const el = await render(<Stats handle={HANDLE} />);
+
+    expect(cards(el).Spent).toBe('$2.50');
+    const spent = [...el.querySelectorAll('[data-slot="stat"]')].find(
+      (stat) =>
+        stat.querySelector('[data-slot="stat-label"]')?.textContent === 'Spent',
+    );
+    expect(spent?.getAttribute('title')).toBeNull();
   });
 
   it('averages cost over the turns that were priced, not over all of them', async () => {

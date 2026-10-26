@@ -42,6 +42,7 @@ import {
   CLAUDE_WORKFLOW_AGENT_STATES,
 } from '../claude.const';
 import { readCommandsChanged } from './claude-commands.utils';
+import { claudePermissionOptions } from './claude-permission-options.utils';
 import { claudeCardQuestions } from './claude-question.utils';
 import {
   claudeTaskEventFromToolResult,
@@ -1171,6 +1172,12 @@ function mapClaudeLine(
         toolName === CLAUDE_QUESTION_TOOL_NAME
           ? claudeCardQuestions(input)
           : [];
+      // A question is answered, not remembered: only a permission gets the
+      // options claude's own terminal offers beside a one-time yes.
+      const options =
+        toolName === CLAUDE_QUESTION_TOOL_NAME
+          ? []
+          : claudePermissionOptions(request.permission_suggestions);
       return [
         {
           type: 'approval_request',
@@ -1184,6 +1191,7 @@ function mapClaudeLine(
             ? true
             : undefined,
           ...(questions.length > 0 ? { questions } : {}),
+          ...(options.length > 0 ? { options } : {}),
         },
       ];
     }

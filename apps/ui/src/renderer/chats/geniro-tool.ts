@@ -40,7 +40,8 @@ export type GeniroCardKind =
   | 'gallery'
   | 'artifact'
   | 'patch'
-  | 'plan';
+  | 'plan'
+  | 'workflow';
 
 /**
  * The tools geniro publishes on its own server that tell their story ELSEWHERE
@@ -55,6 +56,10 @@ export type GeniroCardKind =
  * the call and its result both in the transcript, and nothing on screen
  * between the user's message and the answer.
  *
+ * `monitor`, `stop_monitor` and `list_monitors` are deliberately absent: any key
+ * here hides a tool's raw rows, and a monitor call has no card, so its call
+ * renders as an ordinary tool row.
+ *
  * The VALUE is the card that tool draws, or null for one whose story is told by
  * the dedicated call kinds instead. Keeping both facts in one table is what
  * stops the hide list and the loader's list from drifting: a drawing tool added
@@ -65,6 +70,9 @@ export type GeniroCardKind =
  * `adapters/adapter.types.ts`. A tool added there that draws its own card
  * belongs here; one that draws nothing does not.
  */
+/** `propose_workflow` — its card stands across turns ({@link standsAcrossTurns}). */
+export const PROPOSE_WORKFLOW = 'propose_workflow';
+
 const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   call_agent: null,
   await_agent: null,
@@ -80,6 +88,16 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   show_artifact: 'artifact',
   propose_patch: 'patch',
   propose_plan: 'plan',
+  // The action card is drawn from the `action` / `action_outcome` rows the
+  // daemon writes, so these calls need no loader of their own.
+  publish_action: null,
+  remove_action: null,
+  // The note is its own `team_note` row; `team_notes` draws nothing, so its
+  // call row stays visible.
+  team_note: null,
+  // The card is the `approval_request` row the daemon writes, which outlives
+  // the call; `read_workflows` draws nothing and stays visible.
+  [PROPOSE_WORKFLOW]: 'workflow',
 };
 
 /** The bare tool names, for the matching below. */
@@ -107,9 +125,30 @@ export function geniroToolOf(name: string, runId: string): string | null {
         name === `mcp__${server}__${tool}` ||
         (!name.startsWith('mcp__') &&
           name.includes(server) &&
-          name.includes(tool)),
+          namesWord(name, tool)),
     ) ?? null
   );
+}
+
+/**
+ * Whether `tool` appears in `name` as a whole word — not inside a longer tool
+ * name, so cursor's label for `team_notes` is not read as `team_note`.
+ */
+function namesWord(name: string, tool: string): boolean {
+  let at = name.indexOf(tool);
+  while (at !== -1) {
+    const before = name[at - 1];
+    const after = name[at + tool.length];
+    if (!isWordChar(before) && !isWordChar(after)) {
+      return true;
+    }
+    at = name.indexOf(tool, at + 1);
+  }
+  return false;
+}
+
+function isWordChar(char: string | undefined): boolean {
+  return char !== undefined && /[A-Za-z0-9_]/.test(char);
 }
 
 /**
@@ -133,6 +172,25 @@ const GENIRO_CARD_KINDS = new Set<string>(
   ),
 );
 
+/**
+ * Whether a tool call names geniro's `monitor` — kept out of
+ * {@link GENIRO_TOOLS} so its row stays visible, so matched here on its own,
+ * in the two spellings {@link geniroToolOf} reads (`mcp__<server>__<tool>`, and
+ * cursor's `<server>-<tool>: <tool>`) for a server named `geniro-<runId8>` —
+ * and the bare `mcp__<server>` codex names a call it cannot pin to one tool,
+ * which may be a monitor.
+ *
+ * TWIN PARSER: the exact spellings of the daemon's `isHostToolCall`
+ * (`apps/daemon/src/v1/agents/utils/host-tool.ts`), and codex's bare
+ * `mcp__<server>` card name (`mcpToolApprovalCard` in
+ * `apps/daemon/src/v1/agents/adapters/codex/utils/codex-approval.utils.ts`).
+ */
+export function namesGeniroMonitor(name: string): boolean {
+  return /^(?:mcp__geniro-[0-9a-f]{8}(?:__monitor)?|geniro-[0-9a-f]{8}-monitor: monitor)$/.test(
+    name,
+  );
+}
+
 /** Whether a tool call is one of geniro's own on geniro's own server. */
 export function isGeniroToolName(name: string, runId: string): boolean {
   return geniroToolOf(name, runId) !== null;
@@ -152,4 +210,17 @@ export function geniroCardKindOf(
 ): GeniroCardKind | null {
   const tool = geniroToolOf(name, runId);
   return tool === null ? null : (GENIRO_TOOLS[tool] ?? null);
+}
+
+/**
+ * Whether an approval card for this tool stands ACROSS turns — `propose_workflow`
+ * alone — so it waits on the user only while no turn runs, the daemon's
+ * `awaitingOf` rule.
+ *
+ * TWIN PARSER: `PendingApproval.standing` in
+ * `apps/daemon/src/v1/agents/services/approval-registry.ts`, set for every card
+ * `ChatService.raiseOwnedCard` raises.
+ */
+export function standsAcrossTurns(toolName: string | null): boolean {
+  return toolName === PROPOSE_WORKFLOW;
 }

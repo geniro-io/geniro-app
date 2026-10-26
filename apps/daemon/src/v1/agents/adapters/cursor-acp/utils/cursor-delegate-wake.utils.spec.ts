@@ -47,6 +47,32 @@ describe('cursorDelegateWakePrompt', () => {
     ).toContain('## Sub-agent 1 — ended (its transcript could not be read');
   });
 
+  it.each([false, true])(
+    'keeps tracking loss distinct from finished work in a mixed batch: %s',
+    (mixed) => {
+      const lost = ended({
+        label: 'Lost review',
+        outcome: 'untracked',
+        finalText: null,
+        recordPath: null,
+      });
+      const text = cursorDelegateWakePrompt(mixed ? [ended(), lost] : [lost]);
+      expect(text).toContain(
+        '## Lost review — is untracked (it may still be running)',
+      );
+      expect(text).toContain('No final report was received');
+      expect(text).toContain(
+        'Do not assume an untracked sub-agent has finished',
+      );
+      expect(text).not.toContain('background sub-agents have finished');
+      expect(text).not.toContain('background sub-agent has finished');
+      expect(text).not.toContain('undefined');
+      if (mixed) {
+        expect(text).toContain('Found 2 bugs.');
+      }
+    },
+  );
+
   it('cuts a long report and points at the transcript for the rest', () => {
     const text = cursorDelegateWakePrompt([
       ended({ finalText: `${'x'.repeat(30_000)}TAIL-MARKER` }),

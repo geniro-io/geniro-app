@@ -35,16 +35,19 @@ const mocks = vi.hoisted(() => {
     notificationsEnabled: true,
     archiveRetentionDays: null,
     historyPageSize: 1000,
+    keptSessionIdleMinutes: 60,
     agentOptions: {},
     collapseToolSteps: false,
     daemonInspect: false,
     customInstructions: '',
+    replyLanguage: '',
     theme: 'system',
     remoteAccessEnabled: true,
     sharing: {
       destinations: [],
       defaultDestinationId: null,
       agentsMayShare: false,
+      autoRevokeAfterDays: null,
     },
   };
   return {

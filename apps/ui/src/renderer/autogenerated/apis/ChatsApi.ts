@@ -15,6 +15,7 @@
 
 import * as runtime from '../runtime';
 import type {
+  ActionPressDto,
   AnalyzeThreadDto,
   AppProcessesDto,
   ApplyRecommendationsDto,
@@ -35,6 +36,7 @@ import type {
   LocalImageDto,
   NamedPathsDto,
   NamedPathsResultDto,
+  PressActionDto,
   RenameRunDto,
   ReorderPinnedDto,
   RetriedDto,
@@ -43,6 +45,7 @@ import type {
   RunProcessesDto,
   RunSeenDto,
   RunStateDto,
+  RunTeamNotesDto,
   RunWaterfallDto,
   SendMessageDto,
   SetRunColorDto,
@@ -87,6 +90,11 @@ export interface ChatsApiDeleteChatRequest {
     runId: string;
 }
 
+export interface ChatsApiDismissChatActionRequest {
+    runId: string;
+    seq: number;
+}
+
 export interface ChatsApiExportChatRequest {
     runId: string;
 }
@@ -102,6 +110,10 @@ export interface ChatsApiKillChatShellRequest {
 
 export interface ChatsApiListChatsRequest {
     scope?: ListChatsScopeEnum;
+    limit?: number;
+    beforeCreatedAt?: string;
+    beforeId?: string;
+    runId?: string;
 }
 
 export interface ChatsApiListRunItemsRequest {
@@ -117,6 +129,12 @@ export interface ChatsApiListRunItemsRequest {
 
 export interface ChatsApiMarkRunSeenRequest {
     runId: string;
+}
+
+export interface ChatsApiPressChatActionRequest {
+    runId: string;
+    seq: number;
+    pressActionDto: PressActionDto;
 }
 
 export interface ChatsApiReadChatAttachmentRequest {
@@ -158,6 +176,10 @@ export interface ChatsApiReadRunProcessesRequest {
 }
 
 export interface ChatsApiReadRunStateRequest {
+    runId: string;
+}
+
+export interface ChatsApiReadRunTeamNotesRequest {
     runId: string;
 }
 
@@ -549,6 +571,59 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async dismissChatActionRaw(requestParameters: ChatsApiDismissChatActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ActionPressDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling dismissChatAction().'
+            );
+        }
+
+        if (requestParameters['seq'] == null) {
+            throw new runtime.RequiredError(
+                'seq',
+                'Required parameter "seq" was null or undefined when calling dismissChatAction().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/actions/{seq}/dismiss`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"seq"}}`, encodeURIComponent(String(requestParameters['seq'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async dismissChatAction(requestParameters: ChatsApiDismissChatActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionPressDto> {
+        const response = await this.dismissChatActionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async exportChatRaw(requestParameters: ChatsApiExportChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ChatExportDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -739,6 +814,22 @@ export class ChatsApi extends runtime.BaseAPI {
             queryParameters['scope'] = requestParameters['scope'];
         }
 
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        if (requestParameters['beforeCreatedAt'] != null) {
+            queryParameters['beforeCreatedAt'] = requestParameters['beforeCreatedAt'];
+        }
+
+        if (requestParameters['beforeId'] != null) {
+            queryParameters['beforeId'] = requestParameters['beforeId'];
+        }
+
+        if (requestParameters['runId'] != null) {
+            queryParameters['runId'] = requestParameters['runId'];
+        }
+
         const headerParameters: runtime.HTTPHeaders = {};
 
         if (this.configuration && this.configuration.accessToken) {
@@ -885,6 +976,69 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async markRunSeen(requestParameters: ChatsApiMarkRunSeenRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunSeenDto> {
         const response = await this.markRunSeenRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async pressChatActionRaw(requestParameters: ChatsApiPressChatActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ActionPressDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling pressChatAction().'
+            );
+        }
+
+        if (requestParameters['seq'] == null) {
+            throw new runtime.RequiredError(
+                'seq',
+                'Required parameter "seq" was null or undefined when calling pressChatAction().'
+            );
+        }
+
+        if (requestParameters['pressActionDto'] == null) {
+            throw new runtime.RequiredError(
+                'pressActionDto',
+                'Required parameter "pressActionDto" was null or undefined when calling pressChatAction().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/actions/{seq}/press`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"seq"}}`, encodeURIComponent(String(requestParameters['seq'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['pressActionDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async pressChatAction(requestParameters: ChatsApiPressChatActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionPressDto> {
+        const response = await this.pressChatActionRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -1368,6 +1522,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readRunState(requestParameters: ChatsApiReadRunStateRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunStateDto> {
         const response = await this.readRunStateRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readRunTeamNotesRaw(requestParameters: ChatsApiReadRunTeamNotesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunTeamNotesDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readRunTeamNotes().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/team-notes`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readRunTeamNotes(requestParameters: ChatsApiReadRunTeamNotesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunTeamNotesDto> {
+        const response = await this.readRunTeamNotesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

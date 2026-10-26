@@ -60,6 +60,7 @@ function metrics(): ChatMetricsDto {
       turns: 3,
       costedTurns: 3,
       costUsd: 1.5,
+      estimatedCostUsd: null,
       inputTokens: 100,
       outputTokens: 200,
       cacheReadTokens: null,
@@ -69,6 +70,35 @@ function metrics(): ChatMetricsDto {
     },
   };
 }
+
+describe('the thread totals', () => {
+  it('marks a spend geniro priced itself, and says which part', () => {
+    const base = metrics();
+    render(
+      <ContextPanel
+        metrics={{
+          ...base,
+          totals: { ...base.totals, costUsd: 1.5, estimatedCostUsd: 0.5 },
+        }}
+        loading={false}
+        error={null}
+      />,
+    );
+    expect(container.textContent).toContain('≈$1.50');
+    expect(
+      container.querySelector('[data-slot="cost-estimate-note"]')?.textContent,
+    ).toContain('includes ≈$0.50 geniro estimated');
+  });
+
+  it('states a spend that is all the agent’s own bill plainly', () => {
+    render(<ContextPanel metrics={metrics()} loading={false} error={null} />);
+    expect(container.textContent).toContain('$1.50');
+    expect(container.textContent).not.toContain('≈');
+    expect(
+      container.querySelector('[data-slot="cost-estimate-note"]'),
+    ).toBeNull();
+  });
+});
 
 describe('the folded group headers', () => {
   it('sets its own type, because a button does not inherit the panel’s', () => {
@@ -142,6 +172,62 @@ describe('the plan limits', () => {
     expect(
       container.querySelector('[data-slot="plan-limits-loading"]'),
     ).toBeNull();
+  });
+
+  it('adds no row while a re-read is in flight, so the popover does not jump', () => {
+    // REPORTED as "окошко прыгает всё время и мгновенно меняет размер" on a
+    // refresh press. The readout opens UPWARD from the composer, anchored at
+    // its bottom edge, so a row that appears for the length of the request
+    // moves the panel's top edge up and back — on every refresh, and every ten
+    // seconds while the agent works (the live re-read). jsdom computes no
+    // layout, so the fact pinned is the one that decides it: the panel's rows
+    // and their text are the same in flight as at rest.
+    const reading = { ...metrics(), plan: PLAN, planTakenAt: null };
+    render(<ContextPanel metrics={reading} loading={false} error={null} />);
+    const panel = container.firstElementChild;
+    const atRest = Array.from(panel?.children ?? [], (row) => row.textContent);
+
+    render(<ContextPanel metrics={reading} loading={true} error={null} />);
+    const inFlight = Array.from(
+      container.firstElementChild?.children ?? [],
+      (row) => row.textContent,
+    );
+
+    expect(inFlight).toEqual(atRest);
+    // Still said, just not by a row of its own: inside the breakdown's header.
+    const breakdown = container.querySelector(
+      '[data-slot="context-breakdown"]',
+    );
+    expect(breakdown?.getAttribute('aria-busy')).toBe('true');
+    expect(breakdown?.firstElementChild?.querySelector('svg')).not.toBeNull();
+  });
+
+  it('keeps the sentence saying why there are no limits on screen during a re-read', () => {
+    // The same jump through the other branch: an account with no allowance
+    // swapped its sentence for the first-load placeholder on every re-read.
+    const reading = {
+      ...metrics(),
+      plan: null,
+      planReason: 'This account reports no plan limits.',
+    };
+    render(<ContextPanel metrics={reading} loading={false} error={null} />);
+    const atRest = Array.from(
+      container.firstElementChild?.children ?? [],
+      (row) => row.textContent,
+    );
+
+    render(<ContextPanel metrics={reading} loading={true} error={null} />);
+    const inFlight = Array.from(
+      container.firstElementChild?.children ?? [],
+      (row) => row.textContent,
+    );
+
+    expect(inFlight).toEqual(atRest);
+    expect(
+      container
+        .querySelector('[data-slot="plan-limits-reason"]')
+        ?.getAttribute('aria-busy'),
+    ).toBe('true');
   });
 
   it('dates a reading another chat took minutes ago, and not one taken now', () => {

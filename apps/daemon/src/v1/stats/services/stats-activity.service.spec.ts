@@ -66,6 +66,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       cwd: '/work/project',
       workflowName: null,
       costUsd: 0.25,
+      estimatedCostUsd: null,
       inputTokens: null,
       outputTokens: null,
       cacheReadTokens: null,

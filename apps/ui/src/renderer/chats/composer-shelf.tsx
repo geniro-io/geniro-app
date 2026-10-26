@@ -253,9 +253,11 @@ export function FolderChangesChip({
  * The shelf is a single line that never wraps, so width taken by one chip is
  * width the next one does not have — "we always should fit all available chips
  * to one line". Two mechanisms do that and they answer different situations. A
- * CROWDED row is handled by flex on its own: every chip carries `min-w-0` and
- * the default shrink while the terminals chip beside them is `shrink-0`, so the
- * pull requests give up width first and the row fits by construction. What flex
+ * CROWDED row is handled by flex on its own: the group shrinks far ahead of
+ * everything beside it (`shrink-[100]`; the counter chips are `shrink-0`), so
+ * the pull requests give up width first — down to a floor of mark and number
+ * (`SHELF_YIELD_CLASS`), never to an empty card, after which the agent's
+ * buttons give way too. Only a shelf too narrow for every floor clips. What flex
  * cannot do is the ROOMY row, where three chips would each take their full
  * width and leave the rest of the shelf pressed against the edge — hence a cap
  * that comes down as the count goes up.
@@ -270,7 +272,7 @@ export function FolderChangesChip({
  * 7rem of figures that must never truncate, so at the old caps the title had
  * nothing left at any count. The same three shapes, moved along: a title with
  * room, one that is recognisable, and a hint. Past that the flex shrink still
- * governs, so a genuinely crowded row still fits by construction rather than by
+ * governs, so a genuinely crowded row still fits by its floors rather than by
  * these numbers being right.
  */
 const PULL_REQUEST_CHIP_WIDTH: Record<number, string> = {
@@ -320,7 +322,14 @@ export function ThreadPullRequestChips({
     // one is visually identical to the standalone chip it replaces (the card is
     // the same card), so there is no branch, and no way for the two shapes to
     // drift apart.
-    <div data-slot="pull-request-group" className={SHELF_GROUP_CLASS}>
+    //
+    // `shrink-[100]`: on a crowded shelf the pull requests give way FIRST, down
+    // to their floor of mark and number, before the agent's buttons beside them
+    // lose their labels — a button is a control, a title is a reading the panel
+    // also holds.
+    <div
+      data-slot="pull-request-group"
+      className={cn(SHELF_GROUP_CLASS, 'shrink-[100]')}>
       {shown.map((result) => (
         <ThreadPullRequestChip
           key={result.ref.url}

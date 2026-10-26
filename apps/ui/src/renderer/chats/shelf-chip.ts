@@ -161,4 +161,21 @@ export const SHELF_SEGMENT_CLASS = `${SHELF_BODY} h-full overflow-hidden rounded
  * holds. It does NOT clip the popovers: those are `anchor="viewport"`, so they
  * are `position: fixed`, and nothing here creates a containing block for them.
  */
-export const SHELF_GROUP_CLASS = `flex ${SHELF_ITEM_HEIGHT} min-w-0 items-center divide-x divide-border overflow-hidden ${SHELF_CARD}`;
+export const SHELF_GROUP_CLASS = `flex ${SHELF_ITEM_HEIGHT} min-w-min items-center divide-x divide-border overflow-hidden ${SHELF_CARD}`;
+
+/**
+ * The part of a chip that GIVES WAY on a crowded shelf — a title, a label —
+ * while the part that identifies the chip stays whole.
+ *
+ * `min-w-0` on a chip alone has no floor: a crowded shelf squeezed the
+ * pull-request group to 2px beside two `shrink-0` action buttons, REPORTED as
+ * an empty pill between the changes chip and the actions. So the chips that
+ * shrink carry `min-w-min`, and their yielding part is wrapped in this: a grid
+ * whose one track is `minmax(0, max-content)` asks for its whole content when
+ * there is room and for NOTHING under a min-content squeeze, so the floor
+ * `min-w-min` measures is exactly the parts outside it — the pull request's
+ * number, the button's glyph. A `truncate` span cannot do this by itself: its
+ * `nowrap` text is its min-content width, `min-w-0` or not.
+ */
+export const SHELF_YIELD_CLASS =
+  'grid grid-cols-[minmax(0,max-content)] overflow-hidden';

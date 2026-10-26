@@ -14,7 +14,7 @@ import { DiffFigures } from '../components/diff-figures';
 import { PanelLinkRow } from '../components/panel-link-row';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../components/ui/utils';
-import { SHELF_SEGMENT_CLASS } from './shelf-chip';
+import { SHELF_SEGMENT_CLASS, SHELF_YIELD_CLASS } from './shelf-chip';
 
 /**
  * How one state is drawn — the single mapping, so the panel's list, the sidebar
@@ -275,7 +275,9 @@ export function ThreadPullRequestChip({
       target="_blank"
       rel="noreferrer"
       title={label}
-      className={cn(SHELF_SEGMENT_CLASS, widthClassName)}>
+      // `min-w-min` is the FLOOR — the mark and the number, everything outside
+      // the yielding span below (`SHELF_YIELD_CLASS`).
+      className={cn(SHELF_SEGMENT_CLASS, 'min-w-min', widthClassName)}>
       {pullRequest === null ? (
         <GitPullRequest
           aria-hidden="true"
@@ -286,11 +288,12 @@ export function ThreadPullRequestChip({
       )}
       <span className="shrink-0 font-medium">{name}</span>
       {pullRequest === null ? null : (
-        <span className="min-w-0 truncate text-muted-foreground">
-          {pullRequest.title}
-        </span>
-      )}
-      {/* The SIZE — files AND lines, `shrink-0` like the number beside them: a
+        <span className={SHELF_YIELD_CLASS}>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate text-muted-foreground">
+              {pullRequest.title}
+            </span>
+            {/* The SIZE — files AND lines, `shrink-0` like the number beside them: a
           half-shown figure is worse than a shortened word, so the title is what
           gives up width as the shelf fills, which is the mechanism the chip
           already used rather than a new one.
@@ -299,20 +302,20 @@ export function ThreadPullRequestChip({
           plus a title do not fit a 9rem chip. That was true of the CAP, not of
           the chip — the caps went up with this (`PULL_REQUEST_CHIP_WIDTH`),
           because "how many files" is the other half of the question "how big is
-          this" and reading it required a hover. */}
-      {pullRequest === null ? null : (
-        <>
-          {pullRequest.changedFiles === null ? null : (
-            <span className="shrink-0 tabular-nums text-muted-foreground">
-              {pullRequest.changedFiles}{' '}
-              {pullRequest.changedFiles === 1 ? 'file' : 'files'}
-            </span>
-          )}
-          <DiffFigures
-            added={pullRequest.added}
-            removed={pullRequest.removed}
-          />
-        </>
+          this" and reading it required a hover. Inside the yielding span all
+          the same: past the title they are the next to go, never the number. */}
+            {pullRequest.changedFiles === null ? null : (
+              <span className="shrink-0 tabular-nums text-muted-foreground">
+                {pullRequest.changedFiles}{' '}
+                {pullRequest.changedFiles === 1 ? 'file' : 'files'}
+              </span>
+            )}
+            <DiffFigures
+              added={pullRequest.added}
+              removed={pullRequest.removed}
+            />
+          </span>
+        </span>
       )}
     </a>
   );

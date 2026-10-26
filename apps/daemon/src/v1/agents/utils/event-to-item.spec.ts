@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent, AgentUsage } from '../adapters/adapter.types';
 import {
+  endsOffTurnStretch,
   mapEventToItem,
   restatesRunAsWorking,
   terminalStatus,
@@ -819,6 +820,34 @@ describe('terminalStatus', () => {
     for (const event of midTurn) {
       expect(terminalStatus(event)).toBeNull();
     }
+  });
+});
+
+describe('endsOffTurnStretch', () => {
+  it.each<[string, AgentEvent, boolean]>([
+    ['the end of late work', { type: 'late_work_ended' }, true],
+    [
+      'a tool result',
+      {
+        type: 'tool_result',
+        id: 'exec-1',
+        name: 'shell',
+        result: 'The command was declined.',
+        isError: true,
+      },
+      false,
+    ],
+    [
+      'a turn ending',
+      { type: 'turn_complete', usage: null, stopReason: null, finalText: null },
+      false,
+    ],
+  ])('%s → %s', (_label, event, expected) => {
+    expect(endsOffTurnStretch(event)).toBe(expected);
+  });
+
+  it('is no row of the transcript', () => {
+    expect(mapEventToItem({ type: 'late_work_ended' })).toBeNull();
   });
 });
 

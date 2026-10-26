@@ -271,6 +271,15 @@ export interface AcpPermissionOption {
 }
 
 /**
+ * A `session/request_permission` the user has not answered: what the agent
+ * offered, and the tool call it asked about ('' when the request named none).
+ */
+export interface AcpParkedPermission {
+  options: AcpPermissionOption[];
+  toolCallId: string;
+}
+
+/**
  * The projection of an ACP `ToolCallUpdate` this client uses — enough to name
  * a tool call in the transcript and to let an approval policy classify it.
  */

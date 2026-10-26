@@ -1107,6 +1107,14 @@ export const CUT_OFF_TOOL_RESULT =
   'Cut off — the request this step ran under failed before its result came back.';
 
 /**
+ * The result a tool call carries when geniro did not grant its permission (a
+ * Deny, a policy refusal, or a request answered `cancelled`) and the agent sent
+ * no body of its own for it — the step never ran.
+ */
+export const REFUSED_TOOL_RESULT =
+  'Not run — permission for this step was not granted.';
+
+/**
  * The result a SUB-AGENT's step is closed with when the agent reports that
  * sub-agent ended (`subagent_state_update`) while the step was still open — a
  * cancelled or failed sub-agent says nothing more about the calls it was in.
@@ -1568,12 +1576,13 @@ export class AcpTurnDriver {
         question.encodeReply(params, allow, updatedInput),
       );
     }
-    const options = this.session.parkedPermissions.get(id);
-    if (requestId === null || options === undefined) {
+    const parked = this.session.parkedPermissions.get(id);
+    if (requestId === null || parked === undefined) {
       return undefined;
     }
     this.session.parkedPermissions.delete(id);
-    const optionId = permissionAnswerOptionId(options, allow, option);
+    const optionId = permissionAnswerOptionId(parked.options, allow, option);
+    this.recordAnswer(parked.toolCallId, allow && optionId !== null);
     return encodeResult(requestId, {
       outcome:
         optionId === null
@@ -2309,6 +2318,34 @@ export class AcpTurnDriver {
     }
   }
 
+  /**
+   * Record how a permission was answered ON THE WIRE: anything but a selected
+   * allow option — a reject, or `cancelled` because the agent offered no option
+   * in the verdict's direction — means the step does not run.
+   */
+  private recordAnswer(toolCallId: string, granted: boolean): void {
+    if (granted) {
+      this.session.refusedToolCalls.delete(toolCallId);
+    } else {
+      this.session.refusedToolCalls.add(toolCallId);
+    }
+  }
+
+  /**
+   * The `result` and `isError` of a settled call. The agent closes a call whose
+   * permission geniro refused as `completed`, so the refusal mark decides, and
+   * a body the agent sent is kept over {@link REFUSED_TOOL_RESULT}.
+   */
+  private settledOutcome(
+    call: AcpToolCall,
+    body: unknown,
+  ): { result: unknown; isError: boolean } {
+    if (this.session.refusedToolCalls.delete(call.toolCallId)) {
+      return { result: body ?? REFUSED_TOOL_RESULT, isError: true };
+    }
+    return { result: body, isError: call.status === 'failed' };
+  }
+
   /** A parent request stopping is not a report about its delegate's outcome. */
   private cutOffToolCall(id: string, result: string): AgentEvent[] {
     const delegate = this.session.delegateToolCalls.has(id);
@@ -2478,8 +2515,9 @@ export class AcpTurnDriver {
    */
   private releaseParkedRequests(): string[] {
     const released: string[] = [];
-    for (const encodedId of [...this.session.parkedPermissions.keys()]) {
+    for (const [encodedId, parked] of [...this.session.parkedPermissions]) {
       this.session.parkedPermissions.delete(encodedId);
+      this.recordAnswer(parked.toolCallId, false);
       released.push(encodedId);
       const requestId = decodeRequestId(encodedId);
       if (requestId !== null) {
@@ -4316,6 +4354,10 @@ export class AcpTurnDriver {
     const decision = this.options.autoDecide(toolCall);
     if (decision !== null) {
       const optionId = selectPermissionOption(options, decision === 'allow');
+      this.recordAnswer(
+        toolCall.toolCallId,
+        decision === 'allow' && optionId !== null,
+      );
       this.session.reply(id, {
         outcome:
           optionId === null
@@ -4326,7 +4368,10 @@ export class AcpTurnDriver {
     }
 
     const encodedId = encodeRequestId(id);
-    this.session.parkedPermissions.set(encodedId, options);
+    this.session.parkedPermissions.set(encodedId, {
+      options,
+      toolCallId: toolCall.toolCallId,
+    });
     const remembering = acpApprovalOptions(
       options,
       this.session.options.alwaysAnswerScope,
@@ -4596,11 +4641,13 @@ export class AcpTurnDriver {
           name:
             this.session.toolNames.get(call.toolCallId) ??
             (call.name.length > 0 ? call.name : null),
-          result: this.isBookkeepingResult(call.toolCallId)
-            ? null
-            : (call.rawOutput ??
-              (diffs.length > 0 ? { diffs } : (update.content ?? null))),
-          isError: call.status === 'failed',
+          ...this.settledOutcome(
+            call,
+            this.isBookkeepingResult(call.toolCallId)
+              ? null
+              : (call.rawOutput ??
+                  (diffs.length > 0 ? { diffs } : (update.content ?? null))),
+          ),
           parentToolUseId: launch,
         });
         return events;
@@ -4710,6 +4757,7 @@ export class AcpTurnDriver {
     const open = this.session.childOpenCalls.get(childSessionId);
     this.session.childOpenCalls.delete(childSessionId);
     for (const id of open ?? []) {
+      this.session.refusedToolCalls.delete(id);
       events.push({
         type: 'tool_result',
         id,
@@ -4847,14 +4895,16 @@ export class AcpTurnDriver {
             name:
               this.session.toolNames.get(toolCall.toolCallId) ??
               (toolCall.name.length > 0 ? toolCall.name : null),
-            result: this.isBookkeepingResult(toolCall.toolCallId)
-              ? // The pair still CLOSES — the block reads `completed` off the
-                // result's existence — it just carries no body to frame as the
-                // delegate's report.
-                null
-              : (toolCall.rawOutput ??
-                (diffs.length > 0 ? { diffs } : (update.content ?? null))),
-            isError: toolCall.status === 'failed',
+            ...this.settledOutcome(
+              toolCall,
+              this.isBookkeepingResult(toolCall.toolCallId)
+                ? // The pair still CLOSES — the block reads `completed` off
+                  // the result's existence — it just carries no body to frame
+                  // as the delegate's report.
+                  null
+                : (toolCall.rawOutput ??
+                    (diffs.length > 0 ? { diffs } : (update.content ?? null))),
+            ),
           },
           // …and, when this call launched a delegate that OUTLIVES it, the row
           // that says so. It rides the settled launching call because that is

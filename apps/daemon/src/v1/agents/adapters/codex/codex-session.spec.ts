@@ -1526,6 +1526,373 @@ describe('later turns on the kept process', () => {
     },
   );
 
+  describe('a command codex starts after the turn completed, in its process store', () => {
+    // codex 0.162 (unified exec) gives every command a processId from its
+    // start, one-shot or not, and sends nothing while one keeps running: only
+    // time tells a dev server from a `touch`. Its exec tool yields after at
+    // most 30 s, so a command still running past that has been handed back.
+    const stored = (id: string, done = false) => ({
+      threadId: THREAD,
+      turnId: TURN,
+      item: {
+        type: 'commandExecution',
+        id,
+        command: `/bin/zsh -lc 'cmd ${id}'`,
+        source: 'unifiedExecStartup',
+        processId: '19963',
+        ...(done
+          ? { status: 'completed', exitCode: 0, aggregatedOutput: '' }
+          : { status: 'inProgress' }),
+      },
+    });
+    const backgrounded = (id: string): AgentEvent => ({
+      type: 'background_work',
+      id,
+      phase: 'backgrounded',
+      unit: 'other',
+      toolCallId: id,
+    });
+    function settledSession(): CodexSession {
+      const session = openSession(turnInput({ approvalMode: 'ask' }));
+      acceptTurnStart(session);
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+      });
+      emitted = [];
+      return session;
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('is not a background shell when it starts', () => {
+      const session = settledSession();
+      const started = feed(session, {
+        method: 'item/started',
+        params: stored('touch'),
+      });
+
+      expect(started).not.toContainEqual(backgrounded('touch'));
+      expect(started.map((event) => event.type)).toContain('tool_call');
+    });
+
+    it('ends the late work after its result when it finishes inside the window', () => {
+      const session = settledSession();
+      feed(session, { method: 'item/started', params: stored('touch') });
+
+      const done = feed(session, {
+        method: 'item/completed',
+        params: stored('touch', true),
+      });
+
+      expect(done.map((event) => event.type)).toContain('tool_result');
+      expect(done.at(-1)).toEqual({ type: 'late_work_ended' });
+    });
+
+    it('becomes a background shell, ending the late work, once still running past the 30 s window', () => {
+      const session = settledSession();
+      feed(session, { method: 'item/started', params: stored('dev') });
+
+      vi.advanceTimersByTime(29_000);
+      expect(emitted).toEqual([]);
+      vi.advanceTimersByTime(2_000);
+
+      expect(emitted).toEqual([
+        backgrounded('dev'),
+        { type: 'late_work_ended' },
+      ]);
+      expect(
+        feed(session, {
+          method: 'item/completed',
+          params: stored('dev', true),
+        }),
+      ).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_result',
+          id: 'dev',
+          endsBackgroundWork: true,
+        }),
+      );
+    });
+
+    it('lets a later late call end its own stretch once a long one went to the background', () => {
+      const session = settledSession();
+      feed(session, { method: 'item/started', params: stored('dev') });
+      vi.advanceTimersByTime(31_000);
+      emitted = [];
+
+      feed(session, { method: 'item/started', params: stored('touch') });
+      const done = feed(session, {
+        method: 'item/completed',
+        params: stored('touch', true),
+      });
+
+      expect(done.at(-1)).toEqual({ type: 'late_work_ended' });
+    });
+
+    it('backgrounds nothing once the process has ended', () => {
+      const session = settledSession();
+      feed(session, { method: 'item/started', params: stored('dev') });
+      session.onProcessEnded();
+
+      vi.advanceTimersByTime(60_000);
+      expect(emitted).not.toContainEqual(backgrounded('dev'));
+    });
+
+    it('backgrounds nothing when the process died while no turn was open', () => {
+      // A process ending between turns reaches no driver hook; the window
+      // asks the process itself.
+      let alive = true;
+      const session = newSession(turnInput({ approvalMode: 'ask' }));
+      session.onStdinReady({ ...io(), processAlive: () => alive });
+      feed(session, {
+        id: frames().find((frame) => frame.method === 'thread/start')!.id,
+        result: { thread: { id: THREAD }, model: 'gpt-5.5' },
+      });
+      acceptTurnStart(session);
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+      });
+      feed(session, { method: 'item/started', params: stored('dev') });
+      emitted = [];
+      alive = false;
+
+      vi.advanceTimersByTime(31_000);
+      expect(emitted).toEqual([]);
+    });
+
+    it('keeps the late work open while another late call is still running when its window ends', () => {
+      const session = settledSession();
+      feed(session, { method: 'item/started', params: stored('dev') });
+      feed(session, {
+        method: 'item/started',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          item: {
+            type: 'mcpToolCall',
+            id: 'mcp',
+            server: 's',
+            tool: 't',
+            status: 'inProgress',
+          },
+        },
+      });
+      emitted = [];
+
+      vi.advanceTimersByTime(31_000);
+      expect(emitted).toEqual([backgrounded('dev')]);
+    });
+
+    it('backgrounds a command without a processId that was waiting on its card when the turn completed', () => {
+      const session = openSession(turnInput({ approvalMode: 'ask' }));
+      acceptTurnStart(session);
+      const { processId: _none, ...oneShot } = stored('dev').item;
+      feed(session, {
+        method: 'item/started',
+        params: { threadId: THREAD, turnId: TURN, item: oneShot },
+      });
+      feed(session, {
+        id: 79,
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          itemId: 'dev',
+          command: 'pnpm dev',
+          cwd: '/repo',
+        },
+      });
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+      });
+      emitted = [];
+
+      session.buildApprovalResponse('n:79', true);
+      vi.advanceTimersByTime(31_000);
+      expect(emitted).toEqual([
+        backgrounded('dev'),
+        { type: 'late_work_ended' },
+      ]);
+    });
+
+    it('backgrounds a command without a processId that was still running with no card when the turn completed', () => {
+      // A hook of the user's can hold a call inside codex, past turn/completed,
+      // without geniro ever being asked.
+      const session = openSession(turnInput({ approvalMode: 'ask' }));
+      acceptTurnStart(session);
+      const { processId: _none, ...oneShot } = stored('dev').item;
+      feed(session, {
+        method: 'item/started',
+        params: { threadId: THREAD, turnId: TURN, item: oneShot },
+      });
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+      });
+      emitted = [];
+
+      vi.advanceTimersByTime(31_000);
+      expect(emitted).toEqual([
+        backgrounded('dev'),
+        { type: 'late_work_ended' },
+      ]);
+    });
+
+    it('does not start the window while an approval asked before the item started waits', () => {
+      const session = settledSession();
+      feed(session, {
+        id: 78,
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          itemId: 'dev',
+          command: 'pnpm dev',
+          cwd: '/repo',
+        },
+      });
+      feed(session, { method: 'item/started', params: stored('dev') });
+
+      vi.advanceTimersByTime(120_000);
+      expect(emitted).not.toContainEqual(backgrounded('dev'));
+
+      session.buildApprovalResponse('n:78', true);
+      vi.advanceTimersByTime(31_000);
+      expect(emitted.slice(-2)).toEqual([
+        backgrounded('dev'),
+        { type: 'late_work_ended' },
+      ]);
+    });
+
+    it('does not count the time its approval card waits toward the window', () => {
+      const session = settledSession();
+      feed(session, { method: 'item/started', params: stored('dev') });
+      feed(session, {
+        id: 77,
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          itemId: 'dev',
+          command: 'pnpm dev',
+          cwd: '/repo',
+        },
+      });
+
+      vi.advanceTimersByTime(120_000);
+      expect(emitted).not.toContainEqual(backgrounded('dev'));
+
+      session.buildApprovalResponse('n:77', true);
+      vi.advanceTimersByTime(29_000);
+      expect(emitted).not.toContainEqual(backgrounded('dev'));
+      vi.advanceTimersByTime(2_000);
+      expect(emitted).toContainEqual(backgrounded('dev'));
+    });
+  });
+
+  describe('a tool call codex starts after the turn completed', () => {
+    // A user's PermissionRequest hook held a call past `turn/completed`; codex
+    // then started it under the completed turn's id, with no turn open.
+    const late = (id: string, done = false) => ({
+      threadId: THREAD,
+      turnId: TURN,
+      item: {
+        type: 'commandExecution',
+        id,
+        command: `/bin/zsh -lc 'touch ${id}.txt'`,
+        ...(done
+          ? { status: 'declined', exitCode: null, aggregatedOutput: null }
+          : { status: 'inProgress' }),
+      },
+    });
+    const types = (events: AgentEvent[]) => events.map((event) => event.type);
+    const completeTurn = (session: CodexSession) =>
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+      });
+    const complete = (session: CodexSession, id: string) =>
+      feed(session, { method: 'item/completed', params: late(id, true) });
+
+    it('ends the late work after its result', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      completeTurn(session);
+      feed(session, { method: 'item/started', params: late('one') });
+
+      const done = types(complete(session, 'one'));
+      expect(done).toContain('tool_result');
+      expect(done.at(-1)).toBe('late_work_ended');
+    });
+
+    it('ends it only after the last late call still open', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      completeTurn(session);
+      feed(session, { method: 'item/started', params: late('one') });
+      feed(session, { method: 'item/started', params: late('two') });
+
+      expect(types(complete(session, 'one'))).not.toContain('late_work_ended');
+      expect(types(complete(session, 'two')).at(-1)).toBe('late_work_ended');
+    });
+
+    it('ends it after a call still open when the turn completed', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: late('own') });
+      completeTurn(session);
+
+      expect(types(complete(session, 'own')).at(-1)).toBe('late_work_ended');
+    });
+
+    it('says nothing of late work for a call that completes inside its turn', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      feed(session, { method: 'item/started', params: late('own') });
+
+      expect(types(complete(session, 'own'))).not.toContain('late_work_ended');
+    });
+
+    it('counts a call started while the ending is held for an unanswered steer', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      session.sendFollowUp({ text: 'also this', deliveryId: 'delivery-1' });
+      const steerId = frameFor('turn/steer').id;
+      expect(completeTurn(session)).toEqual([]);
+      feed(session, { method: 'item/started', params: late('held') });
+      feed(session, {
+        id: steerId,
+        error: { code: -32600, message: 'no active turn' },
+      });
+
+      expect(types(complete(session, 'held')).at(-1)).toBe('late_work_ended');
+    });
+
+    it('still ends it when the result reaches the next turn’s driver', () => {
+      const session = openSession();
+      acceptTurnStart(session);
+      completeTurn(session);
+      feed(session, { method: 'item/started', params: late('one') });
+      const NEXT = '01a0e3aa-eeee-7493-8c1f-01cff8862a2b';
+      session.openTurn(io(), turnInput({ prompt: 'next' }));
+      acceptTurnStart(session, NEXT);
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: NEXT, status: 'completed' } },
+      });
+
+      expect(types(complete(session, 'one')).at(-1)).toBe('late_work_ended');
+    });
+  });
+
   describe('commands codex holds in its process store', () => {
     // Measured on codex-cli 0.162.0: an `exec_command` is a commandExecution
     // item carrying the store's `processId` from its start; one that outlives

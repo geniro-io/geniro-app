@@ -92,6 +92,10 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // wedged between the agent's messages would be a permanent record of a
       // moment. It rides the activity channel instead — see `AgentEvent`.
       return null;
+    case 'late_work_ended':
+      // Ends an off-turn stretch the owner keeps in memory (the badge it took),
+      // not something that happened in the conversation.
+      return null;
     case 'approval_withdrawn':
       // Turn plumbing that `runCliSession` forwards only so the OWNER can
       // retire the card it drew for the request — which is the owner's registry
@@ -560,6 +564,16 @@ function unsentMessage(count: number, reason: string | undefined): string {
   return count === 1
     ? `Your message was not sent — ${why}.`
     : `${count} messages were not sent — ${why}.`;
+}
+
+/**
+ * Whether this event ends an off-turn stretch that no terminal event will end:
+ * the adapter's `late_work_ended`. The badge the stretch took goes back to what
+ * it was, as at a continuation's ending. It maps to no row, so an owner reads
+ * it ahead of its row gate.
+ */
+export function endsOffTurnStretch(event: AgentEvent): boolean {
+  return event.type === 'late_work_ended';
 }
 
 /** The run status a terminal event implies, or null for a mid-turn event. */

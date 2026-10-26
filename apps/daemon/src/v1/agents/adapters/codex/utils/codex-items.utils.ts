@@ -166,6 +166,14 @@ export function codexUserInput(
   ];
 }
 
+/** A command unit's later phase, keyed — like its start — by the item id. */
+export function unitPhase(
+  id: string,
+  phase: 'backgrounded' | 'settled',
+): AgentEvent {
+  return { type: 'background_work', id, phase, unit: 'other', toolCallId: id };
+}
+
 /**
  * A delegate's `subagent_info`: whether it is running and how it ended, plus
  * whatever its launch said about it (the brief, its first line as a label, the

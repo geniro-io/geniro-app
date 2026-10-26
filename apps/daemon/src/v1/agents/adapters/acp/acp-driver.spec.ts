@@ -17,6 +17,7 @@ import {
   INTERRUPT_ACK_DEADLINE_MS,
   INTERRUPTED_TOOL_RESULT,
   permissionAnswerOptionId,
+  REFUSED_TOOL_RESULT,
   selectPermissionOption,
 } from './acp-driver';
 import { AcpSession } from './acp-session';
@@ -3888,6 +3889,218 @@ describe('AcpSession permissions', () => {
     expect(h.driver.buildApprovalResponse('n:5', true)).toBeUndefined();
     expect(h.driver.buildApprovalResponse('n:404', true)).toBeUndefined();
     expect(h.driver.buildApprovalResponse('untagged', true)).toBeUndefined();
+  });
+
+  describe('the result of a call whose permission was refused', () => {
+    /** A live session with the call announced, so a settle can name it. */
+    function withCall(overrides: Partial<AcpDriverOptions> = {}): Harness {
+      const h = harness(overrides);
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 't-1',
+          name: 'write_file',
+          status: 'in_progress',
+          rawInput: { path: 'a.ts' },
+        }),
+      );
+      return h;
+    }
+
+    function settle(h: Harness, extra: Record<string, unknown> = {}) {
+      return h
+        .feed(
+          update({
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 't-1',
+            status: 'completed',
+            ...extra,
+          }),
+        )
+        .filter((event) => event.type === 'tool_result');
+    }
+
+    it('is an error carrying the refusal when the agent closes it completed with no output', () => {
+      const h = withCall();
+      h.feed(permissionRequest(5));
+      h.driver.buildApprovalResponse('n:5', false);
+
+      expect(settle(h)).toEqual([
+        {
+          type: 'tool_result',
+          id: 't-1',
+          name: 'write_file',
+          result: REFUSED_TOOL_RESULT,
+          isError: true,
+        },
+      ]);
+    });
+
+    it('is an error that keeps the body the agent sent', () => {
+      const h = withCall();
+      h.feed(permissionRequest(5));
+      h.driver.buildApprovalResponse('n:5', false);
+
+      expect(settle(h, { rawOutput: { rejected: true } })).toEqual([
+        {
+          type: 'tool_result',
+          id: 't-1',
+          name: 'write_file',
+          result: { rejected: true },
+          isError: true,
+        },
+      ]);
+    });
+
+    it('is an error when the agent offered no reject option and the reply was `cancelled`', () => {
+      const h = withCall();
+      h.feed({
+        id: 5,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 'sess-1',
+          toolCall: { toolCallId: 't-1', name: 'write_file' },
+          options: [{ optionId: 'o-allow', name: 'Allow', kind: 'allow_once' }],
+        },
+      });
+      h.driver.buildApprovalResponse('n:5', false);
+
+      expect(settle(h)).toMatchObject([
+        { result: REFUSED_TOOL_RESULT, isError: true },
+      ]);
+    });
+
+    it('is an error when the user allowed it but the agent offered no allow option, so the reply was `cancelled`', () => {
+      const h = withCall();
+      h.feed({
+        id: 5,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 'sess-1',
+          toolCall: { toolCallId: 't-1', name: 'write_file' },
+          options: [{ optionId: 'o-rej', name: 'Reject', kind: 'reject_once' }],
+        },
+      });
+      h.driver.buildApprovalResponse('n:5', true);
+
+      expect(settle(h)).toMatchObject([
+        { result: REFUSED_TOOL_RESULT, isError: true },
+      ]);
+    });
+
+    it('is a success when a refused call is asked again and allowed', () => {
+      const h = withCall();
+      h.feed(permissionRequest(5));
+      h.driver.buildInterruptPayload();
+      h.feed(permissionRequest(6));
+      h.driver.buildApprovalResponse('n:6', true);
+
+      expect(settle(h, { rawOutput: { ok: true } })).toMatchObject([
+        { result: { ok: true }, isError: false },
+      ]);
+    });
+
+    it('is an error when the agent closes it in a later turn than the refusal', () => {
+      const h = withCall();
+      h.feed(permissionRequest(5));
+      h.driver.buildApprovalResponse('n:5', false);
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+      h.openTurn({ prompt: 'next', cwd: '/work' });
+
+      expect(settle(h)).toMatchObject([
+        { result: REFUSED_TOOL_RESULT, isError: true },
+      ]);
+    });
+
+    it('is a success when the user allowed it', () => {
+      const h = withCall();
+      h.feed(permissionRequest(5));
+      h.driver.buildApprovalResponse('n:5', true);
+
+      expect(settle(h, { rawOutput: { ok: true } })).toMatchObject([
+        { result: { ok: true }, isError: false },
+      ]);
+    });
+
+    it('is an error when the policy denied it without asking', () => {
+      const h = withCall({ autoDecide: () => 'deny' });
+      h.feed(permissionRequest(5));
+
+      expect(settle(h)).toMatchObject([
+        { result: REFUSED_TOOL_RESULT, isError: true },
+      ]);
+    });
+
+    it('is a success when the policy allowed it without asking', () => {
+      const h = withCall({ autoDecide: () => 'allow' });
+      h.feed(permissionRequest(5));
+
+      expect(settle(h, { rawOutput: { ok: true } })).toMatchObject([
+        { result: { ok: true }, isError: false },
+      ]);
+    });
+
+    it('is an error when the policy allowed it but the agent offered no allow option', () => {
+      const h = withCall({ autoDecide: () => 'allow' });
+      h.feed({
+        id: 5,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 'sess-1',
+          toolCall: { toolCallId: 't-1', name: 'write_file' },
+          options: [{ optionId: 'o-rej', name: 'Reject', kind: 'reject_once' }],
+        },
+      });
+
+      expect(settle(h)).toMatchObject([
+        { result: REFUSED_TOOL_RESULT, isError: true },
+      ]);
+    });
+
+    it('is an error when a Stop released the request unanswered', () => {
+      const h = withCall();
+      h.feed(permissionRequest(5));
+      h.driver.buildInterruptPayload();
+
+      expect(settle(h)).toMatchObject([
+        { result: REFUSED_TOOL_RESULT, isError: true },
+      ]);
+    });
+
+    it('is an error when the verdict lands in a later turn than the request', () => {
+      const h = withCall();
+      h.feed(permissionRequest(5));
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+      h.openTurn({ prompt: 'next', cwd: '/work' });
+      h.driver.buildApprovalResponse('n:5', false);
+
+      expect(settle(h)).toMatchObject([
+        { result: REFUSED_TOOL_RESULT, isError: true },
+      ]);
+    });
+
+    it('consumes the refusal mark with the first settle', () => {
+      const h = withCall();
+      h.feed(permissionRequest(5));
+      h.driver.buildApprovalResponse('n:5', false);
+
+      expect(settle(h)).toMatchObject([{ isError: true }]);
+      // The mark is consumed by the first settle.
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 't-1',
+          name: 'write_file',
+          status: 'in_progress',
+          rawInput: { path: 'a.ts' },
+        }),
+      );
+      expect(settle(h, { rawOutput: { ok: true } })).toMatchObject([
+        { result: { ok: true }, isError: false },
+      ]);
+    });
   });
 });
 

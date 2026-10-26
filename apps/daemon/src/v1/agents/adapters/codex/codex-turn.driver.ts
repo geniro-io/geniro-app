@@ -62,6 +62,7 @@ import {
   subAgentActivityOf,
   subagentOutcomeOf,
   subagentState,
+  unitPhase,
   waitsOnSubagents,
 } from './utils/codex-items.utils';
 import { codexTurnMcpOverrides } from './utils/codex-mcp.utils';
@@ -139,11 +140,6 @@ const ENDED_TURN_FENCED: ReadonlySet<string> = new Set([
   CODEX_NOTIFICATIONS.reasoningSummaryDelta,
   CODEX_NOTIFICATIONS.planUpdated,
 ]);
-
-/** A command unit's later phase, keyed — like its start — by the item id. */
-function unitPhase(id: string, phase: 'backgrounded' | 'settled'): AgentEvent {
-  return { type: 'background_work', id, phase, unit: 'other', toolCallId: id };
-}
 
 /**
  * ONE turn of a codex conversation — the state that must not outlive it.
@@ -780,6 +776,8 @@ export class CodexTurnDriver {
     }
     const encodedId = encodeRequestId(id);
     this.session.parked.set(encodedId, { method, params });
+    // A late command waiting on its card is not running yet.
+    this.session.stopLateWindow(asString(asRecord(params)?.itemId) ?? '');
     return [
       {
         type: 'approval_request',
@@ -814,6 +812,10 @@ export class CodexTurnDriver {
       return undefined;
     }
     this.session.parked.delete(encodedId);
+    const itemId = asString(asRecord(parked.params)?.itemId) ?? '';
+    if (allow && this.session.lateToolItems.has(itemId)) {
+      this.session.startLateWindow(itemId);
+    }
     return encodeResult(
       id,
       encodeCodexReply(
@@ -991,6 +993,15 @@ export class CodexTurnDriver {
       for (const event of events) {
         if (event.type === 'tool_call') {
           this.openToolItems.set(event.id, event.name);
+          if (this.settled) {
+            this.session.lateToolItems.add(event.id);
+            if (
+              item.type === 'commandExecution' &&
+              !this.awaitsVerdict(item.id)
+            ) {
+              this.session.startLateWindow(item.id);
+            }
+          }
         }
       }
     }
@@ -1088,12 +1099,35 @@ export class CodexTurnDriver {
         this.finalText = text;
       }
     }
-    const events = this.endCommandUnit(item.id, itemCompletedEvents(item));
+    const events = this.markLateWorkEnd(
+      item.id,
+      this.endCommandUnit(item.id, itemCompletedEvents(item)),
+    );
     if (item.type === 'collabAgentToolCall') {
       events.push(...this.trackSubagents(item));
     }
     this.endSubagentWait(item);
     return events;
+  }
+
+  /** Whether a request about this item is parked, waiting on its card. */
+  private awaitsVerdict(itemId: string): boolean {
+    for (const { params } of this.session.parked.values()) {
+      if (asString(asRecord(params)?.itemId) === itemId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** After the last late tool call's result, the end of late work. */
+  private markLateWorkEnd(id: string, events: AgentEvent[]): AgentEvent[] {
+    this.session.stopLateWindow(id);
+    const late = this.session.lateToolItems;
+    if (!late.delete(id) || late.size > 0) {
+      return events;
+    }
+    return [...events, { type: 'late_work_ended' }];
   }
 
   /**
@@ -1185,15 +1219,14 @@ export class CodexTurnDriver {
         continue;
       }
       this.openToolItems.delete(id);
-      this.session.leftRunning.add(id);
-      moved.push(unitPhase(id, 'backgrounded'));
+      moved.push(this.session.moveToBackground(id));
     }
     return moved;
   }
 
   /**
-   * A one-shot command still open as its turn ends goes with it: codex holds
-   * it in no process store, and a Stop kills it with the turn.
+   * A one-shot command still open as its turn is stopped or fails goes with
+   * it: codex holds it in no process store, and a Stop kills it with the turn.
    */
   private settleOneShots(): AgentEvent[] {
     const settled: AgentEvent[] = [];
@@ -1334,8 +1367,7 @@ export class CodexTurnDriver {
             continue;
           }
           if (this.heldInStore(id)) {
-            this.session.leftRunning.add(id);
-            left.push(unitPhase(id, 'backgrounded'));
+            left.push(this.session.moveToBackground(id));
           } else {
             this.session.commandUnits.delete(id);
             left.push(unitPhase(id, 'settled'));
@@ -1780,9 +1812,22 @@ export class CodexTurnDriver {
       events.push(...this.endStoppedCommands(running));
     } else {
       events.push(...this.backgroundLeftRunning());
-      events.push(...this.settleOneShots());
       if (status === 'failed') {
+        events.push(...this.settleOneShots());
         events.push(...this.endUnfinishedTurn(id, CODEX_FAILED_TOOL_RESULT));
+      } else {
+        // A one-shot still open (waiting on its card, or held by a hook of
+        // the user's) runs on as late work: its unit ends with its result,
+        // or goes to the background at the window's end.
+        for (const open of this.openToolItems.keys()) {
+          this.session.lateToolItems.add(open);
+          if (
+            this.session.items.get(open)?.type === 'commandExecution' &&
+            !this.awaitsVerdict(open)
+          ) {
+            this.session.startLateWindow(open);
+          }
+        }
       }
     }
     // A stopped or failed turn takes no more input: a steer codex accepted and

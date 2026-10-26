@@ -12533,6 +12533,67 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
   });
 
+  it('hands the badge back when the adapter ends the late work', async () => {
+    // A call the CLI starts after its turn ended takes the badge like any
+    // off-turn work, but no terminal event follows it: the adapter's
+    // `late_work_ended` is what takes the live row down.
+    const { service, claude, callBroker, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'start the build',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+    const statuses = (): string[] =>
+      itemDao.items
+        .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload as string) as { status: string }).status,
+        );
+
+    callee.emitOffTurn({
+      type: 'tool_call',
+      id: 'late-1',
+      name: 'shell',
+      input: { command: 'touch spike-two.txt' },
+    });
+    await drain();
+    expect(statuses()).toEqual(['running', 'completed', 'running']);
+
+    callee.emitOffTurn({
+      type: 'tool_result',
+      id: 'late-1',
+      name: 'shell',
+      result: 'The command was declined.',
+      isError: true,
+    });
+    await drain();
+    expect(statuses()).toEqual(['running', 'completed', 'running']);
+
+    callee.emitOffTurn({ type: 'late_work_ended' });
+    await drain();
+
+    expect(statuses()).toEqual([
+      'running',
+      'completed',
+      'running',
+      'completed',
+    ]);
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
+  });
+
   it('leaves the badge alone for a backgrounded command opening and closing', async () => {
     // A shell's own bracket is bookkeeping ABOUT work rather than an agent
     // producing any, and a close emits nothing after it — so restating one as

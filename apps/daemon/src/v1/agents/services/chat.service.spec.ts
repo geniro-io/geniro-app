@@ -8995,6 +8995,27 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
   });
 
+  it('leaves the turn now running alone when a previous turn’s late work ends inside it', async () => {
+    const { service, claude, deltas, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'thinking_progress', tokens: 74 });
+    await drain();
+    const rows = itemDao.items.length;
+    const published = deltas.length;
+
+    claude.emit({ type: 'late_work_ended' });
+    await drain();
+
+    expect(
+      deltas.slice(published).map((delta) => delta.thinkingStretch),
+    ).not.toContain(null);
+    expect(itemDao.items).toHaveLength(rows);
+
+    claude.finish();
+    await drain();
+  });
+
   it('scales the live meter from the FIRST request once a model’s window is known', async () => {
     // End to end for the per-model window: the CLI names its model at session
     // start, the turn's result line reports that model's window, and the NEXT
@@ -11503,6 +11524,217 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect((await runDao.getById(run.id))?.status).toBe('completed');
     expect(itemDao.items).toHaveLength(before + 1);
     expect(itemDao.items.at(-1)?.kind).toBe('system');
+  });
+
+  it.each([
+    ['hands the badge back when the adapter ends the late work', true],
+    ['keeps the badge on while the adapter has not ended it', false],
+  ])('%s', async (_label, ended) => {
+    // A call the CLI starts after its turn ended (a user's permission hook
+    // held it past `turn/completed`) restates the run as working, and no
+    // terminal event follows it: the adapter says when its late work is over.
+    const { service, claude, runDao, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'late-1',
+      name: 'shell',
+      input: { command: 'touch spike-two.txt' },
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_result',
+      id: 'late-1',
+      name: 'shell',
+      result: 'The command was declined.',
+      isError: true,
+    });
+    if (ended) {
+      claude.sessions[0]?.onBetweenTurnEvent?.({ type: 'late_work_ended' });
+    }
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe(
+      ended ? 'completed' : 'running',
+    );
+    // The end writes no row of its own.
+    expect(itemDao.items.at(-1)?.kind).toBe('tool_result');
+  });
+
+  describe('the end of late work, when it is not the only work', () => {
+    const lateCall: AgentEvent = {
+      type: 'tool_call',
+      id: 'late-1',
+      name: 'shell',
+      input: { command: 'touch spike-two.txt' },
+    };
+    const lateEnd: AgentEvent = { type: 'late_work_ended' };
+    async function settled() {
+      const harness = setup();
+      const run = await harness.service.createChat({
+        agentKind: 'claude',
+        cwd: process.cwd(),
+      });
+      await harness.service.sendMessage(run.id, 'go');
+      await drain();
+      harness.claude.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      harness.claude.finish();
+      await drain();
+      const emit = (event: AgentEvent) =>
+        harness.claude.sessions[0]?.onBetweenTurnEvent?.(event);
+      return { ...harness, run, emit };
+    }
+
+    it('settles after a late result that arrives in the same batch as the end', async () => {
+      // A call still open when the turn completed: its result is the first
+      // row that restates the run, and the adapter emits the end right after.
+      const { runDao, run, emit } = await settled();
+      emit({
+        type: 'tool_result',
+        id: 'late-1',
+        name: 'shell',
+        result: 'done',
+        isError: false,
+      });
+      emit(lateEnd);
+      await drain();
+
+      expect((await runDao.getById(run.id))?.status).toBe('completed');
+    });
+
+    it('keeps the badge for a late call that starts right after the end', async () => {
+      const { runDao, run, emit } = await settled();
+      emit(lateCall);
+      await drain();
+      emit({
+        type: 'tool_result',
+        id: 'late-1',
+        name: 'shell',
+        result: 'done',
+        isError: false,
+      });
+      emit(lateEnd);
+      emit({ ...lateCall, id: 'late-2' });
+      await drain();
+
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+    });
+
+    it('keeps the badge while a delegate still producing rows holds its lease', async () => {
+      const { runDao, run, emit } = await settled();
+      emit({
+        type: 'tool_call',
+        id: 'call-9',
+        name: 'Read',
+        input: {},
+        parentToolUseId: 'toolu_task_1',
+      });
+      emit(lateCall);
+      await drain();
+      emit(lateEnd);
+      await drain();
+
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+    });
+
+    it('leaves a turn the user opened meanwhile to settle itself', async () => {
+      const { service, runDao, run, emit } = await settled();
+      emit(lateCall);
+      await drain();
+      await service.sendMessage(run.id, 'again');
+      await drain();
+      emit(lateEnd);
+      await drain();
+
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+    });
+
+    it('announces no settle while a send has claimed the run but not yet taken it over', async () => {
+      const { service, runDao, registry, run, emit, statuses } =
+        await settled();
+      emit(lateCall);
+      await drain();
+      // Hold the send's first read after its claim, so it stays between the
+      // claim and the moment it takes the off-turn badge over.
+      const live = runDao.getById.bind(runDao);
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      runDao.getById = async (id: string) => {
+        const row = await live(id);
+        if (registry.has(id)) {
+          await gate;
+        }
+        return row;
+      };
+      statuses.length = 0;
+      const sending = service.sendMessage(run.id, 'again');
+      await vi.waitFor(() => expect(registry.has(run.id)).toBe(true));
+      emit(lateEnd);
+      await drain();
+
+      expect(statuses.map((event) => event.status)).not.toContain('completed');
+      runDao.getById = live;
+      release();
+      await sending;
+    });
+
+    it('lets a stopped process’s end of late work leave the live session’s stretch alone', async () => {
+      const { service, claude, runDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: process.cwd(),
+      });
+      await service.sendMessage(run.id, 'go');
+      const old = claude.sessions[0]!;
+      await service.cancel(run.id);
+      claude.emit({ type: 'turn_cancelled' });
+      claude.finish();
+      await drain();
+      await service.sendMessage(run.id, 'continue');
+      await endTurn(claude);
+      const live = claude.sessions.at(-1)!;
+      expect(live).not.toBe(old);
+
+      live.onBetweenTurnEvent!(lateCall);
+      await drain();
+      old.onBetweenTurnEvent!(lateEnd);
+      await drain();
+
+      expect(runDao.runs.get(run.id)?.status).toBe('running');
+    });
+
+    it('writes no status when no off-turn stretch is open', async () => {
+      const { runDao, run, emit, statuses } = await settled();
+      statuses.length = 0;
+      emit(lateEnd);
+      await drain();
+
+      expect(statuses).toEqual([]);
+      expect((await runDao.getById(run.id))?.status).toBe('completed');
+    });
   });
 
   it('puts the badge back to running while a DELEGATE goes on producing rows', async () => {

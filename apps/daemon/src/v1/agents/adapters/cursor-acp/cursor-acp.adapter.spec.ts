@@ -41,6 +41,7 @@ import {
   HOST_CONTEXT_NOTE,
   HOST_CONTEXT_TAG,
   QUEUED_FOR_SUBAGENTS_NOTICE,
+  REFUSED_TOOL_RESULT,
 } from '../acp/acp-driver';
 import type {
   AccountSpendQuery,
@@ -2963,7 +2964,7 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  function start(): {
+  function start(input: Partial<AgentTurnInput> = {}): {
     child: FakeChild;
     events: AgentEvent[];
     handle: AgentTurnHandle | null;
@@ -2977,8 +2978,8 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
       spawn,
       homeDir: home,
     })
-      .startSession({ ...BASE }, { runScoped: true })
-      .startTurn({ ...BASE }, (event) => events.push(event));
+      .startSession({ ...BASE, ...input }, { runScoped: true })
+      .startTurn({ ...BASE, ...input }, (event) => events.push(event));
     child.stdout.emitData(
       stdoutLine({
         jsonrpc: '2.0',
@@ -3155,6 +3156,49 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
     expect(info.every((event) => event.stepsUnavailableReason === null)).toBe(
       true,
     );
+  });
+
+  it('closes a sub-agent’s step whose permission the user refused as an error', () => {
+    const { child, events, handle } = start({ approvalMode: 'ask' });
+    launch(child, false);
+    fromChild(child, {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tool_shell',
+      title: '`rm -rf build`',
+      kind: 'execute',
+      status: 'pending',
+      rawInput: { command: 'rm -rf build' },
+    });
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 9,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 'agent-1',
+          toolCall: { toolCallId: 'tool_shell' },
+          options: ONCE_OPTIONS,
+        },
+      }),
+    );
+    expect(handle?.respondApproval('n:9', false)).toBe(true);
+    fromChild(child, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tool_shell',
+      status: 'completed',
+    });
+
+    expect(
+      events.filter(
+        (event) => event.type === 'tool_result' && event.id === 'tool_shell',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        result: REFUSED_TOOL_RESULT,
+        isError: true,
+        parentToolUseId: 'tool_A',
+      }),
+    ]);
   });
 
   it('names the native child session on the recovery reference of its delegate', () => {

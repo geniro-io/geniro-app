@@ -5,24 +5,13 @@ import { Field } from '../components/field';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
+import { Stepper } from '../components/ui/stepper';
+import { Switch } from '../components/ui/switch';
 import { Textarea } from '../components/ui/textarea';
 import type { WorkflowMeta } from './graph-doc';
 
-/**
- * The cap field's text as a value: undefined for empty (the machine ceiling),
- * null for anything that is not a whole number of one or more.
- */
-function parseMaxActiveTurns(text: string): number | undefined | null {
-  const trimmed = text.trim();
-  if (trimmed === '') {
-    return undefined;
-  }
-  if (!/^\d+$/.test(trimmed)) {
-    return null;
-  }
-  const value = Number(trimmed);
-  return Number.isSafeInteger(value) && value >= 1 ? value : null;
-}
+/** Where a newly switched-on limit starts: low enough to mean something. */
+const DEFAULT_MAX_ACTIVE_TURNS = 4;
 
 /**
  * The one workflow-meta form (name, optional description, optional cap on
@@ -54,7 +43,8 @@ export function WorkflowMetaDialog({
   initial?: WorkflowMeta;
   /**
    * This Mac's ceiling on agent turns working at once in one run
-   * (`GET /v1/capabilities`) — what an empty cap means. Null until it is read.
+   * (`GET /v1/capabilities`) — what no limit means, and the most a limit can
+   * be set to. Null until it is read.
    */
   maxActiveTurnsCeiling: number | null;
   onClose: () => void;
@@ -62,7 +52,11 @@ export function WorkflowMetaDialog({
 }): React.JSX.Element {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [maxActiveTurns, setMaxActiveTurns] = useState('');
+  // Off = no limit of the workflow's own: the run goes up to the ceiling.
+  const [limited, setLimited] = useState(false);
+  const [maxActiveTurns, setMaxActiveTurns] = useState(
+    DEFAULT_MAX_ACTIVE_TURNS,
+  );
 
   // A reopened dialog starts from `initial` (or blank) — never from the
   // previous visit's abandoned draft.
@@ -70,22 +64,14 @@ export function WorkflowMetaDialog({
     if (open) {
       setName(initial?.name ?? '');
       setDescription(initial?.description ?? '');
-      setMaxActiveTurns(
-        initial?.maxActiveTurns === undefined
-          ? ''
-          : String(initial.maxActiveTurns),
-      );
+      setLimited(initial?.maxActiveTurns !== undefined);
+      setMaxActiveTurns(initial?.maxActiveTurns ?? DEFAULT_MAX_ACTIVE_TURNS);
     }
     // `initial` is compared by its fields: a rename dialog reopened for the
     // same workflow must reset even when the caller rebuilt the object.
   }, [open, initial?.name, initial?.description, initial?.maxActiveTurns]);
 
-  const cap = parseMaxActiveTurns(maxActiveTurns);
-  const canSubmit = name.trim().length > 0 && cap !== null && !busy;
-  const ceiling =
-    maxActiveTurnsCeiling === null
-      ? 'this Mac’s ceiling'
-      : maxActiveTurnsCeiling;
+  const canSubmit = name.trim().length > 0 && !busy;
 
   return (
     <Dialog open={open} onClose={onClose} title={title}>
@@ -100,7 +86,7 @@ export function WorkflowMetaDialog({
           onSubmit({
             name: name.trim(),
             ...(trimmedDescription ? { description: trimmedDescription } : {}),
-            ...(cap !== undefined ? { maxActiveTurns: cap } : {}),
+            ...(limited ? { maxActiveTurns } : {}),
           });
         }}>
         <Field label="Name" htmlFor="workflow-name">
@@ -125,29 +111,41 @@ export function WorkflowMetaDialog({
         </Field>
         <Field
           label="Agents working at once"
-          htmlFor="workflow-max-active-turns"
-          hint={`Optional — how many agent calls of a run may work at the same time, at any depth; the rest wait their turn. Empty uses ${ceiling}, and a higher number runs at it.`}>
-          {/* Text, not `type="number"`: a number input reports what it cannot
-              parse as an empty string, which would save as "no cap". */}
-          <Input
-            id="workflow-max-active-turns"
-            inputMode="numeric"
-            value={maxActiveTurns}
-            placeholder={
-              maxActiveTurnsCeiling === null
-                ? undefined
-                : String(maxActiveTurnsCeiling)
-            }
-            aria-invalid={cap === null}
-            onChange={(event) => setMaxActiveTurns(event.target.value)}
-          />
+          htmlFor="workflow-limit-turns"
+          hint="How many agent calls of a run may work at the same time, at any depth; the rest wait their turn.">
+          <div className="flex h-8 items-center justify-between gap-3">
+            <label
+              htmlFor="workflow-limit-turns"
+              className="flex min-w-0 items-center gap-2 text-sm">
+              <Switch
+                id="workflow-limit-turns"
+                checked={limited}
+                onCheckedChange={setLimited}
+              />
+              <span className="truncate">
+                {limited ? 'Limited to' : 'No limit of its own'}
+              </span>
+            </label>
+            {limited ? (
+              <Stepper
+                value={maxActiveTurns}
+                min={1}
+                // Until the ceiling is read, the value can go down but not up.
+                max={maxActiveTurnsCeiling ?? maxActiveTurns}
+                aria-label="Agents working at once"
+                onChange={setMaxActiveTurns}
+              />
+            ) : (
+              <span
+                data-slot="max-active-turns-ceiling"
+                className="truncate text-sm text-muted-foreground tabular-nums">
+                {maxActiveTurnsCeiling === null
+                  ? 'this Mac’s ceiling'
+                  : `up to ${maxActiveTurnsCeiling}, this Mac’s ceiling`}
+              </span>
+            )}
+          </div>
         </Field>
-        {cap === null ? (
-          <ErrorText>
-            Agents working at once must be a whole number of 1 or more, or
-            empty.
-          </ErrorText>
-        ) : null}
         {error ? <ErrorText>{error}</ErrorText> : null}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>

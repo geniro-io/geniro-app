@@ -78,10 +78,24 @@ function descriptionInput(): HTMLTextAreaElement {
   return container.querySelector<HTMLTextAreaElement>('#workflow-description')!;
 }
 
-function capInput(): HTMLInputElement {
-  return container.querySelector<HTMLInputElement>(
-    '#workflow-max-active-turns',
-  )!;
+function limitSwitch(): HTMLButtonElement {
+  return container.querySelector<HTMLButtonElement>('#workflow-limit-turns')!;
+}
+
+function capValue(): string | null {
+  return (
+    container
+      .querySelector('[role="spinbutton"]')
+      ?.getAttribute('aria-valuenow') ?? null
+  );
+}
+
+function press(label: string): void {
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
 }
 
 function submitButton(): HTMLButtonElement {
@@ -187,38 +201,59 @@ describe('WorkflowMetaDialog', () => {
     expect(nameInput().value).toBe('Demo team');
   });
 
-  it('submits a whole-number cap of one or more', () => {
-    render();
+  it('has no limit of its own until switched on, and says what that means', () => {
+    render({ maxActiveTurnsCeiling: 12 });
+    expect(limitSwitch().getAttribute('aria-checked')).toBe('false');
+    expect(capValue()).toBeNull();
+    expect(
+      container.querySelector('[data-slot="max-active-turns-ceiling"]')
+        ?.textContent,
+    ).toBe('up to 12, this Mac’s ceiling');
     type(nameInput(), 'Team');
-    type(capInput(), ' 3 ');
-    submit();
-    expect(onSubmit).toHaveBeenCalledWith({ name: 'Team', maxActiveTurns: 3 });
-  });
-
-  it.each(['0', '-1', '2.5', 'abc'])(
-    'refuses %s as a cap — submit disabled, the rule said',
-    (value) => {
-      render();
-      type(nameInput(), 'Team');
-      type(capInput(), value);
-      expect(submitButton().disabled).toBe(true);
-      expect(container.textContent).toContain('a whole number of 1 or more');
-      submit();
-      expect(onSubmit).not.toHaveBeenCalled();
-    },
-  );
-
-  it('leaves an emptied cap off the meta — the machine ceiling', () => {
-    render({ initial: { name: 'Team', maxActiveTurns: 4 } });
-    expect(capInput().value).toBe('4');
-    type(capInput(), '');
     submit();
     expect(onSubmit).toHaveBeenCalledWith({ name: 'Team' });
   });
 
-  it('names the machine ceiling an empty cap stands for', () => {
-    render({ maxActiveTurnsCeiling: 12 });
-    expect(capInput().placeholder).toBe('12');
-    expect(container.textContent).toContain('Empty uses 12');
+  it('submits the limit set with the stepper once switched on', () => {
+    render();
+    type(nameInput(), 'Team');
+    act(() => {
+      limitSwitch().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(capValue()).toBe('4');
+    press('Decrease Agents working at once');
+    submit();
+    expect(onSubmit).toHaveBeenCalledWith({ name: 'Team', maxActiveTurns: 3 });
+  });
+
+  it('keeps the limit between 1 and this Mac’s ceiling', () => {
+    render({
+      initial: { name: 'Team', maxActiveTurns: 2 },
+      maxActiveTurnsCeiling: 2,
+    });
+    expect(capValue()).toBe('2');
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Increase Agents working at once"]',
+      )!.disabled,
+    ).toBe(true);
+    press('Decrease Agents working at once');
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Decrease Agents working at once"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(capValue()).toBe('1');
+  });
+
+  it('prefills a saved limit, and drops it when switched off', () => {
+    render({ initial: { name: 'Team', maxActiveTurns: 6 } });
+    expect(limitSwitch().getAttribute('aria-checked')).toBe('true');
+    expect(capValue()).toBe('6');
+    act(() => {
+      limitSwitch().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    submit();
+    expect(onSubmit).toHaveBeenCalledWith({ name: 'Team' });
   });
 });

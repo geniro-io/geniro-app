@@ -332,7 +332,7 @@ One home for each concern:
 - A wire to a missing node is dropped on open and named. A data wire that closes a loop is refused (`closesDataCycle`).
 - After a socket reconnect, the dock reads back from the newest row held when the socket dropped. A turn ending is counted once, by row id. The dock holds anchors the way the chat screen does.
 - `RunDto.awaiting` follows the three-state rule: absent asserts nothing, and `null` clears.
-- `maxActiveTurns` (the "Change workflow" dialog's agents-at-once field, a text input so junk is refused rather than read as empty) rides `WorkflowMeta` through `fromFlow`, `canvasSnapshot` (a required argument) and every save, like the description; dropping it from any one of them loses the cap or loops autosave.
+- `maxActiveTurns` (the "Change workflow" dialog's agents-at-once row: a switch — off is no limit of its own, the machine ceiling — and a `Stepper` from 1 to the ceiling, so no value outside the range can be entered) rides `WorkflowMeta` through `fromFlow`, `canvasSnapshot` (a required argument) and every save, like the description; dropping it from any one of them loses the cap or loops autosave.
 - Agent pools are capped at the twin `MAX_AGENT_POOL_EXTRA_MEMBERS`. Call instances name their member (`CallBlockEntry.member`). Hand-offs above the page arrive as anchors.
 
 ### Settings

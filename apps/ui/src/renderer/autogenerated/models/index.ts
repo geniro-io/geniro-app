@@ -1571,6 +1571,12 @@ export interface AnalyzeThreadDto {
     customInstructions?: string;
     /**
      * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof AnalyzeThreadDto
      */
@@ -2267,6 +2273,12 @@ export interface ChatExportRun {
      * @memberof ChatExportRun
      */
     customInstructions: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    replyLanguage: string | null;
     /**
      * 
      * @type {string}
@@ -3039,6 +3051,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    replyLanguage?: string;
     /**
      * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
@@ -6997,6 +7015,12 @@ export interface RunWorkflowDto {
     customInstructions?: string;
     /**
      * 
+     * @type {string}
+     * @memberof RunWorkflowDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof RunWorkflowDto
      */
@@ -7879,6 +7903,12 @@ export interface StartTaskRunDto {
     customInstructions?: string;
     /**
      * 
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof StartTaskRunDto
      */
@@ -7961,6 +7991,12 @@ export interface StartWorkflowChatDto {
      * @memberof StartWorkflowChatDto
      */
     customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartWorkflowChatDto
+     */
+    replyLanguage?: string;
     /**
      * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}

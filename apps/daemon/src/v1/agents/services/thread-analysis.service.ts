@@ -32,6 +32,7 @@ export interface StartThreadAnalysis {
   cwd?: string;
   focus?: string;
   customInstructions?: string;
+  replyLanguage?: string;
   agentOptions?: AgentOptionsSnapshot;
 }
 
@@ -189,6 +190,7 @@ export class ThreadAnalysisService
       effort: input.effort,
       configDir: input.configDir,
       customInstructions: input.customInstructions,
+      replyLanguage: input.replyLanguage,
       agentOptions: input.agentOptions,
       title: `Analysis: ${source.title ?? 'untitled thread'}`,
       taskInstructions: threadAnalysisGuide(kind, input.focus ?? null),

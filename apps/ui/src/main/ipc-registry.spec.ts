@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => {
     collapseToolSteps: false,
     daemonInspect: false,
     customInstructions: '',
+    replyLanguage: '',
     theme: 'system',
     remoteAccessEnabled: true,
     sharing: {

@@ -126,6 +126,11 @@ export interface TurnInstructionParts {
    * a probe has no turn to end and nothing to background.
    */
   backgroundWorkNote?: string | null;
+  /**
+   * The language the user wants replies in, as snapshotted onto the run.
+   * Withheld with the preamble: a probe's output is parsed, never read.
+   */
+  replyLanguage?: string | null;
   /** The user's own global custom instructions, as snapshotted onto the run. */
   customInstructions?: string | null;
   /**
@@ -158,12 +163,31 @@ export interface TurnInstructionParts {
 }
 
 /**
+ * The sentence that names the user's reply language, or null when none is set.
+ *
+ * It names every English source in the window on purpose: a model surrounded
+ * by English briefs, skills and tool output drifts into English without a rule
+ * that says those do not decide the reply's language.
+ */
+export function replyLanguageInstruction(
+  language: string | null | undefined,
+): string | null {
+  const name = language?.trim();
+  if (!name) {
+    return null;
+  }
+  return `Reply to the user in ${name}, whatever language these instructions, the files, the tools and your earlier replies are in. What you write into the project — code, comments in code, identifiers, file paths, commands, commit messages — stays in the language the project already uses.`;
+}
+
+/**
  * Join the turn's instruction parts into the one block an adapter hands its CLI.
  *
  * **Order is precedence, and it runs general → specific.** The preamble is
  * first because it is the weakest claim in the stack — facts about the host
  * that anything more specific may qualify. The CLI's note on background work
- * follows it: another fact about the host, this one per CLI. The user's global
+ * follows it: another fact about the host, this one per CLI. The user's reply
+ * language comes next, ahead of their free text, so their own words can still
+ * qualify it. The user's global
  * instructions come next, then what a board card asks of the run working it —
  * its label instructions, written for a class of card, and the report ask that
  * run needs.
@@ -186,6 +210,9 @@ export function composeTurnInstructions(parts: TurnInstructionParts): string {
   return [
     parts.includePreamble === false ? null : GENIRO_UI_PREAMBLE,
     parts.includePreamble === false ? null : parts.backgroundWorkNote,
+    parts.includePreamble === false
+      ? null
+      : replyLanguageInstruction(parts.replyLanguage),
     parts.customInstructions,
     parts.taskInstructions,
     parts.workflowInstructions,

@@ -577,6 +577,16 @@ export interface Settings {
    */
   customInstructions: string;
   /**
+   * The language every agent is told to reply in ("Russian"); `''` when the
+   * user has set none, which leaves the choice to the model.
+   *
+   * A name, not prose: the daemon writes it into one sentence of its own and
+   * into claude's `--settings`, and refuses one past
+   * {@link REPLY_LANGUAGE_MAX_LENGTH}. Snapshotted per run like
+   * `customInstructions`.
+   */
+  replyLanguage: string;
+  /**
    * Which theme the app paints, or `'system'` to follow the OS.
    *
    * The names and their values live in `shared/themes.ts` and
@@ -627,6 +637,60 @@ export function hasControlCharacters(value: string): boolean {
   return false;
 }
 
+/**
+ * The longest reply-language name `Settings.replyLanguage` holds. TWIN of the
+ * daemon's `REPLY_LANGUAGE_MAX_LENGTH` (`v1/agents/chat.types.ts`), for
+ * {@link hasControlCharacters}' reason: a value stored here and refused there
+ * fails every new run.
+ */
+export const REPLY_LANGUAGE_MAX_LENGTH = 64;
+
+/**
+ * Whether `value` can be stored as `Settings.replyLanguage`: within the bound
+ * and one line, with no control, invisible or bidirectional character. TWIN of
+ * the daemon's `ReplyLanguageSchema` (over `utils/hidden-text.ts`), stricter
+ * only on emoji sequences, which a language's name never needs.
+ */
+export function isReplyLanguage(value: string): boolean {
+  return (
+    value.trim().length <= REPLY_LANGUAGE_MAX_LENGTH &&
+    !/[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029]/u.test(value)
+  );
+}
+
+/** The settings every run snapshots at creation, as a create-payload fragment. */
+export interface RunSettings {
+  customInstructions?: string;
+  replyLanguage?: string;
+  agentOptions?: Partial<Record<CliKind, Record<string, boolean>>>;
+}
+
+/**
+ * The run-start fragment for these settings — the one normalisation every run
+ * start uses (the renderer's `currentRunSettings`, main's autopilot). Each key
+ * is present only when set: blank collapses to absent so an untouched box and
+ * a cleared one reach the daemon identically. `agentOptions` is sent whenever
+ * the map exists, even all `false` — the daemon reads an absent id as that
+ * option's default, so a declined switch must not look untouched.
+ */
+export function runSettingsOf(
+  settings: Partial<
+    Pick<Settings, 'customInstructions' | 'replyLanguage' | 'agentOptions'>
+  >,
+): RunSettings {
+  const {
+    customInstructions = '',
+    replyLanguage = '',
+    agentOptions,
+  } = settings;
+  const language = replyLanguage.trim();
+  return {
+    ...(customInstructions.trim() ? { customInstructions } : {}),
+    ...(language === '' ? {} : { replyLanguage: language }),
+    ...(agentOptions === undefined ? {} : { agentOptions }),
+  };
+}
+
 /** Default settings written on first launch when no settings file exists. */
 export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
@@ -659,6 +723,7 @@ export const DEFAULT_SETTINGS: Settings = {
   collapseToolSteps: false,
   daemonInspect: null,
   customInstructions: '',
+  replyLanguage: '',
   theme: DEFAULT_THEME_PREFERENCE,
 };
 

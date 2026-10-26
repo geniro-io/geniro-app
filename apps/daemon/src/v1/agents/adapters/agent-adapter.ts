@@ -2167,6 +2167,7 @@ export abstract class AgentAdapter {
       // An `internalProbe` turn has no transcript for the preamble to describe.
       includePreamble: input.internalProbe !== true,
       backgroundWorkNote: this.getConfig().backgroundWork.agentNote,
+      replyLanguage: input.replyLanguage,
       customInstructions: input.customInstructions,
       taskInstructions: input.taskInstructions,
       workflowInstructions: input.workflowInstructions,
@@ -2484,6 +2485,8 @@ export abstract class AgentAdapter {
       // share one CLI process, and the second would silently run on the
       // first's.
       input.customInstructions ?? null,
+      // The same block again, and argv on claude besides.
+      input.replyLanguage ?? null,
       // The same block again: a card whose label instructions changed since
       // this process was spawned must not be served by it.
       input.taskInstructions ?? null,
@@ -2770,6 +2773,8 @@ export abstract class AgentAdapter {
       // below — hoisting either one out would leak the session-scoped resource.
       const command = this.command;
       const local = this.modelConfiguration(input.model);
+      // The model's own args FIRST: an adapter's `buildArgs` may emit a flag
+      // that supersedes one of them (claude's `--settings` does).
       const args = [...local.args, ...this.buildArgs(input)];
       driver = this.createTurnDriver(input);
       let recoverySessionId = input.resumeSessionId ?? null;

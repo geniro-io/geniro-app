@@ -79,6 +79,8 @@ describe('useWorkflowChat', () => {
   let latest: WorkflowChatState | null = null;
 
   let openWorkflowChat: ReturnType<typeof vi.fn>;
+  let replyLanguage: string;
+  let customInstructions: string;
   let discardWorkflowChat: ReturnType<typeof vi.fn>;
   let listRunItems: ReturnType<typeof vi.fn>;
   let sendChatMessage: ReturnType<typeof vi.fn>;
@@ -163,6 +165,11 @@ describe('useWorkflowChat', () => {
     liveListeners = [];
     reconnectListeners = [];
     disconnectListeners = [];
+    replyLanguage = '';
+    customInstructions = '';
+    (window as unknown as { geniro: unknown }).geniro = {
+      getSettings: vi.fn(async () => ({ replyLanguage, customInstructions })),
+    };
     openWorkflowChat = vi.fn().mockResolvedValue(runDto());
     discardWorkflowChat = vi.fn().mockResolvedValue({ deleted: 1 });
     listRunItems = vi.fn().mockResolvedValue([item()]);
@@ -250,6 +257,21 @@ describe('useWorkflowChat', () => {
     expect(state().run?.id).toBe('run-1');
     expect(state().items).toHaveLength(1);
     expect(joinRun).toHaveBeenCalledWith('run-1');
+  });
+
+  it('opens the chat with the run settings every other run snapshots', async () => {
+    replyLanguage = ' Russian ';
+    customInstructions = 'Prefer small diffs.';
+    await mount();
+
+    expect(openWorkflowChat).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      startWorkflowChatDto: {
+        ...CHIPS,
+        replyLanguage: 'Russian',
+        customInstructions: 'Prefer small diffs.',
+      },
+    });
   });
 
   // A room joined after the history read drops anything produced in between;

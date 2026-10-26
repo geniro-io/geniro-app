@@ -204,7 +204,7 @@ One home for each concern:
 - Run-row fields from `run_status` are read by `chats/run-status-row.ts`.
 - The message queue rules are in `chats/use-message-queue.ts`. Only the chat screen persists queues (`queued-message-store.ts`, one key).
 - `joinRun`/`leaveRun` both live in `use-chat-run.ts` (`activateRun`/`deactivateRun`).
-- `Chats` stays mounted across nav switches. Read settings at the moment a run is created (`currentRunSettings()`), never from cached state. Re-read lists such as fast actions when the screen becomes active again.
+- `Chats` stays mounted across nav switches. Read settings at the moment a run is created (`renderer/run-settings.ts` → `currentRunSettings()`, the one reader every renderer run start uses: chat, workflow run, analysis, a card's run, the builder's chat; main's autopilot normalises through the same `runSettingsOf` in `shared/contracts.ts`), never from cached state. Re-read lists such as fast actions when the screen becomes active again.
 
 **Sending and the queue:**
 
@@ -452,6 +452,7 @@ One home for each concern:
 - `notificationsEnabled`: one switch for every notification kind.
 - `archiveRetentionDays`: `null` by default. It arms a permanent deletion sweep (`POST /v1/chats/sweep-archived`), and the daemon learns the window from the client.
 - `customInstructions`: see below.
+- `replyLanguage`: the language every agent is told to reply in (`''` = not set), at most 64 characters (twin of the daemon's `REPLY_LANGUAGE_MAX_LENGTH`). Sent at every run start beside `customInstructions` and snapshotted onto the run; the daemon composes it into the instruction block and hands claude its own `language` setting.
 - `theme`: read by main before any window exists, and enumerated in `settingsPatchSchema`. An unknown value falls back to `'system'`.
 - `historyPageSize`, `checkForUpdates`, `remoteAccessEnabled`, `daemonInspect`, `cliPaths`.
 - `keptSessionIdleMinutes`: how long a run's CLI and its MCP servers are kept after the last turn, 5–180, default 60 (a subscription's prompt-cache TTL), the same for chats and cards. The same window ends what the run's agents left running outside the CLI that attribution can reach (dev servers, watchers; not an orphaned system binary), with a note in the transcript (`apps/daemon/AGENTS.md` → Run processes → Idle). The bounds are twins of the daemon's (`chat.types.ts`). Every write that changes it is pushed to the daemon (`kept-session-config-push.ts`, through `onSettingsWritten`), as is every daemon start; the daemon holds it in memory.
@@ -482,7 +483,8 @@ Agents and MCP:
 Custom instructions:
 
 - `customInstructions` saves through `use-debounced-persist.ts`. An unsavable value (control characters) is held on screen and never written. The timer handle is nulled.
-- **Remove from existing chats** (`POST /v1/chats/forget-custom-instructions`) is an explicit press, never a side effect of clearing the box.
+- **Remove from existing chats** (`POST /v1/chats/forget-custom-instructions`) is an explicit press, never a side effect of clearing the box. It does not touch the snapshotted reply language.
+- `replyLanguage` saves through the same debounced persist; a value over the bound or with control characters is held on screen and never written.
 - The host-preamble preview renders nothing until `hostPreamble` arrives.
 
 Appearance:

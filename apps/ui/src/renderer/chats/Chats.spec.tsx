@@ -6952,6 +6952,33 @@ describe('Chats composer memory & suggestions', () => {
     expect(
       Object.keys(api.createChat.mock.calls[0]![0].createChatDto),
     ).not.toContain('customInstructions');
+    expect(
+      Object.keys(api.createChat.mock.calls[0]![0].createChatDto),
+    ).not.toContain('replyLanguage');
+  });
+
+  it('creates the chat with the reply language set in Settings, trimmed', async () => {
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    (
+      window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }
+    ).geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      replyLanguage: ' Russian ',
+    });
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({ replyLanguage: 'Russian' }),
+    });
   });
 
   /** The composer's config-directory chip (absent unless the CLI supports one). */

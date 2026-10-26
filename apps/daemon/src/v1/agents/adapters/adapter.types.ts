@@ -3231,6 +3231,15 @@ export interface AgentTurnInput {
    */
   customInstructions?: string | null;
   /**
+   * The language the user wants replies in (`Settings.replyLanguage`), as
+   * snapshotted onto the run; null/undefined when none is set.
+   *
+   * Composed into the instruction block like {@link customInstructions}, and
+   * an adapter whose CLI has a language setting of its own may hand it that
+   * too (claude's `--settings {"language"}`).
+   */
+  replyLanguage?: string | null;
+  /**
    * What the board card this run works asks of it — its label instructions and
    * geniro's report ask, as stored on `Run.taskInstructions`. Undefined for
    * every run no card started.

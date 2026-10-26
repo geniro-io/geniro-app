@@ -106,6 +106,7 @@ function build(
                 configDir: '/home/u/.claude-work',
                 groupId: null,
                 customInstructions: 'always answer in Russian',
+                replyLanguage: 'Russian',
                 taskInstructions: 'label block and report ask',
                 workflowInstructions: null,
                 agentOptions: null,
@@ -196,6 +197,7 @@ describe('ChatExportService', () => {
 
     // The four `RunWireSchema` withholds — what the turns actually ran under.
     expect(doc.run.customInstructions).toBe('always answer in Russian');
+    expect(doc.run.replyLanguage).toBe('Russian');
     expect(doc.run.taskInstructions).toBe('label block and report ask');
     expect(doc.run.agentOptions).toBeNull();
     expect(doc.run.pendingContext).toBeNull();

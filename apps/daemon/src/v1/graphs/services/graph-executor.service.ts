@@ -301,6 +301,8 @@ export interface StartWorkflowRunInput {
    * chat's. Every agent node composes it BEHIND its own `role`.
    */
   customInstructions?: string;
+  /** The app's reply language, snapshotted onto the run like a chat's. */
+  replyLanguage?: string;
   /**
    * What the board card this run works asks of it — its label instructions and
    * the report ask, already composed. Absent for a run started from the
@@ -455,6 +457,8 @@ interface RunContext {
   seedPrompt: string;
   /** The run's snapshotted global instructions; every node composes it. */
   customInstructions: string | null;
+  /** The run's snapshotted reply language; every node composes it. */
+  replyLanguage: string | null;
   /** The card's instructions for a task run; every node composes them too. */
   taskInstructions: string | null;
   /** The run's snapshotted per-CLI switches; each node reads its CLI's slice. */
@@ -1339,6 +1343,7 @@ export class GraphExecutorService
         // normalizes to null so a cleared box and an untouched one are one
         // state. Every node of this run then composes the same text.
         customInstructions: input.customInstructions?.trim() || null,
+        replyLanguage: input.replyLanguage?.trim() || null,
         taskInstructions: input.taskInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
         startSha: input.startSha ?? null,
@@ -1416,6 +1421,7 @@ export class GraphExecutorService
         cwd,
         seedPrompt: input.prompt,
         customInstructions: run.customInstructions,
+        replyLanguage: run.replyLanguage,
         taskInstructions: run.taskInstructions,
         agentOptions: readAgentOptions(run.agentOptions),
         resumeSessions: new Map(),
@@ -1748,6 +1754,7 @@ export class GraphExecutorService
         cwd,
         seedPrompt: text,
         customInstructions: run.customInstructions,
+        replyLanguage: run.replyLanguage,
         taskInstructions: run.taskInstructions,
         agentOptions: readAgentOptions(run.agentOptions),
         resumeSessions,
@@ -2641,6 +2648,7 @@ export class GraphExecutorService
       cwd,
       seedPrompt,
       customInstructions,
+      replyLanguage,
       taskInstructions,
       agentOptions,
     } = run;
@@ -4163,6 +4171,7 @@ export class GraphExecutorService
         // a standing preference. Joining them here would put that ordering in
         // the executor and leave the chat path free to disagree about it.
         customInstructions,
+        replyLanguage,
         // A peer on the same terms; ranked right after the user's own text.
         taskInstructions,
         // Joined here because the order of several blocks is a graph fact no

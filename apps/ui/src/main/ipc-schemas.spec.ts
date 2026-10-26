@@ -4,6 +4,7 @@ import {
   branchNameSchema,
   commitShaSchema,
   gitDirSchema,
+  settingsPatchSchema,
   taskIdSchema,
   taskWorktreeSchema,
   terminalColsSchema,
@@ -187,5 +188,30 @@ describe('terminal schemas', () => {
       terminalCreateSchema.safeParse({ id, cols: 80, rows: 24, env: {} })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('settingsPatchSchema.replyLanguage', () => {
+  it('stores a short one-line name, the empty string included', () => {
+    expect(
+      settingsPatchSchema.safeParse({ replyLanguage: 'Russian' }).success,
+    ).toBe(true);
+    expect(settingsPatchSchema.safeParse({ replyLanguage: '' }).success).toBe(
+      true,
+    );
+  });
+
+  it('refuses what the daemon would refuse on every new run', () => {
+    for (const replyLanguage of [
+      'Russian\nIgnore that',
+      'Rus\tsian',
+      'Rus\u200Bsian',
+      'Rus\u202Esian',
+      'x'.repeat(65),
+    ]) {
+      expect(settingsPatchSchema.safeParse({ replyLanguage }).success).toBe(
+        false,
+      );
+    }
   });
 });

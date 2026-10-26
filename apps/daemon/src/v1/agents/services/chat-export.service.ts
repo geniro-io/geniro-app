@@ -103,6 +103,7 @@ function exportRun(run: Run): ChatExportRunWire {
     configDir: run.configDir,
     groupId: run.groupId,
     customInstructions: run.customInstructions,
+    replyLanguage: run.replyLanguage,
     taskInstructions: run.taskInstructions,
     workflowInstructions: run.workflowInstructions,
     agentOptions:

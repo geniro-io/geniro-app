@@ -5,6 +5,7 @@ import {
   AgentOptionsSchema,
   commitShaSchema,
   CustomInstructionsSchema,
+  ReplyLanguageSchema,
 } from '../../agents/chat.types';
 import { messageImagesSchema } from '../../agents/dto/chat.dto';
 import {
@@ -80,6 +81,8 @@ export const runWorkflowSchema = z
      * outranks a standing preference.
      */
     customInstructions: CustomInstructionsSchema.optional(),
+    /** The user's reply language, snapshotted onto the run like a chat's. */
+    replyLanguage: ReplyLanguageSchema.optional(),
     /**
      * The user's per-CLI switches, snapshotted onto the run exactly as a chat
      * snapshots them ({@link Run.agentOptions}); each agent node's turn carries

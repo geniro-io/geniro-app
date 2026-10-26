@@ -6771,6 +6771,21 @@ describe('GraphExecutorService — agent calls', () => {
     );
   });
 
+  it('startRunBySlug carries the reply language through to the run row and every node', async () => {
+    const { service, claude, runDao, storeGet } = setup();
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      replyLanguage: 'Russian',
+    });
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.replyLanguage).toBe('Russian');
+    expect(claude.starts[0]!.input.replyLanguage).toBe('Russian');
+  });
+
   it('startRunBySlug records the folder’s start commit on the run row', async () => {
     // What the folder's line totals are measured against: without it a workflow run counts
     // as a thread on the Stats page and never contributes a line.
@@ -6888,6 +6903,27 @@ describe('GraphExecutorService — agent calls', () => {
     const next = claude.starts[2];
     expect(next).toBeDefined();
     expect(next!.input.taskInstructions).toBe('LABEL BLOCK\n\nREPORT ASK');
+  });
+
+  it('a follow-up pass on a settled run carries the reply language', async () => {
+    const { service, claude, runDao, storeGet } = setup();
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      replyLanguage: 'Russian',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'A done');
+    await drain();
+    completeTurn(claude.starts[1]!, 'B done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    await service.sendMessage(run.id, 'one more thing');
+    await drain();
+
+    expect(claude.starts[2]!.input.replyLanguage).toBe('Russian');
   });
 
   it('startRunBySlug propagates a library miss without creating a run', async () => {

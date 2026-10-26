@@ -5,6 +5,7 @@ import {
   AgentOptionsSchema,
   ChatApprovalModeSchema,
   CustomInstructionsSchema,
+  ReplyLanguageSchema,
 } from '../../agents/chat.types';
 import { commitShaSchema } from '../../agents/chat.types';
 import { AgentKindSchema } from '../../runs/runs.types';
@@ -103,6 +104,8 @@ export const startTaskRunSchema = z.object({
    * every agent.
    */
   customInstructions: CustomInstructionsSchema.optional(),
+  /** The user's reply language, on the same road as `customInstructions`. */
+  replyLanguage: ReplyLanguageSchema.optional(),
   /**
    * The user's per-CLI switches, sent by the client on the same road as
    * `customInstructions` and snapshotted onto the run the press creates.

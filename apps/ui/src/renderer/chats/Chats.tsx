@@ -87,6 +87,7 @@ import {
 } from '../notifications/use-run-notifications';
 import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
+import { currentRunSettings } from '../run-settings';
 import { followTail } from '../scroll-to-bottom';
 import type { SettingsSection } from '../settings/Settings';
 import { useLineSnapshots } from '../stats/use-line-snapshots';
@@ -535,46 +536,10 @@ function runAwaiting(run: ChatRun): RunAwaiting | null {
 }
 
 /**
- * The user's global custom instructions, as a spreadable create-payload
- * fragment — `{ customInstructions }` when they have written some, `{}` when
- * they have not.
- *
- * Read from settings at the moment a run is created rather than cached in
- * component state, because the values are SNAPSHOTTED onto that run: a cached
- * copy would start a chat on text the Settings screen had already replaced,
- * and this screen stays mounted across nav switches, so the stale window is
- * the whole session rather than a moment.
- *
- * Blank collapses to `{}` so an untouched box and a cleared one reach the
- * daemon identically — it normalizes to null either way, and omitting keeps
- * the two indistinguishable on the wire as well.
- */
-async function currentRunSettings(): Promise<{
-  customInstructions?: string;
-  agentOptions?: Partial<Record<CliKind, Record<string, boolean>>>;
-}> {
-  // Defensive defaults, not a contract gap: `readSettings` merges over
-  // DEFAULT_SETTINGS on every branch, so production always carries both keys.
-  // What does not is a test stub of `getSettings`, and a chat must not fail to
-  // open over a missing field either way.
-  const { customInstructions = '', agentOptions } =
-    await window.geniro.getSettings();
-  return {
-    ...(customInstructions.trim() ? { customInstructions } : {}),
-    // Sent whenever the settings HAVE the map, even one whose every value is
-    // `false` — the daemon reads an absent id as that option's own default, so
-    // a user who declined one must not be indistinguishable from one who never
-    // touched it. The daemon snapshots the WHOLE map and hands each turn its
-    // own agent's slice, so nothing here narrows it to the run's own kind.
-    ...(agentOptions === undefined ? {} : { agentOptions }),
-  };
-}
-
-/**
  * Where the run's folder stands right now, as a spreadable create-payload
  * fragment — the fixed point the chat's diff view later measures against.
  *
- * Read at creation for the reason {@link currentRunSettings} is, and kept
+ * Read at creation for the reason `currentRunSettings` is, and kept
  * separate from it because a stamp is a reading of the FOLDER, not a run
  * setting. A WORKFLOW run is stamped too, against the run's own folder: it is
  * the start commit that folder's line totals are measured from, so an

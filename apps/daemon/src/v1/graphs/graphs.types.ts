@@ -765,6 +765,7 @@ export const StartWorkflowChatSchema = createChatSchema
     modelParameters: true,
     configDir: true,
     customInstructions: true,
+    replyLanguage: true,
     agentOptions: true,
   })
   .meta({ id: 'StartWorkflowChat' });

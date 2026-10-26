@@ -1234,6 +1234,22 @@ describe('AgentAdapter sessions separate on the custom instructions', () => {
       ),
     ).not.toBeNull();
   });
+
+  it('refuses to serve a turn whose reply language differs from the spawn’s', async () => {
+    const session = await sessionAfterFirstTurn('BE TERSE');
+
+    expect(
+      session.startTurn(
+        {
+          prompt: 'second',
+          cwd: '/proj',
+          customInstructions: 'BE TERSE',
+          replyLanguage: 'Russian',
+        },
+        () => {},
+      ),
+    ).toBeNull();
+  });
 });
 
 describe('AgentAdapter sessions separate on a working directory made again', () => {

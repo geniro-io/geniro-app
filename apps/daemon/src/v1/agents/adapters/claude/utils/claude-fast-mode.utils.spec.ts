@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import { CLAUDE_FAST_MODE_PARAMETER_ID } from '../claude.const';
 import {
-  CLAUDE_FAST_MODE_PARAMETER_ID,
-  CLAUDE_SETTINGS_FLAG,
-} from '../claude.const';
-import {
-  fastModeArgs,
   fastModeParameter,
   isFastModeCapable,
+  wantsFastMode,
 } from './claude-fast-mode.utils';
 
 describe('isFastModeCapable', () => {
@@ -42,24 +39,13 @@ describe('fastModeParameter', () => {
   });
 });
 
-describe('fastModeArgs', () => {
-  it('passes --settings only when the parameter is explicitly ON', () => {
-    // The real observable a false pin would miss: not merely "some argv
-    // appears", but the EXACT flag and JSON payload the CLI reads its opt-in
-    // from (probe-verified — see `CLAUDE_SETTINGS_FLAG`'s doc block: omitting
-    // it reports `fast_mode_disabled_reason: "sdk_opt_in_required"`).
-    expect(fastModeArgs({ fastMode: 'true' })).toEqual([
-      CLAUDE_SETTINGS_FLAG,
-      '{"fastMode":true}',
-    ]);
-  });
-
-  it('omits the flag for every other value, including an explicit OFF', () => {
-    expect(fastModeArgs({ fastMode: 'false' })).toEqual([]);
-    expect(fastModeArgs({})).toEqual([]);
-    expect(fastModeArgs(null)).toEqual([]);
-    expect(fastModeArgs(undefined)).toEqual([]);
-    // A stray or malformed value must not be read as consent to opt in.
-    expect(fastModeArgs({ fastMode: 'yes' })).toEqual([]);
+describe('wantsFastMode', () => {
+  it('reads only an explicit ON as consent to opt in', () => {
+    expect(wantsFastMode({ fastMode: 'true' })).toBe(true);
+    expect(wantsFastMode({ fastMode: 'false' })).toBe(false);
+    expect(wantsFastMode({})).toBe(false);
+    expect(wantsFastMode(null)).toBe(false);
+    expect(wantsFastMode(undefined)).toBe(false);
+    expect(wantsFastMode({ fastMode: 'yes' })).toBe(false);
   });
 });

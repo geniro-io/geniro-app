@@ -237,6 +237,17 @@ describe('ThreadAnalysisService.start', () => {
     );
   });
 
+  it('hands the analysis chat the user’s reply language', async () => {
+    const { service, createChat } = build({ workflowId: 'dev-team' });
+
+    await service.start('source', {
+      agentKind: 'claude',
+      replyLanguage: 'Russian',
+    });
+
+    expect(createChat.mock.calls[0]![0].replyLanguage).toBe('Russian');
+  });
+
   it('records whether the source was still working at the snapshot', async () => {
     const { service, createChat } = build({ status: 'running' });
 

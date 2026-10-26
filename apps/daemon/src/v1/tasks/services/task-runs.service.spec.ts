@@ -556,6 +556,17 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       );
     });
 
+    it('hands a workflow-targeted card’s run the user’s reply language', async () => {
+      const task = await seedWorkflowCard();
+
+      await service.start(task.id, start({ replyLanguage: 'Russian' }));
+
+      const passed = startWorkflowRun.mock.calls[0]?.[1] as {
+        replyLanguage?: string;
+      };
+      expect(passed.replyLanguage).toBe('Russian');
+    });
+
     it('starts a workflow-targeted card unattended when every agent node is on auto', async () => {
       workflowApprovals = { 'dev-team': 'auto' };
       const task = await seedWorkflowCard();
@@ -751,6 +762,15 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     ];
     expect(passed.customInstructions).toBe('Always use pnpm.');
     expect(passed.taskInstructions).toBe(TASK_REPORT_INSTRUCTIONS);
+  });
+
+  it('hands the chat a press creates the user’s reply language', async () => {
+    const task = await seed();
+
+    await service.start(task.id, start({ replyLanguage: 'Russian' }));
+
+    const [passed] = createChat.mock.calls[0] as [{ replyLanguage?: string }];
+    expect(passed.replyLanguage).toBe('Russian');
   });
 
   it('hands the chat a press creates the user’s per-CLI switches', async () => {

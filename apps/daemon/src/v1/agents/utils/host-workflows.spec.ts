@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  HOST_BACKUP_WORKFLOW_TOOL,
   HOST_PROPOSE_WORKFLOW_TOOL,
   HOST_READ_WORKFLOWS_TOOL,
+  HOST_WORKFLOW_CHANGE_TOOL,
 } from '../chat.types';
 import {
+  isHostBuilderWorkflowCall,
   isHostWorkflowProposalCall,
   workflowVerdictMessage,
 } from './host-workflows';
@@ -33,6 +36,45 @@ describe('workflow host-tool predicates', () => {
   it('refuse a same-named tool on somebody else’s server', () => {
     expect(
       isHostWorkflowProposalCall(SERVER, 'mcp__acme__propose_workflow'),
+    ).toBe(false);
+  });
+});
+
+describe('isHostBuilderWorkflowCall', () => {
+  const call = (tool: string) => `mcp__${SERVER}__${tool}`;
+
+  it('passes the read and the backup always, and the save only where the CLI edits unasked', () => {
+    for (const editsUnasked of [true, false]) {
+      expect(
+        isHostBuilderWorkflowCall(
+          SERVER,
+          call(HOST_READ_WORKFLOWS_TOOL),
+          editsUnasked,
+        ),
+      ).toBe(true);
+      expect(
+        isHostBuilderWorkflowCall(
+          SERVER,
+          call(HOST_BACKUP_WORKFLOW_TOOL),
+          editsUnasked,
+        ),
+      ).toBe(true);
+    }
+    expect(
+      isHostBuilderWorkflowCall(SERVER, call(HOST_WORKFLOW_CHANGE_TOOL), true),
+    ).toBe(true);
+    expect(
+      isHostBuilderWorkflowCall(SERVER, call(HOST_WORKFLOW_CHANGE_TOOL), false),
+    ).toBe(false);
+    expect(
+      isHostBuilderWorkflowCall(SERVER, call(HOST_PROPOSE_WORKFLOW_TOOL), true),
+    ).toBe(false);
+    expect(
+      isHostBuilderWorkflowCall(
+        SERVER,
+        `mcp__acme__${HOST_WORKFLOW_CHANGE_TOOL}`,
+        true,
+      ),
     ).toBe(false);
   });
 });

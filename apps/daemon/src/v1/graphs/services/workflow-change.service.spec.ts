@@ -1,4 +1,11 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,10 +15,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { Workflow } from '../graphs.types';
+import { configDirToken } from '../utils/config-dir-redaction';
 import { WORKFLOW_BACKUP_DIR } from '../utils/workflow-backup';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import {
   type WorkflowChange,
+  type WorkflowChangeAuthority,
   WorkflowChangeService,
 } from './workflow-change.service';
 import { WorkflowStoreService } from './workflow-store.service';
@@ -75,19 +84,44 @@ describe('WorkflowChangeService', () => {
     return (await service.describe('dev-team', null)).hash as string;
   }
 
+  /**
+   * An analysis's save of `ids` (default W-1) against `baseHash` (default the
+   * file as it stands), unless `authority` is given.
+   */
   async function change(
-    overrides: Partial<WorkflowChange> = {},
+    overrides: Partial<WorkflowChange> & {
+      ids?: string[];
+      baseHash?: string;
+    } = {},
   ): Promise<Record<string, unknown>> {
-    return service.save({
+    const { ids = ['W-1'], baseHash, authority, ...rest } = overrides;
+    const asked: WorkflowChangeAuthority = authority ?? {
+      kind: 'apply',
       analysisRunId: 'analysis',
+      ids,
+      baseHash: baseHash ?? (await hash()),
+    };
+    return service.save({
+      authority: asked,
       slug: 'dev-team',
       edits: [{ path: 'nodes/reviewer/model', value: 'sonnet' }],
-      baseHash: await hash(),
-      ids: ['W-1'],
       dryRun: false,
-      ...overrides,
+      ...rest,
     });
   }
+
+  /** A builder turn that began now and has not saved yet. */
+  const builder = (
+    turn: Partial<
+      Omit<Extract<WorkflowChangeAuthority, { kind: 'builder' }>, 'kind'>
+    > = {},
+  ): WorkflowChangeAuthority => ({
+    kind: 'builder',
+    savedHash: null,
+    turnStartedAt: Date.now(),
+    acceptsAnyVersion: false,
+    ...turn,
+  });
 
   it('backs the file up before saving, and the backup is never listed as a workflow', async () => {
     const before = await readFile(join(dir, 'dev-team.geniro.yaml'), 'utf8');
@@ -156,7 +190,7 @@ describe('WorkflowChangeService', () => {
     store.save = async (slug, workflow, baseHash) => {
       if (first) {
         first = false;
-        // A builder autosave lands between the service's check and its write.
+        // A canvas autosave lands between the service's check and its write.
         await realSave(slug, { ...WF, description: 'builder autosave' });
       }
       return realSave(slug, workflow, baseHash);
@@ -233,6 +267,253 @@ describe('WorkflowChangeService', () => {
     });
     expect((await store.get('dev-team')).workflow).toEqual(WF);
     await expect(readdir(dir)).resolves.not.toContain(WORKFLOW_BACKUP_DIR);
+  });
+
+  describe('from a builder chat', () => {
+    const PROFILE = '/Users/someone/.claude-work';
+    const PROFILED: Workflow = {
+      ...WF,
+      nodes: [
+        { ...WF.nodes[0]!, configDir: PROFILE } as Workflow['nodes'][number],
+        WF.nodes[1]!,
+      ],
+    };
+
+    it('saves with no Apply and no hash behind it, and takes no backup of its own', async () => {
+      applies = [];
+
+      const result = await change({ authority: builder() });
+
+      expect(result).toMatchObject({ saved: true });
+      expect(result.hash).toBe(await hash());
+      expect(result).not.toHaveProperty('backup');
+      await expect(readdir(dir)).resolves.not.toContain(WORKFLOW_BACKUP_DIR);
+      expect((await store.get('dev-team')).workflow.nodes[1]).toMatchObject({
+        model: 'sonnet',
+      });
+    });
+
+    it('refuses a file written after its turn began, before its first save', async () => {
+      const result = await change({ authority: builder({ turnStartedAt: 0 }) });
+
+      expect(result).toMatchObject({ saved: false, error: 'HASH_DRIFT' });
+      expect(result.message).toMatch(/read the file again/);
+      expect(result.currentHash).toBe(await hash());
+      expect((await store.get('dev-team')).workflow).toEqual(WF);
+    });
+
+    it("counts a write in the turn's first millisecond as before it, and one a millisecond later as after", async () => {
+      const written = Math.floor(
+        (await stat(join(dir, 'dev-team.geniro.yaml'))).mtimeMs,
+      );
+
+      expect(
+        await change({
+          authority: builder({ turnStartedAt: written - 1 }),
+          dryRun: true,
+        }),
+      ).toMatchObject({ error: 'HASH_DRIFT' });
+      expect(
+        await change({
+          authority: builder({ turnStartedAt: written }),
+          dryRun: true,
+        }),
+      ).toMatchObject({ dryRun: true, saved: false });
+    });
+
+    it('reports the version it lost a race to, so the next save can settle', async () => {
+      const realSave = store.save.bind(store);
+      let first = true;
+      store.save = async (slug, workflow, baseHash) => {
+        if (first) {
+          first = false;
+          await realSave(slug, { ...WF, description: 'canvas edit' });
+        }
+        return realSave(slug, workflow, baseHash);
+      };
+
+      const result = await change({ authority: builder() });
+
+      expect(result).toMatchObject({ saved: false, error: 'HASH_DRIFT' });
+      expect(result.currentHash).toBe(await hash());
+    });
+
+    it('stays a refusal when the write it lost to left a file that does not parse', async () => {
+      const realSave = store.save.bind(store);
+      store.save = async (slug, workflow, baseHash) => {
+        await writeFile(join(dir, 'dev-team.geniro.yaml'), 'nodes: [\n');
+        return realSave(slug, workflow, baseHash);
+      };
+
+      const result = await change({ authority: builder() });
+
+      expect(result).toMatchObject({ saved: false, error: 'HASH_DRIFT' });
+      expect(typeof result.currentHash).toBe('string');
+    });
+
+    it('checks a later save against the version the turn last knew, not the turn start', async () => {
+      const known = await hash();
+
+      expect(
+        await change({
+          authority: builder({ savedHash: known, turnStartedAt: 0 }),
+        }),
+      ).toMatchObject({ saved: true });
+      expect(
+        await change({
+          authority: builder({ savedHash: known }),
+          edits: [{ path: 'nodes/reviewer/model', value: 'opus' }],
+        }),
+      ).toMatchObject({ saved: false, error: 'HASH_DRIFT' });
+    });
+
+    it('points a find that matches nothing at the file, not at an analysis view', async () => {
+      const result = await change({
+        authority: builder(),
+        edits: [{ find: 'not in the workflow', replace: 'x' }],
+      });
+
+      expect(result).toMatchObject({ saved: false, error: 'INVALID_EDIT' });
+      expect(result.message).toMatch(/copy it exactly from the workflow file/);
+    });
+
+    it('refuses a file that no longer parses, naming the fault but quoting no line of it', async () => {
+      await writeFile(
+        join(dir, 'dev-team.geniro.yaml'),
+        'name: Dev Team\nnodes:\n  - id: a\n    configDir: /Users/someone/.claude-work\n      bad: indent\n',
+      );
+
+      const result = await change({
+        authority: builder({ turnStartedAt: Date.now() + 60_000 }),
+      });
+
+      expect(result).toMatchObject({
+        saved: false,
+        error: 'WORKFLOW_UNREADABLE',
+      });
+      expect(result.message).toMatch(/fix only what this names/);
+      expect(result.message).not.toContain('.claude-work');
+    });
+
+    it('names the version it checked on every answer past the check, so a repair is pinned', async () => {
+      const repaired = builder({ turnStartedAt: 0, acceptsAnyVersion: true });
+
+      for (const result of [
+        await change({ authority: repaired, dryRun: true }),
+        await change({
+          authority: repaired,
+          edits: [{ find: 'not in the workflow', replace: 'x' }],
+        }),
+        await change({
+          authority: repaired,
+          edits: [{ path: 'nodes/reviewer/model', value: undefined }],
+        }),
+      ]) {
+        expect(result.currentHash).toBe(await hash());
+      }
+    });
+
+    it('takes the file as it stands after the agent repaired one it could not load', async () => {
+      const result = await change({
+        authority: builder({
+          savedHash: 'before-the-repair',
+          turnStartedAt: 0,
+          acceptsAnyVersion: true,
+        }),
+      });
+
+      expect(result).toMatchObject({ saved: true });
+    });
+
+    it('refuses an invalid graph and writes nothing', async () => {
+      const result = await change({
+        authority: builder(),
+        edits: [
+          {
+            path: 'edges/-',
+            value: { from: 'reviewer', to: 'builder', kind: 'data' },
+          },
+        ],
+      });
+
+      expect(result).toMatchObject({ saved: false, error: 'INVALID_WORKFLOW' });
+      await expect(readdir(dir)).resolves.not.toContain(WORKFLOW_BACKUP_DIR);
+    });
+
+    it('puts back a profile it wrote as the token read_workflows showed', async () => {
+      await store.save('dev-team', PROFILED);
+      const node = {
+        ...WF.nodes[0]!,
+        configDir: configDirToken(PROFILE),
+        model: 'opus',
+      };
+
+      const result = await change({
+        authority: builder({ savedHash: await hash() }),
+        edits: [{ path: 'nodes/builder', value: node }],
+      });
+
+      expect(result).toMatchObject({ saved: true });
+      expect((await store.get('dev-team')).workflow.nodes[0]).toMatchObject({
+        configDir: PROFILE,
+        model: 'opus',
+      });
+    });
+
+    it('refuses a token that names no profile of this workflow, and writes nothing', async () => {
+      const result = await change({
+        authority: builder(),
+        edits: [
+          {
+            path: 'nodes/builder/configDir',
+            value: configDirToken('/elsewhere'),
+          },
+        ],
+      });
+
+      expect(result).toMatchObject({
+        saved: false,
+        error: 'CONFIG_DIR_UNKNOWN',
+      });
+      expect((await store.get('dev-team')).workflow).toEqual(WF);
+    });
+  });
+
+  it('backs the file up as it stands when asked, and refuses a deleted workflow', async () => {
+    const before = await readFile(join(dir, 'dev-team.geniro.yaml'), 'utf8');
+
+    const result = await service.backUp('dev-team');
+
+    const backups = await readdir(join(dir, WORKFLOW_BACKUP_DIR));
+    expect(result).toEqual({
+      backedUp: true,
+      backup: `${WORKFLOW_BACKUP_DIR}/${backups[0]}`,
+    });
+    expect(
+      await readFile(join(dir, WORKFLOW_BACKUP_DIR, backups[0]!), 'utf8'),
+    ).toBe(before);
+    await store.delete('dev-team');
+    expect(await service.backUp('dev-team')).toMatchObject({
+      error: 'WORKFLOW_GONE',
+    });
+  });
+
+  it('answers the backup it already has for an unchanged file, and copies a changed one', async () => {
+    const first = await service.backUp('dev-team');
+
+    expect(await service.backUp('dev-team')).toEqual({
+      backedUp: true,
+      backup: first.backup,
+      unchangedSinceThatBackup: true,
+    });
+    expect(await readdir(join(dir, WORKFLOW_BACKUP_DIR))).toHaveLength(1);
+
+    await store.save('dev-team', FASTER);
+    const changed = await service.backUp('dev-team');
+
+    expect(changed.backup).not.toBe(first.backup);
+    expect(changed).not.toHaveProperty('unchangedSinceThatBackup');
+    expect(await readdir(join(dir, WORKFLOW_BACKUP_DIR))).toHaveLength(2);
   });
 
   it("describes the library copy against the run's own snapshot", async () => {

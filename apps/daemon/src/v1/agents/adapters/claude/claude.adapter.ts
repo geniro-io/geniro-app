@@ -408,6 +408,8 @@ export class ClaudeAdapter extends AgentAdapter {
       approval: {
         /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */
         modes: ['auto', 'ask', 'acceptEdits', 'plan'],
+        /** `ask` and `plan` raise a permission request for every edit. */
+        workspaceEditsUnasked: ['auto', 'acceptEdits'],
         /**
          * The two modes headless claude has been seen to reject on some builds
          * — so a run requesting either waits out the mode probe, and a run that

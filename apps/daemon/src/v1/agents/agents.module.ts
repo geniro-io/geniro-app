@@ -132,6 +132,7 @@ import { ThreadTimelineService } from './services/thread-timeline.service';
 import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
 import { UserQuestionBroker } from './services/user-question.broker';
 import { WallWorkService } from './services/wall-work.service';
+import { WorkflowBuilderBroker } from './services/workflow-builder.broker';
 import { WorkflowProposalBroker } from './services/workflow-proposal.broker';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 import { defaultSpawn } from './utils/spawn-cli';
@@ -225,6 +226,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ArtifactBroker,
     ActionBroker,
     WorkflowProposalBroker,
+    WorkflowBuilderBroker,
     ActionPublishService,
     ActionPressService,
     ActionStopService,
@@ -566,6 +568,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ActionPublishService,
     ActionPressService,
     WorkflowProposalBroker,
+    WorkflowBuilderBroker,
     // And the store behind it: a WORKFLOW node publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,

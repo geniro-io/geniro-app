@@ -34,15 +34,21 @@ const MAX_NAMED_MATCHES = 5;
  * Apply `edits` in order, each to the result of the one before, to a COPY of
  * `workflow`. Validation of the result is the caller's: this only says whether
  * every edit could be carried out as written.
+ *
+ * `copyFrom` finishes the sentence telling the agent where to copy a `find`
+ * that matched nothing — the read it made the edit from.
  */
 export function applyWorkflowEdits(
   workflow: unknown,
   edits: readonly WorkflowEdit[],
+  copyFrom: string,
 ): WorkflowEditResult {
   let doc: unknown = structuredClone(workflow);
   for (const [index, edit] of edits.entries()) {
     const applied =
-      'find' in edit ? replaceText(doc, edit) : applyAtPath(doc, edit);
+      'find' in edit
+        ? replaceText(doc, edit, copyFrom)
+        : applyAtPath(doc, edit);
     if (typeof applied === 'string') {
       return { ok: false, message: `edit ${index + 1}: ${applied}` };
     }
@@ -94,6 +100,7 @@ function occurrences(text: string, find: string): number {
 function replaceText(
   doc: unknown,
   edit: { find: string; replace: string },
+  copyFrom: string,
 ): { doc: unknown } | string {
   if (edit.find === '') {
     return '`find` is empty';
@@ -103,7 +110,7 @@ function replaceText(
     .filter((match) => match.count > 0);
   const total = matches.reduce((sum, match) => sum + match.count, 0);
   if (total === 0) {
-    return '`find` matches no text in the workflow — copy it exactly from view="workflow", as the decoded string rather than its JSON escapes';
+    return `\`find\` matches no text in the workflow — copy it exactly from ${copyFrom}`;
   }
   if (total > 1) {
     const where = matches
@@ -126,6 +133,13 @@ function segmentsOf(path: string): string[] {
   return path.split('/').filter((segment) => segment !== '');
 }
 
+/**
+ * Names a path may never walk through or write: the model writes the path,
+ * and through these an edit would reach what every object in the daemon
+ * inherits rather than the workflow.
+ */
+const RESERVED_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
 /** The array index a segment names: a number, or the `id` of an element. */
 function indexIn(array: unknown[], segment: string): number {
   if (/^\d+$/.test(segment)) {
@@ -141,6 +155,10 @@ function applyAtPath(
   edit: { path: string; value?: unknown } | { path: string; remove: true },
 ): { doc: unknown } | string {
   const segments = segmentsOf(edit.path);
+  const reserved = segments.find((segment) => RESERVED_SEGMENTS.has(segment));
+  if (reserved !== undefined) {
+    return `"${reserved}" cannot be part of a path`;
+  }
   const last = segments.pop();
   if (last === undefined) {
     return '`path` names the whole workflow — name the field to change';
@@ -158,7 +176,7 @@ function applyAtPath(
         return `no element "${segment}" at ${at}`;
       }
       holder = holder[index];
-    } else if (isRecord(holder) && segment in holder) {
+    } else if (isRecord(holder) && Object.hasOwn(holder, segment)) {
       holder = holder[segment];
     } else {
       return `nothing at ${at}`;
@@ -194,7 +212,7 @@ function applyAtPath(
     return `${segments.join('/') || '(root)'} is not an object or a list`;
   }
   if (removing) {
-    if (!(last in holder)) {
+    if (!Object.hasOwn(holder, last)) {
       return `nothing at ${edit.path} to remove`;
     }
     delete holder[last];

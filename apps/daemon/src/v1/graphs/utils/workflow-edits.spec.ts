@@ -13,7 +13,7 @@ const WF = {
 };
 
 function applied(edits: Parameters<typeof applyWorkflowEdits>[1]) {
-  const result = applyWorkflowEdits(WF, edits);
+  const result = applyWorkflowEdits(WF, edits, 'view="workflow"');
   if (!result.ok) {
     throw new Error(result.message);
   }
@@ -21,7 +21,7 @@ function applied(edits: Parameters<typeof applyWorkflowEdits>[1]) {
 }
 
 function refusal(edits: Parameters<typeof applyWorkflowEdits>[1]): string {
-  const result = applyWorkflowEdits(WF, edits);
+  const result = applyWorkflowEdits(WF, edits, 'view="workflow"');
   if (result.ok) {
     throw new Error('expected a refusal');
   }
@@ -104,5 +104,20 @@ describe('applyWorkflowEdits', () => {
         { find: 'absent', replace: 'x' },
       ]),
     ).toMatch(/^edit 2:/);
+  });
+
+  it('never reaches past the workflow into what every object inherits', () => {
+    for (const path of [
+      '__proto__/polluted',
+      'constructor/prototype/polluted',
+      'nodes/__proto__/polluted',
+    ]) {
+      expect(refusal([{ path, value: 'yes' }])).toMatch(/^edit 1:/);
+    }
+    expect(refusal([{ path: '__proto__/toString', remove: true }])).toMatch(
+      /^edit 1:/,
+    );
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(typeof Object.prototype.toString).toBe('function');
   });
 });

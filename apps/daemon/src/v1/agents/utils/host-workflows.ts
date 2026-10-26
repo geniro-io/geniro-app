@@ -1,6 +1,8 @@
 import {
+  HOST_BACKUP_WORKFLOW_TOOL,
   HOST_PROPOSE_WORKFLOW_TOOL,
   HOST_READ_WORKFLOWS_TOOL,
+  HOST_WORKFLOW_CHANGE_TOOL,
   MAX_ANSWER_LENGTH,
   PendingOwnedCardSchema,
   type WorkflowProposalVerdict,
@@ -19,6 +21,30 @@ export function isHostWorkflowProposalCall(
   toolName: string,
 ): boolean {
   return isHostToolCall(serverName, toolName, HOST_PROPOSE_WORKFLOW_TOOL);
+}
+
+/**
+ * Whether a workflow builder chat's call to its own workflow tools goes
+ * without a card — asked only on a builder turn.
+ *
+ * Its read is a library read the user opened this chat to have done, and its
+ * backup only copies the file aside. Its save is the one way the chat may
+ * change the file, so it is approved wherever the CLI would make the agent's
+ * own edit of that file without asking (`editsUnasked`, from
+ * `AdapterConfig.approval.workspaceEditsUnasked`): a card the direct edit
+ * would not raise would push the agent back to it.
+ */
+export function isHostBuilderWorkflowCall(
+  serverName: string | null,
+  toolName: string,
+  editsUnasked: boolean,
+): boolean {
+  return (
+    isHostToolCall(serverName, toolName, HOST_READ_WORKFLOWS_TOOL) ||
+    isHostToolCall(serverName, toolName, HOST_BACKUP_WORKFLOW_TOOL) ||
+    (editsUnasked &&
+      isHostToolCall(serverName, toolName, HOST_WORKFLOW_CHANGE_TOOL))
+  );
 }
 
 /**

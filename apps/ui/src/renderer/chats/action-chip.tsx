@@ -20,6 +20,7 @@ import {
   SHELF_CHIP_CLASS,
   SHELF_CHIP_TRIGGER_CLASS,
   SHELF_CHIP_WRAPPER_CLASS,
+  SHELF_YIELD_CLASS,
 } from './shelf-chip';
 import { type ActionPressPhase, isActionBusy } from './use-chat-actions';
 
@@ -133,9 +134,13 @@ export function ActionChip({
       aria-busy={busy || undefined}
       aria-disabled={busy || undefined}
       title={tooltipOf(action, phase)}
+      // It SHRINKS, like the pull requests before it: `shrink-0` here once left
+      // them all of a crowded shelf's squeeze, down to an empty 2px card. The
+      // floor is the glyph; the label yields (`SHELF_YIELD_CLASS`), and the
+      // tooltip and accessible name still carry it whole.
       className={cn(
         SHELF_CHIP_CLASS,
-        'shrink-0 cursor-pointer focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none max-sm:h-11',
+        'min-w-min cursor-pointer focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none max-sm:h-11',
         busy && 'cursor-default',
         className,
       )}
@@ -145,14 +150,20 @@ export function ActionChip({
         }
       }}>
       <ActionGlyph action={action} phase={phase} />
-      <span className="max-w-40 truncate font-medium">{action.label}</span>
-      {action.publisher.agentLabel === undefined ? null : (
-        <span
-          data-slot="action-agent"
-          className="max-w-24 truncate text-muted-foreground">
-          · {action.publisher.agentLabel}
+      <span className={SHELF_YIELD_CLASS}>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="max-w-40 min-w-0 truncate font-medium">
+            {action.label}
+          </span>
+          {action.publisher.agentLabel === undefined ? null : (
+            <span
+              data-slot="action-agent"
+              className="max-w-24 min-w-0 truncate text-muted-foreground">
+              · {action.publisher.agentLabel}
+            </span>
+          )}
         </span>
-      )}
+      </span>
     </button>
   );
 }
@@ -366,7 +377,7 @@ export function ChatActionChips({
       role="group"
       aria-label="Chat actions"
       data-slot="chat-actions"
-      className="flex min-w-0 shrink-0 items-center gap-1.5 border-l border-border pl-1.5">
+      className="flex min-w-min items-center gap-1.5 border-l border-border pl-1.5">
       {visible.map((action, index) => (
         <ActionChip
           key={action.seq}

@@ -80,6 +80,7 @@ import { PullRequestCaptureService } from '../../agents/services/pull-request-ca
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import {
   type AgentOptionsSnapshot,
@@ -784,6 +785,8 @@ export class GraphExecutorService
     /** The monitor tools, optional on `artifacts`' terms. */
     @Optional() private readonly monitors?: MonitorRegistry,
     @Optional() private readonly monitorSinks?: MonitorBroker,
+    /** The team-note tools, optional on `artifacts`' terms. */
+    @Optional() private readonly teamNotes?: TeamNoteBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -814,6 +817,9 @@ export class GraphExecutorService
 
   /** Each run's monitor sinks, on the same terms. */
   private readonly monitorDisposers = new Map<string, (() => void)[]>();
+
+  /** Each run's team-note sinks, on the same terms. */
+  private readonly teamNoteDisposers = new Map<string, (() => void)[]>();
 
   /**
    * How a monitor's output reaches one of a run's conversations — installed by
@@ -1821,14 +1827,16 @@ export class GraphExecutorService
   }
 
   /**
-   * Drop a run's page and button publishers — every way a run is destroyed
-   * calls this.
+   * Drop a run's host-tool sinks (pages, buttons, monitors, team notes) and
+   * forget its team notes' read state — every way a run is destroyed calls
+   * this.
    */
   private disposeHostPublishers(runId: string): void {
     for (const disposers of [
       this.artifactDisposers,
       this.actionDisposers,
       this.monitorDisposers,
+      this.teamNoteDisposers,
     ]) {
       for (const dispose of disposers.get(runId) ?? []) {
         dispose();
@@ -1836,6 +1844,7 @@ export class GraphExecutorService
       disposers.delete(runId);
     }
     this.monitorWakers.delete(runId);
+    this.teamNotes?.forgetRun(runId);
   }
 
   /**
@@ -2057,6 +2066,55 @@ export class GraphExecutorService
       );
     }
     this.monitorDisposers.set(runId, disposers);
+  }
+
+  /**
+   * Give each agent node of this pass the team-note tools (`team_note`,
+   * `team_notes`), on {@link registerArtifactPublishers}' terms. Every agent
+   * of the run shares one store whether or not it is wired to the others; a
+   * note is written into its author's own transcript and, when that
+   * conversation answers a call, filed in that call's card.
+   */
+  private registerTeamNoteSinks(
+    runId: string,
+    hostToolNodes: readonly WorkflowAgentNode[],
+    nodes: readonly WorkflowNode[],
+    persistItem: (
+      nodeId: string | null,
+      kind: ItemKind,
+      role: string | null,
+      payload: unknown,
+    ) => Promise<ItemWire>,
+  ): void {
+    const broker = this.teamNotes;
+    if (broker === undefined) {
+      return;
+    }
+    for (const dispose of this.teamNoteDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    const names = new Map<string, string>();
+    for (const node of nodes) {
+      if (node.kind === 'agent') {
+        names.set(node.id, node.name ?? node.id);
+      }
+    }
+    const disposers: (() => void)[] = [];
+    for (const node of hostToolNodes) {
+      disposers.push(
+        broker.register(runId, node.id, {
+          persistItem,
+          writer: (caller) => ({
+            nodeId: callerNodeOf(caller),
+            conversationId: callerConversationOf(caller),
+            callId: this.callBroker.callAnsweredBy(runId, caller),
+          }),
+          agentName: (nodeId) => names.get(nodeId) ?? nodeId,
+        }),
+      );
+    }
+    this.teamNoteDisposers.set(runId, disposers);
+    void broker.prime(runId);
   }
 
   /** Drop every per-key fact of one run — its keys are `<runId>::…`. */
@@ -7108,6 +7166,7 @@ export class GraphExecutorService
       cwd,
       (node) => resolveApproval(node).mode,
     );
+    this.registerTeamNoteSinks(runId, hostToolNodes, nodes, persistItem);
     /**
      * Open a turn of a node's OWN conversation on the write chain — what a
      * wake (`wakeNode`) and a monitor's output share: counted live from now
@@ -7253,6 +7312,11 @@ export class GraphExecutorService
           stopMonitors: (caller) =>
             this.monitors?.stopConversation(runId, caller, 'thread-stop'),
           callHeld: (caller) => this.notifyConversationTurnEnded(runId, caller),
+          unreadTeamNotes: (caller) =>
+            this.teamNotes?.unreadCount(runId, {
+              nodeId: callerNodeOf(caller),
+              conversationId: callerConversationOf(caller),
+            }) ?? 0,
           toolCallDeadlineMs: (caller) => {
             const node = agentNodeOfConversation(caller);
             return node !== null

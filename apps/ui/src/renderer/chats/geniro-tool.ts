@@ -92,6 +92,9 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   // daemon writes, so these calls need no loader of their own.
   publish_action: null,
   remove_action: null,
+  // The note is its own `team_note` row; `team_notes` draws nothing, so its
+  // call row stays visible.
+  team_note: null,
   // The card is the `approval_request` row the daemon writes, which outlives
   // the call; `read_workflows` draws nothing and stays visible.
   [PROPOSE_WORKFLOW]: 'workflow',
@@ -122,9 +125,30 @@ export function geniroToolOf(name: string, runId: string): string | null {
         name === `mcp__${server}__${tool}` ||
         (!name.startsWith('mcp__') &&
           name.includes(server) &&
-          name.includes(tool)),
+          namesWord(name, tool)),
     ) ?? null
   );
+}
+
+/**
+ * Whether `tool` appears in `name` as a whole word — not inside a longer tool
+ * name, so cursor's label for `team_notes` is not read as `team_note`.
+ */
+function namesWord(name: string, tool: string): boolean {
+  let at = name.indexOf(tool);
+  while (at !== -1) {
+    const before = name[at - 1];
+    const after = name[at + tool.length];
+    if (!isWordChar(before) && !isWordChar(after)) {
+      return true;
+    }
+    at = name.indexOf(tool, at + 1);
+  }
+  return false;
+}
+
+function isWordChar(char: string | undefined): boolean {
+  return char !== undefined && /[A-Za-z0-9_]/.test(char);
 }
 
 /**

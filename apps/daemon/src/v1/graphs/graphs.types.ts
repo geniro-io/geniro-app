@@ -1764,6 +1764,12 @@ export interface RunCallCapability {
   /** A callee conversation's call is now held — output waiting for it can go. */
   callHeld?(caller: string): void;
   /**
+   * How many of the run's team notes a conversation has not been shown and
+   * did not write — said on its call replies and in its wakes. Absent for a
+   * capability with no team-note tools.
+   */
+  unreadTeamNotes?(caller: string): number;
+  /**
    * Start another turn of a node's OWN conversation whose turns have all
    * ended, carrying `prompt` — how a question or a result that arrives after
    * the caller stopped still reaches it. False when the run cannot take a turn

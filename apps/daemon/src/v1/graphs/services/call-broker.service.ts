@@ -629,6 +629,8 @@ function wakePrompt(
   asked: readonly WakeQuestion[],
   finished: readonly WakeResult[],
   whileWorking = false,
+  /** {@link unreadTeamNotesLine}, said last. */
+  unreadLine: string | null = null,
 ): string {
   const lines = [
     whileWorking
@@ -650,7 +652,20 @@ function wakePrompt(
       `- ${item.callee} has finished ${item.callId}. Collect its result with await_agent(call_id: "${item.callId}") and carry on from there.`,
     );
   }
+  if (unreadLine !== null) {
+    lines.push('', unreadLine);
+  }
   return lines.join('\n');
+}
+
+/**
+ * The line a wake carries when the woken conversation has team notes it has
+ * not read, or null when it has none.
+ */
+function unreadTeamNotesLine(unread: number): string | null {
+  return unread > 0
+    ? `[geniro] ${unread} team ${unread === 1 ? 'note' : 'notes'} by other agents of this run ${unread === 1 ? 'is' : 'are'} unread — read them with team_notes before you change anything they may cover.`
+    : null;
 }
 
 /**
@@ -667,6 +682,8 @@ function heldWake(
   stillRunning: number,
   /** Said first instead of `wakePrompt`'s items — a reset wake's own news. */
   lead: string | null = null,
+  /** {@link unreadTeamNotesLine}, said after the calls still running. */
+  unreadLine: string | null = null,
 ): CallHoldRelease {
   const lines = [lead ?? wakePrompt(asked, finished)];
   if (stillRunning > 0) {
@@ -674,6 +691,9 @@ function heldWake(
       '',
       `${stillRunning} other call(s) of yours are still running — you are continued here again when they finish or ask.`,
     );
+  }
+  if (unreadLine !== null) {
+    lines.push('', unreadLine);
   }
   return { kind: 'wake', prompt: lines.join('\n'), note: HELD_RESULT_NOTE };
 }
@@ -2352,6 +2372,7 @@ export class CallBroker implements OnModuleInit {
         [...fromCaller, ...(userMessage !== null ? [userMessage] : [])].join(
           '\n\n',
         ),
+        this.unreadLine(state, calleeKeyOf(call)),
       ),
     );
   }
@@ -3011,7 +3032,12 @@ export class CallBroker implements OnModuleInit {
       question: call.parked.question,
       options: call.parked.options,
     };
-    if (!state.capability.tellLiveNode(owner, wakePrompt([asked], [], true))) {
+    if (
+      !state.capability.tellLiveNode(
+        owner,
+        wakePrompt([asked], [], true, this.unreadLine(state, owner)),
+      )
+    ) {
       return;
     }
     state.capability.persistItem(callerNodeOf(owner), 'system', null, {
@@ -3189,7 +3215,10 @@ export class CallBroker implements OnModuleInit {
       callee: this.calleeName(state, owner, call.calleeId),
     };
     if (
-      !state.capability.tellLiveNode(owner, wakePrompt([], [finished], true))
+      !state.capability.tellLiveNode(
+        owner,
+        wakePrompt([], [finished], true, this.unreadLine(state, owner)),
+      )
     ) {
       return;
     }
@@ -3494,7 +3523,10 @@ export class CallBroker implements OnModuleInit {
     if (state === undefined || state.capability.isCancelled()) {
       return;
     }
-    const prompt = resetWakePrompt(resetsAt, calls);
+    // Every branch below sends this one text, so the unread line rides all.
+    const unread = this.unreadLine(state, owner);
+    const news = resetWakePrompt(resetsAt, calls);
+    const prompt = unread === null ? news : `${news}\n\n${unread}`;
     const held = heldCallOf(state, owner);
     let told = false;
     if (held !== undefined) {
@@ -3601,7 +3633,7 @@ export class CallBroker implements OnModuleInit {
       runId,
       state,
       owner,
-      wakePrompt(asked, finished),
+      wakePrompt(asked, finished, false, this.unreadLine(state, owner)),
     );
     if (started === null) {
       return false;
@@ -3810,7 +3842,13 @@ export class CallBroker implements OnModuleInit {
     this.markTold(runId, state, key, asked, finished, callId);
     this.releaseHold(
       call,
-      heldWake(asked, finished, open.length - asked.length),
+      heldWake(
+        asked,
+        finished,
+        open.length - asked.length,
+        null,
+        this.unreadLine(state, key),
+      ),
     );
   }
 
@@ -4277,6 +4315,15 @@ export class CallBroker implements OnModuleInit {
     if (call) {
       this.armSilenceWatch(runId, callId, call);
     }
+  }
+
+  /** {@link RunCallCapability.unreadTeamNotes} for one conversation; 0 off-run. */
+  unreadTeamNotes(runId: string, caller: string): number {
+    return this.runs.get(runId)?.capability.unreadTeamNotes?.(caller) ?? 0;
+  }
+
+  private unreadLine(state: RunCallState, caller: string): string | null {
+    return unreadTeamNotesLine(state.capability.unreadTeamNotes?.(caller) ?? 0);
   }
 
   /**

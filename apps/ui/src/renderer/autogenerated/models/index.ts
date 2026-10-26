@@ -4035,7 +4035,8 @@ export const ItemKind = {
     Recommendations: 'recommendations',
     RecommendationOutcome: 'recommendation_outcome',
     Action: 'action',
-    ActionOutcome: 'action_outcome'
+    ActionOutcome: 'action_outcome',
+    TeamNote: 'team_note'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -6399,6 +6400,19 @@ export type RunTaskRowStatusEnum = typeof RunTaskRowStatusEnum[keyof typeof RunT
 /**
  * 
  * @export
+ * @interface RunTeamNotesDto
+ */
+export interface RunTeamNotesDto {
+    /**
+     * 
+     * @type {Array<TeamNote>}
+     * @memberof RunTeamNotesDto
+     */
+    notes: Array<TeamNote>;
+}
+/**
+ * 
+ * @export
  * @interface RunWaterfallCall
  */
 export interface RunWaterfallCall {
@@ -8312,6 +8326,83 @@ export const TaskStatus = {
     Failed: 'failed'
 } as const;
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
+
+/**
+ * 
+ * @export
+ * @interface TeamNote
+ */
+export interface TeamNote {
+    /**
+     * the row that holds it; its id
+     * @type {number}
+     * @memberof TeamNote
+     */
+    seq: number;
+    /**
+     * 
+     * @type {TeamNoteKind}
+     * @memberof TeamNote
+     */
+    kind: TeamNoteKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamNote
+     */
+    text: string;
+    /**
+     * the agent that wrote it
+     * @type {string}
+     * @memberof TeamNote
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamNote
+     */
+    conversationId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamNote
+     */
+    callId: string | null;
+    /**
+     * ISO-8601
+     * @type {string}
+     * @memberof TeamNote
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamNote
+     */
+    supersedes: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamNote
+     */
+    supersededBy: number | null;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const TeamNoteKind = {
+    Contract: 'contract',
+    Decision: 'decision',
+    Fact: 'fact',
+    Pitfall: 'pitfall',
+    Pointer: 'pointer'
+} as const;
+export type TeamNoteKind = typeof TeamNoteKind[keyof typeof TeamNoteKind];
 
 /**
  * 

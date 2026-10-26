@@ -161,6 +161,24 @@ describe('chatToMarkdown', () => {
     expect(kinds.length).toBeGreaterThan(25);
   });
 
+  it('exports a team note as its kind, author, number and text, naming the note it replaces', () => {
+    const note = nodeRow('engineer', 'team_note', {
+      kind: 'pitfall',
+      text: '`npm ci` fails here — use `pnpm install`.',
+      supersedes: 3,
+      nodeId: 'engineer',
+      conversationId: null,
+    });
+    const out = chatToMarkdown(workflowDoc([note]));
+
+    expect(out).toContain(
+      `**📝 team note · pitfall** — engineer — note ${note.seq} — replaces note 3`,
+    );
+    expect(out).toContain('`npm ci` fails here — use `pnpm install`.');
+    // A note in words, never the payload dumped as JSON.
+    expect(out).not.toContain('"conversationId"');
+  });
+
   it('keeps the settle of a turn answered inside a continuation, but not as a second completed turn', () => {
     const settle = row('turn_complete', {
       usage: null,

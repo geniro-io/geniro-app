@@ -1278,3 +1278,39 @@ describe('TranscriptItem — a message a Stop dropped', () => {
     expect(container.textContent).toContain('2 messages were not sent');
   });
 });
+
+describe('TranscriptItem — team notes', () => {
+  it('draws a team note with its author, kind, number and the note it replaces', () => {
+    render(
+      <TranscriptItem
+        item={item(
+          'team_note',
+          {
+            kind: 'decision',
+            text: 'Orders are paged by cursor.',
+            supersedes: 7,
+            nodeId: 'orch',
+            conversationId: null,
+          },
+          'orch',
+        )}
+        nodes={
+          new Map([
+            ['orch', { name: 'Manager', kind: 'agent', agent: 'claude' }],
+          ])
+        }
+      />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('Manager · team note');
+    expect(text).toContain('decision');
+    expect(text).toContain('note 1');
+    expect(text).toContain('replaces note 7');
+    expect(text).toContain('Orders are paged by cursor.');
+  });
+
+  it('draws nothing for a team_note row whose payload is not a note', () => {
+    render(<TranscriptItem item={item('team_note', { kind: 'progress' })} />);
+    expect(container.textContent).toBe('');
+  });
+});

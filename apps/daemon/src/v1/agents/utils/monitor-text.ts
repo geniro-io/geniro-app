@@ -1,8 +1,7 @@
-import { randomUUID } from 'node:crypto';
-
 import type { HostRowWire, MonitorEnd, MonitorRowPayload } from '../chat.types';
 import type { MonitorEvent } from '../chat.types';
 import type { MonitorBatch } from '../chat.types';
+import { randomFenceTag } from './fence-tag';
 import {
   mergeMonitorBatch,
   MONITOR_FLOOD_MAX_BYTES,
@@ -70,7 +69,7 @@ export function monitorMessageText(message: MonitorMessage): string {
   if (lines.length === 0) {
     return [open, ...notes, 'No new output.', '</message>'].join('\n');
   }
-  const tag = `monitor-output-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  const tag = randomFenceTag('monitor-output');
   return [
     open,
     ...notes,

@@ -16,7 +16,11 @@ import { type ComparisonSpec, readComparison } from './comparison-payload';
 import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
 import { type GallerySpec, readGallery } from './gallery-payload';
-import { geniroCardKindOf, isGeniroToolName } from './geniro-tool';
+import {
+  geniroCardKindOf,
+  geniroToolOf,
+  isGeniroToolName,
+} from './geniro-tool';
 import {
   callIdOfKey,
   CHAT_LIVE_KEY,
@@ -2709,6 +2713,19 @@ export function groupTranscript(
       taskToolCallIds.add(toolCallId);
     }
   }
+  // A `team_note` call is hidden because its note row tells the story — but a
+  // REFUSED one writes no row, so its call and the refusal stay on screen.
+  const refusedCallIds = new Set<string>();
+  for (const item of items) {
+    const id = payloadString(item.payload, 'id');
+    if (
+      item.kind === 'tool_result' &&
+      id !== null &&
+      (item.payload as { isError?: unknown } | null)?.isError === true
+    ) {
+      refusedCallIds.add(id);
+    }
+  }
 
   // Pass 3 — the main fold over everything not claimed into a block.
   const entries: TranscriptEntry[] = [];
@@ -2811,8 +2828,12 @@ export function groupTranscript(
     if (item.kind === 'tool_call') {
       const name = payloadString(item.payload, 'name') ?? '';
       const callId = payloadString(item.payload, 'id');
+      const refusedNote =
+        callId !== null &&
+        refusedCallIds.has(callId) &&
+        geniroToolOf(name, item.runId) === 'team_note';
       if (
-        isGeniroToolName(name, item.runId) ||
+        (isGeniroToolName(name, item.runId) && !refusedNote) ||
         (callId !== null && taskToolCallIds.has(callId))
       ) {
         if (callId) {

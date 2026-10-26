@@ -39,6 +39,14 @@ export function revealThreadPullRequests(runId: string | null): void {
  * requests in thirties.
  */
 export function revealWorkflows(runId: string | null): void {
+  revealAgentsPanel(runId);
+}
+
+/**
+ * Unfold this thread's agents panel — where the shelf's chips send a reader
+ * for the whole of what they preview (every workflow, every team note).
+ */
+export function revealAgentsPanel(runId: string | null): void {
   if (runId === null) {
     return;
   }

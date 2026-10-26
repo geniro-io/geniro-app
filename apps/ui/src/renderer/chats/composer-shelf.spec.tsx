@@ -14,6 +14,7 @@ import {
   RunningShellChips,
   RunningSubagentChips,
   TaskListChip,
+  TeamNotesChip,
   ThreadPullRequestChips,
 } from './composer-shelf';
 import type { ShellRun } from './shell-activity';
@@ -984,4 +985,54 @@ describe('every shelf chip opens on a CLICK alone', () => {
       }
     },
   );
+});
+
+describe('TeamNotesChip', () => {
+  const note = (seq: number) => ({
+    seq,
+    kind: 'pitfall' as const,
+    text: `note ${seq}`,
+    nodeId: 'engineer',
+    conversationId: 'call-2',
+    callId: 'call-2',
+    createdAt: new Date().toISOString(),
+    supersedes: null,
+    supersededBy: null,
+  });
+
+  function mount(notes: ReturnType<typeof note>[], onJump = vi.fn()) {
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    act(() => {
+      root.render(
+        <TeamNotesChip
+          notes={notes}
+          agentName={(id) => (id === 'engineer' ? 'Engineer' : id)}
+          onJump={onJump}
+        />,
+      );
+    });
+    return onJump;
+  }
+
+  it('draws nothing at zero notes', () => {
+    mount([]);
+    expect(container.textContent).toBe('');
+  });
+
+  it('counts the notes, and a note in its panel opens that note in the transcript', () => {
+    const onJump = mount([note(9), note(4)]);
+    expect(container.textContent).toContain('Team notes');
+    expect(container.textContent).toContain('2');
+    act(() => {
+      container.querySelector<HTMLButtonElement>('button')!.click();
+    });
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>('button'),
+    ].filter((button) => button.textContent?.includes('Engineer · Call 2'));
+    expect(rows).toHaveLength(2);
+    act(() => rows[1]!.click());
+    expect(onJump).toHaveBeenCalledWith(4);
+  });
 });

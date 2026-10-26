@@ -11,6 +11,7 @@ import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
+import type { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import type { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
@@ -51,6 +52,8 @@ import { ShowComparisonTool } from './show-comparison/show-comparison.tool';
 import { ShowGalleryTool } from './show-gallery/show-gallery.tool';
 import { ShowMetricsTool } from './show-metrics/show-metrics.tool';
 import { StopMonitorTool } from './stop-monitor/stop-monitor.tool';
+import { TeamNoteTool } from './team-note/team-note.tool';
+import { TeamNotesTool } from './team-notes/team-notes.tool';
 
 /** The DI token the ordered tool list is provided under. */
 export const MCP_TOOLS = Symbol('MCP_TOOLS');
@@ -67,6 +70,7 @@ export interface McpToolDeps {
   artifacts: ArtifactBroker;
   actions: ActionBroker;
   monitors: MonitorBroker;
+  teamNotes: TeamNoteBroker;
   patches: PatchBroker;
   plans: PlanBroker;
   notices: NotifyBroker;
@@ -87,7 +91,7 @@ export interface McpToolDeps {
  *
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
- * surface, then the question, the render family, the action buttons, the
+ * surface, the team notes, then the question, the render family, the action buttons, the
  * monitors, the board, the chat history, the workflow library, the analysis tools, and the
  * agent's own notification last.
  */
@@ -99,6 +103,8 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new CancelAgentTool(deps.calls),
     new MessageAgentTool(deps.calls),
     new ListAgentThreadsTool(deps.calls),
+    new TeamNoteTool(deps.teamNotes),
+    new TeamNotesTool(deps.teamNotes),
     new AskUserQuestionTool(deps.questions),
     new ReportFindingsTool(deps.findings),
     new ShowChartTool(deps.charts),

@@ -166,6 +166,11 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * edit of its row but the newest outcome naming its seq — and the daemon folds
  * the pair into the live set it serves on run state (`ChatActionsService`), so
  * no client derives "still pressable" from the window of rows it holds.
+ *
+ * `team_note` is one note a workflow agent wrote to the run's shared team
+ * notes (`team_note`), readable by every agent of the run (`team_notes`).
+ * Append-only like the action pair: a correction is a newer note naming the
+ * older one's seq in `supersedes`, and readers fold the pair.
  */
 export const ItemKindSchema = z
   .enum([
@@ -201,6 +206,7 @@ export const ItemKindSchema = z
     'recommendation_outcome',
     'action',
     'action_outcome',
+    'team_note',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

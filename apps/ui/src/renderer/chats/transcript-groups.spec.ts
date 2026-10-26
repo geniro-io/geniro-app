@@ -583,6 +583,29 @@ describe('groupTranscript', () => {
     expect(pairs.every((pair) => pair.result !== null)).toBe(true);
   });
 
+  it('hides a team_note call its note row stands for, and SHOWS one that was refused', () => {
+    // A written note is its own row; a refused write writes none, so the call
+    // and the refusal are the only trace that the agent tried.
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__team_note', 't1', { kind: 'fact', text: 'x' }),
+      result('t1', 'Saved as note 4.'),
+      call('mcp__geniro-run-1__team_note', 't2', { kind: 'fact', text: '' }),
+      item('tool_result', {
+        id: 't2',
+        name: null,
+        result: 'text is empty',
+        isError: true,
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(pairs.map((pair) => payloadString(pair.call.payload, 'id'))).toEqual(
+      ['t2'],
+    );
+    expect(pairs[0]?.result).not.toBeNull();
+  });
+
   it('SHOWS the monitor tools as ordinary tool rows', () => {
     const entries = groupTranscript([
       call('mcp__geniro-run-1__monitor', 't1', { command: 'tail -f log' }),

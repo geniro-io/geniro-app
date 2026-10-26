@@ -9,18 +9,31 @@ import type { ReactNode } from 'react';
  */
 export function PanelSection({
   label,
+  action,
   children,
 }: {
   label: string;
+  /** A control for the whole section — a filter — at the heading's end. */
+  action?: ReactNode;
   children: ReactNode;
 }): React.JSX.Element {
+  const heading = (
+    <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+      {label}
+    </span>
+  );
   return (
     <section
       aria-label={label}
       className="flex shrink-0 flex-col gap-1 border-t border-border px-3 py-2">
-      <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-        {label}
-      </span>
+      {action === undefined ? (
+        heading
+      ) : (
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          {heading}
+          {action}
+        </div>
+      )}
       {children}
     </section>
   );

@@ -33,10 +33,13 @@ import {
   HOST_RECOMMENDATIONS_TOOL,
   HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
+  HOST_TEAM_NOTE_TOOL,
+  HOST_TEAM_NOTES_TOOL,
   HOST_WORKFLOW_CHANGE_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
 } from '../../agents/chat.types';
 import { ChatSearchIndexDao } from '../../agents/dao/chat-search-index.dao';
+import type { ItemDao } from '../../agents/dao/item.dao';
 import { ActionBroker } from '../../agents/services/action.broker';
 import { AnalysisBroker } from '../../agents/services/analysis.broker';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
@@ -52,6 +55,10 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import {
+  TeamNoteBroker,
+  type TeamNoteSink,
+} from '../../agents/services/team-note.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
@@ -114,7 +121,7 @@ const HELPER: WorkflowAgentNode = {
   role: 'You help with research. Always start by reading SECRET_PLAYBOOK.md.',
 };
 
-function broker(): CallBroker {
+function broker(unreadTeamNotes?: (caller: string) => number): CallBroker {
   const capability: RunCallCapability = {
     calleesOf: new Map([['orch', [HELPER]]]),
     launchCalleeTurn: async () => ({
@@ -135,6 +142,7 @@ function broker(): CallBroker {
     isNodeLive: () => true,
     tellLiveNode: () => false,
     wakeNode: () => false,
+    ...(unreadTeamNotes === undefined ? {} : { unreadTeamNotes }),
   };
   const instance = new CallBroker();
   instance.registerRun('run-1', capability);
@@ -164,6 +172,8 @@ function service(
   workflowGate = new WorkflowProposalBroker(),
   workflowStore = {} as WorkflowStoreService,
   monitors = new MonitorBroker(new MonitorRegistry(new ProcessRegistry())),
+  // Never asked by the cases that pass none: no sink, so neither tool is listed.
+  teamNotes = teamNoteBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -177,6 +187,7 @@ function service(
       artifacts,
       actions,
       monitors,
+      teamNotes,
       patches,
       plans,
       notices,
@@ -230,6 +241,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
   const actions = new ActionBroker();
   const workflowGate = new WorkflowProposalBroker();
   const monitors = monitorBroker();
+  const teamNotes = teamNoteBroker();
+  teamNotes.register('run-1', 'agent', noop as never);
   for (const broker of [
     questions,
     findings,
@@ -282,12 +295,30 @@ async function everyHostTool(): Promise<ToolListing[]> {
       workflowGate,
       undefined,
       monitors.broker,
+      teamNotes,
     ),
     'run-1',
     'agent',
     rpc('tools/list', {}),
   );
   return (json().result as { tools: ToolListing[] }).tools;
+}
+
+/**
+ * A team-note broker over an in-memory `items` table; `rows` is what
+ * `teamNoteRows` reads back, so a write is readable by the next call.
+ */
+function teamNoteBroker(
+  rows: { seq: number; payload: string; createdAt: Date }[] = [],
+): TeamNoteBroker {
+  const em = { fork: () => em } as unknown as ConstructorParameters<
+    typeof TeamNoteBroker
+  >[0];
+  const items = {
+    teamNoteRows: () => Promise.resolve([...rows]),
+    teamNoteCount: () => Promise.resolve(rows.length),
+  } as unknown as ItemDao;
+  return new TeamNoteBroker(em, items);
 }
 
 /** A monitor broker with run-1's `agent` node registered, over a real registry. */
@@ -3140,6 +3171,20 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(find(tools, HOST_METRICS_TOOL)).toContain('show_chart');
   });
 
+  it('makes BOTH team-note tools name the other, and say what a note is not for', async () => {
+    // A writer that never hears of the reader writes into a store nobody
+    // opens; a reader that never hears of the writer treats the notes as a
+    // message channel. Both sides also keep progress and stuck reports out —
+    // the noise that would make the store useless.
+    const tools = await everyHostTool();
+    const write = find(tools, HOST_TEAM_NOTE_TOOL);
+    const read = find(tools, HOST_TEAM_NOTES_TOOL);
+    expect(write).toContain('team_notes');
+    expect(read).toMatch(/\bteam_note\b/);
+    expect(write).toMatch(/Do not use it for progress reports/);
+    expect(read).toMatch(/Do not use it to wait for another agent/);
+  });
+
   it('keeps propose_patch and propose_plan descriptions byte-identical in both modes', () => {
     // The BLOCKING pair is the text these two tools served before the deferred
     // mode existed, byte for byte; the DEFERRED pair is new. A drift in either
@@ -3306,6 +3351,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_REMOVE_ACTION_TOOL,
       HOST_READ_WORKFLOWS_TOOL,
       HOST_PROPOSE_WORKFLOW_TOOL,
+      HOST_TEAM_NOTE_TOOL,
+      HOST_TEAM_NOTES_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
@@ -4170,5 +4217,158 @@ describe('McpServerService — the monitor tools', () => {
       expect(result.content[0]?.text).toMatch(/^INVALID_ARGS/);
     }
     expect(registry.list('run-1')).toEqual([]);
+  });
+});
+
+describe('McpServerService — the team-note tools', () => {
+  it('puts the caller’s unread team-note count beside every call envelope, and leaves it out at 0', async () => {
+    const envelopeOf = async (
+      unread: number,
+    ): Promise<Record<string, unknown>> => {
+      const { json } = await post(
+        service(broker(() => unread)),
+        'run-1',
+        'orch',
+        rpc('tools/call', {
+          name: 'await_agent',
+          arguments: { call_id: 'call-404' },
+        }),
+      );
+      return JSON.parse(
+        (json().result as { content: { text: string }[] }).content[0]!.text,
+      ) as Record<string, unknown>;
+    };
+
+    // Even an error envelope carries it: the caller reads every reply.
+    expect(await envelopeOf(2)).toMatchObject({
+      status: 'error',
+      unread_team_notes: 2,
+    });
+    expect(await envelopeOf(0)).not.toHaveProperty('unread_team_notes');
+  });
+
+  const sinkOf = (
+    rows: { seq: number; payload: string; createdAt: Date }[],
+  ): TeamNoteSink => ({
+    persistItem: (_nodeId, _kind, _role, payload) => {
+      const seq = rows.length + 1;
+      rows.push({
+        seq,
+        payload: JSON.stringify(payload),
+        createdAt: new Date(seq),
+      });
+      return Promise.resolve({ seq } as never);
+    },
+    writer: (caller) => ({
+      nodeId: caller,
+      conversationId: null,
+      callId: null,
+    }),
+    agentName: (nodeId) => (nodeId === 'agent' ? 'Writer' : 'Reader'),
+  });
+
+  const teamService = (teamNotes: TeamNoteBroker): McpServerService =>
+    service(
+      new CallBroker(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      teamNotes,
+    );
+
+  const names = async (subject: McpServerService, nodeId: string) => {
+    const { json } = await post(
+      subject,
+      'run-1',
+      nodeId,
+      rpc('tools/list', {}),
+    );
+    return (json().result as { tools: ToolListing[] }).tools.map((t) => t.name);
+  };
+
+  it('lists both tools to a node with a sink and neither to an endpoint without one', async () => {
+    const teamNotes = teamNoteBroker();
+    teamNotes.register('run-1', 'agent', sinkOf([]));
+    const subject = teamService(teamNotes);
+
+    expect(await names(subject, 'agent')).toEqual(
+      expect.arrayContaining([HOST_TEAM_NOTE_TOOL, HOST_TEAM_NOTES_TOOL]),
+    );
+    // A chat never registers a sink, so its endpoint is never offered them.
+    const chat = await names(subject, 'chat-node');
+    expect(chat).not.toContain(HOST_TEAM_NOTE_TOOL);
+    expect(chat).not.toContain(HOST_TEAM_NOTES_TOOL);
+  });
+
+  it('writes a note through tools/call and reads it back from another node', async () => {
+    const rows: { seq: number; payload: string; createdAt: Date }[] = [];
+    const teamNotes = teamNoteBroker(rows);
+    teamNotes.register('run-1', 'agent', sinkOf(rows));
+    teamNotes.register('run-1', 'other', sinkOf(rows));
+    const subject = teamService(teamNotes);
+
+    const { json: wrote } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_TEAM_NOTE_TOOL,
+        arguments: { kind: 'pitfall', text: 'npm ci fails here; use pnpm' },
+      }),
+    );
+    expect(
+      (wrote().result as { content: { text: string }[] }).content[0]!.text,
+    ).toBe('Saved as note 1.');
+
+    const { json: read } = await post(
+      subject,
+      'run-1',
+      'other',
+      rpc('tools/call', { name: HOST_TEAM_NOTES_TOOL, arguments: {} }),
+    );
+    const text = (read().result as { content: { text: string }[] }).content[0]!
+      .text;
+    expect(text).toContain('note 1 · pitfall · Writer');
+    expect(text).toContain('npm ci fails here; use pnpm');
+  });
+
+  it('answers a refused write as invalid arguments', async () => {
+    const rows: { seq: number; payload: string; createdAt: Date }[] = [];
+    const teamNotes = teamNoteBroker(rows);
+    teamNotes.register('run-1', 'agent', sinkOf(rows));
+
+    const { json } = await post(
+      teamService(teamNotes),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_TEAM_NOTE_TOOL,
+        arguments: { kind: 'fact', text: 'x', supersedes: 99 },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError?: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('names no team note of this run');
+    expect(rows).toHaveLength(0);
   });
 });

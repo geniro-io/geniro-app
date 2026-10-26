@@ -22,9 +22,10 @@ import { useWorkflowChat } from './use-workflow-chat';
 
 /**
  * The agent a workflow chat opens with when the user has picked none, and the
- * approval: its edits are file edits it was asked to make, so `acceptEdits` is
- * the mode that matches what the panel is for — `ask` would put a card in
- * front of every write, and `auto` gives away more than the job needs. A CLI
+ * approval: its saves are edits of the workflow file it was asked to make, so
+ * `acceptEdits` is the mode that matches what the panel is for — the daemon
+ * approves the save there as it would a file edit, `ask` would put a card in
+ * front of every save, and `auto` gives away more than the job needs. A CLI
  * that does not offer it opens on its own default instead; the daemon narrows
  * it.
  */

@@ -141,6 +141,7 @@ import {
   isHostQuestionCall,
 } from '../utils/host-question';
 import {
+  isHostBuilderWorkflowCall,
   isHostWorkflowProposalCall,
   standingProposalCardId,
 } from '../utils/host-workflows';
@@ -218,6 +219,7 @@ import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
+import { WorkflowBuilderBroker } from './workflow-builder.broker';
 import { WorkflowProposalBroker } from './workflow-proposal.broker';
 
 /** A deferred card another module raised — one that stands across turns. */
@@ -792,6 +794,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly wallTurns: WallTurnDao,
     private readonly analyses: AnalysisBroker,
     private readonly analysisReports: AnalysisReportsService,
+    private readonly workflowBuilders: WorkflowBuilderBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     @Optional() private readonly agentMcp?: AgentMcpService,
     /** The `monitor` tool's commands, stopped with the thread. Optional for the positional specs. */
@@ -5414,10 +5417,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // presses it, so the press is the gate — see `isHostActionCall`.
         isHostActionCall(hostServerName, toolName) ||
         // A workflow proposal only raises its card — the file is written behind
-        // that card's Approve, never by the call. `read_workflows` is NOT here:
-        // like the history tools, a read of the user's data outside this chat
-        // is the user's to allow.
+        // that card's Approve, never by the call. An ordinary chat's
+        // `read_workflows` is NOT here: like the history tools, a read of the
+        // user's data outside this chat is the user's to allow.
         isHostWorkflowProposalCall(hostServerName, toolName) ||
+        // A builder chat's own read, backup and save — see
+        // `isHostBuilderWorkflowCall`.
+        (run.editsWorkflowSlug !== null &&
+          isHostBuilderWorkflowCall(
+            hostServerName,
+            toolName,
+            mode !== undefined &&
+              adapter.getConfig().approval.workspaceEditsUnasked.includes(mode),
+          )) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited
@@ -6692,8 +6704,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               }),
             })
           : null;
-      // Only an ORDINARY chat reads and proposes workflows: a builder chat
-      // edits its own workflow's file, and an analysis changes one through
+      // Only an ORDINARY chat proposes workflows: a builder chat changes its
+      // own workflow and an analysis the analysed one, both through
       // `save_workflow_change` — see `WorkflowProposalBroker`.
       const disposeWorkflowProposals =
         mcpEndpoint &&
@@ -6701,6 +6713,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         run.analysisSourceRunId === null
           ? this.workflowProposals.register(runId, SINGLE_AGENT_NODE, {
               runId,
+            })
+          : null;
+      const editsWorkflowSlug = run.editsWorkflowSlug;
+      const disposeWorkflowBuilder =
+        mcpEndpoint && editsWorkflowSlug !== null
+          ? this.workflowBuilders.register(runId, SINGLE_AGENT_NODE, {
+              slug: editsWorkflowSlug,
+              turnStartedAt: Date.now(),
+              savedHash: null,
+              acceptsAnyVersion: false,
             })
           : null;
       // Only an analysis chat reads another thread — see `AnalysisBroker`.
@@ -6753,6 +6775,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeActions?.();
         disposeMonitors?.();
         disposeWorkflowProposals?.();
+        disposeWorkflowBuilder?.();
         disposeAnalysis?.();
       };
       // ZERO the last turn's running bill before this one's first request can

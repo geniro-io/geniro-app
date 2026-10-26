@@ -15,6 +15,7 @@ import {
   HISTORY_RESULT_PREFACE,
   HOST_ANALYZED_THREAD_TOOL,
   HOST_ARTIFACT_TOOL,
+  HOST_BACKUP_WORKFLOW_TOOL,
   HOST_BOARD_TOOLS,
   HOST_CHART_TOOL,
   HOST_COMPARISON_TOOL,
@@ -61,6 +62,7 @@ import {
 } from '../../agents/services/team-note.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import { WorkflowBuilderBroker } from '../../agents/services/workflow-builder.broker';
 import { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
 import {
   MAX_ARTIFACT_IMAGE_BYTES,
@@ -174,6 +176,7 @@ function service(
   monitors = new MonitorBroker(new MonitorRegistry(new ProcessRegistry())),
   // Never asked by the cases that pass none: no sink, so neither tool is listed.
   teamNotes = teamNoteBroker(),
+  workflowBuilders = new WorkflowBuilderBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -197,6 +200,7 @@ function service(
       threads,
       workflowChanges,
       workflowGate,
+      workflowBuilders,
       workflowStore,
       // Never asked by the cases that list tools.
       workflowProposals: {} as WorkflowProposalService,
@@ -3492,11 +3496,142 @@ describe('McpServerService — what the descriptions tell a model', () => {
       content: [
         {
           type: 'text',
-          text: 'Not read: the workflow library is offered to ordinary chats only.',
+          text: "Not read: the workflow library is offered to ordinary chats and a workflow's builder chat only.",
         },
       ],
       isError: true,
     });
+  });
+
+  it('lists a builder chat turn the save and the read it needs, never propose_workflow, each naming the other', async () => {
+    const builders = new WorkflowBuilderBroker();
+    builders.register('run-1', 'agent', {
+      slug: 'team',
+      turnStartedAt: 0,
+      savedHash: null,
+      acceptsAnyVersion: false,
+    });
+    const tools = createMcpTools({
+      calls: new CallBroker(),
+      questions: new UserQuestionBroker(),
+      findings: new FindingsReportBroker(),
+      charts: new ChartBroker(),
+      metrics: new MetricsBroker(),
+      comparisons: new ComparisonBroker(),
+      galleries: new GalleryBroker(),
+      artifacts: new ArtifactBroker(),
+      actions: new ActionBroker(),
+      patches: new PatchBroker(),
+      plans: new PlanBroker(),
+      notices: new NotifyBroker(),
+      board: new TaskBoardBroker(),
+      history: new GlobalChatSearchService({} as ChatSearchIndexDao),
+      analysis: new AnalysisBroker(),
+      threads: {} as ThreadReaderService,
+      workflowChanges: {} as WorkflowChangeService,
+      workflowGate: new WorkflowProposalBroker(),
+      workflowBuilders: builders,
+      workflowStore: {} as WorkflowStoreService,
+      workflowProposals: {} as WorkflowProposalService,
+      shares: fakeShares(false).service,
+      monitors: monitorBroker().broker,
+      teamNotes: teamNoteBroker(),
+    } as Parameters<typeof createMcpTools>[0]);
+    const listing = tools.flatMap((tool) =>
+      tool.list({ runId: 'run-1', nodeId: 'agent', conversationId: null }),
+    );
+    const workflowTools = listing
+      .map((tool) => tool.name)
+      .filter((name) =>
+        [
+          HOST_READ_WORKFLOWS_TOOL,
+          HOST_PROPOSE_WORKFLOW_TOOL,
+          HOST_WORKFLOW_CHANGE_TOOL,
+          HOST_BACKUP_WORKFLOW_TOOL,
+        ].includes(name),
+      );
+    const described = (name: string): string =>
+      listing.find((tool) => tool.name === name)!.description;
+
+    expect(workflowTools).toEqual([
+      HOST_READ_WORKFLOWS_TOOL,
+      HOST_WORKFLOW_CHANGE_TOOL,
+      HOST_BACKUP_WORKFLOW_TOOL,
+    ]);
+    expect(described(HOST_WORKFLOW_CHANGE_TOOL)).toContain(
+      HOST_BACKUP_WORKFLOW_TOOL,
+    );
+    expect(described(HOST_BACKUP_WORKFLOW_TOOL)).toContain(
+      HOST_WORKFLOW_CHANGE_TOOL,
+    );
+    expect(described(HOST_BACKUP_WORKFLOW_TOOL)).toMatch(/Do NOT use it/);
+    expect(described(HOST_READ_WORKFLOWS_TOOL)).toContain(
+      HOST_WORKFLOW_CHANGE_TOOL,
+    );
+    expect(described(HOST_READ_WORKFLOWS_TOOL)).not.toContain(
+      HOST_PROPOSE_WORKFLOW_TOOL,
+    );
+    expect(described(HOST_WORKFLOW_CHANGE_TOOL)).toContain(
+      HOST_READ_WORKFLOWS_TOOL,
+    );
+    for (const name of workflowTools) {
+      expect(described(name), `${name} never says when`).toMatch(
+        /Use it (when|whenever)/,
+      );
+    }
+    expect(described(HOST_WORKFLOW_CHANGE_TOOL)).toMatch(/Do NOT use it/);
+  });
+
+  it('answers a builder chat turn its read_workflows call', async () => {
+    const builders = new WorkflowBuilderBroker();
+    builders.register('run-1', 'agent', {
+      slug: 'team',
+      turnStartedAt: 0,
+      savedHash: null,
+      acceptsAnyVersion: false,
+    });
+    const store = {
+      get: (slug: string) =>
+        Promise.resolve({
+          slug,
+          hash: 'h1',
+          workflow: { name: 'Team', nodes: [], edges: [] },
+        }),
+    } as unknown as WorkflowStoreService;
+    const tool = createMcpTools({
+      calls: new CallBroker(),
+      questions: new UserQuestionBroker(),
+      findings: new FindingsReportBroker(),
+      charts: new ChartBroker(),
+      metrics: new MetricsBroker(),
+      comparisons: new ComparisonBroker(),
+      galleries: new GalleryBroker(),
+      artifacts: new ArtifactBroker(),
+      actions: new ActionBroker(),
+      patches: new PatchBroker(),
+      plans: new PlanBroker(),
+      notices: new NotifyBroker(),
+      board: new TaskBoardBroker(),
+      history: new GlobalChatSearchService({} as ChatSearchIndexDao),
+      analysis: new AnalysisBroker(),
+      threads: {} as ThreadReaderService,
+      workflowChanges: {} as WorkflowChangeService,
+      workflowGate: new WorkflowProposalBroker(),
+      workflowBuilders: builders,
+      workflowStore: store,
+      workflowProposals: {} as WorkflowProposalService,
+      shares: fakeShares(false).service,
+      monitors: monitorBroker().broker,
+      teamNotes: teamNoteBroker(),
+    }).find((t) => t.handles(HOST_READ_WORKFLOWS_TOOL))!;
+
+    const result = await tool.call(HOST_READ_WORKFLOWS_TOOL, { slug: 'team' }, {
+      runId: 'run-1',
+      nodeId: 'agent',
+    } as Parameters<typeof tool.call>[2]);
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('"hash": "h1"');
   });
 
   it('hands a listed propose_workflow call to the proposal service, and marks a refusal an error', async () => {
@@ -3529,6 +3664,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       threads: {} as ThreadReaderService,
       workflowChanges: {} as WorkflowChangeService,
       workflowGate: gate,
+      workflowBuilders: new WorkflowBuilderBroker(),
       workflowStore: {} as WorkflowStoreService,
       workflowProposals: { propose } as unknown as WorkflowProposalService,
       shares: fakeShares(false).service,

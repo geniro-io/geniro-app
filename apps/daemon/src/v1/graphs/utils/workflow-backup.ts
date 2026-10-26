@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { atomicCreate } from '../../../utils/atomic-file';
@@ -58,4 +58,32 @@ export async function readWorkflowSource(
     throw error;
   }
   return { source, hash: workflowFileHash(source) };
+}
+
+/**
+ * The newest backup of `slug` whose text is `source`, as a path relative to
+ * the library, or null — so an agent backing up an unchanged file again gets
+ * the copy it already has instead of another full one.
+ */
+export async function sameBackupOf(
+  directory: string,
+  slug: string,
+  source: string,
+): Promise<string | null> {
+  const dir = join(directory, WORKFLOW_BACKUP_DIR);
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const ours = await Promise.all(
+    names
+      .filter((name) => name.startsWith(`${slug}.`) && name.endsWith('.yaml'))
+      .map(async (name) => ({
+        name,
+        at: (await stat(join(dir, name)).catch(() => null))?.mtimeMs ?? 0,
+      })),
+  );
+  const newest = ours.sort((a, b) => b.at - a.at)[0];
+  if (newest === undefined) {
+    return null;
+  }
+  const text = await readFile(join(dir, newest.name), 'utf8').catch(() => null);
+  return text === source ? `${WORKFLOW_BACKUP_DIR}/${newest.name}` : null;
 }

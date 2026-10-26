@@ -1,4 +1,9 @@
 import {
+  HOST_BACKUP_WORKFLOW_TOOL,
+  HOST_READ_WORKFLOWS_TOOL,
+  HOST_WORKFLOW_CHANGE_TOOL,
+} from '../../agents/chat.types';
+import {
   type ApprovalMode,
   ApprovalModeSchema,
   EDGE_KINDS,
@@ -13,8 +18,10 @@ import {
  *
  * The panel's promise is that the user describes a change in prose and the
  * graph on screen changes — or, on an empty canvas, that a whole workflow
- * appears. So the agent needs: which file is its subject, that editing that
- * file IS the deliverable, the document's structure, what the structure DOES
+ * appears. So the agent needs: which workflow is its subject, that a change
+ * saved through `save_workflow_change` IS the deliverable (its checks and
+ * version check are why the agent never writes the file itself), the
+ * document's structure, what the structure DOES
  * when it runs, and how to write the text inside it — every `role`,
  * `description` and instruction block is itself agent instructions, held to
  * the same rules as any other instruction file.
@@ -89,6 +96,8 @@ export function workflowConnectionLines(): string[] {
 export function composeWorkflowChatInstructions(input: {
   /** Absolute path of the `*.geniro.yaml` file this chat edits. */
   path: string;
+  /** Its library slug, the name `read_workflows` knows it by. */
+  slug: string;
   /** The workflow's own name, as the user sees it in the builder. */
   name: string;
   /** Absolute path of the library's generated JSON Schema. */
@@ -102,9 +111,10 @@ Your subject is this file:
 
   ${input.path}
 
-It is the workflow "${input.name}". Its directory is your working directory
-and holds the user's other workflows: read them as examples, and change one
-only when the user asks you to.
+It is the workflow "${input.name}", slug \`${input.slug}\`. Its directory is
+your working directory and holds the user's other workflows: read them as
+examples (${HOST_READ_WORKFLOWS_TOOL} lists them). This chat changes only this
+one.
 
 The file's structure — every field, its type, its limits and its allowed
 values — is defined by this JSON Schema, generated from the validator geniro
@@ -116,14 +126,25 @@ Read it before you write a field this file does not already use, and before
 you build a workflow from scratch. Where it and your memory disagree, it wins.
 
 HOW TO WORK
-- Read the whole workflow file before your first edit of each turn: every
-  node, role, description, instruction block, edge and layout entry, not only
-  the part the request names. A change is right only against what is wired to
-  it, and the user edits the canvas between your turns.
-- Make the change by editing the file with your own file tools. Nothing else
-  applies it, so an edit you only describe never happens.
-- Leave the file valid against the schema and the graph rules below. The
-  builder reloads it when your turn ends and cannot open an invalid file.
+- Read the whole workflow file with your own file tools before your first
+  change of each turn: every node, role, description, instruction block, edge
+  and layout entry, not only the part the request names. A change is right only
+  against what is wired to it, and the user edits the canvas between your
+  turns. A large file is read in parts.
+- Make every change with ${HOST_WORKFLOW_CHANGE_TOOL}, never by writing the
+  file yourself: it applies your edits to the file as it stands, checks the
+  result against the schema and the graph rules, and refuses it if something
+  else changed the file during this turn. An edit you only describe never
+  happens.
+- Before a change the user may want undone — a rework of several agents or of
+  the wiring, a removal, or whenever they ask — back the file up with
+  ${HOST_BACKUP_WORKFLOW_TOOL}. The save takes no backup of its own.
+- The one time you write the file yourself: when a save answers
+  WORKFLOW_UNREADABLE, the file cannot be loaded. Fix only what that refusal
+  names, with your own file tools, then make the change with
+  ${HOST_WORKFLOW_CHANGE_TOOL}.
+- A change it refuses for breaking the schema or the graph rules below is not
+  saved: fix the edit and save again.
 - When you rename or remove a node, update every edge, layout entry and piece
   of text that names it.
 - Keep the comments and fields the request does not touch.
@@ -200,9 +221,9 @@ A NEW WORKFLOW
 When the file has no agents yet, or the user asks for one from scratch, read
 the schema, choose the shape the task needs — a chain of data edges for fixed
 stages, or one coordinating agent with call edges for work decided at run
-time — and write the whole document: \`name\`, a one-line \`description\`, a
-trigger, the agents with their roles and descriptions, the edges and
-\`layout\`.
+time — and set every part of it with ${HOST_WORKFLOW_CHANGE_TOOL}, one path
+edit each: \`name\`, a one-line \`description\`, the \`nodes\` (a trigger, the
+agents with their roles and descriptions), the \`edges\` and \`layout\`.
 
 LAYOUT
 \`layout\` maps each node id to its \`{x, y}\` on the canvas. Give every node

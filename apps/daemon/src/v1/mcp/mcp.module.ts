@@ -17,6 +17,7 @@ import { PlanBroker } from '../agents/services/plan.broker';
 import { TeamNoteBroker } from '../agents/services/team-note.broker';
 import { ThreadReaderService } from '../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../agents/services/user-question.broker';
+import { WorkflowBuilderBroker } from '../agents/services/workflow-builder.broker';
 import { WorkflowProposalBroker } from '../agents/services/workflow-proposal.broker';
 import { GraphsModule } from '../graphs/graphs.module';
 import { CallBroker } from '../graphs/services/call-broker.service';
@@ -70,6 +71,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         threads: ThreadReaderService,
         workflowChanges: WorkflowChangeService,
         workflowGate: WorkflowProposalBroker,
+        workflowBuilders: WorkflowBuilderBroker,
         workflowStore: WorkflowStoreService,
         workflowProposals: WorkflowProposalService,
         shares: ShareService,
@@ -95,6 +97,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           threads,
           workflowChanges,
           workflowGate,
+          workflowBuilders,
           workflowStore,
           workflowProposals,
           shares,
@@ -120,6 +123,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         ThreadReaderService,
         WorkflowChangeService,
         WorkflowProposalBroker,
+        WorkflowBuilderBroker,
         WorkflowStoreService,
         WorkflowProposalService,
         ShareService,

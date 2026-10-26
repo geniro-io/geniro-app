@@ -77,6 +77,7 @@ import {
   HOST_READ_WORKFLOWS_TOOL,
   HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
+  HOST_WORKFLOW_CHANGE_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
   SINGLE_AGENT_NODE,
 } from '../chat.types';
@@ -136,6 +137,7 @@ import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
+import { WorkflowBuilderBroker } from './workflow-builder.broker';
 import { WorkflowProposalBroker } from './workflow-proposal.broker';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
@@ -1141,6 +1143,7 @@ function setup(
   const artifacts = new ArtifactBroker();
   const actionSinks = new ActionBroker();
   const workflowProposals = new WorkflowProposalBroker();
+  const workflowBuilders = new WorkflowBuilderBroker();
   // The REAL store, on the reasoning the patch broker's comment gives: what a
   // published artifact observably DOES is put a page on disk and hand back a
   // key that opens it, and a double would pin the double. One root shared by
@@ -1323,6 +1326,7 @@ function setup(
     {
       sinkFor: opts.analysisSink ?? (() => ({})),
     } as unknown as AnalysisReportsService,
+    workflowBuilders,
     {
       token: 'launch',
       version: '0.0.0',
@@ -1352,6 +1356,7 @@ function setup(
     artifacts,
     actionSinks,
     workflowProposals,
+    workflowBuilders,
     artifactStore,
     statuses,
     deletedRuns,
@@ -2711,7 +2716,8 @@ describe('ChatService', () => {
     });
 
     it('offers the workflow tools to an ordinary chat turn only', async () => {
-      const { service, claude, runDao, workflowProposals } = setup();
+      const { service, claude, runDao, workflowProposals, workflowBuilders } =
+        setup();
       const ordinary = await service.createChat({
         agentKind: 'claude',
         cwd: dir,
@@ -2719,6 +2725,9 @@ describe('ChatService', () => {
       await service.sendMessage(ordinary.id, 'hello');
       expect(workflowProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
         true,
+      );
+      expect(workflowBuilders.canEdit(ordinary.id, SINGLE_AGENT_NODE)).toBe(
+        false,
       );
       await settle(claude);
       expect(workflowProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
@@ -2748,7 +2757,40 @@ describe('ChatService', () => {
       expect(workflowProposals.canPropose(analysis.id, SINGLE_AGENT_NODE)).toBe(
         false,
       );
+      expect(workflowBuilders.canEdit(analysis.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
       await settle(claude);
+    });
+
+    it('lets a builder chat turn change its own workflow, and only while the turn runs', async () => {
+      const { service, claude, runDao, workflowBuilders } = setup();
+      const builder = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+      });
+      runDao.runs.get(builder.id)!.editsWorkflowSlug = 'team';
+      expect(workflowBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
+
+      await service.sendMessage(builder.id, 'hello');
+      expect(workflowBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(
+        true,
+      );
+      await expect(
+        workflowBuilders.workflowOf(builder.id, SINGLE_AGENT_NODE),
+      ).resolves.toEqual({
+        slug: 'team',
+        turnStartedAt: expect.any(Number),
+        savedHash: null,
+        acceptsAnyVersion: false,
+      });
+
+      await settle(claude);
+      expect(workflowBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
     });
 
     it('stops accepting artifacts once the turn that could show them is over', async () => {
@@ -10420,6 +10462,46 @@ describe('ChatService — approval modes (parity M1)', () => {
       `mcp__${hostMcpServerName(run.id)}__${HOST_READ_WORKFLOWS_TOOL}`,
     ]);
     expect(approvals.listByRun(run.id)).toHaveLength(1);
+  });
+
+  it("approves a builder chat's workflow read always, and its save where a file edit would be", async () => {
+    // The dock opens in acceptEdits, where the agent's own Edit of the YAML
+    // needs no card: a carded save would send it back to that edit.
+    const answered = async (
+      approval: 'acceptEdits' | 'ask',
+    ): Promise<string[]> => {
+      const { service, claude, runDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval,
+      });
+      runDao.runs.get(run.id)!.editsWorkflowSlug = 'team';
+      await service.sendMessage(run.id, 'hi');
+      const handle = claude.handles[0]!;
+      for (const tool of [
+        HOST_READ_WORKFLOWS_TOOL,
+        HOST_WORKFLOW_CHANGE_TOOL,
+      ]) {
+        claude.emit({
+          type: 'approval_request',
+          id: `p-${tool}`,
+          toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
+          input: {},
+        });
+      }
+      await drain();
+      const approved = handle.respondApproval.mock.calls
+        .filter(([, allowed]) => allowed === true)
+        .map(([id]) => id as string);
+      return approved;
+    };
+
+    expect(await answered('acceptEdits')).toEqual([
+      `p-${HOST_READ_WORKFLOWS_TOOL}`,
+      `p-${HOST_WORKFLOW_CHANGE_TOOL}`,
+    ]);
+    expect(await answered('ask')).toEqual([`p-${HOST_READ_WORKFLOWS_TOOL}`]);
   });
 
   it('auto-approves the show_comparison CALL, like every drawing tool', async () => {

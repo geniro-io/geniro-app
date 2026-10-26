@@ -385,16 +385,21 @@ export type HostFindingsOutcome =
 /**
  * The analysis tools ("Analyze thread"): installed for a turn only on a chat
  * whose `Run.analysisSourceRunId` is set, and scoped to that one source run.
+ * `save_workflow_change` is also a workflow builder chat's one write to its
+ * own workflow.
  */
 export const HOST_ANALYZED_THREAD_TOOL = 'read_analyzed_thread';
 export const HOST_RECOMMENDATIONS_TOOL = 'report_recommendations';
 export const HOST_RECOMMENDATION_MARKS_TOOL = 'mark_recommendations';
 export const HOST_WORKFLOW_CHANGE_TOOL = 'save_workflow_change';
+/** A workflow builder chat's own backup of its file, taken when the agent decides. */
+export const HOST_BACKUP_WORKFLOW_TOOL = 'backup_workflow';
 
 /**
  * The workflow tools of an ordinary chat: read the library, and propose a whole
  * workflow on a card the user approves. The daemon writes the file, never the
- * agent.
+ * agent. A workflow builder chat is offered the read too, ahead of its
+ * `save_workflow_change`.
  */
 export const HOST_READ_WORKFLOWS_TOOL = 'read_workflows';
 export const HOST_PROPOSE_WORKFLOW_TOOL = 'propose_workflow';

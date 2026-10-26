@@ -8,11 +8,14 @@ import { WorkflowStoreService } from './workflow-store.service';
 
 /**
  * The conversation behind the workflow builder's chat panel — the user
- * describing a change in prose to an agent that edits the workflow file.
+ * describing a change in prose to an agent that changes the workflow through
+ * `save_workflow_change`.
  *
  * It starts an ORDINARY CHAT rather than a second execution path: the agent
- * needs a working directory and its own file tools, which is exactly what a
- * chat already is, so this composes `ChatService` the way `TaskRunsService`
+ * reads the file and its sibling workflows with its own file tools from a
+ * working directory, which is exactly what a chat already is, and `ChatService`
+ * gives each of its turns the save (`WorkflowBuilderBroker`). So this composes
+ * `ChatService` the way `TaskRunsService`
  * does for a board card's worktree. That is also why the dependency points
  * this way — `GraphsModule` imports `AgentsModule`, never the reverse.
  *
@@ -81,6 +84,7 @@ export class WorkflowChatService {
     const location = this.store.locate(slug);
     const workflowInstructions = composeWorkflowChatInstructions({
       path: location.path,
+      slug,
       name: workflow.name,
       schemaPath: await this.store.writeSchemaReference(),
     });

@@ -50,9 +50,10 @@ export function workflowListText(summaries: WorkflowSummary[]): string {
 
 /**
  * One workflow in full, every profile path shown as a placeholder. Its `hash`
- * names the version read, for telling two reads apart; a replacement is
- * measured against the file as it stands when proposed, never against a hash
- * the agent quotes.
+ * names the version read, for telling two reads apart: a replacement is
+ * measured against the file as it stands when proposed, and a builder chat's
+ * save takes no hash (`WorkflowChangeService` checks it against the version
+ * its turn's `WorkflowBuilderBroker` sink records).
  */
 export function workflowText(wire: WorkflowWire): string {
   return `${WORKFLOW_RESULT_PREFACE}\n${JSON.stringify(

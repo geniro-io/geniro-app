@@ -14,6 +14,7 @@ import type { PlanBroker } from '../../agents/services/plan.broker';
 import type { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import type { WorkflowBuilderBroker } from '../../agents/services/workflow-builder.broker';
 import type { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
 import type { CallBroker } from '../../graphs/services/call-broker.service';
 import type { TaskBoardBroker } from '../../graphs/services/task-board.broker';
@@ -25,6 +26,7 @@ import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
 import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
 import { AwaitAgentTool } from './await-agent/await-agent.tool';
+import { BackupWorkflowTool } from './backup-workflow/backup-workflow.tool';
 import { BoardTools } from './board/board.tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
@@ -80,6 +82,7 @@ export interface McpToolDeps {
   threads: ThreadReaderService;
   workflowChanges: WorkflowChangeService;
   workflowGate: WorkflowProposalBroker;
+  workflowBuilders: WorkflowBuilderBroker;
   workflowStore: WorkflowStoreService;
   workflowProposals: WorkflowProposalService;
   shares: ShareService;
@@ -122,7 +125,11 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new BoardTools(deps.board),
     new SearchChatsTool(deps.history),
     new ReadChatContextTool(deps.history),
-    new ReadWorkflowsTool(deps.workflowGate, deps.workflowStore),
+    new ReadWorkflowsTool(
+      deps.workflowGate,
+      deps.workflowBuilders,
+      deps.workflowStore,
+    ),
     new ProposeWorkflowTool(deps.workflowGate, deps.workflowProposals),
     new ReadAnalyzedThreadTool(
       deps.analysis,
@@ -133,9 +140,11 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new MarkRecommendationsTool(deps.analysis),
     new SaveWorkflowChangeTool(
       deps.analysis,
+      deps.workflowBuilders,
       deps.threads,
       deps.workflowChanges,
     ),
+    new BackupWorkflowTool(deps.workflowBuilders, deps.workflowChanges),
     new NotifyUserTool(deps.notices),
   ];
 }

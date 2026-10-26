@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  HOST_BACKUP_WORKFLOW_TOOL,
+  HOST_READ_WORKFLOWS_TOOL,
+  HOST_WORKFLOW_CHANGE_TOOL,
+} from '../../agents/chat.types';
+import {
   ApprovalModeSchema,
   EDGE_KINDS,
   NODE_CONNECTION_RULES,
@@ -12,6 +17,7 @@ const LIBRARY = '/Users/x/Library/Application Support/Geniro/workflows';
 
 const BRIEF = composeWorkflowChatInstructions({
   path: `${LIBRARY}/dev-team.geniro.yaml`,
+  slug: 'dev-team',
   name: 'Dev Team',
   schemaPath: `${LIBRARY}/.workflow.schema.json`,
 });
@@ -31,14 +37,41 @@ describe('composeWorkflowChatInstructions', () => {
     expect(BRIEF).toContain(`${LIBRARY}/.workflow.schema.json`);
   });
 
-  it('tells the agent to edit the file rather than describe the edit', () => {
-    expect(BRIEF).toMatch(/editing the file with your own file tools/);
+  it('names the slug the workflow tools know it by', () => {
+    expect(BRIEF).toContain('slug `dev-team`');
   });
 
-  it('tells the agent to read the WHOLE file before editing', () => {
+  it('tells the agent to save the change, never write it or only describe it', () => {
     expect(BRIEF).toMatch(
-      /Read the whole workflow file before your first edit/,
+      new RegExp(
+        `Make every change with ${HOST_WORKFLOW_CHANGE_TOOL}, never by writing the\\s+file yourself`,
+      ),
     );
+    expect(BRIEF).toMatch(/An edit you\s+only\s+describe\s+never\s+happens/);
+  });
+
+  it('tells the agent to read the WHOLE file before changing it', () => {
+    expect(BRIEF).toMatch(
+      /Read the whole workflow file with your own file tools before your first\s+change of each turn/,
+    );
+  });
+
+  it('lets the agent write the file itself only to repair YAML a save refused as unreadable', () => {
+    expect(BRIEF).toMatch(/when a save answers\s+WORKFLOW_UNREADABLE/);
+    expect(BRIEF).toMatch(/Fix only what that refusal\s+names/);
+  });
+
+  it('leaves the backup to the agent, through backup_workflow', () => {
+    expect(BRIEF).toMatch(
+      new RegExp(`back the file up with\\s+${HOST_BACKUP_WORKFLOW_TOOL}`),
+    );
+  });
+
+  it('builds a new workflow through the save too, never by writing the document', () => {
+    expect(BRIEF).toMatch(
+      new RegExp(`set every part of it with ${HOST_WORKFLOW_CHANGE_TOOL}`),
+    );
+    expect(BRIEF).not.toMatch(/write the whole document/);
   });
 
   // Each meaning is a `Record` over its enum, so a new member fails the build;
@@ -89,5 +122,11 @@ describe('composeWorkflowChatInstructions', () => {
   it('holds the text inside the workflow to the instruction-writing rules', () => {
     expect(BRIEF).toMatch(/One home per fact/);
     expect(BRIEF).toMatch(/Keep a sentence only if removing it would change/);
+  });
+
+  it('routes every change through save_workflow_change, never the agent writing the file', () => {
+    expect(BRIEF).toContain(HOST_WORKFLOW_CHANGE_TOOL);
+    expect(BRIEF).toContain(HOST_READ_WORKFLOWS_TOOL);
+    expect(BRIEF).not.toMatch(/editing the file with your own file tools/);
   });
 });

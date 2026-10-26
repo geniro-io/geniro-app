@@ -72,6 +72,7 @@ describe('WorkflowChatService', () => {
     expect(input.workflowInstructions).toContain(
       join(dir, `${slug}.geniro.yaml`),
     );
+    expect(input.workflowInstructions).toContain(`slug \`${slug}\``);
   });
 
   it('writes the generated schema beside the workflows and points the brief at it', async () => {

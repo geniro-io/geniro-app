@@ -54,17 +54,34 @@ afterEach(() => {
 });
 
 describe('ShellRows', () => {
-  it('draws ONE line per command: glyph, command, tag, clock', () => {
-    const el = render([shell({ background: true })]);
+  it('gives the command its own line, with the tag and the note under it', () => {
+    const el = render([
+      shell({
+        background: true,
+        command: 'pnpm dev',
+        description: 'Dev server',
+      }),
+    ]);
     const row = el.querySelector('[data-slot="shell-row"]')!;
+    const [commandLine, detailLine] = [...row.children];
 
-    // The parts, in order. There is deliberately no caption over them — the
-    // band used to carry `1 shell running`, which on the commonest case was a
-    // whole line counting the single line beneath it.
-    expect(row.querySelector('svg')).not.toBeNull();
-    expect(row.textContent).toContain('sleep 400');
-    expect(row.textContent).toContain('background');
-    expect(row.textContent).toMatch(/\d+s/);
+    // There is deliberately no caption over the rows — the band used to carry
+    // `1 shell running`, which on the commonest case was a whole line counting
+    // the single line beneath it.
+    expect(commandLine?.querySelector('svg')).not.toBeNull();
+    expect(commandLine?.textContent).toContain('pnpm dev');
+    expect(commandLine?.textContent).toMatch(/\d+s/);
+    // The tag and the agent's own note sit UNDER the command: beside it the tag
+    // took the width a 280px panel had for the command (`pnpm d…`).
+    expect(commandLine?.textContent).not.toContain('background');
+    expect(detailLine?.getAttribute('data-slot')).toBe('shell-detail');
+    expect(detailLine?.textContent).toContain('Dev server');
+    expect(detailLine?.textContent).toContain('background');
+  });
+
+  it('keeps a foreground command with no note to ONE line', () => {
+    const el = render([shell()]);
+    expect(el.querySelector('[data-slot="shell-detail"]')).toBeNull();
   });
 
   it('names the agent that started each command when the list mixes several', () => {

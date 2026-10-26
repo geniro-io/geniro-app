@@ -25,6 +25,10 @@ type Story = StoryObj<typeof meta>;
 
 export const Playground: Story = {};
 
+export const WithCount: Story = {
+  args: { count: 3 },
+};
+
 export const Empty: Story = {
   args: { children: null },
 };

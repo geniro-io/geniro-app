@@ -1,3 +1,5 @@
+import { ChartGantt } from 'lucide-react';
+
 import { Dialog } from '../components/ui/dialog';
 import { RunWaterfallDialog } from './run-waterfall-dialog';
 import type { RunWaterfallState } from './use-run-waterfall';
@@ -50,7 +52,18 @@ export function RunWaterfallPopup({
       ? 'reading the run…'
       : 'nothing has run in this thread yet');
   return (
-    <Dialog open={open} onClose={onClose} title={TITLE}>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={
+        <span className="flex items-center gap-2">
+          <ChartGantt
+            aria-hidden
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+          {TITLE}
+        </span>
+      }>
       <p className="text-sm text-muted-foreground">{message}</p>
     </Dialog>
   );

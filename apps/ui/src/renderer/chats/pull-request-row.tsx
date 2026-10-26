@@ -106,10 +106,11 @@ function sizeSentence(pullRequest: PullRequestInfo): string {
 }
 
 /**
- * The trailing detail on a pull request's PANEL row: its name, then its size.
+ * The second line of a pull request's PANEL row: its name, then its size.
  *
- * The panel has the width the shelf does not, so this is where the file count
- * gets its own word rather than being folded into a tooltip.
+ * Under the title rather than beside it: beside it, these figures left the
+ * title a couple of words in a 280px panel. The file count still gets its own
+ * word rather than being folded into a tooltip.
  */
 function PullRequestMeta({
   name,
@@ -120,7 +121,7 @@ function PullRequestMeta({
 }): React.JSX.Element {
   return (
     <span className="flex items-baseline gap-2">
-      <span className="tabular-nums">{name}</span>
+      <span className="tabular-nums text-foreground/80">{name}</span>
       {pullRequest.changedFiles === null ? null : (
         <span className="tabular-nums">
           {pullRequest.changedFiles}{' '}
@@ -234,7 +235,7 @@ export function ThreadPullRequestRow({
       title={pullRequest.title}
       tooltip={`${ref.owner}/${ref.repo}#${ref.number} ${pullRequest.title} · ${lookOf(pullRequest).word}${sizeSentence(pullRequest)}`}
       icon={<PullRequestStateIcon pullRequest={pullRequest} />}
-      meta={<PullRequestMeta name={name} pullRequest={pullRequest} />}
+      detail={<PullRequestMeta name={name} pullRequest={pullRequest} />}
     />
   );
 }

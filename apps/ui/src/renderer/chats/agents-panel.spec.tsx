@@ -3243,7 +3243,7 @@ describe('AgentsPanel thread pull requests', () => {
     );
 
   const section = (el: HTMLDivElement): HTMLElement | null =>
-    el.querySelector('section[aria-label="This thread’s pull requests"]');
+    el.querySelector('section[aria-label="Pull requests"]');
 
   const foldControl = (el: HTMLDivElement): HTMLButtonElement | null =>
     [...el.querySelectorAll('button')].find((button) =>
@@ -3266,6 +3266,19 @@ describe('AgentsPanel thread pull requests', () => {
 
     click(foldControl(el));
     expect(section(el)?.textContent).toContain('privacy copy');
+  });
+
+  it('counts every pull request on the heading, folded ones included', () => {
+    const el = withThreadPullRequests([
+      threadRow(87, 'still in review', 'open'),
+      threadRow(84, 'privacy copy', 'merged'),
+      threadRow(80, 'abandoned idea', 'closed'),
+    ]);
+
+    expect(
+      section(el)?.querySelector('[data-slot="panel-section-count"]')
+        ?.textContent,
+    ).toBe('3');
   });
 
   it('keeps an UNRESOLVED row in the open', async () => {
@@ -3705,6 +3718,121 @@ describe('AgentsPanel — thread notes', () => {
     );
     expect(railButton).not.toBeNull();
     expect(railButton?.dataset.hasNotes).toBeUndefined();
+  });
+});
+
+describe('AgentsPanel — controls and card layout', () => {
+  const dividers = (el: HTMLElement): number =>
+    el.querySelectorAll('[data-slot="control-group-divider"]').length;
+
+  it('splits the run controls into groups with a rule between each', () => {
+    // Getting around (search) | doing (export) | looking (notes): seven equal
+    // glyphs in one row read as an undifferentiated toolbar.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onSearch={vi.fn()}
+        onExportChat={vi.fn()}
+        notes={{ runId: 'run-1', value: null, onSave: vi.fn() }}
+      />,
+    );
+    const row = el.querySelector('aside > div.flex-wrap')!;
+    expect(
+      [...row.children].map(
+        (child) =>
+          child.getAttribute('aria-label') ?? child.getAttribute('data-slot'),
+      ),
+    ).toEqual([
+      'Search this conversation',
+      'control-group-divider',
+      'Export this chat to a file',
+      'control-group-divider',
+      'Add thread notes',
+      'Collapse agents panel',
+    ]);
+
+    // The rail draws the same groups.
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    expect(dividers(el)).toBe(2);
+  });
+
+  it('draws no rule beside a group that has nothing in it', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onExportChat={vi.fn()}
+      />,
+    );
+    expect(dividers(el)).toBe(0);
+  });
+
+  it('puts the money on the model’s line, so the card reads it in one place', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[{ ...agents[0]!, model: 'claude-opus-5', spentUsd: 3.42 }]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const model = el.querySelector('[data-slot="agent-model"]')!;
+    const spend = el.querySelector('[data-slot="agent-spend"]')!;
+    expect(spend.parentElement).toBe(model.parentElement);
+    expect(spend.textContent).toBe('$3.42');
+  });
+
+  it('still states the money for an agent that names no model', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[{ ...agents[0]!, model: null, spentUsd: 0.5 }]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('[data-slot="agent-model"]')).toBeNull();
+    expect(el.querySelector('[data-slot="agent-spend"]')?.textContent).toBe(
+      '$0.50',
+    );
+  });
+
+  it('marks a pool member by its CLI’s glyph, the name kept for a reader', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...agents[1]!,
+            pool: [{ agent: 'codex', model: 'gpt-6.1-sol', configDir: null }],
+            threads: [{ ...agents[1]!.threads[1]!, member: 2 }],
+          },
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const member = el.querySelector('[data-slot="instance-member"]')!;
+    // A glyph rather than a word badge, which took a third of the heading.
+    expect(member.querySelector('svg')).not.toBeNull();
+    expect(member.querySelector('.sr-only')?.textContent).toBe('codex');
+    expect(member.getAttribute('title')).toContain('Pool member 2');
+  });
+
+  it('says in the notes popup that the notes never reach the agent', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        notes={{ runId: 'run-1', value: 'written', onSave: vi.fn() }}
+      />,
+    );
+    click(el.querySelector('button[aria-label="Open thread notes"]'));
+    expect(
+      el.querySelector('[role="dialog"] [data-slot="thread-notes-hint"]')
+        ?.textContent,
+    ).toContain('never sent to the agent');
   });
 });
 

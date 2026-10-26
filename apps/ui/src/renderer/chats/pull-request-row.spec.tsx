@@ -78,8 +78,23 @@ describe('ThreadPullRequestRow — a resolved pull request', () => {
     expect(link?.getAttribute('target')).toBe('_blank');
     expect(link?.textContent).toContain('builder polish');
     expect(
-      container.querySelector('[data-slot="panel-link-meta"]')?.textContent,
+      container.querySelector('[data-slot="panel-link-detail"]')?.textContent,
     ).toBe('#70');
+  });
+
+  it('gives the title its own line, with the number and size under it', async () => {
+    // Beside the title, `#321 6 files +120 −30` left it `feat(ui): …` in a
+    // 280px panel.
+    await mount(
+      <ResolvedThreadRow
+        pullRequest={{ ...pr(), changedFiles: 6, added: 120, removed: 30 }}
+      />,
+    );
+    const detail = container.querySelector('[data-slot="panel-link-detail"]')!;
+    expect(detail.textContent).toContain('#70');
+    expect(detail.textContent).toContain('6 files');
+    expect(detail.textContent).not.toContain('builder polish');
+    expect(detail.previousElementSibling?.textContent).toBe('builder polish');
   });
 
   it('states the state in the ICON, not as a word beside the number', async () => {
@@ -89,7 +104,7 @@ describe('ThreadPullRequestRow — a resolved pull request', () => {
     await mount(<ResolvedThreadRow pullRequest={pr('merged')} />);
 
     expect(
-      container.querySelector('[data-slot="panel-link-meta"]')?.textContent,
+      container.querySelector('[data-slot="panel-link-detail"]')?.textContent,
     ).not.toContain('merged');
     expect(container.querySelector('a')?.getAttribute('title')).toContain(
       'merged',

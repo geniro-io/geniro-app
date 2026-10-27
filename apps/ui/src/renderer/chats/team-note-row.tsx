@@ -13,11 +13,9 @@ import type { TeamNotePayload } from './team-note-payload';
  */
 export function TeamNoteRow({
   note,
-  seq,
   author,
 }: {
   note: TeamNotePayload;
-  seq: number;
   /** The writing agent's name, or null when the row is drawn under it already. */
   author: string | null;
 }): React.JSX.Element {
@@ -29,11 +27,8 @@ export function TeamNoteRow({
           {author === null ? 'Team note' : `${author} · team note`}
         </span>
         <TeamNoteKindBadge kind={note.kind} />
-        <span className="whitespace-nowrap tabular-nums">note {seq}</span>
         {note.supersedes === null ? null : (
-          <span className="whitespace-nowrap">
-            replaces note {note.supersedes}
-          </span>
+          <span className="whitespace-nowrap">replaces an earlier note</span>
         )}
       </div>
       <MarkdownContent content={note.text} />

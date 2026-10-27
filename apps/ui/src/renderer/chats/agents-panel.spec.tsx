@@ -4295,12 +4295,15 @@ describe('AgentsPanel — team notes', () => {
     expect(rows[1]?.textContent).toContain('Worker · Call 3');
   });
 
-  it('marks a superseded note with the note that replaced it', () => {
+  it('marks a superseded note as replaced, without naming a note number', () => {
     const { el } = withNotes([
       teamNote(9, { supersedes: 4 }),
       teamNote(4, { supersededBy: 9 }),
     ]);
-    expect(section(el)?.textContent).toContain('superseded by note 9');
+    const rows = [...(section(el)?.querySelectorAll('li') ?? [])];
+    expect(rows[0]?.textContent).not.toContain('superseded');
+    expect(rows[1]?.textContent).toContain('superseded by a newer note');
+    expect(section(el)?.textContent).not.toMatch(/note 9|note 4/);
   });
 
   it('opens a note in the transcript on a press of its heading', () => {

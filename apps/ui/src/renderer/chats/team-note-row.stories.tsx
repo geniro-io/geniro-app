@@ -6,7 +6,6 @@ const meta = {
   title: 'Chats/TeamNoteRow',
   component: TeamNoteRow,
   args: {
-    seq: 128,
     author: 'Backend Engineer',
     note: {
       kind: 'contract',
@@ -29,7 +28,6 @@ export const Contract: Story = {};
 
 export const PitfallReplacingAnEarlierNote: Story = {
   args: {
-    seq: 214,
     note: {
       kind: 'pitfall',
       text: '`npm ci` fails in this repo (pnpm workspace). Use `pnpm install --frozen-lockfile`, then `pnpm rebuild:native`.',

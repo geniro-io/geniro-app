@@ -33,8 +33,6 @@ export async function renderLoadedApp(
         <ErrorBoundary reload={reload}>
           <App />
         </ErrorBoundary>
-        {/* Outside the boundary: every `title` in the app is drawn by it,
-            the error screen's own included. */}
         <TooltipLayer />
       </StrictMode>,
     );

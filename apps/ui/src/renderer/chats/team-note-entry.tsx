@@ -15,15 +15,7 @@ function isLong(text: string): boolean {
   return text.length > CLAMP_CHARS || text.split('\n').length > CLAMP_LINES;
 }
 
-/**
- * One team note as a card: who, what kind, when, and the note itself.
- *
- * The WHOLE card opens the note in the transcript, not only its heading —
- * "i can hover only on name, but not on note itself". The heading stays the
- * one button (keyboard and screen reader reach the jump there); a press
- * anywhere else on the card does the same, except on a control or link of its
- * own and except when it ends a text selection, so the words stay copyable.
- */
+/** One team note as a card: who, what kind, when, and the note itself. */
 export function TeamNoteEntry({
   note,
   author,
@@ -71,8 +63,6 @@ export function TeamNoteEntry({
       ? undefined
       : (event: React.MouseEvent<HTMLLIElement>): void => {
           const target = event.target as Element;
-          // The heading button, "Show more" and the note's own links act on
-          // their own; the heading's press already jumped.
           if (target.closest('a, button') !== null) {
             return;
           }
@@ -87,8 +77,6 @@ export function TeamNoteEntry({
       onClick={openFromCard}
       className={cn(
         'group flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 motion-safe:transition-colors',
-        // A plain lighten was invisible on the dark theme's popup ground;
-        // the tinted edge is what says "this card is the button".
         onJump !== undefined &&
           'cursor-pointer hover:border-primary/40 hover:bg-accent',
         superseded && 'opacity-60',

@@ -3846,7 +3846,6 @@ describe('AgentsPanel — thread notes', () => {
       const section = dialog.querySelector('section[aria-label="Team notes"]');
       expect(section?.textContent).toContain('ship behind the flag');
       expect(section?.textContent).toContain('Worker');
-      // The user's field comes first, the agents' notes after it.
       expect(
         notesField(dialog)!.compareDocumentPosition(section!) &
           Node.DOCUMENT_POSITION_FOLLOWING,

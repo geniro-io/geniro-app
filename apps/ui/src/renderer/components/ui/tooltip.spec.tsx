@@ -27,7 +27,6 @@ function mount(ui: React.ReactNode): HTMLDivElement {
   return host;
 }
 
-/** A pointer event as jsdom can make one; `pointerType` absent reads as mouse. */
 function pointer(
   type: 'pointerover' | 'pointerout' | 'pointerdown',
   target: Element,
@@ -72,7 +71,6 @@ describe('TooltipLayer', () => {
     const button = el.querySelector('button')!;
 
     pointer('pointerover', button);
-    // Parked at once, before the system's own hover timer could fire.
     expect(button.hasAttribute('title')).toBe(false);
     wait(TOOLTIP_OPEN_DELAY_MS - 1);
     expect(tooltip()).toBeNull();
@@ -148,7 +146,6 @@ describe('TooltipLayer', () => {
     act(() => {
       button.click();
     });
-    // The MutationObserver's callback is a microtask.
     await act(async () => {});
 
     expect(button.hasAttribute('title')).toBe(false);
@@ -196,7 +193,6 @@ describe('TooltipLayer', () => {
     expect(tooltip()).not.toBeNull();
 
     act(() => {
-      // Removed without a press: a re-render, not the pointer, took it.
       root!.render(
         <>
           <span />
@@ -224,7 +220,6 @@ describe('placeTooltip', () => {
   });
 
   it('keeps the arrow on the element’s centre when the window edge pushes the tooltip aside', () => {
-    // A button near the right edge, centre x=760: the tooltip is pushed left.
     const placed = placeTooltip(
       { left: 750, top: 100, bottom: 120, width: 20 },
       { width: 120, height: 24 },
@@ -235,7 +230,6 @@ describe('placeTooltip', () => {
   });
 
   it('never puts the arrow into the tooltip’s rounded corner', () => {
-    // Flush against the edge, centre x=795: past where the corner begins.
     const placed = placeTooltip(
       { left: 790, top: 100, bottom: 120, width: 10 },
       { width: 120, height: 24 },

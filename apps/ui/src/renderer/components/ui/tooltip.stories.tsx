@@ -12,10 +12,6 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/**
- * Rest the pointer on any control: its ordinary `title` is drawn by the layer,
- * not the system. Moving along the row opens each next one at once.
- */
 export const Playground: Story = {
   render: () => (
     <div className="flex items-center gap-1 p-8">

@@ -3,35 +3,16 @@ import { createPortal } from 'react-dom';
 
 import { cn } from './utils';
 
-/**
- * How long a pointer must rest on an element before its tooltip shows —
- * far quicker than the system's (seconds, reported as "появляется только через
- * 3 секунды"), slow enough that sweeping across a toolbar draws nothing.
- */
 export const TOOLTIP_OPEN_DELAY_MS = 300;
 
-/**
- * After a tooltip closes, the next one within this window opens at once: a
- * reader moving along a row of icons reads each in turn without waiting
- * again, as a native tooltip does.
- */
 const TOOLTIP_WARM_MS = 500;
 
-/** Clear of the element by enough to hold the arrow. */
 const GAP_PX = 8;
 const EDGE_MARGIN_PX = 8;
-/** How close the arrow may come to the tooltip's rounded corner. */
 const ARROW_INSET_PX = 12;
 
-/** Where an element's `title` is parked while its tooltip owns the text. */
 const PARKED_ATTR = 'data-tooltip-title';
 
-/**
- * Where a tooltip goes: centred under its element, above it when there is no
- * room below, and kept `EDGE_MARGIN_PX` inside the window either way. `arrow`
- * is how far across the tooltip its arrow sits — still under the element's
- * centre when the clamp has pushed the tooltip aside.
- */
 export function placeTooltip(
   anchor: Pick<DOMRect, 'left' | 'top' | 'bottom' | 'width'>,
   tip: { width: number; height: number },
@@ -56,17 +37,13 @@ export function placeTooltip(
   return { left, top, side, arrow };
 }
 
-/** The element whose `title` a pointer over `node` would show, if any. */
 function titledElement(node: EventTarget | null): Element | null {
   if (!(node instanceof Element)) {
     return null;
   }
-  // `iframe[title]` names the frame for assistive tech; the pointer is inside
-  // another document there, and no tooltip belongs to it.
   return node.closest(`[title]:not([title=""]):not(iframe), [${PARKED_ATTR}]`);
 }
 
-/** Move `title` aside so the system draws no tooltip; returns the text. */
 function park(element: Element): string {
   const title = element.getAttribute('title');
   if (title !== null) {
@@ -76,7 +53,6 @@ function park(element: Element): string {
   return element.getAttribute(PARKED_ATTR) ?? '';
 }
 
-/** Put `title` back, unless something wrote a newer one meanwhile. */
 function unpark(element: Element): void {
   const parked = element.getAttribute(PARKED_ATTR);
   element.removeAttribute(PARKED_ATTR);
@@ -85,23 +61,6 @@ function unpark(element: Element): void {
   }
 }
 
-/**
- * The app's tooltips: every `title` in the renderer, drawn in the design
- * system instead of by the OS — "implement normal popovers instead of system
- * ones".
- *
- * One layer rather than a component per call site, so the ~360 `title`s the
- * app already has, and every one added later, get it without each learning a
- * new API. `title` stays the source of truth and stays in the DOM: it is the
- * accessible description, and specs read it. Only while a mouse rests on an
- * element is it moved aside (`PARKED_ATTR`) — the one way to stop Chromium
- * drawing its own tooltip — and it is put back the moment the pointer leaves.
- * A `title` React writes while it is parked is taken over at once, so the
- * tooltip follows the element's current text.
- *
- * A touch never shows one, matching what a phone does with a `title` today.
- * Mounted once, at the root (`boot-app.tsx`).
- */
 export function TooltipLayer(): React.JSX.Element | null {
   const [tip, setTip] = React.useState<{
     text: string;
@@ -115,8 +74,6 @@ export function TooltipLayer(): React.JSX.Element | null {
 
   React.useEffect(() => {
     let active: Element | null = null;
-    // Set by a press: the tooltip stays away until the pointer leaves, as the
-    // system's does.
     let pressed = false;
     let openTimer: ReturnType<typeof setTimeout> | null = null;
     let closedAt = Number.NEGATIVE_INFINITY;
@@ -148,8 +105,6 @@ export function TooltipLayer(): React.JSX.Element | null {
       shown = true;
       setTip({ text, anchor: element });
     };
-    // React writing a new `title` while it is parked: take it over, or the
-    // system tooltip would come back mid-hover with the new words.
     const watcher = new MutationObserver(() => {
       if (active === null || !active.hasAttribute('title')) {
         return;
@@ -182,8 +137,6 @@ export function TooltipLayer(): React.JSX.Element | null {
         return;
       }
       active = element;
-      // Parked NOW, not when the tooltip shows: the system starts its own
-      // timer on the same hover, and would win the race otherwise.
       park(element);
       watcher.observe(element, {
         attributes: true,
@@ -203,7 +156,6 @@ export function TooltipLayer(): React.JSX.Element | null {
       if (next instanceof Node && active.contains(next)) {
         return;
       }
-      // Onto a titled element: its own `pointerover` takes over from here.
       release();
     };
     const onPress = (): void => {
@@ -234,9 +186,6 @@ export function TooltipLayer(): React.JSX.Element | null {
     };
   }, []);
 
-  // Measured once mounted, and followed while shown: the element can move
-  // (a list re-sorting) or go away (a press that removed it) under a pointer
-  // that never left it, and no event says so.
   React.useLayoutEffect(() => {
     if (tip === null) {
       setPosition(null);
@@ -280,16 +229,11 @@ export function TooltipLayer(): React.JSX.Element | null {
       id={tipId}
       role="tooltip"
       data-slot="tooltip"
-      // Off-screen and invisible until measured, so it never paints at 0,0.
       style={
         position === null
           ? { left: 0, top: 0, visibility: 'hidden' }
           : { left: position.left, top: position.top }
       }
-      // The app's popover surface, not a system-looking label — "выглядит
-      // так же, как и до этого … некрасивый системный лейбл": the hairline,
-      // the large shadow and the arrow onto its control are what the OS's
-      // own tooltip has none of.
       className="pointer-events-none fixed z-60 max-w-[min(24rem,calc(100vw-16px))] rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs leading-snug font-medium break-words whitespace-pre-line text-popover-foreground shadow-panel-lg">
       {position === null ? null : (
         <span

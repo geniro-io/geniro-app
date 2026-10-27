@@ -8,6 +8,7 @@ import type { SessionPullRequest } from '../adapters/adapter.types';
 import type {
   CapturedPullRequest,
   DisplayedPullRequest,
+  PullRequestOutcome,
   RunPullRequest,
   SessionTranscriptTarget,
 } from '../chat.types';
@@ -19,11 +20,13 @@ import {
   mergePullRequests,
   PULL_REQUEST_SCAN_VERSION,
   pullRequestKey,
+  pullRequestOutcomeKey,
   readDisplayedPullRequests,
   readPullRequestUrls,
   readRunPullRequests,
   textNamesPullRequest,
 } from '../utils/pull-request-capture';
+import { readRunOutcomes } from '../utils/run-outcomes';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { ItemSeqAllocator } from './item-seq.allocator';
@@ -127,6 +130,14 @@ export class PullRequestCaptureService implements OnModuleInit {
 
   /** The newest pass queued per run; every pass of a run waits on the one before. */
   private readonly passes = new Map<string, Promise<void>>();
+
+  /**
+   * Per run, how many CAPTURE passes are queued or running — not counting the
+   * announce-only ones ({@link announceOutcome}), which capture nothing. A
+   * listing skips its pass while any capture pass is ahead of it, and only
+   * then.
+   */
+  private readonly capturing = new Map<string, number>();
 
   /**
    * What each run's last pass in this process wrote to its row. This service is
@@ -316,27 +327,46 @@ export class PullRequestCaptureService implements OnModuleInit {
     em: EntityManager,
     mayRescan: boolean,
   ): Promise<void> {
-    const previous = this.passes.get(run.id);
-    if (previous !== undefined && !mayRescan) {
+    if (!mayRescan && (this.capturing.get(run.id) ?? 0) > 0) {
       const stored = this.written.get(run.id);
       if (stored !== undefined) {
         Object.assign(run, stored);
       }
       return Promise.resolve();
     }
-    const pass = (async () => {
-      await previous?.catch(() => undefined);
+    this.capturing.set(run.id, (this.capturing.get(run.id) ?? 0) + 1);
+    const pass = this.chain(run.id, async () => {
       const stored = this.written.get(run.id);
       if (stored !== undefined) {
         Object.assign(run, stored);
       }
       await this.syncOne(run, em, mayRescan);
-    })();
-    this.passes.set(run.id, pass);
+    });
     void pass
       .finally(() => {
-        if (this.passes.get(run.id) === pass) {
-          this.passes.delete(run.id);
+        const left = (this.capturing.get(run.id) ?? 1) - 1;
+        if (left > 0) {
+          this.capturing.set(run.id, left);
+        } else {
+          this.capturing.delete(run.id);
+        }
+      })
+      .catch(() => undefined);
+    return pass;
+  }
+
+  /** Queue `work` as the run's newest pass, after the one before it settles. */
+  private chain(runId: string, work: () => Promise<void>): Promise<void> {
+    const previous = this.passes.get(runId);
+    const pass = (async () => {
+      await previous?.catch(() => undefined);
+      await work();
+    })();
+    this.passes.set(runId, pass);
+    void pass
+      .finally(() => {
+        if (this.passes.get(runId) === pass) {
+          this.passes.delete(runId);
         }
       })
       .catch(() => undefined);
@@ -408,7 +438,11 @@ export class PullRequestCaptureService implements OnModuleInit {
         if (changed) {
           this.announce(
             run.id,
-            readDisplayedPullRequests(run.pullRequests, touchedPullRequests),
+            readDisplayedPullRequests(
+              run.pullRequests,
+              touchedPullRequests,
+              await this.outcomesOf(run.id, em),
+            ),
           );
         }
       }
@@ -465,7 +499,11 @@ export class PullRequestCaptureService implements OnModuleInit {
     if (changed) {
       this.announce(
         run.id,
-        readDisplayedPullRequests(pullRequests, touchedPullRequests),
+        readDisplayedPullRequests(
+          pullRequests,
+          touchedPullRequests,
+          await this.outcomesOf(run.id, em),
+        ),
       );
     }
     // Opened ones only: the ledger counts what a thread OPENED.
@@ -623,6 +661,46 @@ export class PullRequestCaptureService implements OnModuleInit {
       );
       return [];
     }
+  }
+
+  /**
+   * The run's recorded outcomes, read fresh: this service keeps only the
+   * columns it writes, and an announce without them would wipe every badge,
+   * since the renderer replaces the whole list from each one.
+   */
+  private async outcomesOf(
+    runId: string,
+    em: EntityManager,
+  ): Promise<ReadonlyMap<string, PullRequestOutcome>> {
+    return readRunOutcomes(await this.runDao.runOutcomesOf(runId, em));
+  }
+
+  /**
+   * Announce the run's pull-request list as its row holds it now, after
+   * `RunOutcomeBroker` wrote the outcome filed under `outcomeKey`
+   * (`pullRequestOutcomeKey`). Chained behind any pass in flight for the run,
+   * as passes are, so the announces land in the order the writes did and
+   * neither re-announces a list the other has since moved. Silent, like
+   * {@link announce}'s other callers, when that pull request is not on the
+   * list: nothing any window draws changed.
+   */
+  announceOutcome(runId: string, outcomeKey: string): Promise<void> {
+    return this.chain(runId, async () => {
+      const run = await this.runDao.outcomeContextOf(runId, this.em.fork());
+      if (run === null) {
+        return;
+      }
+      const pullRequests = readDisplayedPullRequests(
+        run.pullRequests,
+        run.touchedPullRequests,
+        readRunOutcomes(run.runOutcomes),
+      );
+      if (
+        pullRequests.some((row) => pullRequestOutcomeKey(row) === outcomeKey)
+      ) {
+        this.announce(runId, pullRequests);
+      }
+    });
   }
 
   /**

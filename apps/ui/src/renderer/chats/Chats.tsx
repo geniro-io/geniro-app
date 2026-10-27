@@ -239,6 +239,7 @@ import {
 } from './run-group';
 import { inScope } from './run-list-pages';
 import { lastActivityOf, sortRunsForSidebar } from './run-order';
+import { runOutcomesOf } from './run-outcome';
 import { effectiveConfigDir } from './run-profile';
 import {
   callEndedPerDaemon,
@@ -5016,6 +5017,14 @@ export function Chats({
     () => threadPullRequestsOf(activeRun ?? null, resolvedThreadPullRequests),
     [activeRun, resolvedThreadPullRequests],
   );
+  /** Each of the open thread's pull requests' newest recorded outcome. */
+  // Keyed on the list alone: a run-status announce that carries no list keeps
+  // its reference, and a fresh value here re-renders every transcript row.
+  const activeRunPullRequests = activeRun?.pullRequests;
+  const activeRunOutcomes = useMemo(
+    () => runOutcomesOf(activeRunPullRequests),
+    [activeRunPullRequests],
+  );
   /** The ONE pull request each sidebar row names ({@link rowPullRequestOf}). */
   const rowPullRequestByRun = useMemo(() => {
     const byRun = new Map<string, PullRequestInfo>();
@@ -8775,7 +8784,10 @@ export function Chats({
           onOpen={openChatChanges}
         />
       ) : null}
-      <ThreadPullRequestChips results={openedByActiveThread} />
+      <ThreadPullRequestChips
+        results={openedByActiveThread}
+        outcomes={activeRunOutcomes.newest}
+      />
       <TaskListChip
         done={sidePanelLive.tasks.done}
         total={sidePanelLive.tasks.total}
@@ -9748,6 +9760,7 @@ export function Chats({
                     overflow past the scroll origin, where it cannot be reached
                     by scrolling up. The margin has no such failure mode. */}
                     <TranscriptContexts
+                      runOutcomes={activeRunOutcomes}
                       collapseToolSteps={collapseToolSteps}
                       runActivity={activeActivity}
                       turnDurations={turnDurations}

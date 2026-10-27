@@ -14,9 +14,14 @@ import type {
   LineSnapshotRow,
   LinesPeak,
   PullRequestActivityInput,
+  RunOutcomeLedgerRow,
   UsageActivityKind,
 } from '../stats.types';
-import { pullRequestFact, threadFact } from '../utils/activity-facts';
+import {
+  pullRequestFact,
+  runOutcomeKey,
+  threadFact,
+} from '../utils/activity-facts';
 import { LEGACY_LINE_KEY_PREFIX } from '../utils/line-keys';
 
 /** The `usage_activity` columns the grouped lines read uses, as SQLite stores them. */
@@ -30,6 +35,34 @@ interface LinesDatabase {
     /** Epoch milliseconds. */
     occurred_at: number;
     deleted_at: number | null;
+  };
+}
+
+/**
+ * `usage_activity` as SQLite stores it, for the outcome upsert — typed off the entity,
+ * so a renamed or retyped field fails the build. Dates are the stored epoch milliseconds
+ * and booleans the stored 0/1, since value conversion is off.
+ */
+interface ActivityDatabase {
+  usage_activity: {
+    id: UsageActivity['id'];
+    created_at: number;
+    updated_at: number;
+    deleted_at: number | null;
+    kind: UsageActivity['kind'];
+    run_id: UsageActivity['runId'];
+    occurred_at: number;
+    dedup_key: UsageActivity['dedupKey'];
+    pr_owner: UsageActivity['prOwner'];
+    pr_repo: UsageActivity['prRepo'];
+    pr_number: UsageActivity['prNumber'];
+    pr_url: UsageActivity['prUrl'];
+    workflow_slug: UsageActivity['workflowSlug'];
+    source_seq: UsageActivity['sourceSeq'];
+    outcome_draft: number | null;
+    outcome_review_rounds: UsageActivity['outcomeReviewRounds'];
+    outcome_acceptance: UsageActivity['outcomeAcceptance'];
+    outcome_questions_asked: UsageActivity['outcomeQuestionsAsked'];
   };
 }
 
@@ -122,6 +155,144 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
       }
     });
     return written;
+  }
+
+  /**
+   * Record one pull request's outcome on one run, or move its row forward to this one.
+   * A row already holding a newer outcome (a higher `sourceSeq`) is left as it is: the
+   * live copy and the boot sweep can reach one pull request out of order, and neither
+   * may move an outcome backwards. One statement, so two copies racing land in seq
+   * order whichever arrives first.
+   */
+  async upsertRunOutcome(
+    row: RunOutcomeLedgerRow,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const now = Date.now();
+    await (txEm ?? this.em.fork())
+      .getKysely<ActivityDatabase>({ convertValues: false })
+      .insertInto('usage_activity')
+      .values({
+        id: randomUUID(),
+        created_at: now,
+        updated_at: now,
+        deleted_at: null,
+        kind: 'run_outcome',
+        run_id: row.runId,
+        occurred_at: row.occurredAt.getTime(),
+        dedup_key: runOutcomeKey(row),
+        pr_owner: row.prOwner,
+        pr_repo: row.prRepo,
+        pr_number: row.prNumber,
+        pr_url: row.prUrl,
+        workflow_slug: row.workflowSlug,
+        source_seq: row.sourceSeq,
+        outcome_draft: row.draft ? 1 : 0,
+        outcome_review_rounds: row.reviewRounds,
+        outcome_acceptance: row.acceptance,
+        outcome_questions_asked: row.questionsAsked,
+      })
+      .onConflict((conflict) =>
+        conflict
+          .column('dedup_key')
+          .doUpdateSet((eb) => ({
+            updated_at: now,
+            occurred_at: eb.ref('excluded.occurred_at'),
+            pr_url: eb.ref('excluded.pr_url'),
+            workflow_slug: eb.ref('excluded.workflow_slug'),
+            source_seq: eb.ref('excluded.source_seq'),
+            outcome_draft: eb.ref('excluded.outcome_draft'),
+            outcome_review_rounds: eb.ref('excluded.outcome_review_rounds'),
+            outcome_acceptance: eb.ref('excluded.outcome_acceptance'),
+            outcome_questions_asked: eb.ref('excluded.outcome_questions_asked'),
+          }))
+          .where((eb) =>
+            eb.or([
+              eb('usage_activity.source_seq', 'is', null),
+              eb(
+                'usage_activity.source_seq',
+                '<',
+                eb.ref('excluded.source_seq'),
+              ),
+            ]),
+          ),
+      )
+      .execute();
+  }
+
+  /**
+   * The outcomes the ledger holds — one per run and pull request, its newest — for the
+   * given runs, or every run of one workflow. What a per-version outcome fold reads, and it
+   * reads it here rather than from the transcript because a deleted run's rows are gone.
+   */
+  async runOutcomes(
+    filter: { runIds?: readonly string[]; workflowSlug?: string },
+    txEm?: EntityManager,
+  ): Promise<RunOutcomeLedgerRow[]> {
+    if (filter.runIds !== undefined && filter.runIds.length === 0) {
+      return [];
+    }
+    const rows = await this.getRepo(txEm).find(
+      {
+        kind: 'run_outcome',
+        ...(filter.runIds === undefined
+          ? {}
+          : { runId: { $in: [...filter.runIds] } }),
+        ...(filter.workflowSlug === undefined
+          ? {}
+          : { workflowSlug: filter.workflowSlug }),
+      },
+      { orderBy: { occurredAt: 'asc' }, disableIdentityMap: true },
+    );
+    const outcomes: RunOutcomeLedgerRow[] = [];
+    for (const row of rows) {
+      if (
+        row.sourceSeq === null ||
+        row.prOwner === null ||
+        row.prRepo === null ||
+        row.prNumber === null ||
+        row.prUrl === null ||
+        row.outcomeDraft === null ||
+        row.outcomeReviewRounds === null ||
+        row.outcomeAcceptance === null ||
+        row.outcomeQuestionsAsked === null
+      ) {
+        continue;
+      }
+      outcomes.push({
+        runId: row.runId,
+        sourceSeq: row.sourceSeq,
+        occurredAt: row.occurredAt,
+        workflowSlug: row.workflowSlug,
+        prOwner: row.prOwner,
+        prRepo: row.prRepo,
+        prNumber: row.prNumber,
+        prUrl: row.prUrl,
+        draft: row.outcomeDraft,
+        reviewRounds: row.outcomeReviewRounds,
+        acceptance: row.outcomeAcceptance,
+        questionsAsked: row.outcomeQuestionsAsked,
+      });
+    }
+    return outcomes;
+  }
+
+  /**
+   * Each recorded outcome's `sourceSeq`, by ledger key — what the boot sweep compares a
+   * run's newest outcome item against, read once rather than per pull request.
+   */
+  async runOutcomeSeqs(txEm?: EntityManager): Promise<Map<string, number>> {
+    const rows = await this.getRepo(txEm).find(
+      { kind: 'run_outcome' },
+      { fields: ['dedupKey', 'sourceSeq'], disableIdentityMap: true },
+    );
+    const seqs = new Map<string, number>();
+    for (const row of rows) {
+      if (row.sourceSeq !== null) {
+        seqs.set(row.dedupKey, row.sourceSeq);
+      }
+    }
+    return seqs;
   }
 
   /** Record one cumulative lines snapshot. Never refused, since a thread is measured many times. */

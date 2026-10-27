@@ -3314,6 +3314,66 @@ export interface TeamNotesReadOutcome {
   unread: number;
 }
 
+/** geniro's own tool a workflow node records a pull request's outcome with. */
+export const HOST_RECORD_OUTCOME_TOOL = 'record_outcome';
+
+/** Where the user's acceptance of a pull request stands. */
+export const RunOutcomeAcceptanceSchema = z
+  .enum(['accepted', 'changes_requested', 'not_yet', 'not_needed'])
+  .meta({ id: 'RunOutcomeAcceptance' });
+export type RunOutcomeAcceptance = z.infer<typeof RunOutcomeAcceptanceSchema>;
+
+/**
+ * The payload of a `run_outcome` row: one pull request's delivery outcome as a
+ * workflow node recorded it. `questionsAsked` and `workflowSlug` are the
+ * daemon's, stamped at the write; the rest is the node's. `nodeId` /
+ * `conversationId` / `callId` name the recording conversation as on a team
+ * note.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/run-outcome-payload.ts
+ * (`readRunOutcomePayload`), which draws the transcript row from these rows.
+ */
+export const RunOutcomePayloadSchema = z.object({
+  prOwner: z.string(),
+  prRepo: z.string(),
+  prNumber: z.number().int(),
+  prUrl: z.string(),
+  draft: z.boolean(),
+  reviewRounds: z.number().int(),
+  acceptance: RunOutcomeAcceptanceSchema,
+  questionsAsked: z.number().int(),
+  workflowSlug: z.string().nullable(),
+  nodeId: z.string(),
+  conversationId: z.string().nullable(),
+  callId: z.string().optional(),
+});
+export type RunOutcomePayload = z.infer<typeof RunOutcomePayloadSchema>;
+
+/** A pull request's newest recorded outcome, as its run's display list carries it. */
+export const PullRequestOutcomeSchema = z
+  .object({
+    seq: z.number().int().describe('the `run_outcome` row it was read from'),
+    draft: z.boolean(),
+    reviewRounds: z.number().int(),
+    acceptance: RunOutcomeAcceptanceSchema,
+    questionsAsked: z.number().int(),
+  })
+  .meta({ id: 'PullRequestOutcome' });
+export type PullRequestOutcome = z.infer<typeof PullRequestOutcomeSchema>;
+
+/** A `record_outcome` call as its reader hands it over. */
+export interface RunOutcomeInput {
+  prNumber: number;
+  prUrl: string;
+  draft: boolean;
+  reviewRounds: number;
+  acceptance: RunOutcomeAcceptance;
+}
+
+export type RunOutcomeWriteOutcome =
+  | { status: 'recorded'; seq: number; questionsAsked: number }
+  | { status: 'refused'; reason: string };
+
 /** A `monitor` call as its reader hands it over. */
 export interface MonitorStartInput {
   command: string;
@@ -5374,6 +5434,11 @@ export const DisplayedPullRequestSchema = RunPullRequestSchema.extend({
   opened: z
     .boolean()
     .describe('The run opened it, rather than only touching it'),
+  outcome: PullRequestOutcomeSchema.nullable()
+    .optional()
+    .describe(
+      'Its newest `record_outcome` on this run; absent or null when none was recorded',
+    ),
 }).meta({ id: 'DisplayedPullRequest' });
 export type DisplayedPullRequest = z.infer<typeof DisplayedPullRequestSchema>;
 

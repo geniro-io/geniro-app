@@ -359,6 +359,36 @@ describe('parseRunStatus — the run_status twin', () => {
     ]);
   });
 
+  it("carries each pull request's recorded outcome, and none for a missing or partial one", () => {
+    const ref = (number: number) => ({
+      owner: 'o',
+      repo: 'r',
+      number,
+      url: `https://github.com/o/r/pull/${number}`,
+      seq: number,
+      opened: true,
+    });
+    const outcome = {
+      seq: 40,
+      draft: false,
+      reviewRounds: 2,
+      acceptance: 'accepted',
+      questionsAsked: 3,
+    };
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        pullRequests: [
+          { ...ref(1), outcome },
+          ref(2),
+          { ...ref(3), outcome: { ...outcome, acceptance: 'merged' } },
+          { ...ref(4), outcome: { ...outcome, reviewRounds: undefined } },
+        ],
+      })?.pullRequests?.map((row) => row.outcome),
+    ).toEqual([outcome, null, null, null]);
+  });
+
   it('admits an announced empty list, and drops one holding nothing usable', () => {
     expect(
       parseRunStatus({ runId: 'r1', status: null, pullRequests: [] })

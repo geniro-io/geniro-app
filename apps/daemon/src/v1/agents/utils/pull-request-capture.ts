@@ -1,5 +1,9 @@
 import type { ItemKind } from '../../runs/runs.types';
-import type { DisplayedPullRequest, RunPullRequest } from '../chat.types';
+import type {
+  DisplayedPullRequest,
+  PullRequestOutcome,
+  RunPullRequest,
+} from '../chat.types';
 
 /**
  * Reading the pull requests a run OPENED out of the transcript it already
@@ -431,6 +435,19 @@ export function pullRequestKey(pullRequest: {
 }
 
 /**
+ * The identity a recorded outcome is filed under: {@link pullRequestKey} with
+ * owner and repo case-folded, since GitHub resolves them case-insensitively
+ * and an agent may write a URL in another case than the capture saw.
+ */
+export function pullRequestOutcomeKey(pullRequest: {
+  owner: string;
+  repo: string;
+  number: number;
+}): string {
+  return pullRequestKey(pullRequest).toLowerCase();
+}
+
+/**
  * How many pull requests one run may carry.
  *
  * Roomy rather than tuned — the thread that motivated this opened 31 — and it
@@ -471,10 +488,15 @@ export function mergePullRequests(
  * CLI recorded touching, as one list in the order the thread reached them.
  * Only display reads this; ending a card and counting what a thread opened
  * read the opened column alone.
+ *
+ * `outcomes` is the run's `runOutcomes` column as `readRunOutcomes` reads it,
+ * keyed by {@link pullRequestOutcomeKey}: every announce of the list carries
+ * it, since the renderer replaces the whole list from each one.
  */
 export function readDisplayedPullRequests(
   opened: string | null | undefined,
   touched: string | null | undefined,
+  outcomes: ReadonlyMap<string, PullRequestOutcome>,
 ): DisplayedPullRequest[] {
   const openedRows = readRunPullRequests(opened);
   const openedKeys = new Set(openedRows.map(pullRequestKey));
@@ -484,7 +506,14 @@ export function readDisplayedPullRequests(
     openedRows,
     readRunPullRequests(touched),
     Number.POSITIVE_INFINITY,
-  ).map((row) => ({ ...row, opened: openedKeys.has(pullRequestKey(row)) }));
+  ).map((row) => {
+    const key = pullRequestKey(row);
+    return {
+      ...row,
+      opened: openedKeys.has(key),
+      outcome: outcomes.get(pullRequestOutcomeKey(row)) ?? null,
+    };
+  });
 }
 
 /**

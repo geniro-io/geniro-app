@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
 import { ChatTotalsWireSchema } from '../agents/chat.types';
-import { commitShaSchema } from '../agents/chat.types';
+import {
+  commitShaSchema,
+  type RunOutcomeAcceptance,
+} from '../agents/chat.types';
 import type { AgentKind } from '../runs/runs.types';
 
 /**
@@ -36,7 +39,29 @@ export interface UsageEventInput {
  * What one `usage_activity` row records. See its entity for what each kind means and
  * how it is keyed.
  */
-export type UsageActivityKind = 'thread' | 'pull_request' | 'lines';
+export type UsageActivityKind =
+  'thread' | 'pull_request' | 'lines' | 'run_outcome';
+
+/**
+ * One pull request's newest recorded outcome, as the ledger keeps it (a `run_outcome`
+ * row): copied from the run's newest `run_outcome` item for that pull request, so it
+ * survives the run's teardown. `sourceSeq` is that item's seq, which orders two copies
+ * of one pull request's outcome.
+ */
+export interface RunOutcomeLedgerRow {
+  runId: string;
+  sourceSeq: number;
+  occurredAt: Date;
+  workflowSlug: string | null;
+  prOwner: string;
+  prRepo: string;
+  prNumber: number;
+  prUrl: string;
+  draft: boolean;
+  reviewRounds: number;
+  acceptance: RunOutcomeAcceptance;
+  questionsAsked: number;
+}
 
 /**
  * One `thread` or `pull_request` row, keyed. The live recorder and the boot sweep build these

@@ -78,6 +78,7 @@ import {
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
+import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
@@ -785,6 +786,8 @@ export class GraphExecutorService
     @Optional() private readonly monitorSinks?: MonitorBroker,
     /** The team-note tools, optional on `artifacts`' terms. */
     @Optional() private readonly teamNotes?: TeamNoteBroker,
+    /** `record_outcome`, optional on `artifacts`' terms. */
+    @Optional() private readonly runOutcomes?: RunOutcomeBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -819,6 +822,9 @@ export class GraphExecutorService
 
   /** Each run's team-note sinks, on the same terms. */
   private readonly teamNoteDisposers = new Map<string, (() => void)[]>();
+
+  /** Each run's `record_outcome` sinks, on the same terms. */
+  private readonly runOutcomeDisposers = new Map<string, (() => void)[]>();
 
   /**
    * How a monitor's output reaches one of a run's conversations — installed by
@@ -1829,7 +1835,8 @@ export class GraphExecutorService
   }
 
   /**
-   * Drop a run's host-tool sinks (pages, buttons, monitors, team notes) and
+   * Drop a run's host-tool sinks (pages, buttons, monitors, team notes,
+   * outcomes) and
    * forget its team notes' read state — every way a run is destroyed calls
    * this.
    */
@@ -1839,6 +1846,7 @@ export class GraphExecutorService
       this.actionDisposers,
       this.monitorDisposers,
       this.teamNoteDisposers,
+      this.runOutcomeDisposers,
     ]) {
       for (const dispose of disposers.get(runId) ?? []) {
         dispose();
@@ -1847,6 +1855,7 @@ export class GraphExecutorService
     }
     this.monitorWakers.delete(runId);
     this.teamNotes?.forgetRun(runId);
+    this.runOutcomes?.forgetRun(runId);
   }
 
   /**
@@ -2117,6 +2126,44 @@ export class GraphExecutorService
     }
     this.teamNoteDisposers.set(runId, disposers);
     void broker.prime(runId);
+  }
+
+  /**
+   * Give each call-capable agent node of this pass `record_outcome`, on
+   * {@link registerArtifactPublishers}' terms. The row goes into the recording
+   * conversation's own transcript and, when that conversation answers a call,
+   * into that call's card — a team note's filing.
+   */
+  private registerRunOutcomeSinks(
+    runId: string,
+    hostToolNodes: readonly WorkflowAgentNode[],
+    persistItem: (
+      nodeId: string | null,
+      kind: ItemKind,
+      role: string | null,
+      payload: unknown,
+    ) => Promise<ItemWire>,
+  ): void {
+    const broker = this.runOutcomes;
+    if (broker === undefined) {
+      return;
+    }
+    for (const dispose of this.runOutcomeDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    this.runOutcomeDisposers.set(
+      runId,
+      hostToolNodes.map((node) =>
+        broker.register(runId, node.id, {
+          persistItem,
+          recorder: (caller) => ({
+            nodeId: callerNodeOf(caller),
+            conversationId: callerConversationOf(caller),
+            callId: this.callBroker.callAnsweredBy(runId, caller),
+          }),
+        }),
+      ),
+    );
   }
 
   /** Drop every per-key fact of one run — its keys are `<runId>::…`. */
@@ -7236,6 +7283,7 @@ export class GraphExecutorService
       (node) => resolveApproval(node).mode,
     );
     this.registerTeamNoteSinks(runId, hostToolNodes, nodes, persistItem);
+    this.registerRunOutcomeSinks(runId, hostToolNodes, persistItem);
     /**
      * Open a turn of a node's OWN conversation on the write chain — what a
      * wake (`wakeNode`) and a monitor's output share: counted live from now

@@ -273,6 +273,7 @@ describe('readDisplayedPullRequests', () => {
     const shown = readDisplayedPullRequests(
       JSON.stringify([pr(87, MAX_RUN_PULL_REQUESTS)]),
       JSON.stringify(touched),
+      new Map(),
     );
 
     expect(shown).toHaveLength(MAX_RUN_PULL_REQUESTS + 1);
@@ -291,6 +292,7 @@ describe('readDisplayedPullRequests', () => {
     const shown = readDisplayedPullRequests(
       JSON.stringify([pr(87, 5)]),
       JSON.stringify([pr(87, 2), pr(7207, 9)]),
+      new Map(),
     );
 
     expect(
@@ -298,6 +300,34 @@ describe('readDisplayedPullRequests', () => {
     ).toEqual([
       { number: 87, opened: true },
       { number: 7207, opened: false },
+    ]);
+  });
+
+  it("attaches each pull request's recorded outcome by identity and null to the rest", () => {
+    const pr = (repo: string, number: number, seq: number) => ({
+      owner: 'acme',
+      repo,
+      number,
+      url: `https://github.com/acme/${repo}/pull/${number}`,
+      seq,
+    });
+    const outcome = {
+      seq: 40,
+      draft: false,
+      reviewRounds: 2,
+      acceptance: 'accepted' as const,
+      questionsAsked: 3,
+    };
+
+    const shown = readDisplayedPullRequests(
+      JSON.stringify([pr('platform', 87, 5), pr('mobile', 87, 6)]),
+      null,
+      new Map([['acme/platform#87', outcome]]),
+    );
+
+    expect(shown.map((row) => [row.repo, row.outcome])).toEqual([
+      ['platform', outcome],
+      ['mobile', null],
     ]);
   });
 });

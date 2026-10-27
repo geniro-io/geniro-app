@@ -3739,6 +3739,12 @@ export interface DisplayedPullRequest {
      * @memberof DisplayedPullRequest
      */
     opened: boolean;
+    /**
+     * 
+     * @type {PullRequestOutcome}
+     * @memberof DisplayedPullRequest
+     */
+    outcome?: PullRequestOutcome | null;
 }
 
 /**
@@ -4156,7 +4162,8 @@ export const ItemKind = {
     RecommendationOutcome: 'recommendation_outcome',
     Action: 'action',
     ActionOutcome: 'action_outcome',
-    TeamNote: 'team_note'
+    TeamNote: 'team_note',
+    RunOutcome: 'run_outcome'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -5219,6 +5226,45 @@ export type PromptCacheTtlReason = typeof PromptCacheTtlReason[keyof typeof Prom
 /**
  * 
  * @export
+ * @interface PullRequestOutcome
+ */
+export interface PullRequestOutcome {
+    /**
+     * the `run_outcome` row it was read from
+     * @type {number}
+     * @memberof PullRequestOutcome
+     */
+    seq: number;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof PullRequestOutcome
+     */
+    draft: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof PullRequestOutcome
+     */
+    reviewRounds: number;
+    /**
+     * 
+     * @type {RunOutcomeAcceptance}
+     * @memberof PullRequestOutcome
+     */
+    acceptance: RunOutcomeAcceptance;
+    /**
+     * 
+     * @type {number}
+     * @memberof PullRequestOutcome
+     */
+    questionsAsked: number;
+}
+
+
+/**
+ * 
+ * @export
  * @interface QueuedTask
  */
 export interface QueuedTask {
@@ -6181,6 +6227,19 @@ export interface RunMonitor {
      */
     rssBytes: number;
 }
+
+/**
+ * 
+ * @export
+ */
+export const RunOutcomeAcceptance = {
+    Accepted: 'accepted',
+    ChangesRequested: 'changes_requested',
+    NotYet: 'not_yet',
+    NotNeeded: 'not_needed'
+} as const;
+export type RunOutcomeAcceptance = typeof RunOutcomeAcceptance[keyof typeof RunOutcomeAcceptance];
+
 /**
  * 
  * @export

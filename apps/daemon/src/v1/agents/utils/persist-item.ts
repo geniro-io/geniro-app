@@ -20,6 +20,7 @@ import { inCallWire } from './item-wire';
 import { threadPreviewOf } from './message-preview';
 import { readModelParameters } from './model-parameters';
 import { readDisplayedPullRequests } from './pull-request-capture';
+import { readRunOutcomes } from './run-outcomes';
 import { readRunResetWakes } from './run-reset-wakes';
 import { searchIndexText } from './searchable-text';
 import { readRunTaskList } from './task-list-fold';
@@ -249,11 +250,13 @@ export function runToWire(
     lastMessage: preview?.lastMessage ?? null,
     lastActivityAt: preview?.lastActivityAt?.toISOString() ?? null,
     // Read off the row rather than passed in like the four live readings above:
-    // these ARE columns (opened + touched), written by the capture pass, so a
-    // caller that cannot know about approvals or holds still projects them.
+    // these ARE columns (opened + touched, written by the capture pass, and
+    // each one's newest recorded outcome), so a caller that cannot know about
+    // approvals or holds still projects them.
     pullRequests: readDisplayedPullRequests(
       run.pullRequests,
       run.touchedPullRequests,
+      readRunOutcomes(run.runOutcomes),
     ),
     // A column too, written by the call broker's reset wakes.
     resetWakes: readRunResetWakes(run.resetWakes),

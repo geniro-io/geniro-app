@@ -82,6 +82,7 @@ import { PartialStreamService } from '../../agents/services/partial-stream.servi
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
+import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import type { RunProcessReaper } from '../../agents/services/run-process-reaper.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
@@ -1153,6 +1154,8 @@ function setup(
   actions: ActionBroker;
   /** The team-note tools' broker, over the fake `items` table. */
   teamNotes: TeamNoteBroker;
+  /** `record_outcome`'s broker, over the fake `items` and `runs` tables. */
+  runOutcomes: RunOutcomeBroker;
   chatActions: ChatActionsService;
   /** The page store's answer, switchable per test: a refusal names its reason. */
   pageStore: { refusal: string | null };
@@ -1367,6 +1370,18 @@ function setup(
   const artifacts = new ArtifactBroker();
   const actions = new ActionBroker();
   const teamNotes = new TeamNoteBroker(em, itemDao as unknown as ItemDao);
+  const runOutcomes = new RunOutcomeBroker(
+    em,
+    itemDao as unknown as ItemDao,
+    {
+      outcomeContextOf: async (runId: string) => runDao.runs.get(runId) ?? null,
+      updateWithoutActivity: async () => undefined,
+    } as unknown as RunDao,
+    { all: () => new Map() } as unknown as AgentAdapterRegistry,
+    {
+      announceOutcome: async () => undefined,
+    } as unknown as PullRequestCaptureService,
+  );
   const chatActions = new ChatActionsService(
     em,
     itemDao as unknown as ItemDao,
@@ -1504,6 +1519,7 @@ function setup(
     undefined,
     undefined,
     teamNotes,
+    runOutcomes,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -1543,6 +1559,7 @@ function setup(
     artifacts,
     actions,
     teamNotes,
+    runOutcomes,
     chatActions,
     pageStore,
   };
@@ -6382,6 +6399,51 @@ describe('GraphExecutorService — agent calls', () => {
     await service.deleteRun(run.id);
     expect(teamNotes.canUse(run.id, 'a')).toBe(false);
     expect(teamNotes.canUse(run.id, 'b')).toBe(false);
+  });
+
+  it('files a callee’s recorded outcome in the call it answers, stamped with the run’s workflow, until the run is deleted', async () => {
+    const { service, callBroker, runOutcomes, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'ship it',
+      agent: 'helper',
+      message: 'open the PR',
+    });
+    await drain();
+
+    const outcome = await runOutcomes.record(
+      run.id,
+      'helper',
+      callerKey('helper', 'call-1'),
+      {
+        prNumber: 87,
+        prUrl: 'https://github.com/acme/platform/pull/87',
+        draft: true,
+        reviewRounds: 0,
+        acceptance: 'not_yet',
+      },
+    );
+
+    expect(outcome.status).toBe('recorded');
+    const row = itemDao.items.find((item) => item.kind === 'run_outcome');
+    expect(row?.nodeId).toBe('helper');
+    expect(JSON.parse(row!.payload)).toMatchObject({
+      prNumber: 87,
+      workflowSlug: 'c',
+      nodeId: 'helper',
+      conversationId: 'call-1',
+      callId: 'call-1',
+    });
+
+    await service.deleteRun(run.id);
+    expect(runOutcomes.canUse(run.id, 'orch')).toBe(false);
+    expect(runOutcomes.canUse(run.id, 'helper')).toBe(false);
   });
 
   it('a live fire-and-forget callee holds the run open until it settles', async () => {

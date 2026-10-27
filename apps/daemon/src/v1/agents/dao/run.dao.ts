@@ -672,6 +672,59 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * The run's `runOutcomes` column as it stands in the database — read past
+   * the identity map, because the writer (`RunOutcomeBroker`) and the readers
+   * that announce the pull-request list hold different copies of the row.
+   */
+  async runOutcomesOf(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    const row = await this.getRepo(txEm).findOne(
+      { id: runId },
+      { fields: ['id', 'runOutcomes'], disableIdentityMap: true },
+    );
+    return row?.runOutcomes ?? null;
+  }
+
+  /**
+   * What recording a pull request's outcome reads off its run, in one read
+   * past the identity map: the workflow it ran, the pull-request lists the
+   * announce re-projects, and the outcomes column it updates. Null for a
+   * run that is gone.
+   */
+  async outcomeContextOf(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<
+    Run,
+    'workflowId' | 'pullRequests' | 'touchedPullRequests' | 'runOutcomes'
+  > | null> {
+    const row = await this.getRepo(txEm).findOne(
+      { id: runId },
+      {
+        fields: [
+          'id',
+          'workflowId',
+          'pullRequests',
+          'touchedPullRequests',
+          'runOutcomes',
+        ],
+        disableIdentityMap: true,
+      },
+    );
+    if (row === null) {
+      return null;
+    }
+    return {
+      workflowId: row.workflowId,
+      pullRequests: row.pullRequests,
+      touchedPullRequests: row.touchedPullRequests,
+      runOutcomes: row.runOutcomes,
+    };
+  }
+
+  /**
    * Write BOOKKEEPING columns on a run without claiming the run did anything.
    *
    * `updatedAt` is the sidebar's "last activity" — its order and the time each

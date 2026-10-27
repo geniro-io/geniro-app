@@ -11,6 +11,7 @@ import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
+import type { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import type { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
@@ -43,6 +44,7 @@ import { PublishActionTool } from './publish-action/publish-action.tool';
 import { ReadAnalyzedThreadTool } from './read-analyzed-thread/read-analyzed-thread.tool';
 import { ReadChatContextTool } from './read-chat-context/read-chat-context.tool';
 import { ReadWorkflowsTool } from './read-workflows/read-workflows.tool';
+import { RecordOutcomeTool } from './record-outcome/record-outcome.tool';
 import { RemoveActionTool } from './remove-action/remove-action.tool';
 import { ReportFindingsTool } from './report-findings/report-findings.tool';
 import { ReportRecommendationsTool } from './report-recommendations/report-recommendations.tool';
@@ -73,6 +75,7 @@ export interface McpToolDeps {
   actions: ActionBroker;
   monitors: MonitorBroker;
   teamNotes: TeamNoteBroker;
+  runOutcomes: RunOutcomeBroker;
   patches: PatchBroker;
   plans: PlanBroker;
   notices: NotifyBroker;
@@ -94,7 +97,7 @@ export interface McpToolDeps {
  *
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
- * surface, the team notes, then the question, the render family, the action buttons, the
+ * surface, the team notes, the run outcome, then the question, the render family, the action buttons, the
  * monitors, the board, the chat history, the workflow library, the analysis tools, and the
  * agent's own notification last.
  */
@@ -108,6 +111,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new ListAgentThreadsTool(deps.calls),
     new TeamNoteTool(deps.teamNotes),
     new TeamNotesTool(deps.teamNotes),
+    new RecordOutcomeTool(deps.runOutcomes),
     new AskUserQuestionTool(deps.questions),
     new ReportFindingsTool(deps.findings),
     new ShowChartTool(deps.charts),

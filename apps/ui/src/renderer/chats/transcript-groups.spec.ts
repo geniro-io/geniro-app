@@ -606,6 +606,27 @@ describe('groupTranscript', () => {
     expect(pairs[0]?.result).not.toBeNull();
   });
 
+  it('hides a record_outcome call its outcome row stands for, and SHOWS one that was refused', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__record_outcome', 'o1', { pr_number: 87 }),
+      result('o1', 'Recorded as outcome 9.'),
+      call('mcp__geniro-run-1__record_outcome', 'o2', { pr_number: 88 }),
+      item('tool_result', {
+        id: 'o2',
+        name: null,
+        result: 'pr_number 88 does not match pr_url',
+        isError: true,
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(pairs.map((pair) => payloadString(pair.call.payload, 'id'))).toEqual(
+      ['o2'],
+    );
+    expect(pairs[0]?.result).not.toBeNull();
+  });
+
   it('SHOWS the monitor tools as ordinary tool rows', () => {
     const entries = groupTranscript([
       call('mcp__geniro-run-1__monitor', 't1', { command: 'tail -f log' }),

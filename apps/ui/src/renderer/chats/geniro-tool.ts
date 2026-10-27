@@ -95,6 +95,8 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   // The note is its own `team_note` row; `team_notes` draws nothing, so its
   // call row stays visible.
   team_note: null,
+  // The outcome is its own `run_outcome` row.
+  record_outcome: null,
   // The card is the `approval_request` row the daemon writes, which outlives
   // the call; `read_workflows` draws nothing and stays visible.
   [PROPOSE_WORKFLOW]: 'workflow',

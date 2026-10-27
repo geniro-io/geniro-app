@@ -47,6 +47,39 @@ describe('runToWire', () => {
     ).toEqual(['#6841@4', '#87@9']);
   });
 
+  it("projects each pull request's recorded outcome from the run's outcomes column", () => {
+    const outcome = {
+      seq: 40,
+      draft: false,
+      reviewRounds: 2,
+      acceptance: 'accepted',
+      questionsAsked: 3,
+    };
+    const run = new Run();
+    run.pullRequests = JSON.stringify([
+      {
+        owner: 'acme',
+        repo: 'platform',
+        number: 87,
+        url: 'https://github.com/acme/platform/pull/87',
+        seq: 9,
+      },
+      {
+        owner: 'acme',
+        repo: 'platform',
+        number: 88,
+        url: 'https://github.com/acme/platform/pull/88',
+        seq: 10,
+      },
+    ]);
+    run.runOutcomes = JSON.stringify({ 'acme/platform#87': outcome });
+
+    expect(runToWire(run).pullRequests.map((row) => row.outcome)).toEqual([
+      outcome,
+      null,
+    ]);
+  });
+
   it('projects a run that was never archived as null', () => {
     expect(runToWire(new Run()).archivedAt).toBeNull();
   });

@@ -10,6 +10,7 @@ import {
 } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
+import type { RunOutcomeAcceptance } from '../../agents/chat.types';
 import type { UsageActivityKind } from '../stats.types';
 
 /**
@@ -29,13 +30,17 @@ import type { UsageActivityKind } from '../stats.types';
  *   had reached, so a snapshot missed while the app was closed moves the timing of that
  *   growth but not its total, and a total that falls back and rises again counts its
  *   lines once.
+ * - `run_outcome`: one pull request's newest recorded outcome (`record_outcome`), copied
+ *   from the run's `run_outcome` items. One row per run and pull request, UPDATED to a
+ *   newer outcome — the one kind here that is not written once — and only ever forward
+ *   (`sourceSeq`).
  *
  * Every figure is nullable, and null means NOT MEASURED rather than zero: a snapshot
  * whose changes could not be counted is simply not written.
  */
 @Entity({ tableName: 'usage_activity' })
 // The idempotency key. A thread and a pull request happen once, so the database
-// refuses a second row for either. A lines snapshot gets a fresh key and is never
+// refuses a second row for either; an outcome's row is updated in place under its key. A lines snapshot gets a fresh key and is never
 // refused: a folder is measured many times over its life.
 @Unique({ properties: ['dedupKey'] })
 // The page's range predicate: this kind, this period.
@@ -59,11 +64,14 @@ export class UsageActivity extends TimestampsEntity {
   @Property({ type: DateTimeType })
   occurredAt!: Date;
 
-  /** `thread:<runId>`, `pr:<runId>:<owner>/<repo>#<number>`, or `lines:<uuid>`. */
+  /**
+   * `thread:<runId>`, `pr:<runId>:<owner>/<repo>#<number>`,
+   * `outcome:<runId>:<owner>/<repo>#<number>`, or `lines:<uuid>`.
+   */
   @Property({ type: 'string' })
   dedupKey!: string;
 
-  /** A pull request's identity. Null for every other kind. */
+  /** A pull request's identity, on a `pull_request` or `run_outcome` row. Null for every other kind. */
   @Property({ type: 'string', nullable: true })
   prOwner: string | null = null;
 
@@ -95,4 +103,28 @@ export class UsageActivity extends TimestampsEntity {
   /** Whether a lines snapshot is a lower bound: a truncated listing, or untracked files the count did not read. */
   @Property({ type: 'boolean', nullable: true })
   partial: boolean | null = null;
+
+  /**
+   * The workflow the run ran, on a `run_outcome` row. Stamped at write time, like
+   * `lineKey`, because the run can be deleted while the ledger stays.
+   */
+  @Property({ type: 'string', nullable: true })
+  workflowSlug: string | null = null;
+
+  /** The `run_outcome` item an outcome row was copied from; a copy only moves forward. */
+  @Property({ type: 'integer', nullable: true })
+  sourceSeq: number | null = null;
+
+  /** An outcome row's figures (`RunOutcomePayload`). Null for every other kind. */
+  @Property({ type: 'boolean', nullable: true })
+  outcomeDraft: boolean | null = null;
+
+  @Property({ type: 'integer', nullable: true })
+  outcomeReviewRounds: number | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  outcomeAcceptance: RunOutcomeAcceptance | null = null;
+
+  @Property({ type: 'integer', nullable: true })
+  outcomeQuestionsAsked: number | null = null;
 }

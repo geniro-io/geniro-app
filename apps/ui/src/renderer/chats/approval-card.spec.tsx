@@ -2406,6 +2406,48 @@ describe("ApprovalCard — the agent's remembering options", () => {
     scope: 'session',
   };
 
+  it("warns on geniro's gallery that remembering covers every later download, and only there", () => {
+    const warning =
+      'Remembering this lets every later gallery download pictures';
+    for (const toolName of [
+      'mcp__geniro-1a2b3c4d__show_gallery',
+      'geniro-1a2b3c4d-show_gallery: show_gallery',
+      // codex's name for a geniro call it cannot pin to one tool
+      'mcp__geniro-1a2b3c4d',
+    ]) {
+      const el = render(
+        <ApprovalCard
+          toolName={toolName}
+          input={{ images: ['https://cdn.example/a.png'] }}
+          options={[SESSION]}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(el.textContent).toContain(warning);
+    }
+    const monitor = render(
+      <ApprovalCard
+        toolName="mcp__geniro-1a2b3c4d__monitor"
+        input={{ command: 'gh run watch 1' }}
+        options={[SESSION]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(monitor.textContent).not.toContain(warning);
+    const noRemember = render(
+      <ApprovalCard
+        toolName="mcp__geniro-1a2b3c4d__show_gallery"
+        input={{ images: ['https://cdn.example/a.png'] }}
+        options={[]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(noRemember.textContent).not.toContain(warning);
+  });
+
   it("warns on geniro's monitor that remembering covers every later command, and only there", () => {
     const warning = 'Remembering this approves every command a monitor runs';
     for (const toolName of [

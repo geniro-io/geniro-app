@@ -5,6 +5,7 @@ import type { ChartBroker } from '../../agents/services/chart.broker';
 import type { ComparisonBroker } from '../../agents/services/comparison.broker';
 import type { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import type { GalleryBroker } from '../../agents/services/gallery.broker';
+import type { GalleryImageService } from '../../agents/services/gallery-image.service';
 import type { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import type { MetricsBroker } from '../../agents/services/metrics.broker';
 import type { MonitorBroker } from '../../agents/services/monitor.broker';
@@ -73,6 +74,7 @@ export interface McpToolDeps {
   metrics: MetricsBroker;
   comparisons: ComparisonBroker;
   galleries: GalleryBroker;
+  galleryImages: GalleryImageService;
   artifacts: ArtifactBroker;
   actions: ActionBroker;
   monitors: MonitorBroker;
@@ -121,7 +123,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new ShowChartTool(deps.charts),
     new ShowMetricsTool(deps.metrics),
     new ShowComparisonTool(deps.comparisons),
-    new ShowGalleryTool(deps.galleries),
+    new ShowGalleryTool(deps.galleries, deps.galleryImages),
     new ShowArtifactTool(deps.artifacts, deps.shares),
     new ProposePatchTool(deps.patches),
     new ProposePlanTool(deps.plans),

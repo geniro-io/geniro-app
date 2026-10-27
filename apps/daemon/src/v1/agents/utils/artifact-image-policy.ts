@@ -125,7 +125,7 @@ export function readArtifactImage(
       throw tooLarge(path, stat.size);
     }
     const bytes = readFileSync(fd);
-    const extension = sniff(bytes);
+    const extension = sniffImageExtension(bytes);
     if (extension === null) {
       throw new BadRequestException(
         'IMAGE_TYPE_UNSUPPORTED',
@@ -198,7 +198,9 @@ function realOrNull(path: string): string | null {
  * AVIF are RIFF and ISO-BMFF containers, so their brand sits at a fixed offset
  * rather than at the start.
  */
-function sniff(bytes: Buffer): ArtifactImageExtension | null {
+export function sniffImageExtension(
+  bytes: Buffer,
+): ArtifactImageExtension | null {
   if (bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
     return 'png';
   }

@@ -19,13 +19,21 @@ export function showGallerySchema(): Record<string, unknown> {
             path: {
               type: 'string',
               description:
-                "The file's FULL path on disk. A relative one is measured against this conversation's own working directory, which is frequently not the directory you wrote the file in.",
+                "The file's FULL path on disk, or an http(s) URL of a picture on the web, which this app " +
+                "downloads when you call the tool. A relative path is measured against this conversation's " +
+                'own working directory, which is frequently not the directory you wrote the file in.',
             },
             caption: {
               type: 'string',
               description:
-                'What THIS picture shows. Optional — leave it out when the pictures speak for ' +
-                'themselves, rather than captioning every tile to fill the field.',
+                'A short heading for THIS picture — what it is. Optional — leave it out when the pictures ' +
+                'speak for themselves, rather than captioning every tile to fill the field.',
+            },
+            description: {
+              type: 'string',
+              description:
+                'Longer text shown under the caption — the details a reader needs about this picture ' +
+                '(price, contents, what changed). Optional; line breaks are kept.',
             },
           },
           required: ['path'],

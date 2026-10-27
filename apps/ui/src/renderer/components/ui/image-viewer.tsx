@@ -391,6 +391,7 @@ export function ImageViewer({
   src,
   alt,
   title,
+  description,
   onPrev,
   onNext,
   position,
@@ -401,6 +402,8 @@ export function ImageViewer({
   alt?: string;
   /** Named in the header — a file name or the reference the agent wrote. */
   title?: string;
+  /** Text shown under the picture, line breaks kept. */
+  description?: string;
   /**
    * Step to the neighbouring picture, when this viewer was opened over a SET.
    *
@@ -530,6 +533,15 @@ export function ImageViewer({
           </>
         ) : null}
       </div>
+      {description === undefined ? null : (
+        <p
+          data-slot="image-viewer-description"
+          // `w-0 min-w-full` takes the text out of the dialog's `w-fit` sizing:
+          // the picture decides the width and the text wraps inside it.
+          className="m-0 w-0 min-w-full pt-3 text-sm whitespace-pre-line text-muted-foreground">
+          {description}
+        </p>
+      )}
     </Dialog>,
     document.body,
   );

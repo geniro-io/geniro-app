@@ -129,7 +129,7 @@ import { isHostBoardCall } from '../utils/host-board';
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
-import { isHostGalleryCall } from '../utils/host-gallery';
+import { hostGalleryDownloads, isHostGalleryCall } from '../utils/host-gallery';
 import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostNotifyCall } from '../utils/host-notify';
 import { hostPatchResultText, isHostPatchCall } from '../utils/host-patch';
@@ -5381,11 +5381,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const autoApproves = (
         toolName: string,
         mode: ChatApprovalMode | undefined,
+        input: unknown,
       ): boolean =>
         isHostQuestionCall(hostQuestionServer(), toolName) ||
         isHostFindingsCall(hostServerName, toolName) ||
         isHostChartCall(hostServerName, toolName) ||
-        isHostGalleryCall(hostServerName, toolName) ||
+        (isHostGalleryCall(hostServerName, toolName) &&
+          !hostGalleryDownloads(input)) ||
         // The artifact tool, on the render family's reading. It looks like the
         // one that should be gated — the agent is handing over a page of its
         // own code — and it is the one that least needs to be: the document
@@ -6253,7 +6255,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * structural copy for the reason spelled out at {@link drawChart}.
        *
        * What is NOT copied is any reading of the files: this stores the paths
-       * the agent named and nothing else. The renderer fetches each one over
+       * the gallery names — the agent's, or the files a URL was downloaded to
+       * before the call reached here — and nothing else. The renderer fetches
+       * each one over
        * the image route, which owns the guards, so a picture that has since
        * moved or was never there costs one broken tile rather than a failed
        * call — and the agent is told the row landed, which is the only thing
@@ -7296,7 +7300,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                   `interactive control_request for unrecognized tool '${event.toolName}' on run ${runId} — kept on the approval path`,
                 );
               }
-              if (autoApproves(event.toolName, approvalMode)) {
+              if (autoApproves(event.toolName, approvalMode, event.input)) {
                 // The daemon-side stand-in for --dangerously-skip-permissions.
                 // An auto chat spawns on the stdio dialogue ONLY so the
                 // question channel survives (buildArgs), so every plain
@@ -7553,8 +7557,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // reached the agent as the user's own "no" for a card nobody rendered —
         // which is how an `auto` chat came to report that it had lost write
         // access to the worktree.
-        ({ toolName }) =>
-          autoApproves(toolName, this.runPosture.get(runId)) ? true : null,
+        ({ toolName, input }) =>
+          autoApproves(toolName, this.runPosture.get(runId), input)
+            ? true
+            : null,
         (event) => {
           const inFlight = this.offTurnInFlight.get(runId) ?? new Set();
           this.offTurnInFlight.set(runId, inFlight);

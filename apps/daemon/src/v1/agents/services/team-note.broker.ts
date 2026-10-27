@@ -15,6 +15,7 @@ import {
   type TeamNoteWriteOutcome,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
+import { KeyedChain } from '../utils/keyed-chain';
 import { foldTeamNotes } from '../utils/team-note-fold';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 
@@ -85,7 +86,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
   /** Per run, per author key: every seq a `team_notes` reply showed it. */
   private readonly shown = new Map<string, Map<string, Set<number>>>();
   /** Per run, the tail of its write chain. */
-  private readonly chains = new Map<string, Promise<void>>();
+  private readonly writes = new KeyedChain();
 
   constructor(
     private readonly em: EntityManager,
@@ -125,7 +126,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
       'no workflow pass is running that could record it',
       'write a team note',
       (sink) =>
-        this.serialized(runId, () =>
+        this.writes.run(runId, () =>
           this.writeNow(runId, nodeId, caller, input, sink),
         ),
     );
@@ -170,7 +171,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
     this.indexes.delete(runId);
     this.loading.delete(runId);
     this.shown.delete(runId);
-    this.chains.delete(runId);
+    this.writes.forget(runId);
   }
 
   private async writeNow(
@@ -347,25 +348,5 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
     } finally {
       this.loading.delete(runId);
     }
-  }
-
-  /**
-   * Run one write of this run after the previous one settles, so two writes
-   * racing at the cap cannot both pass its count.
-   */
-  private serialized<T>(runId: string, work: () => Promise<T>): Promise<T> {
-    const previous = this.chains.get(runId) ?? Promise.resolve();
-    const next = previous.then(work);
-    const tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.chains.set(runId, tail);
-    void tail.then(() => {
-      if (this.chains.get(runId) === tail) {
-        this.chains.delete(runId);
-      }
-    });
-    return next;
   }
 }

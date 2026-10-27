@@ -32,6 +32,11 @@ const base: Workflow = {
   layout: { start: { x: 0, y: 0 }, lead: { x: 100, y: 0 } },
 };
 
+const stages: NonNullable<Workflow['stages']> = [
+  { id: 'build', title: 'Build', doneWhen: 'It compiles', next: ['ship'] },
+  { id: 'ship', title: 'Ship', doneWhen: 'It is released' },
+];
+
 function edit(change: (workflow: Workflow) => Workflow): string {
   return workflowVersionOf(change(structuredClone(base)));
 }
@@ -39,6 +44,29 @@ function edit(change: (workflow: Workflow) => Workflow): string {
 describe('workflowVersionOf', () => {
   it('is 16 hex characters', () => {
     expect(workflowVersionOf(base)).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('hashes a stage-less workflow as the canonical JSON without a stages key', () => {
+    const { maxActiveTurns, nodes, edges } = canonicalGraphOf(base);
+    const withoutKey = JSON.stringify({
+      edges: edges.map((edge) =>
+        Object.fromEntries(
+          Object.entries(edge).sort(([a], [b]) => (a < b ? -1 : 1)),
+        ),
+      ),
+      maxActiveTurns,
+      nodes: nodes.map((node) =>
+        Object.fromEntries(
+          Object.entries(node).sort(([a], [b]) => (a < b ? -1 : 1)),
+        ),
+      ),
+    });
+
+    expect(canonicalGraphJson(canonicalGraphOf(base))).toBe(withoutKey);
+    expect(canonicalGraphJson(canonicalGraphOf(base))).not.toContain('stages');
+    expect(workflowVersionOf({ ...base, stages: undefined })).toBe(
+      workflowVersionOf(base),
+    );
   });
 
   it.each<[string, (workflow: Workflow) => Workflow]>([
@@ -54,6 +82,7 @@ describe('workflowVersionOf', () => {
     ],
     ['the node order', (w) => ({ ...w, nodes: [...w.nodes].reverse() })],
     ['the edge order', (w) => ({ ...w, edges: [...w.edges].reverse() })],
+    ['an empty stage list', (w) => ({ ...w, stages: [] })],
     [
       'the key order inside a node',
       (w) => ({
@@ -71,6 +100,17 @@ describe('workflowVersionOf', () => {
   });
 
   it.each<[string, (workflow: Workflow) => Workflow]>([
+    ['an added stage', (w) => ({ ...w, stages: stages })],
+    [
+      'a stage field',
+      (w) => ({
+        ...w,
+        stages: stages.map((s) =>
+          s.id === 'ship' ? { ...s, doneWhen: 'It is live' } : s,
+        ),
+      }),
+    ],
+    ['the stage order', (w) => ({ ...w, stages: [...stages].reverse() })],
     [
       'a node field',
       (w) => ({
@@ -147,6 +187,16 @@ describe('workflowOfCanonical', () => {
     expect(workflowVersionOf(back!)).toBe(workflowVersionOf(base));
   });
 
+  it('round-trips the stages in their authored order', () => {
+    const staged = { ...base, stages: [...stages].reverse() };
+    const back = workflowOfCanonical(
+      canonicalGraphJson(canonicalGraphOf(staged)),
+    );
+
+    expect(back!.stages).toEqual(staged.stages);
+    expect(workflowVersionOf(back!)).toBe(workflowVersionOf(staged));
+  });
+
   it('answers null for a graph the schema no longer reads', () => {
     expect(workflowOfCanonical('not json')).toBeNull();
     expect(workflowOfCanonical('{"nodes":[{"id":"x"}],"edges":[]}')).toBeNull();
@@ -166,6 +216,18 @@ describe('canonicalGraphYaml', () => {
     expect(yaml).not.toContain('Builds things');
     expect(yaml).not.toContain('layout');
     expect(yaml).not.toContain('brief');
+  });
+
+  it('prints the stages after the edges, and nothing for a stage-less graph', () => {
+    const yaml = canonicalGraphYaml(
+      canonicalGraphJson(canonicalGraphOf({ ...base, stages })),
+    )!;
+
+    expect(yaml.indexOf('stages:\n')).toBeGreaterThan(yaml.indexOf('edges:\n'));
+    expect(yaml).toContain('  - id: build\n    title: Build\n');
+    expect(
+      canonicalGraphYaml(canonicalGraphJson(canonicalGraphOf(base))),
+    ).not.toContain('stages');
   });
 
   it('answers null for a graph the schema no longer reads', () => {

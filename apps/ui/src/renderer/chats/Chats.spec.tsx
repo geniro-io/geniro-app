@@ -304,6 +304,7 @@ const run1: ChatRun = {
   promptCacheTtlMs: null,
   promptCacheTtlReason: null,
   taskList: [],
+  stages: null,
   resetWakes: [],
 };
 
@@ -4596,6 +4597,7 @@ describe('Chats workflow runs', () => {
     promptCacheTtlMs: null,
     promptCacheTtlReason: null,
     taskList: [],
+    stages: null,
     resetWakes: [],
   };
 
@@ -6491,6 +6493,7 @@ describe('Chats — handing a conversation to the user', () => {
       promptCacheTtlMs: null,
       promptCacheTtlReason: null,
       taskList: [],
+      stages: null,
       resetWakes: [],
     };
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);

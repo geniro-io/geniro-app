@@ -26,6 +26,10 @@ const MAX_COMMAND_CHARS = 200;
  */
 const SLASH_COMMAND = /^\/[^\s/]+(\s|$)/;
 
+export function isSlashCommand(prompt: string): boolean {
+  return SLASH_COMMAND.test(prompt.trimStart());
+}
+
 /** How many stopped commands are named before the rest are counted. */
 const MAX_NAMED_COMMANDS = 10;
 
@@ -168,7 +172,7 @@ export function withSessionNote(
     input.commandListProbe === true ||
     input.resumeOnly === true ||
     prompt === '' ||
-    SLASH_COMMAND.test(prompt)
+    isSlashCommand(prompt)
   ) {
     return input;
   }

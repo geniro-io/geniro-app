@@ -153,6 +153,7 @@ import {
   nodeSessionKey,
   runSessionKeyPrefix,
 } from '../../agents/utils/session-keys';
+import { isSlashCommand } from '../../agents/utils/session-replacement-notes';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import { snapshotPoolKinds } from '../../agents/utils/snapshot-config-dirs';
 import {
@@ -215,6 +216,7 @@ import {
   isExecutableNode,
   isNonExecutableNode,
   onDemandNodeIds,
+  triggerFedAgentIds,
 } from '../utils/graph-order';
 import {
   validateRunnableGraph,
@@ -236,10 +238,14 @@ import {
   type TurnCacheClock,
 } from '../utils/prompt-cache-standing';
 import { resetWakePrompt } from '../utils/reset-wake-prompt';
+import { initialStageProgress } from '../utils/stage-fold';
+import { stageLabel, stageMapOf, stageNotice } from '../utils/stage-text';
+import { assertValidStages } from '../utils/stage-validate';
 import { createTurnSemaphore, type TurnSlot } from '../utils/turn-semaphore';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import { CallBroker } from './call-broker.service';
 import { RunWorkflowService } from './run-workflow.service';
+import { StageService } from './stage.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
@@ -680,25 +686,6 @@ function resolveMemberSettings<T extends WorkflowAgentPoolMember>(
  * independent branches keep running; the run rolls up to
  * completed / failed / cancelled once every node settles.
  */
-/** The agents a trigger feeds — where a run's seed and every user message go. */
-function triggerFedAgentIds(
-  nodes: Workflow['nodes'],
-  edges: Workflow['edges'],
-): Set<string> {
-  const { producersOf } = buildEdgeMaps(nodes, edges);
-  const kindOf = new Map(nodes.map((node) => [node.id, node.kind]));
-  return new Set(
-    nodes
-      .filter(
-        (node) =>
-          node.kind === 'agent' &&
-          [...(producersOf.get(node.id) ?? [])].some(
-            (id) => kindOf.get(id) === 'trigger',
-          ),
-      )
-      .map((node) => node.id),
-  );
-}
 
 @Injectable()
 export class GraphExecutorService
@@ -741,6 +728,7 @@ export class GraphExecutorService
    * reach its agents while they are live — see {@link sendMessage}.
    */
   private readonly liveRuns = new Map<string, LiveRunControl>();
+  private readonly runSettledListeners = new Set<(runId: string) => void>();
 
   constructor(
     private readonly em: EntityManager,
@@ -788,6 +776,7 @@ export class GraphExecutorService
     @Optional() private readonly teamNotes?: TeamNoteBroker,
     /** `record_outcome`, optional on `artifacts`' terms. */
     @Optional() private readonly runOutcomes?: RunOutcomeBroker,
+    @Optional() private readonly stages?: StageService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -841,6 +830,8 @@ export class GraphExecutorService
       opener: HostWakeOpener,
     ) => MonitorWake
   >();
+
+  private readonly wakerStopped = new Map<string, () => boolean>();
 
   /** Told whenever one of a run's conversations ends its turn. */
   private readonly conversationTurnEndListeners = new Set<
@@ -1341,6 +1332,7 @@ export class GraphExecutorService
         // The graph as it is NOW, kept with the run: a later edit of the
         // library workflow must not reach this run (`Run.workflowSnapshot`).
         workflowSnapshot: workflowSnapshotOf(input.workflow),
+        stageProgress: initialStageProgress(input.workflow),
         groupId,
         status: 'running',
         agentKind: null,
@@ -1493,6 +1485,66 @@ export class GraphExecutorService
       this.monitorWakers.get(runId)?.(caller, prompt, row, onDropped, opener) ??
       'refused'
     );
+  }
+
+  canWake(runId: string): boolean {
+    return (
+      this.monitorWakers.has(runId) && this.wakerStopped.get(runId)?.() !== true
+    );
+  }
+
+  async continueAsHost(
+    runId: string,
+    nodeId: string,
+    text: string,
+    row: Record<string, unknown>,
+  ): Promise<boolean> {
+    try {
+      const em = this.em.fork();
+      const found = await this.runDao.getById(runId, em);
+      if (
+        found === null ||
+        found.workflowId === null ||
+        found.archivedAt !== null
+      ) {
+        return false;
+      }
+      const run = assertWorkflowRun(found, runId);
+      const workflow = await this.runWorkflows.workflowOf(run, em);
+      const onDemand = onDemandNodeIds(workflow.nodes, workflow.edges);
+      const scheduled = workflow.nodes.filter(
+        (node) => node.kind === 'agent' && !onDemand.has(node.id),
+      );
+      if (scheduled.length !== 1 || scheduled[0]!.id !== nodeId) {
+        return false;
+      }
+      await this.walkAgain(em, run, text, [], row);
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        `workflow run ${runId}: could not continue it through ${nodeId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
+  }
+
+  onRunSettledCompleted(listener: (runId: string) => void): () => void {
+    this.runSettledListeners.add(listener);
+    return () => {
+      this.runSettledListeners.delete(listener);
+    };
+  }
+
+  private notifyRunSettledCompleted(runId: string): void {
+    for (const listener of this.runSettledListeners) {
+      try {
+        listener(runId);
+      } catch (err) {
+        this.logger.error(
+          `workflow run ${runId}: a settle listener failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   /** Be told whenever one of a run's conversations ends its turn. */
@@ -1854,8 +1906,15 @@ export class GraphExecutorService
       disposers.delete(runId);
     }
     this.monitorWakers.delete(runId);
+    this.wakerStopped.delete(runId);
     this.teamNotes?.forgetRun(runId);
     this.runOutcomes?.forgetRun(runId);
+    this.stages?.forget(runId);
+  }
+
+  private async stageNoticeOf(runId: string): Promise<string | null> {
+    const loaded = (await this.stages?.current(runId)) ?? null;
+    return loaded === null ? null : stageNotice(loaded.stages, loaded.progress);
   }
 
   /**
@@ -2650,6 +2709,7 @@ export class GraphExecutorService
     validateWorkflowGraph(workflow.nodes, workflow.edges);
     validateRunnableGraph(workflow.nodes, workflow.edges);
     computeRunOrder(workflow.nodes, workflow.edges);
+    assertValidStages(workflow);
     const resolved = withResolvedNodeSettings(workflow, (kind) =>
       this.adapterFor(kind),
     );
@@ -2766,6 +2826,12 @@ export class GraphExecutorService
       .filter(isExecutableNode)
       .filter((n) => !onDemand.has(n.id));
     const blocksOf = instructionBlocksByNode(workflow);
+    // A mid-run change to an instruction part changes sessionKey; the stage rides each prompt.
+    const stageMap = stageMapOf(workflow);
+    this.stages?.register(runId, workflow);
+    if (stageMap !== null) {
+      void this.stages?.current(runId);
+    }
     // Caller → callee agent nodes, from the call edges. Drives the broker's
     // dispatch, each caller's MCP endpoint grant, and its awareness block.
     const calleesOf = calleesByNode(workflow);
@@ -3535,6 +3601,9 @@ export class GraphExecutorService
             ...(wokenOnlyByMonitors ? { hostTurn: true } : {}),
           });
           wokenOnlyByMonitors = false;
+          if (status === 'completed' && !this.shuttingDown) {
+            this.notifyRunSettledCompleted(runId);
+          }
         }
       } finally {
         // The handle settles even if the write failed, as the pass's own does
@@ -3663,6 +3732,9 @@ export class GraphExecutorService
             usage: null,
             stopReason: `workflow_${status}`,
           });
+          if (status === 'completed' && !this.shuttingDown) {
+            this.notifyRunSettledCompleted(runId);
+          }
         }
       } catch (err) {
         persistenceFailed = true;
@@ -4052,10 +4124,15 @@ export class GraphExecutorService
         : nodeSessionKey(runId, node.id);
       // WHO this turn is, to the call broker: the node, in this conversation.
       const caller = callerKey(node.id, callContext?.conversationId ?? null);
-      const deliveryNotice =
-        extras.compaction || adapter.geniroCommandFor(prompt) !== null
-          ? null
-          : this.callBroker.messageDeliveryNotice(runId, caller);
+      const plainTurn =
+        !extras.compaction &&
+        adapter.geniroCommandFor(prompt) === null &&
+        !isSlashCommand(prompt);
+      const deliveryNotice = plainTurn
+        ? this.callBroker.messageDeliveryNotice(runId, caller)
+        : null;
+      const stageLine =
+        plainTurn && stageMap !== null ? await this.stageNoticeOf(runId) : null;
       let deliveryNoticeAcknowledged = false;
       // An automatic carried compaction replaced this conversation: its summary
       // rides this turn, once, and the session it replaced is not resumed.
@@ -4196,9 +4273,9 @@ export class GraphExecutorService
         ...(streamPartials ? { streamPartials: true } : {}),
         prompt: withCarriedContext(
           carried,
-          deliveryNotice !== null
-            ? `${deliveryNotice.prompt}\n\n${prompt}`
-            : prompt,
+          [deliveryNotice?.prompt ?? null, prompt, stageLine]
+            .filter((part): part is string => part !== null)
+            .join('\n\n'),
         ),
         ...(extras.images?.length ? { images: extras.images } : {}),
         cwd,
@@ -4243,6 +4320,7 @@ export class GraphExecutorService
           callees: calleesOf.get(node.id),
           answeringACall: callContext !== undefined,
           config: adapter.getConfig(),
+          stageMap,
         }),
         // A PEER of the role rather than something joined into it: the two are
         // composed by `AgentAdapter.composeSystemPrompt`, which ranks the
@@ -7343,6 +7421,7 @@ export class GraphExecutorService
     // own once the one it is in has ended — `wakeNode`'s path, which exists
     // only where the workflow can call — and a callee conversation inside the
     // call it holds open.
+    this.wakerStopped.set(runId, () => cancelRequested);
     this.monitorWakers.set(runId, (caller, prompt, row, onDropped, opener) => {
       if (cancelRequested) {
         return 'refused';
@@ -7429,6 +7508,12 @@ export class GraphExecutorService
           stopMonitors: (caller) =>
             this.monitors?.stopConversation(runId, caller, 'thread-stop'),
           callHeld: (caller) => this.notifyConversationTurnEnded(runId, caller),
+          currentStage: () => {
+            const loaded = this.stages?.cached(runId) ?? null;
+            return loaded === null
+              ? null
+              : stageLabel(loaded.stages, loaded.progress);
+          },
           unreadTeamNotes: (caller) =>
             this.teamNotes?.unreadCount(runId, {
               nodeId: callerNodeOf(caller),

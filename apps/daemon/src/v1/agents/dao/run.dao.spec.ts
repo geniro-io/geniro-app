@@ -820,6 +820,76 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('boardFactsOf', () => {
+    it('answers each staged run its current stage and position, and leaves the rest out', async () => {
+      const progress = {
+        rev: 1,
+        current: 'review',
+        position: { index: 2, total: 3 },
+        stages: [
+          { id: 'build', title: 'Build', status: 'done', next: ['review'] },
+          { id: 'review', title: 'Review', status: 'current', next: [] },
+        ],
+      };
+      const staged = await dao.create({
+        stageProgress: JSON.stringify(progress),
+      });
+      const finished = await dao.create({
+        stageProgress: JSON.stringify({
+          ...progress,
+          current: null,
+          position: { index: 3, total: 3 },
+        }),
+      });
+      const plain = await dao.create({});
+
+      const { stages: byRun } = await dao.boardFactsOf([
+        staged.id,
+        finished.id,
+        plain.id,
+      ]);
+
+      expect(byRun.get(staged.id)).toEqual({
+        title: 'Review',
+        index: 2,
+        total: 3,
+      });
+      expect(byRun.get(finished.id)).toEqual({
+        title: null,
+        index: 3,
+        total: 3,
+      });
+      expect(byRun.has(plain.id)).toBe(false);
+    });
+
+    it('answers in the same read the pull requests each run opened, never the ones it touched', async () => {
+      const pr = (number: number) => ({
+        owner: 'acme',
+        repo: 'platform',
+        number,
+        url: `https://github.com/acme/platform/pull/${number}`,
+        seq: 1,
+      });
+      const opened = await dao.create({
+        pullRequests: JSON.stringify([pr(87)]),
+        touchedPullRequests: JSON.stringify([pr(6841)]),
+      });
+      const touchedOnly = await dao.create({
+        touchedPullRequests: JSON.stringify([pr(6841)]),
+      });
+
+      const { pullRequests } = await dao.boardFactsOf([
+        opened.id,
+        touchedOnly.id,
+      ]);
+
+      expect(pullRequests.get(opened.id)?.map((row) => row.number)).toEqual([
+        87,
+      ]);
+      expect(pullRequests.has(touchedOnly.id)).toBe(false);
+    });
+  });
+
   describe('readWork (missing run)', () => {
     it('answers null for a run id that does not exist, and does not throw', async () => {
       // The settle path reads this AFTER writing the status, so a run torn down

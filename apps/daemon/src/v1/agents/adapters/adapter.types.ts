@@ -3282,6 +3282,7 @@ export interface AgentTurnInput {
    * several blocks is a graph fact (the wiring) that no adapter can recover.
    */
   instructionBlocks?: string | null;
+  stageMapPrompt?: string | null;
   /**
    * The run's snapshot of the user's switches for THIS turn's CLI, keyed by
    * {@link AgentOptionSpec.id}. An id that is absent means the caller did not
@@ -3504,6 +3505,7 @@ export type TurnInstructionInput = Pick<
   | 'taskInstructions'
   | 'workflowInstructions'
   | 'instructionBlocks'
+  | 'stageMapPrompt'
   | 'systemPrompt'
   | 'answeringACallPrompt'
   | 'callSurfacePrompt'

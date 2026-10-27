@@ -48,8 +48,12 @@ export abstract class CallMcpTool extends BaseMcpTool {
     // Beside the envelope, not one of its arms: every reply the caller reads
     // can tell it the team wrote something new, whatever the call's state.
     const unread = this.calls.unreadTeamNotes(context.runId, context.caller);
-    const reply =
-      unread > 0 ? { ...envelope, unread_team_notes: unread } : envelope;
+    const stage = this.calls.currentStage(context.runId);
+    const reply = {
+      ...envelope,
+      ...(unread > 0 ? { unread_team_notes: unread } : {}),
+      ...(stage !== null ? { stage } : {}),
+    };
     // A question envelope is a normal outcome, not a tool failure.
     return this.text(JSON.stringify(reply), envelope.status === 'error');
   }

@@ -627,6 +627,27 @@ describe('groupTranscript', () => {
     expect(pairs[0]?.result).not.toBeNull();
   });
 
+  it('hides a move_stage call its stage_change row stands for, and SHOWS one that was refused', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__move_stage', 's1', { action: 'complete' }),
+      result('s1', 'Stage Review done.'),
+      call('mcp__geniro-run-1__move_stage', 's2', { action: 'skip' }),
+      item('tool_result', {
+        id: 's2',
+        name: null,
+        result: 'stage Ship is not reachable from Review',
+        isError: true,
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(pairs.map((pair) => payloadString(pair.call.payload, 'id'))).toEqual(
+      ['s2'],
+    );
+    expect(pairs[0]?.result).not.toBeNull();
+  });
+
   it('SHOWS the monitor tools as ordinary tool rows', () => {
     const entries = groupTranscript([
       call('mcp__geniro-run-1__monitor', 't1', { command: 'tail -f log' }),

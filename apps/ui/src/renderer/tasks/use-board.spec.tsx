@@ -933,6 +933,50 @@ describe('useBoard', () => {
     });
   });
 
+  describe('a run announcing a stage move', () => {
+    const moved = {
+      runId: 'run-1',
+      status: null,
+      stages: {
+        rev: 2,
+        current: 'review',
+        position: { index: 2, total: 2 },
+        stages: [
+          { id: 'build', title: 'Build', status: 'done', next: ['review'] },
+          { id: 'review', title: 'Review', status: 'current', next: [] },
+        ],
+      },
+    };
+
+    it('reloads when the run belongs to a card on this board', async () => {
+      const { client, runStatus: emit } = fakeClient();
+      const { apis, reconcileTasks: listTasks } = stubApis();
+      listTasks.mockResolvedValue([task({ runId: 'run-1' })]);
+      await mount(apis, client);
+      const before = listTasks.mock.calls.length;
+
+      await act(async () => {
+        emit(moved);
+      });
+
+      expect(listTasks.mock.calls.length).toBeGreaterThan(before);
+    });
+
+    it('ignores a stage move of a run no card here is holding', async () => {
+      const { client, runStatus: emit } = fakeClient();
+      const { apis, reconcileTasks: listTasks } = stubApis();
+      listTasks.mockResolvedValue([task({ runId: 'run-1' })]);
+      await mount(apis, client);
+      const before = listTasks.mock.calls.length;
+
+      await act(async () => {
+        emit({ ...moved, runId: 'someone-elses-chat' });
+      });
+
+      expect(listTasks.mock.calls.length).toBe(before);
+    });
+  });
+
   describe('attaching files', () => {
     it('sends each attachment SEQUENTIALLY, in the order given', async () => {
       // The hook's own doc block states this as a correctness property — "a

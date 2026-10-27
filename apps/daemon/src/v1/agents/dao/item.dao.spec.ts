@@ -82,6 +82,28 @@ describe('ItemDao (in-memory sqlite)', () => {
     expect(await dao.teamNoteCount('run-a', undefined, 5)).toBe(2);
   });
 
+  it('reads one run’s stage changes oldest first, beside rows of other kinds and another run', async () => {
+    const change = (stageId: string): string =>
+      JSON.stringify({ action: 'finish', stageId });
+    await insert('run-a', 9, 'stage_change', change('review'));
+    await insert('run-a', 2, 'stage_change', change('plan'));
+    await insert('run-a', 3, 'team_note');
+    await insert('run-b', 4, 'stage_change', change('other run'));
+    await insert('run-a', 5, 'stage_change', change('build'));
+    await insert('run-a', 6, 'message');
+
+    const rows = await dao.stageChangeRows('run-a');
+
+    expect(rows.map((row) => row.seq)).toEqual([2, 5, 9]);
+    expect(rows.map((row) => JSON.parse(row.payload).stageId)).toEqual([
+      'plan',
+      'build',
+      'review',
+    ]);
+    expect(rows.every((row) => row.createdAt instanceof Date)).toBe(true);
+    expect(await dao.stageChangeRows('run-none')).toEqual([]);
+  });
+
   it('finds a send id only on a live user message in its own run', async () => {
     const payload = JSON.stringify({
       text: 'hello',

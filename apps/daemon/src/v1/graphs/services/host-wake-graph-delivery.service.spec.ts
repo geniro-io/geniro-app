@@ -78,6 +78,19 @@ describe('HostWakeGraphDelivery', () => {
     expect(call?.[5]).toBe('host');
   });
 
+  it('joins the wakes held for one conversation into one turn, saying a row message they share once', () => {
+    const h = harness();
+    const second = { ...wake(), key: 'share:s2', prompt: 'second' };
+    h.bus.publish(wake());
+    h.bus.publish(second);
+    h.answer('woken');
+    h.endTurn();
+
+    const call = h.wakeConversation.mock.calls.at(-1);
+    expect(call?.[2]).toBe(`${wake().prompt}\n\nsecond`);
+    expect(call?.[3].message).toBe('Shared "Report"');
+  });
+
   it('holds the wake while the conversation works and sends it when its turn ends', () => {
     const h = harness();
     h.bus.publish(wake());

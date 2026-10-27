@@ -141,7 +141,7 @@ export function droppedEdgesNotice(
 /** The workflow-level fields the meta form edits, as a save writes them. */
 export type WorkflowMeta = Pick<
   Workflow,
-  'name' | 'description' | 'maxActiveTurns'
+  'name' | 'description' | 'maxActiveTurns' | 'stages'
 >;
 
 export function fromFlow(
@@ -161,6 +161,10 @@ export function fromFlow(
     ...(meta.description ? { description: meta.description } : {}),
     ...(meta.maxActiveTurns !== undefined
       ? { maxActiveTurns: meta.maxActiveTurns }
+      : {}),
+    // A file must not flip between `stages: []` and no key on a save.
+    ...(meta.stages !== undefined && meta.stages.length > 0
+      ? { stages: meta.stages }
       : {}),
     nodes: nodes.map((n): WorkflowNode => n.data.node),
     edges: edges.map((e) => ({
@@ -186,6 +190,7 @@ export function canvasSnapshot(
   /** Required, not optional: a caller leaving it out would read every saved
    *  cap as an unsaved change, and autosave would write in a loop. */
   maxActiveTurns: number | undefined,
+  stages: WorkflowMeta['stages'],
   nodes: readonly GraphFlowNode[],
   edges: readonly Edge[],
 ): string {
@@ -196,6 +201,7 @@ export function canvasSnapshot(
         name: name.trim() || 'workflow',
         ...(trimmed ? { description: trimmed } : {}),
         ...(maxActiveTurns !== undefined ? { maxActiveTurns } : {}),
+        ...(stages !== undefined ? { stages } : {}),
       },
       nodes,
       edges,

@@ -133,6 +133,7 @@ import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
+import { RunWriteQueue } from './run-write.queue';
 import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
@@ -1060,6 +1061,7 @@ function setup(
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
     /** The monitor registry a Stop reaches, when a test drives one. */
     monitors?: MonitorRegistry;
+    runWrites?: RunWriteQueue;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
     contextWindows?: Record<string, number>;
     /** What claude resolves each name to — see `fakeAdapter`'s `resolutions`. */
@@ -1327,6 +1329,7 @@ function setup(
       sinkFor: opts.analysisSink ?? (() => ({})),
     } as unknown as AnalysisReportsService,
     workflowBuilders,
+    opts.runWrites ?? new RunWriteQueue(),
     {
       token: 'launch',
       version: '0.0.0',
@@ -1834,6 +1837,27 @@ describe('ChatService', () => {
         [b.id, 0],
         [held.id, 0],
       ]);
+    });
+
+    it('marks a thread archived only after a write already queued for its run has finished', async () => {
+      const runWrites = new RunWriteQueue();
+      const { service, runDao } = setup({ runWrites });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      let release!: () => void;
+      const held = runWrites.run(
+        run.id,
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const archiving = service.archive(run.id);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(runDao.runs.get(run.id)?.archivedAt).toBeNull();
+      release();
+      await held;
+      await archiving;
+      expect(runDao.runs.get(run.id)?.archivedAt).toBeInstanceOf(Date);
     });
 
     it('refuses to pin an archived thread', async () => {

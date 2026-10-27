@@ -650,6 +650,9 @@ export class Run extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   runOutcomes: string | null = null;
 
+  @Property({ type: 'text', nullable: true })
+  stageProgress: string | null = null;
+
   /**
    * Which capture rule {@link pullRequestsScannedSeq} was reached under
    * (`PULL_REQUEST_SCAN_VERSION`), or null for a run scanned before rules were

@@ -51,8 +51,10 @@ export function ExpandableTextarea({
   autoFocus,
   onFocus,
   onBlur,
+  invalid,
 }: {
   id?: string;
+  invalid?: boolean;
   /** The inline field's accessible name, for a field with no `<label>`. */
   ariaLabel?: string;
   /** Enforced inline by the browser, and by the popup refusing to Save. */
@@ -142,6 +144,7 @@ export function ExpandableTextarea({
         rows={rows}
         placeholder={placeholder}
         aria-label={ariaLabel}
+        aria-invalid={invalid}
         maxLength={maxLength}
         autoFocus={autoFocus}
         onFocus={onFocus}

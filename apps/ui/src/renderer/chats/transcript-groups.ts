@@ -2875,7 +2875,9 @@ export function groupTranscript(
       const refusedNote =
         callId !== null &&
         refusedCallIds.has(callId) &&
-        (tool === 'team_note' || tool === 'record_outcome');
+        (tool === 'team_note' ||
+          tool === 'record_outcome' ||
+          tool === 'move_stage');
       if (
         (isGeniroToolName(name, item.runId) && !refusedNote) ||
         (callId !== null && taskToolCallIds.has(callId))

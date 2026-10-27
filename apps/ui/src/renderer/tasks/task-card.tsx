@@ -1,8 +1,10 @@
 import {
   CalendarDays,
+  CircleCheck,
   FolderGit2,
   GitBranch,
   GitPullRequest,
+  Route,
 } from 'lucide-react';
 import { useContext } from 'react';
 
@@ -131,6 +133,7 @@ export function TaskCard({
         due === null
           ? null
           : `due ${due.label}${due.overdue ? ', overdue' : ''}`,
+        stageLabel(task.stage),
         // Spelled out, like the priority and the date above it: on screen it
         // is a glyph and a number, and a screen reader has neither.
         pullRequest === null
@@ -191,6 +194,8 @@ export function TaskCard({
           {task.title}
         </span>
       </span>
+
+      <TaskStageLineView stage={task.stage} />
 
       {/* ONE line. Two lines of preview under two lines of title made the
         title stop being the thing the eye lands on, and the panel behind one
@@ -286,5 +291,47 @@ export function TaskCard({
         </span>
       )}
     </button>
+  );
+}
+
+function stageLabel(stage: TaskDto['stage']): string | null {
+  if (stage === null) {
+    return null;
+  }
+  return stage.title === null
+    ? 'all stages done'
+    : `stage ${stage.index} of ${stage.total}: ${stage.title}`;
+}
+
+function TaskStageLineView({
+  stage,
+}: {
+  stage: TaskDto['stage'];
+}): React.JSX.Element | null {
+  if (stage === null) {
+    return null;
+  }
+  return (
+    <span
+      data-slot="task-stage"
+      className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+      {stage.title === null ? (
+        <>
+          <CircleCheck className="size-3 shrink-0 text-success" />
+          <span>Stages done</span>
+        </>
+      ) : (
+        <>
+          <Route className="size-3 shrink-0" />
+          <span className="flex min-w-0 items-baseline gap-1">
+            <span className="min-w-0 truncate">{stage.title}</span>
+            <span aria-hidden="true">·</span>
+            <span className="shrink-0 tabular-nums">
+              {stage.index}/{stage.total}
+            </span>
+          </span>
+        </>
+      )}
+    </span>
   );
 }

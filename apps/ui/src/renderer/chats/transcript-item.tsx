@@ -27,11 +27,23 @@ import { MonitorNoticeRow } from './monitor-divider';
 import { readMonitorNotice } from './monitor-payload';
 import { callFollowUpId, NotSentMessagesContext } from './not-sent-messages';
 import { NotSentNotice } from './not-sent-notice';
+import { formatClockTime } from './relative-time';
 import { RetryContext } from './retry-context';
 import { pullRequestOutcomeKey, RunOutcomesContext } from './run-outcome';
 import { readRunOutcomePayload } from './run-outcome-payload';
 import { RunOutcomeRow } from './run-outcome-row';
 import { settlesOnContinuation } from './settled-status';
+import {
+  readStageChangePayload,
+  type StageChangePayload,
+} from './stage-change-payload';
+import {
+  RunStagesContext,
+  stageActorLabel,
+  StageChangeRow,
+  stageChangeSuperseded,
+  stageTitleOf,
+} from './stage-change-row';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
 import {
@@ -776,10 +788,47 @@ export const TranscriptItem = memo(function TranscriptItem({
         />
       );
     }
+    case 'stage_change': {
+      const change = readStageChangePayload(item.payload);
+      return change === null ? null : (
+        <StageChangeItem
+          change={change}
+          actor={stageActorLabel(change.by, (id) => nodeName(id) ?? id)}
+          time={formatClockTime(item.createdAt)}
+          memoryKey={`stage:${item.id}`}
+        />
+      );
+    }
     default:
       return null; // usage / attachment / approval_request (rendered as a card)
   }
 });
+
+function StageChangeItem({
+  change,
+  actor,
+  time,
+  memoryKey,
+}: {
+  change: StageChangePayload;
+  actor: string;
+  time: string;
+  memoryKey: string;
+}): React.JSX.Element {
+  const runStages = useContext(RunStagesContext);
+  return (
+    <StageChangeRow
+      change={change}
+      actor={actor}
+      {...(change.next === undefined
+        ? {}
+        : { nextTitle: stageTitleOf(runStages, change.next) })}
+      time={time}
+      superseded={stageChangeSuperseded(change, runStages)}
+      memoryKey={memoryKey}
+    />
+  );
+}
 
 /**
  * Requests the DAEMON declared unanswerable — its turn settled with the

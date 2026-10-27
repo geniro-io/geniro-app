@@ -640,6 +640,17 @@ export class Run extends TimestampsEntity {
   touchedPullRequests: string | null = null;
 
   /**
+   * The newest `record_outcome` per pull request — JSON keyed by
+   * `pullRequestKey` (see `agents/utils/run-outcomes.ts`), null when none was
+   * recorded. A column beside the pull-request lists because the run's wire
+   * projection is synchronous over its columns, and the outcome rides each
+   * displayed pull request; the `run_outcome` rows stay the record. TEXT so the
+   * `safe: true` schema sync adds it.
+   */
+  @Property({ type: 'text', nullable: true })
+  runOutcomes: string | null = null;
+
+  /**
    * Which capture rule {@link pullRequestsScannedSeq} was reached under
    * (`PULL_REQUEST_SCAN_VERSION`), or null for a run scanned before rules were
    * versioned. A marker reached under another rule says nothing about what the

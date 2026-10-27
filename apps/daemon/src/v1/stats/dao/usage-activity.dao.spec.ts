@@ -14,6 +14,7 @@ import {
 } from 'vitest';
 
 import { UsageActivity } from '../entity/usage-activity.entity';
+import type { RunOutcomeLedgerRow } from '../stats.types';
 import { threadFact } from '../utils/activity-facts';
 import { UsageActivityDao } from './usage-activity.dao';
 
@@ -468,6 +469,123 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
 
       expect(prepare).toHaveBeenCalledTimes(1);
       prepare.mockRestore();
+    });
+  });
+  describe('upsertRunOutcome / runOutcomes', () => {
+    const outcome = (
+      overrides: Partial<RunOutcomeLedgerRow> = {},
+    ): RunOutcomeLedgerRow => ({
+      runId: 'run-1',
+      sourceSeq: 10,
+      occurredAt: at('2026-10-20T10:00:00.000Z'),
+      workflowSlug: 'dev-team',
+      prOwner: 'acme',
+      prRepo: 'platform',
+      prNumber: 87,
+      prUrl: 'https://github.com/acme/platform/pull/87',
+      draft: true,
+      reviewRounds: 0,
+      acceptance: 'not_yet',
+      questionsAsked: 1,
+      ...overrides,
+    });
+
+    it('writes one row per run and pull request, and reads it back whole', async () => {
+      await dao.upsertRunOutcome(outcome());
+
+      expect(await dao.runOutcomes({ runIds: ['run-1'] })).toEqual([outcome()]);
+      expect(await orm.em.fork().count(UsageActivity, {})).toBe(1);
+    });
+
+    it('moves the row forward to a newer outcome, keeping one row', async () => {
+      await dao.upsertRunOutcome(outcome());
+      await dao.upsertRunOutcome(
+        outcome({
+          sourceSeq: 20,
+          occurredAt: at('2026-10-20T11:00:00.000Z'),
+          draft: false,
+          reviewRounds: 2,
+          acceptance: 'accepted',
+          questionsAsked: 3,
+        }),
+      );
+
+      expect(await dao.runOutcomes({ runIds: ['run-1'] })).toEqual([
+        outcome({
+          sourceSeq: 20,
+          occurredAt: at('2026-10-20T11:00:00.000Z'),
+          draft: false,
+          reviewRounds: 2,
+          acceptance: 'accepted',
+          questionsAsked: 3,
+        }),
+      ]);
+      expect(await orm.em.fork().count(UsageActivity, {})).toBe(1);
+    });
+
+    it('keeps one row for one pull request written in two cases', async () => {
+      await dao.upsertRunOutcome(outcome());
+      await dao.upsertRunOutcome(
+        outcome({ sourceSeq: 20, prOwner: 'ACME', prRepo: 'Platform' }),
+      );
+
+      expect(await dao.runOutcomes({ runIds: ['run-1'] })).toMatchObject([
+        { sourceSeq: 20 },
+      ]);
+    });
+
+    it('never moves the row back to an older outcome that arrives late', async () => {
+      await dao.upsertRunOutcome(
+        outcome({ sourceSeq: 20, acceptance: 'accepted' }),
+      );
+      await dao.upsertRunOutcome(outcome({ sourceSeq: 10 }));
+
+      expect(await dao.runOutcomes({ runIds: ['run-1'] })).toMatchObject([
+        { sourceSeq: 20, acceptance: 'accepted' },
+      ]);
+    });
+
+    it("keeps another pull request's and another run's outcome apart, and filters by workflow", async () => {
+      await dao.upsertRunOutcome(outcome());
+      await dao.upsertRunOutcome(outcome({ prNumber: 88, sourceSeq: 11 }));
+      await dao.upsertRunOutcome(
+        outcome({ runId: 'run-2', workflowSlug: 'dev-team-b' }),
+      );
+
+      expect(
+        (await dao.runOutcomes({ workflowSlug: 'dev-team' })).map(
+          (row) => `${row.runId}#${row.prNumber}`,
+        ),
+      ).toEqual(['run-1#87', 'run-1#88']);
+      expect(
+        (await dao.runOutcomes({ runIds: ['run-2'] })).map(
+          (row) => row.workflowSlug,
+        ),
+      ).toEqual(['dev-team-b']);
+      expect(await dao.runOutcomes({ runIds: [] })).toEqual([]);
+      expect(await dao.runOutcomeSeqs()).toEqual(
+        new Map([
+          ['outcome:run-1:acme/platform#87', 10],
+          ['outcome:run-1:acme/platform#88', 11],
+          ['outcome:run-2:acme/platform#87', 10],
+        ]),
+      );
+    });
+
+    it('is not counted as a thread or a pull request by the Stats reads', async () => {
+      await dao.upsertRunOutcome(outcome());
+
+      expect(
+        await dao.inRange(
+          'pull_request',
+          at('2026-10-01T00:00:00.000Z'),
+          at('2026-11-01T00:00:00.000Z'),
+          ['kind'],
+        ),
+      ).toEqual([]);
+      expect(
+        await dao.earliestOccurredAt(['thread', 'pull_request']),
+      ).toBeNull();
     });
   });
 });

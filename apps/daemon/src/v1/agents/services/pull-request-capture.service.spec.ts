@@ -204,6 +204,7 @@ function daos(rows: Row[]) {
 function runDao(): { dao: RunDao; writes: Partial<Run>[] } {
   const writes: Partial<Run>[] = [];
   const dao = {
+    runOutcomesOf: async () => null,
     updateWithoutActivity: async (_id: string, data: Partial<Run>) => {
       writes.push(data);
       return 1;
@@ -702,6 +703,7 @@ describe('PullRequestCaptureService', () => {
             url: CREATED,
             seq: 2,
             opened: true,
+            outcome: null,
           },
           {
             owner: 'acme',
@@ -710,6 +712,7 @@ describe('PullRequestCaptureService', () => {
             url: 'https://github.com/acme/platform/pull/6841',
             seq: 4,
             opened: false,
+            outcome: null,
           },
         ],
       },
@@ -749,6 +752,7 @@ describe('PullRequestCaptureService', () => {
             url: 'https://github.com/acme/platform/pull/6841',
             seq: 2,
             opened: false,
+            outcome: null,
           },
         ],
       },
@@ -1000,6 +1004,64 @@ describe('PullRequestCaptureService', () => {
 
     expect(deps.published).toEqual([
       { runId: 'run-1', status: null, pullRequests: [] },
+    ]);
+  });
+
+  it("keeps each pull request's recorded outcome on the list a rescan announces", async () => {
+    // The rescan's own announce site: a list re-sent without its outcomes
+    // would wipe the badge the renderer drew.
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'git -C "$WT" push', '2026-10-22T09:54:00.000Z'),
+      result(2, 'toolu_1', 'Everything up-to-date', '2026-10-22T09:54:05.000Z'),
+    ]);
+    const outcome = {
+      seq: 30,
+      draft: false,
+      reviewRounds: 1,
+      acceptance: 'accepted' as const,
+      questionsAsked: 2,
+    };
+    const { dao } = runDao();
+    const deps = settleDeps();
+    const run = chatRun({
+      pullRequestsScannedSeq: 2,
+      pullRequestsScanVersion: PULL_REQUEST_SCAN_VERSION - 1,
+      pullRequests: JSON.stringify([
+        { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 1 },
+      ]),
+      touchedPullRequests: JSON.stringify([
+        {
+          owner: 'acme',
+          repo: 'platform',
+          number: 7207,
+          url: 'https://github.com/acme/platform/pull/7207',
+          seq: 2,
+        },
+      ]),
+    });
+    const service = new PullRequestCaptureService(
+      itemDao,
+      Object.assign(dao, {
+        runOutcomesOf: async () =>
+          JSON.stringify({ 'acme/platform#87': outcome }),
+        listOutdatedPullRequestScans: async () =>
+          run.pullRequestsScanVersion === PULL_REQUEST_SCAN_VERSION
+            ? []
+            : [run],
+      }),
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+
+    await service.rescanOutdatedQuietly();
+
+    expect(deps.published).toEqual([
+      {
+        runId: 'run-1',
+        status: null,
+        pullRequests: [expect.objectContaining({ number: 87, outcome })],
+      },
     ]);
   });
 
@@ -1264,6 +1326,196 @@ describe('PullRequestCaptureService', () => {
     expect(readRunPullRequests(later.pullRequests)).toHaveLength(1);
   });
 
+  it('announces the current list for another writer only after the pass in flight has announced its own', async () => {
+    // `RunOutcomeBroker` writes the outcomes column and asks for this
+    // announce; chained behind the capture pass, the newest announce is the
+    // one that read the row last.
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const outcome = {
+      seq: 7,
+      draft: true,
+      reviewRounds: 0,
+      acceptance: 'not_yet' as const,
+      questionsAsked: 0,
+    };
+    let landWrite: () => void = () => undefined;
+    let stored: string | null = null;
+    const dao = {
+      runOutcomesOf: async () => null,
+      outcomeContextOf: async () => ({
+        workflowId: 'dev-team',
+        pullRequests: stored,
+        touchedPullRequests: null,
+        runOutcomes: JSON.stringify({ 'acme/platform#87': outcome }),
+      }),
+      updateWithoutActivity: (_id: string, data: Partial<Run>) =>
+        new Promise<number>((resolve) => {
+          landWrite = () => {
+            stored = data.pullRequests ?? null;
+            resolve(1);
+          };
+        }),
+    } as unknown as RunDao;
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+
+    const pass = service.sync([chatRun()], em);
+    await new Promise((resolve) => setImmediate(resolve));
+    const announced = service.announceOutcome('run-1', 'acme/platform#87');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(deps.published).toEqual([]);
+
+    landWrite();
+    await pass;
+    await announced;
+
+    expect(
+      deps.published.map((event) =>
+        (event as { pullRequests: { outcome: unknown }[] }).pullRequests.map(
+          (row) => row.outcome,
+        ),
+      ),
+    ).toEqual([[null], [outcome]]);
+  });
+
+  it('never makes a listing wait on a capture pass, even one queued ahead of an announce', async () => {
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const noWrite = (): void => undefined;
+    let landWrite: () => void = noWrite;
+    const run = chatRun();
+    const dao = {
+      getById: async () => run,
+      runOutcomesOf: async () => null,
+      outcomeContextOf: async () => null,
+      updateWithoutActivity: () =>
+        new Promise<number>((resolve) => {
+          landWrite = () => resolve(1);
+        }),
+    } as unknown as RunDao;
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+    service.onModuleInit();
+
+    // A turn's end starts a capture pass that holds at its write…
+    await deps.listeners[0]?.({
+      runId: 'run-1',
+      item: { nodeId: null, kind: 'turn_complete' },
+    });
+    await vi.waitFor(() => expect(landWrite).not.toBe(noWrite));
+    // …an outcome queues its announce behind it…
+    const announced = service.announceOutcome('run-1', 'acme/platform#87');
+    // …and a listing returns at once rather than waiting on both.
+    let listed = false;
+    void service.sync([chatRun()], em).then(() => {
+      listed = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(listed).toBe(true);
+
+    landWrite();
+    await announced;
+  });
+
+  it('announces nothing for an outcome whose pull request is not on the run’s list', async () => {
+    const { itemDao } = daos([]);
+    const dao = {
+      runOutcomesOf: async () => null,
+      outcomeContextOf: async () => ({
+        workflowId: null,
+        pullRequests: JSON.stringify([
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: CREATED,
+            seq: 2,
+          },
+        ]),
+        touchedPullRequests: null,
+        runOutcomes: null,
+      }),
+      updateWithoutActivity: async () => 1,
+    } as unknown as RunDao;
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+
+    await service.announceOutcome('run-1', 'acme/platform#90');
+    expect(deps.published).toEqual([]);
+    await service.announceOutcome('run-1', 'acme/platform#87');
+    expect(deps.published).toHaveLength(1);
+  });
+
+  it('still captures on a listing that arrives while an announce is queued for the run', async () => {
+    // A listing skips its pass only behind a pass that captures; an
+    // announce-only one captures nothing, so the listing runs after it.
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --fill'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    let releaseRead: () => void = () => undefined;
+    const writes: Partial<Run>[] = [];
+    const dao = {
+      runOutcomesOf: async () => null,
+      outcomeContextOf: () =>
+        new Promise((resolve) => {
+          releaseRead = () =>
+            resolve({
+              workflowId: null,
+              pullRequests: null,
+              touchedPullRequests: null,
+              runOutcomes: null,
+            });
+        }),
+      updateWithoutActivity: async (_id: string, data: Partial<Run>) => {
+        writes.push(data);
+        return 1;
+      },
+    } as unknown as RunDao;
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+
+    const announced = service.announceOutcome('run-1', 'acme/platform#87');
+    const listing = service.sync([chatRun()], em);
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseRead();
+    await announced;
+    await listing;
+
+    expect(
+      writes.flatMap((write) => readRunPullRequests(write.pullRequests)),
+    ).toMatchObject([{ number: 87 }]);
+  });
+
   it('remembers nothing for a run deleted while its pass was writing', async () => {
     const { itemDao, counts } = daos([
       call(1, 'toolu_1', 'gh pr create --fill'),
@@ -1271,6 +1523,7 @@ describe('PullRequestCaptureService', () => {
     ]);
     let landWrite: () => void = () => undefined;
     const dao = {
+      runOutcomesOf: async () => null,
       updateWithoutActivity: () =>
         new Promise<number>((resolve) => {
           landWrite = () => resolve(1);
@@ -1838,6 +2091,7 @@ describe('PullRequestCaptureService — telling the activity ledger which pull r
       result(2, 'toolu_1', CREATED),
     ]);
     const dao = {
+      runOutcomesOf: async () => null,
       updateWithoutActivity: async () => {
         // A write takes longer than a tick, so an announce that did not wait
         // for it would land first.
@@ -1883,6 +2137,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
     const writes: Partial<Run>[] = [];
     const dao = {
       getById: async () => run,
+      runOutcomesOf: async () => null,
       updateWithoutActivity: async (_id: string, data: Partial<Run>) => {
         writes.push(data);
         Object.assign(run, data);
@@ -1936,9 +2191,53 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
             url: CREATED,
             seq: 2,
             opened: true,
+            outcome: null,
           },
         ],
       },
+    ]);
+  });
+
+  it("announces each pull request with the outcome the run's row holds now, not the copy it was handed", async () => {
+    // The renderer replaces the whole list from each announce, so one sent
+    // without the outcome would wipe the badge a `record_outcome` drew.
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --base main'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const run = chatRun();
+    const outcome = {
+      seq: 9,
+      draft: false,
+      reviewRounds: 2,
+      acceptance: 'accepted' as const,
+      questionsAsked: 1,
+    };
+    const dao = {
+      ...settleRunDao(run).dao,
+      runOutcomesOf: async () =>
+        JSON.stringify({ 'acme/platform#87': outcome }),
+    } as unknown as RunDao;
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+      ...noSessionRecords(),
+    );
+    service.onModuleInit();
+
+    await deps.listeners[0]?.({
+      runId: 'run-1',
+      item: { nodeId: null, kind: 'turn_complete' },
+    });
+    await settled();
+
+    expect(deps.published).toEqual([
+      expect.objectContaining({
+        pullRequests: [expect.objectContaining({ number: 87, outcome })],
+      }),
     ]);
   });
 
@@ -2019,6 +2318,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
             url: CREATED,
             seq: 2,
             opened: true,
+            outcome: null,
           },
         ],
       },
@@ -2092,6 +2392,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
             url: CREATED,
             seq: 2,
             opened: true,
+            outcome: null,
           },
         ],
       },

@@ -105,6 +105,7 @@ import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunIdleReapService } from './services/run-idle-reap.service';
 import { RunNamedPathsService } from './services/run-named-paths.service';
+import { RunOutcomeBroker } from './services/run-outcome.broker';
 import {
   currentRunOwner,
   RunProcessAttribution,
@@ -239,6 +240,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     MonitorOutcomeSweep,
     MonitorBroker,
     TeamNoteBroker,
+    RunOutcomeBroker,
     HostWakeBus,
     HostWakeChatDelivery,
     ArtifactPageService,
@@ -557,6 +559,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // For the MCP host's team-note tools and the graph executor, which registers
     // each node's sink and reads the unread figure into call replies and wakes.
     TeamNoteBroker,
+    RunOutcomeBroker,
     // For the workflow delivery, which records the end of output it drops.
     MonitorRowWriter,
     // For the share service, which wakes the agent that asked once a share

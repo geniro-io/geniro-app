@@ -171,6 +171,10 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * notes (`team_note`), readable by every agent of the run (`team_notes`).
  * Append-only like the action pair: a correction is a newer note naming the
  * older one's seq in `supersedes`, and readers fold the pair.
+ *
+ * `run_outcome` is where one pull request of a workflow run ended up, recorded
+ * by a node (`record_outcome`). Append-only per pull request: the newest row
+ * naming a pull request is its outcome, and an earlier one stays as history.
  */
 export const ItemKindSchema = z
   .enum([
@@ -207,6 +211,7 @@ export const ItemKindSchema = z
     'action',
     'action_outcome',
     'team_note',
+    'run_outcome',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

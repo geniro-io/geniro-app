@@ -2754,8 +2754,9 @@ export function groupTranscript(
       taskToolCallIds.add(toolCallId);
     }
   }
-  // A `team_note` call is hidden because its note row tells the story — but a
-  // REFUSED one writes no row, so its call and the refusal stay on screen.
+  // A `team_note` or `record_outcome` call is hidden because its row tells the
+  // story — but a REFUSED one writes no row, so its call and the refusal stay
+  // on screen.
   const refusedCallIds = new Set<string>();
   for (const item of items) {
     const id = payloadString(item.payload, 'id');
@@ -2870,10 +2871,11 @@ export function groupTranscript(
     if (item.kind === 'tool_call') {
       const name = payloadString(item.payload, 'name') ?? '';
       const callId = payloadString(item.payload, 'id');
+      const tool = geniroToolOf(name, item.runId);
       const refusedNote =
         callId !== null &&
         refusedCallIds.has(callId) &&
-        geniroToolOf(name, item.runId) === 'team_note';
+        (tool === 'team_note' || tool === 'record_outcome');
       if (
         (isGeniroToolName(name, item.runId) && !refusedNote) ||
         (callId !== null && taskToolCallIds.has(callId))

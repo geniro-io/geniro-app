@@ -6,6 +6,7 @@ import { LineBaselineDao } from './dao/line-baseline.dao';
 import { UsageActivityDao } from './dao/usage-activity.dao';
 import { UsageEventDao } from './dao/usage-event.dao';
 import { ProjectRootsService } from './services/project-roots.service';
+import { RunOutcomeLedgerService } from './services/run-outcome-ledger.service';
 import { StatsService } from './services/stats.service';
 import { UsageActivityRecorderService } from './services/usage-activity-recorder.service';
 import { UsageBackfillService } from './services/usage-backfill.service';
@@ -39,6 +40,7 @@ import { UsageRecorderService } from './services/usage-recorder.service';
     UsageRecorderService,
     UsageActivityRecorderService,
     UsageBackfillService,
+    RunOutcomeLedgerService,
   ],
   // The bus alone. The WS gateway announces each recorded turn so an open Stats
   // page can refresh — the same direction as everything else here: the channel

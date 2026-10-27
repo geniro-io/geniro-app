@@ -180,6 +180,37 @@ describe('chatToMarkdown', () => {
     expect(out).not.toContain('"conversationId"');
   });
 
+  it('exports a run outcome in words — its pull request, figures and recorder — and dumps an unreadable one', () => {
+    const payload = {
+      prOwner: 'acme',
+      prRepo: 'platform',
+      prNumber: 87,
+      prUrl: 'https://github.com/acme/platform/pull/87',
+      draft: false,
+      reviewRounds: 1,
+      acceptance: 'changes_requested',
+      questionsAsked: 0,
+      workflowSlug: 'dev-team',
+      nodeId: 'manager',
+      conversationId: null,
+    };
+    const out = chatToMarkdown(
+      workflowDoc([nodeRow('manager', 'run_outcome', payload)]),
+    );
+
+    expect(out).toContain(
+      '**✔ outcome** — manager — [acme/platform#87](https://github.com/acme/platform/pull/87) — ready — 1 review round — changes requested — no questions',
+    );
+    expect(out).not.toContain('"workflowSlug"');
+
+    const unreadable = chatToMarkdown(
+      workflowDoc([
+        nodeRow('manager', 'run_outcome', { ...payload, acceptance: 'x' }),
+      ]),
+    );
+    expect(unreadable).toContain('#### run_outcome ·');
+  });
+
   it('keeps the settle of a turn answered inside a continuation, but not as a second completed turn', () => {
     const settle = row('turn_complete', {
       usage: null,

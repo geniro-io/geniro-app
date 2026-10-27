@@ -40,6 +40,7 @@ import {
   RecommendationsApplyContext,
 } from './recommendations-apply-context';
 import { RetryContext } from './retry-context';
+import { type RunOutcomes, RunOutcomesContext } from './run-outcome';
 import { SubagentDetailContext } from './subagent-context';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { CollapseToolStepsContext } from './tool-group';
@@ -68,6 +69,8 @@ export interface TranscriptValues {
   revealCall: ((callId: string) => (() => void) | null) | null;
   /** Open a sub-agent's detail, or null with no detail dialog. */
   openSubagentDetail: ((block: SubagentBlockEntry) => void) | null;
+  /** Each pull request's newest recorded outcome — see `RunOutcomesContext`. */
+  runOutcomes: RunOutcomes;
 }
 
 /**
@@ -268,21 +271,24 @@ export function TranscriptContexts({
   revealCallBlock,
   revealCall,
   openSubagentDetail,
+  runOutcomes,
   children,
 }: TranscriptValues & { children: React.ReactNode }): React.JSX.Element {
   return (
-    <CollapseToolStepsContext.Provider value={collapseToolSteps}>
-      <RunActivityContext.Provider value={runActivity}>
-        <TurnDurationContext.Provider value={turnDurations}>
-          <RevealCallBlockContext.Provider value={revealCallBlock}>
-            <RevealCallContext.Provider value={revealCall}>
-              <SubagentDetailContext.Provider value={openSubagentDetail}>
-                {children}
-              </SubagentDetailContext.Provider>
-            </RevealCallContext.Provider>
-          </RevealCallBlockContext.Provider>
-        </TurnDurationContext.Provider>
-      </RunActivityContext.Provider>
-    </CollapseToolStepsContext.Provider>
+    <RunOutcomesContext.Provider value={runOutcomes}>
+      <CollapseToolStepsContext.Provider value={collapseToolSteps}>
+        <RunActivityContext.Provider value={runActivity}>
+          <TurnDurationContext.Provider value={turnDurations}>
+            <RevealCallBlockContext.Provider value={revealCallBlock}>
+              <RevealCallContext.Provider value={revealCall}>
+                <SubagentDetailContext.Provider value={openSubagentDetail}>
+                  {children}
+                </SubagentDetailContext.Provider>
+              </RevealCallContext.Provider>
+            </RevealCallBlockContext.Provider>
+          </TurnDurationContext.Provider>
+        </RunActivityContext.Provider>
+      </CollapseToolStepsContext.Provider>
+    </RunOutcomesContext.Provider>
   );
 }

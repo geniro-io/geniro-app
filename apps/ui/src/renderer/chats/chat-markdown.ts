@@ -6,6 +6,8 @@ import {
   chatExportSummary,
 } from './chat-export-summary';
 import { collapseImageBlocks } from './export-image-blocks';
+import { outcomeSegments } from './run-outcome';
+import { readRunOutcomePayload } from './run-outcome-payload';
 import { settlesOnContinuation } from './settled-status';
 import {
   readSubagentDeclaration,
@@ -266,6 +268,23 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
     }
     // Verbatim, as a message is: the note is markdown already.
     return [parts.join(' — '), '', note.text];
+  },
+  run_outcome: (item, agent) => {
+    const outcome = readRunOutcomePayload(item.payload);
+    if (outcome === null) {
+      return null;
+    }
+    const words = outcomeSegments(outcome);
+    return [
+      [
+        `**✔ outcome** — ${speaker(item, agent)}`,
+        `[${outcome.prOwner}/${outcome.prRepo}#${outcome.prNumber}](${outcome.prUrl})`,
+        words.draft,
+        words.rounds,
+        words.acceptance,
+        words.questions,
+      ].join(' — '),
+    ];
   },
 };
 

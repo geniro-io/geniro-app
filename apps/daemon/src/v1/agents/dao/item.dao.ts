@@ -839,6 +839,22 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Every `run_outcome` row of every run, for the stats ledger's boot sweep. Served
+   * by the `kind` index; a profile holds a handful per workflow run.
+   */
+  async runOutcomeRows(
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'runId' | 'seq' | 'payload' | 'createdAt'>[]> {
+    return this.getRepo(txEm).find(
+      { kind: 'run_outcome' },
+      {
+        fields: ['runId', 'seq', 'payload', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * Every usage-bearing row in the database (`USAGE_ITEM_KINDS`), across all
    * runs — what the usage ledger's boot backfill sweeps to recover history
    * recorded before it existed.

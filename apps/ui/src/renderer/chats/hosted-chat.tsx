@@ -70,6 +70,7 @@ import {
 } from './published-artifact';
 import { QueuedStrip } from './queued-strip';
 import type { RecommendationsApplier } from './recommendations-apply-context';
+import { runOutcomesOf } from './run-outcome';
 import type { RunStatusKind } from './run-status';
 import {
   displayRunStatus,
@@ -501,6 +502,11 @@ export function HostedChat({
     () => scanTurns(chat.items).durations,
     [chat.items],
   );
+  const runPullRequests = run?.pullRequests;
+  const runOutcomes = useMemo(
+    () => runOutcomesOf(runPullRequests),
+    [runPullRequests],
+  );
   const { remember, recall, forget } = useContextReadings();
   const transcriptFigures = useMemo(
     () => computeAgentActivity(foldItems).get(CHAT_AGENT_KEY),
@@ -909,6 +915,7 @@ export function HostedChat({
         revealCallBlock: null,
         revealCall: null,
         openSubagentDetail: null,
+        runOutcomes,
         cardBacked,
         loadImage: loadMarkdownImage,
         loadMetrics,

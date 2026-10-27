@@ -32,6 +32,7 @@ import {
   HOST_READ_WORKFLOWS_TOOL,
   HOST_RECOMMENDATION_MARKS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
+  HOST_RECORD_OUTCOME_TOOL,
   HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
   HOST_TEAM_NOTE_TOOL,
@@ -56,6 +57,7 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import {
   TeamNoteBroker,
   type TeamNoteSink,
@@ -177,6 +179,8 @@ function service(
   // Never asked by the cases that pass none: no sink, so neither tool is listed.
   teamNotes = teamNoteBroker(),
   workflowBuilders = new WorkflowBuilderBroker(),
+  // Never asked by the cases that pass none: no sink, so the tool is not listed.
+  runOutcomes = runOutcomeBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -191,6 +195,7 @@ function service(
       actions,
       monitors,
       teamNotes,
+      runOutcomes,
       patches,
       plans,
       notices,
@@ -247,6 +252,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
   const monitors = monitorBroker();
   const teamNotes = teamNoteBroker();
   teamNotes.register('run-1', 'agent', noop as never);
+  const runOutcomes = runOutcomeBroker();
+  runOutcomes.register('run-1', 'agent', noop as never);
   for (const broker of [
     questions,
     findings,
@@ -300,12 +307,23 @@ async function everyHostTool(): Promise<ToolListing[]> {
       undefined,
       monitors.broker,
       teamNotes,
+      undefined,
+      runOutcomes,
     ),
     'run-1',
     'agent',
     rpc('tools/list', {}),
   );
   return (json().result as { tools: ToolListing[] }).tools;
+}
+
+/** A `record_outcome` broker no case here records through: listing only. */
+function runOutcomeBroker(): RunOutcomeBroker {
+  return new RunOutcomeBroker(
+    ...([{}, {}, {}, {}, {}] as unknown as ConstructorParameters<
+      typeof RunOutcomeBroker
+    >),
+  );
 }
 
 /**
@@ -3175,6 +3193,89 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(find(tools, HOST_METRICS_TOOL)).toContain('show_chart');
   });
 
+  it('offers record_outcome only to a node a workflow pass registered, never to a chat', async () => {
+    const runOutcomes = runOutcomeBroker();
+    runOutcomes.register('run-1', 'manager', (async () => {
+      throw new Error('not called');
+    }) as never);
+    const list = async (nodeId: string): Promise<string[]> => {
+      const { json } = await post(
+        // Every other broker left to its default; `runOutcomes` is the last.
+        service(
+          ...([
+            ...Array.from({ length: 23 }),
+            runOutcomes,
+          ] as unknown as Parameters<typeof service>),
+        ),
+        'run-1',
+        nodeId,
+        rpc('tools/list', {}),
+      );
+      return (json().result as { tools: ToolListing[] }).tools.map(
+        (tool) => tool.name,
+      );
+    };
+
+    expect(await list('manager')).toContain(HOST_RECORD_OUTCOME_TOOL);
+    expect(await list('agent')).not.toContain(HOST_RECORD_OUTCOME_TOOL);
+  });
+
+  it('answers a refused or malformed record_outcome as an error the agent reads, recording nothing for a malformed one', async () => {
+    const recorded: unknown[] = [];
+    const outcomes = {
+      canUse: () => true,
+      record: async (...args: unknown[]) => {
+        recorded.push(args);
+        return {
+          status: 'refused',
+          reason: 'pr_number 88 does not match pr_url, which names #87',
+        };
+      },
+    } as unknown as RunOutcomeBroker;
+    const tool = createMcpTools({
+      ...({} as Parameters<typeof createMcpTools>[0]),
+      runOutcomes: outcomes,
+      board: new TaskBoardBroker(),
+      shares: fakeShares(false).service,
+      monitors: monitorBroker().broker,
+      teamNotes: teamNoteBroker(),
+    }).find((t) => t.handles(HOST_RECORD_OUTCOME_TOOL))!;
+    const ctx = {
+      runId: 'run-1',
+      nodeId: 'manager',
+      caller: 'manager',
+    } as Parameters<typeof tool.call>[2];
+    const args = {
+      pr_number: 88,
+      pr_url: 'https://github.com/acme/platform/pull/87',
+      draft: true,
+      review_rounds: 0,
+      acceptance: 'not_yet',
+    };
+
+    const refused = await tool.call(HOST_RECORD_OUTCOME_TOOL, args, ctx);
+    const malformed = await tool.call(
+      HOST_RECORD_OUTCOME_TOOL,
+      { ...args, acceptance: 'merged' },
+      ctx,
+    );
+
+    expect(refused).toMatchObject({ isError: true });
+    expect(JSON.stringify(refused)).toContain('does not match pr_url');
+    expect(malformed).toMatchObject({ isError: true });
+    expect(recorded).toHaveLength(1);
+  });
+
+  it('keeps record_outcome from standing in for a reply or a team note, and from taking the question count', async () => {
+    // The Manager reports to the user and its team as before; the record is a
+    // side channel. And geniro counts the questions — a model told it may
+    // report them would send a remembered number.
+    const recordOutcome = find(await everyHostTool(), HOST_RECORD_OUTCOME_TOOL);
+    expect(recordOutcome).toContain('never replaces reporting');
+    expect(recordOutcome).toMatch(/\bteam_note\b/);
+    expect(recordOutcome).toContain('geniro counts the questions');
+  });
+
   it('makes BOTH team-note tools name the other, and say what a note is not for', async () => {
     // A writer that never hears of the reader writes into a store nobody
     // opens; a reader that never hears of the writer treats the notes as a
@@ -3357,6 +3458,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_PROPOSE_WORKFLOW_TOOL,
       HOST_TEAM_NOTE_TOOL,
       HOST_TEAM_NOTES_TOOL,
+      HOST_RECORD_OUTCOME_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
@@ -3536,6 +3638,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       shares: fakeShares(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
+      runOutcomes: runOutcomeBroker(),
     } as Parameters<typeof createMcpTools>[0]);
     const listing = tools.flatMap((tool) =>
       tool.list({ runId: 'run-1', nodeId: 'agent', conversationId: null }),
@@ -3623,6 +3726,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       shares: fakeShares(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
+      runOutcomes: runOutcomeBroker(),
     }).find((t) => t.handles(HOST_READ_WORKFLOWS_TOOL))!;
 
     const result = await tool.call(HOST_READ_WORKFLOWS_TOOL, { slug: 'team' }, {

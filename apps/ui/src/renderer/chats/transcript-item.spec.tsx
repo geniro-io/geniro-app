@@ -1282,7 +1282,7 @@ describe('TranscriptItem — a message a Stop dropped', () => {
 });
 
 describe('TranscriptItem — team notes', () => {
-  it('draws a team note with its author, kind, number and the note it replaces', () => {
+  it('draws a team note with its author, kind and that it replaces an earlier one, never a note number', () => {
     render(
       <TranscriptItem
         item={item(
@@ -1306,8 +1306,8 @@ describe('TranscriptItem — team notes', () => {
     const text = container.textContent ?? '';
     expect(text).toContain('Manager · team note');
     expect(text).toContain('decision');
-    expect(text).toContain('note 1');
-    expect(text).toContain('replaces note 7');
+    expect(text).toContain('replaces an earlier note');
+    expect(text).not.toMatch(/note \d/);
     expect(text).toContain('Orders are paged by cursor.');
   });
 

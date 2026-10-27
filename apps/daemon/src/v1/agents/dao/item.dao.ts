@@ -310,6 +310,32 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Every agent-pool hand-off of a run, in seq order — the `system` row the
+   * executor writes when a node's conversation moves to another member (a
+   * call's carries its `callId`). Stops at `maxSeq`, as the waterfall's reads do.
+   */
+  async poolHandOffRows(
+    runId: string,
+    txEm?: EntityManager,
+    maxSeq?: number,
+  ): Promise<Item[]> {
+    const em = txEm ?? this.em.fork();
+    let query = em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('id')
+      .where('run_id', '=', runId)
+      .where('deleted_at', 'is', null)
+      .where('kind', '=', 'system')
+      .where((eb) => eb(payloadPath(eb, '$.nodePoolHandOff'), 'is not', null));
+    if (maxSeq !== undefined) {
+      query = query.where('seq', '<=', maxSeq);
+    }
+    const ids = (await query.execute()).map((head) => head.id);
+    return this.rowsWithIds(ids, em);
+  }
+
+  /**
    * The rows a Kysely read picked by id, loaded as entities in seq order — the
    * second half of a read whose filter is a payload path, which only Kysely
    * can say.

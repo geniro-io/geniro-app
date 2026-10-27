@@ -7272,6 +7272,12 @@ export interface RunWaterfallTurn {
     model: string | null;
     /**
      * 
+     * @type {RunWaterfallTurnMember}
+     * @memberof RunWaterfallTurn
+     */
+    member: RunWaterfallTurnMember | null;
+    /**
+     * 
      * @type {number}
      * @memberof RunWaterfallTurn
      */
@@ -7322,6 +7328,27 @@ export const RunWaterfallTurnOutcomeEnum = {
     Cancelled: 'cancelled'
 } as const;
 export type RunWaterfallTurnOutcomeEnum = typeof RunWaterfallTurnOutcomeEnum[keyof typeof RunWaterfallTurnOutcomeEnum];
+
+/**
+ * 
+ * @export
+ * @interface RunWaterfallTurnMember
+ */
+export interface RunWaterfallTurnMember {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof RunWaterfallTurnMember
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallTurnMember
+     */
+    model: string | null;
+}
+
 
 /**
  * 

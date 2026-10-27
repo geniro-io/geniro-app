@@ -938,6 +938,7 @@ export interface FoldedRun {
     | 'nodeId'
     | 'startedAt'
     | 'model'
+    | 'member'
     | 'outcome'
     | 'durationMs'
     | 'toolCalls'
@@ -953,7 +954,7 @@ export interface FoldedRun {
   costUsd: number | null;
   /** The model each node recorded — what a turn that reported none ran on. */
   nodeModels: ReadonlyMap<string | null, string | null>;
-  /** Nodes with a pool: a turn of theirs names no member, so no model is guessed for it. */
+  /** Nodes with a pool: their turns are compared per member (`RunWaterfallTurn.member`). */
   pooledNodes: ReadonlySet<string | null>;
   timeline: Pick<
     ThreadTimeline,
@@ -991,14 +992,17 @@ export interface NodeFigures {
 /** One node's turns on one model, summed over every analysed run. */
 export interface ModelFigures {
   node: string;
+  /** The CLI that ran them — on a pooled node, the member's own. */
+  agent: AgentKind | null;
   model: string | null;
   /**
    * Where `model` comes from: what the CLI reported (a turn that reported
    * none counts on the model its node reported last in that run), or — for a
    * turn that ended before its node had reported any — what the node was
    * configured with: an alias as the workflow spells it, or null for the
-   * CLI's own default. `unreported`: a pooled node's turn that reported no
-   * model — which member ran it is not known, so it is not guessed.
+   * CLI's own default — on a pooled node, the model the member that ran it
+   * was configured with. `unreported`: a pooled node's turn that reported no
+   * model and wrote no row naming its member, so none is guessed.
    */
   modelSource: 'reported' | 'configured' | 'unreported';
   /** How many of the analysed runs this node took a turn in on this model. */
@@ -2718,6 +2722,15 @@ export const RunWaterfallTurnSchema = z
         "costUsd split by the model that spent it, costliest first — the sub-agents' models included, while the token figures may be the main thread's alone. Null when the CLI stated no split that adds up to the cost",
       ),
     model: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
+    member: z
+      .object({
+        agentKind: AgentKindSchema,
+        model: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
+      })
+      .nullable()
+      .describe(
+        "on a node with an agent pool: the member that ran the turn — its CLI and the model it was configured with (null: that CLI's default), as the turn's own usage row names it; null on a node without a pool, and for a pooled turn that wrote no usage row",
+      ),
     inputTokens: z.number().nullable(),
     outputTokens: z.number().nullable(),
     cacheReadTokens: z.number().nullable(),

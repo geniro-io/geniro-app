@@ -57,6 +57,7 @@ export function wfTurn(
     costUsd: null,
     estimatedCostUsd: null,
     model: null,
+    member: null,
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,

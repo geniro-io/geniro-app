@@ -19,6 +19,7 @@ function turn(patch: Partial<Turn>): Turn {
     nodeId: 'dev',
     startedAt: new Date(clock).toISOString(),
     model: 'sonnet',
+    member: null,
     outcome: 'completed',
     durationMs: 1_000,
     toolCalls: 2,
@@ -171,6 +172,43 @@ describe('modelFigures', () => {
     ).toEqual([
       ['claude-opus-4', 'reported', 0],
       [null, 'unreported', 1],
+    ]);
+  });
+
+  // A pool hands on when a member fails, so the model reported before or
+  // after may be another member's: each member is followed on its own.
+  it("follows a pooled node's members apart, by the member each turn's row names", () => {
+    const claude = { agentKind: 'claude' as const, model: 'opus' };
+    const codex = { agentKind: 'codex' as const, model: null };
+    const rows = modelFigures([
+      run(
+        'r1',
+        [
+          // Member 1 fails before reporting: its configured model, its CLI.
+          turn({ outcome: 'failed', model: null, member: claude }),
+          // Handed on to member 2, which reports.
+          turn({ model: 'gpt-5-codex', member: codex }),
+          // Member 1 again, having reported once since.
+          turn({ model: 'claude-opus-4', member: claude }),
+          turn({ outcome: 'cancelled', model: null, member: claude }),
+        ],
+        { pooledNodes: new Set(['dev']) },
+      ),
+    ]);
+
+    expect(
+      rows.map((row) => [
+        row.agent,
+        row.model,
+        row.modelSource,
+        row.turns,
+        row.failedTurns,
+        row.cancelledTurns,
+      ]),
+    ).toEqual([
+      ['claude', 'claude-opus-4', 'reported', 2, 0, 1],
+      ['claude', 'opus', 'configured', 1, 1, 0],
+      ['codex', 'gpt-5-codex', 'reported', 1, 0, 0],
     ]);
   });
 

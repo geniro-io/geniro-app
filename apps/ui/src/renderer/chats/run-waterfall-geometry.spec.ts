@@ -42,6 +42,7 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
     estimatedCostUsd: null,
     modelCosts: null,
     model: 'opus-5',
+    member: null,
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,

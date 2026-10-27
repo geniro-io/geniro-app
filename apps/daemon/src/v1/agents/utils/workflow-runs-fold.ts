@@ -1,4 +1,5 @@
 import { readWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
+import type { AgentKind } from '../../runs/runs.types';
 import type {
   FoldedRun,
   ModelFigures,
@@ -6,6 +7,7 @@ import type {
   RunFigures,
 } from '../chat.types';
 import { laneOf } from './analysis-lane';
+import { snapshotNodePoolProfiles } from './snapshot-config-dirs';
 
 /**
  * What the run's own frozen copy configured each agent node with — the model
@@ -21,11 +23,7 @@ export function configuredModels(
     ) ?? [];
   return {
     nodeModels: new Map(nodes.map((node) => [node.id, node.model ?? null])),
-    pooledNodes: new Set(
-      nodes
-        .filter((node) => (node.pool?.length ?? 0) > 0)
-        .map((node) => node.id),
-    ),
+    pooledNodes: new Set(snapshotNodePoolProfiles(snapshot).keys()),
   };
 }
 
@@ -110,18 +108,26 @@ export function nodeFigures(runs: readonly FoldedRun[]): NodeFigures[] {
     .sort((a, b) => a.node.localeCompare(b.node));
 }
 
+/** Which agent ran a turn, as the comparison names it. */
+interface TurnIdentity {
+  agent: AgentKind | null;
+  model: string | null;
+  source: ModelFigures['modelSource'];
+}
+
 /**
- * The model each turn ran on. A turn that ended without reporting one — a
- * failure, a Stop, one still running — ran on the model its node last
- * reported in that run. One that came before any report is filed under the
- * model the node was configured with, marked so: a pool hands work on exactly
- * when a member fails before reporting, so the NEXT model reported may be
- * another member's. A pooled node's turn names no member, so one that
- * reported nothing is left unattributed.
+ * The CLI and model each turn ran on. A turn that ended without reporting a
+ * model — a failure, a Stop, one still running — ran on the model its node
+ * last reported in that run; one before any report is filed under the model
+ * the node was configured with, marked so.
+ *
+ * A pooled node is followed per MEMBER, as the turn's own usage row names it:
+ * a pool hands work on exactly when a member fails, so the model reported
+ * before or after may be another member's. A pooled turn naming no member is
+ * left unattributed.
  */
-function turnModels(
-  run: FoldedRun,
-): { model: string | null; source: ModelFigures['modelSource'] }[] {
+function turnIdentities(run: FoldedRun): TurnIdentity[] {
+  const lanes = new Map(run.lanes.map((lane) => [lane.nodeId, lane.agentKind]));
   const ordered = run.turns
     .map((turn, index) => ({ turn, index }))
     .sort(
@@ -129,30 +135,42 @@ function turnModels(
         Date.parse(a.turn.startedAt) - Date.parse(b.turn.startedAt) ||
         a.index - b.index,
     );
-  const models = run.turns.map((turn) => ({
-    model: turn.model,
-    source: 'reported' as ModelFigures['modelSource'],
+  const identities: TurnIdentity[] = run.turns.map(() => ({
+    agent: null,
+    model: null,
+    source: 'unreported',
   }));
-  const last = new Map<string | null, string>();
+  const last = new Map<string, string>();
   for (const { turn, index } of ordered) {
+    const pooled = run.pooledNodes.has(turn.nodeId);
+    const agent = pooled
+      ? (turn.member?.agentKind ?? null)
+      : (lanes.get(turn.nodeId) ?? null);
+    const runner = JSON.stringify([
+      turn.nodeId,
+      pooled ? (turn.member ?? null) : null,
+    ]);
     if (turn.model !== null) {
-      last.set(turn.nodeId, turn.model);
+      last.set(runner, turn.model);
+      identities[index] = { agent, model: turn.model, source: 'reported' };
       continue;
     }
-    if (run.pooledNodes.has(turn.nodeId)) {
-      models[index] = { model: null, source: 'unreported' };
+    if (pooled && turn.member === null) {
       continue;
     }
-    const reported = last.get(turn.nodeId);
-    models[index] =
-      reported === undefined
-        ? {
-            model: run.nodeModels.get(turn.nodeId) ?? null,
+    const reported = last.get(runner);
+    identities[index] =
+      reported !== undefined
+        ? { agent, model: reported, source: 'reported' }
+        : {
+            agent,
+            model: pooled
+              ? (turn.member?.model ?? null)
+              : (run.nodeModels.get(turn.nodeId) ?? null),
             source: 'configured',
-          }
-        : { model: reported, source: 'reported' };
+          };
   }
-  return models;
+  return identities;
 }
 
 /**
@@ -165,13 +183,14 @@ function turnModels(
 export function modelFigures(runs: readonly FoldedRun[]): ModelFigures[] {
   const rows = new Map<string, ModelFigures & { runIds: Set<string> }>();
   for (const run of runs) {
-    const models = turnModels(run);
+    const identities = turnIdentities(run);
     run.turns.forEach((turn, index) => {
       const node = laneOf(turn.nodeId);
-      const { model, source } = models[index]!;
-      const key = JSON.stringify([node, model, source]);
+      const { agent, model, source } = identities[index]!;
+      const key = JSON.stringify([node, agent, model, source]);
       const row = rows.get(key) ?? {
         node,
+        agent,
         model,
         modelSource: source,
         runs: 0,

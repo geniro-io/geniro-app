@@ -59,6 +59,7 @@ function turn(
     costUsd: null,
     estimatedCostUsd: null,
     model: 'opus-5',
+    member: null,
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,

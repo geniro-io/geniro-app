@@ -12,7 +12,11 @@ import type {
   RunWaterfallWait,
   RunWaterfallWire,
 } from '../chat.types';
-import type { ChatTotalsWire, RunWaterfallFold } from '../chat.types';
+import type {
+  ChatTotalsWire,
+  RunWaterfallFold,
+  TurnMember,
+} from '../chat.types';
 import { HOST_QUESTION_TOOL, MAX_WATERFALL_LABEL_CHARS } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -28,13 +32,17 @@ import {
   polledDollars,
   type PolledSpend,
 } from '../utils/polled-spend';
-import { snapshotPoolKinds } from '../utils/snapshot-config-dirs';
+import {
+  snapshotNodePoolProfiles,
+  snapshotPoolKinds,
+} from '../utils/snapshot-config-dirs';
 import { foldThreadTimeline } from '../utils/thread-timeline';
 import { foldToolUsage } from '../utils/tool-usage';
 import {
   carriesUsage,
   sumUsagePayloads,
   turnAgentKindOf,
+  turnMemberOf,
 } from '../utils/usage-figures';
 import { PolledSpendService } from './polled-spend.service';
 
@@ -166,12 +174,16 @@ export class ChatWaterfallService {
     if (run === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    const [spine, payloadRows, nodeStates, delegateSeqs] = await Promise.all([
-      this.itemDao.timelineSpine(runId, em, maxSeq),
-      this.itemDao.waterfallPayloadRows(runId, em, maxSeq),
-      this.nodeStateDao.listByRun(runId, em),
-      this.itemDao.delegateToolCallSeqs(runId, em, maxSeq),
-    ]);
+    const [spine, payloadRows, nodeStates, delegateSeqs, handOffs] =
+      await Promise.all([
+        this.itemDao.timelineSpine(runId, em, maxSeq),
+        this.itemDao.waterfallPayloadRows(runId, em, maxSeq),
+        this.nodeStateDao.listByRun(runId, em),
+        this.itemDao.delegateToolCallSeqs(runId, em, maxSeq),
+        run.workflowId === null
+          ? Promise.resolve([])
+          : this.itemDao.poolHandOffRows(runId, em, maxSeq),
+      ]);
     const delegated = new Set(delegateSeqs);
 
     if (spine.length === 0) {
@@ -186,11 +198,18 @@ export class ChatWaterfallService {
     // A snapshot read takes the working flag recorded when the snapshot was
     // taken, so the same snapshot always folds the same.
     const working = workingAtSnapshot ?? !isTerminalRunStatus(run.status);
-    const finished = foldTurns(payloadRows, laneRows(spine));
+    const pooled = poolMembers(run.workflowSnapshot);
+    const finished = foldTurns(payloadRows, laneRows(spine), pooled);
     const unfinished =
       run.workflowId === null
         ? foldUnfinishedChatTurns(spine, working, to)
-        : foldUnfinishedNodeTurns(payloadRows, finished.ends, working, to);
+        : foldUnfinishedNodeTurns(
+            [...payloadRows, ...handOffs].sort((a, b) => a.seq - b.seq),
+            finished.ends,
+            working,
+            to,
+            pooled,
+          );
     const turns = withToolCounts(
       [...finished.turns, ...unfinished].sort(
         (a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt),
@@ -418,6 +437,7 @@ function parsed(payload: string): Record<string, unknown> | null {
 function foldTurns(
   rows: readonly PayloadRow[],
   laneRows: ReadonlyMap<string | null, readonly LaneRow[]>,
+  pooled: PoolMembers,
 ): { turns: RunWaterfallTurn[]; ends: Map<string, number[]> } {
   const out: RunWaterfallTurn[] = [];
   // Where each DRAWN turn ended, per (node, call) — what the unfinished fold
@@ -477,6 +497,7 @@ function foldTurns(
       estimatedCostUsd: asNumber(usage.estimatedCostUsd),
       modelCosts: readModelCosts(usage.modelCosts, asNumber(usage.costUsd)),
       model: asString(usage.contextModel),
+      member: poolMemberOf(pooled, row.nodeId, body),
       inputTokens: asNumber(usage.inputTokens),
       outputTokens: asNumber(usage.outputTokens),
       cacheReadTokens: asNumber(usage.cacheReadTokens),
@@ -516,6 +537,44 @@ function readModelCosts(
   return splitOf(entries, costUsd);
 }
 
+/** Each pooled node's members, read from the run's own copy of the workflow. */
+interface PoolMembers {
+  /** Whether the node has a pool. */
+  has(nodeId: string | null): boolean;
+  /** Member `n` (1-based) of the node's pool — its CLI and configured model. */
+  member(nodeId: string | null, n: number | null): TurnMember | null;
+}
+
+function poolMembers(snapshot: string | null): PoolMembers {
+  const profiles = snapshotNodePoolProfiles(snapshot);
+  return {
+    has: (nodeId) => nodeId !== null && profiles.has(nodeId),
+    member: (nodeId, n) => {
+      const profile =
+        nodeId === null || n === null
+          ? null
+          : (profiles.get(nodeId)?.[n - 1] ?? null);
+      return profile === null
+        ? null
+        : { agentKind: profile.agentKind, model: profile.model };
+    },
+  };
+}
+
+/**
+ * The pool member a usage row names, or — on a pooled node, for a row naming
+ * none — member 1 (whose rows are left unnamed); null on a node without a pool.
+ */
+function poolMemberOf(
+  pooled: PoolMembers,
+  nodeId: string | null,
+  body: Record<string, unknown> | null,
+): TurnMember | null {
+  return pooled.has(nodeId)
+    ? (turnMemberOf(body) ?? pooled.member(nodeId, 1))
+    : null;
+}
+
 /** One (node, call) conversation — the grain a turn opens and closes on. */
 function turnKey(nodeId: string | null, callId: string | null): string {
   return `${nodeId ?? ''}\u0000${callId ?? ''}`;
@@ -535,6 +594,7 @@ function bracketedTurn(
   outcome: RunWaterfallTurn['outcome'],
   /** The row that opened the stretch — where a reader is taken for it. */
   seq: number,
+  member: TurnMember | null,
 ): RunWaterfallTurn | null {
   const durationMs = Math.max(0, endMs - startMs);
   if (durationMs > MAX_SPAN_MS) {
@@ -557,6 +617,7 @@ function bracketedTurn(
     estimatedCostUsd: null,
     modelCosts: null,
     model: null,
+    member,
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,
@@ -581,11 +642,18 @@ function foldUnfinishedNodeTurns(
   ends: ReadonlyMap<string, readonly number[]>,
   working: boolean,
   to: number,
+  pooled: PoolMembers,
 ): RunWaterfallTurn[] {
   const open = new Map<
     string,
     { nodeId: string | null; startMs: number; seq: number }
   >();
+  // The pool member running each conversation's open attempt: the one its
+  // own usage rows (its `error`, its `turn_cancelled`) name, else the one the
+  // conversation was last handed to — the only record of who ran a turn that
+  // ended without a `turn_complete`.
+  const members = new Map<string, TurnMember | null>();
+  const handedTo = new Map<string, TurnMember | null>();
   const out: RunWaterfallTurn[] = [];
   const settle = (
     key: string,
@@ -605,13 +673,42 @@ function foldUnfinishedNodeTurns(
       endMs,
       outcome,
       started.seq,
+      members.get(key) ?? null,
     );
     if (turn !== null) {
       out.push(turn);
     }
   };
   for (const row of rows) {
+    if (row.kind === 'system') {
+      // A hand-off ends the member's attempt as failed — the pool hands on
+      // only on a failure — and the turn goes on under the member it names.
+      const body = parsed(row.payload);
+      const key = turnKey(row.nodeId, asString(body?.callId));
+      const to = pooled.member(row.nodeId, asNumber(body?.member));
+      handedTo.set(key, to);
+      const started = open.get(key);
+      if (started !== undefined) {
+        const atMs = row.createdAt.getTime();
+        members.set(
+          key,
+          members.get(key) ??
+            pooled.member(row.nodeId, asNumber(body?.fromMember)),
+        );
+        settle(key, started, atMs, 'failed');
+        open.set(key, { nodeId: started.nodeId, startMs: atMs, seq: row.seq });
+        members.set(key, to);
+      }
+      continue;
+    }
     if (row.kind !== 'status') {
+      if (carriesUsage(row.kind)) {
+        const body = parsed(row.payload);
+        const key = turnKey(row.nodeId, asString(body?.callId));
+        if (open.has(key)) {
+          members.set(key, poolMemberOf(pooled, row.nodeId, body));
+        }
+      }
       continue;
     }
     const body = parsed(row.payload);
@@ -624,6 +721,13 @@ function foldUnfinishedNodeTurns(
       // turn already under way must not shrink it to its tail.
       if (!open.has(key)) {
         open.set(key, { nodeId, startMs: atMs, seq: row.seq });
+        members.set(
+          key,
+          handedTo.get(key) ??
+            (nodeId !== null && asString(body?.callId) === null
+              ? pooled.member(nodeId, 1)
+              : null),
+        );
       }
       continue;
     }
@@ -668,7 +772,7 @@ function foldUnfinishedChatTurns(
     if (open === null) {
       return;
     }
-    const turn = bracketedTurn(null, open.atMs, endMs, outcome, open.seq);
+    const turn = bracketedTurn(null, open.atMs, endMs, outcome, open.seq, null);
     if (turn !== null) {
       out.push(turn);
     }

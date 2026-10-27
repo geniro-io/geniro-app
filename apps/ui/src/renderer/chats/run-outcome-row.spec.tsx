@@ -21,6 +21,7 @@ const OUTCOME: RunOutcomePayload = {
   reviewRounds: 2,
   acceptance: RunOutcomeAcceptance.Accepted,
   questionsAsked: 3,
+  summary: null,
   nodeId: 'manager',
 };
 
@@ -95,6 +96,40 @@ describe('RunOutcomeRow', () => {
     expect(row?.className).toContain('opacity-70');
     expect(row?.textContent).toContain('superseded');
     expect(row?.textContent).toContain('accepted');
+  });
+
+  it("shows the agent's summary under the verdict, and the figures when it gave none", () => {
+    render({ outcome: { ...OUTCOME, summary: 'Retry moved behind a flag.' } });
+    expect(
+      container.querySelector('[data-slot="run-outcome-preview"]')?.textContent,
+    ).toBe('Retry moved behind a flag.');
+
+    render({});
+    expect(
+      container.querySelector('[data-slot="run-outcome-preview"]')?.textContent,
+    ).toBe('draft · 2 review rounds · 3 questions');
+  });
+
+  it('opens into the summary and every figure, with when it was recorded', () => {
+    render({
+      outcome: { ...OUTCOME, summary: 'Retry moved behind a flag.' },
+      recordedAt: '2026-10-27T09:31:00',
+    });
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-expanded]')
+        ?.click(),
+    );
+    const detail =
+      container.querySelector('[data-slot="run-outcome-detail"]')
+        ?.textContent ?? '';
+    expect(detail).toContain('Retry moved behind a flag.');
+    expect(detail).toContain('Review rounds2');
+    expect(detail).toContain('Questions asked3');
+    expect(detail).toContain('Oct 27, 2026');
+    expect(
+      container.querySelector('[data-slot="run-outcome-preview"]'),
+    ).toBeNull();
   });
 
   it('draws a current row at full strength with no superseded tag', () => {

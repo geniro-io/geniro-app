@@ -18,8 +18,10 @@ const meta = {
       reviewRounds: 2,
       acceptance: 'accepted',
       questionsAsked: 3,
+      summary: null,
       nodeId: 'manager',
     },
+    recordedAt: '2026-10-27T14:31:00',
   },
   decorators: [
     (story) => <div className="w-[560px] bg-background p-4">{story()}</div>,
@@ -39,6 +41,41 @@ export const ChangesRequested: Story = {
       reviewRounds: 1,
       acceptance: 'changes_requested',
       questionsAsked: 1,
+      summary:
+        'The user wants the upload retry moved behind a feature flag before it ships.',
+    },
+  },
+};
+
+export const WithGitHubDetails: Story = {
+  args: {
+    outcome: {
+      ...meta.args.outcome,
+      summary:
+        'Adds resumable uploads; the user accepted it after one review round.',
+    },
+    pullRequest: {
+      ref: {
+        owner: 'acme',
+        repo: 'platform',
+        number: 7381,
+        url: 'https://github.com/acme/platform/pull/7381',
+      },
+      pullRequest: {
+        number: 7381,
+        title: 'feat(upload): resumable uploads with retry',
+        state: 'open',
+        isDraft: true,
+        headRefName: 'resumable-uploads',
+        isCrossRepository: false,
+        headRepositoryOwner: 'acme',
+        author: 'octo',
+        url: 'https://github.com/acme/platform/pull/7381',
+        updatedAt: '2026-10-27T14:00:00Z',
+        added: 412,
+        removed: 38,
+        changedFiles: 9,
+      },
     },
   },
 };

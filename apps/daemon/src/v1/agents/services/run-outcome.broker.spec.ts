@@ -129,6 +129,7 @@ const INPUT: RunOutcomeInput = {
   draft: true,
   reviewRounds: 0,
   acceptance: 'not_yet',
+  summary: null,
 };
 
 describe('RunOutcomeBroker', () => {
@@ -168,6 +169,22 @@ describe('RunOutcomeBroker', () => {
         },
       },
     ]);
+  });
+
+  it('keeps the summary the node gave on the row', async () => {
+    const harness = setUp();
+    harness.broker.register('run-1', 'manager', sinkFor(harness));
+
+    await harness.broker.record('run-1', 'manager', 'manager', {
+      ...INPUT,
+      acceptance: 'changes_requested',
+      summary: 'The user wants the retry moved behind a flag.',
+    });
+
+    expect(harness.rows[0]?.payload).toMatchObject({
+      acceptance: 'changes_requested',
+      summary: 'The user wants the retry moved behind a flag.',
+    });
   });
 
   it('files the row under the call the recording conversation answers', async () => {

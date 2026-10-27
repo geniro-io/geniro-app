@@ -19,6 +19,8 @@ export interface RunOutcomePayload {
   reviewRounds: number;
   acceptance: RunOutcomeAcceptance;
   questionsAsked: number;
+  /** What the recording agent said about it, or null when it said nothing. */
+  summary: string | null;
   nodeId: string;
 }
 
@@ -68,6 +70,10 @@ export function readRunOutcomePayload(
     reviewRounds: bag.reviewRounds,
     acceptance: bag.acceptance,
     questionsAsked: bag.questionsAsked,
+    summary:
+      typeof bag.summary === 'string' && bag.summary.trim() !== ''
+        ? bag.summary
+        : null,
     nodeId: bag.nodeId,
   };
 }

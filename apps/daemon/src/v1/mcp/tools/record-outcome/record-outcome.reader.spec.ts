@@ -28,6 +28,16 @@ describe('readRecordOutcome', () => {
       draft: true,
       reviewRounds: 2,
       acceptance: 'changes_requested',
+      summary: null,
+    });
+  });
+
+  it('reads the summary trimmed, and a blank one as none', () => {
+    expect(
+      readRecordOutcome({ ...ARGS, summary: '  Retry moved behind a flag. ' }),
+    ).toMatchObject({ summary: 'Retry moved behind a flag.' });
+    expect(readRecordOutcome({ ...ARGS, summary: '   ' })).toMatchObject({
+      summary: null,
     });
   });
 
@@ -62,6 +72,9 @@ describe('readRecordOutcome', () => {
       error({ ...ARGS, pr_url: `${ARGS.pr_url}/${'x'.repeat(2048)}` }),
     ).toContain('pr_url is over 2048 characters');
     expect(error({ ...ARGS, acceptance: 'merged' })).toContain('acceptance');
+    expect(error({ ...ARGS, summary: 'x'.repeat(1001) })).toContain(
+      'summary is over 1000 characters',
+    );
     expect(error({ ...ARGS, questions_asked: 3 })).toContain('questions_asked');
   });
 });

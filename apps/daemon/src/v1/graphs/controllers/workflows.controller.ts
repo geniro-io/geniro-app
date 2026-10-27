@@ -23,15 +23,18 @@ import type {
   ActionPressWire,
   ItemWire,
   RunWire,
+  ThreadAnalysisWire,
 } from '../../agents/chat.types';
 import {
   ActionPressDto,
+  AnalyzeWorkflowDto,
   CancelledDto,
   ItemDto,
   ListChatsQueryDto,
   PressActionDto,
   RunDto,
   SendMessageDto,
+  ThreadAnalysisDto,
 } from '../../agents/dto/chat.dto';
 import { runListPageOf } from '../../agents/utils/run-list-page';
 import {
@@ -68,6 +71,7 @@ import { InstructionSizesService } from '../services/instruction-sizes.service';
 import { RunWorkflowService } from '../services/run-workflow.service';
 import { StageWakeService } from '../services/stage-wake.service';
 import { WorkflowActionsService } from '../services/workflow-actions.service';
+import { WorkflowAnalysisService } from '../services/workflow-analysis.service';
 import { WorkflowChatService } from '../services/workflow-chat.service';
 import { WorkflowStoreService } from '../services/workflow-store.service';
 
@@ -91,6 +95,7 @@ export class WorkflowsController {
     private readonly workflowChats: WorkflowChatService,
     private readonly actions: WorkflowActionsService,
     private readonly instructionSizes: InstructionSizesService,
+    private readonly workflowAnalyses: WorkflowAnalysisService,
     private readonly stageWakes: StageWakeService,
   ) {}
 
@@ -357,6 +362,34 @@ export class WorkflowsController {
   @ZodResponse({ status: 200, type: WorkflowChatsDiscardedDto })
   discardChat(@Param('slug') slug: string): Promise<{ deleted: number }> {
     return this.workflowChats.discard(slug);
+  }
+
+  /**
+   * This workflow's analysis — the chat its "Analyze & improve" popup opens —
+   * or `analysis: null` while it has none. 404 for a workflow the library
+   * does not hold.
+   */
+  @Get(':slug/analysis')
+  @ApiOperation({ operationId: 'getWorkflowAnalysis' })
+  @ZodResponse({ status: 200, type: ThreadAnalysisDto })
+  async getAnalysis(@Param('slug') slug: string): Promise<ThreadAnalysisWire> {
+    return { analysis: await this.workflowAnalyses.find(slug) };
+  }
+
+  /**
+   * Start this workflow's analysis ("Analyze & improve") over its `runs`
+   * newest runs, replacing the one it had. 409 `ANALYSIS_NO_RUNS` for a
+   * workflow never run, `ANALYSIS_FOLDER_GONE` until a folder that exists is
+   * sent as `cwd`.
+   */
+  @Post(':slug/analyses')
+  @ApiOperation({ operationId: 'analyzeWorkflow' })
+  @ZodResponse({ status: 201, type: RunDto })
+  analyze(
+    @Param('slug') slug: string,
+    @Body() dto: AnalyzeWorkflowDto,
+  ): Promise<RunWire> {
+    return this.workflowAnalyses.start(slug, dto);
   }
 
   @Post(':slug/export')

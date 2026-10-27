@@ -63,6 +63,7 @@ describe('ThreadAnalysisService.start', () => {
             archivedAt: null,
             status: 'completed',
             analysisSourceRunId: null,
+            analysisWorkflowSlug: null,
             ...source,
           } as Run);
     const runDao = {
@@ -307,6 +308,7 @@ describe('ThreadAnalysisService.start', () => {
       archivedAt: null,
       status,
       analysisSourceRunId: null,
+      analysisWorkflowSlug: null,
     });
     runDao.getById
       .mockResolvedValueOnce(at('completed') as never)
@@ -365,6 +367,11 @@ describe('ThreadAnalysisService.start', () => {
         agentKind: 'claude',
       }),
     ).rejects.toMatchObject({ errorCode: 'ANALYSIS_OF_ANALYSIS' });
+    await expect(
+      build({ analysisWorkflowSlug: 'team' }).service.start('source', {
+        agentKind: 'claude',
+      }),
+    ).rejects.toMatchObject({ errorCode: 'ANALYSIS_OF_ANALYSIS' });
   });
 
   it('refuses a source with no rows, and one that does not exist', async () => {
@@ -374,5 +381,212 @@ describe('ThreadAnalysisService.start', () => {
     await expect(
       build(null).service.start('source', { agentKind: 'claude' }),
     ).rejects.toMatchObject({ errorCode: 'RUN_NOT_FOUND' });
+  });
+});
+
+describe('ThreadAnalysisService.startWorkflow', () => {
+  let folder: string;
+
+  beforeEach(() => {
+    folder = realpathSync(mkdtempSync(join(tmpdir(), 'wf-analysis-')));
+  });
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  function build(
+    runs: Partial<Run>[],
+    seqs: Record<string, number>,
+    earlier: string[] = [],
+  ) {
+    const listed: string[] = [];
+    const createChat = vi.fn(
+      (input: Parameters<ChatService['createChat']>[0]) => {
+        listed.unshift('analysis');
+        return Promise.resolve({
+          id: 'analysis',
+          title: input.title,
+          status: 'pending',
+        } as RunWire);
+      },
+    );
+    const sendMessage = vi.fn((): Promise<unknown> => Promise.resolve({}));
+    const remove = vi.fn(() => Promise.resolve({ deleted: true }));
+    const findWorkflowAnalysis = vi.fn(() =>
+      Promise.resolve({ id: 'analysis', status: 'running' } as RunWire),
+    );
+    const rows = runs.map(
+      (run) =>
+        ({
+          status: 'completed',
+          cwd: folder,
+          createdAt: new Date(0),
+          ...run,
+        }) as Run,
+    );
+    const runDao = {
+      getById: vi.fn((id: string) =>
+        Promise.resolve(rows.find((run) => run.id === id) ?? null),
+      ),
+      newestWorkflowRuns: vi.fn((_slug: string, limit: number) =>
+        Promise.resolve(rows.slice(0, limit)),
+      ),
+      listWorkflowAnalyses: vi.fn(() =>
+        Promise.resolve([...listed, ...earlier].map((id) => ({ id }) as Run)),
+      ),
+    };
+    const itemDao = {
+      maxSeq: vi.fn((runId: string) => Promise.resolve(seqs[runId] ?? -1)),
+    };
+    const service = new ThreadAnalysisService(
+      { fork: () => ({}) } as unknown as EntityManager,
+      runDao as unknown as RunDao,
+      itemDao as unknown as ItemDao,
+      {
+        createChat,
+        sendMessage,
+        delete: remove,
+        findWorkflowAnalysis,
+      } as unknown as ChatService,
+      {
+        allDeleted: () => new Subject<string>().asObservable(),
+      } as unknown as AgentEventBus,
+    );
+    return { service, createChat, sendMessage, remove, runDao };
+  }
+
+  const TARGET = { slug: 'team', name: 'Dev Team' };
+
+  it('reads the newest runs up to the count, each at its own snapshot, skipping an empty one', async () => {
+    const { service, createChat, sendMessage, runDao } = build(
+      [
+        { id: 'r3', status: 'running' },
+        { id: 'r2' },
+        { id: 'r1' },
+        { id: 'r0' },
+      ],
+      { r3: 12, r2: -1, r1: 40, r0: 7 },
+    );
+
+    await service.startWorkflow(TARGET, {
+      agentKind: 'claude',
+      runs: 3,
+      focus: 'cheaper',
+    });
+
+    expect(runDao.newestWorkflowRuns).toHaveBeenCalledWith(
+      'team',
+      3,
+      expect.anything(),
+    );
+    const input = createChat.mock.calls[0]![0];
+    expect(input.analysisWorkflow).toEqual({
+      slug: 'team',
+      runs: [
+        { runId: 'r3', snapshotSeq: 12, working: true },
+        { runId: 'r1', snapshotSeq: 40, working: false },
+      ],
+    });
+    expect(input.analysisSource).toBeUndefined();
+    expect(input.title).toBe('Analysis: Dev Team');
+    expect(input.cwd).toBe(folder);
+    expect(input.approval).toBe('auto');
+    expect(input.taskInstructions).toContain('# Workflow analysis');
+    expect(input.taskInstructions).toContain('cheaper');
+    expect(sendMessage).toHaveBeenCalledWith(
+      'analysis',
+      expect.stringContaining('across its 2 latest runs'),
+    );
+  });
+
+  it('replaces the workflow’s earlier analysis only once the new one has its brief', async () => {
+    const { service, sendMessage, remove } = build([{ id: 'r1' }], { r1: 3 }, [
+      'old',
+    ]);
+
+    const started = await service.startWorkflow(TARGET, {
+      agentKind: 'claude',
+      runs: 5,
+    });
+
+    expect(remove).toHaveBeenCalledWith('old');
+    expect(remove).not.toHaveBeenCalledWith('analysis');
+    expect(remove.mock.invocationCallOrder[0]).toBeGreaterThan(
+      sendMessage.mock.invocationCallOrder[0]!,
+    );
+    expect(started.status).toBe('running');
+  });
+
+  it('refuses a workflow with nothing to read, and keeps the old analysis', async () => {
+    const { service, createChat, remove } = build([{ id: 'r1' }], { r1: -1 }, [
+      'old',
+    ]);
+
+    await expect(
+      service.startWorkflow(TARGET, { agentKind: 'claude', runs: 5 }),
+    ).rejects.toMatchObject({ errorCode: 'ANALYSIS_NO_RUNS' });
+    expect(createChat).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("runs in the newest run with rows' own folder, or the folder sent, and asks for one when that run's is gone", async () => {
+    const own = realpathSync(mkdtempSync(join(tmpdir(), 'wf-newest-')));
+    const picked = realpathSync(mkdtempSync(join(tmpdir(), 'wf-picked-')));
+    try {
+      // The newest run wrote nothing, so the run read first is the next one.
+      const runs = [
+        { id: 'empty', cwd: folder },
+        { id: 'r1', cwd: own },
+      ];
+      const first = build(runs, { empty: -1, r1: 2 });
+      await first.service.startWorkflow(TARGET, {
+        agentKind: 'claude',
+        runs: 2,
+      });
+      expect(first.createChat.mock.calls[0]![0].cwd).toBe(own);
+
+      const sent = build(runs, { empty: -1, r1: 2 });
+      await sent.service.startWorkflow(TARGET, {
+        agentKind: 'claude',
+        runs: 2,
+        cwd: picked,
+      });
+      expect(sent.createChat.mock.calls[0]![0].cwd).toBe(picked);
+
+      const gone = build([{ id: 'r1', cwd: join(own, 'gone') }], { r1: 2 });
+      await expect(
+        gone.service.startWorkflow(TARGET, { agentKind: 'claude', runs: 1 }),
+      ).rejects.toMatchObject({ errorCode: 'ANALYSIS_FOLDER_GONE' });
+      expect(gone.createChat).not.toHaveBeenCalled();
+    } finally {
+      rmSync(own, { recursive: true, force: true });
+      rmSync(picked, { recursive: true, force: true });
+    }
+  });
+
+  it('deletes exactly the analyses its workflow has', async () => {
+    const { service, remove, runDao } = build([], {}, ['a1', 'a2']);
+
+    await service.deleteWorkflowAnalyses('team');
+
+    expect(runDao.listWorkflowAnalyses).toHaveBeenCalledWith(
+      'team',
+      expect.anything(),
+    );
+    expect(remove.mock.calls).toEqual([['a1'], ['a2']]);
+  });
+
+  it('removes the new chat when its brief cannot be sent', async () => {
+    const { service, sendMessage, remove } = build([{ id: 'r1' }], { r1: 2 }, [
+      'old',
+    ]);
+    sendMessage.mockRejectedValueOnce(new Error('RUN_BUSY'));
+
+    await expect(
+      service.startWorkflow(TARGET, { agentKind: 'claude', runs: 1 }),
+    ).rejects.toThrow('RUN_BUSY');
+    expect(remove).toHaveBeenCalledWith('analysis');
+    expect(remove).not.toHaveBeenCalledWith('old');
   });
 });

@@ -6,7 +6,6 @@ import {
 
 import {
   MONITOR_RUN_MAX,
-  type MonitorBatch,
   type MonitorEnd,
   type MonitorEvent,
   type MonitorOwner,

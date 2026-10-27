@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunWire } from '../../agents/chat.types';
 import type { ChatService } from '../../agents/services/chat.service';
+import type { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
 import type { StartWorkflowChatInput, Workflow } from '../graphs.types';
 import { workflowJsonSchema } from '../utils/workflow-json-schema';
 import { WorkflowChatService } from './workflow-chat.service';
@@ -38,6 +39,7 @@ describe('WorkflowChatService', () => {
     deleteWorkflowChats: ReturnType<typeof vi.fn>;
     offeredApproval: ReturnType<typeof vi.fn>;
   };
+  let analyses: { deleteWorkflowAnalyses: ReturnType<typeof vi.fn> };
   let service: WorkflowChatService;
 
   beforeEach(async () => {
@@ -52,7 +54,12 @@ describe('WorkflowChatService', () => {
         (_kind: string, approval: string | undefined) => approval,
       ),
     };
-    service = new WorkflowChatService(store, chats as unknown as ChatService);
+    analyses = { deleteWorkflowAnalyses: vi.fn().mockResolvedValue(undefined) };
+    service = new WorkflowChatService(
+      store,
+      chats as unknown as ChatService,
+      analyses as unknown as ThreadAnalysisService,
+    );
   });
 
   afterEach(async () => {
@@ -209,13 +216,14 @@ describe('WorkflowChatService', () => {
     expect(chats.deleteWorkflowChats).toHaveBeenCalledWith('already-deleted');
   });
 
-  it('deletes a workflow and the chat about it', async () => {
+  it('deletes a workflow, the chat about it and its analyses', async () => {
     const { slug } = await store.create(WF);
 
     await service.deleteWorkflow(slug);
 
     await expect(store.get(slug)).rejects.toThrow(NotFoundException);
     expect(chats.deleteWorkflowChats).toHaveBeenCalledWith(slug);
+    expect(analyses.deleteWorkflowAnalyses).toHaveBeenCalledWith(slug);
   });
 
   // The file goes first, so a slug the library never held cannot take a
@@ -225,5 +233,6 @@ describe('WorkflowChatService', () => {
       NotFoundException,
     );
     expect(chats.deleteWorkflowChats).not.toHaveBeenCalled();
+    expect(analyses.deleteWorkflowAnalyses).not.toHaveBeenCalled();
   });
 });

@@ -125,7 +125,15 @@ function readItem(value: unknown): RecommendationView | null {
         const quote = text(ev?.quote);
         return seq === null || quote === null
           ? []
-          : [{ seq, quote, ts: text(ev?.ts), nodeId: text(ev?.nodeId) }];
+          : [
+              {
+                runId: text(ev?.runId),
+                seq,
+                quote,
+                ts: text(ev?.ts),
+                nodeId: text(ev?.nodeId),
+              },
+            ];
       })
     : [];
   return {

@@ -18,6 +18,7 @@ import {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { analysedSourceOf } from '../utils/analysed-runs';
 import { readCard } from '../utils/recommendations-card';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
 import { ThreadTimelineService } from './thread-timeline.service';
@@ -34,7 +35,8 @@ function refused(reason: string): AnalysisFiled {
 
 /**
  * The checks between an analysis agent and its card: a recommendation must
- * cite rows that exist in the source at or below the snapshot, a plain chat
+ * cite rows that exist in the run it names (the source, or one of a workflow
+ * analysis's runs) at or below that run's snapshot, a plain chat
  * gets no workflow items, ids are unique and say their target — and the
  * timing strip on the card is measured here, never taken from the agent.
  */
@@ -61,37 +63,57 @@ export class AnalysisReportsService {
     write: AnalysisRowWriter,
   ): Promise<AnalysisFiled> {
     const em = this.em.fork();
-    const source = await this.runDao.getById(turn.sourceRunId, em);
-    if (source === null) {
-      return refused('SOURCE_GONE — the analysed thread has been deleted');
+    let sourceKind: AnalysedThreadKind = 'workflow';
+    if (!turn.workflow) {
+      const source = await this.runDao.getById(turn.sourceRunId, em);
+      if (source === null) {
+        return refused('SOURCE_GONE — the analysed thread has been deleted');
+      }
+      sourceKind = analysedThreadKindOf(source);
     }
-    const sourceKind = analysedThreadKindOf(source);
     const problem = checkItems(report, sourceKind);
     if (problem !== null) {
       return refused(problem);
     }
-    const cited = [
-      ...new Set(
-        report.items.flatMap((item) => item.evidence.map((ev) => ev.seq)),
-      ),
-    ];
-    const existing = await this.itemDao.existingSeqs(
-      turn.sourceRunId,
-      cited,
-      turn.snapshotSeq,
-      em,
-    );
-    const missing = cited.filter((seq) => !existing.has(seq));
-    if (missing.length > 0) {
-      return refused(
-        `evidence seq ${missing.join(', ')} ${missing.length === 1 ? 'does' : 'do'} not exist in the analysed thread (snapshot ends at ${turn.snapshotSeq}) — re-read and cite real rows`,
+    // Each cited row is checked against the run it names, at that run's own
+    // snapshot — a workflow analysis cites several.
+    const cited = new Map<string, { snapshotSeq: number; seqs: Set<number> }>();
+    for (const evidence of report.items.flatMap((item) => item.evidence)) {
+      const source = analysedSourceOf(turn, evidence.runId);
+      if ('error' in source) {
+        return refused(
+          `evidence runId ${evidence.runId} is not one of the runs this analysis reads — view=runs lists them`,
+        );
+      }
+      const entry = cited.get(source.sourceRunId) ?? {
+        snapshotSeq: source.snapshotSeq,
+        seqs: new Set<number>(),
+      };
+      entry.seqs.add(evidence.seq);
+      cited.set(source.sourceRunId, entry);
+    }
+    for (const [runId, { snapshotSeq, seqs }] of cited) {
+      const wanted = [...seqs];
+      const existing = await this.itemDao.existingSeqs(
+        runId,
+        wanted,
+        snapshotSeq,
+        em,
       );
+      const missing = wanted.filter((seq) => !existing.has(seq));
+      if (missing.length > 0) {
+        return refused(
+          `evidence seq ${missing.join(', ')} ${missing.length === 1 ? 'does' : 'do'} not exist in the analysed ${turn.workflow ? `run ${runId}` : 'thread'} (snapshot ends at ${snapshotSeq}) — re-read and cite real rows`,
+        );
+      }
     }
     const payload: RecommendationsPayload = {
       ...report,
       sourceRunId: turn.sourceRunId,
       sourceKind,
-      timing: await this.timing(turn),
+      // One run's timing would pass for the workflow's; the comparison is the
+      // analysis's own to state.
+      timing: turn.workflow ? null : await this.timing(turn),
     };
     const row = await write('recommendations', payload);
     return { status: 'recorded', seq: row.seq, count: report.items.length };

@@ -9,6 +9,7 @@ import {
   type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
+import type { AgentOptionsSnapshot } from './utils/agent-options';
 import { hasHiddenText } from './utils/hidden-text';
 import { RUN_PROCESS_CAP } from './utils/run-process-scan';
 
@@ -383,8 +384,9 @@ export type HostFindingsOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
- * The analysis tools ("Analyze thread"): installed for a turn only on a chat
- * whose `Run.analysisSourceRunId` is set, and scoped to that one source run.
+ * The analysis tools ("Analyze thread", a workflow's "Analyze & improve"):
+ * installed for a turn only on an analysis chat, and scoped to the source run
+ * it was started on, or a workflow analysis's runs.
  * `save_workflow_change` is also a workflow builder chat's one write to its
  * own workflow.
  */
@@ -459,6 +461,7 @@ export const ANALYSIS_VIEWS = [
   'items',
   'item',
   'workflow',
+  'runs',
 ] as const;
 export const ANALYSIS_SPAN_KINDS = [
   'turn',
@@ -475,7 +478,14 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
   view: z
     .enum(ANALYSIS_VIEWS)
     .describe(
-      'overview: timing summary, per-node time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. workflow: the workflow as it is in the library now, its hash and how it differs from the copy this run started with (workflow threads only)',
+      "overview: timing summary, per-node time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. workflow: the workflow as it is in the library now, its hash and how it differs from the copy this run started with (workflow threads only). runs: every run a workflow analysis reads, with its totals and outcome, every node's totals and every node's turns per model across them, in chunks when long (workflow analyses only)",
+    ),
+  runId: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      'A workflow analysis: which of its runs to read (view=runs lists them); omitted, the newest',
     ),
   cursor: z
     .number()
@@ -502,7 +512,9 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .int()
     .min(0)
     .optional()
-    .describe('item: the `next.offset` the previous chunk returned'),
+    .describe(
+      'item, runs, workflow: the `next.offset` the previous chunk returned',
+    ),
   nodeId: z
     .string()
     .max(200)
@@ -566,6 +578,13 @@ export const RecommendationTargetSchema = z.enum(RECOMMENDATION_TARGETS);
 export const RecommendationRiskLevelSchema = z.enum(['low', 'medium', 'high']);
 
 export const RecommendationEvidenceSchema = z.object({
+  runId: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      'A workflow analysis: the run the quoted row is from (view=runs lists them); omitted, the newest',
+    ),
   seq: z
     .number()
     .int()
@@ -851,13 +870,157 @@ export interface ThreadTimeline {
 /** What kind of thread an analysis reads — it decides what may be recommended. */
 export type AnalysedThreadKind = 'workflow' | 'chat';
 
-/** Which source an analysis turn reads, and where its snapshot ends. */
+/** One run a workflow analysis reads, and where its snapshot ends. */
+export interface AnalysedRun {
+  runId: string;
+  snapshotSeq: number;
+  /** The run was working at the snapshot — see `Run.analysisSourceWorking`. */
+  working: boolean;
+}
+
+/** What a workflow analysis reads: the workflow, and its runs newest first. */
+export interface AnalysedWorkflow {
+  slug: string;
+  runs: AnalysedRun[];
+}
+
+/**
+ * Which source an analysis turn reads, and where its snapshot ends.
+ *
+ * A workflow analysis reads several runs: `sourceRunId` and its snapshot are
+ * then the newest of `workflow.runs`, the run a read naming none is about.
+ */
 export interface AnalysisTurn {
   analysisRunId: string;
   sourceRunId: string;
   snapshotSeq: number;
   /** `Run.analysisSourceWorking`: the source was working at the snapshot. */
   sourceWorking: boolean;
+  /** Set only for a workflow analysis ("Analyze & improve"). */
+  workflow?: AnalysedWorkflow | null;
+}
+
+/** What the reader needs of an analysis turn: its source and snapshot. */
+export type AnalysisSource = Pick<
+  AnalysisTurn,
+  'sourceRunId' | 'snapshotSeq' | 'sourceWorking'
+>;
+
+/** What one read is scoped to: the source, and for a workflow analysis its runs. */
+export type AnalysisReadScope = AnalysisSource & Pick<AnalysisTurn, 'workflow'>;
+
+/** What "Analyze thread" starts with — `AnalyzeThreadDto`'s body. */
+export interface StartThreadAnalysis {
+  agentKind: AgentKind;
+  /** Omitted = {@link ANALYSIS_DEFAULT_APPROVAL}. */
+  approval?: ChatApprovalMode;
+  model?: string;
+  effort?: string;
+  configDir?: string;
+  cwd?: string;
+  focus?: string;
+  customInstructions?: string;
+  replyLanguage?: string;
+  agentOptions?: AgentOptionsSnapshot;
+}
+
+/** What "Analyze & improve" on a workflow starts with — `AnalyzeWorkflowDto`'s body. */
+export interface StartWorkflowAnalysis extends StartThreadAnalysis {
+  /** How many of the workflow's newest runs to read. */
+  runs: number;
+}
+
+/** One analysed run as `view=runs` folds it, read at its own snapshot. */
+export interface FoldedRun {
+  runId: string;
+  turns: readonly Pick<
+    RunWaterfallTurn,
+    | 'nodeId'
+    | 'startedAt'
+    | 'model'
+    | 'member'
+    | 'outcome'
+    | 'durationMs'
+    | 'toolCalls'
+    | 'inputTokens'
+    | 'outputTokens'
+    | 'costUsd'
+  >[];
+  lanes: readonly Pick<
+    RunWaterfallLane,
+    'nodeId' | 'agentKind' | 'turns' | 'workedMs' | 'toolCalls' | 'costUsd'
+  >[];
+  /** The run's whole bill, a polled-spend CLI's included. */
+  costUsd: number | null;
+  /** The model each node recorded — what a turn that reported none ran on. */
+  nodeModels: ReadonlyMap<string | null, string | null>;
+  /** Nodes with a pool: their turns are compared per member (`RunWaterfallTurn.member`). */
+  pooledNodes: ReadonlySet<string | null>;
+  timeline: Pick<
+    ThreadTimeline,
+    'wallMs' | 'activeMs' | 'waitingOnUserMs' | 'tools'
+  >;
+}
+
+/** A run's own totals at its snapshot. */
+export interface RunFigures {
+  wallMs: number;
+  activeMs: number;
+  waitingOnUserMs: number;
+  turns: number;
+  failedTurns: number;
+  cancelledTurns: number;
+  failedToolCalls: number;
+  costUsd: number | null;
+}
+
+/** One node's work summed over every analysed run, from its lanes. */
+export interface NodeFigures {
+  node: string;
+  /** The node's own agent — a pool's first member. */
+  agent: AgentKind | null;
+  runs: number;
+  turns: number;
+  failedTurns: number;
+  cancelledTurns: number;
+  workedMs: number | null;
+  toolCalls: number;
+  costUsd: number | null;
+  costPerRunUsd: number | null;
+}
+
+/** One node's turns on one model, summed over every analysed run. */
+export interface ModelFigures {
+  node: string;
+  /** The CLI that ran them — on a pooled node, the member's own. */
+  agent: AgentKind | null;
+  model: string | null;
+  /**
+   * Where `model` comes from: what the CLI reported (a turn that reported
+   * none counts on the model its node reported last in that run), or — for a
+   * turn that ended before its node had reported any — what the node was
+   * configured with: an alias as the workflow spells it, or null for the
+   * CLI's own default — on a pooled node, the model the member that ran it
+   * was configured with. `unreported`: a pooled node's turn that reported no
+   * model and wrote no row naming its member, so none is guessed.
+   */
+  modelSource: 'reported' | 'configured' | 'unreported';
+  /** How many of the analysed runs this node took a turn in on this model. */
+  runs: number;
+  turns: number;
+  failedTurns: number;
+  cancelledTurns: number;
+  /** Turns still in progress at their run's snapshot. */
+  runningTurns: number;
+  durationMs: number;
+  avgTurnMs: number;
+  toolCalls: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  /** Of `turns`, how many reported a cost — what `costPerTurnUsd` divides by. */
+  pricedTurns: number;
+  costPerTurnUsd: number | null;
 }
 
 /** What filing a report or a set of outcomes resolved to. */
@@ -2559,6 +2722,15 @@ export const RunWaterfallTurnSchema = z
         "costUsd split by the model that spent it, costliest first — the sub-agents' models included, while the token figures may be the main thread's alone. Null when the CLI stated no split that adds up to the cost",
       ),
     model: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
+    member: z
+      .object({
+        agentKind: AgentKindSchema,
+        model: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
+      })
+      .nullable()
+      .describe(
+        "on a node with an agent pool: the member that ran the turn — its CLI and the model it was configured with (null: that CLI's default), as the turn's own usage row names it; null on a node without a pool, and for a pooled turn that wrote no usage row",
+      ),
     inputTokens: z.number().nullable(),
     outputTokens: z.number().nullable(),
     cacheReadTokens: z.number().nullable(),
@@ -5925,6 +6097,12 @@ export const RunWireSchema = z.object({
     .describe(
       "The source run's highest seq when the analysis started — the snapshot its reads stop at; null when not an analysis",
     ),
+  analysisWorkflowSlug: z
+    .string()
+    .nullable()
+    .describe(
+      'The library workflow this chat analyses across its recent runs ("Analyze & improve"); null for every chat that is not a workflow analysis',
+    ),
   /**
    * Where this run sits in the pinned band at the top of its own group (or of
    * the loose list, when it belongs to none); null while it is not pinned.
@@ -6574,6 +6752,7 @@ export interface ChatTextDatabase {
     archived_at: StoredDate | null;
     edits_workflow_slug: Run['editsWorkflowSlug'];
     analysis_source_run_id: Run['analysisSourceRunId'];
+    analysis_workflow_slug: Run['analysisWorkflowSlug'];
     deleted_at: StoredDate | null;
   };
   chat_text: {

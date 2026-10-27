@@ -240,6 +240,7 @@ export function runToWire(
     taskIdentifier: run.taskIdentifier,
     analysisSourceRunId: run.analysisSourceRunId,
     analysisSourceSeq: run.analysisSourceSeq,
+    analysisWorkflowSlug: run.analysisWorkflowSlug,
     pinnedPosition: run.pinnedPosition,
     color: readRunColor(run.color),
     createdAt: run.createdAt.toISOString(),

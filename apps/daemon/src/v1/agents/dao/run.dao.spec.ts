@@ -286,6 +286,77 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('workflow analyses', () => {
+    it('leaves a workflow’s analysis out of EVERY scope, and finds it by its slug', async () => {
+      const older = await dao.create({
+        createdAt: new Date(2_000),
+        analysisWorkflowSlug: 'review-team',
+      });
+      const newer = await dao.create({
+        createdAt: new Date(3_000),
+        analysisWorkflowSlug: 'review-team',
+        archivedAt: new Date(9_000),
+      });
+      await dao.create({
+        createdAt: new Date(4_000),
+        analysisWorkflowSlug: 'other-team',
+      });
+      const chat = await dao.create({ createdAt: new Date(1_000) });
+
+      for (const scope of ['active', 'archived', 'all'] as const) {
+        expect(
+          (await dao.listChats(scope))
+            .map((run) => run.id)
+            .filter((id) => id !== chat.id),
+        ).toEqual([]);
+      }
+      expect(
+        (await dao.listWorkflowAnalyses('review-team')).map((run) => run.id),
+      ).toEqual([newer.id, older.id]);
+      expect((await dao.workflowAnalysisSlugs()).sort()).toEqual([
+        'other-team',
+        'review-team',
+      ]);
+    });
+
+    it('reads a workflow’s newest unarchived runs, newest first, up to the limit', async () => {
+      await dao.create({
+        id: 'w1',
+        workflowId: 'team',
+        createdAt: new Date(1_000),
+      });
+      await dao.create({
+        id: 'w2',
+        workflowId: 'team',
+        createdAt: new Date(2_000),
+      });
+      await dao.create({
+        id: 'w3',
+        workflowId: 'team',
+        createdAt: new Date(3_000),
+        archivedAt: new Date(5_000),
+      });
+      await dao.create({
+        id: 'w4',
+        workflowId: 'team',
+        createdAt: new Date(4_000),
+      });
+      await dao.create({
+        id: 'x1',
+        workflowId: 'other',
+        createdAt: new Date(6_000),
+      });
+      await dao.create({ id: 'c1', createdAt: new Date(7_000) });
+
+      expect(
+        (await dao.newestWorkflowRuns('team', 2)).map((run) => run.id),
+      ).toEqual(['w4', 'w2']);
+      expect(
+        (await dao.newestWorkflowRuns('team', 10)).map((run) => run.id),
+      ).toEqual(['w4', 'w2', 'w1']);
+    });
+  });
+
   describe('listOrphanedAnalyses', () => {
     it('answers only the analyses whose source thread is gone', async () => {
       const source = await dao.create({});

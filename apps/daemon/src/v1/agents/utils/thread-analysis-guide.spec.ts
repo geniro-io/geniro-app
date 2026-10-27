@@ -7,6 +7,8 @@ import {
 import {
   threadAnalysisBrief,
   threadAnalysisGuide,
+  workflowAnalysisBrief,
+  workflowAnalysisGuide,
 } from './thread-analysis-guide';
 
 describe('threadAnalysisGuide', () => {
@@ -75,6 +77,46 @@ describe('threadAnalysisBrief', () => {
       threadAnalysisBrief({ title: 'Dev Team run', kind: 'workflow' }),
     ).toBe(
       'Analyse "Dev Team run" (a workflow thread): find where its time went and what in its environment would make the next run faster or less error-prone. Start with read_analyzed_thread view=overview.',
+    );
+  });
+});
+
+describe('workflowAnalysisGuide', () => {
+  it('starts from the cross-run comparison and asks for models and the graph', () => {
+    const guide = workflowAnalysisGuide(null);
+
+    expect(guide).toContain('# Workflow analysis');
+    expect(guide).toContain('Read view=runs first');
+    expect(guide).toContain('3. Model effectiveness.');
+    expect(guide).toContain('recommend nothing from a single sample');
+    expect(guide).toContain('4. Graph structure.');
+    expect(guide).toContain('its `runId` and seq');
+  });
+
+  it('offers workflow, repo and user changes and the workflow save', () => {
+    const guide = workflowAnalysisGuide(null);
+
+    expect(guide).toContain('W-1, W-2');
+    expect(guide).toContain('U-1, U-2');
+    expect(guide).toContain(HOST_WORKFLOW_CHANGE_TOOL);
+    expect(guide).toContain('## Two territories: process and domain');
+    expect(guide).toContain('## Where a fix belongs');
+  });
+
+  it("adds the user's focus as its own section", () => {
+    expect(workflowAnalysisGuide(' cheaper reviews ')).toContain(
+      "## The user's focus for this analysis\n\ncheaper reviews",
+    );
+  });
+});
+
+describe('workflowAnalysisBrief', () => {
+  it('names the workflow, how many runs, and where to start', () => {
+    expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 5 })).toBe(
+      'Analyse the workflow "Dev Team" across its 5 latest runs: compare how its agents and their models did, and find what in the workflow or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=runs.',
+    );
+    expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 1 })).toContain(
+      'across its latest run:',
     );
   });
 });

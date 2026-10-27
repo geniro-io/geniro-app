@@ -59,7 +59,7 @@ const CARD = {
       location: '~/.claude/CLAUDE.md',
       title: 'Name the check command',
       change: 'WHEN … → …',
-      evidence: [{ seq: 4, quote: 'waiting' }],
+      evidence: [{ runId: 'run-older', seq: 4, quote: 'waiting' }],
       rootCause: 'guessed',
       impact: { minutesSaved: 2, basis: 'one retry', confidence: 3 },
       risk: { level: 'low', note: 'none' },
@@ -77,6 +77,9 @@ describe('recommendations payload readers', () => {
     expect(card?.items.map((entry) => entry.id)).toEqual(['W-1', 'U-1']);
     expect(card?.items[1]?.target).toBe('user');
     expect(card?.items[0]).toMatchObject({ minutesSaved: 12, risk: 'low' });
+    // A workflow analysis names the run each quote is from.
+    expect(card?.items[1]?.evidence[0]?.runId).toBe('run-older');
+    expect(card?.items[0]?.evidence[0]?.runId).toBeNull();
   });
 
   it("reads each item's territory, and drops an item that names none or another", () => {

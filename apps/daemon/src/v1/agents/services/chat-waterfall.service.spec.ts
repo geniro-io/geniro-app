@@ -35,6 +35,8 @@ function row(
 
 const PAYLOAD_KINDS = new Set([
   'turn_complete',
+  'error',
+  'turn_cancelled',
   'subagent_info',
   'call_started',
   'call_result',
@@ -96,6 +98,25 @@ function build(
         Promise.resolve(
           rows
             .filter((r) => PAYLOAD_KINDS.has(r.kind))
+            .map(({ seq, kind, nodeId, payload, secondsIn }) => ({
+              seq,
+              kind,
+              nodeId,
+              payload: JSON.stringify(payload),
+              createdAt: at(secondsIn),
+            })),
+        ),
+      // Mirrors the DAO: a `system` row naming `nodePoolHandOff`, in seq order.
+      poolHandOffRows: (_runId: string, _em: unknown, maxSeq?: number) =>
+        Promise.resolve(
+          rows
+            .filter(
+              (r) =>
+                r.kind === 'system' &&
+                (r.payload as { nodePoolHandOff?: unknown } | null)
+                  ?.nodePoolHandOff !== undefined &&
+                (maxSeq === undefined || r.seq <= maxSeq),
+            )
             .map(({ seq, kind, nodeId, payload, secondsIn }) => ({
               seq,
               kind,
@@ -492,6 +513,144 @@ describe('ChatWaterfallService', () => {
         startedAt: iso(10),
         durationMs: 60_000,
         toolCalls: 1,
+      });
+    });
+
+    it('names the pool member that ran a turn, from its own usage rows, a failed one included', async () => {
+      const result = await build(
+        [
+          engineerStatus(0, 'running', 10),
+          row(
+            1,
+            'turn_complete',
+            {
+              usage: { durationMs: 5_000, contextModel: 'claude-opus-4' },
+              callId: 'call-4',
+            },
+            15,
+            'engineer',
+          ),
+          engineerStatus(2, 'completed', 16),
+          engineerStatus(3, 'running', 20),
+          // Handed on: member 2 failed; its error row names it.
+          row(
+            4,
+            'error',
+            {
+              message: 'limit',
+              agentKind: 'codex',
+              agentModel: 'gpt-5',
+              callId: 'call-4',
+            },
+            30,
+            'engineer',
+          ),
+          engineerStatus(5, 'failed', 31),
+        ],
+        {
+          workflowId: 'dev-team',
+          workflowSnapshot: JSON.stringify({
+            nodes: [
+              {
+                id: 'engineer',
+                kind: 'agent',
+                agent: 'claude',
+                model: 'opus',
+                pool: [{ agent: 'codex', model: 'gpt-5' }],
+              },
+            ],
+          }),
+        },
+      ).read('run-a');
+
+      expect(
+        result.turns.map((turn) => [turn.outcome, turn.model, turn.member]),
+      ).toEqual([
+        // Member 1's row names nobody: the node's own CLI and model.
+        ['completed', 'claude-opus-4', { agentKind: 'claude', model: 'opus' }],
+        ['failed', null, { agentKind: 'codex', model: 'gpt-5' }],
+      ]);
+    });
+
+    it('splits a turn at a pool hand-off: the attempt handed on fails as its member, the rest runs as the next', async () => {
+      const pooledSnapshot = JSON.stringify({
+        nodes: [
+          {
+            id: 'engineer',
+            kind: 'agent',
+            agent: 'claude',
+            model: 'opus',
+            pool: [{ agent: 'codex', model: 'gpt-5' }],
+          },
+        ],
+      });
+      const handOff = (seq: number, secondsIn: number): StoredRow =>
+        row(
+          seq,
+          'system',
+          {
+            severity: 'info',
+            nodePoolHandOff: true,
+            member: 2,
+            fromMember: 1,
+            callId: 'call-4',
+          },
+          secondsIn,
+          'engineer',
+        );
+      // Member 1 hits its limit and hands on; member 2 is still working at
+      // the last row, having written nothing of its own yet.
+      const result = await build(
+        [
+          engineerStatus(0, 'running', 10),
+          row(
+            1,
+            'error',
+            { message: 'limit', callId: 'call-4' },
+            20,
+            'engineer',
+          ),
+          handOff(2, 21),
+          row(3, 'tool_call', null, 40, 'engineer'),
+        ],
+        {
+          workflowId: 'dev-team',
+          workflowSnapshot: pooledSnapshot,
+          status: 'running',
+        },
+      ).read('run-a');
+
+      expect(
+        result.turns.map((turn) => [
+          turn.outcome,
+          turn.startedAt,
+          turn.member?.agentKind,
+        ]),
+      ).toEqual([
+        ['failed', iso(10), 'claude'],
+        ['running', iso(21), 'codex'],
+      ]);
+    });
+
+    it('names no member on a node without a pool', async () => {
+      const result = await build(
+        [
+          engineerStatus(0, 'running', 10),
+          row(
+            1,
+            'error',
+            { message: 'x', agentKind: 'codex', callId: 'call-4' },
+            20,
+            'engineer',
+          ),
+          engineerStatus(2, 'failed', 30),
+        ],
+        { workflowId: 'dev-team' },
+      ).read('run-a');
+
+      expect(result.turns[0]).toMatchObject({
+        outcome: 'failed',
+        member: null,
       });
     });
 

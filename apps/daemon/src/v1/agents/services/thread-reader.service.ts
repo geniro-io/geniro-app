@@ -7,17 +7,28 @@ import type { Run } from '../../runs/entity/run.entity';
 import { type ItemKind, ItemKindSchema } from '../../runs/runs.types';
 import {
   ANALYSIS_SPAN_KINDS,
+  type AnalysisReadScope,
+  type AnalysisSource,
   type AnalysisSpanKind,
-  type AnalysisTurn,
+  type FoldedRun,
   type ReadAnalyzedThreadArgs,
   type RunWaterfallTurn,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { analysedSourceOf } from '../utils/analysed-runs';
+import { CHAT_LANE, laneOf } from '../utils/analysis-lane';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { asRecord } from '../utils/json-util';
+import { readRunOutcomes } from '../utils/run-outcomes';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
 import { userInstructionFiles } from '../utils/user-instruction-files';
+import {
+  configuredModels,
+  modelFigures,
+  nodeFigures,
+  runFigures,
+} from '../utils/workflow-runs-fold';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ThreadTimelineService } from './thread-timeline.service';
 
@@ -42,14 +53,11 @@ export const ITEM_TEXT_CHARS = 2_000;
 /** At most this many rows are read for one `items` page. */
 const ITEMS_READ_LIMIT = 40;
 
-/** The chat's own lane, as the agent names it — a chat's rows carry no node. */
-const CHAT_LANE = 'agent';
+/** How long a `view=runs` answer is kept after its last read, for its pages. */
+const RUNS_ANSWER_TTL_MS = 5 * 60_000;
 
-/** What the reader needs of an analysis turn: its source and snapshot. */
-export type AnalysisSource = Pick<
-  AnalysisTurn,
-  'sourceRunId' | 'snapshotSeq' | 'sourceWorking'
->;
+/** How many `view=runs` answers are kept at once. */
+const RUNS_ANSWERS_KEPT = 4;
 
 const DEFAULT_SPAN_KINDS: readonly AnalysisSpanKind[] = [
   'turn',
@@ -63,10 +71,6 @@ type Answer = Record<string, unknown>;
 
 function bytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
-}
-
-function laneOf(nodeId: string | null): string {
-  return nodeId ?? CHAT_LANE;
 }
 
 function iso(ms: number): string {
@@ -94,6 +98,11 @@ function payloadText(payload: string): string {
   return redactSecrets(text);
 }
 
+/** A JSON answer with every registered secret masked in its values. */
+export function maskedAnswer(answer: Answer): Answer {
+  return JSON.parse(redactSecrets(JSON.stringify(answer))) as Answer;
+}
+
 function clip(text: string, max: number, seq: number): string {
   if (text.length <= max) {
     return text;
@@ -110,6 +119,16 @@ function clip(text: string, max: number, seq: number): string {
  */
 @Injectable()
 export class ThreadReaderService {
+  /**
+   * `view=runs` answers by the runs they fold. Folding up to the maximum of
+   * runs is a full pass over each, and the answer is read again for every
+   * page after its first.
+   */
+  private readonly runsAnswers = new Map<
+    string,
+    { at: number; answer: Answer }
+  >();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -119,9 +138,41 @@ export class ThreadReaderService {
   ) {}
 
   async read(
-    source: AnalysisSource,
+    turn: AnalysisReadScope,
     args: ReadAnalyzedThreadArgs,
   ): Promise<Answer> {
+    if (args.view === 'runs') {
+      if (!turn.workflow) {
+        return {
+          error: 'UNSUPPORTED',
+          message:
+            'view=runs compares the runs of a workflow analysis; this one reads one thread — start with view=overview.',
+        };
+      }
+      const offset = args.offset ?? 0;
+      const key = JSON.stringify([turn.workflow.slug, turn.workflow.runs]);
+      // A later page is cut from the very text the first one was: one folded
+      // again could differ (a status moved on, a run deleted) and join into
+      // broken JSON.
+      // A read from the start folds afresh; only its later pages are cut from
+      // the kept text.
+      const kept = offset > 0 ? this.keptRuns(key) : null;
+      if (offset > 0 && kept === null) {
+        return {
+          error: 'RUNS_CHANGED',
+          message:
+            'That comparison is no longer held — read view=runs again from offset 0.',
+        };
+      }
+      return pagedAnswer(
+        kept ?? (await this.runs(key, turn.workflow.slug, turn.workflow.runs)),
+        offset,
+      );
+    }
+    const source = analysedSourceOf(turn, args.runId);
+    if ('error' in source) {
+      return source;
+    }
     const em = this.em.fork();
     const run = await this.runDao.getById(source.sourceRunId, em);
     if (run === null) {
@@ -148,6 +199,99 @@ export class ThreadReaderService {
   }
 
   /**
+   * A workflow analysis's runs side by side: each run's totals and outcome,
+   * every node's figures, and every node's turns per model — each folded from
+   * every row up to that run's snapshot, never from a window.
+   */
+  private async runs(
+    key: string,
+    slug: string,
+    analysedRuns: NonNullable<AnalysisReadScope['workflow']>['runs'],
+  ): Promise<Answer> {
+    const em = this.em.fork();
+    const folded: FoldedRun[] = [];
+    const runs: Answer[] = [];
+    for (const analysed of analysedRuns) {
+      const run = await this.runDao.getById(analysed.runId, em);
+      if (run === null) {
+        runs.push({ runId: analysed.runId, gone: true });
+        continue;
+      }
+      const reading = await this.timelines.read(
+        analysed.runId,
+        analysed.snapshotSeq,
+        analysed.working,
+      );
+      const header = {
+        runId: run.id,
+        title: run.title,
+        createdAt: run.createdAt.toISOString(),
+        statusNow: run.status,
+        snapshotSeq: analysed.snapshotSeq,
+        workingAtSnapshot: analysed.working,
+      };
+      const pullRequests = [...readRunOutcomes(run.runOutcomes).entries()].map(
+        ([pullRequest, outcome]) => ({
+          pullRequest,
+          acceptance: outcome.acceptance,
+          reviewRounds: outcome.reviewRounds,
+          draft: outcome.draft,
+        }),
+      );
+      if (reading === null) {
+        runs.push({ ...header, note: 'The run has no rows yet.' });
+        continue;
+      }
+      const entry: FoldedRun = {
+        runId: run.id,
+        turns: reading.fold.turns,
+        lanes: reading.fold.lanes,
+        costUsd: reading.fold.totals.costUsd,
+        ...configuredModels(run.workflowSnapshot),
+        timeline: reading.timeline,
+      };
+      folded.push(entry);
+      runs.push({
+        ...header,
+        ...runFigures(entry),
+        ...(pullRequests.length === 0 ? {} : { pullRequests }),
+      });
+    }
+    // Masked BEFORE it is kept and cut into pages: a secret split across two
+    // chunks matches in neither, and the per-page pass would let both out.
+    const answer = maskedAnswer({
+      workflow: slug,
+      runs,
+      nodes: nodeFigures(folded),
+      models: modelFigures(folded),
+      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=workflow runId=… is the workflow as the library holds it now, against that run's copy.",
+    });
+    this.runsAnswers.delete(key);
+    this.runsAnswers.set(key, { at: Date.now(), answer });
+    for (const stale of [...this.runsAnswers.keys()].slice(
+      0,
+      Math.max(0, this.runsAnswers.size - RUNS_ANSWERS_KEPT),
+    )) {
+      this.runsAnswers.delete(stale);
+    }
+    return answer;
+  }
+
+  /**
+   * The comparison kept for this run set while it is being paged, its time
+   * renewed by every read, or null once it lapsed.
+   */
+  private keptRuns(key: string): Answer | null {
+    const kept = this.runsAnswers.get(key);
+    this.runsAnswers.delete(key);
+    if (kept === undefined || Date.now() - kept.at >= RUNS_ANSWER_TTL_MS) {
+      return null;
+    }
+    this.runsAnswers.set(key, { at: Date.now(), answer: kept.answer });
+    return kept.answer;
+  }
+
+  /**
    * The library slug and run-start snapshot of a WORKFLOW source, or null for
    * a plain chat (or a source that is gone).
    */
@@ -159,6 +303,27 @@ export class ThreadReaderService {
       return null;
     }
     return { slug: run.workflowId, snapshot: run.workflowSnapshot };
+  }
+
+  /**
+   * The workflow an analysis may read and change: a workflow analysis's own,
+   * with the start copy of the run read (its newest unless one is named,
+   * through `analysedSourceOf`) while that run still exists, else a workflow
+   * source's — null for a plain chat (or a source that is gone).
+   */
+  async analysedWorkflowOf(
+    turn: AnalysisReadScope,
+    /** The analysed run whose start copy the library is set against. */
+    read: AnalysisSource = turn,
+  ): Promise<{ slug: string; snapshot: string | null } | null> {
+    const source = await this.workflowOf(read.sourceRunId);
+    if (!turn.workflow) {
+      return source;
+    }
+    return {
+      slug: turn.workflow.slug,
+      snapshot: source?.slug === turn.workflow.slug ? source.snapshot : null,
+    };
   }
 
   private async overview(source: AnalysisSource, run: Run): Promise<Answer> {

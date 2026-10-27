@@ -44,7 +44,9 @@ export class RunDao extends BaseDao<Run> {
    * **A thread's analysis is hidden for the same reason** ("I should not see
    * this thread in shared list - same as for thread with changing workflow"):
    * it belongs to the thread it reads, opens in that thread's popup, and is
-   * found through {@link listAnalysesOf}. Nothing else is hidden by kind.
+   * found through {@link listAnalysesOf}. A workflow's analysis is hidden on
+   * the same terms and found through {@link listWorkflowAnalyses}. Nothing
+   * else is hidden by kind.
    */
   async listChats(
     scope: ChatListScope,
@@ -56,6 +58,7 @@ export class RunDao extends BaseDao<Run> {
         workflowId: null,
         editsWorkflowSlug: null,
         analysisSourceRunId: null,
+        analysisWorkflowSlug: null,
         ...scopeFilter(scope),
       },
       page,
@@ -129,6 +132,50 @@ export class RunDao extends BaseDao<Run> {
     return this.getRepo(txEm).find(
       { analysisSourceRunId: sourceRunId },
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * Every analysis started on one library workflow, newest first — archived
+   * rows included, for the reason {@link listAnalysesOf} gives.
+   */
+  async listWorkflowAnalyses(
+    slug: string,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { analysisWorkflowSlug: slug },
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /** The slugs of every workflow some analysis was started on. */
+  async workflowAnalysisSlugs(txEm?: EntityManager): Promise<string[]> {
+    const rows = await this.getRepo(txEm).find(
+      { analysisWorkflowSlug: { $ne: null } },
+      { fields: ['analysisWorkflowSlug'], disableIdentityMap: true },
+    );
+    return [...new Set(rows.map((run) => run.analysisWorkflowSlug!))];
+  }
+
+  /**
+   * A library workflow's newest runs, newest first, at most `limit` — the
+   * ones a workflow analysis reads. Archived runs are left out: the user
+   * shelved them, and an analysis refuses an archived thread too.
+   */
+  async newestWorkflowRuns(
+    slug: string,
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<Pick<Run, 'id' | 'status' | 'title' | 'createdAt' | 'cwd'>[]> {
+    return this.getRepo(txEm).find(
+      { workflowId: slug, archivedAt: null },
+      {
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        limit,
+        fields: ['id', 'status', 'title', 'createdAt', 'cwd'],
+        disableIdentityMap: true,
+      },
     );
   }
 

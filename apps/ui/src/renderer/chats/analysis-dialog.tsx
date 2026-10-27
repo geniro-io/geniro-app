@@ -11,6 +11,7 @@ import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import type { AnalysedWorkflowSubject } from './analyze-thread-dialog';
 import { HostedChat } from './hosted-chat';
 import type { RecommendationsApplier } from './recommendations-apply-context';
 import { RunStatusBadge } from './run-status';
@@ -28,9 +29,13 @@ import { useHostedChat } from './use-hosted-chat';
  *
  * Closing it stops nothing: the analysis runs in the daemon, and the thread's
  * Analyze button says when it is working or waiting on you.
+ *
+ * A workflow's subject is that workflow's analysis across its recent runs
+ * ("Analyze & improve", `GET /v1/workflows/:slug/analysis`), hosted over the
+ * builder the same way.
  */
 export function AnalysisDialog({
-  source,
+  subject,
   sourceLabel,
   apis,
   handle,
@@ -41,10 +46,14 @@ export function AnalysisDialog({
   configProfiles,
   applyRecommendations,
   onNewAnalysis,
+  onTurnSettled,
   onClose,
 }: {
-  /** The thread whose analysis this is; the popup is open while it is non-null. */
-  source: RunDto | null;
+  /** Whose analysis this is; the popup is open while it is non-null. */
+  subject:
+    | { kind: 'thread'; run: RunDto }
+    | ({ kind: 'workflow' } & AnalysedWorkflowSubject)
+    | null;
   sourceLabel: string;
   apis: DaemonApis | null;
   /** This launch's daemon — what a published page's URL is built from. */
@@ -57,26 +66,39 @@ export function AnalysisDialog({
   applyRecommendations: RecommendationsApplier;
   /** Open the setup dialog to start a new analysis, which replaces this one. */
   onNewAnalysis: () => void;
+  /** A turn of the analysis ended — it may have changed the workflow. */
+  onTurnSettled?: () => void | Promise<void>;
   onClose: () => void;
 }): React.JSX.Element {
-  const sourceId = source?.id ?? null;
+  const slug = subject?.kind === 'workflow' ? subject.slug : null;
+  const sourceId =
+    subject === null
+      ? null
+      : subject.kind === 'thread'
+        ? subject.run.id
+        : `workflow-analysis:${subject.slug}`;
   const open = useCallback(async (): Promise<RunDto> => {
     if (apis === null || sourceId === null) {
       throw new Error('daemon unavailable');
     }
-    const { analysis } = await apis.chats.getThreadAnalysis({
-      runId: sourceId,
-    });
+    const { analysis } =
+      slug === null
+        ? await apis.chats.getThreadAnalysis({ runId: sourceId })
+        : await apis.workflows.getWorkflowAnalysis({ slug });
     if (analysis == null) {
-      throw new Error('This thread has no analysis yet.');
+      throw new Error(
+        slug === null
+          ? 'This thread has no analysis yet.'
+          : 'This workflow has no analysis yet.',
+      );
     }
     return analysis;
-  }, [apis, sourceId]);
+  }, [apis, sourceId, slug]);
   const chat = useHostedChat({ subject: sourceId, apis, client, open });
 
   return (
     <Dialog
-      open={source !== null}
+      open={sourceId !== null}
       onClose={onClose}
       className="h-full max-w-5xl"
       flush
@@ -101,7 +123,12 @@ export function AnalysisDialog({
             configProfiles={configProfiles}
             applyRecommendations={applyRecommendations}
             transcriptSlot="analysis-transcript"
-            emptyText="The analysis is starting — it reads the thread, then posts what it found and a card of changes to pick from."
+            emptyText={
+              slug === null
+                ? 'The analysis is starting — it reads the thread, then posts what it found and a card of changes to pick from.'
+                : 'The analysis is starting — it reads the workflow’s latest runs, then posts what it found and a card of changes to pick from.'
+            }
+            onTurnSettled={onTurnSettled}
             composerLabel="Message the analysis"
             composerPlaceholder="Ask about a finding, or what to change instead…"
             header={({ run, status }) => (
@@ -119,7 +146,7 @@ export function AnalysisDialog({
                   variant="ghost"
                   size="sm"
                   className="ml-auto shrink-0"
-                  title="Set up a new analysis of this thread — starting it replaces this one"
+                  title={`Set up a new analysis of this ${slug === null ? 'thread' : 'workflow'} — starting it replaces this one`}
                   onClick={onNewAnalysis}>
                   <RotateCcw className="size-3.5" />
                   New analysis

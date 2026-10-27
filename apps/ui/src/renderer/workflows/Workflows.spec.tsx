@@ -54,7 +54,11 @@ const {
   measureInstructionSizes,
   readWorkflowVersions,
   restoreWorkflowVersion,
+  getWorkflowAnalysis,
+  analyzeWorkflow,
 } = vi.hoisted(() => ({
+  getWorkflowAnalysis: vi.fn(),
+  analyzeWorkflow: vi.fn(),
   measureInstructionSizes: vi.fn(),
   readWorkflowVersions: vi.fn(),
   restoreWorkflowVersion: vi.fn(),
@@ -92,6 +96,8 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       listWorkflowRuns: vi.fn(async () => []),
       deleteWorkflow,
       measureInstructionSizes,
+      getWorkflowAnalysis,
+      analyzeWorkflow,
     },
     chats: withHistoryPages({
       readRunState: vi.fn(async () => emptyRunState()),
@@ -167,12 +173,12 @@ function fakeClient(): DaemonClient {
 }
 
 /** Deliver a row that ENDS a run-level turn, as the daemon's socket would. */
-async function endTurn(id: string): Promise<void> {
+async function endTurn(id: string, runId = 'run-1'): Promise<void> {
   await act(async () => {
     for (const listener of [...itemListeners]) {
       listener({
         id,
-        runId: 'run-1',
+        runId,
         seq: 1,
         kind: 'turn_complete',
         role: 'assistant',
@@ -244,6 +250,12 @@ beforeEach(() => {
   deleteWorkflow
     .mockReset()
     .mockImplementation(async () => ({ deleted: true }));
+  getWorkflowAnalysis
+    .mockReset()
+    .mockImplementation(async () => ({ analysis: null }));
+  analyzeWorkflow
+    .mockReset()
+    .mockImplementation(async () => ({ id: 'analysis-1', status: 'pending' }));
   readWorkflowVersions.mockReset().mockImplementation(async () => ({
     slug: 'dev-team',
     currentVersion: null,
@@ -522,6 +534,21 @@ describe('Workflows — reloading after the agent edits the file', () => {
     const readsBefore = getWorkflow.mock.calls.length;
 
     await endTurn('done-1');
+
+    expect(getWorkflow.mock.calls.length).toBe(readsBefore + 1);
+  });
+
+  // An applied workflow item is written by the ANALYSIS, whose popup is the
+  // only surface that sees its turn end.
+  it('re-reads the workflow when its analysis finishes a turn', async () => {
+    getWorkflowAnalysis.mockImplementation(async () => ({
+      analysis: { id: 'analysis-1', status: 'running' },
+    }));
+    await openBuilder();
+    await menuRow('Analyze & improve…');
+    const readsBefore = getWorkflow.mock.calls.length;
+
+    await endTurn('applied-1', 'analysis-1');
 
     expect(getWorkflow.mock.calls.length).toBe(readsBefore + 1);
   });
@@ -1163,8 +1190,61 @@ describe('Workflows — the builder header', () => {
       'Export…',
       'Edit name and description',
       'Versions…',
+      'Analyze & improve…',
       'Delete workflow',
     ]);
+  });
+
+  it('sets up an analysis of the workflow’s latest runs when it has none, then opens it', async () => {
+    await openBuilder();
+
+    await menuRow('Analyze & improve…');
+
+    expect(getWorkflowAnalysis).toHaveBeenCalledWith({ slug: 'dev-team' });
+    expect(document.body.textContent).toContain('Analyze workflow');
+    getWorkflowAnalysis.mockImplementation(async () => ({
+      analysis: { id: 'analysis-1', status: 'running' },
+    }));
+    await press('Start analysis');
+
+    expect(analyzeWorkflow).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      analyzeWorkflowDto: expect.objectContaining({ runs: 10 }),
+    });
+    expect(document.querySelector('[data-slot="analysis-dialog"]')).not.toBe(
+      null,
+    );
+  });
+
+  it('closes the analysis when the builder leaves its workflow', async () => {
+    getWorkflowAnalysis.mockImplementation(async () => ({
+      analysis: { id: 'analysis-1', status: 'completed' },
+    }));
+    await openBuilder();
+    await menuRow('Analyze & improve…');
+    expect(document.querySelector('[data-slot="analysis-dialog"]')).not.toBe(
+      null,
+    );
+
+    await press('Back to library');
+    await press('Open Dev Team');
+
+    expect(document.querySelector('[data-slot="analysis-dialog"]')).toBe(null);
+  });
+
+  it('opens the workflow’s analysis straight away when it already has one', async () => {
+    getWorkflowAnalysis.mockImplementation(async () => ({
+      analysis: { id: 'analysis-1', status: 'completed' },
+    }));
+    await openBuilder();
+
+    await menuRow('Analyze & improve…');
+
+    expect(document.querySelector('[data-slot="analysis-dialog"]')).not.toBe(
+      null,
+    );
+    expect(document.body.textContent).not.toContain('Analyze workflow');
+    expect(analyzeWorkflow).not.toHaveBeenCalled();
   });
 
   it('opens the open workflow’s versions from the overflow, reading them only then', async () => {

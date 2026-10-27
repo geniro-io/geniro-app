@@ -40,6 +40,7 @@ import type {
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import {
+  type AnalysedWorkflow,
   type AttachmentDataWire,
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
@@ -95,6 +96,11 @@ import {
   readAgentOptions,
   writeAgentOptions,
 } from '../utils/agent-options';
+import {
+  analysisTurnOf,
+  isAnalysisRun,
+  writeAnalysedRuns,
+} from '../utils/analysed-runs';
 import {
   applyHostPatch,
   captureHostPatchFingerprint,
@@ -1988,6 +1994,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      * `ThreadAnalysisService.start`. See `Run.analysisSourceRunId`.
      */
     analysisSource?: { runId: string; seq: number; working: boolean };
+    /**
+     * The library workflow this chat analyses and the runs it reads — set
+     * only by `ThreadAnalysisService.startWorkflow`. See
+     * `Run.analysisWorkflowSlug`.
+     */
+    analysisWorkflow?: AnalysedWorkflow;
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
     this.assertApprovalSupported(input.agentKind, input.approval);
@@ -2063,6 +2075,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         analysisSourceRunId: input.analysisSource?.runId ?? null,
         analysisSourceSeq: input.analysisSource?.seq ?? null,
         analysisSourceWorking: input.analysisSource?.working ?? null,
+        analysisWorkflowSlug: input.analysisWorkflow?.slug ?? null,
+        analysisRuns:
+          input.analysisWorkflow === undefined
+            ? null
+            : writeAnalysedRuns(input.analysisWorkflow.runs),
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
         // stay null.
@@ -2778,6 +2795,25 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   async findWorkflowChat(slug: string): Promise<RunWire | null> {
     const em = this.em.fork();
     const [run] = await this.runDao.listEditingWorkflow(slug, em);
+    if (!run) {
+      return null;
+    }
+    const previews = await this.wireReads([run.id], em);
+    return this.toRunWire(run, previews.of(run.id));
+  }
+
+  /**
+   * A library workflow's analysis, or null if it has none — newest wins, as
+   * in {@link findAnalysis}, `prefer` included.
+   */
+  async findWorkflowAnalysis(
+    slug: string,
+    prefer?: string,
+  ): Promise<RunWire | null> {
+    const em = this.em.fork();
+    const analyses = await this.runDao.listWorkflowAnalyses(slug, em);
+    const run =
+      analyses.find((analysis) => analysis.id === prefer) ?? analyses[0];
     if (!run) {
       return null;
     }
@@ -6711,9 +6747,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // below, and an analysis saves the analysed one through
       // `save_workflow_change` — see `WorkflowProposalBroker`.
       const disposeWorkflowProposals =
-        mcpEndpoint &&
-        run.editsWorkflowSlug === null &&
-        run.analysisSourceRunId === null
+        mcpEndpoint && run.editsWorkflowSlug === null && !isAnalysisRun(run)
           ? this.workflowProposals.register(runId, SINGLE_AGENT_NODE, {
               runId,
             })
@@ -6729,22 +6763,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             })
           : null;
       // Only an analysis chat reads another thread — see `AnalysisBroker`.
-      const analysisSourceRunId = run.analysisSourceRunId;
-      const analysisSourceSeq = run.analysisSourceSeq;
+      const analysisTurn = analysisTurnOf(runId, run);
       const disposeAnalysis =
-        mcpEndpoint &&
-        analysisSourceRunId !== null &&
-        analysisSourceSeq !== null
+        mcpEndpoint && analysisTurn !== null
           ? this.analyses.register(
               runId,
               SINGLE_AGENT_NODE,
               this.analysisReports.sinkFor(
-                {
-                  analysisRunId: runId,
-                  sourceRunId: analysisSourceRunId,
-                  snapshotSeq: analysisSourceSeq,
-                  sourceWorking: run.analysisSourceWorking ?? false,
-                },
+                analysisTurn,
                 async (kind, payload) =>
                   this.persist(
                     em,

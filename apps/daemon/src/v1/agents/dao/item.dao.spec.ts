@@ -1116,6 +1116,28 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('poolHandOffRows', () => {
+    it("reads a run's pool hand-offs up to the snapshot, and no other system row", async () => {
+      const handOff = JSON.stringify({
+        nodePoolHandOff: true,
+        member: 2,
+        fromMember: 1,
+      });
+      await insert('run-a', 1, 'system', handOff);
+      await insert('run-a', 2, 'system', JSON.stringify({ severity: 'info' }));
+      await insert('run-a', 3, 'error', handOff);
+      await insert('run-a', 6, 'system', handOff);
+      await insert('run-b', 4, 'system', handOff);
+
+      expect((await dao.poolHandOffRows('run-a')).map((r) => r.seq)).toEqual([
+        1, 6,
+      ]);
+      expect(
+        (await dao.poolHandOffRows('run-a', undefined, 5)).map((r) => r.seq),
+      ).toEqual([1]);
+    });
+  });
+
   describe('toolCallTimes', () => {
     it('reads the id and name of each tool row up to the snapshot, and nothing it said', async () => {
       await insert(

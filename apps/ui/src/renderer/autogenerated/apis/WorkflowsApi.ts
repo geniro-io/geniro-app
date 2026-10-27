@@ -16,6 +16,7 @@
 import * as runtime from '../runtime';
 import type {
   ActionPressDto,
+  AnalyzeWorkflowDto,
   CancelledDto,
   CreateWorkflowDto,
   ExportWorkflowDto,
@@ -35,11 +36,17 @@ import type {
   SendMessageDto,
   StageMoveResultDto,
   StartWorkflowChatDto,
+  ThreadAnalysisDto,
   WorkflowChatsDiscardedDto,
   WorkflowDeletedDto,
   WorkflowFileDto,
   WorkflowSummaryDto,
 } from '../models/index';
+
+export interface WorkflowsApiAnalyzeWorkflowRequest {
+    slug: string;
+    analyzeWorkflowDto: AnalyzeWorkflowDto;
+}
 
 export interface WorkflowsApiCancelWorkflowRunRequest {
     runId: string;
@@ -76,6 +83,10 @@ export interface WorkflowsApiExportWorkflowRequest {
 }
 
 export interface WorkflowsApiGetWorkflowRequest {
+    slug: string;
+}
+
+export interface WorkflowsApiGetWorkflowAnalysisRequest {
     slug: string;
 }
 
@@ -145,6 +156,61 @@ export interface WorkflowsApiStartWorkflowRunRequest {
  * 
  */
 export class WorkflowsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async analyzeWorkflowRaw(requestParameters: WorkflowsApiAnalyzeWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling analyzeWorkflow().'
+            );
+        }
+
+        if (requestParameters['analyzeWorkflowDto'] == null) {
+            throw new runtime.RequiredError(
+                'analyzeWorkflowDto',
+                'Required parameter "analyzeWorkflowDto" was null or undefined when calling analyzeWorkflow().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/{slug}/analyses`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['analyzeWorkflowDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async analyzeWorkflow(requestParameters: WorkflowsApiAnalyzeWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
+        const response = await this.analyzeWorkflowRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -568,6 +634,51 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async getWorkflow(requestParameters: WorkflowsApiGetWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowFileDto> {
         const response = await this.getWorkflowRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async getWorkflowAnalysisRaw(requestParameters: WorkflowsApiGetWorkflowAnalysisRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ThreadAnalysisDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling getWorkflowAnalysis().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/{slug}/analysis`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async getWorkflowAnalysis(requestParameters: WorkflowsApiGetWorkflowAnalysisRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ThreadAnalysisDto> {
+        const response = await this.getWorkflowAnalysisRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

@@ -180,11 +180,13 @@ describe('ChatSearchIndexDao (in-memory sqlite)', () => {
     await db.run('builder', { editsWorkflowSlug: 'dev-team' });
     // An analysis quotes its source, so it would answer the same words.
     await db.run('analysis', { analysisSourceRunId: RUN_A });
+    await db.run('wf-analysis', { analysisWorkflowSlug: 'dev-team' });
     await db.item('a', { runId: RUN_A, payload: said('shared word') });
     await db.item('b', { runId: RUN_B, payload: said('shared word') });
     await db.item('c', { runId: 'gone', payload: said('shared word') });
     await db.item('e', { runId: 'builder', payload: said('shared word') });
     await db.item('f', { runId: 'analysis', payload: said('shared word') });
+    await db.item('g', { runId: 'wf-analysis', payload: said('shared word') });
     await db.item('d', {
       runId: RUN_A,
       seq: 2,
@@ -282,11 +284,13 @@ describe('ChatSearchIndexDao (in-memory sqlite)', () => {
     await db.run(RUN_A);
     await db.run('builder', { editsWorkflowSlug: 'dev-team' });
     await db.run('analysis', { analysisSourceRunId: RUN_A });
+    await db.run('wf-analysis', { analysisWorkflowSlug: 'dev-team' });
     const dao = db.dao();
 
     expect((await dao.run(RUN_A))?.id).toBe(RUN_A);
     expect(await dao.run('builder')).toBeUndefined();
     expect(await dao.run('analysis')).toBeUndefined();
+    expect(await dao.run('wf-analysis')).toBeUndefined();
   });
 
   it('reads neighbours nearest first, words only, breaking a seq tie by id', async () => {

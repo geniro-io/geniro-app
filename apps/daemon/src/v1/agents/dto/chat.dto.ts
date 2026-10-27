@@ -198,6 +198,20 @@ export const analyzeThreadSchema = z.object({
 });
 export class AnalyzeThreadDto extends createZodDto(analyzeThreadSchema) {}
 
+/** At most this many of a workflow's newest runs are read by one analysis. */
+export const MAX_ANALYSED_WORKFLOW_RUNS = 30;
+
+/** `POST /v1/workflows/:slug/analyses` — "Analyze & improve" on a workflow. */
+export const analyzeWorkflowSchema = analyzeThreadSchema.extend({
+  runs: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_ANALYSED_WORKFLOW_RUNS)
+    .describe("How many of the workflow's newest runs to read"),
+});
+export class AnalyzeWorkflowDto extends createZodDto(analyzeWorkflowSchema) {}
+
 /** `POST /v1/chats/:runId/recommendations/apply` — the card's Apply. */
 export const applyRecommendationsSchema = z.object({
   cardSeq: z.number().int().min(0),

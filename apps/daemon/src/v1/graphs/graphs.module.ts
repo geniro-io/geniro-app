@@ -16,6 +16,7 @@ import { StageService } from './services/stage.service';
 import { StageWakeService } from './services/stage-wake.service';
 import { TaskBoardBroker } from './services/task-board.broker';
 import { WorkflowActionsService } from './services/workflow-actions.service';
+import { WorkflowAnalysisService } from './services/workflow-analysis.service';
 import { WorkflowChangeService } from './services/workflow-change.service';
 import { WorkflowChatService } from './services/workflow-chat.service';
 import { WorkflowProposalService } from './services/workflow-proposal.service';
@@ -62,6 +63,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     StageService,
     StageWakeService,
     WorkflowChatService,
+    WorkflowAnalysisService,
     WorkflowChangeService,
     WorkflowActionsService,
     WorkflowProposalService,

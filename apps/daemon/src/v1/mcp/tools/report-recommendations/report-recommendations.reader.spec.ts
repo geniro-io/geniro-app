@@ -1,7 +1,10 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it } from 'vitest';
 
-import type { RecommendationItem } from '../../../agents/chat.types';
+import type {
+  AnalysedWorkflow,
+  RecommendationItem,
+} from '../../../agents/chat.types';
 import type { ItemDao } from '../../../agents/dao/item.dao';
 import type { RunDao } from '../../../agents/dao/run.dao';
 import { AnalysisBroker } from '../../../agents/services/analysis.broker';
@@ -39,18 +42,28 @@ function item(id: string, seq = 3): RecommendationItem {
   };
 }
 
-function setup(workflowId: string | null) {
+function setup(
+  workflowId: string | null,
+  workflow: AnalysedWorkflow | null = null,
+) {
   const written: { kind: string; payload: unknown }[] = [];
+  const checked: { runId: string; maxSeq: number }[] = [];
   const reports = new AnalysisReportsService(
     { fork: () => ({}) } as unknown as EntityManager,
     {
-      getById: () => Promise.resolve({ id: 'source', workflowId } as Run),
+      // A workflow analysis needs no source row: its newest run may be gone.
+      getById: () =>
+        Promise.resolve(
+          workflow === null ? ({ id: 'source', workflowId } as Run) : null,
+        ),
     } as unknown as RunDao,
     {
-      existingSeqs: (_runId: string, seqs: number[], maxSeq: number) =>
-        Promise.resolve(
+      existingSeqs: (runId: string, seqs: number[], maxSeq: number) => {
+        checked.push({ runId, maxSeq });
+        return Promise.resolve(
           new Set(seqs.filter((seq) => seq <= maxSeq && seq !== 404)),
-        ),
+        );
+      },
     } as unknown as ItemDao,
     {
       read: () =>
@@ -76,6 +89,7 @@ function setup(workflowId: string | null) {
         sourceRunId: 'source',
         snapshotSeq: 50,
         sourceWorking: false,
+        workflow,
       },
       (kind, payload) => {
         written.push({ kind, payload });
@@ -89,7 +103,7 @@ function setup(workflowId: string | null) {
       args,
       CONTEXT,
     );
-  return { report, written };
+  return { report, written, checked };
 }
 
 describe('ReportRecommendationsTool', () => {
@@ -122,6 +136,51 @@ describe('ReportRecommendationsTool', () => {
     expect(missing.content[0]!.text).toContain('evidence seq 404');
     expect(past.content[0]!.text).toContain('evidence seq 51');
     expect(written).toEqual([]);
+  });
+
+  it("checks a workflow analysis's evidence against the run each quote names, at that run's snapshot", async () => {
+    const { report, written, checked } = setup(null, {
+      slug: 'team',
+      runs: [
+        { runId: 'source', snapshotSeq: 50, working: false },
+        { runId: 'older', snapshotSeq: 8, working: false },
+      ],
+    });
+    const cited = item('W-1');
+    cited.evidence = [
+      { seq: 3, quote: 'in the newest run' },
+      { runId: 'older', seq: 7, quote: 'in an older run' },
+    ];
+
+    const result = await report({ items: [cited] });
+    const past = await report({
+      items: [
+        { ...cited, evidence: [{ runId: 'older', seq: 9, quote: 'too late' }] },
+      ],
+    });
+    const stranger = await report({
+      items: [
+        { ...cited, evidence: [{ runId: 'other', seq: 1, quote: 'not read' }] },
+      ],
+    });
+
+    expect(result.isError).toBe(false);
+    expect(checked.slice(0, 2)).toEqual([
+      { runId: 'source', maxSeq: 50 },
+      { runId: 'older', maxSeq: 8 },
+    ]);
+    expect(past.content[0]!.text).toContain(
+      'evidence seq 9 does not exist in the analysed run older (snapshot ends at 8)',
+    );
+    expect(stranger.content[0]!.text).toContain(
+      'evidence runId other is not one of the runs this analysis reads',
+    );
+    expect(written).toHaveLength(1);
+    // One run's timing would pass for the workflow's.
+    expect(written[0]!.payload).toMatchObject({
+      sourceKind: 'workflow',
+      timing: null,
+    });
   });
 
   it('refuses a workflow item when the analysed thread is a plain chat', async () => {

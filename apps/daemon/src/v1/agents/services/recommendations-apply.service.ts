@@ -13,6 +13,7 @@ import {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { isAnalysisRun } from '../utils/analysed-runs';
 import { appliesOf, readCard } from '../utils/recommendations-card';
 import { ChatService } from './chat.service';
 
@@ -48,7 +49,7 @@ export class RecommendationsApplyService {
     if (run === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    if (run.analysisSourceRunId === null) {
+    if (!isAnalysisRun(run)) {
       throw new ConflictException(
         'NOT_AN_ANALYSIS',
         'recommendations are applied only in an analysis chat',

@@ -20,6 +20,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
+import { Stepper } from '../components/ui/stepper';
 import {
   type DaemonApis,
   daemonErrorCode,
@@ -48,22 +49,47 @@ import { useAgentModels } from './use-agent-models';
  */
 const ANALYSIS_DEFAULT_APPROVAL: ChatApprovalMode = 'auto';
 
+/** How many of a workflow's newest runs an analysis reads unless changed. */
+export const DEFAULT_ANALYSED_RUNS = 10;
+
 /**
- * "Analyze thread": who analyses the thread, and what to look at.
+ * The most runs one workflow analysis reads. Twin of the daemon's
+ * `MAX_ANALYSED_WORKFLOW_RUNS` (`v1/agents/dto/chat.dto.ts`).
+ */
+export const MAX_ANALYSED_RUNS = 30;
+
+/** A library workflow "Analyze & improve" is set up for. */
+export interface AnalysedWorkflowSubject {
+  slug: string;
+  name: string;
+}
+
+/** What an analysis reads: one thread, or a workflow across its runs. */
+export type AnalysisSubject =
+  | { kind: 'thread'; run: RunDto }
+  | ({
+      kind: 'workflow';
+      api: DaemonApis['workflows'];
+    } & AnalysedWorkflowSubject);
+
+/**
+ * "Analyze thread": who analyses the subject, and what to look at — for a
+ * workflow ("Analyze & improve"), how many of its newest runs to read too.
  *
- * Starts a NEW chat linked to the clicked one (`POST /v1/chats/:runId/analyses`);
- * the analysis itself happens there. Opens on the last analysis choice
+ * Starts a NEW chat linked to its subject (`POST /v1/chats/:runId/analyses`,
+ * `POST /v1/workflows/:slug/analyses`); the analysis itself happens there.
+ * Opens on the last analysis choice
  * (`Settings.lastAnalysisConfig`), else the composer's own setup — except the
  * approval mode, which starts on auto-approve rather than the composer's: the
  * analysis works unwatched in its popup, where a card per read stalls it.
  *
  * Refusals keep the dialog open with the daemon's sentence. One of them is a
- * question rather than an error: `ANALYSIS_FOLDER_GONE` — the thread's folder
- * no longer exists — and the dialog then asks for one, since repo
- * recommendations are edits in that folder.
+ * question rather than an error: `ANALYSIS_FOLDER_GONE` — the thread's (or
+ * the newest run's) folder no longer exists — and the dialog then asks for
+ * one, since repo recommendations are edits in that folder.
  */
 export function AnalyzeThreadDialog({
-  source,
+  subject,
   replaces = false,
   sourceLabel,
   chatApi,
@@ -78,9 +104,9 @@ export function AnalyzeThreadDialog({
   onClose,
   onStarted,
 }: {
-  /** The thread to analyse; the dialog is open while it is non-null. */
-  source: RunDto | null;
-  /** The thread already has an analysis, which starting this one replaces. */
+  /** What to analyse; the dialog is open while it is non-null. */
+  subject: AnalysisSubject | null;
+  /** The subject already has an analysis, which starting this one replaces. */
   replaces?: boolean;
   sourceLabel: string;
   chatApi: DaemonApis['chats'];
@@ -97,9 +123,12 @@ export function AnalyzeThreadDialog({
   onClose: () => void;
   onStarted: (run: RunDto) => void;
 }): React.JSX.Element {
-  const open = source !== null;
+  const open = subject !== null;
+  const source = subject?.kind === 'thread' ? subject.run : null;
+  const workflow = subject?.kind === 'workflow' ? subject : null;
   const [config, setConfig] = useState<AnalysisConfig>(composerSetup);
   const [focus, setFocus] = useState('');
+  const [runs, setRuns] = useState(DEFAULT_ANALYSED_RUNS);
   const [folder, setFolder] = useState<string | null>(null);
   const [folderGone, setFolderGone] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -113,6 +142,7 @@ export function AnalyzeThreadDialog({
     }
     setConfig(composerSetup);
     setFocus('');
+    setRuns(DEFAULT_ANALYSED_RUNS);
     setFolder(null);
     setFolderGone(false);
     setError(null);
@@ -128,9 +158,9 @@ export function AnalyzeThreadDialog({
     return () => {
       live = false;
     };
-    // Only on open and a change of thread: the composer moving under an open
+    // Only on open and a change of subject: the composer moving under an open
     // dialog must not overwrite a choice the user is making.
-  }, [open, source?.id]);
+  }, [open, source?.id, workflow?.slug]);
 
   const kind = config.agent;
   const profileless = configDirReasonFor(kind) !== null;
@@ -147,7 +177,7 @@ export function AnalyzeThreadDialog({
     config.model,
     configDir,
   );
-  const workflow = source?.workflowId != null;
+  const isWorkflow = workflow !== null || source?.workflowId != null;
   const approval: ChatApprovalMode = isChatApprovalMode(config.approval)
     ? config.approval
     : ANALYSIS_DEFAULT_APPROVAL;
@@ -171,25 +201,32 @@ export function AnalyzeThreadDialog({
   };
 
   const start = async (): Promise<void> => {
-    if (source === null || starting) {
+    if (subject === null || starting) {
       return;
     }
     setStarting(true);
     setError(null);
     try {
-      const run = await chatApi.analyzeThread({
-        runId: source.id,
-        analyzeThreadDto: {
-          agentKind: kind,
-          approval,
-          ...(config.model === null ? {} : { model: config.model }),
-          ...(config.effort === null ? {} : { effort: config.effort }),
-          ...(configDir === null ? {} : { configDir }),
-          ...(folder === null ? {} : { cwd: folder }),
-          ...(focus.trim() === '' ? {} : { focus: focus.trim() }),
-          ...(await runSettings()),
-        },
-      });
+      const dto = {
+        agentKind: kind,
+        approval,
+        ...(config.model === null ? {} : { model: config.model }),
+        ...(config.effort === null ? {} : { effort: config.effort }),
+        ...(configDir === null ? {} : { configDir }),
+        ...(folder === null ? {} : { cwd: folder }),
+        ...(focus.trim() === '' ? {} : { focus: focus.trim() }),
+        ...(await runSettings()),
+      };
+      const run =
+        subject.kind === 'workflow'
+          ? await subject.api.analyzeWorkflow({
+              slug: subject.slug,
+              analyzeWorkflowDto: { ...dto, runs },
+            })
+          : await chatApi.analyzeThread({
+              runId: subject.run.id,
+              analyzeThreadDto: dto,
+            });
       void window.geniro
         .updateSettings({
           lastAnalysisConfig: { ...config, configDir, approval },
@@ -221,35 +258,52 @@ export function AnalyzeThreadDialog({
           onClose();
         }
       }}
-      title="Analyze thread">
+      title={workflow === null ? 'Analyze thread' : 'Analyze workflow'}>
       <div data-slot="analyze-thread" className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
           <p className="flex items-center gap-2 text-sm font-medium">
             <span className="min-w-0 truncate">{sourceLabel}</span>
             <Badge variant="secondary" className="shrink-0">
-              {workflow ? (
+              {isWorkflow ? (
                 <WorkflowIcon className="size-3" aria-hidden />
               ) : null}
-              {workflow ? 'Workflow' : 'Chat'}
+              {isWorkflow ? 'Workflow' : 'Chat'}
             </Badge>
           </p>
           {facts.length === 0 ? null : (
             <p className="text-xs text-muted-foreground">{facts.join(' · ')}</p>
           )}
           <p className="text-xs text-muted-foreground" data-slot="scope-note">
-            {workflow
-              ? 'Finds where the time went and suggests workflow changes (roles, models, parallel calls, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
-              : 'Finds where the time went and suggests repository changes (AGENTS.md, rules, checks). You choose which to apply.'}
+            {workflow !== null
+              ? 'Reads the workflow’s latest runs, compares how its agents and their models did, and suggests workflow changes (models, roles, the graph’s structure, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
+              : isWorkflow
+                ? 'Finds where the time went and suggests workflow changes (roles, models, parallel calls, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
+                : 'Finds where the time went and suggests repository changes (AGENTS.md, rules, checks). You choose which to apply.'}
           </p>
           {replaces ? (
             <p className="text-xs text-warning" data-slot="replaces-note">
-              Starting replaces this thread&apos;s current analysis — its
-              conversation and card are deleted.
+              {`Starting replaces this ${workflow === null ? 'thread' : 'workflow'}'s current analysis — its conversation and card are deleted.`}
             </p>
           ) : null}
         </div>
 
         <div className="flex flex-col divide-y divide-border rounded-md border border-border">
+          {workflow === null ? null : (
+            <SettingRow label="Runs">
+              <span className="flex items-center gap-2">
+                <Stepper
+                  value={runs}
+                  min={1}
+                  max={MAX_ANALYSED_RUNS}
+                  aria-label="Latest runs to analyse"
+                  onChange={setRuns}
+                />
+                <span className="text-xs text-muted-foreground">
+                  latest runs
+                </span>
+              </span>
+            </SettingRow>
+          )}
           <SettingRow label="Agent">
             <TargetSelect
               value={kind}
@@ -319,9 +373,13 @@ export function AnalyzeThreadDialog({
           className="text-xs text-muted-foreground"
           data-slot="analysis-folder">
           Runs in{' '}
-          <span className="font-mono">
-            {shortenPath(folder ?? source?.cwd ?? '')}
-          </span>
+          {folder === null && workflow !== null ? (
+            'the newest run’s folder'
+          ) : (
+            <span className="font-mono">
+              {shortenPath(folder ?? source?.cwd ?? '')}
+            </span>
+          )}
           {folderGone ? null : ' — repository changes are made there.'}
         </p>
         {folderGone ? (
@@ -341,7 +399,9 @@ export function AnalyzeThreadDialog({
               Choose a folder…
             </Button>
             <span className="text-xs text-muted-foreground">
-              The thread’s folder no longer exists.
+              {workflow === null
+                ? 'The thread’s folder no longer exists.'
+                : 'The newest run’s folder no longer exists.'}
             </span>
           </div>
         ) : null}
@@ -370,9 +430,7 @@ export function AnalyzeThreadDialog({
             Cancel
           </Button>
           <Button
-            disabled={
-              source === null || starting || (folderGone && folder === null)
-            }
+            disabled={!open || starting || (folderGone && folder === null)}
             onClick={() => void start()}>
             <Sparkles className="size-3.5" aria-hidden />
             {starting ? 'Starting…' : 'Start analysis'}

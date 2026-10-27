@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HISTORY_RESULT_PREFACE } from '../../../agents/chat.types';
 import { AnalysisBroker } from '../../../agents/services/analysis.broker';
@@ -119,7 +119,8 @@ describe('ReadAnalyzedThreadTool', () => {
         }),
     };
     const reader = {
-      workflowOf: () => Promise.resolve({ slug: 'dev-team', snapshot: null }),
+      analysedWorkflowOf: () =>
+        Promise.resolve({ slug: 'dev-team', snapshot: null }),
     };
 
     const first = textOf(
@@ -141,10 +142,25 @@ describe('ReadAnalyzedThreadTool', () => {
 
   it('tells a plain chat analysis there is no workflow', async () => {
     const result = await tool({
-      workflowOf: () => Promise.resolve(null),
+      analysedWorkflowOf: () => Promise.resolve(null),
     }).call('read_analyzed_thread', { view: 'workflow' }, CONTEXT);
 
     expect(textOf(result)).toContain('NOT_A_WORKFLOW');
+  });
+
+  it('refuses a workflow view of a run the analysis does not read, reading nothing', async () => {
+    const analysedWorkflowOf = vi.fn(() =>
+      Promise.resolve({ slug: 'dev-team', snapshot: null }),
+    );
+
+    const result = await tool({ analysedWorkflowOf }).call(
+      'read_analyzed_thread',
+      { view: 'workflow', runId: 'other-run' },
+      CONTEXT,
+    );
+
+    expect(textOf(result)).toContain('NOT_ANALYSED');
+    expect(analysedWorkflowOf).not.toHaveBeenCalled();
   });
 
   it('is not offered, and reads nothing, without an analysis turn', async () => {

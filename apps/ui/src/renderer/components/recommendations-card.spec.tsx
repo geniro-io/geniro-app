@@ -245,6 +245,37 @@ describe('RecommendationsCard', () => {
     );
   });
 
+  it('names the run a quote is from when the analysis read several', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflow
+        items={[
+          recommendation('W-1', {
+            evidence: [
+              {
+                runId: '0f3c9a2e-1111-2222-3333-444455556666',
+                seq: 12,
+                ts: null,
+                nodeId: 'reviewer',
+                quote: 'again',
+              },
+              { seq: 4, ts: null, nodeId: null, quote: 'newest' },
+            ],
+          }),
+        ]}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+    click(button(el, 'Why'));
+
+    expect(el.textContent).toContain('run 0f3c9a2e · seq 12 · reviewer');
+    expect(el.textContent).toContain('seq 4newest');
+  });
+
   it('names the critical path sinks in text beside the bar', () => {
     const el = render(
       <RecommendationsCard

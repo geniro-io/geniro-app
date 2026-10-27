@@ -1593,6 +1593,81 @@ export interface AnalyzeThreadDto {
 /**
  * 
  * @export
+ * @interface AnalyzeWorkflowDto
+ */
+export interface AnalyzeWorkflowDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AnalyzeWorkflowDto
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof AnalyzeWorkflowDto
+     */
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeWorkflowDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeWorkflowDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeWorkflowDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeWorkflowDto
+     */
+    cwd?: string;
+    /**
+     * The user's focus or extra instructions for this analysis
+     * @type {string}
+     * @memberof AnalyzeWorkflowDto
+     */
+    focus?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeWorkflowDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeWorkflowDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
+     * @memberof AnalyzeWorkflowDto
+     */
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+    /**
+     * How many of the workflow's newest runs to read
+     * @type {number}
+     * @memberof AnalyzeWorkflowDto
+     */
+    runs: number;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AppProcessThread
  */
 export interface AppProcessThread {
@@ -6097,6 +6172,12 @@ export interface RunDto {
     analysisSourceSeq: number | null;
     /**
      * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    analysisWorkflowSlug: string | null;
+    /**
+     * 
      * @type {number}
      * @memberof RunDto
      */
@@ -7250,6 +7331,12 @@ export interface RunWaterfallTurn {
     model: string | null;
     /**
      * 
+     * @type {RunWaterfallTurnMember}
+     * @memberof RunWaterfallTurn
+     */
+    member: RunWaterfallTurnMember | null;
+    /**
+     * 
      * @type {number}
      * @memberof RunWaterfallTurn
      */
@@ -7300,6 +7387,27 @@ export const RunWaterfallTurnOutcomeEnum = {
     Cancelled: 'cancelled'
 } as const;
 export type RunWaterfallTurnOutcomeEnum = typeof RunWaterfallTurnOutcomeEnum[keyof typeof RunWaterfallTurnOutcomeEnum];
+
+/**
+ * 
+ * @export
+ * @interface RunWaterfallTurnMember
+ */
+export interface RunWaterfallTurnMember {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof RunWaterfallTurnMember
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallTurnMember
+     */
+    model: string | null;
+}
+
 
 /**
  * 
@@ -9377,6 +9485,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     analysisSourceSeq: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    analysisWorkflowSlug: string | null;
     /**
      * 
      * @type {number}

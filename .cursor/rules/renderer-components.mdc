@@ -40,7 +40,6 @@ Every styled element goes through the layers in order: token → primitive → s
 - Remembering a boolean the user set: `use-persisted-flag`. Inside a chat thread use `chats/thread-ui-memory.ts` (`useThreadFlag` / `useThreadOverride` / `useThreadFlags`) instead, so the choice stays with that thread.
 - Side-panel blocks and outward links: `panel-section` + `panel-link-row`.
 - Sidebar rows: `nav-list-item`; set `suspendActivation` while a nested control owns the row's clicks and focus.
-- Tabular figures: `table` (`Table`, `TableHead`, `TableCell` …): a bordered card that scrolls both ways, a sticky header, `align="right"` for numbers. New tabular figures use it rather than a bare `<table>` (`chats/run-waterfall-dialog.tsx` predates it).
 - Prompt-length fields: `expandable-textarea`, except where the surrounding component must close the field itself (its ⤢ modal cannot be dismissed from outside — see `chats/queued-strip.tsx`).
 
 ## Daemon types

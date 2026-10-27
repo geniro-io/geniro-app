@@ -1,8 +1,7 @@
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 
 import type {
-  VersionChanges,
   VersionFigures,
   WorkflowVersionRow,
   WorkflowVersionsDto,
@@ -10,19 +9,10 @@ import type {
 import { formatUsd, markEstimate } from '../chats/agent-activity';
 import { UnifiedDiff } from '../chats/diff-view';
 import { ConfirmButton } from '../components/confirm-button';
+import { DiffFigures } from '../components/diff-figures';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
-import {
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableFooter,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '../components/ui/table';
 import { cn } from '../components/ui/utils';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { formatCount, NOT_MEASURED } from '../stats/stats-format';
@@ -79,69 +69,46 @@ function dateRange(row: WorkflowVersionRow): string {
   return first === last ? first : `${first} – ${last}`;
 }
 
-/** A dash with the reason beside it, never behind a hover. */
-function Unmeasured({ reason }: { reason: string }): React.JSX.Element {
-  return (
-    <span className="flex flex-col">
-      <span>{NOT_MEASURED}</span>
-      <span className="text-[10px] text-muted-foreground">{reason}</span>
-    </span>
-  );
-}
-
-function AvgCost({ figures }: { figures: VersionFigures }): React.JSX.Element {
-  return figures.avgCostUsd === null ? (
-    <Unmeasured
-      reason={figures.runs === 0 ? 'not run yet' : 'no cost reported'}
-    />
-  ) : (
-    <>{markEstimate(formatUsd(figures.avgCostUsd), figures.estimatedCostUsd)}</>
-  );
-}
-
-/** `+N −M`, as `git diff --stat` counts a change. */
-function LineCounts({
-  changes,
-}: {
-  changes: VersionChanges;
-}): React.JSX.Element {
-  if (changes.added === 0 && changes.removed === 0) {
-    return <span className="text-muted-foreground">no line change</span>;
+/** The average cost per run, or a dash with its reason as text — never behind a hover. */
+function avgCost(figures: VersionFigures): {
+  text: string;
+  reason: string | null;
+} {
+  if (figures.avgCostUsd === null) {
+    return {
+      text: NOT_MEASURED,
+      reason: figures.runs === 0 ? 'not run yet' : 'no cost reported',
+    };
   }
-  return (
-    <span className="tabular-nums">
-      <span className="text-success">+{changes.added}</span>{' '}
-      <span className="text-destructive">−{changes.removed}</span>
-    </span>
-  );
+  return {
+    text: markEstimate(formatUsd(figures.avgCostUsd), figures.estimatedCostUsd),
+    reason: null,
+  };
 }
 
-function Changes({ row }: { row: WorkflowVersionRow }): React.JSX.Element {
-  return row.changes ? (
-    <LineCounts changes={row.changes} />
-  ) : (
-    <span className="text-muted-foreground">{noDiffReason(row)}</span>
-  );
-}
-
-function VersionLabel({
+/** The version's name: `#n` (or what stands in for one) with its badges. */
+function VersionTitle({
   row,
   current,
 }: {
   row: WorkflowVersionRow;
   current: boolean;
 }): React.JSX.Element {
-  if (row.version === null) {
-    return <span className="font-medium">No recorded graph</span>;
-  }
   return (
-    <span className="flex flex-wrap items-center gap-1.5">
-      <span className="font-mono">{row.version.slice(0, 8)}</span>
-      {row.ordinal !== null ? (
-        <span className="text-muted-foreground">#{row.ordinal}</span>
-      ) : null}
-      {!row.recorded ? (
-        <span className="text-muted-foreground">numbered on its first run</span>
+    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      <span className="text-sm font-medium">
+        {row.version === null
+          ? 'No recorded graph'
+          : row.ordinal !== null
+            ? `#${row.ordinal}`
+            : row.recorded
+              ? 'Unnumbered'
+              : 'New version'}
+      </span>
+      {row.version !== null ? (
+        <span className="font-mono text-xs text-muted-foreground">
+          {row.version.slice(0, 8)}
+        </span>
       ) : null}
       {current ? <Badge variant="success">current</Badge> : null}
       {row.inferred ? <Badge variant="outline">inferred</Badge> : null}
@@ -149,12 +116,27 @@ function VersionLabel({
   );
 }
 
-function openLabel(row: WorkflowVersionRow): string {
-  return `Show version ${row.version?.slice(0, 8) ?? ''}`;
+/** What a version changed against the one before it; the card's second line says why when nothing. */
+function Changes({
+  row,
+}: {
+  row: WorkflowVersionRow;
+}): React.JSX.Element | null {
+  if (row.changes === null) {
+    return null;
+  }
+  if (row.changes.added === 0 && row.changes.removed === 0) {
+    return (
+      <span className="text-xs text-muted-foreground">no line change</span>
+    );
+  }
+  return (
+    <DiffFigures added={row.changes.added} removed={row.changes.removed} />
+  );
 }
 
-/** The version label, as the control that opens the version when it can open. */
-function OpenDiff({
+/** One version as a card: name and when, then runs, average cost and its change size. */
+function VersionCard({
   row,
   current,
   onOpen,
@@ -163,166 +145,95 @@ function OpenDiff({
   current: boolean;
   onOpen: (key: string) => void;
 }): React.JSX.Element {
-  if (!opens(row)) {
-    return <VersionLabel row={row} current={current} />;
-  }
+  const cost = avgCost(row.figures);
+  const notRun = row.figures.runs === 0;
+  const meta = [
+    notRun ? 'not run yet' : dateRange(row),
+    ...(notRun ? [] : [plural(row.figures.runs, 'run')]),
+    ...(row.changes === null && row.recorded ? [noDiffReason(row)] : []),
+  ].join(' · ');
+  const body = (
+    <>
+      <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <VersionTitle row={row} current={current} />
+        <span className="text-xs text-muted-foreground">{meta}</span>
+      </span>
+      <span className="flex shrink-0 flex-col items-end gap-1">
+        <span className="text-sm tabular-nums">{cost.text}</span>
+        {notRun ? null : (
+          <span className="text-[10px] text-muted-foreground">
+            {cost.reason ?? 'avg per run'}
+          </span>
+        )}
+      </span>
+      <span className="flex w-20 shrink-0 justify-end">
+        <Changes row={row} />
+      </span>
+      <ChevronRight
+        aria-hidden="true"
+        className={cn(
+          'size-4 shrink-0 text-muted-foreground',
+          !opens(row) && 'invisible',
+        )}
+      />
+    </>
+  );
+  const className = cn(
+    'flex w-full items-center gap-3 rounded-xl border bg-card px-4 py-3 text-left',
+    current ? 'border-success/50 bg-success/5' : 'border-border',
+    !opens(row) && 'opacity-75',
+  );
   return (
-    <button
-      type="button"
-      aria-label={openLabel(row)}
-      className="text-left text-xs focus-visible:outline-none"
-      onClick={(event) => {
-        // The row opens it too; one press opens it once.
-        event.stopPropagation();
-        onOpen(rowKey(row));
-      }}>
-      <VersionLabel row={row} current={current} />
-    </button>
+    <li data-slot="version-row">
+      {opens(row) ? (
+        <button
+          type="button"
+          aria-label={`Show version ${row.version?.slice(0, 8) ?? ''}`}
+          className={cn(
+            className,
+            'min-h-11 transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
+          )}
+          onClick={() => onOpen(rowKey(row))}>
+          {body}
+        </button>
+      ) : (
+        <div className={className}>{body}</div>
+      )}
+    </li>
   );
 }
 
-function VersionsTable({
-  rows,
-  data,
-  onOpen,
-}: {
-  rows: readonly WorkflowVersionRow[];
-  data: WorkflowVersionsDto;
-  onOpen: (key: string) => void;
-}): React.JSX.Element {
-  return (
-    <Table containerClassName="max-h-[60vh]" className="min-w-[36rem]">
-      <TableCaption className="sr-only">
-        Runs of this workflow by graph version, newest first
-      </TableCaption>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Version</TableHead>
-          <TableHead>Used</TableHead>
-          <TableHead align="right">Runs</TableHead>
-          <TableHead align="right">Avg cost</TableHead>
-          <TableHead align="right">Changes</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((row) => (
-          <TableRow
-            key={rowKey(row)}
-            data-slot="version-row"
-            interactive={opens(row)}
-            onClick={opens(row) ? () => onOpen(rowKey(row)) : undefined}>
-            <TableCell>
-              <OpenDiff
-                row={row}
-                current={isCurrent(row, data)}
-                onOpen={onOpen}
-              />
-            </TableCell>
-            <TableCell className="whitespace-nowrap">
-              {dateRange(row)}
-            </TableCell>
-            <TableCell align="right">{formatCount(row.figures.runs)}</TableCell>
-            <TableCell align="right">
-              <AvgCost figures={row.figures} />
-            </TableCell>
-            <TableCell align="right">
-              <Changes row={row} />
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-      <TableFooter>
-        <TableRow data-slot="versions-total">
-          <TableCell>All versions</TableCell>
-          <TableCell />
-          <TableCell align="right">{formatCount(data.totals.runs)}</TableCell>
-          <TableCell align="right">
-            <AvgCost figures={data.totals} />
-          </TableCell>
-          <TableCell />
-        </TableRow>
-      </TableFooter>
-    </Table>
-  );
-}
-
+/** One figure of the summary strip. */
 function Figure({
   label,
-  children,
+  value,
 }: {
   label: string;
-  children: React.ReactNode;
+  value: string;
 }): React.JSX.Element {
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className="flex flex-col gap-0.5 rounded-xl border border-border bg-muted/30 px-4 py-3">
       <span className="text-[10px] tracking-wide text-muted-foreground uppercase">
         {label}
       </span>
-      <span className="tabular-nums">{children}</span>
+      <span className="text-lg font-medium tabular-nums">{value}</span>
     </div>
   );
 }
 
-const CARD =
-  'grid grid-cols-2 gap-3 rounded-xl border border-border bg-card p-4 text-left text-xs';
-
-function VersionCards({
-  rows,
-  data,
-  onOpen,
-}: {
-  rows: readonly WorkflowVersionRow[];
-  data: WorkflowVersionsDto;
-  onOpen: (key: string) => void;
-}): React.JSX.Element {
+function Summary({ data }: { data: WorkflowVersionsDto }): React.JSX.Element {
+  const cost = avgCost(data.totals);
   return (
-    <div className="flex flex-col gap-3">
-      <section
-        data-slot="versions-total-card"
-        className={cn(CARD, 'bg-muted/30')}>
-        <span className="col-span-2 font-medium">All versions</span>
-        <Figure label="Runs">{formatCount(data.totals.runs)}</Figure>
-        <Figure label="Avg cost">
-          <AvgCost figures={data.totals} />
-        </Figure>
-      </section>
-      {rows.map((row) => {
-        const body = (
-          <>
-            <span className="col-span-2">
-              <VersionLabel row={row} current={isCurrent(row, data)} />
-            </span>
-            <span className="col-span-2 text-muted-foreground">
-              {dateRange(row)}
-            </span>
-            <Figure label="Runs">{formatCount(row.figures.runs)}</Figure>
-            <Figure label="Avg cost">
-              <AvgCost figures={row.figures} />
-            </Figure>
-            <span className="col-span-2">
-              <Changes row={row} />
-            </span>
-          </>
-        );
-        return opens(row) ? (
-          <button
-            key={rowKey(row)}
-            type="button"
-            data-slot="version-card"
-            aria-label={openLabel(row)}
-            className={cn(
-              CARD,
-              'min-h-11 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
-            )}
-            onClick={() => onOpen(rowKey(row))}>
-            {body}
-          </button>
-        ) : (
-          <section key={rowKey(row)} data-slot="version-card" className={CARD}>
-            {body}
-          </section>
-        );
-      })}
+    <div data-slot="versions-summary" className="grid grid-cols-3 gap-2">
+      <Figure label="Runs" value={formatCount(data.totals.runs)} />
+      <Figure
+        label="Versions"
+        value={formatCount(data.versions.filter((row) => row.recorded).length)}
+      />
+      <Figure
+        label="Avg per run"
+        value={cost.reason === null ? cost.text : NOT_MEASURED}
+      />
     </div>
   );
 }
@@ -352,16 +263,21 @@ function VersionView({
   };
   return (
     <div data-slot="version-view" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-3 text-xs">
+      <div className="flex flex-wrap items-center gap-3">
         <Button type="button" size="sm" variant="ghost" onClick={onBack}>
           <ArrowLeft />
           All versions
         </Button>
-        <VersionLabel row={row} current={current} />
-        <span className="text-muted-foreground">{dateRange(row)}</span>
-        {row.changes ? <LineCounts changes={row.changes} /> : null}
+        <VersionTitle row={row} current={current} />
+        <span className="text-xs text-muted-foreground">{dateRange(row)}</span>
+        {row.changes ? (
+          <DiffFigures
+            added={row.changes.added}
+            removed={row.changes.removed}
+          />
+        ) : null}
         {onRestore && !current && row.ordinal !== null ? (
-          <span className="ml-auto flex items-center gap-2">
+          <span className="ml-auto flex items-center gap-2 text-xs">
             {restoreBlockedReason !== null ? (
               <span className="text-muted-foreground">
                 {restoreBlockedReason}
@@ -399,24 +315,11 @@ function VersionView({
   );
 }
 
-function summaryLine(data: WorkflowVersionsDto): string {
-  const parts = [
-    plural(data.totals.runs, 'run'),
-    plural(data.versions.filter((row) => row.recorded).length, 'version'),
-  ];
-  if (data.totals.avgCostUsd !== null) {
-    parts.push(
-      `${markEstimate(formatUsd(data.totals.avgCostUsd), data.totals.estimatedCostUsd)} a run on average`,
-    );
-  }
-  return parts.join(' · ');
-}
-
 /**
- * The open workflow's runs by graph version: each version's runs and average cost. A
- * press on a numbered version shows what it changed, as `git diff` prints it, and offers
- * to restore it as the workflow's graph. Every figure is the daemon's; the dialog only
- * lays them out.
+ * The open workflow's runs by graph version, one card per version: its runs and average
+ * cost and how much it changed. A press on a numbered version shows what it changed, as
+ * `git diff` prints it, and offers to restore it as the workflow's graph. Every figure is
+ * the daemon's; the dialog only lays them out.
  */
 export function WorkflowVersionsDialog({
   open,
@@ -445,7 +348,7 @@ export function WorkflowVersionsDialog({
   restoreBlockedReason?: string | null;
 }): React.JSX.Element | null {
   const narrow = useNarrowViewport();
-  // The open diff, by row key, so a re-read keeps the same version open.
+  // The open version, by row key, so a re-read keeps the same one open.
   const [shown, setShown] = useState<string | null>(null);
   const close = (): void => {
     setShown(null);
@@ -466,16 +369,23 @@ export function WorkflowVersionsDialog({
   } else if (data === null || loading) {
     body = (
       <div aria-busy="true" className="flex flex-col gap-2">
-        <div className="h-3 w-48 animate-pulse rounded bg-muted" />
-        {Array.from({ length: 6 }, (_, index) => (
+        <div className="grid grid-cols-3 gap-2">
+          {Array.from({ length: 3 }, (_, index) => (
+            <div
+              key={index}
+              className="h-16 animate-pulse rounded-xl bg-muted/60"
+            />
+          ))}
+        </div>
+        {Array.from({ length: 5 }, (_, index) => (
           <div
             key={index}
-            className="h-9 animate-pulse rounded-md bg-muted/60"
+            className="h-14 animate-pulse rounded-xl bg-muted/60"
           />
         ))}
       </div>
     );
-  } else if (data.totals.runs === 0) {
+  } else if (data.totals.runs === 0 && data.versions.length === 0) {
     body = (
       <p className="text-sm text-muted-foreground">
         This workflow hasn't run yet. Versions appear after its first run.
@@ -504,18 +414,27 @@ export function WorkflowVersionsDialog({
       />
     ) : (
       <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-0.5">
-          <p className="text-sm text-muted-foreground">{summaryLine(data)}</p>
-          <p className="text-xs text-muted-foreground">
-            Name, description and layout edits do not create a version. Press a
-            version to see what it changed or to restore it.
-          </p>
-        </div>
-        {narrow ? (
-          <VersionCards rows={rows} data={data} onOpen={setShown} />
-        ) : (
-          <VersionsTable rows={rows} data={data} onOpen={setShown} />
-        )}
+        <Summary data={data} />
+        <p className="text-xs text-muted-foreground">
+          Newest first. Name, description and layout edits do not create a
+          version. Press a version to see what it changed or to restore it.
+        </p>
+        <ul
+          aria-label="Versions, newest first"
+          // Full screen, the page scrolls the list; in a window, the list does.
+          className={cn(
+            'flex flex-col gap-2',
+            !narrow && 'max-h-[55vh] overflow-y-auto',
+          )}>
+          {rows.map((row) => (
+            <VersionCard
+              key={rowKey(row)}
+              row={row}
+              current={isCurrent(row, data)}
+              onOpen={setShown}
+            />
+          ))}
+        </ul>
       </div>
     );
   }
@@ -525,9 +444,10 @@ export function WorkflowVersionsDialog({
       open={open}
       onClose={close}
       fullScreen={narrow}
-      className={narrow ? undefined : 'max-h-[85vh] max-w-[56rem]'}
+      className={narrow ? undefined : 'max-h-[85vh] max-w-[48rem]'}
       title={`Versions of ${workflowName}`}>
-      {body}
+      {/* Full screen, the dialog pads nothing: the page's 16px gutter is ours. */}
+      <div className={cn(narrow && 'p-4')}>{body}</div>
     </Dialog>
   );
 }

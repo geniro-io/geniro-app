@@ -75,7 +75,7 @@ function press(label: string): void {
 }
 
 describe('WorkflowVersionsDialog', () => {
-  it('draws one row per version with its runs, average cost and line counts, and the totals', () => {
+  it('draws one card per version with its runs, average cost and line counts, under the totals', () => {
     render({ data: DEV_TEAM_VERSIONS });
 
     const versionRows = rows('version-row');
@@ -86,12 +86,15 @@ describe('WorkflowVersionsDialog', () => {
       expect.stringContaining('No recorded graph'),
     ]);
     expect(versionRows[0]!.textContent).toContain('current');
+    expect(versionRows[0]!.textContent).toContain('#2');
+    expect(versionRows[0]!.textContent).toContain('2 runs');
     expect(versionRows[0]!.textContent).toContain('$6.20');
-    expect(versionRows[0]!.textContent).toContain('+9 −2');
+    expect(versionRows[0]!.textContent).toContain('+9−2');
     expect(versionRows[1]!.textContent).toContain('≈$3.00');
-    expect(rows('versions-total')[0]!.textContent).toContain('All versions');
-    expect(rows('versions-total')[0]!.textContent).toContain('7');
-    expect(document.body.textContent).toContain('7 runs · 3 versions');
+    const summary = rows('versions-summary')[0]!.textContent;
+    expect(summary).toContain('Runs7');
+    expect(summary).toContain('Versions3');
+    expect(summary).toContain('≈$3.73');
   });
 
   it('says why a row has no diff or no cost, as text', () => {
@@ -104,7 +107,7 @@ describe('WorkflowVersionsDialog', () => {
     expect(copyless!.textContent).toContain('these runs kept no graph copy');
   });
 
-  it('shows a version’s git diff on a press, and goes back to the table', () => {
+  it('shows a version’s git diff on a press, and goes back to the list', () => {
     render({ data: DEV_TEAM_VERSIONS });
 
     press('Show version b7c1e09a');
@@ -118,12 +121,12 @@ describe('WorkflowVersionsDialog', () => {
     expect(rows('version-row')).toHaveLength(4);
   });
 
-  it('opens the diff from a press anywhere on the row', () => {
+  it('opens the diff from a press anywhere on the card', () => {
     render({ data: DEV_TEAM_VERSIONS });
 
-    const cell =
-      rows('version-row')[0]!.querySelector<HTMLElement>('td:last-child');
-    act(() => cell!.click());
+    const figures =
+      rows('version-row')[0]!.querySelector<HTMLElement>('.tabular-nums');
+    act(() => figures!.click());
 
     expect(
       document.body.querySelector('[data-slot="unified-diff"]'),
@@ -136,7 +139,7 @@ describe('WorkflowVersionsDialog', () => {
     const [, , inferred, copyless] = rows('version-row');
     for (const row of [inferred!, copyless!]) {
       expect(row.querySelector('button')).toBeNull();
-      act(() => row.querySelector<HTMLElement>('td')!.click());
+      act(() => row.querySelector<HTMLElement>('span')!.click());
       expect(
         document.body.querySelector('[data-slot="version-view"]'),
       ).toBeNull();
@@ -235,9 +238,9 @@ describe('WorkflowVersionsDialog', () => {
     const edited = rows('version-row')[0]!;
     expect(edited.textContent).toContain('c3a9e1f0');
     expect(edited.textContent).toContain('current');
-    expect(edited.textContent).toContain('numbered on its first run');
     expect(edited.textContent).toContain('not run yet');
-    expect(edited.textContent).toContain('+1 −1');
+    expect(edited.textContent).toContain('New version');
+    expect(edited.textContent).toContain('+1−1');
     expect(rows('version-row')[1]!.textContent).not.toContain('current');
 
     press('Show version c3a9e1f0');

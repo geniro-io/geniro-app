@@ -72,6 +72,7 @@ const run1: ChatRun = {
   promptCacheTtlMs: null,
   promptCacheTtlReason: null,
   taskList: [],
+  stages: null,
   resetWakes: [],
 };
 const run2: ChatRun = { ...run1, id: 'r2', title: 'Other chat' };

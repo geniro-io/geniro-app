@@ -154,10 +154,12 @@ export function nodeInstructionFields(
     answeringACall: boolean;
     /** The config of the CLI the node's turn runs on. */
     config: Pick<AdapterConfig, 'mcp' | 'questionToolName'>;
+    stageMap: string | null;
   },
 ): Pick<
   TurnInstructionInput,
   | 'instructionBlocks'
+  | 'stageMapPrompt'
   | 'systemPrompt'
   | 'answeringACallPrompt'
   | 'callSurfacePrompt'
@@ -165,6 +167,7 @@ export function nodeInstructionFields(
   const { callees, config, answeringACall } = context;
   return {
     instructionBlocks: joinInstructionBlocks(context.blocks),
+    stageMapPrompt: callToolsAdmitted(config) ? context.stageMap : null,
     systemPrompt: node.role ?? null,
     // Every callee, a leaf included: one with no callees gets no "May call"
     // block to carry it.

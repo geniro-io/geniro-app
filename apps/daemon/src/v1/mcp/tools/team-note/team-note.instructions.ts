@@ -13,7 +13,8 @@ export function teamNoteInstructions(): string {
     'what worked instead; `pointer` — where a result lives (a file, a pull request, a page) instead ' +
     'of the result itself. Do not use it for progress reports, "I am stuck" or questions — your ' +
     'caller hears those from your reply, ask or message_agent — nor for whole outputs, nor for what ' +
-    'the code, AGENTS.md or the task already says. Nobody is woken by a note; it waits to be read. ' +
+    'the code, AGENTS.md or the task already says. A run with stages records finishing one with ' +
+    'move_stage, not a note. Nobody is woken by a note; it waits to be read. ' +
     'Write each note so it stands alone: the reader has none of your context. When something you ' +
     "wrote stops being true, write the correct note with `supersedes` set to the old note's number " +
     'instead of contradicting it; the old one stays, marked superseded. The reply names your note ' +

@@ -111,6 +111,61 @@ type KindFieldsAreComplete = [MissingKindField] extends [never]
 const _kindFieldsAreComplete: KindFieldsAreComplete = true;
 void _kindFieldsAreComplete;
 
+// Listing a key here does not add it to the merge in serializeWorkflowYaml; nothing checks that.
+const MERGED_TOP_LEVEL_KEYS = [
+  'name',
+  'description',
+  'maxActiveTurns',
+  'nodes',
+  'edges',
+  'layout',
+  'stages',
+] as const satisfies readonly (keyof Workflow)[];
+
+type MissingTopLevelKey = Exclude<
+  keyof Workflow,
+  (typeof MERGED_TOP_LEVEL_KEYS)[number]
+>;
+type TopLevelKeysAreComplete = [MissingTopLevelKey] extends [never]
+  ? true
+  : MissingTopLevelKey;
+const _topLevelKeysAreComplete: TopLevelKeysAreComplete = true;
+void _topLevelKeysAreComplete;
+void MERGED_TOP_LEVEL_KEYS;
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner as Record<string, unknown>).sort(([a], [b]) =>
+            a.localeCompare(b),
+          ),
+        )
+      : inner,
+  );
+}
+
+// An unchanged block is left alone so the user's YAML comments on it survive an autosave.
+function patchStages(
+  doc: Document,
+  root: YAMLMap,
+  stages: Workflow['stages'],
+): void {
+  if (stages === undefined) {
+    root.delete('stages');
+    return;
+  }
+  const plain = JSON.parse(JSON.stringify(stages)) as unknown;
+  const existing = root.get('stages');
+  if (
+    isSeq(existing) &&
+    canonicalJson(existing.toJSON()) === canonicalJson(plain)
+  ) {
+    return;
+  }
+  root.set('stages', doc.createNode(plain));
+}
+
 function patchNodeItem(item: YAMLMap, node: WorkflowNode): void {
   item.set('kind', node.kind);
   setOrDelete(item, 'name', node.name);
@@ -173,6 +228,7 @@ export function serializeWorkflowYaml(
   setOrDelete(root, 'name', workflow.name);
   setOrDelete(root, 'description', workflow.description);
   setOrDelete(root, 'maxActiveTurns', workflow.maxActiveTurns);
+  patchStages(doc, root, workflow.stages);
 
   // Nodes: patch retained items in place (file order preserved), drop removed
   // ones, append new ones at the end.

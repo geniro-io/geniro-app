@@ -18,6 +18,7 @@ import type { UserQuestionBroker } from '../../agents/services/user-question.bro
 import type { WorkflowBuilderBroker } from '../../agents/services/workflow-builder.broker';
 import type { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
 import type { CallBroker } from '../../graphs/services/call-broker.service';
+import type { StageService } from '../../graphs/services/stage.service';
 import type { TaskBoardBroker } from '../../graphs/services/task-board.broker';
 import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
 import type { WorkflowProposalService } from '../../graphs/services/workflow-proposal.service';
@@ -36,6 +37,7 @@ import { ListMonitorsTool } from './list-monitors/list-monitors.tool';
 import { MarkRecommendationsTool } from './mark-recommendations/mark-recommendations.tool';
 import { MessageAgentTool } from './message-agent/message-agent.tool';
 import { MonitorTool } from './monitor/monitor.tool';
+import { MoveStageTool } from './move-stage/move-stage.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposePatchTool } from './propose-patch/propose-patch.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
@@ -76,6 +78,7 @@ export interface McpToolDeps {
   monitors: MonitorBroker;
   teamNotes: TeamNoteBroker;
   runOutcomes: RunOutcomeBroker;
+  stages: StageService;
   patches: PatchBroker;
   plans: PlanBroker;
   notices: NotifyBroker;
@@ -112,6 +115,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new TeamNoteTool(deps.teamNotes),
     new TeamNotesTool(deps.teamNotes),
     new RecordOutcomeTool(deps.runOutcomes),
+    new MoveStageTool(deps.stages, deps.calls),
     new AskUserQuestionTool(deps.questions),
     new ReportFindingsTool(deps.findings),
     new ShowChartTool(deps.charts),

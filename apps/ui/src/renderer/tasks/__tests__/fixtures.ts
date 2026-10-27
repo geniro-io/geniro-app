@@ -42,6 +42,7 @@ export function aTask(over: Partial<TaskDto> = {}): TaskDto {
     // What the card's run opened — empty for a card nothing has run, which is
     // every fixture that does not say otherwise.
     pullRequests: [],
+    stage: null,
     number: null,
     attachments: [],
     position: 0,

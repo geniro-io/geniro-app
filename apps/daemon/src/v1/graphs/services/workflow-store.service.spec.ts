@@ -57,6 +57,30 @@ describe('WorkflowStoreService', () => {
     });
   });
 
+  it('refuses a save whose stages loop back, and keeps one whose hint names a deleted agent', async () => {
+    await store.create(WF, 'review-team');
+    await expect(
+      store.save('review-team', {
+        ...WF,
+        stages: [
+          { id: 'build', title: 'Build', doneWhen: 'built', next: ['check'] },
+          { id: 'check', title: 'Check', doneWhen: 'ok', next: ['fix'] },
+          { id: 'fix', title: 'Fix', doneWhen: 'fixed', next: ['check'] },
+        ],
+      }),
+    ).rejects.toMatchObject({ errorCode: 'STAGE_CYCLE' });
+
+    await store.save('review-team', {
+      ...WF,
+      stages: [
+        { id: 'build', title: 'Build', doneWhen: 'built', ownerHint: 'gone' },
+      ],
+    });
+    expect(
+      (await store.get('review-team')).workflow.stages?.[0]?.ownerHint,
+    ).toBe('gone');
+  });
+
   it('refuses a save made from a copy older than the file, and accepts one from the current copy', async () => {
     const created = await store.create(WF, 'review-team');
     const elsewhere = await store.save('review-team', {

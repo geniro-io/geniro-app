@@ -13,6 +13,8 @@ import {
   NodeStateWireSchema,
   ResetWakesCancelledSchema,
   RunWorkflowSnapshotWireSchema,
+  StageMoveRequestSchema,
+  StageMoveResultSchema,
   StartWorkflowChatSchema,
   WorkflowChatsDiscardedSchema,
   WorkflowSchema,
@@ -165,3 +167,8 @@ export class WorkflowDeletedDto extends createZodDto(
 export class ExportedDto extends createZodDto(
   z.object({ exported: z.boolean() }),
 ) {}
+
+export class MoveWorkflowRunStageDto extends createZodDto(
+  StageMoveRequestSchema,
+) {}
+export class StageMoveResultDto extends createZodDto(StageMoveResultSchema) {}

@@ -24,6 +24,7 @@ import type {
   InstructionSizesDto,
   ItemDto,
   MeasureInstructionSizesDto,
+  MoveWorkflowRunStageDto,
   NodeStateDto,
   PressActionDto,
   ResetWakesCancelledDto,
@@ -32,6 +33,7 @@ import type {
   RunWorkflowSnapshotDto,
   SaveWorkflowDto,
   SendMessageDto,
+  StageMoveResultDto,
   StartWorkflowChatDto,
   WorkflowChatsDiscardedDto,
   WorkflowDeletedDto,
@@ -99,6 +101,11 @@ export interface WorkflowsApiListWorkflowRunsRequest {
 
 export interface WorkflowsApiMeasureInstructionSizesRequest {
     measureInstructionSizesDto: MeasureInstructionSizesDto;
+}
+
+export interface WorkflowsApiMoveWorkflowRunStageRequest {
+    runId: string;
+    moveWorkflowRunStageDto: MoveWorkflowRunStageDto;
 }
 
 export interface WorkflowsApiOpenWorkflowChatRequest {
@@ -839,6 +846,61 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async measureInstructionSizes(requestParameters: WorkflowsApiMeasureInstructionSizesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<InstructionSizesDto> {
         const response = await this.measureInstructionSizesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async moveWorkflowRunStageRaw(requestParameters: WorkflowsApiMoveWorkflowRunStageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<StageMoveResultDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling moveWorkflowRunStage().'
+            );
+        }
+
+        if (requestParameters['moveWorkflowRunStageDto'] == null) {
+            throw new runtime.RequiredError(
+                'moveWorkflowRunStageDto',
+                'Required parameter "moveWorkflowRunStageDto" was null or undefined when calling moveWorkflowRunStage().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}/stages`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['moveWorkflowRunStageDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async moveWorkflowRunStage(requestParameters: WorkflowsApiMoveWorkflowRunStageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<StageMoveResultDto> {
+        const response = await this.moveWorkflowRunStageRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

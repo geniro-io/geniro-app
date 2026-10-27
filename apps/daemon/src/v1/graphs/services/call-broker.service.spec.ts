@@ -78,6 +78,7 @@ function harness(options?: {
   poolCooldowns?: PoolCooldowns;
   /** Each conversation's unread team notes; default: no team-note tools. */
   unreadTeamNotes?: RunCallCapability['unreadTeamNotes'];
+  currentStage?: RunCallCapability['currentStage'];
 }): {
   broker: CallBroker;
   capability: RunCallCapability;
@@ -201,6 +202,9 @@ function harness(options?: {
     ...(options?.unreadTeamNotes === undefined
       ? {}
       : { unreadTeamNotes: options.unreadTeamNotes }),
+    ...(options?.currentStage === undefined
+      ? {}
+      : { currentStage: options.currentStage }),
   };
   const broker = new CallBroker(undefined, options?.poolCooldowns);
   broker.registerRun('run-1', capability, options?.seed ?? null);
@@ -1552,6 +1556,34 @@ describe('CallBroker — parked questions (M4)', () => {
       '2 team notes by other agents of this run are unread — read them with team_notes',
     );
     expect(wakeOf(0)).not.toContain('team note');
+  });
+
+  it("says the run's current stage in a wake, and nothing for a run without stages", async () => {
+    const wakeOf = (stage: string | null): string => {
+      const wakes: string[] = [];
+      const { broker } = harness({
+        launch: 'defer',
+        isNodeLive: () => false,
+        wakeNode: (_nodeId, prompt) => {
+          wakes.push(prompt);
+          return true;
+        },
+        currentStage: () => stage,
+      });
+      void broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      park(broker, { ttlMs: 60_000 });
+      return wakes[0]!;
+    };
+
+    expect(wakeOf('Review (review), 3/4')).toContain(
+      '[geniro] Current stage: Review (review), 3/4.',
+    );
+    expect(wakeOf(null)).not.toContain('Current stage');
   });
 
   it('answers the unread team-note figure per conversation, and 0 for a run it does not hold', () => {

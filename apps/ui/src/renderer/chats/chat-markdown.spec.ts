@@ -223,6 +223,29 @@ describe('chatToMarkdown', () => {
     expect(unreadable).toContain('#### run_outcome ·');
   });
 
+  it('exports a stage change in words — stage, actor, move and reason — and dumps an unreadable one', () => {
+    const payload = {
+      action: 'skip',
+      stageId: 'review',
+      stageTitle: 'Review',
+      next: 'ship',
+      text: 'docs only',
+      rev: 2,
+      by: { kind: 'user', via: 'desktop' },
+    };
+    const out = chatToMarkdown(workflowDoc([row('stage_change', payload)]));
+
+    expect(out).toContain(
+      '**◈ stage Review** — You — skipped — took ship\n\ndocs only',
+    );
+    expect(out).not.toContain('"stageId"');
+
+    const unreadable = chatToMarkdown(
+      workflowDoc([row('stage_change', { ...payload, action: 'finish' })]),
+    );
+    expect(unreadable).toContain('#### stage_change ·');
+  });
+
   it('keeps the settle of a turn answered inside a continuation, but not as a second completed turn', () => {
     const settle = row('turn_complete', {
       usage: null,

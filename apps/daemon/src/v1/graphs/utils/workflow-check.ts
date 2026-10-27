@@ -3,6 +3,7 @@ import { BaseException } from '@packages/common';
 import { type Workflow, WorkflowSchema } from '../graphs.types';
 import { computeRunOrder } from './graph-order';
 import { validateWorkflowGraph } from './graph-validate';
+import { assertValidStages } from './stage-validate';
 
 export type WorkflowCheck =
   | { ok: true; workflow: Workflow }
@@ -30,6 +31,7 @@ export function checkWorkflow(input: unknown): WorkflowCheck {
   try {
     validateWorkflowGraph(parsed.data.nodes, parsed.data.edges);
     computeRunOrder(parsed.data.nodes, parsed.data.edges);
+    assertValidStages(parsed.data);
   } catch (error) {
     return {
       ok: false,

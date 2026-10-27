@@ -190,6 +190,22 @@ To run, additionally:
 - an agent with no incoming data edge — one that runs only when called — has
   no outgoing data edge.
 
+STAGES
+\`stages\` is optional: the steps every run of the workflow walks, separate
+from the node graph. Every agent of a run sees the whole stage list and the
+current stage, and agents mark stages done, skipped or reopened as they work.
+When the user describes the process a run goes through ("first investigate,
+then implement or fix, then review"), write it as stages:
+- one stage per step, with a short \`title\`, \`instructions\` saying what to
+  do in it and a \`doneWhen\` saying when it is finished;
+- \`id\` is a lowercase slug (\`investigation\`, \`code-review\`), never all
+  digits, and an edit names a stage by it (\`stages/review/doneWhen\`);
+- \`next\` lists the stages that may follow; two or more mean the run takes
+  ONE of them (implementation or fix), and a final stage has none;
+- exactly one stage starts the walk, and the stages never loop back;
+- \`ownerHint\` names the agent node that usually does the stage — a hint,
+  never a rule; leave it out when any agent may.
+
 WRITING THE TEXT INSIDE IT
 Every \`role\`, \`description\` and instruction block is instructions an agent
 follows on every run. Hold everything you write or rewrite to this:
@@ -228,9 +244,9 @@ to optimize or review the workflow, apply all of the above throughout.
 
 A NEW WORKFLOW
 When the file has no agents yet, or the user asks for one from scratch, read
-the schema, choose the shape the task needs — a chain of data edges for fixed
-stages, or one coordinating agent with call edges for work decided at run
-time — and propose every part of it on one ${HOST_PROPOSE_WORKFLOW_TOOL} card,
+the schema, choose the shape the task needs — a chain of data edges for a
+fixed order of agents, or one coordinating agent with call edges for work
+decided at run time — and propose every part of it on one ${HOST_PROPOSE_WORKFLOW_TOOL} card,
 one path edit each: \`name\`, a one-line \`description\`, the \`nodes\` (a
 trigger, the agents with their roles and descriptions), the \`edges\` and
 \`layout\`.

@@ -147,6 +147,7 @@ import { WorkflowVersionsDialog } from './workflow-versions-dialog';
 // focused chat row deleted whatever node was selected here, and autosave wrote
 // the loss 700ms later.
 const DELETE_KEY_CODES = ['Delete', 'Backspace'];
+const NO_AGENT_IDS: readonly string[] = [];
 const PRO_OPTIONS = { hideAttribution: true };
 /**
  * How many config directories the picker remembers. The same cap the composer
@@ -239,6 +240,7 @@ export function Workflows({
   const [maxActiveTurns, setMaxActiveTurns] = useState<number | undefined>(
     undefined,
   );
+  const [stages, setStages] = useState<WorkflowMeta['stages']>(undefined);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   // The builder's "Change workflow" popup — the create meta form, prefilled.
@@ -387,6 +389,7 @@ export function Workflows({
         setName(workflow.name);
         setDescription(workflow.description ?? '');
         setMaxActiveTurns(workflow.maxActiveTurns);
+        setStages(workflow.stages);
         setNodes(flow.nodes);
         setEdges(flow.edges);
         setSelectedNodeId(null);
@@ -399,6 +402,7 @@ export function Workflows({
             workflow.name,
             workflow.description ?? '',
             workflow.maxActiveTurns,
+            workflow.stages,
             flow.nodes,
             flow.edges,
           ),
@@ -456,6 +460,7 @@ export function Workflows({
     setName('');
     setDescription('');
     setMaxActiveTurns(undefined);
+    setStages(undefined);
     setNodes([]);
     setEdges([]);
     setError(null);
@@ -472,8 +477,14 @@ export function Workflows({
   /** The live canvas serialized as a write would store it — the autosave
    *  trigger (compared against `savedSnapshot`). */
   const liveSnapshot = useMemo(
-    () => canvasSnapshot(name, description, maxActiveTurns, nodes, edges),
-    [name, description, maxActiveTurns, nodes, edges],
+    () =>
+      canvasSnapshot(name, description, maxActiveTurns, stages, nodes, edges),
+    [name, description, maxActiveTurns, stages, nodes, edges],
+  );
+
+  const agentIds = useMemo(
+    () => nodes.flatMap((node) => (node.type === 'agent' ? [node.id] : [])),
+    [nodes],
   );
 
   /** Persist the canvas under the given meta; true on success. */
@@ -510,6 +521,7 @@ export function Workflows({
             meta.name,
             meta.description ?? '',
             meta.maxActiveTurns,
+            meta.stages,
             nodes,
             edges,
           ),
@@ -541,8 +553,9 @@ export function Workflows({
       name: name.trim() || 'workflow',
       ...(trimmedDescription ? { description: trimmedDescription } : {}),
       ...(maxActiveTurns !== undefined ? { maxActiveTurns } : {}),
+      ...(stages !== undefined ? { stages } : {}),
     });
-  }, [persist, name, description, maxActiveTurns]);
+  }, [persist, name, description, maxActiveTurns, stages]);
 
   // No Save button: edits persist on their own once the user pauses. Suspended
   // while a delete is in flight so a queued write can't resurrect the file.
@@ -602,6 +615,7 @@ export function Workflows({
         workflow.name,
         workflow.description ?? '',
         workflow.maxActiveTurns,
+        workflow.stages,
         flow.nodes,
         flow.edges,
       );
@@ -621,6 +635,7 @@ export function Workflows({
       setName(workflow.name);
       setDescription(workflow.description ?? '');
       setMaxActiveTurns(workflow.maxActiveTurns);
+      setStages(workflow.stages);
       setNodes(flow.nodes);
       setEdges(flow.edges);
       setSavedSnapshot(onDisk);
@@ -745,6 +760,7 @@ export function Workflows({
           setName(meta.name);
           setDescription(meta.description ?? '');
           setMaxActiveTurns(meta.maxActiveTurns);
+          setStages(meta.stages);
           setRenameOpen(false);
         }
       } finally {
@@ -1580,6 +1596,7 @@ export function Workflows({
           submitLabel="Create"
           busyLabel="Creating…"
           maxActiveTurnsCeiling={capabilities?.maxActiveTurnsCeiling ?? null}
+          agentIds={NO_AGENT_IDS}
           onClose={() => setCreateOpen(false)}
           onSubmit={(meta) => void createWorkflow(meta)}
         />
@@ -2321,8 +2338,10 @@ export function Workflows({
           name,
           ...(description.trim() ? { description } : {}),
           ...(maxActiveTurns !== undefined ? { maxActiveTurns } : {}),
+          ...(stages !== undefined ? { stages } : {}),
         }}
         maxActiveTurnsCeiling={capabilities?.maxActiveTurnsCeiling ?? null}
+        agentIds={agentIds}
         onClose={() => setRenameOpen(false)}
         onSubmit={(meta) => void renameWorkflow(meta)}
       />

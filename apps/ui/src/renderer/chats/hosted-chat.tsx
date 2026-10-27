@@ -940,6 +940,7 @@ export function HostedChat({
         revealCall: null,
         openSubagentDetail: null,
         runOutcomes,
+        runStages: null,
         cardBacked,
         loadImage: loadMarkdownImage,
         loadMetrics,

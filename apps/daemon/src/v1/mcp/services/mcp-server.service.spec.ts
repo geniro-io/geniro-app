@@ -22,6 +22,7 @@ import {
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
+  HOST_MOVE_STAGE_TOOL,
   HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
@@ -89,6 +90,7 @@ import {
   type WorkflowAgentNode,
 } from '../../graphs/graphs.types';
 import { CallBroker } from '../../graphs/services/call-broker.service';
+import type { StageService } from '../../graphs/services/stage.service';
 import { TaskBoardBroker } from '../../graphs/services/task-board.broker';
 import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
 import type { WorkflowProposalService } from '../../graphs/services/workflow-proposal.service';
@@ -103,6 +105,7 @@ import type { ShareService } from '../../shares/services/share.service';
 import type { AgentShareOutcome } from '../../shares/shares.types';
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import { createMcpTools } from '../tools/mcp-tools';
+import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
 import { proposePatchInstructions } from '../tools/propose-patch/propose-patch.instructions';
 import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
 import { McpServerService } from './mcp-server.service';
@@ -125,7 +128,10 @@ const HELPER: WorkflowAgentNode = {
   role: 'You help with research. Always start by reading SECRET_PLAYBOOK.md.',
 };
 
-function broker(unreadTeamNotes?: (caller: string) => number): CallBroker {
+function broker(
+  unreadTeamNotes?: (caller: string) => number,
+  currentStage?: () => string | null,
+): CallBroker {
   const capability: RunCallCapability = {
     calleesOf: new Map([['orch', [HELPER]]]),
     launchCalleeTurn: async () => ({
@@ -147,6 +153,7 @@ function broker(unreadTeamNotes?: (caller: string) => number): CallBroker {
     tellLiveNode: () => false,
     wakeNode: () => false,
     ...(unreadTeamNotes === undefined ? {} : { unreadTeamNotes }),
+    ...(currentStage === undefined ? {} : { currentStage }),
   };
   const instance = new CallBroker();
   instance.registerRun('run-1', capability);
@@ -181,6 +188,7 @@ function service(
   workflowBuilders = new WorkflowBuilderBroker(),
   // Never asked by the cases that pass none: no sink, so the tool is not listed.
   runOutcomes = runOutcomeBroker(),
+  stages = stageService(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -196,6 +204,7 @@ function service(
       monitors,
       teamNotes,
       runOutcomes,
+      stages,
       patches,
       plans,
       notices,
@@ -309,12 +318,28 @@ async function everyHostTool(): Promise<ToolListing[]> {
       teamNotes,
       undefined,
       runOutcomes,
+      stageService({ runId: 'run-1', nodeId: 'agent' }),
     ),
     'run-1',
     'agent',
     rpc('tools/list', {}),
   );
   return (json().result as { tools: ToolListing[] }).tools;
+}
+
+function stageService(
+  staged?: { runId: string; nodeId: string },
+  move: StageService['move'] = async () => {
+    throw new Error('not called');
+  },
+): StageService {
+  return {
+    canUse: (runId: string, nodeId: string) =>
+      staged !== undefined &&
+      staged.runId === runId &&
+      staged.nodeId === nodeId,
+    move,
+  } as unknown as StageService;
 }
 
 /** A `record_outcome` broker no case here records through: listing only. */
@@ -3276,6 +3301,102 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(recordOutcome).toContain('geniro counts the questions');
   });
 
+  it('lists move_stage right after record_outcome, and only to a node of a staged run', async () => {
+    const names = (await everyHostTool()).map((t) => t.name);
+    const at = names.indexOf(HOST_RECORD_OUTCOME_TOOL);
+    expect(names.slice(at, at + 2)).toEqual([
+      HOST_RECORD_OUTCOME_TOOL,
+      HOST_MOVE_STAGE_TOOL,
+    ]);
+
+    const tool = new MoveStageTool(
+      stageService({ runId: 'run-1', nodeId: 'lead' }),
+      new CallBroker(),
+    );
+    const listed = (nodeId: string) =>
+      tool.list({ runId: 'run-1', nodeId, conversationId: null }).length;
+    expect(listed('lead')).toBe(1);
+    expect(listed('other')).toBe(0);
+  });
+
+  it('keeps move_stage, team_note, record_outcome and the CLI task list in their own lanes', async () => {
+    const tools = await everyHostTool();
+    const move = find(tools, HOST_MOVE_STAGE_TOOL);
+    expect(move).toMatch(/\bteam_note\b/);
+    expect(move).toContain('record_outcome');
+    expect(move).toContain('TaskCreate');
+    expect(find(tools, HOST_TEAM_NOTE_TOOL)).toContain('move_stage');
+    expect(find(tools, HOST_RECORD_OUTCOME_TOOL)).toContain('move_stage');
+  });
+
+  it('answers a move with the stage to work on next, and a refusal with its fix', async () => {
+    const moved = new MoveStageTool(
+      stageService({ runId: 'run-1', nodeId: 'lead' }, async () => ({
+        ok: true,
+        workflow: { name: 'w', nodes: [], edges: [] },
+        stages: [
+          { id: 'build', title: 'Build', doneWhen: 'built', next: ['review'] },
+          { id: 'review', title: 'Review', doneWhen: 'approved' },
+        ],
+        progress: {
+          rev: 1,
+          current: 'review',
+          position: { index: 2, total: 2 },
+          stages: [],
+        },
+        resets: [],
+        payload: {
+          action: 'complete',
+          stageId: 'build',
+          stageTitle: 'Build',
+          text: 'built',
+          rev: 1,
+          by: { kind: 'agent', nodeId: 'lead' },
+        },
+      })),
+      new CallBroker(),
+    );
+    const ctx = {
+      runId: 'run-1',
+      nodeId: 'lead',
+      conversationId: null,
+      caller: 'lead',
+    } as Parameters<typeof moved.call>[2];
+    const ok = await moved.call(
+      HOST_MOVE_STAGE_TOOL,
+      { action: 'complete', stage: 'build', text: 'built' },
+      ctx,
+    );
+    expect(ok.isError).toBe(false);
+    expect(ok.content[0]!.text).toBe(
+      'Done: Build.\nNow: Review (review) (2/2).\nDone when: approved',
+    );
+
+    const refused = new MoveStageTool(
+      stageService({ runId: 'run-1', nodeId: 'lead' }, async () => ({
+        ok: false,
+        code: 'NEXT_REQUIRED',
+        message: 'name one of: implementation, fix',
+      })),
+      new CallBroker(),
+    );
+    const no = await refused.call(
+      HOST_MOVE_STAGE_TOOL,
+      { action: 'complete', stage: 'investigation', text: 'x' },
+      ctx,
+    );
+    expect(no).toMatchObject({ isError: true });
+    expect(no.content[0]!.text).toBe(
+      'NEXT_REQUIRED: name one of: implementation, fix',
+    );
+    const bad = await refused.call(
+      HOST_MOVE_STAGE_TOOL,
+      { action: 'finish', stage: 'x', text: 'x' },
+      ctx,
+    );
+    expect(bad.content[0]!.text).toContain('INVALID_ARGS');
+  });
+
   it('makes BOTH team-note tools name the other, and say what a note is not for', async () => {
     // A writer that never hears of the reader writes into a store nobody
     // opens; a reader that never hears of the writer treats the notes as a
@@ -3639,6 +3760,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
+      stages: stageService(),
     } as Parameters<typeof createMcpTools>[0]);
     const listing = tools.flatMap((tool) =>
       tool.list({ runId: 'run-1', nodeId: 'agent', conversationId: null }),
@@ -3733,6 +3855,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
+      stages: stageService(),
     }).find((t) => t.handles(HOST_READ_WORKFLOWS_TOOL))!;
 
     const result = await tool.call(HOST_READ_WORKFLOWS_TOOL, { slug: 'team' }, {
@@ -3796,6 +3919,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
+      stages: stageService(),
     }).find((t) => t.handles(HOST_PROPOSE_WORKFLOW_TOOL))!;
     const context = {
       runId: 'run-1',
@@ -4573,6 +4697,36 @@ describe('McpServerService — the team-note tools', () => {
       unread_team_notes: 2,
     });
     expect(await envelopeOf(0)).not.toHaveProperty('unread_team_notes');
+  });
+
+  it('puts the run’s current stage beside every call envelope, and leaves it out for a run without stages', async () => {
+    const envelopeOf = async (
+      stage: string | null,
+    ): Promise<Record<string, unknown>> => {
+      const { json } = await post(
+        service(
+          broker(
+            () => 0,
+            () => stage,
+          ),
+        ),
+        'run-1',
+        'orch',
+        rpc('tools/call', {
+          name: 'await_agent',
+          arguments: { call_id: 'call-404' },
+        }),
+      );
+      return JSON.parse(
+        (json().result as { content: { text: string }[] }).content[0]!.text,
+      ) as Record<string, unknown>;
+    };
+
+    expect(await envelopeOf('Fix (fix), 2/4')).toMatchObject({
+      status: 'error',
+      stage: 'Fix (fix), 2/4',
+    });
+    expect(await envelopeOf(null)).not.toHaveProperty('stage');
   });
 
   const sinkOf = (

@@ -11,10 +11,12 @@ import type {
   RunListPage,
   RunPullRequest,
   SettleFigures,
+  TaskStageLine,
 } from '../chat.types';
 import { idBatches } from '../utils/id-batches';
 import { positive } from '../utils/positive-figure';
 import { readRunPullRequests } from '../utils/pull-request-capture';
+import { readRunStageProgress, stageLineOf } from '../utils/stage-progress';
 
 @Injectable()
 export class RunDao extends BaseDao<Run> {
@@ -504,14 +506,35 @@ export class RunDao extends BaseDao<Run> {
         disableIdentityMap: true,
       },
     );
-    const byRun = new Map<string, RunPullRequest[]>();
+    return pullRequestsByRun(rows);
+  }
+
+  async boardFactsOf(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<{
+    pullRequests: Map<string, RunPullRequest[]>;
+    stages: Map<string, TaskStageLine>;
+  }> {
+    const stages = new Map<string, TaskStageLine>();
+    const ids = [...new Set(runIds)];
+    if (ids.length === 0) {
+      return { pullRequests: new Map(), stages };
+    }
+    const rows = await this.getRepo(txEm).find(
+      { id: { $in: ids } },
+      {
+        fields: ['id', 'pullRequests', 'stageProgress'],
+        disableIdentityMap: true,
+      },
+    );
     for (const row of rows) {
-      const captured = readRunPullRequests(row.pullRequests);
-      if (captured.length > 0) {
-        byRun.set(row.id, captured);
+      const progress = readRunStageProgress(row.stageProgress);
+      if (progress !== null) {
+        stages.set(row.id, stageLineOf(progress));
       }
     }
-    return byRun;
+    return { pullRequests: pullRequestsByRun(rows), stages };
   }
 
   /**
@@ -1059,4 +1082,17 @@ function scopeFilter(scope: ChatListScope): {
   return scope === 'all'
     ? {}
     : { archivedAt: scope === 'archived' ? { $ne: null } : null };
+}
+
+function pullRequestsByRun(
+  rows: readonly { id: string; pullRequests: string | null }[],
+): Map<string, RunPullRequest[]> {
+  const byRun = new Map<string, RunPullRequest[]>();
+  for (const row of rows) {
+    const captured = readRunPullRequests(row.pullRequests);
+    if (captured.length > 0) {
+      byRun.set(row.id, captured);
+    }
+  }
+  return byRun;
 }

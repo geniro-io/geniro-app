@@ -403,6 +403,109 @@ describe('parseRunStatus — the run_status twin', () => {
     ).not.toHaveProperty('pullRequests');
   });
 
+  describe('stages', () => {
+    const progress = {
+      rev: 2,
+      current: 'review',
+      position: { index: 2, total: 3 },
+      stages: [
+        {
+          id: 'build',
+          title: 'Build',
+          status: 'done',
+          next: ['review'],
+          by: { kind: 'agent', nodeId: 'manager', callId: 'call-1' },
+          text: 'built',
+          at: '2026-10-27T10:00:00.000Z',
+        },
+        { id: 'review', title: 'Review', status: 'current', next: ['ship'] },
+        { id: 'ship', title: 'Ship', status: 'pending', next: [] },
+      ],
+    };
+
+    it('carries the run’s stage progress whole', () => {
+      expect(
+        parseRunStatus({ runId: 'r1', status: null, stages: progress })?.stages,
+      ).toEqual(progress);
+    });
+
+    it('carries a stage’s rev, the move that resolved it', () => {
+      const withRev = {
+        ...progress,
+        stages: [
+          { ...progress.stages[0], rev: 2 },
+          ...progress.stages.slice(1),
+        ],
+      };
+      const read = parseRunStatus({
+        runId: 'r1',
+        status: null,
+        stages: withRev,
+      })?.stages;
+      expect(read?.stages[0]?.rev).toBe(2);
+      expect(read?.stages[1]).not.toHaveProperty('rev');
+    });
+
+    it('reads a non-integer stage rev as no stages at all', () => {
+      for (const rev of [1.5, '2', null]) {
+        expect(
+          parseRunStatus({
+            runId: 'r1',
+            status: null,
+            stages: {
+              ...progress,
+              stages: [
+                { ...progress.stages[0], rev },
+                ...progress.stages.slice(1),
+              ],
+            },
+          }),
+        ).not.toHaveProperty('stages');
+      }
+    });
+
+    it('asserts nothing when the announce carries no stages', () => {
+      expect(parseRunStatus({ runId: 'r1', status: null })).not.toHaveProperty(
+        'stages',
+      );
+    });
+
+    it('reads a malformed value as absent rather than drawing a partial list', () => {
+      const broken = [
+        'review',
+        { ...progress, position: { index: 2 } },
+        { ...progress, current: 4 },
+        { ...progress, stages: 'none' },
+        {
+          ...progress,
+          stages: [
+            progress.stages[0],
+            { ...progress.stages[1], status: 'late' },
+          ],
+        },
+        {
+          ...progress,
+          stages: [{ ...progress.stages[0], by: { kind: 'robot' } }],
+        },
+      ];
+      for (const stages of broken) {
+        expect(
+          parseRunStatus({ runId: 'r1', status: null, stages }),
+        ).not.toHaveProperty('stages');
+      }
+    });
+
+    it('admits a finished run, whose current stage is null', () => {
+      expect(
+        parseRunStatus({
+          runId: 'r1',
+          status: null,
+          stages: { ...progress, current: null },
+        })?.stages?.current,
+      ).toBeNull();
+    });
+  });
+
   it('carries whether the stamped context count is geniro’s stand-in', () => {
     expect(
       parseRunStatus({

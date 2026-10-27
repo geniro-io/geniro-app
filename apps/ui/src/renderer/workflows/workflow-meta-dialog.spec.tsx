@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { WorkflowMeta } from './graph-doc';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
 
 (
@@ -33,7 +34,7 @@ function render(
     open?: boolean;
     busy?: boolean;
     error?: string | null;
-    initial?: { name: string; description?: string; maxActiveTurns?: number };
+    initial?: WorkflowMeta;
     maxActiveTurnsCeiling?: number | null;
   } = {},
 ): void {
@@ -52,6 +53,7 @@ function render(
             ? 8
             : props.maxActiveTurnsCeiling
         }
+        agentIds={['coder']}
         onClose={onClose}
         onSubmit={onSubmit}
       />,
@@ -255,5 +257,174 @@ describe('WorkflowMetaDialog', () => {
     });
     submit();
     expect(onSubmit).toHaveBeenCalledWith({ name: 'Team' });
+  });
+
+  describe('stages', () => {
+    const STAGES = [
+      {
+        id: 'investigate',
+        title: 'Investigation',
+        doneWhen: 'Cause found',
+        next: ['implement', 'fix'],
+      },
+      { id: 'implement', title: 'Implementation', doneWhen: 'Built' },
+      { id: 'fix', title: 'Fix', doneWhen: 'Fixed' },
+    ];
+
+    function graphColumns(): string[][] | null {
+      const graph = container.querySelector('[data-slot="stage-graph"]');
+      if (graph === null) {
+        return null;
+      }
+      const columns: string[][] = [];
+      for (const pill of graph.querySelectorAll<SVGGElement>(
+        '[data-slot="stage-pill"]',
+      )) {
+        (columns[Number(pill.dataset.column)] ??= []).push(
+          pill.querySelector('text')!.textContent!,
+        );
+      }
+      return columns;
+    }
+
+    function emptyState(): string | null {
+      return (
+        container.querySelector('[data-slot="stages-empty"]')?.textContent ??
+        null
+      );
+    }
+
+    const FORK_COLUMNS = [['Investigation'], ['Implementation', 'Fix']];
+
+    function pressText(label: string): void {
+      act(() => {
+        Array.from(container.querySelectorAll('button'))
+          .find((b) => b.textContent?.trim() === label)!
+          .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    }
+
+    it('says there are none and what stages are, and submits without a stages key', () => {
+      render();
+      expect(graphColumns()).toBeNull();
+      expect(emptyState()).toContain('No stages yet');
+      expect(emptyState()).toContain('the steps every run walks');
+      expect(container.querySelector('[data-slot="stages-count"]')).toBeNull();
+      type(nameInput(), 'Team');
+      submit();
+      expect(onSubmit).toHaveBeenCalledWith({ name: 'Team' });
+    });
+
+    it('draws saved stages as the stage graph, a fork split into rows, with a count', () => {
+      render({ initial: { name: 'Team', stages: STAGES } });
+      expect(emptyState()).toBeNull();
+      expect(graphColumns()).toEqual(FORK_COLUMNS);
+      expect(
+        container
+          .querySelector('[data-slot="stage-graph"] svg')!
+          .getAttribute('aria-label'),
+      ).toBe('Stages: Investigation → Implementation or Fix');
+      expect(
+        container.querySelector('[data-slot="stages-count"]')?.textContent,
+      ).toBe('3 stages · 1 fork');
+      expect(
+        container.querySelector('[data-slot="stage-pill"][role="button"]'),
+      ).toBeNull();
+    });
+
+    it('counts a line with no fork as stages alone', () => {
+      render({
+        initial: {
+          name: 'Team',
+          stages: [
+            { id: 'a', title: 'A', doneWhen: 'a', next: ['b'] },
+            { id: 'b', title: 'B', doneWhen: 'b' },
+          ],
+        },
+      });
+      expect(
+        container.querySelector('[data-slot="stages-count"]')?.textContent,
+      ).toBe('2 stages');
+    });
+
+    it('resubmits saved stages untouched', () => {
+      render({ initial: { name: 'Team', stages: STAGES } });
+      submit();
+      expect(onSubmit).toHaveBeenCalledWith({ name: 'Team', stages: STAGES });
+    });
+
+    it('opens the stage editor over the form and takes its saved stages', () => {
+      render();
+      type(nameInput(), 'Team');
+      expect(
+        container.querySelector('[data-slot="stage-schema-editor"]'),
+      ).toBeNull();
+
+      pressText('Add stages');
+      expect(
+        container.querySelector('[data-slot="stage-schema-editor"]'),
+      ).not.toBeNull();
+      pressText('Add stage');
+      const doneWhen = Array.from(container.querySelectorAll('label')).find(
+        (l) => l.textContent === 'Done when',
+      )!.htmlFor;
+      type(document.getElementById(doneWhen) as HTMLInputElement, 'It works');
+      pressText('Save stages');
+
+      expect(
+        container.querySelector('[data-slot="stage-schema-editor"]'),
+      ).toBeNull();
+      expect(graphColumns()).toEqual([['Stage 1']]);
+      expect(onSubmit).not.toHaveBeenCalled();
+      submit();
+      expect(onSubmit).toHaveBeenCalledWith({
+        name: 'Team',
+        stages: [{ id: 'stage-1', title: 'Stage 1', doneWhen: 'It works' }],
+      });
+    });
+
+    it('leaves the stages alone when the editor is cancelled', () => {
+      render({ initial: { name: 'Team', stages: STAGES } });
+      pressText('Edit stages');
+      pressText('Add stage');
+      pressText('Cancel');
+      expect(graphColumns()).toEqual(FORK_COLUMNS);
+      submit();
+      expect(onSubmit).toHaveBeenCalledWith({ name: 'Team', stages: STAGES });
+    });
+
+    it('drops the stages key when the last stage is deleted', () => {
+      render({
+        initial: {
+          name: 'Team',
+          stages: [{ id: 'only', title: 'Only', doneWhen: 'Done' }],
+        },
+      });
+      pressText('Edit stages');
+      act(() => {
+        container
+          .querySelector<HTMLElement>(
+            '[data-slot="stage-row"] [data-menu-trigger]',
+          )!
+          .click();
+      });
+      act(() => {
+        Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+          .find((o) => o.textContent?.includes('Delete'))!
+          .click();
+      });
+      pressText('Save stages');
+      expect(graphColumns()).toBeNull();
+      expect(emptyState()).toContain('No stages yet');
+      submit();
+      expect(onSubmit).toHaveBeenCalledWith({ name: 'Team' });
+    });
+
+    it('does not submit the form from the editor’s buttons', () => {
+      render({ initial: { name: 'Team' } });
+      pressText('Add stages');
+      pressText('Add stage');
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
   });
 });

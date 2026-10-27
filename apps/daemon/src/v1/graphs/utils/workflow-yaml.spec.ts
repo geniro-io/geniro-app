@@ -233,6 +233,51 @@ edges:
     expect(parseWorkflowYaml(back).maxActiveTurns).toBeUndefined();
   });
 
+  it('writes stages into an existing file, keeps their comments while unchanged, and removes them once cleared', () => {
+    const wf = parseWorkflowYaml(VALID_SOURCE);
+    wf.stages = [
+      {
+        id: 'investigation',
+        title: 'Investigation',
+        doneWhen: 'The cause is known',
+        next: ['fix'],
+      },
+      { id: 'fix', title: 'Fix', doneWhen: 'Tests pass' },
+    ];
+    const out = serializeWorkflowYaml(wf, VALID_SOURCE);
+    expect(parseWorkflowYaml(out).stages).toEqual(wf.stages);
+    expect(out).toContain('# the coder writes the change');
+
+    const commented = out.replace(
+      'title: Investigation',
+      'title: Investigation # first look',
+    );
+    const resaved = serializeWorkflowYaml(
+      parseWorkflowYaml(commented),
+      commented,
+    );
+    expect(resaved).toContain('# first look');
+
+    const cleared = parseWorkflowYaml(resaved);
+    delete cleared.stages;
+    const back = serializeWorkflowYaml(cleared, resaved);
+    expect(back).not.toContain('stages');
+    expect(parseWorkflowYaml(back).stages).toBeUndefined();
+  });
+
+  it('keeps a hand-written stage block, comments and key order, when a save leaves it unchanged', () => {
+    const source = `${VALID_SOURCE}stages:
+  # what every run walks
+  - doneWhen: The cause is known # done-when first, by hand
+    id: investigation
+    title: Investigation
+`;
+    const wf = parseWorkflowYaml(source);
+    const out = serializeWorkflowYaml(wf, source);
+    expect(out).toContain('# done-when first, by hand');
+    expect(out).toContain('# what every run walks');
+  });
+
   it('writes an agent description back into an existing file', () => {
     // The merge patches a fixed field list, so a field missing from it is
     // silently dropped on every save of a pre-existing file — and description

@@ -13,6 +13,7 @@ import {
 import type { Workflow, WorkflowAgentNode } from '../graphs.types';
 import { ANSWERING_A_CALL } from '../utils/callee-text';
 import { callSurfaceText } from '../utils/node-instructions';
+import { stageMapPrompt } from '../utils/stage-text';
 import { InstructionSizesService } from './instruction-sizes.service';
 
 const claude = new ClaudeAdapter();
@@ -43,7 +44,7 @@ const reviewer = {
 } as WorkflowAgentNode;
 
 /** The Dev Team's shape: a trigger-fed manager with blocks, a call-only callee. */
-const DEV_TEAM: Pick<Workflow, 'nodes' | 'edges'> = {
+const DEV_TEAM: Pick<Workflow, 'nodes' | 'edges' | 'stages'> = {
   nodes: [
     { id: 'trigger', kind: 'trigger', trigger: 'manual' },
     { id: 'settings', kind: 'instruction', instructions: 'TEAM SETTINGS' },
@@ -156,6 +157,36 @@ describe('InstructionSizesService', () => {
     expect(size?.parts.map((part) => part.source)).not.toContain(
       'replyLanguage',
     );
+  });
+
+  it("measures the run's stage map for every agent, between the wired blocks and the role", () => {
+    const stages: NonNullable<Workflow['stages']> = [
+      { id: 'build', title: 'Build', doneWhen: 'built', next: ['review'] },
+      {
+        id: 'review',
+        title: 'Review',
+        doneWhen: 'approved',
+        ownerHint: 'reviewer',
+      },
+    ];
+    const sizes = subject.measure({
+      workflow: { ...DEV_TEAM, stages },
+      ...SETTINGS,
+    }).nodes;
+    const map = stageMapPrompt(stages, DEV_TEAM.nodes);
+    for (const size of sizes) {
+      const sources = size.parts.map((part) => part.source);
+      expect(sources).toContain('stageMap');
+      expect(sources.indexOf('stageMap')).toBe(sources.indexOf('role') - 1);
+      expect(size.parts.find((p) => p.source === 'stageMap')?.chars).toBe(
+        map.length,
+      );
+    }
+    expect(
+      subject
+        .measure({ workflow: DEV_TEAM, ...SETTINGS })
+        .nodes.flatMap((n) => n.parts.map((p) => p.source)),
+    ).not.toContain('stageMap');
   });
 
   it('answers only for agent nodes', () => {

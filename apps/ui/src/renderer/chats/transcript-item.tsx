@@ -27,11 +27,20 @@ import { MonitorNoticeRow } from './monitor-divider';
 import { readMonitorNotice } from './monitor-payload';
 import { callFollowUpId, NotSentMessagesContext } from './not-sent-messages';
 import { NotSentNotice } from './not-sent-notice';
+import { formatClockTime } from './relative-time';
 import { RetryContext } from './retry-context';
 import { pullRequestOutcomeKey, RunOutcomesContext } from './run-outcome';
 import { readRunOutcomePayload } from './run-outcome-payload';
 import { RunOutcomeRow } from './run-outcome-row';
 import { settlesOnContinuation } from './settled-status';
+import { readStageChangePayload } from './stage-change-payload';
+import {
+  RunStagesContext,
+  stageActorLabel,
+  StageChangeRow,
+  stageChangeSuperseded,
+  stageTitleOf,
+} from './stage-change-row';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
 import {
@@ -191,6 +200,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   const nested = useContext(NestedThreadContext);
   const durations = useContext(TurnDurationContext);
   const runOutcomes = useContext(RunOutcomesContext);
+  const runStages = useContext(RunStagesContext);
   const nodeName = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
   // Workflow-run items carry the node that produced them; tag each row so
@@ -773,6 +783,20 @@ export const TranscriptItem = memo(function TranscriptItem({
           pullRequest={runOutcomes.resolved.get(key) ?? null}
           recordedAt={item.createdAt}
           memoryKey={`outcome:${item.id}`}
+        />
+      );
+    }
+    case 'stage_change': {
+      const change = readStageChangePayload(item.payload);
+      return change === null ? null : (
+        <StageChangeRow
+          change={change}
+          actor={stageActorLabel(change.by, (id) => nodeName(id) ?? id)}
+          {...(change.next === undefined
+            ? {}
+            : { nextTitle: stageTitleOf(runStages, change.next) })}
+          time={formatClockTime(item.createdAt)}
+          superseded={stageChangeSuperseded(change, runStages)}
         />
       );
     }

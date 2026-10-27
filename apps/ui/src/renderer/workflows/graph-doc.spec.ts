@@ -203,44 +203,63 @@ describe('canvasSnapshot (the builder dirty-check baseline)', () => {
       'team',
       '',
       undefined,
+      undefined,
       flow.nodes,
       flow.edges,
     );
 
     // Re-serializing the untouched canvas reads clean.
-    expect(canvasSnapshot('team', '', undefined, flow.nodes, flow.edges)).toBe(
-      baseline,
-    );
+    expect(
+      canvasSnapshot('team', '', undefined, undefined, flow.nodes, flow.edges),
+    ).toBe(baseline);
 
     // Selecting a node is not an edit — it must never arm the discard guard.
     const selected = flow.nodes.map((n) =>
       n.id === 'coder' ? { ...n, selected: true } : n,
     );
-    expect(canvasSnapshot('team', '', undefined, selected, flow.edges)).toBe(
-      baseline,
-    );
+    expect(
+      canvasSnapshot('team', '', undefined, undefined, selected, flow.edges),
+    ).toBe(baseline);
 
     // Moving a node IS an edit (layout persists to the YAML).
     const moved = flow.nodes.map((n) =>
       n.id === 'coder' ? { ...n, position: { x: 99, y: 20 } } : n,
     );
-    expect(canvasSnapshot('team', '', undefined, moved, flow.edges)).not.toBe(
-      baseline,
-    );
+    expect(
+      canvasSnapshot('team', '', undefined, undefined, moved, flow.edges),
+    ).not.toBe(baseline);
 
     // Removing an edge IS an edit.
-    expect(canvasSnapshot('team', '', undefined, flow.nodes, [])).not.toBe(
-      baseline,
-    );
+    expect(
+      canvasSnapshot('team', '', undefined, undefined, flow.nodes, []),
+    ).not.toBe(baseline);
   });
 
   it('normalizes meta like Save does — whitespace and the empty-name fallback', () => {
     const flow = toFlow(WF);
     expect(
-      canvasSnapshot(' team ', '  ', undefined, flow.nodes, flow.edges),
-    ).toBe(canvasSnapshot('team', '', undefined, flow.nodes, flow.edges));
-    expect(canvasSnapshot('', '', undefined, flow.nodes, flow.edges)).toBe(
-      canvasSnapshot('workflow', '', undefined, flow.nodes, flow.edges),
+      canvasSnapshot(
+        ' team ',
+        '  ',
+        undefined,
+        undefined,
+        flow.nodes,
+        flow.edges,
+      ),
+    ).toBe(
+      canvasSnapshot('team', '', undefined, undefined, flow.nodes, flow.edges),
+    );
+    expect(
+      canvasSnapshot('', '', undefined, undefined, flow.nodes, flow.edges),
+    ).toBe(
+      canvasSnapshot(
+        'workflow',
+        '',
+        undefined,
+        undefined,
+        flow.nodes,
+        flow.edges,
+      ),
     );
   });
 });
@@ -262,16 +281,88 @@ describe('maxActiveTurns through the builder', () => {
     // agree on the cap, or a capped workflow reads dirty forever and autosave
     // writes in a loop — or a change to it is never saved.
     const flow = toFlow({ ...WF, maxActiveTurns: 3 });
-    const baseline = canvasSnapshot('team', '', 3, flow.nodes, flow.edges);
-    expect(canvasSnapshot('team', '', 3, flow.nodes, flow.edges)).toBe(
-      baseline,
-    );
-    expect(canvasSnapshot('team', '', 2, flow.nodes, flow.edges)).not.toBe(
-      baseline,
+    const baseline = canvasSnapshot(
+      'team',
+      '',
+      3,
+      undefined,
+      flow.nodes,
+      flow.edges,
     );
     expect(
-      canvasSnapshot('team', '', undefined, flow.nodes, flow.edges),
+      canvasSnapshot('team', '', 3, undefined, flow.nodes, flow.edges),
+    ).toBe(baseline);
+    expect(
+      canvasSnapshot('team', '', 2, undefined, flow.nodes, flow.edges),
     ).not.toBe(baseline);
+    expect(
+      canvasSnapshot('team', '', undefined, undefined, flow.nodes, flow.edges),
+    ).not.toBe(baseline);
+  });
+});
+
+describe('stages through the builder', () => {
+  const STAGES = [
+    {
+      id: 'investigate',
+      title: 'Investigate',
+      doneWhen: 'Cause found',
+      next: ['fix'],
+    },
+    { id: 'fix', title: 'Fix', doneWhen: 'Fix merged' },
+  ];
+
+  it('canvasSnapshot and fromFlow carry stages', () => {
+    const flow = toFlow({ ...WF, stages: STAGES });
+    expect(flow.nodes.length).toBe(2);
+    expect(
+      fromFlow({ name: 'team', stages: STAGES }, flow.nodes, flow.edges).stages,
+    ).toEqual(STAGES);
+    const baseline = canvasSnapshot(
+      'team',
+      '',
+      undefined,
+      STAGES,
+      flow.nodes,
+      flow.edges,
+    );
+    expect(JSON.parse(baseline).stages).toEqual(STAGES);
+    expect(
+      canvasSnapshot(
+        'team',
+        '',
+        undefined,
+        [...STAGES],
+        flow.nodes,
+        flow.edges,
+      ),
+    ).toBe(baseline);
+    expect(
+      canvasSnapshot(
+        'team',
+        '',
+        undefined,
+        [STAGES[0]!, { ...STAGES[1]!, title: 'Repair' }],
+        flow.nodes,
+        flow.edges,
+      ),
+    ).not.toBe(baseline);
+    expect(
+      canvasSnapshot('team', '', undefined, undefined, flow.nodes, flow.edges),
+    ).not.toBe(baseline);
+  });
+
+  it('writes an empty stage list as absent, in a save and in the baseline alike', () => {
+    const flow = toFlow(WF);
+    expect(
+      'stages' in
+        fromFlow({ name: 'team', stages: [] }, flow.nodes, flow.edges),
+    ).toBe(false);
+    expect(
+      canvasSnapshot('team', '', undefined, [], flow.nodes, flow.edges),
+    ).toBe(
+      canvasSnapshot('team', '', undefined, undefined, flow.nodes, flow.edges),
+    );
   });
 });
 

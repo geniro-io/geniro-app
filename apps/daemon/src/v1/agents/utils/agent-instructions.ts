@@ -152,6 +152,7 @@ export interface TurnInstructionParts {
    * for plain chat, which has no canvas to wire one on.
    */
   instructionBlocks?: string | null;
+  stageMapPrompt?: string | null;
   /** This turn's own role text — a graph node's `role`. Absent for plain chat. */
   systemPrompt?: string | null;
   /**
@@ -193,6 +194,7 @@ export const TURN_INSTRUCTION_SOURCES = [
   'taskInstructions',
   'workflowInstructions',
   'instructionBlocks',
+  'stageMap',
   'role',
   'answeringACall',
   'callSurface',
@@ -254,6 +256,7 @@ export function turnInstructionParts(
     ['taskInstructions', parts.taskInstructions],
     ['workflowInstructions', parts.workflowInstructions],
     ['instructionBlocks', parts.instructionBlocks],
+    ['stageMap', parts.stageMapPrompt],
     ['role', parts.systemPrompt],
     ['answeringACall', parts.answeringACallPrompt],
     ['callSurface', parts.callSurfacePrompt],

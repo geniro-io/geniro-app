@@ -12,6 +12,7 @@ import {
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { asRecord, asString } from '../utils/json-util';
+import { KeyedChain } from '../utils/keyed-chain';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
 import { parsePullRequestUrl, withRunOutcome } from '../utils/run-outcomes';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -71,7 +72,7 @@ function questionsOnCard(payload: Record<string, unknown>): number {
 export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
   private readonly log = new Logger(RunOutcomeBroker.name);
   /** Per run, the tail of its write chain. */
-  private readonly chains = new Map<string, Promise<void>>();
+  private readonly writes = new KeyedChain();
 
   constructor(
     private readonly em: EntityManager,
@@ -100,14 +101,14 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
       'no workflow pass is running that could record it',
       'record a pull request outcome',
       (sink) =>
-        this.serialized(runId, () =>
+        this.writes.run(runId, () =>
           this.recordNow(runId, nodeId, caller, input, sink),
         ),
     );
   }
 
   forgetRun(runId: string): void {
-    this.chains.delete(runId);
+    this.writes.forget(runId);
   }
 
   private async recordNow(
@@ -215,25 +216,5 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
       }
     }
     return count;
-  }
-
-  /**
-   * Run one write of this run after the previous one settles, so two outcomes
-   * recorded together update the column one after the other.
-   */
-  private serialized<T>(runId: string, work: () => Promise<T>): Promise<T> {
-    const previous = this.chains.get(runId) ?? Promise.resolve();
-    const next = previous.then(work);
-    const tail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.chains.set(runId, tail);
-    void tail.then(() => {
-      if (this.chains.get(runId) === tail) {
-        this.chains.delete(runId);
-      }
-    });
-    return next;
   }
 }

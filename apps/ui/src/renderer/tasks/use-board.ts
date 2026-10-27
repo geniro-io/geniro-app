@@ -585,7 +585,7 @@ export function useBoard(
     // the touched ones alone also announces, and costs one reload of a card
     // that shows only the opened ones.
     return client.onRunStatus((event) => {
-      if (event.pullRequests === undefined) {
+      if (event.pullRequests === undefined && event.stages === undefined) {
         return;
       }
       if (boardRunsRef.current.has(event.runId)) {

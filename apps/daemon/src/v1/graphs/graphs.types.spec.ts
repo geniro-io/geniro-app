@@ -199,3 +199,60 @@ describe('Workflow.maxActiveTurns', () => {
     expect(parseWith(2.5).success).toBe(false);
   });
 });
+
+describe('Workflow.stages', () => {
+  const stage = (
+    over: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    id: 'investigation',
+    title: 'Investigation',
+    doneWhen: 'The cause is known',
+    ...over,
+  });
+  const parseWith = (
+    stages: unknown,
+  ): ReturnType<typeof WorkflowSchema.safeParse> =>
+    WorkflowSchema.safeParse({ name: 'n', nodes: [], edges: [], stages });
+
+  it('accepts a stage list, and its absence', () => {
+    expect(
+      parseWith([
+        stage({ next: ['fix', 'implementation'], ownerHint: 'lead' }),
+        stage({ id: 'fix', title: 'Fix', instructions: 'Patch it.' }),
+        stage({ id: 'implementation', title: 'Implementation' }),
+      ]).success,
+    ).toBe(true);
+    expect(parseWith(undefined).success).toBe(true);
+  });
+
+  it('refuses an id that is all digits, upper-case or too long', () => {
+    expect(parseWith([stage({ id: '42' })]).success).toBe(false);
+    expect(parseWith([stage({ id: 'Review' })]).success).toBe(false);
+    expect(parseWith([stage({ id: 'a'.repeat(41) })]).success).toBe(false);
+    expect(parseWith([stage({ id: 'step-2' })]).success).toBe(true);
+  });
+
+  it('refuses a blank title or done-when and an over-long field', () => {
+    expect(parseWith([stage({ title: '   ' })]).success).toBe(false);
+    expect(parseWith([stage({ doneWhen: '' })]).success).toBe(false);
+    expect(parseWith([stage({ title: 'x'.repeat(81) })]).success).toBe(false);
+    expect(parseWith([stage({ instructions: 'x'.repeat(4001) })]).success).toBe(
+      false,
+    );
+  });
+
+  it('refuses a NUL in any stage text that reaches an agent', () => {
+    for (const field of ['title', 'instructions', 'doneWhen', 'ownerHint']) {
+      expect(parseWith([stage({ [field]: 'a\u0000b' })]).success).toBe(false);
+    }
+  });
+
+  it('reads a workflow written before stages existed', () => {
+    const parsed = WorkflowSchema.safeParse({
+      name: 'n',
+      nodes: [],
+      edges: [],
+    });
+    expect(parsed.success && parsed.data.stages).toBeUndefined();
+  });
+});

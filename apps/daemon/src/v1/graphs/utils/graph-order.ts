@@ -222,3 +222,30 @@ export function computeRunOrder(
 
   return runOrder;
 }
+
+/** The agents a trigger feeds — where a run's seed and every user message go. */
+export function triggerFedAgentIds(
+  nodes: readonly WorkflowNode[],
+  edges: readonly WorkflowEdge[],
+): Set<string> {
+  const { producersOf } = buildEdgeMaps(nodes, edges);
+  const kindOf = new Map(nodes.map((node) => [node.id, node.kind]));
+  return new Set(
+    nodes
+      .filter(
+        (node) =>
+          node.kind === 'agent' &&
+          [...(producersOf.get(node.id) ?? [])].some(
+            (id) => kindOf.get(id) === 'trigger',
+          ),
+      )
+      .map((node) => node.id),
+  );
+}
+
+export function leadAgentId(
+  nodes: readonly WorkflowNode[],
+  edges: readonly WorkflowEdge[],
+): string | null {
+  return [...triggerFedAgentIds(nodes, edges)][0] ?? null;
+}

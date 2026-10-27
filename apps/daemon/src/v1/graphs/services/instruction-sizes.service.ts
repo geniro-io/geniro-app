@@ -16,6 +16,7 @@ import {
   instructionBlocksByNode,
   nodeInstructionFields,
 } from '../utils/node-instructions';
+import { stageMapOf } from '../utils/stage-text';
 
 /**
  * The common rough rule for English prose. The readout says "approximate"
@@ -24,7 +25,7 @@ import {
 const CHARS_PER_TOKEN = 4;
 
 export interface InstructionSizesInput {
-  workflow: Pick<Workflow, 'nodes' | 'edges'>;
+  workflow: Pick<Workflow, 'nodes' | 'edges' | 'stages'>;
   customInstructions?: string;
   replyLanguage?: string;
 }
@@ -48,6 +49,7 @@ export class InstructionSizesService {
     const blocksOf = instructionBlocksByNode(workflow);
     const calleesOf = calleesByNode(workflow);
     const onDemand = onDemandNodeIds(workflow.nodes, workflow.edges);
+    const stageMap = stageMapOf(workflow);
     const nodes: NodeInstructionSize[] = [];
     for (const node of workflow.nodes) {
       if (node.kind !== 'agent') {
@@ -60,6 +62,7 @@ export class InstructionSizesService {
           answeringACall: onDemand.has(node.id),
           customInstructions: input.customInstructions,
           replyLanguage: input.replyLanguage,
+          stageMap,
         }),
       );
     }
@@ -74,6 +77,7 @@ export class InstructionSizesService {
       answeringACall: boolean;
       customInstructions: string | undefined;
       replyLanguage: string | undefined;
+      stageMap: string | null;
     },
   ): NodeInstructionSize {
     const adapter = this.adapters.for(node.agent);
@@ -86,6 +90,7 @@ export class InstructionSizesService {
           callees: context.callees,
           answeringACall: context.answeringACall,
           config: adapter.getConfig(),
+          stageMap: context.stageMap,
         }),
       },
       // As if the CLI's delivery of the call tools succeeded — the turn the

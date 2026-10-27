@@ -1960,6 +1960,20 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
+  async stageChangeRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload' | 'createdAt'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'stage_change' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'payload', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
   /**
    * The last row of one kind a run wrote, or null for a run that wrote none.
    *

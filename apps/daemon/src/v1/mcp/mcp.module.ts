@@ -22,6 +22,7 @@ import { WorkflowBuilderBroker } from '../agents/services/workflow-builder.broke
 import { WorkflowProposalBroker } from '../agents/services/workflow-proposal.broker';
 import { GraphsModule } from '../graphs/graphs.module';
 import { CallBroker } from '../graphs/services/call-broker.service';
+import { StageService } from '../graphs/services/stage.service';
 import { TaskBoardBroker } from '../graphs/services/task-board.broker';
 import { WorkflowChangeService } from '../graphs/services/workflow-change.service';
 import { WorkflowProposalService } from '../graphs/services/workflow-proposal.service';
@@ -64,6 +65,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         monitors: MonitorBroker,
         teamNotes: TeamNoteBroker,
         runOutcomes: RunOutcomeBroker,
+        stages: StageService,
         patches: PatchBroker,
         plans: PlanBroker,
         notices: NotifyBroker,
@@ -91,6 +93,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           monitors,
           teamNotes,
           runOutcomes,
+          stages,
           patches,
           plans,
           notices,
@@ -118,6 +121,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         MonitorBroker,
         TeamNoteBroker,
         RunOutcomeBroker,
+        StageService,
         PatchBroker,
         PlanBroker,
         NotifyBroker,

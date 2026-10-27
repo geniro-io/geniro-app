@@ -1690,6 +1690,31 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     );
   });
 
+  it("sends the run's stage map between the wired blocks and the role, and withholds it without an endpoint", () => {
+    const turn = (mcpEndpoint: typeof ENDPOINT | null): string => {
+      const { spawn, captured } = fakeSpawn();
+      new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
+        {
+          prompt: 'p',
+          cwd: '/proj',
+          instructionBlocks: 'TEAM SETTINGS',
+          stageMapPrompt: 'This workflow has stages every run walks',
+          systemPrompt: 'You are the router.',
+          mcpEndpoint,
+        },
+        () => {},
+      );
+      const idx = captured.args!.indexOf('--append-system-prompt');
+      return captured.args![idx + 1]!;
+    };
+    expect(turn(ENDPOINT)).toBe(
+      `${HOST_BLOCK}\n\nTEAM SETTINGS\n\nThis workflow has stages every run walks\n\nYou are the router.`,
+    );
+    expect(turn(null)).toBe(
+      `${HOST_BLOCK}\n\nTEAM SETTINGS\n\nYou are the router.`,
+    );
+  });
+
   it('sends the call block alone when a caller node has no role of its own', () => {
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(

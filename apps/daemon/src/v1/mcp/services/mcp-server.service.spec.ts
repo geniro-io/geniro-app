@@ -45,10 +45,12 @@ import type { ItemDao } from '../../agents/dao/item.dao';
 import { ActionBroker } from '../../agents/services/action.broker';
 import { AnalysisBroker } from '../../agents/services/analysis.broker';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
+import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
+import { GalleryImageService } from '../../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { MonitorBroker } from '../../agents/services/monitor.broker';
@@ -79,6 +81,7 @@ import {
   ARTIFACT_TOKEN_NAMES,
 } from '../../agents/utils/artifact-runtime';
 import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question';
+import { RemoteImageError } from '../../agents/utils/remote-image';
 import {
   ALWAYS_LOADED_TOOL_META,
   DEFAULT_AWAIT_TIMEOUT_MS,
@@ -181,6 +184,10 @@ function service(
   workflowBuilders = new WorkflowBuilderBroker(),
   // Never asked by the cases that pass none: no sink, so the tool is not listed.
   runOutcomes = runOutcomeBroker(),
+  // Never asked to download by the cases that pass none: they name local files.
+  galleryImages = new GalleryImageService({} as AttachmentStoreService, {
+    download: () => Promise.reject(new Error('no download in this case')),
+  }),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -191,6 +198,7 @@ function service(
       metrics,
       comparisons,
       galleries,
+      galleryImages,
       artifacts,
       actions,
       monitors,
@@ -397,7 +405,10 @@ function patchService(patches: PatchBroker): McpServerService {
   );
 }
 
-function galleryService(galleries: GalleryBroker): McpServerService {
+function galleryService(
+  galleries: GalleryBroker,
+  galleryImages?: GalleryImageService,
+): McpServerService {
   return service(
     new CallBroker(),
     new UserQuestionBroker(),
@@ -408,6 +419,24 @@ function galleryService(galleries: GalleryBroker): McpServerService {
     new MetricsBroker(),
     new ComparisonBroker(),
     galleries,
+    ...([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ] as const),
+    galleryImages,
   );
 }
 
@@ -2374,6 +2403,139 @@ describe('McpServerService', () => {
     expect(result.content[0]!.text).not.toContain('.png');
   });
 
+  it('tools/call show_gallery downloads a URL entry and draws the stored file', async () => {
+    const galleries = new GalleryBroker();
+    const shown: { images: { path: string; source?: string }[] }[] = [];
+    galleries.register('run-1', 'agent', async (gallery) => {
+      shown.push(gallery);
+      return { status: 'drawn', images: gallery.images.length };
+    });
+    const stored: string[] = [];
+    const attachments = {
+      saveDownloaded: () => {
+        stored.push('/userdata/attachments/run-1/x.png');
+        return '/userdata/attachments/run-1/x.png';
+      },
+    } as unknown as AttachmentStoreService;
+    const galleryImages = new GalleryImageService(attachments, {
+      download: (url) =>
+        url.endsWith('gone.png')
+          ? Promise.reject(new RemoteImageError('the server answered HTTP 404'))
+          : Promise.resolve({
+              mediaType: 'image/png',
+              bytes: Buffer.from([1]),
+            }),
+    });
+    const { json } = await post(
+      galleryService(galleries, galleryImages),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_GALLERY_TOOL,
+        arguments: {
+          images: [
+            { url: 'https://cdn.example/dish.png', description: '5 pcs' },
+            'https://cdn.example/gone.png',
+          ],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(shown).toEqual([
+      {
+        images: [
+          {
+            path: '/userdata/attachments/run-1/x.png',
+            description: '5 pcs',
+            source: 'https://cdn.example/dish.png',
+          },
+        ],
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    expect(stored).toHaveLength(1);
+    expect(result.content[0]!.text).toBe(
+      'Gallery shown to the user: 1 image. 1 image could not be downloaded: ' +
+        'https://cdn.example/gone.png (the server answered HTTP 404).',
+    );
+  });
+
+  it('draws nothing when no URL of the gallery could be downloaded', async () => {
+    const galleries = new GalleryBroker();
+    const shown: unknown[] = [];
+    galleries.register('run-1', 'agent', async (gallery) => {
+      shown.push(gallery);
+      return { status: 'drawn', images: gallery.images.length };
+    });
+    const galleryImages = new GalleryImageService(
+      {} as AttachmentStoreService,
+      {
+        download: () =>
+          Promise.reject(new RemoteImageError('too many redirects')),
+      },
+    );
+    const { json } = await post(
+      galleryService(galleries, galleryImages),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_GALLERY_TOOL,
+        arguments: { images: ['https://cdn.example/a.png'] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(shown).toEqual([]);
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toBe(
+      'The gallery could not be shown (no image could be downloaded). 1 image could not be ' +
+        'downloaded: https://cdn.example/a.png (too many redirects). Describe the images in your reply instead.',
+    );
+  });
+
+  it('downloads nothing for a gallery it has nowhere to draw', async () => {
+    const asked: string[] = [];
+    const galleryImages = new GalleryImageService(
+      {} as AttachmentStoreService,
+      {
+        download: (url) => {
+          asked.push(url);
+          return Promise.resolve({
+            mediaType: 'image/png',
+            bytes: Buffer.from([1]),
+          });
+        },
+      },
+    );
+    const tool = createMcpTools({
+      ...({} as Parameters<typeof createMcpTools>[0]),
+      galleries: new GalleryBroker(),
+      galleryImages,
+    }).find((entry) => entry.handles(HOST_GALLERY_TOOL))!;
+    const result = await tool.call(
+      HOST_GALLERY_TOOL,
+      { images: ['https://cdn.example/a.png'] },
+      {
+        runId: 'run-1',
+        nodeId: 'agent',
+        whileCancellable: (call: (signal: AbortSignal) => Promise<unknown>) =>
+          call(new AbortController().signal),
+      } as unknown as Parameters<typeof tool.call>[2],
+    );
+    expect(asked).toEqual([]);
+    expect(result.content).toEqual([
+      {
+        type: 'text',
+        text: 'The gallery could not be shown (this conversation has no turn to draw it in). Describe the images in your reply instead.',
+      },
+    ]);
+  });
+
   it('does not offer show_artifact to a node with nowhere to publish one', async () => {
     const { json } = await post(
       service(new CallBroker(), new UserQuestionBroker()),
@@ -3621,6 +3783,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       metrics: new MetricsBroker(),
       comparisons: new ComparisonBroker(),
       galleries: new GalleryBroker(),
+      galleryImages: {} as GalleryImageService,
       artifacts: new ArtifactBroker(),
       actions: new ActionBroker(),
       patches: new PatchBroker(),
@@ -3715,6 +3878,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       metrics: new MetricsBroker(),
       comparisons: new ComparisonBroker(),
       galleries: new GalleryBroker(),
+      galleryImages: {} as GalleryImageService,
       artifacts: new ArtifactBroker(),
       actions: new ActionBroker(),
       patches: new PatchBroker(),
@@ -3775,6 +3939,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       metrics: new MetricsBroker(),
       comparisons: new ComparisonBroker(),
       galleries: new GalleryBroker(),
+      galleryImages: {} as GalleryImageService,
       artifacts: new ArtifactBroker(),
       actions: new ActionBroker(),
       patches: new PatchBroker(),
@@ -3845,6 +4010,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       metrics: new MetricsBroker(),
       comparisons: new ComparisonBroker(),
       galleries: new GalleryBroker(),
+      galleryImages: {} as GalleryImageService,
       artifacts: new ArtifactBroker(),
       actions: new ActionBroker(),
       patches: new PatchBroker(),

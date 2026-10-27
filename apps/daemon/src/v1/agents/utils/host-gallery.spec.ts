@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { HOST_GALLERY_TOOL } from '../chat.types';
-import { isHostGalleryCall } from './host-gallery';
+import { hostGalleryDownloads, isHostGalleryCall } from './host-gallery';
 
 const SERVER = 'geniro-1a2b3c4d';
 
@@ -29,5 +29,45 @@ describe('isHostGalleryCall', () => {
       false,
     );
     expect(isHostGalleryCall(SERVER, 'mcp__acme__show_gallery')).toBe(false);
+  });
+});
+
+describe('hostGalleryDownloads', () => {
+  it('finds a URL in any of the forms a call can name a picture in', () => {
+    expect(hostGalleryDownloads({ images: ['https://a.example/x.png'] })).toBe(
+      true,
+    );
+    expect(
+      hostGalleryDownloads({ images: [{ url: 'http://a.example/x.png' }] }),
+    ).toBe(true);
+    expect(
+      hostGalleryDownloads({ images: [{ src: ' HTTPS://a.example/x.png' }] }),
+    ).toBe(true);
+  });
+
+  it('finds a URL however the CLI wraps the arguments', () => {
+    expect(
+      hostGalleryDownloads({
+        arguments: { images: [{ path: 'https://a.example/x.png' }] },
+      }),
+    ).toBe(true);
+  });
+
+  it('reads a gallery of local files as no download', () => {
+    expect(
+      hostGalleryDownloads({
+        title: 'Shots',
+        images: [
+          '/tmp/a.png',
+          { path: 'b.png', description: 'see https://a.example for more' },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it('counts arguments the CLI did not relay as a download, so the user is asked', () => {
+    expect(hostGalleryDownloads(undefined)).toBe(true);
+    expect(hostGalleryDownloads(null)).toBe(true);
+    expect(hostGalleryDownloads({})).toBe(true);
   });
 });

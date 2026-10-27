@@ -96,7 +96,7 @@ Renders:
 - A BUTTON the user can press later, where the \`publish_action\` tool is offered: it is shown in this chat, and a press sends the message you gave it — to you, or in a workflow to the agent the user's messages go to — stops a process you left running, or runs a command once the user has confirmed it. Reach for it when your next step waits on something only the user will see happen, such as a pull request being merged, to let them stop a preview server once they are done with it, or to let them run a step only they should decide to run.
 
 Does not render:
-- Remote image URLs (\`http://\`, \`https://\`). This app's content security policy refuses them; only local file paths work.
+- Remote image URLs in markdown (\`![](https://…)\`). This app's content security policy refuses them; only local file paths work there. Where \`show_gallery\` is offered, it takes a picture's URL itself.
 - Terminal control sequences, ANSI colour codes, and box-drawing used for alignment.
 
 Text you write before a tool call in the same response may reach the user only as a one-line summary, not in full. So when you ask the user a question, put everything they need to decide into the question itself — the question text, each option's description, and, where the question tool takes one, an option's preview, which is shown in full as markdown. Anything else the user must read in full goes in a message that ends your turn, with no tool call after it.

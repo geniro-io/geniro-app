@@ -10621,10 +10621,11 @@ describe('ChatService — approval modes (parity M1)', () => {
   });
 
   it('auto-approves the show_gallery CALL, like every drawing tool', async () => {
-    // Drawing in this app's own transcript is not something a permission card
-    // can meaningfully guard — the CALL reads no file, the renderer fetches the
-    // pictures afterwards through the image route's own guards. Without this
-    // arm the user gets an "allow show_gallery?" card on every gallery.
+    // Drawing local files in this app's own transcript is not something a
+    // permission card can meaningfully guard — the CALL reads no file, the
+    // renderer fetches the pictures afterwards through the image route's own
+    // guards. Without this arm the user gets an "allow show_gallery?" card on
+    // every gallery.
     const { service, claude, approvals, itemDao } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -10650,6 +10651,61 @@ describe('ChatService — approval modes (parity M1)', () => {
       false,
     );
     expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('puts a show_gallery call naming a URL to the user outside `auto`', async () => {
+    // The daemon downloads a URL from a host the agent chose, so in an `ask`
+    // chat it gets the card the agent's own fetch would (user decision).
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-gallery',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_GALLERY_TOOL}`,
+      input: {
+        images: [{ path: '/tmp/a.png' }, { url: 'https://cdn.example/b.png' }],
+      },
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalledWith(
+      'p-gallery',
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(
+      itemDao.items.filter((i) => i.kind === 'approval_request'),
+    ).toHaveLength(1);
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+  });
+
+  it('approves a show_gallery call naming a URL in an `auto` chat', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { images: ['https://cdn.example/b.png'] };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-gallery',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_GALLERY_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-gallery',
+      true,
+      input,
+    );
   });
 
   it('auto-approves the propose_plan CALL — the gate is its own card too', async () => {

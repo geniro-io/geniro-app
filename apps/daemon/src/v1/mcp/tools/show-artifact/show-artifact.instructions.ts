@@ -35,7 +35,7 @@ export function showArtifactInstructions(
     'easier. ' +
     'Do NOT use it in place of the tools that already draw one shape well: several readings of one ' +
     'measure is show_chart, a few headline figures is show_metrics, options judged against criteria is ' +
-    'show_comparison, pictures already on disk is show_gallery, and a plan you want APPROVED before ' +
+    'show_comparison, a set of pictures on disk or the web is show_gallery, and a plan you want APPROVED before ' +
     'you start is propose_plan — that one blocks on the user, this one does not ask them anything. ' +
     'Reach for this when what you need is a layout none of those can express. ' +
     ARTIFACT_DESIGN_GUIDANCE +

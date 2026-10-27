@@ -174,8 +174,10 @@ export class McpServerService {
    *
    * Only the tools that WAIT need this: the three that wait on a person, and
    * the two call tools that wait on a callee (`await_agent`, a sync
-   * `call_agent`). The drawing tools resolve the moment their row is durable,
-   * so there is never a window in which a cancellation could arrive for one.
+   * `call_agent`), and `show_gallery` while it downloads the pictures a call
+   * names by URL. The other drawing tools resolve the moment their row is
+   * durable, so there is never a window in which a cancellation could arrive
+   * for one.
    */
   private async whileCancellable<TOutcome>(
     runId: string,

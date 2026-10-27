@@ -1,8 +1,10 @@
 import {
+  type GalleryDownloadFailure,
   type HostGallery,
   type HostGalleryImage,
   type HostGalleryOutcome,
   MAX_GALLERY_CAPTION_LENGTH,
+  MAX_GALLERY_DESCRIPTION_LENGTH,
   MAX_GALLERY_IMAGES,
   MAX_GALLERY_PATH_LENGTH,
   MAX_GALLERY_TITLE_LENGTH,
@@ -28,12 +30,15 @@ function text(value: unknown, max: number): string | null {
  * deliberate rather than an omission: this process does not read the file. The
  * renderer asks the image route for it, and that route owns the guards —
  * checking here as well would be a second, drifting copy of a decision made
- * where the read actually happens.
+ * where the read actually happens. A URL is judged where it is downloaded.
  *
  * A path is TRUNCATED to its cap like every other string in the family, which
  * is safe for exactly the same reason: a cut path names a different file or no
  * file, and the route answers accordingly. It cannot be made to name a file
  * outside what an untruncated path could already reach.
+ *
+ * `source` is never read from the call: it records where the daemon itself
+ * downloaded a picture from.
  */
 function galleryImage(value: unknown): HostGalleryImage | null {
   if (typeof value === 'string') {
@@ -44,17 +49,23 @@ function galleryImage(value: unknown): HostGalleryImage | null {
     return null;
   }
   const entry = value as Record<string, unknown>;
-  // `path` is the documented name; `src` is what a model writing HTML in its
-  // head reaches for, and accepting it costs one `??` against a whole gallery
-  // dropped over a synonym.
+  // `path` is the documented name; `src` and `url` are what a model writing
+  // HTML or holding a link reaches for, and accepting them costs one `??`
+  // against a whole gallery dropped over a synonym.
   const path =
     text(entry.path, MAX_GALLERY_PATH_LENGTH) ??
-    text(entry.src, MAX_GALLERY_PATH_LENGTH);
+    text(entry.src, MAX_GALLERY_PATH_LENGTH) ??
+    text(entry.url, MAX_GALLERY_PATH_LENGTH);
   if (path === null) {
     return null;
   }
   const caption = text(entry.caption, MAX_GALLERY_CAPTION_LENGTH);
-  return { path, ...(caption === null ? {} : { caption }) };
+  const description = text(entry.description, MAX_GALLERY_DESCRIPTION_LENGTH);
+  return {
+    path,
+    ...(caption === null ? {} : { caption }),
+    ...(description === null ? {} : { description }),
+  };
 }
 
 /**
@@ -104,15 +115,26 @@ export function readHostGallery(
  *
  * A RECEIPT, never the paths — the point of a host-drawn gallery is that the
  * pictures go to the screen instead of back through the model's window, and
- * echoing the list here would put every path in it twice.
+ * echoing the list here would put every path in it twice. The one exception is
+ * a URL that could not be downloaded: the agent is told which and why, since
+ * that picture is missing from what the user sees.
  *
  * The count is said because the cap truncates silently: an agent that sent
  * thirty images reads back twenty-four and knows.
  */
-export function hostGalleryResultText(outcome: HostGalleryOutcome): string {
+export function hostGalleryResultText(
+  outcome: HostGalleryOutcome,
+  failures: readonly GalleryDownloadFailure[] = [],
+): string {
+  const failed =
+    failures.length === 0
+      ? ''
+      : ` ${failures.length} ${failures.length === 1 ? 'image' : 'images'} could not be downloaded: ${failures
+          .map((failure) => `${failure.url} (${failure.reason})`)
+          .join('; ')}.`;
   if (outcome.status === 'unavailable') {
-    return `The gallery could not be shown (${outcome.reason}). Describe the images in your reply instead.`;
+    return `The gallery could not be shown (${outcome.reason}).${failed} Describe the images in your reply instead.`;
   }
   const noun = outcome.images === 1 ? 'image' : 'images';
-  return `Gallery shown to the user: ${outcome.images} ${noun}.`;
+  return `Gallery shown to the user: ${outcome.images} ${noun}.${failed}`;
 }

@@ -30,8 +30,18 @@ describe('readGallery', () => {
     ).toEqual({
       title: 'Before and after',
       images: [
-        { path: '/tmp/shots/before.png', caption: 'the old header' },
-        { path: '/tmp/shots/after.png', caption: null },
+        {
+          path: '/tmp/shots/before.png',
+          caption: 'the old header',
+          description: null,
+          source: null,
+        },
+        {
+          path: '/tmp/shots/after.png',
+          caption: null,
+          description: null,
+          source: null,
+        },
       ],
     });
   });
@@ -43,14 +53,61 @@ describe('readGallery', () => {
     // the two readers are only checkable against each other while they agree.
     expect(readGallery(item({ images: ['a.png'] }))).toEqual({
       title: null,
-      images: [{ path: 'a.png', caption: null }],
+      images: [
+        { path: 'a.png', caption: null, description: null, source: null },
+      ],
     });
   });
 
   it('accepts `src` as a synonym for `path`, like its twin', () => {
     expect(readGallery(item({ images: [{ src: 'a.png' }] }))).toEqual({
       title: null,
-      images: [{ path: 'a.png', caption: null }],
+      images: [
+        { path: 'a.png', caption: null, description: null, source: null },
+      ],
+    });
+  });
+
+  it('accepts `url` as a synonym for `path`, like its twin', () => {
+    expect(
+      readGallery(item({ images: [{ url: 'https://cdn.example/a.png' }] })),
+    ).toEqual({
+      title: null,
+      images: [
+        {
+          path: 'https://cdn.example/a.png',
+          caption: null,
+          description: null,
+          source: null,
+        },
+      ],
+    });
+  });
+
+  it('reads a description and the URL a downloaded picture came from', () => {
+    expect(
+      readGallery(
+        item({
+          images: [
+            {
+              path: '/u/attachments/r1/x.png',
+              caption: 'Khinkali',
+              description: '5 pcs\n2 400 ₸',
+              source: 'https://cdn.example/khinkali.png',
+            },
+          ],
+        }),
+      ),
+    ).toEqual({
+      title: null,
+      images: [
+        {
+          path: '/u/attachments/r1/x.png',
+          caption: 'Khinkali',
+          description: '5 pcs\n2 400 ₸',
+          source: 'https://cdn.example/khinkali.png',
+        },
+      ],
     });
   });
 
@@ -67,8 +124,8 @@ describe('readGallery', () => {
     ).toEqual({
       title: null,
       images: [
-        { path: 'a.png', caption: null },
-        { path: 'b.png', caption: null },
+        { path: 'a.png', caption: null, description: null, source: null },
+        { path: 'b.png', caption: null, description: null, source: null },
       ],
     });
   });
@@ -91,6 +148,11 @@ describe('readGallery', () => {
       readGallery(
         item({ title: '  ', images: [{ path: 'a.png', caption: '' }] }),
       ),
-    ).toEqual({ title: null, images: [{ path: 'a.png', caption: null }] });
+    ).toEqual({
+      title: null,
+      images: [
+        { path: 'a.png', caption: null, description: null, source: null },
+      ],
+    });
   });
 });

@@ -80,10 +80,12 @@ export class UiFixturesSeeder extends Seeder {
     });
 
     // The gallery card, with EVERY tile state on screen at once — two that
-    // load, one uncaptioned, one whose file has moved, and one naming a remote
-    // source. The last two are the point: a dead tile and a refused scheme each
-    // say what is wrong in their own words rather than showing a broken box,
-    // and neither takes the rest of the set down with it. The markdown image in
+    // load (with descriptions, one of them a downloaded picture carrying its
+    // `source`), one uncaptioned, one whose file has moved, and one naming a
+    // remote source the daemon never downloaded. The last two are the point: a
+    // dead tile and a refused scheme each say what is wrong in their own words
+    // rather than showing a broken box, and neither takes the rest of the set
+    // down with it. The markdown image in
     // the reply above it is the same picture reached the other way, which is
     // what makes the shared zoom viewer comparable between the two.
     this.chat(em, {
@@ -106,10 +108,15 @@ export class UiFixturesSeeder extends Seeder {
           {
             path: 'apps/ui/resources/icon.png',
             caption: 'icon.png — relative to the run cwd',
+            description:
+              'The app icon as the dock shows it.\nA second line, kept as written.',
           },
           {
             path: 'apps/ui/src/renderer/assets/logo.png',
             caption: 'logo.png',
+            description:
+              'A description long enough to be cut after four lines in the card, so the strip stays one height whatever an agent writes; the whole text is in the tooltip and under the picture in the full-screen viewer.',
+            source: 'https://example.com/logo.png',
           },
           { path: 'apps/ui/resources/icon.png' },
           {
@@ -401,7 +408,12 @@ const turnComplete = (): SeedItem => ({
  */
 const gallery = (
   title: string,
-  images: { path: string; caption?: string }[],
+  images: {
+    path: string;
+    caption?: string;
+    description?: string;
+    source?: string;
+  }[],
 ): SeedItem => ({
   kind: 'show_gallery',
   payload: { title, images },

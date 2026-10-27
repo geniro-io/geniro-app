@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { Injectable } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
@@ -10,6 +18,7 @@ import {
   type AttachmentMediaType,
   type AttachmentWire,
   MAX_ATTACHMENT_BYTES,
+  MAX_LOCAL_IMAGE_BYTES,
 } from '../chat.types';
 
 /** Constructor options — test seams, not user config. */
@@ -77,11 +86,63 @@ export class AttachmentStoreService {
         `attachment exceeds the ${Math.floor(MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB limit`,
       );
     }
+    return { id: this.write(runId, mediaType, bytes).id, mediaType };
+  }
+
+  /**
+   * Persist an image geniro obtained itself — a gallery picture downloaded
+   * from a URL — and answer its absolute path. It lives and dies with the run
+   * like an attachment; the caller has already bounded its size.
+   */
+  saveDownloaded(
+    runId: string,
+    mediaType: AttachmentMediaType,
+    bytes: Buffer,
+  ): string {
+    if (!UUID.test(runId)) {
+      throw new BadRequestException('RUN_ID_INVALID', 'not a run id');
+    }
+    if (bytes.byteLength > MAX_LOCAL_IMAGE_BYTES) {
+      throw new BadRequestException(
+        'ATTACHMENT_TOO_LARGE',
+        `a downloaded image may be at most ${Math.floor(MAX_LOCAL_IMAGE_BYTES / 1024 / 1024)}MB`,
+      );
+    }
+    return this.write(runId, mediaType, bytes).path;
+  }
+
+  /**
+   * Delete downloaded images {@link saveDownloaded} wrote for a run, and the
+   * run's directory once it is empty. Only a file directly in that directory
+   * with a name this service mints is touched, whatever the caller passes.
+   */
+  removeDownloaded(runId: string, paths: readonly string[]): void {
+    if (!UUID.test(runId)) {
+      return;
+    }
+    const dir = join(this.root, runId);
+    for (const path of paths) {
+      const id = path.slice(dir.length + 1);
+      if (dirname(path) === dir && ATTACHMENT_ID.test(id)) {
+        rmSync(path, { force: true });
+      }
+    }
+    if (existsSync(dir) && readdirSync(dir).length === 0) {
+      rmdirSync(dir);
+    }
+  }
+
+  private write(
+    runId: string,
+    mediaType: AttachmentMediaType,
+    bytes: Buffer,
+  ): { id: string; path: string } {
     const id = `${randomUUID()}.${EXTENSIONS[mediaType]}`;
     const dir = join(this.root, runId);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, id), bytes);
-    return { id, mediaType };
+    const path = join(dir, id);
+    writeFileSync(path, bytes);
+    return { id, path };
   }
 
   /**

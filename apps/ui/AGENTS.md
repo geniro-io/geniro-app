@@ -174,7 +174,7 @@ One home for each concern:
 - Findings keep the agent's order.
 - Charts key rows by position (`s0`, `s1`, …), never by series name. `null` stays a gap.
 - Metrics colour a delta by stated sentiment, never by sign.
-- The gallery loads through `LocalImageLoaderContext`. It does that sequentially and only while open, releases images on fold, and uses no lightbox of its own.
+- The gallery loads through `LocalImageLoaderContext`. It does that sequentially and only while open, releases images on fold, and uses no lightbox of its own. A picture named by URL arrives already downloaded by the daemon (a local path, with the URL as `source`); the renderer never fetches one. Each card shows its caption and description under the picture in one horizontally scrolling strip, and the viewer shows the description too.
 - Dynamic workflow: the roster is taken whole. A launch is recognised by a `workflow_info` row, never by tool name.
 - `propose_patch` renders as an ordinary approval card (`diff-view.tsx` `editDiffOf`). Its tool-name literal is a twin.
 - A plan or question row that cannot be parsed falls back to the permission body.

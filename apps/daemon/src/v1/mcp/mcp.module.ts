@@ -8,6 +8,7 @@ import { ChartBroker } from '../agents/services/chart.broker';
 import { ComparisonBroker } from '../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../agents/services/findings-report.broker';
 import { GalleryBroker } from '../agents/services/gallery.broker';
+import { GalleryImageService } from '../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../agents/services/global-chat-search.service';
 import { MetricsBroker } from '../agents/services/metrics.broker';
 import { MonitorBroker } from '../agents/services/monitor.broker';
@@ -59,6 +60,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         metrics: MetricsBroker,
         comparisons: ComparisonBroker,
         galleries: GalleryBroker,
+        galleryImages: GalleryImageService,
         artifacts: ArtifactBroker,
         actions: ActionBroker,
         monitors: MonitorBroker,
@@ -86,6 +88,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           metrics,
           comparisons,
           galleries,
+          galleryImages,
           artifacts,
           actions,
           monitors,
@@ -113,6 +116,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         MetricsBroker,
         ComparisonBroker,
         GalleryBroker,
+        GalleryImageService,
         ArtifactBroker,
         ActionBroker,
         MonitorBroker,

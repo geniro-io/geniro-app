@@ -166,7 +166,14 @@ describe('EntryCard', () => {
         type: 'gallery',
         gallery: {
           title: 'Before and after',
-          images: [{ path: '/tmp/a.png', caption: 'the before' }],
+          images: [
+            {
+              path: '/tmp/a.png',
+              caption: 'the before',
+              description: null,
+              source: null,
+            },
+          ],
         },
       }),
     ).toContain('Before and after');

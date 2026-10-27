@@ -100,13 +100,15 @@ export type StdinLifetime = 'payload' | 'turn' | 'session';
  * `startSession` opts, and the registry's `startTurn` — and a shape restated
  * three times is a shape that drifts.
  *
- * The tool NAME is the whole input, deliberately. It is what tells a question
- * from a permission, and keying on the name rather than on a payload flag is
- * this codebase's standing rule for that decision — a flag can drift between
- * CLI releases and quietly move a tool across the human gate.
+ * The tool NAME is what tells a question from a permission, and keying on the
+ * name rather than on a payload flag is this codebase's standing rule for that
+ * decision — a flag can drift between CLI releases and quietly move a tool
+ * across the human gate. The arguments ride along for a permission whose
+ * answer depends on what it asks for (a gallery naming a URL).
  */
 export type BetweenTurnApproval = (request: {
   toolName: string;
+  input: unknown;
 }) => boolean | null;
 
 /** An `approval_request`, narrowed — the only event kind that is ever held. */
@@ -1769,7 +1771,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // read it as an absent policy and fall through to the refusal this exists
     // to remove.
     const offered = opts.betweenTurnApproval
-      ? opts.betweenTurnApproval({ toolName: event.toolName })
+      ? opts.betweenTurnApproval({
+          toolName: event.toolName,
+          input: event.input,
+        })
       : isQuestion
         ? null
         : false;

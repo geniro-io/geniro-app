@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import { GalleryCard } from './gallery-block';
@@ -18,9 +18,14 @@ stubResizeObserver();
 const GALLERY: GallerySpec = {
   title: 'Before and after',
   images: [
-    { path: '/tmp/a.png', caption: 'the old header' },
-    { path: '/tmp/b.png', caption: null },
-    { path: '/tmp/c.png', caption: null },
+    {
+      path: '/tmp/a.png',
+      caption: 'the old header',
+      description: null,
+      source: null,
+    },
+    { path: '/tmp/b.png', caption: null, description: null, source: null },
+    { path: '/tmp/c.png', caption: null, description: null, source: null },
   ],
 };
 
@@ -160,8 +165,18 @@ describe('a gallery an agent handed over', () => {
       {
         title: null,
         images: [
-          { path: '/tmp/a.png', caption: null },
-          { path: 'https://example.com/pixel.png', caption: null },
+          {
+            path: '/tmp/a.png',
+            caption: null,
+            description: null,
+            source: null,
+          },
+          {
+            path: 'https://example.com/pixel.png',
+            caption: null,
+            description: null,
+            source: null,
+          },
         ],
       },
       async (path) => {
@@ -369,10 +384,119 @@ describe('a gallery an agent handed over', () => {
   it('counts a single image in the singular', async () => {
     await render({
       title: null,
-      images: [{ path: '/tmp/a.png', caption: null }],
+      images: [
+        { path: '/tmp/a.png', caption: null, description: null, source: null },
+      ],
     });
 
     expect(container.textContent).toContain('1 image');
     expect(container.textContent).not.toContain('1 images');
+  });
+
+  it('shows each picture’s caption and description under it, line breaks kept', async () => {
+    await render({
+      title: null,
+      images: [
+        {
+          path: '/tmp/a.png',
+          caption: 'Khinkali',
+          description: '5 pcs\n2 400 ₸',
+          source: null,
+        },
+        { path: '/tmp/b.png', caption: null, description: null, source: null },
+      ],
+    });
+
+    const captions = container.querySelectorAll(
+      '[data-slot="gallery-caption"]',
+    );
+    const descriptions = container.querySelectorAll<HTMLElement>(
+      '[data-slot="gallery-description"]',
+    );
+    expect([...captions].map((node) => node.textContent)).toEqual(['Khinkali']);
+    expect([...descriptions].map((node) => node.textContent)).toEqual([
+      '5 pcs\n2 400 ₸',
+    ]);
+    expect(descriptions[0]!.className).toContain('whitespace-pre-line');
+    // The second card draws no empty caption block under its picture.
+    expect(container.querySelectorAll('figcaption')).toHaveLength(1);
+  });
+
+  it('shows the description in the full-screen viewer too', async () => {
+    await render({
+      title: null,
+      images: [
+        {
+          path: '/tmp/a.png',
+          caption: 'Khinkali',
+          description: 'Juicy, with broth inside',
+          source: 'https://cdn.example/k.png',
+        },
+        { path: '/tmp/b.png', caption: null, description: null, source: null },
+      ],
+    });
+    press(tiles()[0]!);
+
+    expect(
+      document.body.querySelector('[data-slot="image-viewer-description"]')
+        ?.textContent,
+    ).toBe('Juicy, with broth inside');
+
+    press(control('Next image')!);
+
+    expect(
+      document.body.querySelector('[data-slot="image-viewer-description"]'),
+    ).toBeNull();
+  });
+
+  it('names a downloaded picture by its URL when it has no caption', async () => {
+    await render({
+      title: null,
+      images: [
+        {
+          path: '/u/attachments/r/x.png',
+          caption: null,
+          description: null,
+          source: 'https://cdn.example/x.png',
+        },
+      ],
+    });
+
+    expect(tiles()[0]!.title).toBe('https://cdn.example/x.png');
+  });
+
+  it('offers a scroll arrow only toward a side that has more to show', async () => {
+    await render(GALLERY);
+    const strip = container.querySelector<HTMLUListElement>(
+      '[data-slot="gallery-strip"]',
+    )!;
+    const scrollBy = vi.fn();
+    strip.scrollBy = scrollBy as unknown as typeof strip.scrollBy;
+
+    // jsdom lays nothing out, so every width reads 0: nothing is out of view.
+    expect(control('Scroll the gallery forward')).toBeNull();
+    expect(control('Scroll the gallery back')).toBeNull();
+
+    Object.defineProperty(strip, 'clientWidth', { value: 400 });
+    Object.defineProperty(strip, 'scrollWidth', { value: 1000 });
+    act(() => {
+      strip.dispatchEvent(new Event('scroll'));
+    });
+
+    expect(control('Scroll the gallery back')).toBeNull();
+    press(control('Scroll the gallery forward')!);
+    expect(scrollBy).toHaveBeenCalledWith({ left: 320, behavior: 'smooth' });
+
+    Object.defineProperty(strip, 'scrollLeft', { value: 600 });
+    act(() => {
+      strip.dispatchEvent(new Event('scroll'));
+    });
+
+    expect(control('Scroll the gallery forward')).toBeNull();
+    press(control('Scroll the gallery back')!);
+    expect(scrollBy).toHaveBeenLastCalledWith({
+      left: -320,
+      behavior: 'smooth',
+    });
   });
 });

@@ -3,7 +3,6 @@ import { Injectable } from '@nestjs/common';
 
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
-import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
@@ -28,7 +27,6 @@ export class WorkflowVersionsService {
     private readonly versionDao: WorkflowVersionDao,
     private readonly runDao: RunDao,
     private readonly nodeStateDao: NodeStateDao,
-    private readonly wallTurns: WallTurnDao,
     private readonly adapters: AgentAdapterRegistry,
     private readonly store: WorkflowStoreService,
   ) {}
@@ -40,9 +38,11 @@ export class WorkflowVersionsService {
     const live = new Map(
       (await this.runDao.runFacts(runIds, em)).map((run) => [run.id, run]),
     );
-    const liveIds = [...live.keys()];
     const liveFailedNodes = new Map<string, string[]>();
-    for (const node of await this.nodeStateDao.failedByRuns(liveIds, em)) {
+    for (const node of await this.nodeStateDao.failedByRuns(
+      [...live.keys()],
+      em,
+    )) {
       liveFailedNodes.set(node.runId, [
         ...(liveFailedNodes.get(node.runId) ?? []),
         node.nodeId,
@@ -59,9 +59,6 @@ export class WorkflowVersionsService {
         pollsSpendFor(adapters, kind),
       ),
       liveFailedNodes,
-      liveWallMs: await this.wallTurns.runSums(liveIds, em),
-      pullRequests: await this.activityDao.pullRequestCounts(runIds, em),
-      lines: await this.activityDao.lineSnapshotsOfRunSeries(runIds, em),
       graphs: await this.versionDao.graphsOf(slug, em),
     });
   }

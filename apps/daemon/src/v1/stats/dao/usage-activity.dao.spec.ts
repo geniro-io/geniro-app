@@ -610,7 +610,6 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
           inferred: false,
           runStatus: null,
           failedNodes: null,
-          wallMs: null,
         },
       ]);
       expect(await orm.em.fork().count(UsageActivity, {})).toBe(1);
@@ -631,13 +630,11 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       await dao.stampThreadOutcome('run-1', created, {
         status: 'failed',
         failedNodes: [{ nodeId: 'dev', name: 'Developer' }],
-        wallMs: 1200,
         at: at('2026-10-01T11:00:00.000Z'),
       });
       await dao.stampThreadOutcome('run-1', created, {
         status: 'completed',
         failedNodes: [],
-        wallMs: 4800.4,
         at: at('2026-10-01T12:00:00.000Z'),
       });
 
@@ -646,7 +643,6 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
         version: 'abcdef0123456789',
         runStatus: 'completed',
         failedNodes: [],
-        wallMs: 4800,
       });
     });
 
@@ -654,7 +650,6 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       await dao.stampThreadOutcome('run-1', created, {
         status: 'completed',
         failedNodes: [],
-        wallMs: null,
         at: created,
       });
       await dao.stampThreadVersion('run-1', created, version);
@@ -664,7 +659,6 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       expect(rows.get('run-1')).toMatchObject({
         slug: 'dev-team',
         runStatus: 'completed',
-        wallMs: null,
       });
     });
 
@@ -712,57 +706,6 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       expect(
         (await dao.threadRowsByRuns(['run-1'])).get('run-1'),
       ).toMatchObject({ version: 'abcdef0123456789', runStatus: null });
-    });
-  });
-
-  describe('pullRequestCounts', () => {
-    it('counts each run’s distinct pull requests', async () => {
-      await dao.insertPullRequestOnce(
-        pullRequest({ runId: 'run-1', number: 1 }),
-      );
-      await dao.insertPullRequestOnce(
-        pullRequest({ runId: 'run-1', number: 2 }),
-      );
-      await dao.insertPullRequestOnce(
-        pullRequest({ runId: 'run-2', number: 3 }),
-      );
-
-      const counts = await dao.pullRequestCounts(['run-1', 'run-2', 'run-3']);
-      expect(Object.fromEntries(counts)).toEqual({ 'run-1': 2, 'run-2': 1 });
-    });
-  });
-
-  describe('lineSnapshotsOfRunSeries', () => {
-    const snapshot = (
-      runId: string,
-      lineKey: string | null,
-      linesAdded: number,
-    ) =>
-      dao.insertLineSnapshot({
-        runId,
-        lineKey,
-        occurredAt: at('2026-10-01T10:00:00.000Z'),
-        linesAdded,
-        linesRemoved: 0,
-        partial: false,
-      });
-
-    it('reads every snapshot of the series the runs measured, other runs’ included', async () => {
-      await snapshot('run-1', 'key-a', 10);
-      await snapshot('run-other', 'key-a', 25);
-      await snapshot('run-other', 'key-b', 99);
-      await snapshot('run-1', null, 4);
-      await snapshot('run-other', null, 7);
-
-      const rows = await dao.lineSnapshotsOfRunSeries(['run-1']);
-      expect(
-        rows
-          .map(
-            (row) =>
-              `${row.runId}:${row.lineKey ?? 'legacy'}:${row.linesAdded}`,
-          )
-          .sort(),
-      ).toEqual(['run-1:key-a:10', 'run-1:legacy:4', 'run-other:key-a:25']);
     });
   });
 });

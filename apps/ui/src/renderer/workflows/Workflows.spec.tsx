@@ -269,10 +269,6 @@ beforeEach(() => {
         thinkingTokens: null,
         workedMs: null,
       },
-      pullRequests: 0,
-      lines: null,
-      workedMs: null,
-      workedPartial: false,
     },
   }));
 });

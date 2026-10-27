@@ -13,7 +13,6 @@ import { UsageActivity } from '../entity/usage-activity.entity';
 import type {
   ActivityFact,
   FailedNodeStamp,
-  LineSnapshotRead,
   LineSnapshotRow,
   LinesPeak,
   PullRequestActivityInput,
@@ -70,7 +69,6 @@ const LEDGER_COLUMNS = [
   'workflow_version_inferred',
   'run_status',
   'failed_nodes',
-  'wall_ms',
 ] as const;
 
 type LedgerColumns = Pick<
@@ -87,7 +85,6 @@ function toLedgerRow(row: LedgerColumns): ThreadLedgerRow {
     inferred: flagOf(row.workflow_version_inferred),
     runStatus: row.run_status,
     failedNodes: readFailedNodes(row.failed_nodes),
-    wallMs: row.wall_ms,
   };
 }
 
@@ -124,7 +121,6 @@ interface ActivityDatabase {
     workflow_version_inferred: number | null;
     run_status: UsageActivity['runStatus'];
     failed_nodes: UsageActivity['failedNodes'];
-    wall_ms: UsageActivity['wallMs'];
     outcome_at: number | null;
   };
 }
@@ -516,8 +512,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
 
   /**
    * Stamp how a workflow run last settled. Overwrites an earlier stamp: a settled run
-   * reopens, and the newest ending is the run's outcome. The wall time only ever rises,
-   * since `wall_turns` is insert-only: a lower reading is a purge in progress, not the run.
+   * reopens, and the newest ending is the run's outcome.
    */
   async stampThreadOutcome(
     runId: string,
@@ -530,19 +525,12 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
     await em
       .getKysely<ActivityDatabase>({ convertValues: false })
       .updateTable('usage_activity')
-      .set((eb) => ({
+      .set({
         run_status: outcome.status,
         failed_nodes: JSON.stringify(outcome.failedNodes),
-        wall_ms:
-          outcome.wallMs === null
-            ? eb.ref('wall_ms')
-            : eb.fn<number>('max', [
-                eb.fn.coalesce('wall_ms', eb.val(0)),
-                eb.val(Math.round(outcome.wallMs)),
-              ]),
         outcome_at: outcome.at.getTime(),
         updated_at: Date.now(),
-      }))
+      })
       .where('dedup_key', '=', threadFact(runId, createdAt).dedupKey)
       .execute();
   }
@@ -585,105 +573,6 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
       }
     }
     return out;
-  }
-
-  /** How many distinct pull requests each of these runs opened, by run id; a run with none is absent. */
-  async pullRequestCounts(
-    runIds: readonly string[],
-    txEm?: EntityManager,
-  ): Promise<Map<string, number>> {
-    const db = (txEm ?? this.em.fork()).getKysely<ActivityDatabase>({
-      convertValues: false,
-    });
-    const out = new Map<string, number>();
-    for (const batch of idBatches(runIds)) {
-      const rows = await db
-        .selectFrom('usage_activity')
-        .select((eb) => [
-          'run_id',
-          eb.fn.count<number>('dedup_key').distinct().as('count'),
-        ])
-        .where('kind', '=', 'pull_request')
-        .where('run_id', 'in', batch)
-        .where('deleted_at', 'is', null)
-        .groupBy('run_id')
-        .execute();
-      for (const row of rows) {
-        out.set(row.run_id, Number(row.count));
-      }
-    }
-    return out;
-  }
-
-  /**
-   * Every lines snapshot of every series these runs measured — other runs' snapshots of a
-   * shared folder included, since a run's growth is counted past what the series had
-   * already reached (`linesIncrements`).
-   */
-  async lineSnapshotsOfRunSeries(
-    runIds: readonly string[],
-    txEm?: EntityManager,
-  ): Promise<LineSnapshotRead[]> {
-    const db = (txEm ?? this.em.fork()).getKysely<ActivityDatabase>({
-      convertValues: false,
-    });
-    const lineKeys = new Set<string>();
-    const legacyRunIds = new Set<string>();
-    for (const batch of idBatches(runIds)) {
-      const rows = await db
-        .selectFrom('usage_activity')
-        .select(['run_id', 'line_key'])
-        .distinct()
-        .where('kind', '=', 'lines')
-        .where('run_id', 'in', batch)
-        .where('deleted_at', 'is', null)
-        .execute();
-      for (const row of rows) {
-        if (row.line_key === null) {
-          legacyRunIds.add(row.run_id);
-        } else {
-          lineKeys.add(row.line_key);
-        }
-      }
-    }
-    const snapshots: LineSnapshotRead[] = [];
-    const read = async (
-      column: 'line_key' | 'run_id',
-      values: readonly string[],
-    ): Promise<void> => {
-      for (const batch of idBatches(values)) {
-        const rows = await db
-          .selectFrom('usage_activity')
-          .select([
-            'run_id',
-            'line_key',
-            'occurred_at',
-            'lines_added',
-            'lines_removed',
-            'partial',
-          ])
-          .where('kind', '=', 'lines')
-          .where(column, 'in', batch)
-          .$if(column === 'run_id', (query) =>
-            query.where('line_key', 'is', null),
-          )
-          .where('deleted_at', 'is', null)
-          .execute();
-        for (const row of rows) {
-          snapshots.push({
-            runId: row.run_id,
-            lineKey: row.line_key,
-            occurredAt: new Date(Number(row.occurred_at)),
-            linesAdded: row.lines_added,
-            linesRemoved: row.lines_removed,
-            partial: flagOf(row.partial),
-          });
-        }
-      }
-    };
-    await read('line_key', [...lineKeys]);
-    await read('run_id', [...legacyRunIds]);
-    return snapshots;
   }
 
   /**

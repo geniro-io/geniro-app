@@ -15,14 +15,12 @@ import {
 
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
-import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { Workflow } from '../../graphs/graphs.types';
 import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { workflowVersionOf } from '../../graphs/utils/workflow-version';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
-import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import type { RunStatus } from '../../runs/runs.types';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { WorkflowVersionDao } from '../dao/workflow-version.dao';
@@ -55,7 +53,6 @@ describe('WorkflowLedgerService (in-memory sqlite)', () => {
   let bus: AgentEventBus;
   let runDao: RunDao;
   let nodeStateDao: NodeStateDao;
-  let wallTurns: WallTurnDao;
   let activityDao: UsageActivityDao;
   let versionDao: WorkflowVersionDao;
   let service: WorkflowLedgerService;
@@ -64,7 +61,7 @@ describe('WorkflowLedgerService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, NodeState, WallTurn, UsageActivity, WorkflowVersion],
+        entities: [Run, NodeState, UsageActivity, WorkflowVersion],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -84,7 +81,6 @@ describe('WorkflowLedgerService (in-memory sqlite)', () => {
     bus = new AgentEventBus();
     runDao = new RunDao(em);
     nodeStateDao = new NodeStateDao(em);
-    wallTurns = new WallTurnDao(em);
     activityDao = new UsageActivityDao(em);
     versionDao = new WorkflowVersionDao(em);
     service = new WorkflowLedgerService(
@@ -92,7 +88,6 @@ describe('WorkflowLedgerService (in-memory sqlite)', () => {
       bus,
       runDao,
       nodeStateDao,
-      wallTurns,
       activityDao,
       versionDao,
     );
@@ -182,18 +177,12 @@ describe('WorkflowLedgerService (in-memory sqlite)', () => {
         nodeId: 'start',
         status: 'completed',
       });
-      await wallTurns.record('run-1', [
-        { seq: 3, nodeId: 'dev', ms: 1000 },
-        { seq: 5, nodeId: 'qa', ms: 500 },
-      ]);
-
       await settle('run-1', 'failed');
 
       expect(await row('run-1')).toMatchObject({
         version: workflowVersionOf(graph),
         runStatus: 'failed',
         failedNodes: [{ nodeId: 'dev', name: 'Developer' }],
-        wallMs: 1500,
       });
     });
 
@@ -224,16 +213,13 @@ describe('WorkflowLedgerService (in-memory sqlite)', () => {
 
     describe('a delete purging the run while its last settle is being stamped', () => {
       /** The teardown's purge, landing right after the handler has read the run. */
-      function purgeAfterTheRunIsRead(withRunRow: boolean): void {
+      function purgeAfterTheRunIsRead(): void {
         const read = runDao.runFacts.bind(runDao);
         vi.spyOn(runDao, 'runFacts').mockImplementationOnce(async (...args) => {
           const facts = await read(...args);
           const em = orm.em.fork();
           await em.nativeDelete(NodeState, { runId: 'run-1' });
-          await em.nativeDelete(WallTurn, { runId: 'run-1' });
-          if (withRunRow) {
-            await em.nativeDelete(Run, { id: 'run-1' });
-          }
+          await em.nativeDelete(Run, { id: 'run-1' });
           return facts;
         });
       }
@@ -246,19 +232,17 @@ describe('WorkflowLedgerService (in-memory sqlite)', () => {
           status: 'failed',
           error: 'exit 1',
         });
-        await wallTurns.record('run-1', [{ seq: 3, nodeId: 'dev', ms: 1500 }]);
         await settle('run-1', 'failed');
       });
 
       it('keeps the earlier stamp when the run is gone by the time its rows are read', async () => {
-        purgeAfterTheRunIsRead(true);
+        purgeAfterTheRunIsRead();
 
         await settle('run-1', 'cancelled');
 
         expect(await row('run-1')).toMatchObject({
           runStatus: 'failed',
           failedNodes: [{ nodeId: 'dev', name: 'Developer' }],
-          wallMs: 1500,
         });
       });
 
@@ -277,14 +261,6 @@ describe('WorkflowLedgerService (in-memory sqlite)', () => {
           runStatus: 'failed',
           failedNodes: [{ nodeId: 'dev', name: 'Developer' }],
         });
-      });
-
-      it('never lowers the stamped wall time to the zero a half-purged run reads', async () => {
-        purgeAfterTheRunIsRead(false);
-
-        await settle('run-1', 'cancelled');
-
-        expect((await row('run-1'))?.wallMs).toBe(1500);
       });
     });
 

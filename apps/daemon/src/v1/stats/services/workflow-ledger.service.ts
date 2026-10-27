@@ -6,7 +6,6 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { RunFacts } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
-import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { parseWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
 import {
@@ -50,7 +49,6 @@ export class WorkflowLedgerService implements OnModuleInit {
     private readonly bus: AgentEventBus,
     private readonly runDao: RunDao,
     private readonly nodeStateDao: NodeStateDao,
-    private readonly wallTurns: WallTurnDao,
     private readonly activityDao: UsageActivityDao,
     private readonly versionDao: WorkflowVersionDao,
   ) {}
@@ -223,10 +221,9 @@ export class WorkflowLedgerService implements OnModuleInit {
    * left for its next settle, and a run already deleted keeps its previous stamp rather
    * than one read off rows that are gone.
    *
-   * A delete cancels the run (a terminal announce) and then purges `node_state`,
-   * `wall_turns` and `runs` one after another, so these reads can land mid-purge: the
-   * run and its node rows are asked for again after them, and the DAO never lowers the
-   * stamped wall time.
+   * A delete cancels the run (a terminal announce) and then purges `node_state` and
+   * `runs` one after the other, so these reads can land mid-purge: the run and its node
+   * rows are asked for again after them.
    */
   private async stampOutcome(
     run: RunFacts,
@@ -235,12 +232,11 @@ export class WorkflowLedgerService implements OnModuleInit {
     if (!isTerminalRunStatus(run.status)) {
       return false;
     }
-    // The purge deletes node_state, then wall_turns, then runs. Node rows that were
-    // there before the reads and are gone after them mean a read was cut short; a run
-    // that never had any (it failed before its nodes were written) is stamped as is.
+    // The purge deletes node_state before runs. Node rows that were there before the
+    // read and are gone after it mean the read was cut short; a run that never had any
+    // (it failed before its nodes were written) is stamped as is.
     const nodesBefore = await this.nodeStateDao.countByRun(run.id, em);
     const failed = await this.nodeStateDao.failedByRuns([run.id], em);
-    const wall = await this.wallTurns.runSums([run.id], em);
     if (
       (nodesBefore > 0 &&
         (await this.nodeStateDao.countByRun(run.id, em)) === 0) ||
@@ -258,7 +254,6 @@ export class WorkflowLedgerService implements OnModuleInit {
           failed.map((node) => node.nodeId),
           em,
         ),
-        wallMs: wall.get(run.id) ?? 0,
         at: new Date(),
       },
       em,

@@ -147,7 +147,6 @@ export function linesIncrements(
     for (const current of list) {
       increments.push({
         key,
-        runId: current.runId,
         occurredAt: current.occurredAt,
         addedDelta: Math.max(0, current.linesAdded - highestAdded),
         removedDelta: Math.max(0, current.linesRemoved - highestRemoved),

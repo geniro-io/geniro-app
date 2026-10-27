@@ -6,7 +6,6 @@ import {
   mergeTotals,
   type UsageFigures,
 } from '../../agents/utils/usage-figures';
-import { servedWorkedMs } from '../../agents/utils/wall-worked';
 import type { Workflow } from '../../graphs/graphs.types';
 import { diffWorkflows } from '../../graphs/utils/workflow-diff';
 import {
@@ -16,7 +15,6 @@ import {
 import type { UsageEvent } from '../entity/usage-event.entity';
 import type {
   FailedNodeStamp,
-  LineSnapshotRead,
   ThreadLedgerRow,
   VersionChangesWire,
   VersionEdgeRefWire,
@@ -27,7 +25,6 @@ import type {
   WorkflowVersionRowWire,
   WorkflowVersionsWire,
 } from '../stats.types';
-import { linesIncrements } from './activity-fold';
 import {
   isPolledSpend,
   PolledTurnCredit,
@@ -51,11 +48,6 @@ export interface WorkflowVersionsInput {
   polledKinds: readonly string[];
   /** A live run's nodes whose last pass failed, the boot reconcile's excluded. */
   liveFailedNodes: ReadonlyMap<string, readonly string[]>;
-  /** A live run's whole `wall_turns` sum; absent means none recorded. */
-  liveWallMs: ReadonlyMap<string, number>;
-  pullRequests: ReadonlyMap<string, number>;
-  /** Every lines snapshot of every series the runs measured. */
-  lines: readonly LineSnapshotRead[];
   /** The workflow's recorded versions, oldest first. */
   graphs: readonly WorkflowVersionGraph[];
 }
@@ -64,16 +56,8 @@ interface RunFold {
   thread: ThreadLedgerRow;
   live: RunFacts | undefined;
   totals: ChatTotalsWire;
-  workedMs: number | null;
-  wallKnown: boolean;
   status: VersionRunStatus;
   failedNodes: FailedNodeStamp[];
-  pullRequests: number;
-  lines: { added: number; removed: number } | null;
-}
-
-function addNullable(a: number | null, b: number | null): number | null {
-  return b === null ? a : (a ?? 0) + b;
 }
 
 /** Each run's spend: its turns, then its polled bill spread over its unpriced turns. */
@@ -111,20 +95,6 @@ function totalsByRun(
   return totals;
 }
 
-/** Each run's line growth: what its own snapshots added past its series' peak. */
-function linesByRun(
-  snapshots: readonly LineSnapshotRead[],
-): Map<string, { added: number; removed: number }> {
-  const out = new Map<string, { added: number; removed: number }>();
-  for (const increment of linesIncrements(snapshots, new Map())) {
-    const lines = out.get(increment.runId) ?? { added: 0, removed: 0 };
-    lines.added += increment.addedDelta;
-    lines.removed += increment.removedDelta;
-    out.set(increment.runId, lines);
-  }
-  return out;
-}
-
 function nodeNamesOf(workflow: Workflow | null): Map<string, string | null> {
   return new Map(
     (workflow?.nodes ?? []).map((node) => [node.id, node.name ?? null]),
@@ -142,10 +112,6 @@ function outcomesOf(runs: readonly RunFold[]): VersionOutcomesWire {
   };
   const failed = new Map<string, { name: string | null; count: number }>();
   const totals = emptyTotals();
-  let pullRequests = 0;
-  const lines = { added: 0, removed: 0, measured: false };
-  let workedMs: number | null = null;
-  let workedPartial = false;
   for (const run of runs) {
     statuses[run.status] += 1;
     for (const node of run.failedNodes) {
@@ -155,16 +121,6 @@ function outcomesOf(runs: readonly RunFold[]): VersionOutcomesWire {
       failed.set(node.nodeId, entry);
     }
     mergeTotals(totals, run.totals);
-    pullRequests += run.pullRequests;
-    if (run.lines !== null) {
-      lines.added += run.lines.added;
-      lines.removed += run.lines.removed;
-      lines.measured = true;
-    }
-    workedMs = addNullable(workedMs, run.workedMs);
-    if (!run.wallKnown) {
-      workedPartial = true;
-    }
   }
   return {
     runs: runs.length,
@@ -173,12 +129,6 @@ function outcomesOf(runs: readonly RunFold[]): VersionOutcomesWire {
       .map(([nodeId, entry]) => ({ nodeId, ...entry }))
       .sort((a, b) => b.count - a.count || (a.nodeId < b.nodeId ? -1 : 1)),
     totals,
-    pullRequests,
-    lines: lines.measured
-      ? { added: lines.added, removed: lines.removed }
-      : null,
-    workedMs,
-    workedPartial,
   };
 }
 
@@ -261,15 +211,14 @@ function rowOf(
  * One workflow's runs grouped by the graph version they ran, each group's outcomes folded
  * over its runs' own rows, and the workflow's total folded over every run directly.
  *
- * A live run is read as it stands; a deleted one from what the ledger kept: its spend, its
- * pull requests and lines, and the status, failed nodes and wall time stamped when it last
- * settled. What neither kept is not measured, never zero.
+ * A live run is read as it stands; a deleted one from what the ledger kept: its spend, and
+ * the status and failed nodes stamped when it last settled. What neither kept is not
+ * measured, never zero.
  */
 export function foldWorkflowVersions(
   input: WorkflowVersionsInput,
 ): WorkflowVersionsWire {
   const totals = totalsByRun(input.usage, input.polledKinds);
-  const lines = linesByRun(input.lines);
   const versions = new Map(
     input.graphs.map((graph, index) => [
       graph.version,
@@ -282,11 +231,6 @@ export function foldWorkflowVersions(
 
   const runs: RunFold[] = input.threads.map((thread) => {
     const live = input.live.get(thread.runId);
-    const runTotals = totals.get(thread.runId) ?? emptyTotals();
-    const wallMs =
-      live !== undefined
-        ? (input.liveWallMs.get(thread.runId) ?? 0)
-        : thread.wallMs;
     // The version's recorded graph names the nodes; an unregistered (inferred) version
     // has none, so the names the run's own last stamp kept stand in.
     const names = nodeNamesOf(
@@ -302,9 +246,7 @@ export function foldWorkflowVersions(
     return {
       thread,
       live,
-      totals: runTotals,
-      workedMs: servedWorkedMs(runTotals.workedMs, wallMs),
-      wallKnown: wallMs !== null,
+      totals: totals.get(thread.runId) ?? emptyTotals(),
       status: live?.status ?? thread.runStatus ?? 'unknown',
       failedNodes:
         live !== undefined
@@ -312,8 +254,6 @@ export function foldWorkflowVersions(
               .sort()
               .map((nodeId) => ({ nodeId, name: names.get(nodeId) ?? null }))
           : (thread.failedNodes ?? []),
-      pullRequests: input.pullRequests.get(thread.runId) ?? 0,
-      lines: lines.get(thread.runId) ?? null,
     };
   });
 

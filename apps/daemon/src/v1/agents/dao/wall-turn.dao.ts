@@ -3,7 +3,6 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
-import { idBatches } from '../utils/id-batches';
 import { positive } from '../utils/positive-figure';
 
 /**
@@ -116,33 +115,6 @@ export class WallTurnDao extends BaseDao<WallTurn> {
     for (const row of rows) {
       if (row.node_id !== null) {
         out.set(row.node_id, Number(row.ms));
-      }
-    }
-    return out;
-  }
-
-  /**
-   * Each of these runs' whole recorded wall time ({@link runSum} for many), by run id; a
-   * run with no measured turn is absent.
-   */
-  async runSums(
-    runIds: readonly string[],
-    txEm?: EntityManager,
-  ): Promise<Map<string, number>> {
-    const out = new Map<string, number>();
-    const db = (txEm ?? this.em.fork()).getKysely<WallTurnDatabase>({
-      convertValues: false,
-    });
-    for (const batch of idBatches(runIds)) {
-      const rows = await db
-        .selectFrom('wall_turns')
-        .select((eb) => ['run_id', eb.fn.sum<number>('ms').as('ms')])
-        .where('run_id', 'in', batch)
-        .where('deleted_at', 'is', null)
-        .groupBy('run_id')
-        .execute();
-      for (const row of rows) {
-        out.set(row.run_id, Number(row.ms));
       }
     }
     return out;

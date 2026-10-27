@@ -102,8 +102,7 @@ describe('WorkflowVersionsDialog', () => {
 
     const inferred = rows('version-row')[1]!;
     expect(inferred.textContent).toContain('—');
-    expect(inferred.textContent).toContain('not measured');
-    expect(inferred.textContent).toContain('partial: deleted runs not timed');
+    expect(inferred.textContent).toContain('not numbered: graph copied later');
     expect(rows('version-row')[2]!.textContent).toContain(
       'these runs kept no graph copy',
     );

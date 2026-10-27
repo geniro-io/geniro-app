@@ -126,7 +126,6 @@ export interface ThreadVersionStamp {
 export interface ThreadOutcomeStamp {
   status: RunStatus;
   failedNodes: FailedNodeStamp[];
-  wallMs: number | null;
   at: Date;
 }
 
@@ -140,7 +139,6 @@ export interface ThreadLedgerRow {
   runStatus: RunStatus | null;
   /** Null when no outcome was stamped, or the stamp no longer reads. */
   failedNodes: FailedNodeStamp[] | null;
-  wallMs: number | null;
 }
 
 /** One `workflow_versions` row. */
@@ -164,8 +162,6 @@ export interface LineSnapshotRead {
 export interface LinesIncrement {
   /** The line key the growth is counted under (see `snapshotLineKey`). */
   key: string;
-  /** The run whose snapshot measured the growth. */
-  runId: string;
   occurredAt: Date;
   addedDelta: number;
   removedDelta: number;
@@ -556,22 +552,6 @@ export const VersionOutcomesSchema = z
       )
       .describe('most often failed first'),
     totals: ChatTotalsWireSchema,
-    pullRequests: z.number().describe('pull requests the runs opened'),
-    lines: z
-      .object({ added: z.number(), removed: z.number() })
-      .nullable()
-      .describe('null when no run of the set was measured'),
-    workedMs: z
-      .number()
-      .nullable()
-      .describe(
-        "the CLIs' own time plus the wall-clock time of turns they did not time",
-      ),
-    workedPartial: z
-      .boolean()
-      .describe(
-        "some run's wall-clock time is not known: it was deleted before the ledger recorded it",
-      ),
   })
   .meta({ id: 'VersionOutcomes' });
 export type VersionOutcomesWire = z.infer<typeof VersionOutcomesSchema>;

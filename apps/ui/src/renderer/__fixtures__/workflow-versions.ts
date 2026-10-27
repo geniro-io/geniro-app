@@ -32,10 +32,6 @@ function outcomes(over: Partial<VersionOutcomes>): VersionOutcomes {
     },
     failedNodes: [],
     totals: totals(null, 0),
-    pullRequests: 0,
-    lines: null,
-    workedMs: null,
-    workedPartial: false,
     ...over,
   };
 }
@@ -71,9 +67,6 @@ export const DEV_TEAM_VERSIONS: WorkflowVersionsDto = {
         },
         failedNodes: [{ nodeId: 'engineer', name: 'Engineer', count: 1 }],
         totals: totals(12.4, 38),
-        pullRequests: 1,
-        lines: { added: 420, removed: 37 },
-        workedMs: 2_820_000,
       }),
       runs: [
         {
@@ -114,8 +107,6 @@ export const DEV_TEAM_VERSIONS: WorkflowVersionsDto = {
           unknown: 1,
         },
         totals: totals(2.15, 9),
-        workedMs: 300_000,
-        workedPartial: true,
       }),
       runs: [
         {
@@ -148,7 +139,6 @@ export const DEV_TEAM_VERSIONS: WorkflowVersionsDto = {
         unknown: 0,
       },
       totals: totals(0.95, 4),
-      workedMs: 120_000,
     }),
     runs: [
       {
@@ -174,10 +164,6 @@ export const DEV_TEAM_VERSIONS: WorkflowVersionsDto = {
     },
     failedNodes: [{ nodeId: 'engineer', name: 'Engineer', count: 1 }],
     totals: totals(15.5, 51),
-    pullRequests: 1,
-    lines: { added: 420, removed: 37 },
-    workedMs: 3_240_000,
-    workedPartial: true,
   }),
 };
 

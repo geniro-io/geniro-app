@@ -150,10 +150,6 @@ export class UsageActivity extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   failedNodes: string | null = null;
 
-  /** The run's whole `wall_turns` sum when it last settled; null when not measured. */
-  @Property({ type: 'integer', nullable: true })
-  wallMs: number | null = null;
-
   /** When the outcome stamp above was written. */
   @Property({ type: DateTimeType, nullable: true })
   outcomeAt: Date | null = null;

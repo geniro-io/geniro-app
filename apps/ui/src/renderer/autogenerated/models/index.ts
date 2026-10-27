@@ -9820,30 +9820,6 @@ export interface VersionOutcomes {
      * @memberof VersionOutcomes
      */
     totals: ChatTotals;
-    /**
-     * pull requests the runs opened
-     * @type {number}
-     * @memberof VersionOutcomes
-     */
-    pullRequests: number;
-    /**
-     * 
-     * @type {VersionOutcomesLines}
-     * @memberof VersionOutcomes
-     */
-    lines: VersionOutcomesLines | null;
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomes
-     */
-    workedMs: number | null;
-    /**
-     * some run's wall-clock time is not known: it was deleted before the ledger recorded it
-     * @type {boolean}
-     * @memberof VersionOutcomes
-     */
-    workedPartial: boolean;
 }
 /**
  * 
@@ -9869,25 +9845,6 @@ export interface VersionOutcomesFailedNodesInner {
      * @memberof VersionOutcomesFailedNodesInner
      */
     count: number;
-}
-/**
- * 
- * @export
- * @interface VersionOutcomesLines
- */
-export interface VersionOutcomesLines {
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomesLines
-     */
-    added: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomesLines
-     */
-    removed: number;
 }
 /**
  * 

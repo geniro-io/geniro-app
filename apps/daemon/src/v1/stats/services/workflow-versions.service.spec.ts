@@ -16,14 +16,12 @@ import {
 
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
-import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { Workflow } from '../../graphs/graphs.types';
 import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { workflowVersionOf } from '../../graphs/utils/workflow-version';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
-import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { WorkflowVersionDao } from '../dao/workflow-version.dao';
@@ -53,14 +51,7 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [
-          Run,
-          NodeState,
-          WallTurn,
-          UsageActivity,
-          UsageEvent,
-          WorkflowVersion,
-        ],
+        entities: [Run, NodeState, UsageActivity, UsageEvent, WorkflowVersion],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -88,7 +79,6 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
       new WorkflowVersionDao(em),
       runDao,
       new NodeStateDao(em),
-      new WallTurnDao(em),
       { all: () => new Map() } as unknown as AgentAdapterRegistry,
       { get } as unknown as WorkflowStoreService,
     );

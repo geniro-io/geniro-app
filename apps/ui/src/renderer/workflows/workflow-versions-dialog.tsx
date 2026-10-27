@@ -26,12 +26,7 @@ import {
 } from '../components/ui/table';
 import { cn } from '../components/ui/utils';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
-import {
-  formatCount,
-  formatDuration,
-  formatLineCount,
-  NOT_MEASURED,
-} from '../stats/stats-format';
+import { formatCount, NOT_MEASURED } from '../stats/stats-format';
 
 const DATE = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -206,37 +201,6 @@ function Cost({ outcomes }: { outcomes: VersionOutcomes }): React.JSX.Element {
   );
 }
 
-function Lines({ outcomes }: { outcomes: VersionOutcomes }): React.JSX.Element {
-  return outcomes.lines === null ? (
-    <Unmeasured reason="not measured" />
-  ) : (
-    <>
-      {formatLineCount(outcomes.lines.added, 'added')} /{' '}
-      {formatLineCount(outcomes.lines.removed, 'removed')}
-    </>
-  );
-}
-
-function WorkTime({
-  outcomes,
-}: {
-  outcomes: VersionOutcomes;
-}): React.JSX.Element {
-  if (outcomes.workedMs === null) {
-    return <Unmeasured reason="not measured" />;
-  }
-  return (
-    <span className="flex flex-col">
-      <span>{formatDuration(outcomes.workedMs)}</span>
-      {outcomes.workedPartial ? (
-        <span className="text-[10px] text-muted-foreground">
-          partial: deleted runs not timed
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
 function VersionLabel({
   row,
   current,
@@ -327,7 +291,7 @@ function RunList({
   );
 }
 
-const COLUMNS = 10;
+const COLUMNS = 6;
 
 function VersionTableRow({
   row,
@@ -385,18 +349,6 @@ function VersionTableRow({
         <TableCell align="right">
           <Cost outcomes={outcomes} />
         </TableCell>
-        <TableCell align="right">
-          {formatCount(outcomes.totals.turns)}
-        </TableCell>
-        <TableCell align="right">
-          {formatCount(outcomes.pullRequests)}
-        </TableCell>
-        <TableCell align="right" className="whitespace-nowrap">
-          <Lines outcomes={outcomes} />
-        </TableCell>
-        <TableCell align="right">
-          <WorkTime outcomes={outcomes} />
-        </TableCell>
       </TableRow>
       {open ? (
         <TableRow>
@@ -428,7 +380,7 @@ function VersionsTable({
     ...(data.unversioned ? [data.unversioned] : []),
   ];
   return (
-    <Table containerClassName="max-h-[60vh]" className="min-w-[64rem]">
+    <Table containerClassName="max-h-[60vh]" className="min-w-[48rem]">
       <TableCaption className="sr-only">
         Runs of this workflow by graph version, newest first
       </TableCaption>
@@ -440,10 +392,6 @@ function VersionsTable({
           <TableHead>Runs</TableHead>
           <TableHead>Failed nodes</TableHead>
           <TableHead align="right">Cost</TableHead>
-          <TableHead align="right">Turns</TableHead>
-          <TableHead align="right">PRs</TableHead>
-          <TableHead align="right">Lines</TableHead>
-          <TableHead align="right">Work time</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -474,18 +422,6 @@ function VersionsTable({
           </TableCell>
           <TableCell align="right">
             <Cost outcomes={data.totals} />
-          </TableCell>
-          <TableCell align="right">
-            {formatCount(data.totals.totals.turns)}
-          </TableCell>
-          <TableCell align="right">
-            {formatCount(data.totals.pullRequests)}
-          </TableCell>
-          <TableCell align="right" className="whitespace-nowrap">
-            <Lines outcomes={data.totals} />
-          </TableCell>
-          <TableCell align="right">
-            <WorkTime outcomes={data.totals} />
           </TableCell>
         </TableRow>
       </TableFooter>
@@ -526,16 +462,6 @@ function OutcomeFigures({
       </Figure>
       <Figure label="Cost">
         <Cost outcomes={outcomes} />
-      </Figure>
-      <Figure label="Turns · PRs">
-        {formatCount(outcomes.totals.turns)} ·{' '}
-        {formatCount(outcomes.pullRequests)}
-      </Figure>
-      <Figure label="Lines">
-        <Lines outcomes={outcomes} />
-      </Figure>
-      <Figure label="Work time">
-        <WorkTime outcomes={outcomes} />
       </Figure>
     </div>
   );
@@ -705,7 +631,7 @@ export function WorkflowVersionsDialog({
       open={open}
       onClose={onClose}
       fullScreen={narrow}
-      className={narrow ? undefined : 'max-h-[85vh] max-w-[80rem]'}
+      className={narrow ? undefined : 'max-h-[85vh] max-w-[64rem]'}
       title={`Versions of ${workflowName}`}>
       {body}
     </Dialog>

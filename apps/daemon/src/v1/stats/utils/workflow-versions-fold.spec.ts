@@ -7,11 +7,7 @@ import {
   canonicalGraphOf,
   workflowVersionOf,
 } from '../../graphs/utils/workflow-version';
-import {
-  type LineSnapshotRead,
-  POLLED_SPEND_SEQ,
-  type ThreadLedgerRow,
-} from '../stats.types';
+import { POLLED_SPEND_SEQ, type ThreadLedgerRow } from '../stats.types';
 import {
   foldWorkflowVersions,
   type UsageLedgerRow,
@@ -81,7 +77,6 @@ function thread(
     inferred: version === null ? null : false,
     runStatus: null,
     failedNodes: null,
-    wallMs: null,
     ...stamp,
   };
 }
@@ -133,9 +128,6 @@ function input(
     usage: [],
     polledKinds: ['cursor-agent'],
     liveFailedNodes: new Map(),
-    liveWallMs: new Map(),
-    pullRequests: new Map(),
-    lines: [],
     graphs,
     ...overrides,
   };
@@ -164,10 +156,6 @@ describe('foldWorkflowVersions', () => {
           turn('b', 1),
           turn('c', 1),
         ],
-        pullRequests: new Map([
-          ['a', 1],
-          ['c', 2],
-        ]),
       }),
     );
 
@@ -185,44 +173,20 @@ describe('foldWorkflowVersions', () => {
       first!.outcomes.totals.costUsd! + second!.outcomes.totals.costUsd!,
     );
     expect(result.totals.totals.turns).toBe(5);
-    expect(result.totals.pullRequests).toBe(3);
-    expect(result.totals.workedMs).toBe(5000);
     expect(result.totals.statuses).toMatchObject({ completed: 3, failed: 1 });
     expect(second!.runs.map((run) => run.runId)).toEqual(['c', 'b']);
   });
 
-  it('times a run whose CLI reports no duration from its wall-clock turns', () => {
-    const result = foldWorkflowVersions(
-      input({
-        threads: [thread('cursor-run', V2, '2026-10-02T00:00:00Z')],
-        live: new Map([live('cursor-run', 'completed')]),
-        usage: [
-          turn('cursor-run', 1, {
-            agentKind: 'cursor-agent',
-            durationMs: null,
-            costUsd: null,
-          }),
-        ],
-        liveWallMs: new Map([['cursor-run', 4200]]),
-      }),
-    );
-
-    expect(result.totals.workedMs).toBe(4200);
-    expect(result.totals.workedPartial).toBe(false);
-  });
-
-  it('keeps a deleted run’s spend, pull requests and stamped status, failed nodes and wall time', () => {
+  it('keeps a deleted run’s spend and its stamped status and failed nodes', () => {
     const result = foldWorkflowVersions(
       input({
         threads: [
           thread('gone', V1, '2026-09-02T00:00:00Z', {
             runStatus: 'failed',
             failedNodes: [{ nodeId: 'dev', name: 'Developer' }],
-            wallMs: 500,
           }),
         ],
         usage: [turn('gone', 1), turn('gone', 2)],
-        pullRequests: new Map([['gone', 1]]),
       }),
     );
 
@@ -234,33 +198,19 @@ describe('foldWorkflowVersions', () => {
       costUsd: 2,
     });
     expect(row!.outcomes).toMatchObject({
-      pullRequests: 1,
-      workedMs: 2500,
-      workedPartial: false,
       failedNodes: [{ nodeId: 'dev', name: 'Developer', count: 1 }],
     });
   });
 
-  it('marks work time partial for a deleted run that was never stamped, and unmeasured when nothing timed it', () => {
-    const timed = foldWorkflowVersions(
+  it('reads a deleted run that was never stamped as status unknown', () => {
+    const result = foldWorkflowVersions(
       input({
         threads: [thread('gone', V1, '2026-09-02T00:00:00Z')],
         usage: [turn('gone', 1)],
       }),
     );
-    expect(timed.totals).toMatchObject({ workedMs: 1000, workedPartial: true });
-    expect(timed.versions[0]!.runs[0]!.status).toBe('unknown');
-
-    const untimed = foldWorkflowVersions(
-      input({
-        threads: [thread('gone', V1, '2026-09-02T00:00:00Z')],
-        usage: [turn('gone', 1, { durationMs: null })],
-      }),
-    );
-    expect(untimed.totals).toMatchObject({
-      workedMs: null,
-      workedPartial: true,
-    });
+    expect(result.versions[0]!.runs[0]!.status).toBe('unknown');
+    expect(result.totals.statuses.unknown).toBe(1);
   });
 
   it('credits a run’s polled bill once, over its unpriced turns of a polled CLI', () => {
@@ -290,43 +240,6 @@ describe('foldWorkflowVersions', () => {
       costedTurns: 2,
       costUsd: 5,
     });
-  });
-
-  it('counts a run’s line growth past what its shared series had already reached', () => {
-    const snapshot = (
-      runId: string,
-      added: number,
-      at: string,
-    ): LineSnapshotRead => ({
-      runId,
-      lineKey: 'folder-a',
-      occurredAt: new Date(at),
-      linesAdded: added,
-      linesRemoved: 0,
-      partial: false,
-    });
-    const result = foldWorkflowVersions(
-      input({
-        threads: [
-          thread('wf', V2, '2026-10-02T00:00:00Z'),
-          thread('silent', V1, '2026-09-02T00:00:00Z'),
-        ],
-        live: new Map([live('wf', 'completed'), live('silent', 'completed')]),
-        lines: [
-          snapshot('other-chat', 40, '2026-10-01T00:00:00Z'),
-          snapshot('wf', 55, '2026-10-02T01:00:00Z'),
-          snapshot('wf', 70, '2026-10-02T02:00:00Z'),
-        ],
-      }),
-    );
-
-    expect(
-      result.versions.find((row) => row.version === V2)!.outcomes.lines,
-    ).toEqual({ added: 30, removed: 0 });
-    expect(
-      result.versions.find((row) => row.version === V1)!.outcomes.lines,
-    ).toBeNull();
-    expect(result.totals.lines).toEqual({ added: 30, removed: 0 });
   });
 
   it('describes each version against the one before it, and puts copy-less runs in their own row', () => {

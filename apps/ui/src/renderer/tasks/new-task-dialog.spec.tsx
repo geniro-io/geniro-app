@@ -161,6 +161,55 @@ describe('the properties a draft carries', () => {
     expect('folder' in sent).toBe(false);
   });
 
+  it('offers the user’s named profiles and sends the one picked', async () => {
+    const capabilitiesApi = {
+      getCapabilities: vi.fn(async () => ({
+        configDirs: [{ agent: 'claude', unavailableReason: null }],
+        interactiveTerminals: [],
+        approvals: [],
+        followUps: [],
+      })),
+    } as unknown as TaskFieldsContext['capabilitiesApi'];
+    const { onCreate } = open({
+      context: context({
+        capabilitiesApi,
+        configProfiles: [
+          {
+            id: 'p1',
+            name: 'Claude work',
+            dir: '/profiles/claude-work',
+            color: 'blue',
+            agent: 'claude',
+          },
+        ],
+      }),
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const trigger = document.body.querySelector(
+      '[aria-label="Config directory for this task"]',
+    ) as HTMLButtonElement;
+    act(() => {
+      trigger.click();
+    });
+    const profile = [
+      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((option) => option.textContent?.includes('Claude work'));
+    expect(profile).toBeDefined();
+    act(() => {
+      profile!.click();
+    });
+
+    typeTitle('Runs as the work profile');
+    submit();
+
+    const sent = onCreate.mock.calls[0]?.[0] as NewTaskInput;
+    expect(sent.configDir).toBe('/profiles/claude-work');
+  });
+
   it('refuses to create a card with no title', () => {
     open();
 

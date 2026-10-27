@@ -16,7 +16,11 @@ import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { plainMarkdownText } from './brief-text';
 import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
-import { namesGeniroMonitor, PROPOSE_WORKFLOW } from './geniro-tool';
+import {
+  namesGeniroGallery,
+  namesGeniroMonitor,
+  PROPOSE_WORKFLOW,
+} from './geniro-tool';
 import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
 import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
@@ -1243,6 +1247,13 @@ function PermissionCard({
             <p className="text-xs text-muted-foreground">
               Remembering this approves every command a monitor runs from now
               on, not only this one.
+            </p>
+          ) : null}
+          {options.some((option) => option.allow) &&
+          namesGeniroGallery(toolName) ? (
+            <p className="text-xs text-muted-foreground">
+              Remembering this lets every later gallery download pictures from
+              any web address unasked, not only these.
             </p>
           ) : null}
         </div>

@@ -193,6 +193,21 @@ export function namesGeniroMonitor(name: string): boolean {
   );
 }
 
+/**
+ * Whether a tool call names geniro's `show_gallery`, in the same spellings as
+ * {@link namesGeniroMonitor} — codex's bare `mcp__<server>` included, which may
+ * be a gallery. Its card is the one a gallery naming a URL raises outside
+ * `auto`.
+ *
+ * TWIN PARSER: the daemon's `isHostToolCall`
+ * (`apps/daemon/src/v1/agents/utils/host-tool.ts`).
+ */
+export function namesGeniroGallery(name: string): boolean {
+  return /^(?:mcp__geniro-[0-9a-f]{8}(?:__show_gallery)?|geniro-[0-9a-f]{8}-show_gallery: show_gallery)$/.test(
+    name,
+  );
+}
+
 /** Whether a tool call is one of geniro's own on geniro's own server. */
 export function isGeniroToolName(name: string, runId: string): boolean {
   return geniroToolOf(name, runId) !== null;

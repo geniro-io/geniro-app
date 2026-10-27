@@ -73,6 +73,7 @@ import { ContextWindowsService } from './services/context-windows.service';
 import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
+import { GalleryImageService } from './services/gallery-image.service';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
 import { HostWakeBus } from './services/host-wake.bus';
 import { HostWakeChatDelivery } from './services/host-wake-chat-delivery.service';
@@ -259,6 +260,12 @@ import { defaultSpawn } from './utils/spawn-cli';
     {
       provide: AttachmentStoreService,
       useFactory: () => new AttachmentStoreService(),
+    },
+    {
+      provide: GalleryImageService,
+      useFactory: (attachments: AttachmentStoreService) =>
+        new GalleryImageService(attachments),
+      inject: [AttachmentStoreService],
     },
     {
       provide: ChatUploadStoreService,
@@ -549,6 +556,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     ComparisonBroker,
     MetricsBroker,
     GalleryBroker,
+    // For show_gallery, which downloads the pictures a call names by URL.
+    GalleryImageService,
     ArtifactBroker,
     ActionBroker,
     // For the MCP host's monitor tools and the graph executor, which registers

@@ -226,7 +226,7 @@ pnpm commit             # conventional commit via commitizen
 
 ## Constraints (local-first & security)
 
-**No cloud service of geniro's own and no remote code paths.** No geniro backend, telemetry, account or sync. geniro never holds a credential of its own, syncs user data anywhere, or talks to a machine on someone else's say-so. Exactly six kinds of outbound call are allowed:
+**No cloud service of geniro's own and no remote code paths.** No geniro backend, telemetry, account or sync. geniro never holds a credential of its own, syncs user data anywhere, or talks to a machine on someone else's say-so. Exactly seven kinds of outbound call are allowed:
 
 1. **The user's own login, the user's own data.**
    - `main/github-prs.ts` runs the user's `gh` CLI; geniro holds no token and degrades to silence without login or network.
@@ -249,6 +249,11 @@ pnpm commit             # conventional commit via commitizen
    - Only on a press, or by an agent's `show_artifact(share: true)` while the user's "Let agents share pages" switch is on (off by default). A share that failed because the destination's CLI is signed out is retried once, after the user's own "Sign in to …" press; nothing retries on its own.
    - A revoke also runs unattended from the auto-revoke sweep, only while the user has set `Settings.sharing.autoRevokeAfterDays` (off by default).
    - The share routes and settings are desktop only (`DesktopOnlyGuard`; a paired device may not write `Settings.sharing`). Accepted by decision: while agents may share, a message sent from a paired device can still ask an agent to share, because the agent's own MCP call is loopback.
+
+7. **A gallery picture an agent named by URL** (`show_gallery`, user decision): the daemon downloads it once, when the tool is called (`v1/agents/utils/remote-image.ts`), and the row names the stored copy.
+   - Public hosts only: every resolved address of every hop is judged at connect time (`guardedLookup`), and loopback, private, link-local and reserved ranges are refused; an IP literal is judged directly.
+   - http(s) only, no credentials in the URL, at most 3 redirects, a 15 s deadline per picture and 45 s per call, `MAX_REMOTE_IMAGE_BYTES` per picture and `MAX_GALLERY_RUN_DOWNLOAD_BYTES` per run since the daemon started (counted as pictures land, so it can be passed by those in flight), png/jpeg/gif/webp judged by bytes. geniro adds no credential or user data, but the URL is the agent's, so outside `auto` a call naming one is put to the user (`hostGalleryDownloads`); a local-only gallery stays auto-approved.
+   - The renderer never fetches: its CSP and the Chromium lockdown stay as they are, and a markdown image by URL is still refused.
 
 **LAN gateway** (`apps/ui/src/main/remote/`, `Settings.remoteAccessEnabled`) is the one inbound exception: the Mac serves the app to the user's own devices on the same network. Mechanics: `apps/ui/src/main/AGENTS.md` → **LAN gateway**.
 
@@ -332,7 +337,7 @@ Daemon side of the contract (zod wire schemas, `@ZodResponse`, operationIds, `se
 - **Debug log → 0600 JSONL** under `<userData>/logs/`, rotated. Every entry is scrubbed of registered secrets (`v1/diagnostics/utils/redact.ts`).
   - Redaction is by registration, never by pattern: register a new credential at its mint site, before it can be logged (the launch token in `main.ts`, inherited CLI credentials in `AgentAdapterRegistry`, call tokens in `CallTokenRegistry.issue()`, share keys in `ShareKeychain` and the artifact key in `ArtifactStoreService`).
   - The `agent-stdio` channel records the user's raw CLI conversation, so it stays off unless switched on.
-- **Pasted images → `<userData>/attachments/<runId>/`.** Only `{id, mediaType}` rides the item payload; never put blobs in the DB.
+- **Pasted images → `<userData>/attachments/<runId>/`.** Only `{id, mediaType}` rides the item payload; never put blobs in the DB. A gallery picture downloaded from a URL is stored there too (`AttachmentStoreService.saveDownloaded`), its path in the `show_gallery` row, and is dropped with the run.
   - On ACP, send image blocks only to an agent that advertised `promptCapabilities.image`; otherwise send the text plus a `notice` naming what was withheld.
 - **Uploaded files (phone) → `<userData>/chat-uploads/<uuid>/<name>`** (`POST /v1/chats/uploads`), collected by the teardown of the run whose user messages name them.
 - **Published artifacts → `<userData>/artifacts/<runId>/<artifactId>/v<N>.html`** plus `meta.json` (version, serving key). The `show_artifact` row carries only the descriptor.

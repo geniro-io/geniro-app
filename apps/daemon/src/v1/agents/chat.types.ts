@@ -1184,7 +1184,7 @@ export type HostComparisonOutcome =
  * the `show_gallery` item payload this tool produces.
  *
  * The render family's PICTURES: several images the agent wants looked at, drawn
- * as a thumbnail grid that opens into the full-screen viewer. What it is for is
+ * as a scrolling strip of cards that opens into the full-screen viewer. What it is for is
  * a class of answer the other five cannot carry at all — screenshots of a UI
  * before and after a change, the frames of a flow, the charts some other tool
  * wrote to disk. Without it an agent's only move is a markdown image per
@@ -1203,10 +1203,17 @@ export type HostComparisonOutcome =
  * which is why {@link MAX_GALLERY_IMAGES} is a cap on how many file reads one
  * call can trigger rather than a cap on how much a card can readably hold.
  *
+ * The one exception is an entry named by an http(s) URL: the daemon downloads
+ * it when the tool is called (`utils/remote-image.ts`, public hosts only),
+ * stores it beside the run's attachments and writes THAT path into the row, with
+ * the URL kept as `source`. The renderer never reaches the network.
+ *
  * Everything else is the family's ordinary bargain: the payload is the card,
  * the call answers with a receipt, the row is the only copy, every chat is
- * handed it, and it auto-approves — drawing in this app's own transcript is not
- * something a permission card can meaningfully guard.
+ * handed it, and a call naming only local files auto-approves — drawing in this
+ * app's own transcript is not something a permission card can meaningfully
+ * guard. One naming a URL is put to the user outside `auto`
+ * (`hostGalleryDownloads`).
  */
 export const HOST_GALLERY_TOOL = 'show_gallery';
 
@@ -1216,34 +1223,47 @@ export const HOST_GALLERY_TOOL = 'show_gallery';
  * them plus a receipt saying so is a better answer than a refusal.
  *
  * `MAX_GALLERY_IMAGES` is the one cap here that is not about readability: every
- * entry becomes a file read over the image route, so this bounds the work ONE
- * tool call can ask of the disk. Twenty-four is two full rows of a six-column
- * grid at the widest the transcript gets, which is about where a set stops
- * being something a reader takes in and starts being a directory listing.
+ * entry becomes a file read over the image route, or a download, so this bounds
+ * the work ONE tool call can ask of the disk and the network. Twenty-four is
+ * about where a set stops being something a reader takes in and starts being a
+ * directory listing.
  */
 export const MAX_GALLERY_IMAGES = 24;
 export const MAX_GALLERY_TITLE_LENGTH = 120;
 export const MAX_GALLERY_CAPTION_LENGTH = 200;
+export const MAX_GALLERY_DESCRIPTION_LENGTH = 1000;
 /**
- * Long enough for any real absolute path without being unbounded — the value
- * reaches a query string and a filesystem call, and neither wants a megabyte.
+ * Long enough for any real absolute path or image URL without being unbounded
+ * — the value reaches a query string, a filesystem call or a download, and none
+ * of them wants a megabyte.
  */
-export const MAX_GALLERY_PATH_LENGTH = 1024;
+export const MAX_GALLERY_PATH_LENGTH = 2048;
 
 /** One picture in the gallery. */
 export interface HostGalleryImage {
   /**
    * Where the file is. Absolute, or relative to the run's cwd — the same two
    * forms the image route already resolves for a markdown reference, so an
-   * agent needs to learn no new rule about paths.
+   * agent needs to learn no new rule about paths. In the call it may also be an
+   * http(s) URL, which is downloaded before the row is written.
    */
   path: string;
   /**
-   * What this one shows. Optional, and genuinely so: a set of screenshots named
-   * `01-before.png` / `02-after.png` explains itself, and a caption per tile
-   * invented to fill the field is noise under every picture.
+   * What this one shows, as its heading. Optional, and genuinely so: a set of
+   * screenshots named `01-before.png` / `02-after.png` explains itself, and a
+   * caption per tile invented to fill the field is noise under every picture.
    */
   caption?: string;
+  /** Longer text under the caption; line breaks are kept. */
+  description?: string;
+  /** The URL a downloaded picture came from. Set by the daemon, never read from the call. */
+  source?: string;
+}
+
+/** A gallery entry whose URL could not be downloaded, and why. */
+export interface GalleryDownloadFailure {
+  url: string;
+  reason: string;
 }
 
 /** One `show_gallery` call, as the card will draw it. */

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MAX_GALLERY_CAPTION_LENGTH,
+  MAX_GALLERY_DESCRIPTION_LENGTH,
   MAX_GALLERY_IMAGES,
   MAX_GALLERY_PATH_LENGTH,
 } from '../../../agents/chat.types';
@@ -37,6 +38,31 @@ describe('readHostGallery', () => {
   it('accepts `src` as a synonym for `path`', () => {
     expect(readHostGallery({ images: [{ src: 'a.png' }] })).toEqual({
       images: [{ path: 'a.png' }],
+    });
+  });
+
+  it('accepts `url` as a synonym for `path`, and keeps a URL as written', () => {
+    expect(
+      readHostGallery({ images: [{ url: 'https://example.com/a.png' }] }),
+    ).toEqual({ images: [{ path: 'https://example.com/a.png' }] });
+  });
+
+  it('reads a description with its line breaks, and never a source', () => {
+    expect(
+      readHostGallery({
+        images: [
+          {
+            path: 'a.png',
+            caption: 'Khinkali',
+            description: '  5 pcs\n2 400 ₸  ',
+            source: 'https://evil.example/claimed.png',
+          },
+        ],
+      }),
+    ).toEqual({
+      images: [
+        { path: 'a.png', caption: 'Khinkali', description: '5 pcs\n2 400 ₸' },
+      ],
     });
   });
 
@@ -93,6 +119,7 @@ describe('readHostGallery', () => {
         {
           path: `/${'d'.repeat(MAX_GALLERY_PATH_LENGTH + 50)}.png`,
           caption: 'c'.repeat(MAX_GALLERY_CAPTION_LENGTH + 50),
+          description: 'd'.repeat(MAX_GALLERY_DESCRIPTION_LENGTH + 50),
         },
       ],
     });
@@ -100,6 +127,9 @@ describe('readHostGallery', () => {
     expect(gallery?.images[0]?.path).toHaveLength(MAX_GALLERY_PATH_LENGTH);
     expect(gallery?.images[0]?.caption).toHaveLength(
       MAX_GALLERY_CAPTION_LENGTH,
+    );
+    expect(gallery?.images[0]?.description).toHaveLength(
+      MAX_GALLERY_DESCRIPTION_LENGTH,
     );
   });
 
@@ -131,5 +161,35 @@ describe('hostGalleryResultText', () => {
     expect(
       hostGalleryResultText({ status: 'unavailable', reason: 'no turn' }),
     ).toContain('Describe the images in your reply instead.');
+  });
+
+  it('names each URL that could not be downloaded, and why', () => {
+    expect(
+      hostGalleryResultText({ status: 'drawn', images: 2 }, [
+        {
+          url: 'https://a.example/x.png',
+          reason: 'the server answered HTTP 404',
+        },
+      ]),
+    ).toBe(
+      'Gallery shown to the user: 2 images. 1 image could not be downloaded: ' +
+        'https://a.example/x.png (the server answered HTTP 404).',
+    );
+  });
+
+  it('says why nothing was shown when no URL could be downloaded', () => {
+    expect(
+      hostGalleryResultText(
+        { status: 'unavailable', reason: 'no image could be downloaded' },
+        [
+          { url: 'https://a.example/x.png', reason: 'the download timed out' },
+          { url: 'https://b.example/y.png', reason: 'too many redirects' },
+        ],
+      ),
+    ).toBe(
+      'The gallery could not be shown (no image could be downloaded). 2 images could not be ' +
+        'downloaded: https://a.example/x.png (the download timed out); https://b.example/y.png ' +
+        '(too many redirects). Describe the images in your reply instead.',
+    );
   });
 });

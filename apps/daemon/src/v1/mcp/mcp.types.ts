@@ -67,7 +67,8 @@ export interface McpCallContext extends McpListContext {
   /**
    * Run a PARKING call under a signal the client's own
    * `notifications/cancelled` for this request can trip. Only a tool that
-   * waits — on a person, or on a callee — needs it.
+   * waits — on a person, on a callee, or on downloads (`show_gallery`) — needs
+   * it.
    */
   whileCancellable<TOutcome>(
     call: (signal: AbortSignal) => Promise<TOutcome>,

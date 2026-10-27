@@ -84,6 +84,28 @@ export const Open: Story = {
   },
 };
 
+/** Open with a description under the picture, as a gallery tile opens it. */
+export const WithDescription: Story = {
+  render: () => {
+    function DescribedViewerDemo(): React.JSX.Element {
+      const [open, setOpen] = useState(true);
+      return (
+        <ImageViewer
+          open={open}
+          onClose={() => setOpen(false)}
+          src={PLACEHOLDER_SRC}
+          alt="Khinkali with beef"
+          title="Khinkali with beef"
+          description={
+            'Medium, 5 pcs · 2 400 ₸\nJuicy dumplings with broth inside — a long description wraps to the width of the picture rather than widening the dialog.'
+          }
+        />
+      );
+    }
+    return <DescribedViewerDemo />;
+  },
+};
+
 /**
  * A 600×4000 screenshot — the case REPORTED as "I see only its middle part and
  * can't move it": a picture far taller than the window has to be fitted to the

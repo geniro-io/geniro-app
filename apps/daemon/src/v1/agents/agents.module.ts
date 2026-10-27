@@ -88,6 +88,7 @@ import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
 import { MonitorBroker } from './services/monitor.broker';
 import { MonitorRegistry } from './services/monitor.registry';
+import { MonitorAnnouncer } from './services/monitor-announcer.service';
 import { MonitorChatDelivery } from './services/monitor-chat-delivery.service';
 import { MonitorOutcomeSweep } from './services/monitor-outcome-sweep.service';
 import { MonitorRowWriter } from './services/monitor-row.writer';
@@ -237,6 +238,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ActionOutcomeSweep,
     MonitorRegistry,
     MonitorRowWriter,
+    MonitorAnnouncer,
     MonitorChatDelivery,
     MonitorOutcomeSweep,
     MonitorBroker,

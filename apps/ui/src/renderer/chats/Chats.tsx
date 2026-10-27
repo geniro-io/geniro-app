@@ -42,6 +42,7 @@ import type {
   GlobalChatSearchHit,
   HandoffTargetDto,
   ItemDto as ChatItem,
+  OpenMonitor,
   RunAwaiting,
   RunCallState,
   RunDto as ChatRun,
@@ -160,6 +161,7 @@ import {
   type OpenCallChipRow,
   ResetWakeChip,
   RunningCallChips,
+  RunningMonitorChips,
   RunningShellChips,
   RunningSubagentChips,
   TaskListChip,
@@ -6605,6 +6607,30 @@ export function Chats({
     [activeRunId, chatApi, refreshRunState, setError],
   );
 
+  /** Stop one monitor from the shelf, as the processes popup's Stop does. */
+  const handleStopMonitor = useCallback(
+    async (monitor: OpenMonitor): Promise<void> => {
+      if (activeRunId === null) {
+        return;
+      }
+      setError(null);
+      try {
+        const answer = await chatApi.stopDetachedProcesses({
+          runId: activeRunId,
+          stopDetachedProcessesDto: { monitorIds: [monitor.id] },
+        });
+        if (!answer.stoppedMonitorIds.includes(monitor.id)) {
+          setError(`${monitor.description}: the monitor could not be stopped`);
+        }
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        refreshRunState();
+      }
+    },
+    [activeRunId, chatApi, refreshRunState, setError],
+  );
+
   /**
    * The timeline as the agents panel takes it — its markers plus the jump.
    *
@@ -7348,8 +7374,8 @@ export function Chats({
     threadTotals.outputTokens,
     threadTotals.cacheTokens,
   ]);
-  /** A team note's author by name, for the shelf chip — the panel has its own. */
-  const teamNoteAuthor = useCallback(
+  /** A node's agent by name, for the shelf's team-note and monitor chips — the panel has its own. */
+  const shelfAgentName = useCallback(
     (nodeId: string): string => agentNameOf(agents, nodeId),
     [agents],
   );
@@ -8825,7 +8851,7 @@ export function Chats({
       />
       <TeamNotesChip
         notes={teamNotes}
-        agentName={teamNoteAuthor}
+        agentName={shelfAgentName}
         onJump={jumpToSeq}
         onOpenAll={() => setTeamNotesOpen(true)}
       />
@@ -8837,7 +8863,7 @@ export function Chats({
           open
           onClose={() => setTeamNotesOpen(false)}
           notes={teamNotes}
-          agentName={teamNoteAuthor}
+          agentName={shelfAgentName}
           onJump={jumpToSeq}
         />
       ) : null}
@@ -8868,6 +8894,11 @@ export function Chats({
         // way to a delegate now, and a list that only
         // looked clickable would be a step back from it.
         onOpen={openSubagentById}
+      />
+      <RunningMonitorChips
+        monitors={runState.monitors}
+        agentNameOf={activeRun?.workflowId ? shelfAgentName : undefined}
+        onStop={handleStopMonitor}
       />
       {/* LAST on the row: a command an agent runs comes
             and goes many times within a single turn. */}

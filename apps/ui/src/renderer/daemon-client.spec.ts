@@ -336,6 +336,15 @@ describe('parseRunStatus — the run_status twin', () => {
     expect(skewed).not.toHaveProperty('seenAt');
   });
 
+  it('carries the monitors-changed marker, and drops one that is not a number', () => {
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, monitorsChangedAt: 1700 }),
+    ).toMatchObject({ monitorsChangedAt: 1700 });
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, monitorsChangedAt: 'now' }),
+    ).not.toHaveProperty('monitorsChangedAt');
+  });
+
   it('carries which announced pull requests the run opened, reading a missing mark as touched', () => {
     const ref = (number: number) => ({
       owner: 'o',

@@ -3048,6 +3048,28 @@ export const OpenShellSchema = z
   .meta({ id: 'OpenShell' });
 export type OpenShell = z.infer<typeof OpenShellSchema>;
 
+/** One `monitor` command still running, as `MonitorRegistry` holds it. */
+export const OpenMonitorSchema = z
+  .object({
+    id: z.string().describe('the id the agent knows it by, e.g. `m1`'),
+    description: z.string(),
+    command: z.string(),
+    nodeId: z
+      .string()
+      .nullable()
+      .describe('which workflow node started it; null for a 1:1 chat'),
+    callId: z
+      .string()
+      .nullable()
+      .describe(
+        'the call its conversation was answering when it started; null for its own conversation',
+      ),
+    startedAt: z.string(),
+    endsAt: z.string().describe('when its timeout stops it, ISO-8601'),
+  })
+  .meta({ id: 'OpenMonitor' });
+export type OpenMonitor = z.infer<typeof OpenMonitorSchema>;
+
 /**
  * Every command the run still has running, over the WHOLE conversation.
  *
@@ -3913,6 +3935,9 @@ export const RunStateWireSchema = z.object({
   shells: z
     .array(OpenShellSchema)
     .describe('every DETACHED command still running'),
+  monitors: z
+    .array(OpenMonitorSchema)
+    .describe("every conversation's monitors still running, in start order"),
   actions: z
     .array(LiveActionSchema)
     .describe(
@@ -4904,6 +4929,13 @@ export interface RunStatusEvent {
    * Cursor had already recorded.
    */
   spendUpdatedAt?: number;
+  /**
+   * When one of this run's monitors last started or ended — absent on every
+   * other announce. A marker like {@link spendUpdatedAt}: it says only "read
+   * run state's `monitors` again", since a monitor's end row can wait for the
+   * agent's turn to finish while the monitor is already gone.
+   */
+  monitorsChangedAt?: number;
   /**
    * The run's new status, or null when this event only says what the run is
    * DOING and asserts nothing about whether it is still going.

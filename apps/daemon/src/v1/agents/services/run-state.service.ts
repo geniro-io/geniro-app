@@ -4,7 +4,13 @@ import { NotFoundException } from '@packages/common';
 
 import type { Item } from '../../runs/entity/item.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
-import type { ItemWire, RunStateWire, TurnEnding } from '../chat.types';
+import type {
+  ItemWire,
+  MonitorSnapshot,
+  OpenMonitor,
+  RunStateWire,
+  TurnEnding,
+} from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { rowsWithId, workflowEdgeRows } from '../utils/history-anchors';
@@ -20,6 +26,7 @@ import { ApprovalRegistry } from './approval-registry';
 import { ChatActionsService } from './chat-actions.service';
 import { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
+import { MonitorRegistry } from './monitor.registry';
 
 /**
  * What a run holds as a whole, for the readouts that must not depend on how
@@ -27,7 +34,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
  *
  * A COMPOSITION of reads the run already answers elsewhere, never a second
  * store: the open cards are the approval registry's, the shells are
- * `ChatShellsService`'s, and the rest is folded from the rows each question is
+ * `ChatShellsService`'s, the monitors `MonitorRegistry`'s, and the rest is folded from the rows each question is
  * about. Kinds a run holds a handful of are read by the `(runId, kind, seq)`
  * index. The tool rows cost JSON-path scans: one over the run's tool calls by
  * NAME, one over its replies by id, a third over its tool calls by id only
@@ -45,6 +52,7 @@ export class RunStateService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly seqs: ItemSeqAllocator,
     private readonly actions: ChatActionsService,
+    private readonly monitors: MonitorRegistry,
   ) {}
 
   async read(runId: string): Promise<RunStateWire> {
@@ -200,6 +208,7 @@ export class RunStateService {
       workflowRows,
       artifactRows,
       shells: (await this.shells.read(runId)).shells,
+      monitors: this.monitors.list(runId).map(openMonitor),
       actions: await this.actions.live(runId, em),
       turnStartedAt,
     };
@@ -289,4 +298,17 @@ function idOf(row: ItemWire): string | null {
 
 function idsOf(rows: readonly ItemWire[]): Set<string> {
   return new Set(rows.map(idOf).filter((id): id is string => id !== null));
+}
+
+function openMonitor(monitor: MonitorSnapshot): OpenMonitor {
+  return {
+    id: monitor.id,
+    description: monitor.description,
+    command: monitor.command,
+    // A chat's own rows carry no node.
+    nodeId: monitor.owner.target === 'chat' ? null : monitor.owner.nodeId,
+    callId: monitor.owner.callId,
+    startedAt: monitor.startedAt,
+    endsAt: monitor.endsAt,
+  };
 }

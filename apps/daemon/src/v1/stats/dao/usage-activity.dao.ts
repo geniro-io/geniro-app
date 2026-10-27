@@ -8,13 +8,19 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 import type { ExpressionBuilder } from 'kysely';
 
+import { idBatches } from '../../agents/utils/id-batches';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import type {
   ActivityFact,
+  FailedNodeStamp,
+  LineSnapshotRead,
   LineSnapshotRow,
   LinesPeak,
   PullRequestActivityInput,
   RunOutcomeLedgerRow,
+  ThreadLedgerRow,
+  ThreadOutcomeStamp,
+  ThreadVersionStamp,
   UsageActivityKind,
 } from '../stats.types';
 import {
@@ -24,24 +30,71 @@ import {
 } from '../utils/activity-facts';
 import { LEGACY_LINE_KEY_PREFIX } from '../utils/line-keys';
 
-/** The `usage_activity` columns the grouped lines read uses, as SQLite stores them. */
-interface LinesDatabase {
-  usage_activity: {
-    kind: UsageActivity['kind'];
-    run_id: UsageActivity['runId'];
-    line_key: UsageActivity['lineKey'];
-    lines_added: UsageActivity['linesAdded'];
-    lines_removed: UsageActivity['linesRemoved'];
-    /** Epoch milliseconds. */
-    occurred_at: number;
-    deleted_at: number | null;
+function flagOf(value: number | null): boolean | null {
+  return value === null ? null : value !== 0;
+}
+
+/** A stamped failed-node list, or null when the column holds none that reads. */
+function readFailedNodes(text: string | null): FailedNodeStamp[] | null {
+  if (text === null) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) {
+    return null;
+  }
+  const nodes: FailedNodeStamp[] = [];
+  for (const entry of parsed as unknown[]) {
+    if (entry === null || typeof entry !== 'object') {
+      return null;
+    }
+    const { nodeId, name } = entry as Record<string, unknown>;
+    if (typeof nodeId !== 'string') {
+      return null;
+    }
+    nodes.push({ nodeId, name: typeof name === 'string' ? name : null });
+  }
+  return nodes;
+}
+
+const LEDGER_COLUMNS = [
+  'run_id',
+  'occurred_at',
+  'workflow_slug',
+  'workflow_version',
+  'workflow_version_inferred',
+  'run_status',
+  'failed_nodes',
+  'wall_ms',
+] as const;
+
+type LedgerColumns = Pick<
+  ActivityDatabase['usage_activity'],
+  (typeof LEDGER_COLUMNS)[number]
+>;
+
+function toLedgerRow(row: LedgerColumns): ThreadLedgerRow {
+  return {
+    runId: row.run_id,
+    occurredAt: new Date(Number(row.occurred_at)),
+    slug: row.workflow_slug,
+    version: row.workflow_version,
+    inferred: flagOf(row.workflow_version_inferred),
+    runStatus: row.run_status,
+    failedNodes: readFailedNodes(row.failed_nodes),
+    wallMs: row.wall_ms,
   };
 }
 
 /**
- * `usage_activity` as SQLite stores it, for the outcome upsert — typed off the entity,
- * so a renamed or retyped field fails the build. Dates are the stored epoch milliseconds
- * and booleans the stored 0/1, since value conversion is off.
+ * `usage_activity` as SQLite stores it, for the typed Kysely reads and writes — typed off
+ * the entity, so a renamed or retyped field fails the build. Dates are the stored epoch
+ * milliseconds and booleans the stored 0/1, since value conversion is off.
  */
 interface ActivityDatabase {
   usage_activity: {
@@ -57,12 +110,22 @@ interface ActivityDatabase {
     pr_repo: UsageActivity['prRepo'];
     pr_number: UsageActivity['prNumber'];
     pr_url: UsageActivity['prUrl'];
+    line_key: UsageActivity['lineKey'];
+    lines_added: UsageActivity['linesAdded'];
+    lines_removed: UsageActivity['linesRemoved'];
+    partial: number | null;
     workflow_slug: UsageActivity['workflowSlug'];
     source_seq: UsageActivity['sourceSeq'];
     outcome_draft: number | null;
     outcome_review_rounds: UsageActivity['outcomeReviewRounds'];
     outcome_acceptance: UsageActivity['outcomeAcceptance'];
     outcome_questions_asked: UsageActivity['outcomeQuestionsAsked'];
+    workflow_version: UsageActivity['workflowVersion'];
+    workflow_version_inferred: number | null;
+    run_status: UsageActivity['runStatus'];
+    failed_nodes: UsageActivity['failedNodes'];
+    wall_ms: UsageActivity['wallMs'];
+    outcome_at: number | null;
   };
 }
 
@@ -70,7 +133,9 @@ interface ActivityDatabase {
  * `snapshotLineKey` in the database, for a read that groups rows by series. Built from the
  * same prefix, so the database and the fold cannot file one row under two keys.
  */
-function seriesKeyOf(eb: ExpressionBuilder<LinesDatabase, 'usage_activity'>) {
+function seriesKeyOf(
+  eb: ExpressionBuilder<ActivityDatabase, 'usage_activity'>,
+) {
   return eb.fn<string>('coalesce', [
     eb.ref('line_key'),
     eb(eb.val(LEGACY_LINE_KEY_PREFIX), '||', eb.ref('run_id')),
@@ -385,7 +450,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
       return peaks;
     }
     const rows = await (txEm ?? this.em.fork())
-      .getKysely<LinesDatabase>({ convertValues: false })
+      .getKysely<ActivityDatabase>({ convertValues: false })
       .selectFrom('usage_activity')
       .select((eb) => [
         // The same key `snapshotLineKey` gives a row, so the two maps cannot disagree.
@@ -420,6 +485,205 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
       });
     }
     return peaks;
+  }
+
+  /**
+   * Stamp a workflow run's thread row with its workflow and graph version, writing the row
+   * first when the recorder has not yet. Both writers insert through the unique key, so
+   * either may go first.
+   */
+  async stampThreadVersion(
+    runId: string,
+    createdAt: Date,
+    stamp: ThreadVersionStamp,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const em = txEm ?? this.em.fork();
+    await this.insertThreadOnce(runId, createdAt, em);
+    await em
+      .getKysely<ActivityDatabase>({ convertValues: false })
+      .updateTable('usage_activity')
+      .set({
+        workflow_slug: stamp.slug,
+        workflow_version: stamp.version,
+        workflow_version_inferred:
+          stamp.inferred === null ? null : stamp.inferred ? 1 : 0,
+        updated_at: Date.now(),
+      })
+      .where('dedup_key', '=', threadFact(runId, createdAt).dedupKey)
+      .execute();
+  }
+
+  /**
+   * Stamp how a workflow run last settled. Overwrites an earlier stamp: a settled run
+   * reopens, and the newest ending is the run's outcome. The wall time only ever rises,
+   * since `wall_turns` is insert-only: a lower reading is a purge in progress, not the run.
+   */
+  async stampThreadOutcome(
+    runId: string,
+    createdAt: Date,
+    outcome: ThreadOutcomeStamp,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const em = txEm ?? this.em.fork();
+    await this.insertThreadOnce(runId, createdAt, em);
+    await em
+      .getKysely<ActivityDatabase>({ convertValues: false })
+      .updateTable('usage_activity')
+      .set((eb) => ({
+        run_status: outcome.status,
+        failed_nodes: JSON.stringify(outcome.failedNodes),
+        wall_ms:
+          outcome.wallMs === null
+            ? eb.ref('wall_ms')
+            : eb.fn<number>('max', [
+                eb.fn.coalesce('wall_ms', eb.val(0)),
+                eb.val(Math.round(outcome.wallMs)),
+              ]),
+        outcome_at: outcome.at.getTime(),
+        updated_at: Date.now(),
+      }))
+      .where('dedup_key', '=', threadFact(runId, createdAt).dedupKey)
+      .execute();
+  }
+
+  /** Every thread row stamped with this workflow — its runs, deleted ones included. */
+  async threadRowsBySlug(
+    slug: string,
+    txEm?: EntityManager,
+  ): Promise<ThreadLedgerRow[]> {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ActivityDatabase>({ convertValues: false })
+      .selectFrom('usage_activity')
+      .select(LEDGER_COLUMNS)
+      .where('kind', '=', 'thread')
+      .where('workflow_slug', '=', slug)
+      .where('deleted_at', 'is', null)
+      .execute();
+    return rows.map(toLedgerRow);
+  }
+
+  /** These runs' thread rows, by run id; a run with no row is absent. */
+  async threadRowsByRuns(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, ThreadLedgerRow>> {
+    const db = (txEm ?? this.em.fork()).getKysely<ActivityDatabase>({
+      convertValues: false,
+    });
+    const out = new Map<string, ThreadLedgerRow>();
+    for (const batch of idBatches(runIds)) {
+      const rows = await db
+        .selectFrom('usage_activity')
+        .select(LEDGER_COLUMNS)
+        .where('kind', '=', 'thread')
+        .where('run_id', 'in', batch)
+        .where('deleted_at', 'is', null)
+        .execute();
+      for (const row of rows) {
+        out.set(row.run_id, toLedgerRow(row));
+      }
+    }
+    return out;
+  }
+
+  /** How many distinct pull requests each of these runs opened, by run id; a run with none is absent. */
+  async pullRequestCounts(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, number>> {
+    const db = (txEm ?? this.em.fork()).getKysely<ActivityDatabase>({
+      convertValues: false,
+    });
+    const out = new Map<string, number>();
+    for (const batch of idBatches(runIds)) {
+      const rows = await db
+        .selectFrom('usage_activity')
+        .select((eb) => [
+          'run_id',
+          eb.fn.count<number>('dedup_key').distinct().as('count'),
+        ])
+        .where('kind', '=', 'pull_request')
+        .where('run_id', 'in', batch)
+        .where('deleted_at', 'is', null)
+        .groupBy('run_id')
+        .execute();
+      for (const row of rows) {
+        out.set(row.run_id, Number(row.count));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Every lines snapshot of every series these runs measured — other runs' snapshots of a
+   * shared folder included, since a run's growth is counted past what the series had
+   * already reached (`linesIncrements`).
+   */
+  async lineSnapshotsOfRunSeries(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<LineSnapshotRead[]> {
+    const db = (txEm ?? this.em.fork()).getKysely<ActivityDatabase>({
+      convertValues: false,
+    });
+    const lineKeys = new Set<string>();
+    const legacyRunIds = new Set<string>();
+    for (const batch of idBatches(runIds)) {
+      const rows = await db
+        .selectFrom('usage_activity')
+        .select(['run_id', 'line_key'])
+        .distinct()
+        .where('kind', '=', 'lines')
+        .where('run_id', 'in', batch)
+        .where('deleted_at', 'is', null)
+        .execute();
+      for (const row of rows) {
+        if (row.line_key === null) {
+          legacyRunIds.add(row.run_id);
+        } else {
+          lineKeys.add(row.line_key);
+        }
+      }
+    }
+    const snapshots: LineSnapshotRead[] = [];
+    const read = async (
+      column: 'line_key' | 'run_id',
+      values: readonly string[],
+    ): Promise<void> => {
+      for (const batch of idBatches(values)) {
+        const rows = await db
+          .selectFrom('usage_activity')
+          .select([
+            'run_id',
+            'line_key',
+            'occurred_at',
+            'lines_added',
+            'lines_removed',
+            'partial',
+          ])
+          .where('kind', '=', 'lines')
+          .where(column, 'in', batch)
+          .$if(column === 'run_id', (query) =>
+            query.where('line_key', 'is', null),
+          )
+          .where('deleted_at', 'is', null)
+          .execute();
+        for (const row of rows) {
+          snapshots.push({
+            runId: row.run_id,
+            lineKey: row.line_key,
+            occurredAt: new Date(Number(row.occurred_at)),
+            linesAdded: row.lines_added,
+            linesRemoved: row.lines_removed,
+            partial: flagOf(row.partial),
+          });
+        }
+      }
+    };
+    await read('line_key', [...lineKeys]);
+    await read('run_id', [...legacyRunIds]);
+    return snapshots;
   }
 
   /**

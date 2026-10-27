@@ -5,7 +5,12 @@ import {
   commitShaSchema,
   type RunOutcomeAcceptance,
 } from '../agents/chat.types';
-import type { AgentKind } from '../runs/runs.types';
+import { EdgeKindSchema } from '../graphs/graphs.types';
+import {
+  type AgentKind,
+  RUN_STATUSES,
+  type RunStatus,
+} from '../runs/runs.types';
 
 /**
  * One ledger row as its writers hand it over — the shape both the live recorder
@@ -103,6 +108,48 @@ export interface LineSnapshotRow {
   partial: boolean;
 }
 
+/** A node that had failed when a workflow run settled, as the workflow ledger stamps it. */
+export interface FailedNodeStamp {
+  nodeId: string;
+  name: string | null;
+}
+
+/** What the workflow ledger writes on a run's thread row when the run is created. */
+export interface ThreadVersionStamp {
+  slug: string;
+  /** Null when the run kept no graph copy it can read. */
+  version: string | null;
+  inferred: boolean | null;
+}
+
+/** What the workflow ledger writes on a run's thread row each time the run settles. */
+export interface ThreadOutcomeStamp {
+  status: RunStatus;
+  failedNodes: FailedNodeStamp[];
+  wallMs: number | null;
+  at: Date;
+}
+
+/** One workflow run's thread row, as the versions table reads it. */
+export interface ThreadLedgerRow {
+  runId: string;
+  occurredAt: Date;
+  slug: string | null;
+  version: string | null;
+  inferred: boolean | null;
+  runStatus: RunStatus | null;
+  /** Null when no outcome was stamped, or the stamp no longer reads. */
+  failedNodes: FailedNodeStamp[] | null;
+  wallMs: number | null;
+}
+
+/** One `workflow_versions` row. */
+export interface WorkflowVersionGraph {
+  version: string;
+  graph: string;
+  firstSeenAt: Date;
+}
+
 /** One lines snapshot, as the fold reads it. A null count is a measurement that was never made. */
 export interface LineSnapshotRead {
   runId: string;
@@ -117,6 +164,8 @@ export interface LineSnapshotRead {
 export interface LinesIncrement {
   /** The line key the growth is counted under (see `snapshotLineKey`). */
   key: string;
+  /** The run whose snapshot measured the growth. */
+  runId: string;
   occurredAt: Date;
   addedDelta: number;
   removedDelta: number;
@@ -434,3 +483,154 @@ export const UsageStatsWireSchema = z.object({
 // class name — the dangling `$ref` `setupSwagger` fails the boot on. The nested
 // shapes above carry ids precisely because they are not roots.
 export type UsageStatsWire = z.infer<typeof UsageStatsWireSchema>;
+
+/** A node as a version's change list names it. */
+export const VersionNodeRefSchema = z
+  .object({
+    id: z.string(),
+    name: z.string().nullable(),
+  })
+  .meta({ id: 'VersionNodeRef' });
+export type VersionNodeRefWire = z.infer<typeof VersionNodeRefSchema>;
+
+export const VersionEdgeRefSchema = z
+  .object({
+    from: z.string(),
+    to: z.string(),
+    kind: EdgeKindSchema,
+  })
+  .meta({ id: 'VersionEdgeRef' });
+export type VersionEdgeRefWire = z.infer<typeof VersionEdgeRefSchema>;
+
+/** What a version changed against the version recorded before it. */
+export const VersionChangesSchema = z
+  .object({
+    nodesAdded: z.array(VersionNodeRefSchema),
+    nodesRemoved: z.array(VersionNodeRefSchema),
+    nodesChanged: z.array(
+      VersionNodeRefSchema.extend({
+        fields: z.array(z.string()).describe('the node fields that differ'),
+      }),
+    ),
+    edgesAdded: z.array(VersionEdgeRefSchema),
+    edgesRemoved: z.array(VersionEdgeRefSchema),
+    maxActiveTurns: z
+      .object({
+        from: z.number().nullable(),
+        to: z.number().nullable(),
+      })
+      .nullable()
+      .describe('null when the cap did not change; a null bound is no cap'),
+  })
+  .meta({ id: 'VersionChanges' });
+export type VersionChangesWire = z.infer<typeof VersionChangesSchema>;
+
+/** A run's status as the versions table knows it: `unknown` for a deleted run that was never stamped. */
+export const VersionRunStatusSchema = z
+  .enum([...RUN_STATUSES, 'unknown'])
+  .meta({ id: 'VersionRunStatus' });
+export type VersionRunStatus = z.infer<typeof VersionRunStatusSchema>;
+
+/**
+ * What a set of runs came to. Every figure is folded over the runs' own ledger rows, a
+ * deleted run's included; null means not measured, never zero.
+ */
+export const VersionOutcomesSchema = z
+  .object({
+    runs: z.number(),
+    statuses: z.object({
+      completed: z.number(),
+      failed: z.number(),
+      cancelled: z.number(),
+      running: z.number(),
+      pending: z.number(),
+      unknown: z.number(),
+    }),
+    failedNodes: z
+      .array(
+        z.object({
+          nodeId: z.string(),
+          name: z.string().nullable(),
+          count: z.number().describe('runs this node had failed in'),
+        }),
+      )
+      .describe('most often failed first'),
+    totals: ChatTotalsWireSchema,
+    pullRequests: z.number().describe('pull requests the runs opened'),
+    lines: z
+      .object({ added: z.number(), removed: z.number() })
+      .nullable()
+      .describe('null when no run of the set was measured'),
+    workedMs: z
+      .number()
+      .nullable()
+      .describe(
+        "the CLIs' own time plus the wall-clock time of turns they did not time",
+      ),
+    workedPartial: z
+      .boolean()
+      .describe(
+        "some run's wall-clock time is not known: it was deleted before the ledger recorded it",
+      ),
+  })
+  .meta({ id: 'VersionOutcomes' });
+export type VersionOutcomesWire = z.infer<typeof VersionOutcomesSchema>;
+
+export const VersionRunSchema = z
+  .object({
+    runId: z.string(),
+    title: z.string().nullable().describe('null for a deleted run'),
+    createdAt: z.string(),
+    status: VersionRunStatusSchema,
+    deleted: z.boolean(),
+    costUsd: z.number().nullable(),
+    estimated: z
+      .boolean()
+      .describe('part of the cost was priced by geniro, not billed by a CLI'),
+  })
+  .meta({ id: 'VersionRun' });
+export type VersionRunWire = z.infer<typeof VersionRunSchema>;
+
+export const WorkflowVersionRowSchema = z
+  .object({
+    version: z
+      .string()
+      .nullable()
+      .describe('null for the runs that kept no graph copy'),
+    ordinal: z
+      .number()
+      .nullable()
+      .describe('1 for the first version recorded, in order of first use'),
+    inferred: z
+      .boolean()
+      .describe(
+        'every run of it predates graph copies, so the graph was frozen after the run started',
+      ),
+    firstRunAt: z.string(),
+    lastRunAt: z.string(),
+    changes: VersionChangesSchema.nullable().describe(
+      'null for the first recorded version and for runs with no graph copy',
+    ),
+    outcomes: VersionOutcomesSchema,
+    runs: z.array(VersionRunSchema).describe('newest first'),
+  })
+  .meta({ id: 'WorkflowVersionRow' });
+export type WorkflowVersionRowWire = z.infer<typeof WorkflowVersionRowSchema>;
+
+/** One workflow's runs grouped by the graph version they ran. */
+export const WorkflowVersionsWireSchema = z.object({
+  slug: z.string(),
+  currentVersion: z
+    .string()
+    .nullable()
+    .describe("the library graph's version; null when the file cannot be read"),
+  versions: z.array(WorkflowVersionRowSchema).describe('newest first'),
+  unversioned: WorkflowVersionRowSchema.nullable().describe(
+    'the runs that kept no graph copy, or null when there are none',
+  ),
+  totals: VersionOutcomesSchema.describe(
+    'folded over every run of the workflow, not summed from the rows',
+  ),
+});
+// No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
+export type WorkflowVersionsWire = z.infer<typeof WorkflowVersionsWireSchema>;

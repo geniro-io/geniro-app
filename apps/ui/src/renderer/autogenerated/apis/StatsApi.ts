@@ -20,11 +20,16 @@ import type {
   LineSnapshotAckDto,
   LineSnapshotDto,
   UsageStatsDto,
+  WorkflowVersionsDto,
 } from '../models/index';
 
 export interface StatsApiReadUsageStatsRequest {
     from?: string;
     to?: string;
+}
+
+export interface StatsApiReadWorkflowVersionsRequest {
+    slug: string;
 }
 
 export interface StatsApiRecordLineSnapshotRequest {
@@ -82,6 +87,54 @@ export class StatsApi extends runtime.BaseAPI {
      */
     async readUsageStats(requestParameters: StatsApiReadUsageStatsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<UsageStatsDto> {
         const response = await this.readUsageStatsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readWorkflowVersionsRaw(requestParameters: StatsApiReadWorkflowVersionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<WorkflowVersionsDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling readWorkflowVersions().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['slug'] != null) {
+            queryParameters['slug'] = requestParameters['slug'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/stats/workflow-versions`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readWorkflowVersions(requestParameters: StatsApiReadWorkflowVersionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowVersionsDto> {
+        const response = await this.readWorkflowVersionsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

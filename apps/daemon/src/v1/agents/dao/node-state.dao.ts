@@ -3,8 +3,13 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { NodeState } from '../../runs/entity/node-state.entity';
-import type { AgentKind, NodeStatus } from '../../runs/runs.types';
+import {
+  type AgentKind,
+  INTERRUPTED_NODE_ERROR,
+  type NodeStatus,
+} from '../../runs/runs.types';
 import type { ContextLevel } from '../chat.types';
+import { idBatches } from '../utils/id-batches';
 import { readNodeSessions, withNodeSession } from '../utils/node-sessions';
 import { positive } from '../utils/positive-figure';
 
@@ -412,6 +417,35 @@ export class NodeStateDao extends BaseDao<NodeState> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /** How many node rows the run has. */
+  async countByRun(runId: string, txEm?: EntityManager): Promise<number> {
+    return this.getRepo(txEm).count({ runId });
+  }
+
+  /**
+   * The nodes of these runs whose last pass FAILED. A node the boot reconcile failed
+   * (`error: 'interrupted'`) is left out: the daemon stopped under it, it did not fail.
+   */
+  async failedByRuns(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Pick<NodeState, 'runId' | 'nodeId'>[]> {
+    const rows: Pick<NodeState, 'runId' | 'nodeId'>[] = [];
+    for (const batch of idBatches(runIds)) {
+      rows.push(
+        ...(await this.getRepo(txEm).find(
+          {
+            runId: { $in: batch },
+            status: 'failed',
+            $or: [{ error: null }, { error: { $ne: INTERRUPTED_NODE_ERROR } }],
+          },
+          { fields: ['runId', 'nodeId'], disableIdentityMap: true },
+        )),
+      );
+    }
+    return rows.map((row) => ({ runId: row.runId, nodeId: row.nodeId }));
   }
 
   /**

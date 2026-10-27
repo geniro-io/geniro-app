@@ -51,8 +51,10 @@ const {
   getCapabilities,
   listAgentMcpServers,
   measureInstructionSizes,
+  readWorkflowVersions,
 } = vi.hoisted(() => ({
   measureInstructionSizes: vi.fn(),
+  readWorkflowVersions: vi.fn(),
   listAgentMcpServers: vi.fn(),
   getCapabilities: vi.fn(),
   createWorkflow: vi.fn(),
@@ -96,6 +98,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       updateChatSettings: vi.fn(),
     }),
     capabilities: { getCapabilities },
+    stats: { readWorkflowVersions },
     agents: withVocabulary({
       listAgentModels: vi.fn(async () => []),
       // Each of these three answers a LISTING, not a bare array — the hooks
@@ -238,6 +241,40 @@ beforeEach(() => {
   deleteWorkflow
     .mockReset()
     .mockImplementation(async () => ({ deleted: true }));
+  readWorkflowVersions.mockReset().mockImplementation(async () => ({
+    slug: 'dev-team',
+    currentVersion: null,
+    versions: [],
+    unversioned: null,
+    totals: {
+      runs: 0,
+      statuses: {
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+        running: 0,
+        pending: 0,
+        unknown: 0,
+      },
+      failedNodes: [],
+      totals: {
+        turns: 0,
+        costedTurns: 0,
+        costUsd: null,
+        estimatedCostUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        workedMs: null,
+      },
+      pullRequests: 0,
+      lines: null,
+      workedMs: null,
+      workedPartial: false,
+    },
+  }));
 });
 
 afterEach(() => {
@@ -1103,8 +1140,20 @@ describe('Workflows — the builder header', () => {
       'Auto-layout',
       'Export…',
       'Edit name and description',
+      'Versions…',
       'Delete workflow',
     ]);
+  });
+
+  it('opens the open workflow’s versions from the overflow, reading them only then', async () => {
+    await openBuilder();
+    expect(readWorkflowVersions).not.toHaveBeenCalled();
+
+    await menuRow('Versions…');
+
+    expect(readWorkflowVersions).toHaveBeenCalledWith({ slug: 'dev-team' });
+    expect(document.body.textContent).toContain('Versions of');
+    expect(document.body.textContent).toContain("This workflow hasn't run yet");
   });
 
   it('does not delete on the menu row alone — it asks first', async () => {

@@ -9660,6 +9660,347 @@ export interface UsageStatsDto {
 /**
  * 
  * @export
+ * @interface VersionChanges
+ */
+export interface VersionChanges {
+    /**
+     * 
+     * @type {Array<VersionNodeRef>}
+     * @memberof VersionChanges
+     */
+    nodesAdded: Array<VersionNodeRef>;
+    /**
+     * 
+     * @type {Array<VersionNodeRef>}
+     * @memberof VersionChanges
+     */
+    nodesRemoved: Array<VersionNodeRef>;
+    /**
+     * 
+     * @type {Array<VersionChangesNodesChangedInner>}
+     * @memberof VersionChanges
+     */
+    nodesChanged: Array<VersionChangesNodesChangedInner>;
+    /**
+     * 
+     * @type {Array<VersionEdgeRef>}
+     * @memberof VersionChanges
+     */
+    edgesAdded: Array<VersionEdgeRef>;
+    /**
+     * 
+     * @type {Array<VersionEdgeRef>}
+     * @memberof VersionChanges
+     */
+    edgesRemoved: Array<VersionEdgeRef>;
+    /**
+     * 
+     * @type {VersionChangesMaxActiveTurns}
+     * @memberof VersionChanges
+     */
+    maxActiveTurns: VersionChangesMaxActiveTurns | null;
+}
+/**
+ * 
+ * @export
+ * @interface VersionChangesMaxActiveTurns
+ */
+export interface VersionChangesMaxActiveTurns {
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionChangesMaxActiveTurns
+     */
+    from: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionChangesMaxActiveTurns
+     */
+    to: number | null;
+}
+/**
+ * 
+ * @export
+ * @interface VersionChangesNodesChangedInner
+ */
+export interface VersionChangesNodesChangedInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionChangesNodesChangedInner
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionChangesNodesChangedInner
+     */
+    name: string | null;
+    /**
+     * the node fields that differ
+     * @type {Array<string>}
+     * @memberof VersionChangesNodesChangedInner
+     */
+    fields: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface VersionEdgeRef
+ */
+export interface VersionEdgeRef {
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionEdgeRef
+     */
+    from: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionEdgeRef
+     */
+    to: string;
+    /**
+     * 
+     * @type {EdgeKind}
+     * @memberof VersionEdgeRef
+     */
+    kind: EdgeKind;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface VersionNodeRef
+ */
+export interface VersionNodeRef {
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionNodeRef
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionNodeRef
+     */
+    name: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface VersionOutcomes
+ */
+export interface VersionOutcomes {
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomes
+     */
+    runs: number;
+    /**
+     * 
+     * @type {VersionOutcomesStatuses}
+     * @memberof VersionOutcomes
+     */
+    statuses: VersionOutcomesStatuses;
+    /**
+     * most often failed first
+     * @type {Array<VersionOutcomesFailedNodesInner>}
+     * @memberof VersionOutcomes
+     */
+    failedNodes: Array<VersionOutcomesFailedNodesInner>;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof VersionOutcomes
+     */
+    totals: ChatTotals;
+    /**
+     * pull requests the runs opened
+     * @type {number}
+     * @memberof VersionOutcomes
+     */
+    pullRequests: number;
+    /**
+     * 
+     * @type {VersionOutcomesLines}
+     * @memberof VersionOutcomes
+     */
+    lines: VersionOutcomesLines | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomes
+     */
+    workedMs: number | null;
+    /**
+     * some run's wall-clock time is not known: it was deleted before the ledger recorded it
+     * @type {boolean}
+     * @memberof VersionOutcomes
+     */
+    workedPartial: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface VersionOutcomesFailedNodesInner
+ */
+export interface VersionOutcomesFailedNodesInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionOutcomesFailedNodesInner
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionOutcomesFailedNodesInner
+     */
+    name: string | null;
+    /**
+     * runs this node had failed in
+     * @type {number}
+     * @memberof VersionOutcomesFailedNodesInner
+     */
+    count: number;
+}
+/**
+ * 
+ * @export
+ * @interface VersionOutcomesLines
+ */
+export interface VersionOutcomesLines {
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomesLines
+     */
+    added: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomesLines
+     */
+    removed: number;
+}
+/**
+ * 
+ * @export
+ * @interface VersionOutcomesStatuses
+ */
+export interface VersionOutcomesStatuses {
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomesStatuses
+     */
+    completed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomesStatuses
+     */
+    failed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomesStatuses
+     */
+    cancelled: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomesStatuses
+     */
+    running: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomesStatuses
+     */
+    pending: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionOutcomesStatuses
+     */
+    unknown: number;
+}
+/**
+ * 
+ * @export
+ * @interface VersionRun
+ */
+export interface VersionRun {
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionRun
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionRun
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof VersionRun
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {VersionRunStatus}
+     * @memberof VersionRun
+     */
+    status: VersionRunStatus;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof VersionRun
+     */
+    deleted: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionRun
+     */
+    costUsd: number | null;
+    /**
+     * part of the cost was priced by geniro, not billed by a CLI
+     * @type {boolean}
+     * @memberof VersionRun
+     */
+    estimated: boolean;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const VersionRunStatus = {
+    Pending: 'pending',
+    Running: 'running',
+    Completed: 'completed',
+    Failed: 'failed',
+    Cancelled: 'cancelled',
+    Unknown: 'unknown'
+} as const;
+export type VersionRunStatus = typeof VersionRunStatus[keyof typeof VersionRunStatus];
+
+/**
+ * 
+ * @export
  * @interface Workflow
  */
 export interface Workflow {
@@ -10091,6 +10432,98 @@ export const WorkflowTriggerNodeKindEnum = {
 } as const;
 export type WorkflowTriggerNodeKindEnum = typeof WorkflowTriggerNodeKindEnum[keyof typeof WorkflowTriggerNodeKindEnum];
 
+/**
+ * 
+ * @export
+ * @interface WorkflowVersionRow
+ */
+export interface WorkflowVersionRow {
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionRow
+     */
+    version: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof WorkflowVersionRow
+     */
+    ordinal: number | null;
+    /**
+     * every run of it predates graph copies, so the graph was frozen after the run started
+     * @type {boolean}
+     * @memberof WorkflowVersionRow
+     */
+    inferred: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionRow
+     */
+    firstRunAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionRow
+     */
+    lastRunAt: string;
+    /**
+     * 
+     * @type {VersionChanges}
+     * @memberof WorkflowVersionRow
+     */
+    changes: VersionChanges | null;
+    /**
+     * 
+     * @type {VersionOutcomes}
+     * @memberof WorkflowVersionRow
+     */
+    outcomes: VersionOutcomes;
+    /**
+     * newest first
+     * @type {Array<VersionRun>}
+     * @memberof WorkflowVersionRow
+     */
+    runs: Array<VersionRun>;
+}
+/**
+ * 
+ * @export
+ * @interface WorkflowVersionsDto
+ */
+export interface WorkflowVersionsDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionsDto
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionsDto
+     */
+    currentVersion: string | null;
+    /**
+     * newest first
+     * @type {Array<WorkflowVersionRow>}
+     * @memberof WorkflowVersionsDto
+     */
+    versions: Array<WorkflowVersionRow>;
+    /**
+     * 
+     * @type {WorkflowVersionRow}
+     * @memberof WorkflowVersionsDto
+     */
+    unversioned: WorkflowVersionRow | null;
+    /**
+     * folded over every run of the workflow, not summed from the rows
+     * @type {VersionOutcomes}
+     * @memberof WorkflowVersionsDto
+     */
+    totals: VersionOutcomes;
+}
 /**
  * 
  * @export

@@ -118,6 +118,7 @@ describe('linesIncrements', () => {
     ).toEqual([
       {
         key: 'run:run-a',
+        runId: 'run-a',
         occurredAt: at('2026-08-10T12:00:00Z'),
         addedDelta: 15,
         removedDelta: 3,
@@ -135,6 +136,7 @@ describe('linesIncrements', () => {
     ).toEqual([
       {
         key: 'run:run-b',
+        runId: 'run-b',
         occurredAt: at('2026-08-10T12:00:00Z'),
         addedDelta: 40,
         removedDelta: 3,

@@ -144,6 +144,76 @@ export function isPolledSpend(event: Pick<UsageEvent, 'seq'>): boolean {
   return event.seq <= POLLED_SPEND_SEQ;
 }
 
+/** The unpriced-turn tally key for one run and one agent. */
+export function turnKey(runId: string, agentKind: string | null): string {
+  return `${runId}\u0000${agentKind ?? ''}`;
+}
+
+/**
+ * Count a finished turn nobody priced (`costUsd === null`) — the turns a POLLED price is
+ * spread over. Keyed by agent, so a workflow's polled money is credited to each CLI with
+ * that CLI's own turns.
+ */
+export function tallyUnpricedTurn(
+  tally: Map<string, number>,
+  event: Pick<UsageEvent, 'runId' | 'agentKind' | 'costUsd'>,
+): void {
+  if (event.costUsd === null) {
+    const key = turnKey(event.runId, event.agentKind);
+    tally.set(key, (tally.get(key) ?? 0) + 1);
+  }
+}
+
+/** One run's unpriced turns that belong to a CLI whose money is polled. */
+export function polledTurns(
+  unpricedTurns: ReadonlyMap<string, number>,
+  polledKinds: readonly string[],
+  runId: string,
+): number {
+  let turns = 0;
+  for (const kind of polledKinds) {
+    turns += unpricedTurns.get(turnKey(runId, kind)) ?? 0;
+  }
+  return turns;
+}
+
+/**
+ * The unpriced turns each polled row of a fold is spread over.
+ *
+ * A run's bill is several rows (one per day and model) and its unpriced turns are what
+ * that WHOLE bill is spread over, so they are credited with the run's first row alone —
+ * otherwise a cost per turn would divide one bill by the same turns once per row. Only
+ * turns of a CLI whose money is polled count: an unpriced turn of one that is not stays
+ * unmeasured.
+ */
+export class PolledTurnCredit {
+  private readonly credited = new Set<string>();
+
+  constructor(
+    private readonly unpricedTurns: ReadonlyMap<string, number>,
+    private readonly polledKinds: readonly string[],
+  ) {}
+
+  /**
+   * `turns` for the run as a whole, `agentTurns` for the one CLI the row names. Call once
+   * per row.
+   */
+  next(row: Pick<UsageEvent, 'runId' | 'agentKind'>): {
+    turns: number;
+    agentTurns: number;
+  } {
+    if (this.credited.has(row.runId)) {
+      return { turns: 0, agentTurns: 0 };
+    }
+    this.credited.add(row.runId);
+    return {
+      turns: polledTurns(this.unpricedTurns, this.polledKinds, row.runId),
+      agentTurns:
+        this.unpricedTurns.get(turnKey(row.runId, row.agentKind)) ?? 0,
+    };
+  }
+}
+
 /**
  * The CLI a run's polled money belongs to. A chat's is its own agent's. A
  * workflow run names no agent, so its bill is the CLI of the node holding the

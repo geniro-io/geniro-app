@@ -20,6 +20,7 @@ import { environment } from '../../../environments';
 import { atomicCreate, atomicWrite } from '../../../utils/atomic-file';
 import type { AgentKind } from '../../runs/runs.types';
 import {
+  SLUG_RE,
   type Workflow,
   WORKFLOW_AGENT_KINDS,
   type WorkflowLocation,
@@ -44,9 +45,6 @@ import {
 
 /** Library file suffix — a workflow `foo` lives at `<dir>/foo.geniro.yaml`. */
 const WORKFLOW_SUFFIX = '.geniro.yaml';
-
-/** Slug charset — a plain file-name segment, so no path traversal is possible. */
-const SLUG_RE = /^[a-z0-9][a-z0-9-_]*$/i;
 
 /**
  * Tally a workflow's nodes by agent kind for the library summary. Only kinds

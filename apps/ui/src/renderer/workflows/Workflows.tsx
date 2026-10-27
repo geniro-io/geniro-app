@@ -16,6 +16,7 @@ import {
 import {
   ArrowLeft,
   Download,
+  History,
   MessagesSquare,
   MoreHorizontal,
   Pencil,
@@ -125,10 +126,12 @@ import { useAutosave } from './use-autosave';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
 import { useInstructionSizes } from './use-instruction-sizes';
 import { useNodeMcp } from './use-node-mcp';
+import { useWorkflowVersions } from './use-workflow-versions';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
 import { WorkflowChatPanel } from './workflow-chat-panel';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
+import { WorkflowVersionsDialog } from './workflow-versions-dialog';
 
 // Hoisted so ReactFlow sees stable identities — a fresh array/object per
 // render (and drags render per frame) defeats its internal memoization.
@@ -181,6 +184,7 @@ export function Workflows({
   onFirstLaunchHandled,
   openRequest = null,
   onOpenRequestHandled,
+  onOpenThread,
 }: {
   handle: DaemonHandle | null;
   /**
@@ -200,6 +204,8 @@ export function Workflows({
    */
   openRequest?: string | null;
   onOpenRequestHandled?: () => void;
+  /** Opens a run's thread in Chats — from the Versions dialog's run lists. */
+  onOpenThread?: (runId: string) => void;
 }): React.JSX.Element {
   const apis = useMemo(
     () => (handle ? createDaemonApis(handle) : null),
@@ -235,6 +241,12 @@ export function Workflows({
   const [creating, setCreating] = useState(false);
   // The builder's "Change workflow" popup — the create meta form, prefilled.
   const [renameOpen, setRenameOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const versions = useWorkflowVersions(
+    apis,
+    versionsOpen ? activeSlug : null,
+    client,
+  );
   const [renaming, setRenaming] = useState(false);
   // A delete in flight — suspends autosave (see `remove`).
   const [deleting, setDeleting] = useState(false);
@@ -786,6 +798,12 @@ export function Workflows({
           value: 'rename',
           label: 'Edit name and description',
           icon: <Pencil />,
+          action: true,
+        },
+        {
+          value: 'versions',
+          label: 'Versions…',
+          icon: <History />,
           action: true,
         },
       );
@@ -1626,6 +1644,8 @@ export function Workflows({
                   void exportWorkflow();
                 } else if (value === 'rename') {
                   setRenameOpen(true);
+                } else if (value === 'versions') {
+                  setVersionsOpen(true);
                 } else if (value === 'delete') {
                   setRemoveOpen(true);
                 }
@@ -2255,6 +2275,17 @@ export function Workflows({
         maxActiveTurnsCeiling={capabilities?.maxActiveTurnsCeiling ?? null}
         onClose={() => setRenameOpen(false)}
         onSubmit={(meta) => void renameWorkflow(meta)}
+      />
+
+      <WorkflowVersionsDialog
+        open={versionsOpen && activeSlug !== null}
+        onClose={() => setVersionsOpen(false)}
+        workflowName={name}
+        data={versions.data}
+        loading={versions.loading}
+        error={versions.error}
+        onRetry={versions.reload}
+        onOpenThread={onOpenThread}
       />
 
       <ConfirmDialog

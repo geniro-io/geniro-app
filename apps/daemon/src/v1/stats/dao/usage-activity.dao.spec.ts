@@ -588,4 +588,181 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       ).toBeNull();
     });
   });
+
+  describe('the workflow ledger stamps', () => {
+    const created = at('2026-10-01T10:00:00.000Z');
+    const version = {
+      slug: 'dev-team',
+      version: 'abcdef0123456789',
+      inferred: false,
+    };
+
+    it('writes the thread row when the recorder has not yet, then stamps it', async () => {
+      await dao.stampThreadVersion('run-1', created, version);
+
+      const rows = await dao.threadRowsBySlug('dev-team');
+      expect(rows).toEqual([
+        {
+          runId: 'run-1',
+          occurredAt: created,
+          slug: 'dev-team',
+          version: 'abcdef0123456789',
+          inferred: false,
+          runStatus: null,
+          failedNodes: null,
+          wallMs: null,
+        },
+      ]);
+      expect(await orm.em.fork().count(UsageActivity, {})).toBe(1);
+    });
+
+    it('stamps the row the recorder already wrote, keeping it single', async () => {
+      await dao.insertThreadOnce('run-1', created);
+      await dao.stampThreadVersion('run-1', created, version);
+
+      expect(await orm.em.fork().count(UsageActivity, {})).toBe(1);
+      expect((await dao.threadRowsBySlug('dev-team'))[0]?.version).toBe(
+        'abcdef0123456789',
+      );
+    });
+
+    it('overwrites the outcome on every settle and keeps the version', async () => {
+      await dao.stampThreadVersion('run-1', created, version);
+      await dao.stampThreadOutcome('run-1', created, {
+        status: 'failed',
+        failedNodes: [{ nodeId: 'dev', name: 'Developer' }],
+        wallMs: 1200,
+        at: at('2026-10-01T11:00:00.000Z'),
+      });
+      await dao.stampThreadOutcome('run-1', created, {
+        status: 'completed',
+        failedNodes: [],
+        wallMs: 4800.4,
+        at: at('2026-10-01T12:00:00.000Z'),
+      });
+
+      const [row] = await dao.threadRowsBySlug('dev-team');
+      expect(row).toMatchObject({
+        version: 'abcdef0123456789',
+        runStatus: 'completed',
+        failedNodes: [],
+        wallMs: 4800,
+      });
+    });
+
+    it('reads an outcome stamped before the version (a settle racing the create)', async () => {
+      await dao.stampThreadOutcome('run-1', created, {
+        status: 'completed',
+        failedNodes: [],
+        wallMs: null,
+        at: created,
+      });
+      await dao.stampThreadVersion('run-1', created, version);
+
+      const rows = await dao.threadRowsByRuns(['run-1', 'run-gone']);
+      expect([...rows.keys()]).toEqual(['run-1']);
+      expect(rows.get('run-1')).toMatchObject({
+        slug: 'dev-team',
+        runStatus: 'completed',
+        wallMs: null,
+      });
+    });
+
+    it('reads a failed-node stamp that no longer parses as not stamped', async () => {
+      await dao.stampThreadVersion('run-1', created, version);
+      await orm.em
+        .fork()
+        .nativeUpdate(
+          UsageActivity,
+          { dedupKey: 'thread:run-1' },
+          { failedNodes: '{"not":"a list"}' },
+        );
+
+      expect((await dao.threadRowsBySlug('dev-team'))[0]?.failedNodes).toBe(
+        null,
+      );
+    });
+
+    it('lists only thread rows of the asked workflow', async () => {
+      await dao.stampThreadVersion('run-1', created, version);
+      await dao.stampThreadVersion('run-2', created, {
+        ...version,
+        slug: 'other',
+      });
+      await dao.insertThreadOnce('chat-1', created);
+      // A run_outcome row of the same run carries the same workflow slug.
+      await dao.upsertRunOutcome({
+        runId: 'run-1',
+        sourceSeq: 10,
+        occurredAt: created,
+        workflowSlug: 'dev-team',
+        prOwner: 'acme',
+        prRepo: 'platform',
+        prNumber: 87,
+        prUrl: 'https://github.com/acme/platform/pull/87',
+        draft: false,
+        reviewRounds: 1,
+        acceptance: 'accepted',
+        questionsAsked: 0,
+      });
+
+      expect(
+        (await dao.threadRowsBySlug('dev-team')).map((row) => row.runId),
+      ).toEqual(['run-1']);
+      expect(
+        (await dao.threadRowsByRuns(['run-1'])).get('run-1'),
+      ).toMatchObject({ version: 'abcdef0123456789', runStatus: null });
+    });
+  });
+
+  describe('pullRequestCounts', () => {
+    it('counts each run’s distinct pull requests', async () => {
+      await dao.insertPullRequestOnce(
+        pullRequest({ runId: 'run-1', number: 1 }),
+      );
+      await dao.insertPullRequestOnce(
+        pullRequest({ runId: 'run-1', number: 2 }),
+      );
+      await dao.insertPullRequestOnce(
+        pullRequest({ runId: 'run-2', number: 3 }),
+      );
+
+      const counts = await dao.pullRequestCounts(['run-1', 'run-2', 'run-3']);
+      expect(Object.fromEntries(counts)).toEqual({ 'run-1': 2, 'run-2': 1 });
+    });
+  });
+
+  describe('lineSnapshotsOfRunSeries', () => {
+    const snapshot = (
+      runId: string,
+      lineKey: string | null,
+      linesAdded: number,
+    ) =>
+      dao.insertLineSnapshot({
+        runId,
+        lineKey,
+        occurredAt: at('2026-10-01T10:00:00.000Z'),
+        linesAdded,
+        linesRemoved: 0,
+        partial: false,
+      });
+
+    it('reads every snapshot of the series the runs measured, other runs’ included', async () => {
+      await snapshot('run-1', 'key-a', 10);
+      await snapshot('run-other', 'key-a', 25);
+      await snapshot('run-other', 'key-b', 99);
+      await snapshot('run-1', null, 4);
+      await snapshot('run-other', null, 7);
+
+      const rows = await dao.lineSnapshotsOfRunSeries(['run-1']);
+      expect(
+        rows
+          .map(
+            (row) =>
+              `${row.runId}:${row.lineKey ?? 'legacy'}:${row.linesAdded}`,
+          )
+          .sort(),
+      ).toEqual(['run-1:key-a:10', 'run-1:legacy:4', 'run-other:key-a:25']);
+    });
+  });
 });

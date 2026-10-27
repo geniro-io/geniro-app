@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { workflowVersionsQuerySchema } from '../dto/stats.dto';
 import type { StatsService } from '../services/stats.service';
-import type { UsageStatsWire } from '../stats.types';
+import type { WorkflowVersionsService } from '../services/workflow-versions.service';
+import type { UsageStatsWire, WorkflowVersionsWire } from '../stats.types';
 import { StatsController } from './stats.controller';
 
 describe('StatsController', () => {
@@ -13,7 +15,10 @@ describe('StatsController', () => {
   } {
     const usage = vi.fn(async () => answer);
     return {
-      route: new StatsController({ usage } as unknown as StatsService),
+      route: new StatsController(
+        { usage } as unknown as StatsService,
+        {} as WorkflowVersionsService,
+      ),
       usage,
     };
   }
@@ -37,5 +42,42 @@ describe('StatsController', () => {
     // goes" / "up to now"); a default invented here would put that decision in
     // two places and let them disagree.
     expect(usage).toHaveBeenCalledWith(undefined, undefined);
+  });
+
+  describe('readWorkflowVersions', () => {
+    it('hands the slug to the versions service and answers what it read', async () => {
+      const versions = {
+        slug: 'dev-team',
+      } as unknown as WorkflowVersionsWire;
+      const read = vi.fn(async () => versions);
+      const route = new StatsController(
+        {} as StatsService,
+        { read } as unknown as WorkflowVersionsService,
+      );
+
+      await expect(
+        route.readWorkflowVersions({ slug: 'dev-team' }),
+      ).resolves.toBe(versions);
+      expect(read).toHaveBeenCalledWith('dev-team');
+    });
+
+    it.each(['', '../etc', 'has space', '-leading-dash'])(
+      'refuses the slug %j before it reaches the service',
+      (slug) => {
+        expect(workflowVersionsQuerySchema.safeParse({ slug }).success).toBe(
+          false,
+        );
+      },
+    );
+
+    it('refuses a request with no slug', () => {
+      expect(workflowVersionsQuerySchema.safeParse({}).success).toBe(false);
+    });
+
+    it('accepts a library slug', () => {
+      expect(
+        workflowVersionsQuerySchema.safeParse({ slug: 'dev-team_2' }).success,
+      ).toBe(true);
+    });
   });
 });

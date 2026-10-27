@@ -1,7 +1,11 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-import { UsageStatsWireSchema } from '../stats.types';
+import { SLUG_RE } from '../../graphs/graphs.types';
+import {
+  UsageStatsWireSchema,
+  WorkflowVersionsWireSchema,
+} from '../stats.types';
 
 /**
  * HTTP DTOs for the stats route.
@@ -38,3 +42,16 @@ export class UsageStatsQueryDto extends createZodDto(usageStatsQuerySchema) {}
 
 /** What the app has spent over a period — see {@link UsageStatsWireSchema}. */
 export class UsageStatsDto extends createZodDto(UsageStatsWireSchema) {}
+
+/** Which workflow's versions to read: a library slug, in the library's own charset. */
+export const workflowVersionsQuerySchema = z.object({
+  slug: z.string().min(1).regex(SLUG_RE),
+});
+export class WorkflowVersionsQueryDto extends createZodDto(
+  workflowVersionsQuerySchema,
+) {}
+
+/** One workflow's runs by graph version — see {@link WorkflowVersionsWireSchema}. */
+export class WorkflowVersionsDto extends createZodDto(
+  WorkflowVersionsWireSchema,
+) {}

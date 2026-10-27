@@ -55,6 +55,7 @@ import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 import { WorkflowProposalService } from './v1/graphs/services/workflow-proposal.service';
 import { ShareService } from './v1/shares/services/share.service';
+import { WorkflowLedgerService } from './v1/stats/services/workflow-ledger.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 
 /**
@@ -299,6 +300,13 @@ bootstrapper.addExtension(
       // whole bill — the money is real, and on the CLI's own ledger, but this
       // column is the only place geniro still knows it.
       await app.get(PartialStreamService).rehydrateUnrecordedSpend();
+
+      // Stamp every workflow run the version ledger does not describe yet,
+      // BEFORE listen: the renderer's archive-retention sweep reaches the
+      // daemon only once it listens, and a run it deletes first would lose its
+      // version for good. The ledger's bus subscriptions start in
+      // `onModuleInit`, inside listen, so they never race this.
+      await app.get(WorkflowLedgerService).sweep();
 
       // Resolved here, STARTED from `onListening` — see that comment. This is
       // the only line of it that may run before the server is up, and it only

@@ -205,6 +205,20 @@ export function addPolledSpend(
   totals.costedTurns += costedTurns;
 }
 
+/** Add one aggregate into another, in place — the same null-means-unmeasured rule as {@link addUsage}. */
+export function mergeTotals(into: ChatTotalsWire, from: ChatTotalsWire): void {
+  into.turns += from.turns;
+  into.costedTurns += from.costedTurns;
+  add(into, 'costUsd', from.costUsd);
+  add(into, 'estimatedCostUsd', from.estimatedCostUsd);
+  add(into, 'inputTokens', from.inputTokens);
+  add(into, 'outputTokens', from.outputTokens);
+  add(into, 'cacheReadTokens', from.cacheReadTokens);
+  add(into, 'cacheCreationTokens', from.cacheCreationTokens);
+  add(into, 'thinkingTokens', from.thinkingTokens);
+  add(into, 'workedMs', from.workedMs);
+}
+
 /** Total every turn in a set of stored `turn_complete` payloads. */
 export function sumUsagePayloads(payloads: readonly string[]): ChatTotalsWire {
   const totals = emptyTotals();

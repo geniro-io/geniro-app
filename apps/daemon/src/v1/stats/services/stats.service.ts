@@ -28,7 +28,11 @@ import type {
 } from '../stats.types';
 import { ActivityFold, linesIncrements } from '../utils/activity-fold';
 import { folderKeyOf, lineKeyOf } from '../utils/line-keys';
-import { isPolledSpend } from '../utils/polled-spend';
+import {
+  isPolledSpend,
+  PolledTurnCredit,
+  tallyUnpricedTurn,
+} from '../utils/polled-spend';
 import { eachLocalDay, localDateKey } from '../utils/usage-fold';
 import { ProjectRootsService } from './project-roots.service';
 import { UsageEventBus } from './usage-events.bus';
@@ -136,10 +140,7 @@ export class StatsService {
       // REPORTED as combining everything into one bucket — when the question a
       // reader brings here is which conversations cost the most.
       addUsage(bucket(byThread, event.runId), event);
-      if (event.costUsd === null) {
-        const key = turnKey(event.runId, event.agentKind);
-        unpricedTurns.set(key, (unpricedTurns.get(key) ?? 0) + 1);
-      }
+      tallyUnpricedTurn(unpricedTurns, event);
     }
 
     // Then the spend nobody's TURN reported.
@@ -159,24 +160,13 @@ export class StatsService {
     const polledKinds = [...adapters.keys()].filter((kind) =>
       pollsSpendFor(adapters, kind),
     );
-    // A run's bill is several rows (one per day and model), and its unpriced
-    // turns are what that WHOLE bill is spread over — so they are credited
-    // with the run's first row alone, or a cost per turn would divide one bill
-    // by the same turns once per row.
-    const turnsCredited = new Set<string>();
+    const credit = new PolledTurnCredit(unpricedTurns, polledKinds);
     for (const event of polled) {
       const costUsd = event.costUsd ?? 0;
       if (costUsd <= 0) {
         continue;
       }
-      const firstRow = !turnsCredited.has(event.runId);
-      turnsCredited.add(event.runId);
-      // Only turns of a CLI whose money is polled. An unpriced turn of one that
-      // is not (no cost on its wire, no account to ask) stays unmeasured;
-      // counting it would spread this bill over a turn it never paid for.
-      const turns = firstRow
-        ? polledTurns(unpricedTurns, polledKinds, event.runId)
-        : 0;
+      const { turns, agentTurns } = credit.next(event);
       addPolledSpend(totals, costUsd, turns);
       addPolledSpend(
         bucket(byDay, localDateKey(event.occurredAt)),
@@ -186,13 +176,7 @@ export class StatsService {
       // The agent's own divisor is that agent's unpriced turns alone: the row
       // names the one CLI whose money this is, so a workflow's other agents'
       // turns are not part of what it is spread over.
-      addPolledSpend(
-        bucket(byAgent, event.agentKind),
-        costUsd,
-        firstRow
-          ? (unpricedTurns.get(turnKey(event.runId, event.agentKind)) ?? 0)
-          : 0,
-      );
+      addPolledSpend(bucket(byAgent, event.agentKind), costUsd, agentTurns);
       addPolledSpend(bucket(byModel, event.model), costUsd, turns);
       addPolledSpend(bucket(byProject, projectOf(event.cwd)), costUsd, turns);
       // The polled row is keyed by its own run, so a run's bill lands on that
@@ -532,24 +516,6 @@ export class StatsService {
     fallback.setDate(fallback.getDate() - EMPTY_RANGE_DAYS);
     return fallback;
   }
-}
-
-/** The unpriced-turn tally key for one run and one agent. */
-function turnKey(runId: string, agentKind: string | null): string {
-  return `${runId}\u0000${agentKind ?? ''}`;
-}
-
-/** One run's unpriced turns that belong to a CLI whose money is polled. */
-function polledTurns(
-  unpricedTurns: ReadonlyMap<string, number>,
-  polledKinds: readonly string[],
-  runId: string,
-): number {
-  let turns = 0;
-  for (const kind of polledKinds) {
-    turns += unpricedTurns.get(turnKey(runId, kind)) ?? 0;
-  }
-  return turns;
 }
 
 function bucket<K>(buckets: Map<K, ChatTotalsWire>, key: K): ChatTotalsWire {

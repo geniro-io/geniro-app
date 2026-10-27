@@ -173,6 +173,7 @@ import {
 } from '../../agents/utils/wall-worked';
 import {
   AgentKind,
+  INTERRUPTED_NODE_ERROR,
   type ItemKind,
   type RunStatus,
 } from '../../runs/runs.types';
@@ -2609,7 +2610,11 @@ export class GraphExecutorService
             await this.nodeStateDao.setStatus(
               run.id,
               node.nodeId,
-              { status: 'failed', endedAt: Date.now(), error: 'interrupted' },
+              {
+                status: 'failed',
+                endedAt: Date.now(),
+                error: INTERRUPTED_NODE_ERROR,
+              },
               em,
             );
           } else if (node.status === 'pending') {

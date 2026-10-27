@@ -301,6 +301,7 @@ One home for each concern:
 
 - "Workflow" is the thing and "graph" is its shape. The noun rule is in the root `AGENTS.md`. The renderer screen is `workflows/`.
 - **The daemon's `v1/graphs/` deliberately keeps its name**: it is the graph engine, and no user reads it.
+- **Versions…** (the open workflow's overflow menu, only with a saved workflow): `workflows/workflow-versions-dialog.tsx` over `use-workflow-versions.ts`, read only while open and again after `usage_recorded`. Every figure is the daemon's (`GET /v1/stats/workflow-versions`); the dialog never folds or sums one. Rows come newest first and are not sortable; an unmeasured figure is a dash with its reason as visible text, never hover-only. A run row opens its thread in Chats through `onOpenThread` (the App's `setThreadRequest` then `setView`), except a deleted run, which is text. Below `sm` the table becomes stacked cards with the totals card first.
 - Library cards take activation from `NavListItem`. Never use a `div role="button"` with a nested delete button.
 - Port counts are edges actually attached (`useEdges`), never `rules.length`.
 - Every wire is drawn by `graph-edge.tsx`.

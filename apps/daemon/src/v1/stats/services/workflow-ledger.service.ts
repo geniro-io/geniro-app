@@ -4,7 +4,6 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
 import type { RunFacts } from '../../agents/chat.types';
-import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { parseWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
@@ -13,10 +12,8 @@ import {
   canonicalGraphOf,
   workflowVersionOf,
 } from '../../graphs/utils/workflow-version';
-import { isTerminalRunStatus } from '../../runs/runs.types';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { WorkflowVersionDao } from '../dao/workflow-version.dao';
-import type { FailedNodeStamp } from '../stats.types';
 
 /**
  * Runs created before this instant got no graph copy when they started; theirs was
@@ -31,13 +28,13 @@ const SWEEP_WINDOW = 25;
 
 /**
  * The workflow ledger: stamps each workflow run's `usage_activity` thread row with its
- * graph version when it is created and with its outcome each time it settles, and records
- * each version's graph in `workflow_versions`. Both survive the run's deletion, which is
- * what lets the Workflows screen show a version's outcomes after its chats are gone.
+ * graph version when it is created, and records each version's graph in
+ * `workflow_versions`. Both survive the run's deletion, which is what lets the Workflows
+ * screen count a version's runs and cost after its chats are gone.
  *
- * It observes the bus like `UsageActivityRecorderService`. Work for one run is queued so
- * its stamps land in the order the bus announced them; different runs do not wait on
- * each other.
+ * It observes the bus like `UsageActivityRecorderService`. Work for one run is queued, so
+ * a run announced twice is stamped once at a time; different runs do not wait on each
+ * other.
  */
 @Injectable()
 export class WorkflowLedgerService implements OnModuleInit {
@@ -48,23 +45,15 @@ export class WorkflowLedgerService implements OnModuleInit {
     private readonly em: EntityManager,
     private readonly bus: AgentEventBus,
     private readonly runDao: RunDao,
-    private readonly nodeStateDao: NodeStateDao,
     private readonly activityDao: UsageActivityDao,
     private readonly versionDao: WorkflowVersionDao,
   ) {}
 
   onModuleInit(): void {
     this.bus.allRunCreated().subscribe((event) => {
-      void this.enqueue(event.runId, 'version', (em) =>
+      void this.enqueue(event.runId, (em) =>
         this.recordVersion(event.runId, em),
       );
-    });
-    this.bus.allStatuses().subscribe((event) => {
-      if (event.status !== null && isTerminalRunStatus(event.status)) {
-        void this.enqueue(event.runId, 'outcome', (em) =>
-          this.recordOutcome(event.runId, em),
-        );
-      }
     });
   }
 
@@ -74,13 +63,11 @@ export class WorkflowLedgerService implements OnModuleInit {
   }
 
   /**
-   * Stamp every workflow run the ledger does not describe as it stands: no version stamp
-   * yet (a run from before the ledger, or one whose announce was missed), or a settled
-   * status that differs from the stamped one (a status written whose announce never went
-   * out). Awaited at boot BEFORE the server listens, so nothing can delete a run before it
-   * is stamped; a second call finds nothing to do.
+   * Stamp every workflow run that has no version stamp yet: a run from before the ledger,
+   * or one whose announce was missed. Awaited at boot BEFORE the server listens, so
+   * nothing can delete a run before it is stamped; a second call finds nothing to do.
    */
-  async sweep(): Promise<{ versions: number; outcomes: number }> {
+  async sweep(): Promise<{ versions: number }> {
     const em = this.em.fork();
     const runs = await this.runDao.runFacts('every-workflow-run', em);
     const rows = await this.activityDao.threadRowsByRuns(
@@ -91,13 +78,7 @@ export class WorkflowLedgerService implements OnModuleInit {
       const row = rows.get(run.id);
       return row === undefined || row.slug === null;
     });
-    const unsettled = runs.filter(
-      (run) =>
-        isTerminalRunStatus(run.status) &&
-        rows.get(run.id)?.runStatus !== run.status,
-    );
     let versions = 0;
-    let outcomes = 0;
     for (let at = 0; at < unversioned.length; at += SWEEP_WINDOW) {
       const window = unversioned.slice(at, at + SWEEP_WINDOW);
       const snapshots = await this.runDao.workflowSnapshots(
@@ -106,7 +87,7 @@ export class WorkflowLedgerService implements OnModuleInit {
       );
       for (const run of window) {
         if (
-          await this.guarded(run.id, 'version', () =>
+          await this.guarded(run.id, () =>
             this.stampVersion(run, snapshots.get(run.id) ?? null, em),
           )
         ) {
@@ -115,33 +96,18 @@ export class WorkflowLedgerService implements OnModuleInit {
       }
       await yieldToEventLoop();
     }
-    for (let at = 0; at < unsettled.length; at += SWEEP_WINDOW) {
-      for (const run of unsettled.slice(at, at + SWEEP_WINDOW)) {
-        if (
-          await this.guarded(run.id, 'outcome', () =>
-            this.stampOutcome(run, em),
-          )
-        ) {
-          outcomes += 1;
-        }
-      }
-      await yieldToEventLoop();
+    if (versions > 0) {
+      this.logger.log(`workflow ledger: stamped ${versions} version(s)`);
     }
-    if (versions + outcomes > 0) {
-      this.logger.log(
-        `workflow ledger: stamped ${versions} version(s) and ${outcomes} outcome(s)`,
-      );
-    }
-    return { versions, outcomes };
+    return { versions };
   }
 
   private enqueue(
     runId: string,
-    what: 'version' | 'outcome',
     work: (em: EntityManager) => Promise<void>,
   ): Promise<void> {
     const tail: Promise<void> = (this.queues.get(runId) ?? Promise.resolve())
-      .then(() => this.guarded(runId, what, () => work(this.em.fork())))
+      .then(() => this.guarded(runId, () => work(this.em.fork())))
       .then(() => {
         if (this.queues.get(runId) === tail) {
           this.queues.delete(runId);
@@ -158,14 +124,6 @@ export class WorkflowLedgerService implements OnModuleInit {
     }
     const snapshots = await this.runDao.workflowSnapshots([runId], em);
     await this.stampVersion(run, snapshots.get(runId) ?? null, em);
-  }
-
-  private async recordOutcome(runId: string, em: EntityManager): Promise<void> {
-    const [run] = await this.runDao.runFacts([runId], em);
-    if (run === undefined || run.workflowId === null) {
-      return;
-    }
-    await this.stampOutcome(run, em);
   }
 
   /**
@@ -217,86 +175,19 @@ export class WorkflowLedgerService implements OnModuleInit {
   }
 
   /**
-   * Stamp the run as it stands NOW, read after the announce: a run reopened since is
-   * left for its next settle, and a run already deleted keeps its previous stamp rather
-   * than one read off rows that are gone.
-   *
-   * A delete cancels the run (a terminal announce) and then purges `node_state` and
-   * `runs` one after the other, so these reads can land mid-purge: the run and its node
-   * rows are asked for again after them.
-   */
-  private async stampOutcome(
-    run: RunFacts,
-    em: EntityManager,
-  ): Promise<boolean> {
-    if (!isTerminalRunStatus(run.status)) {
-      return false;
-    }
-    // The purge deletes node_state before runs. Node rows that were there before the
-    // read and are gone after it mean the read was cut short; a run that never had any
-    // (it failed before its nodes were written) is stamped as is.
-    const nodesBefore = await this.nodeStateDao.countByRun(run.id, em);
-    const failed = await this.nodeStateDao.failedByRuns([run.id], em);
-    if (
-      (nodesBefore > 0 &&
-        (await this.nodeStateDao.countByRun(run.id, em)) === 0) ||
-      (await this.runDao.runFacts([run.id], em)).length === 0
-    ) {
-      return false;
-    }
-    await this.activityDao.stampThreadOutcome(
-      run.id,
-      run.createdAt,
-      {
-        status: run.status,
-        failedNodes: await this.namedNodes(
-          run.id,
-          failed.map((node) => node.nodeId),
-          em,
-        ),
-        at: new Date(),
-      },
-      em,
-    );
-    return true;
-  }
-
-  /** Each failed node with the name its run's own graph gave it, so the name outlives the run. */
-  private async namedNodes(
-    runId: string,
-    nodeIds: readonly string[],
-    em: EntityManager,
-  ): Promise<FailedNodeStamp[]> {
-    if (nodeIds.length === 0) {
-      return [];
-    }
-    const reading = parseWorkflowSnapshot(
-      (await this.runDao.workflowSnapshots([runId], em)).get(runId) ?? null,
-    );
-    const names = new Map(
-      reading.state === 'readable'
-        ? reading.workflow.nodes.map((node) => [node.id, node.name ?? null])
-        : [],
-    );
-    return [...nodeIds]
-      .sort()
-      .map((nodeId) => ({ nodeId, name: names.get(nodeId) ?? null }));
-  }
-
-  /**
    * Runs one stamp, logging a failure instead of throwing it into the bus or the sweep.
-   * True when it wrote; a stamp that answers `false` chose to write nothing.
+   * True when it wrote.
    */
   private async guarded(
     runId: string,
-    what: 'version' | 'outcome',
-    stamp: () => Promise<boolean | void>,
+    stamp: () => Promise<void>,
   ): Promise<boolean> {
     try {
-      return (await stamp()) !== false;
+      await stamp();
+      return true;
     } catch (err) {
       this.logger.warn(
-        `could not stamp the ${what} of workflow run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+        `could not stamp the version of workflow run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;
     }

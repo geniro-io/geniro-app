@@ -40,12 +40,6 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
   return !LIVE_RUN_STATUSES.has(status);
 }
 
-/**
- * `NodeState.error` of a node the boot reconcile failed because the daemon stopped under
- * it — told apart from a node that failed on its own.
- */
-export const INTERRUPTED_NODE_ERROR = 'interrupted';
-
 /** A node may additionally be `skipped` — an upstream node failed. */
 export const NodeStatusSchema = z
   .enum([...RUN_STATUSES, 'skipped'])

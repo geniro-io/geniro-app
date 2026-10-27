@@ -248,27 +248,9 @@ beforeEach(() => {
     unversioned: null,
     totals: {
       runs: 0,
-      statuses: {
-        completed: 0,
-        failed: 0,
-        cancelled: 0,
-        running: 0,
-        pending: 0,
-        unknown: 0,
-      },
-      failedNodes: [],
-      totals: {
-        turns: 0,
-        costedTurns: 0,
-        costUsd: null,
-        estimatedCostUsd: null,
-        inputTokens: null,
-        outputTokens: null,
-        cacheReadTokens: null,
-        cacheCreationTokens: null,
-        thinkingTokens: null,
-        workedMs: null,
-      },
+      costUsd: null,
+      avgCostUsd: null,
+      estimatedCostUsd: null,
     },
   }));
 });

@@ -188,8 +188,7 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Who these runs are and how they stand — never their graph copy, which runs to
-   * hundreds of KB a run. `'every-workflow-run'` reads every workflow run. A run that no
+   * Who these runs are — never their graph copy, which runs to hundreds of KB a run. `'every-workflow-run'` reads every workflow run. A run that no
    * longer exists is absent.
    */
   async runFacts(
@@ -199,14 +198,12 @@ export class RunDao extends BaseDao<Run> {
     const read = async (where: FilterQuery<Run>): Promise<RunFacts[]> =>
       (
         await this.getRepo(txEm).find(where, {
-          fields: ['id', 'workflowId', 'status', 'title', 'createdAt'],
+          fields: ['id', 'workflowId', 'createdAt'],
           disableIdentityMap: true,
         })
       ).map((run) => ({
         id: run.id,
         workflowId: run.workflowId,
-        status: run.status,
-        title: run.title,
         createdAt: run.createdAt,
       }));
     if (runIds === 'every-workflow-run') {

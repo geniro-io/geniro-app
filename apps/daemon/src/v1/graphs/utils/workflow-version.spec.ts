@@ -4,6 +4,7 @@ import type { Workflow } from '../graphs.types';
 import {
   canonicalGraphJson,
   canonicalGraphOf,
+  canonicalGraphYaml,
   workflowOfCanonical,
   workflowVersionOf,
 } from './workflow-version';
@@ -149,5 +150,25 @@ describe('workflowOfCanonical', () => {
   it('answers null for a graph the schema no longer reads', () => {
     expect(workflowOfCanonical('not json')).toBeNull();
     expect(workflowOfCanonical('{"nodes":[{"id":"x"}],"edges":[]}')).toBeNull();
+  });
+});
+
+describe('canonicalGraphYaml', () => {
+  it('prints the cap, nodes and edges in the file’s field order, without the name, description or layout', () => {
+    const yaml = canonicalGraphYaml(
+      canonicalGraphJson(canonicalGraphOf(base)),
+    )!;
+
+    expect(yaml.startsWith('maxActiveTurns: 3\nnodes:\n')).toBe(true);
+    expect(yaml).toContain('  - id: lead\n    name: Lead\n    kind: agent\n');
+    expect(yaml).toContain('edges:\n');
+    expect(yaml).not.toContain('Dev Team');
+    expect(yaml).not.toContain('Builds things');
+    expect(yaml).not.toContain('layout');
+    expect(yaml).not.toContain('brief');
+  });
+
+  it('answers null for a graph the schema no longer reads', () => {
+    expect(canonicalGraphYaml('{"nodes":"no"}')).toBeNull();
   });
 });

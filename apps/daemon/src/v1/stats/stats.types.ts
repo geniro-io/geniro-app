@@ -5,12 +5,7 @@ import {
   commitShaSchema,
   type RunOutcomeAcceptance,
 } from '../agents/chat.types';
-import { EdgeKindSchema } from '../graphs/graphs.types';
-import {
-  type AgentKind,
-  RUN_STATUSES,
-  type RunStatus,
-} from '../runs/runs.types';
+import type { AgentKind } from '../runs/runs.types';
 
 /**
  * One ledger row as its writers hand it over — the shape both the live recorder
@@ -108,25 +103,12 @@ export interface LineSnapshotRow {
   partial: boolean;
 }
 
-/** A node that had failed when a workflow run settled, as the workflow ledger stamps it. */
-export interface FailedNodeStamp {
-  nodeId: string;
-  name: string | null;
-}
-
 /** What the workflow ledger writes on a run's thread row when the run is created. */
 export interface ThreadVersionStamp {
   slug: string;
   /** Null when the run kept no graph copy it can read. */
   version: string | null;
   inferred: boolean | null;
-}
-
-/** What the workflow ledger writes on a run's thread row each time the run settles. */
-export interface ThreadOutcomeStamp {
-  status: RunStatus;
-  failedNodes: FailedNodeStamp[];
-  at: Date;
 }
 
 /** One workflow run's thread row, as the versions table reads it. */
@@ -136,9 +118,6 @@ export interface ThreadLedgerRow {
   slug: string | null;
   version: string | null;
   inferred: boolean | null;
-  runStatus: RunStatus | null;
-  /** Null when no outcome was stamped, or the stamp no longer reads. */
-  failedNodes: FailedNodeStamp[] | null;
 }
 
 /** One `workflow_versions` row. */
@@ -480,96 +459,37 @@ export const UsageStatsWireSchema = z.object({
 // shapes above carry ids precisely because they are not roots.
 export type UsageStatsWire = z.infer<typeof UsageStatsWireSchema>;
 
-/** A node as a version's change list names it. */
-export const VersionNodeRefSchema = z
+/**
+ * What a set of runs cost. Folded over the runs' own ledger rows, a deleted run's
+ * included; null means not measured, never zero.
+ */
+export const VersionFiguresSchema = z
   .object({
-    id: z.string(),
-    name: z.string().nullable(),
+    runs: z.number(),
+    costUsd: z.number().nullable().describe('null when no run reported a cost'),
+    avgCostUsd: z
+      .number()
+      .nullable()
+      .describe('costUsd over the runs that reported one'),
+    estimatedCostUsd: z
+      .number()
+      .nullable()
+      .describe('the part of costUsd geniro priced, not billed by a CLI'),
   })
-  .meta({ id: 'VersionNodeRef' });
-export type VersionNodeRefWire = z.infer<typeof VersionNodeRefSchema>;
+  .meta({ id: 'VersionFigures' });
+export type VersionFiguresWire = z.infer<typeof VersionFiguresSchema>;
 
-export const VersionEdgeRefSchema = z
-  .object({
-    from: z.string(),
-    to: z.string(),
-    kind: EdgeKindSchema,
-  })
-  .meta({ id: 'VersionEdgeRef' });
-export type VersionEdgeRefWire = z.infer<typeof VersionEdgeRefSchema>;
-
-/** What a version changed against the version recorded before it. */
+/** A version's graph against the version recorded before it, as `git diff` prints it. */
 export const VersionChangesSchema = z
   .object({
-    nodesAdded: z.array(VersionNodeRefSchema),
-    nodesRemoved: z.array(VersionNodeRefSchema),
-    nodesChanged: z.array(
-      VersionNodeRefSchema.extend({
-        fields: z.array(z.string()).describe('the node fields that differ'),
-      }),
-    ),
-    edgesAdded: z.array(VersionEdgeRefSchema),
-    edgesRemoved: z.array(VersionEdgeRefSchema),
-    maxActiveTurns: z
-      .object({
-        from: z.number().nullable(),
-        to: z.number().nullable(),
-      })
-      .nullable()
-      .describe('null when the cap did not change; a null bound is no cap'),
+    added: z.number().describe('lines the diff adds'),
+    removed: z.number().describe('lines the diff removes'),
+    diff: z
+      .string()
+      .describe("unified diff of the two graphs' YAML; empty when they match"),
   })
   .meta({ id: 'VersionChanges' });
 export type VersionChangesWire = z.infer<typeof VersionChangesSchema>;
-
-/** A run's status as the versions table knows it: `unknown` for a deleted run that was never stamped. */
-export const VersionRunStatusSchema = z
-  .enum([...RUN_STATUSES, 'unknown'])
-  .meta({ id: 'VersionRunStatus' });
-export type VersionRunStatus = z.infer<typeof VersionRunStatusSchema>;
-
-/**
- * What a set of runs came to. Every figure is folded over the runs' own ledger rows, a
- * deleted run's included; null means not measured, never zero.
- */
-export const VersionOutcomesSchema = z
-  .object({
-    runs: z.number(),
-    statuses: z.object({
-      completed: z.number(),
-      failed: z.number(),
-      cancelled: z.number(),
-      running: z.number(),
-      pending: z.number(),
-      unknown: z.number(),
-    }),
-    failedNodes: z
-      .array(
-        z.object({
-          nodeId: z.string(),
-          name: z.string().nullable(),
-          count: z.number().describe('runs this node had failed in'),
-        }),
-      )
-      .describe('most often failed first'),
-    totals: ChatTotalsWireSchema,
-  })
-  .meta({ id: 'VersionOutcomes' });
-export type VersionOutcomesWire = z.infer<typeof VersionOutcomesSchema>;
-
-export const VersionRunSchema = z
-  .object({
-    runId: z.string(),
-    title: z.string().nullable().describe('null for a deleted run'),
-    createdAt: z.string(),
-    status: VersionRunStatusSchema,
-    deleted: z.boolean(),
-    costUsd: z.number().nullable(),
-    estimated: z
-      .boolean()
-      .describe('part of the cost was priced by geniro, not billed by a CLI'),
-  })
-  .meta({ id: 'VersionRun' });
-export type VersionRunWire = z.infer<typeof VersionRunSchema>;
 
 export const WorkflowVersionRowSchema = z
   .object({
@@ -589,10 +509,9 @@ export const WorkflowVersionRowSchema = z
     firstRunAt: z.string(),
     lastRunAt: z.string(),
     changes: VersionChangesSchema.nullable().describe(
-      'null for the first recorded version and for runs with no graph copy',
+      'null for the first recorded version, an inferred one and the runs with no graph copy',
     ),
-    outcomes: VersionOutcomesSchema,
-    runs: z.array(VersionRunSchema).describe('newest first'),
+    figures: VersionFiguresSchema,
   })
   .meta({ id: 'WorkflowVersionRow' });
 export type WorkflowVersionRowWire = z.infer<typeof WorkflowVersionRowSchema>;
@@ -608,7 +527,7 @@ export const WorkflowVersionsWireSchema = z.object({
   unversioned: WorkflowVersionRowSchema.nullable().describe(
     'the runs that kept no graph copy, or null when there are none',
   ),
-  totals: VersionOutcomesSchema.describe(
+  totals: VersionFiguresSchema.describe(
     'folded over every run of the workflow, not summed from the rows',
   ),
 });

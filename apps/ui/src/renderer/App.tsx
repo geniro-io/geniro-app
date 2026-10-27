@@ -267,13 +267,6 @@ export function App(): React.JSX.Element {
   const appProcesses = useAppProcesses(apis, usageOpen);
   const agentIdentities = useAgentIdentities(capabilities.capabilities);
 
-  // Both writes, in this order: the request is what `Chats` acts on, and
-  // switching first would show the previous thread for a frame.
-  const openThread = useCallback((runId: string): void => {
-    setThreadRequest(runId);
-    setView('chats');
-  }, []);
-
   /**
    * The menu bar's Clear Agent Cache: forget, then RELOAD.
    *
@@ -649,7 +642,12 @@ export function App(): React.JSX.Element {
                   data={appProcesses.data}
                   loading={appProcesses.loading}
                   error={appProcesses.error}
-                  onOpenThread={openThread}
+                  // Both writes, in this order, on `Tasks`' reason: the
+                  // request is what `Chats` acts on.
+                  onOpenThread={(runId) => {
+                    setThreadRequest(runId);
+                    setView('chats');
+                  }}
                 />
               ) : null
             }
@@ -768,7 +766,6 @@ export function App(): React.JSX.Element {
                       onFirstLaunchHandled={() => setTeamLaunch(null)}
                       openRequest={workflowRequest}
                       onOpenRequestHandled={() => setWorkflowRequest(null)}
-                      onOpenThread={openThread}
                     />
                   ) : null}
                 </div>
@@ -783,7 +780,13 @@ export function App(): React.JSX.Element {
                       client={clientRef.current}
                       active={view === 'tasks'}
                       waitingByRun={waitingByRun}
-                      onOpenThread={openThread}
+                      // Both writes, in this order: the request is what `Chats`
+                      // acts on, and switching first would show the previous
+                      // thread for a frame.
+                      onOpenThread={(runId) => {
+                        setThreadRequest(runId);
+                        setView('chats');
+                      }}
                     />
                   ) : null}
                 </div>

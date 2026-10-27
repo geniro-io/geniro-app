@@ -14,14 +14,14 @@ import {
   vi,
 } from 'vitest';
 
-import { NodeStateDao } from '../../agents/dao/node-state.dao';
-import { RunDao } from '../../agents/dao/run.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { Workflow } from '../../graphs/graphs.types';
 import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
-import { workflowVersionOf } from '../../graphs/utils/workflow-version';
-import { NodeState } from '../../runs/entity/node-state.entity';
-import { Run } from '../../runs/entity/run.entity';
+import {
+  canonicalGraphJson,
+  canonicalGraphOf,
+  workflowVersionOf,
+} from '../../graphs/utils/workflow-version';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { WorkflowVersionDao } from '../dao/workflow-version.dao';
@@ -43,7 +43,7 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let activityDao: UsageActivityDao;
   let usageDao: UsageEventDao;
-  let runDao: RunDao;
+  let versionDao: WorkflowVersionDao;
   let get: ReturnType<typeof vi.fn>;
   let service: WorkflowVersionsService;
 
@@ -51,7 +51,7 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, NodeState, UsageActivity, UsageEvent, WorkflowVersion],
+        entities: [UsageActivity, UsageEvent, WorkflowVersion],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -70,15 +70,13 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
     const em = orm.em.fork();
     activityDao = new UsageActivityDao(em);
     usageDao = new UsageEventDao(em);
-    runDao = new RunDao(em);
+    versionDao = new WorkflowVersionDao(em);
     get = vi.fn(async () => ({ slug: 'dev-team', workflow: graph, hash: 'h' }));
     service = new WorkflowVersionsService(
       em,
       activityDao,
       usageDao,
-      new WorkflowVersionDao(em),
-      runDao,
-      new NodeStateDao(em),
+      versionDao,
       { all: () => new Map() } as unknown as AgentAdapterRegistry,
       { get } as unknown as WorkflowStoreService,
     );
@@ -86,20 +84,16 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
 
   const created = new Date('2026-10-01T10:00:00.000Z');
 
-  async function workflowThread(runId: string, live: boolean): Promise<void> {
-    await activityDao.stampThreadVersion(runId, created, {
+  async function workflowThread(
+    runId: string,
+    version = VERSION,
+    at = created,
+  ): Promise<void> {
+    await activityDao.stampThreadVersion(runId, at, {
       slug: 'dev-team',
-      version: VERSION,
+      version,
       inferred: false,
     });
-    if (live) {
-      await runDao.create({
-        id: runId,
-        workflowId: 'dev-team',
-        status: 'completed',
-        createdAt: created,
-      });
-    }
   }
 
   function turn(runId: string, costUsd: number): UsageEventInput {
@@ -127,41 +121,66 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
     };
   }
 
-  it('reads a deleted run’s spend from the ledger, beside a live one', async () => {
-    await workflowThread('live', true);
-    await workflowThread('gone', false);
-    await usageDao.recordOnce(turn('live', 2));
+  it('counts a run whose chat is gone through what the ledger kept', async () => {
+    await workflowThread('gone');
+    await workflowThread('kept');
     await usageDao.recordOnce(turn('gone', 3));
+    await usageDao.recordOnce(turn('kept', 1));
 
     const result = await service.read('dev-team');
 
-    const runs = result.versions[0]!.runs;
-    expect(runs.find((run) => run.runId === 'gone')).toMatchObject({
-      deleted: true,
-      costUsd: 3,
+    expect(result.versions[0]!.figures).toMatchObject({
+      runs: 2,
+      costUsd: 4,
+      avgCostUsd: 2,
     });
-    expect(runs.find((run) => run.runId === 'live')).toMatchObject({
-      deleted: false,
-      costUsd: 2,
-    });
-    expect(result.totals.totals.costUsd).toBe(5);
     expect(result.currentVersion).toBe(VERSION);
   });
 
   it('counts every run past the first batch of ids', async () => {
     for (let index = 0; index < 501; index += 1) {
-      await workflowThread(`run-${index}`, false);
+      await workflowThread(`run-${index}`);
     }
     await usageDao.recordOnce(turn('run-500', 7));
 
     const result = await service.read('dev-team');
 
     expect(result.totals.runs).toBe(501);
-    expect(result.totals.totals.costUsd).toBe(7);
+    expect(result.totals.costUsd).toBe(7);
+  });
+
+  it('diffs a version’s graph against the one recorded before it', async () => {
+    const next: Workflow = {
+      ...graph,
+      nodes: [
+        ...graph.nodes,
+        { id: 'qa', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+    };
+    const NEXT = workflowVersionOf(next);
+    for (const [workflow, version, at] of [
+      [graph, VERSION, created],
+      [next, NEXT, new Date('2026-10-02T10:00:00.000Z')],
+    ] as const) {
+      await versionDao.register(
+        'dev-team',
+        version,
+        canonicalGraphJson(canonicalGraphOf(workflow)),
+        at,
+      );
+      await workflowThread(`run-${version}`, version, at);
+    }
+
+    const [newest, oldest] = (await service.read('dev-team')).versions;
+
+    expect(oldest!.changes).toBeNull();
+    expect(newest!.changes).toMatchObject({ removed: 0 });
+    expect(newest!.changes!.added).toBeGreaterThan(0);
+    expect(newest!.changes!.diff).toContain('+  - id: qa');
   });
 
   it('names no current version when the library file is gone', async () => {
-    await workflowThread('live', true);
+    await workflowThread('run-1');
     get.mockRejectedValueOnce(new NotFoundException('WORKFLOW_NOT_FOUND'));
 
     expect((await service.read('dev-team')).currentVersion).toBeNull();

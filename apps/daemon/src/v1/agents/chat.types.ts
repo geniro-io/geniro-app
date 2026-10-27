@@ -4628,12 +4628,10 @@ export interface RunCreatedEvent {
   createdAt: string;
 }
 
-/** A run's identity and standing, read without its graph copy (`RunDao.runFacts`). */
+/** A run's identity, read without its graph copy (`RunDao.runFacts`). */
 export interface RunFacts {
   id: string;
   workflowId: string | null;
-  status: RunStatus;
-  title: string | null;
   createdAt: Date;
 }
 

@@ -12,13 +12,11 @@ import { idBatches } from '../../agents/utils/id-batches';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import type {
   ActivityFact,
-  FailedNodeStamp,
   LineSnapshotRow,
   LinesPeak,
   PullRequestActivityInput,
   RunOutcomeLedgerRow,
   ThreadLedgerRow,
-  ThreadOutcomeStamp,
   ThreadVersionStamp,
   UsageActivityKind,
 } from '../stats.types';
@@ -33,42 +31,12 @@ function flagOf(value: number | null): boolean | null {
   return value === null ? null : value !== 0;
 }
 
-/** A stamped failed-node list, or null when the column holds none that reads. */
-function readFailedNodes(text: string | null): FailedNodeStamp[] | null {
-  if (text === null) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) {
-    return null;
-  }
-  const nodes: FailedNodeStamp[] = [];
-  for (const entry of parsed as unknown[]) {
-    if (entry === null || typeof entry !== 'object') {
-      return null;
-    }
-    const { nodeId, name } = entry as Record<string, unknown>;
-    if (typeof nodeId !== 'string') {
-      return null;
-    }
-    nodes.push({ nodeId, name: typeof name === 'string' ? name : null });
-  }
-  return nodes;
-}
-
 const LEDGER_COLUMNS = [
   'run_id',
   'occurred_at',
   'workflow_slug',
   'workflow_version',
   'workflow_version_inferred',
-  'run_status',
-  'failed_nodes',
 ] as const;
 
 type LedgerColumns = Pick<
@@ -83,8 +51,6 @@ function toLedgerRow(row: LedgerColumns): ThreadLedgerRow {
     slug: row.workflow_slug,
     version: row.workflow_version,
     inferred: flagOf(row.workflow_version_inferred),
-    runStatus: row.run_status,
-    failedNodes: readFailedNodes(row.failed_nodes),
   };
 }
 
@@ -119,9 +85,6 @@ interface ActivityDatabase {
     outcome_questions_asked: UsageActivity['outcomeQuestionsAsked'];
     workflow_version: UsageActivity['workflowVersion'];
     workflow_version_inferred: number | null;
-    run_status: UsageActivity['runStatus'];
-    failed_nodes: UsageActivity['failedNodes'];
-    outcome_at: number | null;
   };
 }
 
@@ -504,31 +467,6 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
         workflow_version: stamp.version,
         workflow_version_inferred:
           stamp.inferred === null ? null : stamp.inferred ? 1 : 0,
-        updated_at: Date.now(),
-      })
-      .where('dedup_key', '=', threadFact(runId, createdAt).dedupKey)
-      .execute();
-  }
-
-  /**
-   * Stamp how a workflow run last settled. Overwrites an earlier stamp: a settled run
-   * reopens, and the newest ending is the run's outcome.
-   */
-  async stampThreadOutcome(
-    runId: string,
-    createdAt: Date,
-    outcome: ThreadOutcomeStamp,
-    txEm?: EntityManager,
-  ): Promise<void> {
-    const em = txEm ?? this.em.fork();
-    await this.insertThreadOnce(runId, createdAt, em);
-    await em
-      .getKysely<ActivityDatabase>({ convertValues: false })
-      .updateTable('usage_activity')
-      .set({
-        run_status: outcome.status,
-        failed_nodes: JSON.stringify(outcome.failedNodes),
-        outcome_at: outcome.at.getTime(),
         updated_at: Date.now(),
       })
       .where('dedup_key', '=', threadFact(runId, createdAt).dedupKey)

@@ -35,6 +35,7 @@
     "@packages/http-server": "workspace:*",
     "@packages/metrics": "workspace:*",
     "@packages/mikroorm": "workspace:*",
+    "diff": "^9.0.0",
     "dotenv": "^18.0.5",
     "fastify": "^5.12.5",
     "nestjs-zod": "~5.4.0",

@@ -9664,297 +9664,55 @@ export interface UsageStatsDto {
  */
 export interface VersionChanges {
     /**
-     * 
-     * @type {Array<VersionNodeRef>}
+     * lines the diff adds
+     * @type {number}
      * @memberof VersionChanges
      */
-    nodesAdded: Array<VersionNodeRef>;
+    added: number;
     /**
-     * 
-     * @type {Array<VersionNodeRef>}
+     * lines the diff removes
+     * @type {number}
      * @memberof VersionChanges
      */
-    nodesRemoved: Array<VersionNodeRef>;
+    removed: number;
     /**
-     * 
-     * @type {Array<VersionChangesNodesChangedInner>}
+     * unified diff of the two graphs' YAML; empty when they match
+     * @type {string}
      * @memberof VersionChanges
      */
-    nodesChanged: Array<VersionChangesNodesChangedInner>;
-    /**
-     * 
-     * @type {Array<VersionEdgeRef>}
-     * @memberof VersionChanges
-     */
-    edgesAdded: Array<VersionEdgeRef>;
-    /**
-     * 
-     * @type {Array<VersionEdgeRef>}
-     * @memberof VersionChanges
-     */
-    edgesRemoved: Array<VersionEdgeRef>;
-    /**
-     * 
-     * @type {VersionChangesMaxActiveTurns}
-     * @memberof VersionChanges
-     */
-    maxActiveTurns: VersionChangesMaxActiveTurns | null;
+    diff: string;
 }
 /**
  * 
  * @export
- * @interface VersionChangesMaxActiveTurns
+ * @interface VersionFigures
  */
-export interface VersionChangesMaxActiveTurns {
+export interface VersionFigures {
     /**
      * 
      * @type {number}
-     * @memberof VersionChangesMaxActiveTurns
-     */
-    from: number | null;
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionChangesMaxActiveTurns
-     */
-    to: number | null;
-}
-/**
- * 
- * @export
- * @interface VersionChangesNodesChangedInner
- */
-export interface VersionChangesNodesChangedInner {
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionChangesNodesChangedInner
-     */
-    id: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionChangesNodesChangedInner
-     */
-    name: string | null;
-    /**
-     * the node fields that differ
-     * @type {Array<string>}
-     * @memberof VersionChangesNodesChangedInner
-     */
-    fields: Array<string>;
-}
-/**
- * 
- * @export
- * @interface VersionEdgeRef
- */
-export interface VersionEdgeRef {
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionEdgeRef
-     */
-    from: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionEdgeRef
-     */
-    to: string;
-    /**
-     * 
-     * @type {EdgeKind}
-     * @memberof VersionEdgeRef
-     */
-    kind: EdgeKind;
-}
-
-
-/**
- * 
- * @export
- * @interface VersionNodeRef
- */
-export interface VersionNodeRef {
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionNodeRef
-     */
-    id: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionNodeRef
-     */
-    name: string | null;
-}
-/**
- * 
- * @export
- * @interface VersionOutcomes
- */
-export interface VersionOutcomes {
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomes
+     * @memberof VersionFigures
      */
     runs: number;
     /**
      * 
-     * @type {VersionOutcomesStatuses}
-     * @memberof VersionOutcomes
-     */
-    statuses: VersionOutcomesStatuses;
-    /**
-     * most often failed first
-     * @type {Array<VersionOutcomesFailedNodesInner>}
-     * @memberof VersionOutcomes
-     */
-    failedNodes: Array<VersionOutcomesFailedNodesInner>;
-    /**
-     * 
-     * @type {ChatTotals}
-     * @memberof VersionOutcomes
-     */
-    totals: ChatTotals;
-}
-/**
- * 
- * @export
- * @interface VersionOutcomesFailedNodesInner
- */
-export interface VersionOutcomesFailedNodesInner {
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionOutcomesFailedNodesInner
-     */
-    nodeId: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionOutcomesFailedNodesInner
-     */
-    name: string | null;
-    /**
-     * runs this node had failed in
      * @type {number}
-     * @memberof VersionOutcomesFailedNodesInner
-     */
-    count: number;
-}
-/**
- * 
- * @export
- * @interface VersionOutcomesStatuses
- */
-export interface VersionOutcomesStatuses {
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomesStatuses
-     */
-    completed: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomesStatuses
-     */
-    failed: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomesStatuses
-     */
-    cancelled: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomesStatuses
-     */
-    running: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomesStatuses
-     */
-    pending: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionOutcomesStatuses
-     */
-    unknown: number;
-}
-/**
- * 
- * @export
- * @interface VersionRun
- */
-export interface VersionRun {
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionRun
-     */
-    runId: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionRun
-     */
-    title: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof VersionRun
-     */
-    createdAt: string;
-    /**
-     * 
-     * @type {VersionRunStatus}
-     * @memberof VersionRun
-     */
-    status: VersionRunStatus;
-    /**
-     * 
-     * @type {boolean}
-     * @memberof VersionRun
-     */
-    deleted: boolean;
-    /**
-     * 
-     * @type {number}
-     * @memberof VersionRun
+     * @memberof VersionFigures
      */
     costUsd: number | null;
     /**
-     * part of the cost was priced by geniro, not billed by a CLI
-     * @type {boolean}
-     * @memberof VersionRun
+     * 
+     * @type {number}
+     * @memberof VersionFigures
      */
-    estimated: boolean;
+    avgCostUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionFigures
+     */
+    estimatedCostUsd: number | null;
 }
-
-
-
-/**
- * 
- * @export
- */
-export const VersionRunStatus = {
-    Pending: 'pending',
-    Running: 'running',
-    Completed: 'completed',
-    Failed: 'failed',
-    Cancelled: 'cancelled',
-    Unknown: 'unknown'
-} as const;
-export type VersionRunStatus = typeof VersionRunStatus[keyof typeof VersionRunStatus];
-
 /**
  * 
  * @export
@@ -10433,16 +10191,10 @@ export interface WorkflowVersionRow {
     changes: VersionChanges | null;
     /**
      * 
-     * @type {VersionOutcomes}
+     * @type {VersionFigures}
      * @memberof WorkflowVersionRow
      */
-    outcomes: VersionOutcomes;
-    /**
-     * newest first
-     * @type {Array<VersionRun>}
-     * @memberof WorkflowVersionRow
-     */
-    runs: Array<VersionRun>;
+    figures: VersionFigures;
 }
 /**
  * 
@@ -10476,10 +10228,10 @@ export interface WorkflowVersionsDto {
     unversioned: WorkflowVersionRow | null;
     /**
      * folded over every run of the workflow, not summed from the rows
-     * @type {VersionOutcomes}
+     * @type {VersionFigures}
      * @memberof WorkflowVersionsDto
      */
-    totals: VersionOutcomes;
+    totals: VersionFigures;
 }
 /**
  * 

@@ -40,7 +40,6 @@ const meta = {
     loading: false,
     error: null,
     onRetry: () => undefined,
-    onOpenThread: () => undefined,
   },
   render: (args) => <Stateful {...args} />,
   decorators: [(story) => <div className="h-[640px]">{story()}</div>],
@@ -49,7 +48,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Two versions, the first inferred, plus runs that kept no graph copy. */
+/** Two numbered versions, an inferred one, and runs that kept no graph copy. Press the newest to see its diff. */
 export const Versions: Story = {};
 
 export const Loading: Story = {

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { Document } from 'yaml';
+
 import { type Workflow, WorkflowSchema } from '../graphs.types';
 
 /**
@@ -94,4 +96,20 @@ export function workflowOfCanonical(json: string): Workflow | null {
     ...(typeof maxActiveTurns === 'number' ? { maxActiveTurns } : {}),
   });
   return result.success ? result.data : null;
+}
+
+/**
+ * A stored canonical graph as YAML in the library file's field order — what a version's
+ * diff is taken over — or null when it no longer parses.
+ */
+export function canonicalGraphYaml(json: string): string | null {
+  const workflow = workflowOfCanonical(json);
+  if (workflow === null) {
+    return null;
+  }
+  const { maxActiveTurns, nodes, edges } = workflow;
+  // The JSON round trip drops undefined fields, as the library writer does.
+  return new Document(
+    JSON.parse(JSON.stringify({ maxActiveTurns, nodes, edges })),
+  ).toString();
 }

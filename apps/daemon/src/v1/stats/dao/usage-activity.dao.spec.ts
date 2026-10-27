@@ -608,8 +608,6 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
           slug: 'dev-team',
           version: 'abcdef0123456789',
           inferred: false,
-          runStatus: null,
-          failedNodes: null,
         },
       ]);
       expect(await orm.em.fork().count(UsageActivity, {})).toBe(1);
@@ -625,56 +623,11 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       );
     });
 
-    it('overwrites the outcome on every settle and keeps the version', async () => {
-      await dao.stampThreadVersion('run-1', created, version);
-      await dao.stampThreadOutcome('run-1', created, {
-        status: 'failed',
-        failedNodes: [{ nodeId: 'dev', name: 'Developer' }],
-        at: at('2026-10-01T11:00:00.000Z'),
-      });
-      await dao.stampThreadOutcome('run-1', created, {
-        status: 'completed',
-        failedNodes: [],
-        at: at('2026-10-01T12:00:00.000Z'),
-      });
-
-      const [row] = await dao.threadRowsBySlug('dev-team');
-      expect(row).toMatchObject({
-        version: 'abcdef0123456789',
-        runStatus: 'completed',
-        failedNodes: [],
-      });
-    });
-
-    it('reads an outcome stamped before the version (a settle racing the create)', async () => {
-      await dao.stampThreadOutcome('run-1', created, {
-        status: 'completed',
-        failedNodes: [],
-        at: created,
-      });
+    it('reads every asked run that has a row, and none that has not', async () => {
       await dao.stampThreadVersion('run-1', created, version);
 
       const rows = await dao.threadRowsByRuns(['run-1', 'run-gone']);
       expect([...rows.keys()]).toEqual(['run-1']);
-      expect(rows.get('run-1')).toMatchObject({
-        slug: 'dev-team',
-        runStatus: 'completed',
-      });
-    });
-
-    it('reads a failed-node stamp that no longer parses as not stamped', async () => {
-      await dao.stampThreadVersion('run-1', created, version);
-      await orm.em
-        .fork()
-        .nativeUpdate(
-          UsageActivity,
-          { dedupKey: 'thread:run-1' },
-          { failedNodes: '{"not":"a list"}' },
-        );
-
-      expect((await dao.threadRowsBySlug('dev-team'))[0]?.failedNodes).toBe(
-        null,
-      );
     });
 
     it('lists only thread rows of the asked workflow', async () => {
@@ -705,7 +658,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       ).toEqual(['run-1']);
       expect(
         (await dao.threadRowsByRuns(['run-1'])).get('run-1'),
-      ).toMatchObject({ version: 'abcdef0123456789', runStatus: null });
+      ).toMatchObject({ version: 'abcdef0123456789' });
     });
   });
 });

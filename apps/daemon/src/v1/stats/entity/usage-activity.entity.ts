@@ -11,7 +11,6 @@ import {
 import { TimestampsEntity } from '@packages/mikroorm';
 
 import type { RunOutcomeAcceptance } from '../../agents/chat.types';
-import type { RunStatus } from '../../runs/runs.types';
 import type { UsageActivityKind } from '../stats.types';
 
 /**
@@ -23,8 +22,8 @@ import type { UsageActivityKind } from '../stats.types';
  * table, told apart by `kind`:
  *
  * - `thread`: a run was created. One row per run. A workflow run's row also carries
- *   the workflow ledger's stamps (`workflowSlug` … `outcomeAt`), which are UPDATED in
- *   place: the version when the run is created, the outcome each time it settles.
+ *   the workflow ledger's version stamp (`workflowSlug`, `workflowVersion`,
+ *   `workflowVersionInferred`), written in place when the run is created.
  * - `pull_request`: a pull request a thread OPENED, from its `gh pr create` result.
  *   One row per run and pull request.
  * - `lines`: one CUMULATIVE snapshot of a folder's change totals against the folder's
@@ -42,8 +41,8 @@ import type { UsageActivityKind } from '../stats.types';
  */
 @Entity({ tableName: 'usage_activity' })
 // The idempotency key. A thread and a pull request happen once, so the database
-// refuses a second row for either; an outcome's row, and a workflow run's thread
-// stamps, are updated in place under their key. A lines snapshot gets a fresh key
+// refuses a second row for either; an outcome's row, and a workflow run's version
+// stamp, are updated in place under their key. A lines snapshot gets a fresh key
 // and is never refused: a folder is measured many times over its life.
 @Unique({ properties: ['dedupKey'] })
 // The page's range predicate: this kind, this period.
@@ -141,16 +140,4 @@ export class UsageActivity extends TimestampsEntity {
   /** The version was hashed from a copy frozen AFTER the run started, so it may not be the graph the run had. */
   @Property({ type: 'boolean', nullable: true })
   workflowVersionInferred: boolean | null = null;
-
-  /** The run's status when it last settled. Null until it first does. */
-  @Property({ type: 'string', nullable: true })
-  runStatus: RunStatus | null = null;
-
-  /** JSON `[{nodeId, name}]`: the nodes that had failed when the run last settled. */
-  @Property({ type: 'text', nullable: true })
-  failedNodes: string | null = null;
-
-  /** When the outcome stamp above was written. */
-  @Property({ type: DateTimeType, nullable: true })
-  outcomeAt: Date | null = null;
 }

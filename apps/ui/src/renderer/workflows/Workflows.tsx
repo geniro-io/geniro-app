@@ -184,7 +184,6 @@ export function Workflows({
   onFirstLaunchHandled,
   openRequest = null,
   onOpenRequestHandled,
-  onOpenThread,
 }: {
   handle: DaemonHandle | null;
   /**
@@ -204,8 +203,6 @@ export function Workflows({
    */
   openRequest?: string | null;
   onOpenRequestHandled?: () => void;
-  /** Opens a run's thread in Chats — from the Versions dialog's run lists. */
-  onOpenThread?: (runId: string) => void;
 }): React.JSX.Element {
   const apis = useMemo(
     () => (handle ? createDaemonApis(handle) : null),
@@ -2285,7 +2282,6 @@ export function Workflows({
         loading={versions.loading}
         error={versions.error}
         onRetry={versions.reload}
-        onOpenThread={onOpenThread}
       />
 
       <ConfirmDialog

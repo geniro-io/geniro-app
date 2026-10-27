@@ -314,7 +314,7 @@ Daemon side of the contract (zod wire schemas, `@ZodResponse`, operationIds, `se
 ### Storage split
 
 - **Workflow (graph) definitions → YAML.** Never in SQLite.
-  - Workflow backups → `<userData>/workflows/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written before every save an analysis applies and whenever a builder chat's agent calls `backup_workflow` (`WorkflowChangeService`) and before an approved `propose_workflow` replaces a file (`WorkflowProposalService`). Never named `*.geniro.yaml`, so the library never lists them; restore by copying one over `<slug>.geniro.yaml`.
+  - Workflow backups → `<userData>/workflows/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written before every save an analysis applies and whenever a builder chat's agent calls `backup_workflow` (`WorkflowChangeService`) before an approved `propose_workflow` replaces a file (`WorkflowProposalService`), and before a version restore (`WorkflowVersionsService.restore`). Never named `*.geniro.yaml`, so the library never lists them; restore by copying one over `<slug>.geniro.yaml`.
 - **Settings → `settings.json`** in the Electron userData dir. The key list is `apps/ui/AGENTS.md` → **Settings keys (`settings.json`).**
   - Removing or renaming a schema key destroys what it held (`readSettings` keeps only known keys; `writeSettings` rewrites the file). Migrate or export the data first.
   - An unparseable file is copied aside to `settings.json.corrupt-<timestamp>` before any write; never write over a file that cannot be read.

@@ -19,7 +19,9 @@ import type {
   LineBaselineRequestDto,
   LineSnapshotAckDto,
   LineSnapshotDto,
+  RestoreWorkflowVersionDto,
   UsageStatsDto,
+  WorkflowVersionRestoredDto,
   WorkflowVersionsDto,
 } from '../models/index';
 
@@ -38,6 +40,10 @@ export interface StatsApiRecordLineSnapshotRequest {
 
 export interface StatsApiResolveLineBaselineRequest {
     lineBaselineRequestDto: LineBaselineRequestDto;
+}
+
+export interface StatsApiRestoreWorkflowVersionRequest {
+    restoreWorkflowVersionDto: RestoreWorkflowVersionDto;
 }
 
 /**
@@ -229,6 +235,53 @@ export class StatsApi extends runtime.BaseAPI {
      */
     async resolveLineBaseline(requestParameters: StatsApiResolveLineBaselineRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LineBaselineDto> {
         const response = await this.resolveLineBaselineRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async restoreWorkflowVersionRaw(requestParameters: StatsApiRestoreWorkflowVersionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<WorkflowVersionRestoredDto>> {
+        if (requestParameters['restoreWorkflowVersionDto'] == null) {
+            throw new runtime.RequiredError(
+                'restoreWorkflowVersionDto',
+                'Required parameter "restoreWorkflowVersionDto" was null or undefined when calling restoreWorkflowVersion().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/stats/workflow-versions/restore`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['restoreWorkflowVersionDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async restoreWorkflowVersion(requestParameters: StatsApiRestoreWorkflowVersionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowVersionRestoredDto> {
+        const response = await this.restoreWorkflowVersionRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

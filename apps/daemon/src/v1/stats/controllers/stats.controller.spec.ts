@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { workflowVersionsQuerySchema } from '../dto/stats.dto';
+import {
+  restoreWorkflowVersionSchema,
+  workflowVersionsQuerySchema,
+} from '../dto/stats.dto';
 import type { StatsService } from '../services/stats.service';
 import type { WorkflowVersionsService } from '../services/workflow-versions.service';
-import type { UsageStatsWire, WorkflowVersionsWire } from '../stats.types';
+import type {
+  UsageStatsWire,
+  WorkflowVersionRestoredWire,
+  WorkflowVersionsWire,
+} from '../stats.types';
 import { StatsController } from './stats.controller';
 
 describe('StatsController', () => {
@@ -78,6 +85,39 @@ describe('StatsController', () => {
       expect(
         workflowVersionsQuerySchema.safeParse({ slug: 'dev-team_2' }).success,
       ).toBe(true);
+    });
+  });
+
+  describe('restoreWorkflowVersion', () => {
+    it('hands the slug, version and base hash to the versions service', async () => {
+      const answer = { slug: 'dev-team' } as WorkflowVersionRestoredWire;
+      const restore = vi.fn(async () => answer);
+      const route = new StatsController(
+        {} as StatsService,
+        { restore } as unknown as WorkflowVersionsService,
+      );
+
+      await expect(
+        route.restoreWorkflowVersion({
+          slug: 'dev-team',
+          version: '0123456789abcdef',
+          baseHash: 'h1',
+        }),
+      ).resolves.toBe(answer);
+      expect(restore).toHaveBeenCalledWith(
+        'dev-team',
+        '0123456789abcdef',
+        'h1',
+      );
+    });
+
+    it.each([
+      { slug: '../etc', version: '0123456789abcdef' },
+      { slug: 'dev-team', version: 'not-a-version' },
+      { slug: 'dev-team', version: '0123456789ABCDEF' },
+      { slug: 'dev-team' },
+    ])('refuses %j before it reaches the service', (body) => {
+      expect(restoreWorkflowVersionSchema.safeParse(body).success).toBe(false);
     });
   });
 });

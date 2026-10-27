@@ -1,19 +1,34 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@packages/common';
 
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
+import type { Workflow } from '../../graphs/graphs.types';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import {
+  backUpWorkflow,
+  readWorkflowSource,
+  sameBackupOf,
+} from '../../graphs/utils/workflow-backup';
+import {
   canonicalGraphYaml,
+  edgeIdentity,
+  workflowOfCanonical,
   workflowVersionOf,
 } from '../../graphs/utils/workflow-version';
+import { parseWorkflowYaml } from '../../graphs/utils/workflow-yaml';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { WorkflowVersionDao } from '../dao/workflow-version.dao';
 import type {
   VersionChangesWire,
   WorkflowVersionGraph,
+  WorkflowVersionRestoredWire,
   WorkflowVersionsWire,
 } from '../stats.types';
 import { versionDiff } from '../utils/version-diff';
@@ -65,6 +80,66 @@ export class WorkflowVersionsService {
     });
   }
 
+  /**
+   * Write a recorded version back as the workflow's graph: its nodes, edges and active-turn
+   * cap. The workflow keeps its own name and description, the canvas places of the nodes
+   * it still has, and the labels of the edges it still has — none of them is part of a
+   * version. The file as it stood is backed up first (`.backups/`, as an applied change
+   * does), and the write quotes the hash it was read at, so a save landing in between is
+   * refused rather than overwritten. A version is restorable only while its graph is
+   * recorded: an inferred one never was.
+   */
+  async restore(
+    slug: string,
+    version: string,
+    baseHash: string | undefined,
+  ): Promise<WorkflowVersionRestoredWire> {
+    const recorded = (
+      await this.versionDao.graphsOf(slug, this.em.fork())
+    ).find((graph) => graph.version === version);
+    if (recorded === undefined) {
+      throw new NotFoundException(
+        'WORKFLOW_VERSION_NOT_FOUND',
+        `Version ${version} of '${slug}' has no recorded graph`,
+      );
+    }
+    const graph = workflowOfCanonical(recorded.graph);
+    if (graph === null) {
+      throw new BadRequestException(
+        'WORKFLOW_VERSION_UNREADABLE',
+        `Version ${version} of '${slug}' no longer reads as a workflow`,
+      );
+    }
+    const { path, directory } = this.store.locate(slug);
+    const current = await readWorkflowSource(path);
+    if (current === null) {
+      throw new NotFoundException(
+        'WORKFLOW_NOT_FOUND',
+        `No workflow '${slug}' in the library`,
+      );
+    }
+    if (baseHash !== undefined && baseHash !== current.hash) {
+      throw new ConflictException(
+        'WORKFLOW_CHANGED',
+        `Workflow '${slug}' changed since this copy was read — reload it before restoring`,
+      );
+    }
+    const backup =
+      (await sameBackupOf(directory, slug, current.source)) ??
+      (await backUpWorkflow(directory, slug, current.source));
+    const saved = await this.store.save(
+      slug,
+      restoredWorkflow(graph, parseWorkflowYaml(current.source)),
+      current.hash,
+    );
+    return {
+      slug,
+      version: workflowVersionOf(saved.workflow),
+      hash: saved.hash,
+      backup,
+    };
+  }
+
   private changesOf(
     slug: string,
     previous: WorkflowVersionGraph,
@@ -96,4 +171,32 @@ export class WorkflowVersionsService {
       return null;
     }
   }
+}
+
+/** `graph`'s nodes, edges and cap under `current`'s name, description, places and labels. */
+function restoredWorkflow(graph: Workflow, current: Workflow): Workflow {
+  const ids = new Set(graph.nodes.map((node) => node.id));
+  const labels = new Map(
+    current.edges.flatMap((edge) =>
+      edge.label === undefined ? [] : [[edgeIdentity(edge), edge.label]],
+    ),
+  );
+  const layout = Object.fromEntries(
+    Object.entries(current.layout ?? {}).filter(([id]) => ids.has(id)),
+  );
+  return {
+    name: current.name,
+    ...(current.description === undefined
+      ? {}
+      : { description: current.description }),
+    ...(graph.maxActiveTurns === undefined
+      ? {}
+      : { maxActiveTurns: graph.maxActiveTurns }),
+    nodes: graph.nodes,
+    edges: graph.edges.map((edge) => {
+      const label = labels.get(edgeIdentity(edge));
+      return label === undefined ? edge : { ...edge, label };
+    }),
+    ...(Object.keys(layout).length === 0 ? {} : { layout }),
+  };
 }

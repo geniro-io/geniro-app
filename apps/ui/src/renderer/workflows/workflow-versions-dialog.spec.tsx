@@ -106,7 +106,7 @@ describe('WorkflowVersionsDialog', () => {
   it('shows a version’s git diff on a press, and goes back to the table', () => {
     render({ data: DEV_TEAM_VERSIONS });
 
-    press('Show changes of b7c1e09a');
+    press('Show version b7c1e09a');
 
     const diff = document.body.querySelector('[data-slot="unified-diff"]');
     expect(diff?.textContent).toContain('--- a/dev-team.geniro.yaml');
@@ -129,20 +129,97 @@ describe('WorkflowVersionsDialog', () => {
     ).not.toBeNull();
   });
 
-  it('offers no press on a row with no diff', () => {
+  it('offers no press on a version whose graph was never recorded', () => {
     render({ data: DEV_TEAM_VERSIONS });
 
-    const first = rows('version-row')[1]!;
-    expect(first.querySelector('button')).toBeNull();
-    act(() => first.querySelector<HTMLElement>('td')!.click());
+    const [, , inferred, copyless] = rows('version-row');
+    for (const row of [inferred!, copyless!]) {
+      expect(row.querySelector('button')).toBeNull();
+      act(() => row.querySelector<HTMLElement>('td')!.click());
+      expect(
+        document.body.querySelector('[data-slot="version-view"]'),
+      ).toBeNull();
+    }
+  });
+
+  it('opens the first version too, saying there is nothing to compare it with', () => {
+    render({ data: DEV_TEAM_VERSIONS });
+
+    press('Show version 5d06e8b7');
+
     expect(
-      document.body.querySelector('[data-slot="version-diff"]'),
-    ).toBeNull();
+      document.body.querySelector('[data-slot="version-view"]')?.textContent,
+    ).toContain('first recorded version: there is nothing to compare it with');
+  });
+
+  it('restores a version after a confirming second press, then returns to the table', async () => {
+    const onRestore = vi.fn(async () => undefined);
+    render({ data: DEV_TEAM_VERSIONS, onRestore });
+    press('Show version 5d06e8b7');
+
+    press('Restore this version');
+    expect(onRestore).not.toHaveBeenCalled();
+    await act(async () => {
+      [...document.body.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Restore #1?')!
+        .click();
+    });
+
+    expect(onRestore).toHaveBeenCalledWith(DEV_TEAM_VERSIONS.versions[1]);
+    expect(rows('version-row')).toHaveLength(4);
+  });
+
+  it('shows why a restore failed and stays on the version', async () => {
+    const onRestore = vi.fn(async () => {
+      throw new Error('changed since this copy was read');
+    });
+    render({ data: DEV_TEAM_VERSIONS, onRestore });
+    press('Show version 5d06e8b7');
+
+    press('Restore this version');
+    await act(async () => {
+      [...document.body.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Restore #1?')!
+        .click();
+    });
+
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe(
+      'changed since this copy was read',
+    );
+    expect(
+      document.body.querySelector('[data-slot="version-view"]'),
+    ).not.toBeNull();
+  });
+
+  it('offers no restore of the current version', () => {
+    render({ data: DEV_TEAM_VERSIONS, onRestore: vi.fn() });
+
+    press('Show version b7c1e09a');
+
+    expect(document.body.textContent).not.toContain('Restore this version');
+  });
+
+  it('holds the restore back, saying why, while it cannot start', () => {
+    render({
+      data: DEV_TEAM_VERSIONS,
+      onRestore: vi.fn(),
+      restoreBlockedReason: 'The chat’s agent is working on this workflow.',
+    });
+
+    press('Show version 5d06e8b7');
+
+    const restore = [...document.body.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Restore this version',
+    );
+    expect(restore?.disabled).toBe(true);
+    expect(document.body.textContent).toContain(
+      'The chat’s agent is working on this workflow.',
+    );
   });
 
   it('forgets the open diff when the dialog closes', () => {
     const { onClose } = render({ data: DEV_TEAM_VERSIONS });
-    press('Show changes of b7c1e09a');
+    press('Show version b7c1e09a');
 
     press('Close');
     expect(onClose).toHaveBeenCalledTimes(1);

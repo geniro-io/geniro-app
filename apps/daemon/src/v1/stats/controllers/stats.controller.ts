@@ -9,8 +9,10 @@ import {
   LineSnapshotDto,
 } from '../dto/line-snapshot.dto';
 import {
+  RestoreWorkflowVersionDto,
   UsageStatsDto,
   UsageStatsQueryDto,
+  WorkflowVersionRestoredDto,
   WorkflowVersionsDto,
   WorkflowVersionsQueryDto,
 } from '../dto/stats.dto';
@@ -19,6 +21,7 @@ import { WorkflowVersionsService } from '../services/workflow-versions.service';
 import type {
   LineBaselineWire,
   UsageStatsWire,
+  WorkflowVersionRestoredWire,
   WorkflowVersionsWire,
 } from '../stats.types';
 
@@ -51,6 +54,15 @@ export class StatsController {
     @Query() query: WorkflowVersionsQueryDto,
   ): Promise<WorkflowVersionsWire> {
     return this.versions.read(query.slug);
+  }
+
+  @Post('workflow-versions/restore')
+  @ApiOperation({ operationId: 'restoreWorkflowVersion' })
+  @ZodResponse({ status: 201, type: WorkflowVersionRestoredDto })
+  restoreWorkflowVersion(
+    @Body() body: RestoreWorkflowVersionDto,
+  ): Promise<WorkflowVersionRestoredWire> {
+    return this.versions.restore(body.slug, body.version, body.baseHash);
   }
 
   @Post('line-baselines')

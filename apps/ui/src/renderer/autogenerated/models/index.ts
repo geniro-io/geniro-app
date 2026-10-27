@@ -5461,6 +5461,31 @@ export interface ResetWakesCancelledDto {
 /**
  * 
  * @export
+ * @interface RestoreWorkflowVersionDto
+ */
+export interface RestoreWorkflowVersionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof RestoreWorkflowVersionDto
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RestoreWorkflowVersionDto
+     */
+    version: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RestoreWorkflowVersionDto
+     */
+    baseHash?: string;
+}
+/**
+ * 
+ * @export
  * @interface RetriedDto
  */
 export interface RetriedDto {
@@ -10147,6 +10172,37 @@ export const WorkflowTriggerNodeKindEnum = {
 } as const;
 export type WorkflowTriggerNodeKindEnum = typeof WorkflowTriggerNodeKindEnum[keyof typeof WorkflowTriggerNodeKindEnum];
 
+/**
+ * 
+ * @export
+ * @interface WorkflowVersionRestoredDto
+ */
+export interface WorkflowVersionRestoredDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionRestoredDto
+     */
+    slug: string;
+    /**
+     * the graph version the library file now holds
+     * @type {string}
+     * @memberof WorkflowVersionRestoredDto
+     */
+    version: string;
+    /**
+     * the file hash the next save must quote
+     * @type {string}
+     * @memberof WorkflowVersionRestoredDto
+     */
+    hash: string;
+    /**
+     * where the replaced file was copied, relative to the library
+     * @type {string}
+     * @memberof WorkflowVersionRestoredDto
+     */
+    backup: string;
+}
 /**
  * 
  * @export

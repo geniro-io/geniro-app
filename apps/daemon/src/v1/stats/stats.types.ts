@@ -533,3 +533,17 @@ export const WorkflowVersionsWireSchema = z.object({
 });
 // No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
 export type WorkflowVersionsWire = z.infer<typeof WorkflowVersionsWireSchema>;
+
+/** A version written back to the library as the workflow's graph. */
+export const WorkflowVersionRestoredSchema = z.object({
+  slug: z.string(),
+  version: z.string().describe('the graph version the library file now holds'),
+  hash: z.string().describe('the file hash the next save must quote'),
+  backup: z
+    .string()
+    .describe('where the replaced file was copied, relative to the library'),
+});
+// No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
+export type WorkflowVersionRestoredWire = z.infer<
+  typeof WorkflowVersionRestoredSchema
+>;

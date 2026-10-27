@@ -40,6 +40,7 @@ const meta = {
     loading: false,
     error: null,
     onRetry: () => undefined,
+    onRestore: async () => undefined,
   },
   render: (args) => <Stateful {...args} />,
   decorators: [(story) => <div className="h-[640px]">{story()}</div>],
@@ -48,7 +49,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Two numbered versions, an inferred one, and runs that kept no graph copy. Press the newest to see its diff. */
+/** Two numbered versions, an inferred one, and runs that kept no graph copy. Press the newest to see its diff, or #1 to restore it. */
 export const Versions: Story = {};
 
 export const Loading: Story = {
@@ -65,4 +66,11 @@ export const LoadFailed: Story = {
 
 export const NeverRun: Story = {
   args: { data: NEVER_RUN_VERSIONS, workflowName: 'Fresh workflow' },
+};
+
+/** A restore held back while the builder chat's agent works. */
+export const RestoreHeldBack: Story = {
+  args: {
+    restoreBlockedReason: 'The chat’s agent is working on this workflow.',
+  },
 };

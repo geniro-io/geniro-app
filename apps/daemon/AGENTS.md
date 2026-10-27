@@ -305,6 +305,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - Each version's graph is recorded once in `workflow_versions`, keyed by (slug, version), teardown-exempt like the ledgers; `first_seen_at` keeps the earliest run, and versions are numbered by it.
   - A run with no graph copy it can read is stamped with its workflow alone and stays so, even after a later read freezes the library's graph into it. A run created before `SNAPSHOT_AT_CREATION_SINCE` is `inferred` (its copy was frozen later) and its graph is never registered, so it gets no number and no change summary.
   - The versions table (`GET /v1/stats/workflow-versions`) serves per version only the dates used, the run count, the cost and its average per priced run, and the graph's unified diff against the version numbered before it (`canonicalGraphYaml` of both, `utils/version-diff.ts` over jsdiff) with its added and removed line counts. A version's diff never changes, so `WorkflowVersionsService` keeps it in memory. Run status, failed nodes, turns, pull requests, lines and work time are deliberately not shown (user decision).
+  - `POST /v1/stats/workflow-versions/restore` (`WorkflowVersionsService.restore`) writes a recorded version back as the library file's graph: its nodes, edges and `maxActiveTurns`, under the file's own name and description, the places of the nodes it still has and the labels of the edges it still has. It backs the file up first (`.backups/`, as an applied change does), refuses a `baseHash` the file has moved past (`WORKFLOW_CHANGED`, checked before the backup and again by the store's save), and refuses a version with no recorded graph (`WORKFLOW_VERSION_NOT_FOUND`: an inferred one never has one). Restoring writes no new version: the next run stamps the restored one.
   - The archive sweep deletes archived WORKFLOW runs too (`sweepArchived` → `purgeArchived`), so `WorkflowLedgerService.sweep()` is awaited in `main.ts` before listen — every boot, selecting only runs with no version stamp yet.
   - Every read by `workflow_slug` filters `kind = 'thread'`: `run_outcome` rows carry the slug too.
 - `v1/stats` observes `AgentEventBus` and never drives; nothing in `v1/agents` imports it.
@@ -454,6 +455,7 @@ Destructive or irreversible routes (and one that only looks it — `DELETE /v1/t
 - `POST /v1/chats/sweep-archived` — deletes chats archived ≥ `olderThanDays` (1 day–10 years) from `archivedAt`; one at a time, failures logged and skipped. The policy is the client's.
 - `DELETE /v1/workflows/runs/:runId` — one workflow run's history (never the library workflow).
 - `DELETE /v1/workflows/:slug` — removes the library workflow's YAML file.
+- `POST /v1/stats/workflow-versions/restore` — replaces a library workflow's graph with a recorded version's (the file is backed up first).
 - `DELETE /v1/workflows/:slug/chat` — discards the builder chat.
 - `DELETE /v1/projects/:projectId` — the project AND its tasks.
 - `DELETE /v1/tasks/:taskId` (soft delete), `DELETE /v1/label-instructions/:instructionId` — remove a card or a label instruction.

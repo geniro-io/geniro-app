@@ -1,3 +1,7 @@
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   defineConfig,
   MikroORM,
@@ -6,6 +10,7 @@ import {
 import { NotFoundException } from '@packages/common';
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -16,7 +21,7 @@ import {
 
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { Workflow } from '../../graphs/graphs.types';
-import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
+import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import {
   canonicalGraphJson,
   canonicalGraphOf,
@@ -184,5 +189,112 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
     get.mockRejectedValueOnce(new NotFoundException('WORKFLOW_NOT_FOUND'));
 
     expect((await service.read('dev-team')).currentVersion).toBeNull();
+  });
+
+  describe('restore', () => {
+    let dir: string;
+    let store: WorkflowStoreService;
+    let restoring: WorkflowVersionsService;
+
+    const older: Workflow = {
+      name: 'Old name',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [{ from: 'start', to: 'dev', kind: 'data' }],
+    };
+    const newer: Workflow = {
+      name: 'Dev Team',
+      description: 'Ships things',
+      maxActiveTurns: 2,
+      nodes: [
+        ...older.nodes,
+        { id: 'qa', kind: 'agent', agent: 'codex', approval: 'auto' },
+      ],
+      edges: [
+        { from: 'start', to: 'dev', kind: 'data', label: 'brief' },
+        { from: 'dev', to: 'qa', kind: 'call' },
+      ],
+      layout: {
+        start: { x: 0, y: 0 },
+        dev: { x: 100, y: 0 },
+        qa: { x: 200, y: 0 },
+      },
+    };
+    const OLDER = workflowVersionOf(older);
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'geniro-restore-'));
+      store = new WorkflowStoreService({ workflowsDir: dir });
+      await store.save('dev-team', newer);
+      await versionDao.register(
+        'dev-team',
+        OLDER,
+        canonicalGraphJson(canonicalGraphOf(older)),
+        created,
+      );
+      restoring = new WorkflowVersionsService(
+        orm.em.fork(),
+        activityDao,
+        usageDao,
+        versionDao,
+        { all: () => new Map() } as unknown as AgentAdapterRegistry,
+        store,
+      );
+    });
+
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('writes the version’s graph, keeping the name, description, places and labels, and backs the old file up', async () => {
+      const before = await readFile(join(dir, 'dev-team.geniro.yaml'), 'utf8');
+      const { hash } = await store.get('dev-team');
+
+      const restored = await restoring.restore('dev-team', OLDER, hash);
+
+      const { workflow } = await store.get('dev-team');
+      expect(restored.version).toBe(OLDER);
+      expect(workflowVersionOf(workflow)).toBe(OLDER);
+      expect(workflow).toMatchObject({
+        name: 'Dev Team',
+        description: 'Ships things',
+        layout: { start: { x: 0, y: 0 }, dev: { x: 100, y: 0 } },
+        edges: [{ from: 'start', to: 'dev', kind: 'data', label: 'brief' }],
+      });
+      expect(workflow.maxActiveTurns).toBeUndefined();
+      expect(workflow.layout).not.toHaveProperty('qa');
+      expect(restored.hash).toBe((await store.get('dev-team')).hash);
+      expect(restored.backup).toMatch(/^\.backups\/dev-team\..+\.yaml$/);
+      expect(await readFile(join(dir, restored.backup), 'utf8')).toBe(before);
+    });
+
+    it('refuses a copy read before the file changed, writing nothing', async () => {
+      const { hash } = await store.get('dev-team');
+      await store.save('dev-team', { ...newer, description: 'Edited since' });
+
+      await expect(
+        restoring.restore('dev-team', OLDER, hash),
+      ).rejects.toMatchObject({ errorCode: 'WORKFLOW_CHANGED' });
+      expect(workflowVersionOf((await store.get('dev-team')).workflow)).toBe(
+        workflowVersionOf(newer),
+      );
+      expect(await readdir(dir)).not.toContain('.backups');
+    });
+
+    it('refuses a version whose graph was never recorded', async () => {
+      await expect(
+        restoring.restore('dev-team', 'ffffffffffffffff', undefined),
+      ).rejects.toMatchObject({ errorCode: 'WORKFLOW_VERSION_NOT_FOUND' });
+    });
+
+    it('refuses a workflow that is gone from the library', async () => {
+      await store.delete('dev-team');
+
+      await expect(
+        restoring.restore('dev-team', OLDER, undefined),
+      ).rejects.toMatchObject({ errorCode: 'WORKFLOW_NOT_FOUND' });
+    });
   });
 });

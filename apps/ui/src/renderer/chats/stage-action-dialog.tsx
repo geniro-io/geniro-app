@@ -17,6 +17,7 @@ import {
   daemonErrorStatus,
   describeDaemonError,
 } from '../daemon-api';
+import { distinctStageLabels, stagesReopenResets } from './stage-progress';
 
 export type StageMoveAction = MoveWorkflowRunStageDtoStageMoveAction;
 
@@ -49,34 +50,6 @@ const ACTION_VIEW: Record<
 
 export const STAGES_MOVED_MESSAGE =
   'The stages moved meanwhile — check them and try again';
-
-/** TWIN: stagesReopenResets in apps/daemon/src/v1/graphs/utils/stage-fold.ts. */
-export function stagesReopenResets(
-  progress: StageProgress,
-  id: string,
-): string[] {
-  const byId = new Map(progress.stages.map((stage) => [stage.id, stage]));
-  const seen = new Set<string>();
-  const queue = [id];
-  while (queue.length > 0) {
-    const at = queue.shift()!;
-    if (seen.has(at)) {
-      continue;
-    }
-    seen.add(at);
-    queue.push(...(byId.get(at)?.next ?? []));
-  }
-  seen.delete(id);
-  return progress.stages
-    .filter(
-      (stage) =>
-        seen.has(stage.id) &&
-        (stage.status === 'done' ||
-          stage.status === 'skipped' ||
-          stage.status === 'current'),
-    )
-    .map((stage) => stage.id);
-}
 
 export function StageActionDialog({
   request,
@@ -119,6 +92,19 @@ export function StageActionDialog({
   );
 }
 
+function branchChoices(
+  progress: StageProgress,
+  ids: readonly string[],
+): { id: string; label: string }[] {
+  const labels = distinctStageLabels(
+    ids.map((id) => ({
+      id,
+      title: progress.stages.find((entry) => entry.id === id)?.title ?? id,
+    })),
+  );
+  return ids.map((id) => ({ id, label: labels.get(id)! }));
+}
+
 function StageActionForm({
   request,
   progress,
@@ -142,10 +128,7 @@ function StageActionForm({
   const stage = progress.stages.find((entry) => entry.id === request.stageId)!;
   const branches =
     request.action !== 'reopen' && stage.next.length > 1
-      ? stage.next.map((id) => ({
-          id,
-          title: progress.stages.find((entry) => entry.id === id)?.title ?? id,
-        }))
+      ? branchChoices(progress, stage.next)
       : [];
   const resets =
     request.action === 'reopen'
@@ -198,13 +181,13 @@ function StageActionForm({
           <OptionList
             label="Next stage"
             arity="one"
-            options={branches.map((branch) => branch.title)}
+            options={branches.map((branch) => branch.label)}
             selected={branches
               .filter((branch) => branch.id === next)
-              .map((branch) => branch.title)}
-            onPick={(title) =>
+              .map((branch) => branch.label)}
+            onPick={(label) =>
               setNext(
-                branches.find((branch) => branch.title === title)?.id ?? null,
+                branches.find((branch) => branch.label === label)?.id ?? null,
               )
             }
             disabled={busy}

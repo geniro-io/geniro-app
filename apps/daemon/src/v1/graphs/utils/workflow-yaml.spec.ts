@@ -265,6 +265,30 @@ edges:
     expect(parseWorkflowYaml(back).stages).toBeUndefined();
   });
 
+  it('merges every top-level field of a workflow into an existing file, and drops each optional one once cleared', () => {
+    const full: Workflow = {
+      name: 'merged',
+      description: 'every field set',
+      maxActiveTurns: 2,
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+      edges: [],
+      layout: { a: { x: 10, y: 20 } },
+      stages: [{ id: 'only', title: 'Only', doneWhen: 'done' }],
+    };
+    const bare: Workflow = { name: 'bare', nodes: [], edges: [] };
+
+    const merged = serializeWorkflowYaml(full, serializeWorkflowYaml(bare));
+    expect(parseWorkflowYaml(merged)).toEqual(full);
+
+    const cleared = serializeWorkflowYaml(bare, merged);
+    expect(parseWorkflowYaml(cleared)).toEqual(bare);
+    expect(Object.keys(parseWorkflowYaml(cleared)).sort()).toEqual([
+      'edges',
+      'name',
+      'nodes',
+    ]);
+  });
+
   it('keeps a hand-written stage block, comments and key order, when a save leaves it unchanged', () => {
     const source = `${VALID_SOURCE}stages:
   # what every run walks

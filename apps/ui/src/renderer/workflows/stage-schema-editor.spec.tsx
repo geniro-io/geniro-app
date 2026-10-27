@@ -104,7 +104,9 @@ const field = (label: string): HTMLInputElement | HTMLTextAreaElement => {
   return document.getElementById(htmlFor) as
     HTMLInputElement | HTMLTextAreaElement;
 };
-const saveButton = (): HTMLButtonElement => button('Save stages')!;
+const doneButton = (): HTMLButtonElement => button('Done')!;
+const errorAlert = (): Element | null =>
+  container.querySelector('[role="alert"]');
 
 function pickRowMenuItem(rowIndex: number, label: string): void {
   click(rows()[rowIndex]!.querySelector('[data-menu-trigger]'));
@@ -130,7 +132,7 @@ describe('StageSchemaEditor', () => {
     type(field('Done when') as HTMLInputElement, 'Merged');
     expect(rowTitles()).toEqual(['Fix the Build', 'Stage 2']);
 
-    click(saveButton());
+    click(doneButton());
     expect(lastSaved()).toEqual([
       {
         id: 'stage-1',
@@ -148,7 +150,7 @@ describe('StageSchemaEditor', () => {
     type(field('Title') as HTMLInputElement, '  Repair  ');
     type(field('Instructions') as HTMLTextAreaElement, '   ');
     type(field('Done when') as HTMLInputElement, ' Repair merged ');
-    click(saveButton());
+    click(doneButton());
 
     expect(lastSaved()[1]).toEqual({
       id: 'fix',
@@ -168,7 +170,7 @@ describe('StageSchemaEditor', () => {
         (o) => o.textContent === 'reviewer',
       ) ?? null,
     );
-    click(saveButton());
+    click(doneButton());
     expect(lastSaved()[0]!.ownerHint).toBe('reviewer');
 
     click(owner());
@@ -177,7 +179,7 @@ describe('StageSchemaEditor', () => {
         (o) => o.textContent === 'Any agent',
       ) ?? null,
     );
-    click(saveButton());
+    click(doneButton());
     expect('ownerHint' in lastSaved()[0]!).toBe(false);
   });
 
@@ -204,7 +206,7 @@ describe('StageSchemaEditor', () => {
     pickRowMenuItem(2, 'Delete');
     expect(rowTitles()).toEqual(['Investigate', 'Fix']);
 
-    click(saveButton());
+    click(doneButton());
     expect(lastSaved()).toEqual([
       LINE[0],
       { id: 'fix', title: 'Fix', doneWhen: 'Fix merged' },
@@ -244,17 +246,24 @@ describe('StageSchemaEditor', () => {
     expect(
       container.querySelector('[data-slot="stage-next-hint"]')!.textContent,
     ).toBe('Then ghost');
-    expect(saveButton().disabled).toBe(true);
+    expect(errorAlert()).toBeNull();
+    click(doneButton());
+    expect(onSave).not.toHaveBeenCalled();
+    expect(errorAlert()!.textContent).toContain('Error');
   });
 
-  it('withholds Save while the stages loop back, and says why in words', () => {
+  it('refuses Done while the stages loop back, and says why in words', () => {
     render([
       { id: 'a', title: 'A', doneWhen: 'a', next: ['b'] },
       { id: 'b', title: 'B', doneWhen: 'b', next: ['c'] },
       { id: 'c', title: 'C', doneWhen: 'c', next: ['b'] },
     ]);
-    expect(saveButton().disabled).toBe(true);
+    expect(container.querySelector('[data-slot="stage-errors"]')).toBeNull();
+    expect(rowWords('b')).toBeUndefined();
+    click(doneButton());
+    expect(onSave).not.toHaveBeenCalled();
     const alert = container.querySelector('[data-slot="stage-errors"]')!;
+    expect(alert.getAttribute('role')).toBe('alert');
     expect(alert.textContent).toContain('Error');
     expect(alert.textContent).toContain('B: The stages loop back');
     expect(rowWords('b')).toBe('error');
@@ -276,30 +285,33 @@ describe('StageSchemaEditor', () => {
         ),
       ].find((b) => b.textContent === 'B') ?? null,
     );
-    expect(saveButton().disabled).toBe(false);
     expect(container.querySelector('[data-slot="stage-errors"]')).toBeNull();
+    click(doneButton());
+    expect(lastSaved()).toHaveLength(3);
   });
 
-  it('withholds Save for a stage without a title or a done-when, and for a second start', () => {
+  it('refuses Done for a stage without a title or a done-when, and for a second start', () => {
     render([{ id: 'a', title: 'A', doneWhen: 'a' }]);
-    expect(saveButton().disabled).toBe(false);
+    click(doneButton());
+    expect(onSave).toHaveBeenCalledTimes(1);
 
     type(field('Title') as HTMLInputElement, '   ');
-    expect(saveButton().disabled).toBe(true);
     expect(fieldIssues('error')).toEqual(['Error: A stage needs a title']);
+    click(doneButton());
+    expect(onSave).toHaveBeenCalledTimes(1);
     type(field('Title') as HTMLInputElement, 'A');
-    expect(saveButton().disabled).toBe(false);
+    expect(fieldIssues('error')).toEqual([]);
 
     type(field('Done when') as HTMLInputElement, '');
-    expect(saveButton().disabled).toBe(true);
     expect(fieldIssues('error')).toEqual([
       'Error: A stage needs a "done when" condition',
     ]);
+    click(doneButton());
+    expect(onSave).toHaveBeenCalledTimes(1);
     type(field('Done when') as HTMLInputElement, 'a');
 
     click(button('Add stage'));
     type(field('Done when') as HTMLInputElement, 'b');
-    expect(saveButton().disabled).toBe(false);
     click(rows()[0]!.querySelector('button'));
     click(
       [
@@ -308,13 +320,116 @@ describe('StageSchemaEditor', () => {
         ),
       ].find((b) => b.textContent === 'Stage 2') ?? null,
     );
-    expect(saveButton().disabled).toBe(true);
+    click(doneButton());
+    expect(onSave).toHaveBeenCalledTimes(1);
     expect(
       container.querySelector('[data-slot="stage-errors"]')!.textContent,
     ).toContain('Only one stage may start');
   });
 
-  it('shows a hint naming an agent the workflow lacks as a warning that does not block Save', () => {
+  it('shows no error and no alert for a stage just added, however often', () => {
+    render([{ id: 'a', title: 'A', doneWhen: 'a' }]);
+    click(button('Add stage'));
+    click(button('Add stage'));
+    expect(rows().length).toBe(3);
+    expect(fieldIssues('error')).toEqual([]);
+    expect(errorAlert()).toBeNull();
+    expect(rowWords('stage-2')).toBeUndefined();
+    expect(pill('stage-2').dataset.error).toBeUndefined();
+  });
+
+  it('shows a field’s error once the field is edited or left, and the rest only after Done is pressed', () => {
+    render([{ id: 'a', title: 'A', doneWhen: 'a' }]);
+    click(button('Add stage'));
+    const doneWhen = field('Done when') as HTMLInputElement;
+    expect(fieldIssues('error')).toEqual([]);
+
+    act(() => doneWhen.focus());
+    act(() => doneWhen.blur());
+    expect(fieldIssues('error')).toEqual([
+      'Error: A stage needs a "done when" condition',
+    ]);
+    expect(errorAlert()).toBeNull();
+  });
+
+  it('on Done with errors, shows every error with an alert, saves nothing and stays open', () => {
+    render(LINE);
+    click(button('Add stage'));
+    click(button('Add stage'));
+    expect(fieldIssues('error')).toEqual([]);
+
+    click(doneButton());
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(fieldIssues('error')).toEqual([
+      'Error: A stage needs a "done when" condition',
+    ]);
+    const alert = errorAlert()!;
+    expect(alert).toBe(container.querySelector('[data-slot="stage-errors"]'));
+    expect(alert.textContent).toContain('Stage 3');
+    expect(rowWords('stage-3')).toContain('error');
+    expect(rowWords('stage-4')).toContain('error');
+
+    type(field('Done when') as HTMLInputElement, 'Shipped');
+    click(rows()[2]!.querySelector('button'));
+    type(field('Done when') as HTMLInputElement, 'Reviewed');
+    expect(errorAlert()).toBeNull();
+    click(doneButton());
+    expect(lastSaved()).toHaveLength(4);
+  });
+
+  it('starts every open without the previous visit’s attempt', () => {
+    render([{ id: 'a', title: 'A', doneWhen: '' }]);
+    click(doneButton());
+    expect(errorAlert()).not.toBeNull();
+
+    act(() =>
+      root.render(
+        <StageSchemaEditor
+          open={false}
+          stages={LINE}
+          agentIds={[]}
+          onClose={onClose}
+          onSave={onSave}
+        />,
+      ),
+    );
+    render([{ id: 'a', title: 'A', doneWhen: '' }]);
+    expect(errorAlert()).toBeNull();
+    expect(fieldIssues('error')).toEqual([]);
+  });
+
+  it('writes the instructions from the expandable field', () => {
+    render(LINE);
+    expect(
+      container.querySelector('button[aria-label="Expand Instructions"]'),
+    ).not.toBeNull();
+    type(field('Instructions') as HTMLTextAreaElement, ' Find it ');
+    click(doneButton());
+    expect(lastSaved()[0]!.instructions).toBe('Find it');
+  });
+
+  it('keeps the stored next as ids and tells apart stages that share a title', () => {
+    render([
+      { id: 'a', title: 'A', doneWhen: 'a', next: ['twin-1'] },
+      { id: 'twin-1', title: 'Twin', doneWhen: 't' },
+      { id: 'twin-2', title: 'Twin', doneWhen: 't' },
+    ]);
+    const options = (): string[] =>
+      [...container.querySelectorAll('[aria-pressed]')].map(
+        (b) => b.textContent!,
+      );
+    expect(options()).toEqual(['Twin (twin-1)', 'Twin (twin-2)']);
+    click(
+      [...container.querySelectorAll<HTMLButtonElement>('[aria-pressed]')].find(
+        (b) => b.textContent === 'Twin (twin-2)',
+      ) ?? null,
+    );
+    click(doneButton());
+    expect(lastSaved()[0]!.next).toEqual(['twin-1', 'twin-2']);
+  });
+
+  it('shows a hint naming an agent the workflow lacks as a warning that does not block Done', () => {
     render([
       { id: 'a', title: 'A', doneWhen: 'a', next: ['b'] },
       { id: 'b', title: 'B', doneWhen: 'b', ownerHint: 'ghost' },
@@ -333,8 +448,7 @@ describe('StageSchemaEditor', () => {
     ]);
     expect(container.querySelector('[data-slot="stage-warnings"]')).toBeNull();
     expect(container.querySelector('[data-slot="stage-errors"]')).toBeNull();
-    expect(saveButton().disabled).toBe(false);
-    click(saveButton());
+    click(doneButton());
     expect(lastSaved()[1]!.ownerHint).toBe('ghost');
   });
 
@@ -419,7 +533,7 @@ describe('StageSchemaEditor', () => {
     expect(rowTitles()).toEqual(['Fix', 'Ship', 'Investigate']);
     rect.mockRestore();
 
-    click(saveButton());
+    click(doneButton());
     expect(lastSaved().map((stage) => stage.id)).toEqual([
       'fix',
       'ship',

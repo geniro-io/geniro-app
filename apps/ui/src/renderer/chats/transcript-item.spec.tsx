@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, Profiler } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +12,7 @@ import { NotSentMessagesContext } from './not-sent-messages';
 import { formatClockTime } from './relative-time';
 import { RunOutcomesContext } from './run-outcome';
 import { RunStagesContext } from './stage-change-row';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 import {
   cardBackedRequestIds,
   CardBackedRequestsContext,
@@ -1496,6 +1497,11 @@ describe('TranscriptItem — stage changes', () => {
     ['orch', { name: 'Manager', kind: 'agent' as const, agent: 'claude' }],
   ]);
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
   it('draws the move under the acting agent’s name, from a run-level row', () => {
     render(
       <TranscriptItem
@@ -1600,6 +1606,71 @@ describe('TranscriptItem — stage changes', () => {
     expect(
       container.querySelector('[data-slot="stage-headline"]')?.textContent,
     ).toBe('Review still open — woke the lead');
+  });
+
+  it('remembers "more" on a stage row within its thread, keyed by the row', () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(48);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(16);
+    const row = (
+      <ThreadUiMemoryContext.Provider value="run-1">
+        <TranscriptItem
+          item={item('stage_change', change, null)}
+          nodes={nodes}
+        />
+      </ThreadUiMemoryContext.Provider>
+    );
+    render(row);
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button:not([data-slot])')!
+        .click(),
+    );
+    render(null);
+    render(row);
+    expect(
+      container.querySelector('[data-slot="stage-summary"] p')?.className,
+    ).not.toContain('line-clamp-1');
+  });
+
+  it('re-renders only a stage row when the run’s stages move, not other rows', () => {
+    const stages = (
+      rev: number,
+    ): React.ComponentProps<typeof RunStagesContext.Provider>['value'] => ({
+      rev,
+      current: null,
+      position: { index: 1, total: 1 },
+      stages: [],
+    });
+    const renders = { message: 0, stage: 0 };
+    const rows = (
+      <>
+        <Profiler id="message" onRender={() => (renders.message += 1)}>
+          <TranscriptItem
+            item={item('message', { text: 'hello' }, null)}
+            nodes={nodes}
+          />
+        </Profiler>
+        <Profiler id="stage" onRender={() => (renders.stage += 1)}>
+          <TranscriptItem
+            item={item('stage_change', change, null)}
+            nodes={nodes}
+          />
+        </Profiler>
+      </>
+    );
+    render(
+      <RunStagesContext.Provider value={stages(1)}>
+        {rows}
+      </RunStagesContext.Provider>,
+    );
+    const before = { ...renders };
+    render(
+      <RunStagesContext.Provider value={stages(2)}>
+        {rows}
+      </RunStagesContext.Provider>,
+    );
+    expect(renders.message).toBe(before.message);
+    expect(renders.stage).toBe(before.stage + 1);
   });
 
   it('draws nothing for a stage_change row whose payload is not a move', () => {

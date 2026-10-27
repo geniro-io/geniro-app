@@ -319,18 +319,37 @@ describe('StageChangeRow', () => {
   it('marks, dims and says "superseded" only when a later move superseded it', () => {
     const word = (row: HTMLElement) =>
       row.querySelector('[data-slot="stage-superseded"]')?.textContent ?? null;
+    const dimmed = (row: HTMLElement): (string | null)[] =>
+      [
+        row.querySelector('svg'),
+        row.querySelector('[data-slot="stage-verb"]'),
+      ].map((el) =>
+        (el?.getAttribute('class') ?? '').includes('opacity-60') ? 'dim' : null,
+      );
     const live = render({});
     expect(live.hasAttribute('data-superseded')).toBe(false);
-    expect(live.className).not.toContain('opacity-60');
+    expect(dimmed(live)).toEqual([null, null]);
     expect(word(live)).toBeNull();
     const stale = render({}, { superseded: true });
     expect(stale.hasAttribute('data-superseded')).toBe(true);
-    expect(stale.className).toContain('opacity-60');
+    expect(dimmed(stale)).toEqual(['dim', 'dim']);
     expect(word(stale)).toBe('superseded');
     const explicit = render({}, { superseded: false });
     expect(explicit.hasAttribute('data-superseded')).toBe(false);
-    expect(explicit.className).not.toContain('opacity-60');
+    expect(dimmed(explicit)).toEqual([null, null]);
     expect(word(explicit)).toBeNull();
+  });
+
+  it('keeps the whole row and its text at full strength when superseded', () => {
+    const stale = render({ text: 'two rounds' }, { superseded: true });
+    expect(stale.className).not.toContain('opacity');
+    const summary = stale.querySelector('[data-slot="stage-summary"] p')!;
+    expect(summary.className).toContain('text-muted-foreground');
+    expect(summary.className).not.toContain('opacity');
+    expect(
+      stale.querySelector('[data-slot="stage-headline"] .text-foreground')!
+        .className,
+    ).not.toContain('opacity');
   });
 
   it('is no control outside a thread', () => {
@@ -398,5 +417,57 @@ describe('ClampedText', () => {
     );
     act(() => container.querySelector('button')!.click());
     expect(outer).not.toHaveBeenCalled();
+  });
+});
+
+describe('ClampedText memory', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(48);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(16);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  const draw = (memoryKey: string | undefined): void =>
+    act(() =>
+      root.render(
+        <ThreadUiMemoryContext.Provider value="run-1">
+          <ClampedText
+            text="a long summary"
+            {...(memoryKey === undefined ? {} : { memoryKey })}
+          />
+        </ThreadUiMemoryContext.Provider>,
+      ),
+    );
+
+  it('keeps "more" open across a remount of the same row in the thread', () => {
+    draw('stage:i1');
+    act(() => container.querySelector('button')!.click());
+    expect(readThreadFlag('run-1', 'stage:i1')).toBe(true);
+    act(() => root.render(null));
+    draw('stage:i1');
+    expect(container.querySelector('p')?.className).not.toContain(
+      'line-clamp-1',
+    );
+    expect(container.querySelector('button')?.textContent).toBe('less');
+  });
+
+  it('does not open a row whose key was never pressed', () => {
+    draw('stage:i1');
+    act(() => container.querySelector('button')!.click());
+    act(() => root.render(null));
+    draw('stage:i2');
+    expect(container.querySelector('p')?.className).toContain('line-clamp-1');
   });
 });

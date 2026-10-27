@@ -153,6 +153,7 @@ import {
   nodeSessionKey,
   runSessionKeyPrefix,
 } from '../../agents/utils/session-keys';
+import { isSlashCommand } from '../../agents/utils/session-replacement-notes';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import { snapshotPoolKinds } from '../../agents/utils/snapshot-config-dirs';
 import {
@@ -3600,7 +3601,7 @@ export class GraphExecutorService
             ...(wokenOnlyByMonitors ? { hostTurn: true } : {}),
           });
           wokenOnlyByMonitors = false;
-          if (status === 'completed') {
+          if (status === 'completed' && !this.shuttingDown) {
             this.notifyRunSettledCompleted(runId);
           }
         }
@@ -3731,7 +3732,7 @@ export class GraphExecutorService
             usage: null,
             stopReason: `workflow_${status}`,
           });
-          if (status === 'completed') {
+          if (status === 'completed' && !this.shuttingDown) {
             this.notifyRunSettledCompleted(runId);
           }
         }
@@ -4124,7 +4125,9 @@ export class GraphExecutorService
       // WHO this turn is, to the call broker: the node, in this conversation.
       const caller = callerKey(node.id, callContext?.conversationId ?? null);
       const plainTurn =
-        !extras.compaction && adapter.geniroCommandFor(prompt) === null;
+        !extras.compaction &&
+        adapter.geniroCommandFor(prompt) === null &&
+        !isSlashCommand(prompt);
       const deliveryNotice = plainTurn
         ? this.callBroker.messageDeliveryNotice(runId, caller)
         : null;
@@ -4270,7 +4273,7 @@ export class GraphExecutorService
         ...(streamPartials ? { streamPartials: true } : {}),
         prompt: withCarriedContext(
           carried,
-          [stageLine, deliveryNotice?.prompt ?? null, prompt]
+          [deliveryNotice?.prompt ?? null, prompt, stageLine]
             .filter((part): part is string => part !== null)
             .join('\n\n'),
         ),

@@ -10192,7 +10192,7 @@ export interface Workflow {
      */
     layout?: { [key: string]: NodePosition; };
     /**
-     * The workflow's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review → done. Every agent of a run sees it and moves it with move_stage. Omitted = the workflow has no stages
+     * The workflow's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every agent of a run sees it and moves it with move_stage. Omitted = the workflow has no stages
      * @type {Array<WorkflowStage>}
      * @memberof Workflow
      */

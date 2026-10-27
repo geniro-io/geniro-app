@@ -305,6 +305,37 @@ describe('TasksService (in-memory sqlite)', () => {
     return task;
   };
 
+  it("carries the stage line of the card's run, and none for a run without stages", async () => {
+    const staged = await cardWithRun('in_progress', 'running', 'run-staged');
+    const plain = await cardWithRun('in_progress', 'running', 'run-plain');
+    await new RunDao(em).updateById('run-staged', {
+      stageProgress: JSON.stringify({
+        rev: 1,
+        current: 'build',
+        position: { index: 2, total: 3 },
+        stages: [
+          { id: 'plan', title: 'Plan', status: 'done', next: ['build'] },
+          { id: 'build', title: 'Build', status: 'current', next: ['ship'] },
+          { id: 'ship', title: 'Ship', status: 'pending', next: [] },
+        ],
+      }),
+    });
+
+    expect((await service.get(staged.id)).stage).toEqual({
+      title: 'Build',
+      index: 2,
+      total: 3,
+    });
+    expect((await service.get(plain.id)).stage).toBeNull();
+    const board = await service.listForProject(projectId);
+    expect(board.find((card) => card.id === staged.id)?.stage).toEqual({
+      title: 'Build',
+      index: 2,
+      total: 3,
+    });
+    expect(board.find((card) => card.id === plain.id)?.stage).toBeNull();
+  });
+
   it('marks the work FINISHED on a move to Done whose run has stopped', async () => {
     const task = await cardWithRun('in_review', 'completed');
     changes.length = 0;

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { StageProgress } from '../../agents/chat.types';
-import type { WorkflowStage } from '../graphs.types';
-import { foldStages, type StageMove, stagesReopenResets } from './stage-fold';
+import type { StageMove, WorkflowStage } from '../graphs.types';
+import { foldStages, stagesReopenResets } from './stage-fold';
 
 const S: WorkflowStage[] = [
   {

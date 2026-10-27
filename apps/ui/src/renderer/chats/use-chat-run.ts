@@ -184,18 +184,31 @@ function keepFresherRows(
   const heldById = new Map(held.map((run) => [run.id, run] as const));
   return listed.map((row) => {
     const mine = heldById.get(row.id);
-    return mine !== undefined &&
-      Date.parse(mine.updatedAt) > Date.parse(row.updatedAt)
-      ? {
-          ...mine,
-          ...(listedLiveReadings(row.id) ? liveReadingsOf(row) : {}),
-          pinnedPosition: row.pinnedPosition,
-          groupId: row.groupId,
-          archivedAt: row.archivedAt,
-          color: row.color,
-        }
-      : row;
+    if (mine === undefined) {
+      return row;
+    }
+    const stages = laterStages(mine.stages, row.stages);
+    if (Date.parse(mine.updatedAt) > Date.parse(row.updatedAt)) {
+      return {
+        ...mine,
+        ...(listedLiveReadings(row.id) ? liveReadingsOf(row) : {}),
+        pinnedPosition: row.pinnedPosition,
+        groupId: row.groupId,
+        archivedAt: row.archivedAt,
+        color: row.color,
+        stages,
+      };
+    }
+    return stages === row.stages ? row : { ...row, stages };
   });
+}
+
+/** A stage write moves no `updatedAt`; only the progress' `rev` orders two copies. */
+function laterStages(
+  held: ChatRun['stages'],
+  listed: ChatRun['stages'],
+): ChatRun['stages'] {
+  return (held?.rev ?? -1) > (listed?.rev ?? -1) ? held : listed;
 }
 
 /**
@@ -1932,17 +1945,22 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // Read off the row being replaced inside the updater, never off
         // `runsRef`: an announce that moved the counts may not have rendered yet.
         setRuns((prev) =>
-          prev.map((row) =>
-            row.id !== run.id
-              ? row
-              : keepLiveCounts
-                ? {
-                    ...run,
-                    rootsWorking: row.rootsWorking,
-                    awaitingCalls: row.awaitingCalls,
-                  }
-                : run,
-          ),
+          prev.map((row) => {
+            if (row.id !== run.id) {
+              return row;
+            }
+            const stages = laterStages(row.stages, run.stages);
+            return keepLiveCounts
+              ? {
+                  ...run,
+                  rootsWorking: row.rootsWorking,
+                  awaitingCalls: row.awaitingCalls,
+                  stages,
+                }
+              : stages === run.stages
+                ? run
+                : { ...run, stages };
+          }),
         );
         return;
       }
@@ -1986,11 +2004,14 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           ...pages,
           held: pages.held.flatMap((row) => {
             const next = byId.get(row.id);
-            return next === undefined
-              ? [row]
-              : inScope(next, pages.scope)
-                ? [next]
-                : [];
+            if (next === undefined) {
+              return [row];
+            }
+            if (!inScope(next, pages.scope)) {
+              return [];
+            }
+            const stages = laterStages(row.stages, next.stages);
+            return [stages === next.stages ? next : { ...next, stages }];
           }),
         };
       }

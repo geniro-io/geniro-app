@@ -111,28 +111,6 @@ type KindFieldsAreComplete = [MissingKindField] extends [never]
 const _kindFieldsAreComplete: KindFieldsAreComplete = true;
 void _kindFieldsAreComplete;
 
-// Listing a key here does not add it to the merge in serializeWorkflowYaml; nothing checks that.
-const MERGED_TOP_LEVEL_KEYS = [
-  'name',
-  'description',
-  'maxActiveTurns',
-  'nodes',
-  'edges',
-  'layout',
-  'stages',
-] as const satisfies readonly (keyof Workflow)[];
-
-type MissingTopLevelKey = Exclude<
-  keyof Workflow,
-  (typeof MERGED_TOP_LEVEL_KEYS)[number]
->;
-type TopLevelKeysAreComplete = [MissingTopLevelKey] extends [never]
-  ? true
-  : MissingTopLevelKey;
-const _topLevelKeysAreComplete: TopLevelKeysAreComplete = true;
-void _topLevelKeysAreComplete;
-void MERGED_TOP_LEVEL_KEYS;
-
 function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, inner: unknown) =>
     inner !== null && typeof inner === 'object' && !Array.isArray(inner)
@@ -205,31 +183,7 @@ function edgeKey(from: unknown, to: unknown, kind: unknown): string {
   return JSON.stringify([from, to, kind]);
 }
 
-/**
- * Serialize a workflow, merging into `existingSource` when provided so user
- * comments/formatting survive. Returns the YAML text to write to disk.
- */
-export function serializeWorkflowYaml(
-  workflow: Workflow,
-  existingSource?: string | null,
-): string {
-  if (!existingSource) {
-    return new Document(workflowToPlain(workflow)).toString();
-  }
-
-  const doc = parseDocument(existingSource);
-  if (doc.errors.length > 0 || !isMap(doc.contents)) {
-    return new Document(workflowToPlain(workflow)).toString();
-  }
-  // Widen away Document.Parsed's strict node generics — this function only
-  // feeds plain JS values, which the runtime coerces to YAML nodes itself.
-  const root = doc.contents as YAMLMap;
-
-  setOrDelete(root, 'name', workflow.name);
-  setOrDelete(root, 'description', workflow.description);
-  setOrDelete(root, 'maxActiveTurns', workflow.maxActiveTurns);
-  patchStages(doc, root, workflow.stages);
-
+function patchNodes(doc: Document, root: YAMLMap, workflow: Workflow): void {
   // Nodes: patch retained items in place (file order preserved), drop removed
   // ones, append new ones at the end.
   const keepNodeIds = new Set(workflow.nodes.map((n) => n.id));
@@ -267,7 +221,9 @@ export function serializeWorkflowYaml(
   } else {
     root.set('nodes', doc.createNode(workflowToPlain(workflow).nodes));
   }
+}
 
+function patchEdges(doc: Document, root: YAMLMap, workflow: Workflow): void {
   // Edges: same strategy, keyed by from→to→kind. A hand-edited kind-less item
   // never matches a kept key, so it is dropped here and re-appended below
   // with its kind explicit.
@@ -307,13 +263,58 @@ export function serializeWorkflowYaml(
   } else {
     root.set('edges', doc.createNode(workflowToPlain(workflow).edges));
   }
+}
 
+function patchLayout(doc: Document, root: YAMLMap, workflow: Workflow): void {
   // Layout: canvas-owned positions — replace wholesale (nobody hand-writes
   // pixel coordinates), or drop the block when absent.
   if (workflow.layout === undefined) {
     root.delete('layout');
   } else {
     root.set('layout', doc.createNode(workflow.layout));
+  }
+}
+
+type TopLevelPatch = (doc: Document, root: YAMLMap, workflow: Workflow) => void;
+
+function patchScalar(
+  key: 'name' | 'description' | 'maxActiveTurns',
+): TopLevelPatch {
+  return (_doc, root, workflow) => setOrDelete(root, key, workflow[key]);
+}
+
+const MERGED_TOP_LEVEL_PATCHES = {
+  name: patchScalar('name'),
+  description: patchScalar('description'),
+  maxActiveTurns: patchScalar('maxActiveTurns'),
+  stages: (doc, root, workflow) => patchStages(doc, root, workflow.stages),
+  nodes: patchNodes,
+  edges: patchEdges,
+  layout: patchLayout,
+} as const satisfies Record<keyof Workflow, TopLevelPatch>;
+
+/**
+ * Serialize a workflow, merging into `existingSource` when provided so user
+ * comments/formatting survive. Returns the YAML text to write to disk.
+ */
+export function serializeWorkflowYaml(
+  workflow: Workflow,
+  existingSource?: string | null,
+): string {
+  if (!existingSource) {
+    return new Document(workflowToPlain(workflow)).toString();
+  }
+
+  const doc = parseDocument(existingSource);
+  if (doc.errors.length > 0 || !isMap(doc.contents)) {
+    return new Document(workflowToPlain(workflow)).toString();
+  }
+  // Widen away Document.Parsed's strict node generics — this function only
+  // feeds plain JS values, which the runtime coerces to YAML nodes itself.
+  const root = doc.contents as YAMLMap;
+
+  for (const patch of Object.values(MERGED_TOP_LEVEL_PATCHES)) {
+    patch(doc, root, workflow);
   }
 
   return doc.toString();

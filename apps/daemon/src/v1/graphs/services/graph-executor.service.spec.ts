@@ -17059,7 +17059,7 @@ describe('GraphExecutorService — workflow stages', () => {
       }
     ).sessionKey(input);
 
-  it('prefixes the current stage on every turn, and keeps the stage map and sessionKey identical across a move', async () => {
+  it('carries the current stage after the user’s words on every turn, and keeps the stage map and sessionKey identical across a move', async () => {
     const { service, claude, stages, runDao, createdRuns } = setup();
     const run = await service.startRun({
       slug: 'staged',
@@ -17075,7 +17075,8 @@ describe('GraphExecutorService — workflow stages', () => {
     expect(first.prompt).toContain(
       'Current stage: Investigation (investigation) (1/2)',
     );
-    expect(first.prompt.endsWith('go')).toBe(true);
+    expect(first.prompt.startsWith('go')).toBe(true);
+    expect(first.prompt.endsWith('</stage>')).toBe(true);
     expect(first.stageMapPrompt).toContain('This workflow has stages');
     expect(stages.canUse(run.id, 'a')).toBe(true);
     completeTurn(claude.starts[0]!, 'done');
@@ -17304,5 +17305,270 @@ describe('GraphExecutorService — workflow stages', () => {
     expect(runDao.runs.get(run.id)!.stageProgress ?? null).toBeNull();
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+
+  describe('with an on-demand callee', () => {
+    const STAGED_WITH_CALLEE: Workflow = {
+      ...STAGED,
+      name: 'staged-callee',
+      nodes: [
+        ...STAGED.nodes,
+        {
+          id: 'callee',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You callee.',
+        },
+      ],
+      edges: [
+        ...STAGED.edges,
+        { from: 'a', to: 'callee', kind: 'call' as const },
+      ],
+    };
+
+    const STAGE_NOTICE = 'Current stage: Investigation (investigation) (1/2)';
+
+    const WAKE = {
+      severity: 'info' as const,
+      message: 'CI · monitor m1: 1 line.',
+      monitors: [],
+      woke: true as const,
+    };
+
+    it('gives the call broker the current stage label, and the new one after a move', async () => {
+      const { service, claude, stages, callBroker } = setup();
+      const run = await service.startRun({
+        slug: 'staged-callee',
+        workflow: STAGED_WITH_CALLEE,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      expect(callBroker.currentStage(run.id)).toBe(
+        'Investigation (investigation), 1/2',
+      );
+
+      const moved = await stages.move(
+        run.id,
+        { action: 'complete', stage: 'investigation', text: 'found it' },
+        { kind: 'agent', nodeId: 'a' },
+      );
+      expect(moved.ok).toBe(true);
+      expect(callBroker.currentStage(run.id)).toBe('Fix (fix), 2/2');
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('carries the current stage on a callee turn, a call-wake turn and a woken turn', async () => {
+      const { service, claude, callBroker } = setup();
+      const run = await service.startRun({
+        slug: 'staged-callee',
+        workflow: STAGED_WITH_CALLEE,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'a', {
+        title: 'check',
+        agent: 'callee',
+        message: 'look at it',
+        mode: 'async',
+      });
+      await drain();
+      const callee = turnsOf(claude, 'You callee.')[0]!;
+      expect(callee.input.prompt).toContain(STAGE_NOTICE);
+      expect(callee.input.prompt.indexOf('look at it')).toBeLessThan(
+        callee.input.prompt.indexOf('<stage>'),
+      );
+      completeTurn(callee, 'checked');
+      await drain();
+
+      const lead = claude.starts[0]!;
+      lead.emit({ type: 'session', sessionId: 'sess-lead' });
+      completeTurn(lead, 'done');
+      await drain();
+      const callWake = claude.starts[2]!;
+      expect(callWake.input.prompt).toContain(STAGE_NOTICE);
+      completeTurn(callWake, 'read it');
+      await drain();
+
+      expect(service.wakeConversation(run.id, 'a', 'CI output', WAKE)).toBe(
+        'woken',
+      );
+      await drain();
+      const woken = claude.starts[3]!;
+      expect(woken.input.prompt).toContain(STAGE_NOTICE);
+      expect(woken.input.prompt.indexOf('CI output')).toBeLessThan(
+        woken.input.prompt.indexOf('<stage>'),
+      );
+      completeTurn(woken, 'noted');
+      await drain();
+    });
+
+    it('continues only the lead of a settled run, leaving the callee as it was', async () => {
+      const { service, claude, nodeDao } = setup();
+      const run = await service.startRun({
+        slug: 'staged-callee',
+        workflow: STAGED_WITH_CALLEE,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+      const calleeBefore = { ...nodeDao.row(run.id, 'callee') };
+      expect(calleeBefore.status).toBe('skipped');
+
+      await expect(
+        service.continueAsHost(run.id, 'a', 'The user reopened Investigation', {
+          severity: 'info',
+          message: 'You moved the stage Investigation — woke the lead',
+        }),
+      ).resolves.toBe(true);
+      await drain();
+      expect(claude.starts).toHaveLength(2);
+      expect(claude.starts[1]!.input.systemPrompt).not.toBe('You callee.');
+      expect(claude.starts[1]!.input.prompt).toContain(
+        'The user reopened Investigation',
+      );
+      expect({ ...nodeDao.row(run.id, 'callee') }).toEqual(calleeBefore);
+      completeTurn(claude.starts[1]!, 'done');
+      await drain();
+    });
+  });
+
+  it('leaves a slash command exactly as the user typed it on a staged run, and adds the stage to a plain message', async () => {
+    const { service, claude } = setup();
+    const run = await service.startRun({
+      slug: 'staged',
+      workflow: STAGED,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    await service.sendMessage(run.id, '/review the diff', [], 'slash-1');
+    await drain();
+    expect(claude.starts[1]!.input.prompt).toBe('/review the diff');
+    completeTurn(claude.starts[1]!, 'done');
+    await drain();
+
+    await service.sendMessage(run.id, 'and the tests', [], 'plain-1');
+    await drain();
+    expect(claude.starts[2]!.input.prompt).toContain('<stage>');
+    expect(claude.starts[2]!.input.prompt.startsWith('and the tests')).toBe(
+      true,
+    );
+    completeTurn(claude.starts[2]!, 'done');
+    await drain();
+  });
+
+  it('does not tell its settle listeners of a pass that completes while the daemon is shutting down', async () => {
+    const { service, claude, runDao } = setup();
+    const settled: string[] = [];
+    service.onRunSettledCompleted((runId) => settled.push(runId));
+    const run = await service.startRun({
+      slug: 'staged',
+      workflow: STAGED,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    service.beforeApplicationShutdown();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(settled).toEqual([]);
+  });
+
+  it('tells its settle listeners again when a woken, settled run finishes its turn', async () => {
+    const { service, claude, runDao } = setup();
+    const settled: string[] = [];
+    service.onRunSettledCompleted((runId) => settled.push(runId));
+    const run = await service.startRun({
+      slug: 'staged',
+      workflow: STAGED,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const lead = claude.starts[0]!;
+    lead.emit({ type: 'session', sessionId: 'sess-lead' });
+    completeTurn(lead, 'done');
+    await drain();
+    expect(settled).toEqual([run.id]);
+
+    expect(
+      service.wakeConversation(run.id, 'a', 'CI output', {
+        severity: 'info',
+        message: 'CI · monitor m1: 1 line.',
+        monitors: [],
+        woke: true,
+      }),
+    ).toBe('woken');
+    await drain();
+    expect(claude.starts).toHaveLength(2);
+    expect(settled).toEqual([run.id]);
+    completeTurn(claude.starts[1]!, 'noted');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(settled).toEqual([run.id, run.id]);
+  });
+
+  it('does not tell its settle listeners of a woken run that finishes while the daemon is shutting down', async () => {
+    const { service, claude } = setup();
+    const settled: string[] = [];
+    service.onRunSettledCompleted((runId) => settled.push(runId));
+    const run = await service.startRun({
+      slug: 'staged',
+      workflow: STAGED,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'session', sessionId: 'sess-lead' });
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(
+      service.wakeConversation(run.id, 'a', 'CI output', {
+        severity: 'info',
+        message: 'CI · monitor m1: 1 line.',
+        monitors: [],
+        woke: true,
+      }),
+    ).toBe('woken');
+    await drain();
+    service.beforeApplicationShutdown();
+    completeTurn(claude.starts[1]!, 'noted');
+    await drain();
+    expect(settled).toEqual([run.id]);
+  });
+
+  it('logs a settle listener that throws and still tells the others', async () => {
+    const { service, claude } = setup();
+    const error = vi
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => {});
+    const settled: string[] = [];
+    service.onRunSettledCompleted(() => {
+      throw new Error('listener broke');
+    });
+    service.onRunSettledCompleted((runId) => settled.push(runId));
+    const run = await service.startRun({
+      slug: 'staged',
+      workflow: STAGED,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(settled).toEqual([run.id]);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('a settle listener failed: listener broke'),
+    );
   });
 });

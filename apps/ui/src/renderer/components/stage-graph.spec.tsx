@@ -3,12 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  STAGE_GRAPH_MIN_SCALE,
-  StageGraph,
-  type StageGraphStage,
-  stageLayout,
-} from './stage-graph';
+import { StageGraph, type StageGraphStage, stageLayout } from './stage-graph';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -16,8 +11,35 @@ import {
 
 let container: HTMLDivElement;
 let root: Root;
+let observed: ((entries: unknown[]) => void)[] = [];
+const originalObserver = (globalThis as { ResizeObserver?: unknown })
+  .ResizeObserver;
+
+class StubResizeObserver {
+  private readonly callback: (entries: unknown[]) => void;
+  constructor(callback: (entries: unknown[]) => void) {
+    this.callback = callback;
+  }
+  observe(): void {
+    observed.push(this.callback);
+  }
+  unobserve(): void {}
+  disconnect(): void {
+    observed = observed.filter((each) => each !== this.callback);
+  }
+}
+
+const resizeTo = (width: number): void =>
+  act(() => {
+    for (const callback of observed) {
+      callback([{ contentRect: { width } }]);
+    }
+  });
 
 beforeEach(() => {
+  observed = [];
+  (globalThis as { ResizeObserver?: unknown }).ResizeObserver =
+    StubResizeObserver;
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -26,6 +48,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  (globalThis as { ResizeObserver?: unknown }).ResizeObserver =
+    originalObserver;
 });
 
 const stage = (id: string, next?: string[]): StageGraphStage => ({
@@ -145,16 +169,65 @@ describe('StageGraph', () => {
     expect(end('a>b').split(' ')[1]).not.toBe(end('a>c').split(' ')[1]);
   });
 
-  it('scales down to fit rather than wrapping, and scrolls past three quarters', () => {
-    act(() => root.render(<StageGraph stages={FORK} />));
-    const svg = container.querySelector('svg')!;
-    const natural = Number(svg.getAttribute('viewBox')!.split(' ')[2]);
-    expect(svg.getAttribute('width')).toBe('100%');
-    expect(svg.style.maxWidth).toBe(`${natural}px`);
-    expect(svg.style.minWidth).toBe(`${natural * STAGE_GRAPH_MIN_SCALE}px`);
-    expect(
-      container.querySelector('[data-slot="stage-graph"]')!.className,
-    ).toContain('overflow-x-auto');
+  describe('fitting its container', () => {
+    const NATIVE_TEXT_PX = 12;
+    const svg = (): SVGSVGElement => container.querySelector('svg')!;
+    const naturalWidth = (): number =>
+      Number(svg().getAttribute('viewBox')!.split(' ')[2]);
+    const drawnWidth = (): number => Number(svg().getAttribute('width'));
+    const textPx = (): number =>
+      (NATIVE_TEXT_PX * drawnWidth()) / naturalWidth();
+    const labels = (): string[] =>
+      pills().map((each) => each.querySelector('text')!.textContent!);
+
+    it('draws at its natural size in a roomy container, text unscaled', () => {
+      act(() => root.render(<StageGraph stages={FORK} />));
+      const natural = drawnWidth();
+      resizeTo(natural + 400);
+      expect(drawnWidth()).toBe(natural);
+      expect(textPx()).toBe(NATIVE_TEXT_PX);
+      expect(labels()).toEqual([
+        'Investigation',
+        'Implementation',
+        'Fix',
+        'Review',
+      ]);
+    });
+
+    it('cuts titles with an ellipsis to fit a narrow container without scrolling', () => {
+      act(() => root.render(<StageGraph stages={FORK} />));
+      const natural = drawnWidth();
+      const narrow = Math.round(natural * 0.8);
+      resizeTo(narrow);
+      expect(drawnWidth()).toBeLessThanOrEqual(narrow);
+      expect(labels().some((label) => label.endsWith('…'))).toBe(true);
+      expect(labels()[2]).toBe('Fix');
+      expect(pill('b').getAttribute('title')).toBe('Implementation');
+      expect(pill('b').getAttribute('aria-label')).toBe('Implementation');
+      expect(textPx()).toBeGreaterThanOrEqual(10);
+    });
+
+    it('never shrinks the text, and overflows only when minimum pills cannot fit', () => {
+      act(() => root.render(<StageGraph stages={FORK} />));
+      const natural = drawnWidth();
+      resizeTo(Math.round(natural * 0.8));
+      expect(drawnWidth()).toBeLessThanOrEqual(Math.round(natural * 0.8));
+      resizeTo(60);
+      expect(drawnWidth()).toBeGreaterThan(60);
+      expect(textPx()).toBeGreaterThanOrEqual(10);
+      expect(
+        container.querySelector('[data-slot="stage-graph"]')!.className,
+      ).toContain('overflow-x-auto');
+    });
+
+    it('grows back to full titles when the container widens again', () => {
+      act(() => root.render(<StageGraph stages={FORK} />));
+      const natural = drawnWidth();
+      resizeTo(Math.round(natural * 0.8));
+      resizeTo(natural + 100);
+      expect(drawnWidth()).toBe(natural);
+      expect(labels()[1]).toBe('Implementation');
+    });
   });
 
   it('cuts a long title with an ellipsis and keeps it whole in the tooltip', () => {
@@ -163,7 +236,8 @@ describe('StageGraph', () => {
     expect(pill('a').querySelector('text')!.textContent).toBe(
       'Investigate every failing…',
     );
-    expect(pill('a').querySelector('title')!.textContent).toBe(long);
+    expect(pill('a').getAttribute('title')).toBe(long);
+    expect(pill('a').querySelector('title')).toBeNull();
     expect(pill('a').getAttribute('aria-label')).toBe(long);
   });
 
@@ -300,6 +374,18 @@ describe('StageGraph', () => {
         ['Review, pending', null],
         ['Docs, skipped', 'skipped'],
       ]);
+    });
+
+    it('tints the ring red for a failing stage and blue for the current one', () => {
+      act(() =>
+        root.render(<StageGraph stages={RUN} errorIds={new Set(['d'])} />),
+      );
+      const ring = (id: string): string | null =>
+        pill(id)
+          .querySelector('[data-slot="stage-pill-ring"]')
+          ?.getAttribute('class') ?? null;
+      expect(ring('c')).toContain('stroke-primary');
+      expect(ring('d')).toContain('stroke-destructive');
     });
 
     it('outlines an untaken branch dashed and rings the current stage', () => {

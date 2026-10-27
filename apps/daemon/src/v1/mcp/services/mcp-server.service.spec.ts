@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -3395,6 +3396,66 @@ describe('McpServerService — what the descriptions tell a model', () => {
       ctx,
     );
     expect(bad.content[0]!.text).toContain('INVALID_ARGS');
+  });
+
+  it('refuses a move from a node that cannot use stages, even though the call was not listed', async () => {
+    let moved = false;
+    const tool = new MoveStageTool(
+      stageService({ runId: 'run-1', nodeId: 'lead' }, async () => {
+        moved = true;
+        throw new Error('not called');
+      }),
+      new CallBroker(),
+    );
+    const refused = await tool.call(
+      HOST_MOVE_STAGE_TOOL,
+      { action: 'complete', stage: 'build', text: 'built' },
+      {
+        runId: 'run-1',
+        nodeId: 'other',
+        conversationId: null,
+        caller: 'other',
+      } as Parameters<typeof tool.call>[2],
+    );
+    expect(refused).toMatchObject({ isError: true });
+    expect(refused.content[0]!.text).toBe(
+      'Not moved: this run has no stages you can move.',
+    );
+    expect(moved).toBe(false);
+  });
+
+  it('logs an unexpected move failure and tells the model only that it could not be saved', async () => {
+    const error = vi
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => {});
+    try {
+      const tool = new MoveStageTool(
+        stageService({ runId: 'run-1', nodeId: 'lead' }, async () => {
+          throw new Error('SQLITE_BUSY at /Users/someone/geniro.db');
+        }),
+        new CallBroker(),
+      );
+      const failed = await tool.call(
+        HOST_MOVE_STAGE_TOOL,
+        { action: 'complete', stage: 'build', text: 'built' },
+        {
+          runId: 'run-1',
+          nodeId: 'lead',
+          conversationId: null,
+          caller: 'lead',
+        } as Parameters<typeof tool.call>[2],
+      );
+      expect(failed).toMatchObject({ isError: true });
+      expect(failed.content[0]!.text).toBe(
+        'Not moved: the move could not be saved. Try again.',
+      );
+      expect(failed.content[0]!.text).not.toContain('SQLITE_BUSY');
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('SQLITE_BUSY at /Users/someone/geniro.db'),
+      );
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it('makes BOTH team-note tools name the other, and say what a note is not for', async () => {

@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
 import { StageMoveActionSchema } from '../../../agents/chat.types';
-import type { WorkflowNode } from '../../../graphs/graphs.types';
 import type {
   StageMoveRequest,
   StageMoveResult,
-} from '../../../graphs/services/stage.service';
+  WorkflowNode,
+} from '../../../graphs/graphs.types';
 import { moveReply } from '../../../graphs/utils/stage-text';
 import { readToolArgs } from '../tool-args';
 

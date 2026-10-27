@@ -14,7 +14,11 @@ import {
   CustomInstructionsSchema,
   PendingOwnedCardSchema,
   type PersistedResetWake,
+  type StageActor,
+  type StageChangePayload,
+  type StageMoveAction,
   StageMoveActionSchema,
+  type StageProgress,
   StageProgressSchema,
 } from '../agents/chat.types';
 import { createChatSchema } from '../agents/dto/chat.dto';
@@ -650,7 +654,7 @@ export const WorkflowSchema = z
       .array(WorkflowStageSchema)
       .optional()
       .describe(
-        "The workflow's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review → done. Every agent of a run sees it and moves it with move_stage. Omitted = the workflow has no stages",
+        "The workflow's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every agent of a run sees it and moves it with move_stage. Omitted = the workflow has no stages",
       ),
   })
   .meta({ id: 'Workflow' });
@@ -2050,6 +2054,45 @@ export const StageMoveRequestSchema = z.object({
     ),
 });
 export type StageMoveRequestWire = z.infer<typeof StageMoveRequestSchema>;
+
+export type StageMoveRequest = Omit<StageMoveRequestWire, 'expectedRev'>;
+
+export interface StageMove {
+  action: StageMoveAction;
+  stageId: string;
+  next?: string;
+  text: string;
+  by: StageActor;
+  at: string;
+}
+
+export type StageRefusalCode =
+  | 'NO_STAGES'
+  | 'STAGE_UNKNOWN'
+  | 'STAGE_NOT_CURRENT'
+  | 'STAGES_FINISHED'
+  | 'NEXT_REQUIRED'
+  | 'NEXT_INVALID'
+  | 'NOT_REOPENABLE'
+  | 'TEXT_REQUIRED'
+  | 'TEXT_TOO_LONG'
+  | 'STAGE_PROGRESS_CHANGED'
+  | 'RUN_ARCHIVED';
+
+export type StageMoveResult =
+  | {
+      ok: true;
+      stages: readonly WorkflowStage[];
+      workflow: Workflow;
+      progress: StageProgress;
+      resets: string[];
+      payload: StageChangePayload;
+    }
+  | {
+      ok: false;
+      code: StageRefusalCode;
+      message: string;
+    };
 
 export const StageMoveResultSchema = z.object({
   progress: StageProgressSchema,

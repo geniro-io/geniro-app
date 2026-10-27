@@ -4,12 +4,12 @@ import { BadRequestException, ConflictException } from '@packages/common';
 import type { HostRowWire, StageProgress } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
-import type { Workflow } from '../graphs.types';
+import type { StageMoveRequest } from '../graphs.types';
 import { callerKey } from '../utils/caller-key';
 import { leadAgentId } from '../utils/graph-order';
 import { userMoveWake } from '../utils/stage-text';
 import { GraphExecutorService } from './graph-executor.service';
-import { type StageMoveRequest, StageService } from './stage.service';
+import { StageService } from './stage.service';
 
 export interface UserStageMove {
   progress: StageProgress;
@@ -46,7 +46,7 @@ export class StageWakeService implements OnModuleInit {
     if (await this.stages.isWaiting(runId)) {
       return;
     }
-    const { progress, stages, workflow } = loaded;
+    const { progress, stages, leadId } = loaded;
     const stage = stages.find((s) => s.id === progress.current);
     if (stage === undefined) {
       return;
@@ -57,25 +57,35 @@ export class StageWakeService implements OnModuleInit {
     if (here.some((note) => note.action === 'stalled')) {
       return;
     }
-    if (!here.some((note) => note.action === 'nudge')) {
+    const nudged = here.some((note) => note.action === 'nudge');
+    if (leadId !== null && !nudged) {
       const text = `Stage ${stage.title} is still open: finish it with move_stage, skip it with a reason, or say what blocks it.`;
       if (
         !(await this.stages.note(runId, 'nudge', stage, progress.rev, text))
       ) {
         return;
       }
+      const generation = this.stages.generation(runId);
       await this.wakeLead(
         runId,
-        workflow,
+        leadId,
         `stage:${runId}:nudge:${progress.rev}`,
         `[geniro] ${text}\n${stageBriefLine(stage)}`,
         'Woke the lead to finish the open stage',
-        () => this.stages.cached(runId)?.progress.rev !== progress.rev,
+        () =>
+          this.stages.generation(runId) !== generation ||
+          this.stages.cached(runId)?.progress.rev !== progress.rev,
       );
       return;
     }
-    const text = `Stage ${stage.title} is still open after a nudge, and the agents have stopped.`;
-    await this.stages.note(runId, 'stalled', stage, progress.rev, text);
+    const text = nudged
+      ? `Stage ${stage.title} is still open after a nudge, and the agents have stopped.`
+      : `Stage ${stage.title} is still open, and the agents have stopped.`;
+    if (
+      !(await this.stages.note(runId, 'stalled', stage, progress.rev, text))
+    ) {
+      return;
+    }
     this.bus.publishRunStatus({ runId, status: null, notify: text });
   }
 
@@ -100,6 +110,7 @@ export class StageWakeService implements OnModuleInit {
       }
       throw new BadRequestException(result.code, result.message);
     }
+    const lead = leadAgentId(result.workflow.nodes, result.workflow.edges);
     const text = userMoveWake(
       result.stages,
       result.workflow.nodes,
@@ -116,7 +127,7 @@ export class StageWakeService implements OnModuleInit {
     );
     const woke = await this.wakeLead(
       runId,
-      result.workflow,
+      lead,
       `stage:${runId}:${result.payload.rev}`,
       text,
       'Woke the lead with your reason',
@@ -124,20 +135,18 @@ export class StageWakeService implements OnModuleInit {
     return {
       progress: result.progress,
       woke,
-      hasLead:
-        leadAgentId(result.workflow.nodes, result.workflow.edges) !== null,
+      hasLead: lead !== null,
     };
   }
 
   async wakeLead(
     runId: string,
-    workflow: Workflow,
+    lead: string | null,
     key: string,
     prompt: string,
     rowMessage: string,
     withdrawn?: () => boolean,
   ): Promise<boolean> {
-    const lead = leadAgentId(workflow.nodes, workflow.edges);
     if (lead === null) {
       return false;
     }

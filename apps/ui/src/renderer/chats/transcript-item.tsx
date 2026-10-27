@@ -33,7 +33,10 @@ import { pullRequestOutcomeKey, RunOutcomesContext } from './run-outcome';
 import { readRunOutcomePayload } from './run-outcome-payload';
 import { RunOutcomeRow } from './run-outcome-row';
 import { settlesOnContinuation } from './settled-status';
-import { readStageChangePayload } from './stage-change-payload';
+import {
+  readStageChangePayload,
+  type StageChangePayload,
+} from './stage-change-payload';
 import {
   RunStagesContext,
   stageActorLabel,
@@ -200,7 +203,6 @@ export const TranscriptItem = memo(function TranscriptItem({
   const nested = useContext(NestedThreadContext);
   const durations = useContext(TurnDurationContext);
   const runOutcomes = useContext(RunOutcomesContext);
-  const runStages = useContext(RunStagesContext);
   const nodeName = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
   // Workflow-run items carry the node that produced them; tag each row so
@@ -789,14 +791,11 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'stage_change': {
       const change = readStageChangePayload(item.payload);
       return change === null ? null : (
-        <StageChangeRow
+        <StageChangeItem
           change={change}
           actor={stageActorLabel(change.by, (id) => nodeName(id) ?? id)}
-          {...(change.next === undefined
-            ? {}
-            : { nextTitle: stageTitleOf(runStages, change.next) })}
           time={formatClockTime(item.createdAt)}
-          superseded={stageChangeSuperseded(change, runStages)}
+          memoryKey={`stage:${item.id}`}
         />
       );
     }
@@ -804,6 +803,32 @@ export const TranscriptItem = memo(function TranscriptItem({
       return null; // usage / attachment / approval_request (rendered as a card)
   }
 });
+
+function StageChangeItem({
+  change,
+  actor,
+  time,
+  memoryKey,
+}: {
+  change: StageChangePayload;
+  actor: string;
+  time: string;
+  memoryKey: string;
+}): React.JSX.Element {
+  const runStages = useContext(RunStagesContext);
+  return (
+    <StageChangeRow
+      change={change}
+      actor={actor}
+      {...(change.next === undefined
+        ? {}
+        : { nextTitle: stageTitleOf(runStages, change.next) })}
+      time={time}
+      superseded={stageChangeSuperseded(change, runStages)}
+      memoryKey={memoryKey}
+    />
+  );
+}
 
 /**
  * Requests the DAEMON declared unanswerable — its turn settled with the

@@ -87,18 +87,20 @@ export function WorkflowMetaDialog({
       setDescription(initial?.description ?? '');
       setLimited(initial?.maxActiveTurns !== undefined);
       setMaxActiveTurns(initial?.maxActiveTurns ?? DEFAULT_MAX_ACTIVE_TURNS);
-      setStages(initial?.stages);
-      setStagesOpen(false);
     }
     // `initial` is compared by its fields: a rename dialog reopened for the
     // same workflow must reset even when the caller rebuilt the object.
-  }, [
-    open,
-    initial?.name,
-    initial?.description,
-    initial?.maxActiveTurns,
-    initial?.stages,
-  ]);
+  }, [open, initial?.name, initial?.description, initial?.maxActiveTurns]);
+
+  // Compared by content: a re-read that rebuilt an equal list keeps the draft,
+  // one that brought other stages replaces it like the other fields.
+  const initialStagesKey = JSON.stringify(initial?.stages ?? null);
+  useEffect(() => {
+    if (open) {
+      setStages(initial?.stages);
+      setStagesOpen(false);
+    }
+  }, [open, initialStagesKey]);
 
   const canSubmit = name.trim().length > 0 && !busy;
 

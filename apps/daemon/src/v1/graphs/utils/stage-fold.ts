@@ -1,21 +1,11 @@
 import type {
   StageActor,
-  StageMoveAction,
   StageProgress,
   StageProgressEntry,
 } from '../../agents/chat.types';
 import { writeRunStageProgress } from '../../agents/utils/stage-progress';
-import type { Workflow, WorkflowStage } from '../graphs.types';
+import type { StageMove, Workflow, WorkflowStage } from '../graphs.types';
 import { startStageId, walkableStages } from './stage-validate';
-
-export interface StageMove {
-  action: StageMoveAction;
-  stageId: string;
-  next?: string;
-  text: string;
-  by: StageActor;
-  at: string;
-}
 
 interface Resolution {
   status: 'done' | 'skipped';
@@ -162,7 +152,7 @@ function firstBranchLength(
   return length;
 }
 
-/** TWIN: stagesReopenResets in apps/ui/src/renderer/chats/stage-action-dialog.tsx. */
+/** TWIN: stagesReopenResets in apps/ui/src/renderer/chats/stage-progress.ts. */
 export function stagesReopenResets(
   stages: readonly WorkflowStage[],
   progress: StageProgress,

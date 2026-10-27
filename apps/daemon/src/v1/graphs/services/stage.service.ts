@@ -1,5 +1,11 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleDestroy,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 
 import {
   type StageActor,
@@ -23,12 +29,16 @@ import {
   writeRunStageProgress,
 } from '../../agents/utils/stage-progress';
 import type { Run } from '../../runs/entity/run.entity';
-import type { Workflow, WorkflowStage } from '../graphs.types';
-import {
-  foldStages,
-  type StageMove,
-  stagesReopenResets,
-} from '../utils/stage-fold';
+import type {
+  StageMove,
+  StageMoveRequest,
+  StageMoveResult,
+  StageRefusalCode,
+  Workflow,
+  WorkflowStage,
+} from '../graphs.types';
+import { leadAgentId } from '../utils/graph-order';
+import { foldStages, stagesReopenResets } from '../utils/stage-fold';
 import {
   MAX_AGENT_STAGE_TEXT_LINES,
   MAX_STAGE_TEXT_LENGTH,
@@ -36,52 +46,24 @@ import {
 import { walkableStages } from '../utils/stage-validate';
 import { RunWorkflowService } from './run-workflow.service';
 
-export type StageRefusalCode =
-  | 'NO_STAGES'
-  | 'STAGE_UNKNOWN'
-  | 'STAGE_NOT_CURRENT'
-  | 'STAGES_FINISHED'
-  | 'NEXT_REQUIRED'
-  | 'NEXT_INVALID'
-  | 'NOT_REOPENABLE'
-  | 'TEXT_REQUIRED'
-  | 'TEXT_TOO_LONG'
-  | 'STAGE_PROGRESS_CHANGED'
-  | 'RUN_ARCHIVED';
-
-export interface StageMoveRequest {
-  action: StageMoveAction;
-  stage: string;
-  next?: string;
-  text: string;
-}
+export const STAGE_COLUMN_RETRY_MS = 30_000;
 
 export interface RunStages {
-  workflow: Workflow;
   stages: readonly WorkflowStage[];
   progress: StageProgress;
+  leadId: string | null;
 }
 
-export type StageMoveResult =
-  | {
-      ok: true;
-      stages: readonly WorkflowStage[];
-      workflow: Workflow;
-      progress: StageProgress;
-      resets: string[];
-      payload: StageChangePayload;
-    }
-  | {
-      ok: false;
-      code: StageRefusalCode;
-      message: string;
-    };
-
 @Injectable()
-export class StageService {
+export class StageService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(StageService.name);
   private readonly registered = new Map<string, ReadonlySet<string>>();
   private readonly cache = new Map<string, RunStages>();
+  private readonly unstaged = new Set<string>();
+  private readonly unsynced = new Set<string>();
+  private readonly retries = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly announcedRevs = new Map<string, number>();
+  private readonly generations = new Map<string, number>();
 
   constructor(
     private readonly em: EntityManager,
@@ -94,6 +76,19 @@ export class StageService {
     private readonly writes: RunWriteQueue,
     @Optional() private readonly monitors?: MonitorRegistry,
   ) {}
+
+  onModuleInit(): void {
+    this.bus.allDeleted().subscribe((runId) => {
+      this.forget(runId);
+    });
+    this.bus.allChanged().subscribe((runs) => {
+      for (const run of runs) {
+        if (run.archivedAt !== null) {
+          this.drop(run.id);
+        }
+      }
+    });
+  }
 
   register(runId: string, workflow: Workflow): void {
     if (walkableStages(workflow) === null) {
@@ -108,9 +103,34 @@ export class StageService {
     );
   }
 
+  onModuleDestroy(): void {
+    for (const timer of this.retries.values()) {
+      clearTimeout(timer);
+    }
+    this.retries.clear();
+  }
+
   forget(runId: string): void {
     this.registered.delete(runId);
+    this.drop(runId);
+    void this.writes.run(runId, async () => {
+      this.drop(runId);
+      this.generations.delete(runId);
+      this.announcedRevs.delete(runId);
+    });
+  }
+
+  generation(runId: string): number {
+    return this.generations.get(runId) ?? 0;
+  }
+
+  private drop(runId: string): void {
     this.cache.delete(runId);
+    this.unstaged.delete(runId);
+    this.unsynced.delete(runId);
+    clearTimeout(this.retries.get(runId));
+    this.retries.delete(runId);
+    this.generations.set(runId, this.generation(runId) + 1);
   }
 
   async isWaiting(runId: string): Promise<boolean> {
@@ -130,29 +150,46 @@ export class StageService {
 
   async current(runId: string): Promise<RunStages | null> {
     const cached = this.cache.get(runId);
-    if (cached !== undefined) {
+    if (cached !== undefined && !this.unsynced.has(runId)) {
       return cached;
+    }
+    if (cached === undefined && this.unstaged.has(runId)) {
+      return null;
     }
     try {
       return await this.writes.run(runId, async () => {
         const again = this.cache.get(runId);
         if (again !== undefined) {
+          if (this.unsynced.has(runId)) {
+            await this.sync(runId, again.progress, this.em.fork());
+          }
           return again;
         }
         const em = this.em.fork();
         const run = await this.runDao.getById(runId, em);
         const workflow = run === null ? null : await this.workflowOf(run, em);
         const stages = workflow === null ? null : walkableStages(workflow);
+        if (
+          run !== null &&
+          (run.workflowId === null || (workflow !== null && stages === null))
+        ) {
+          this.unstaged.add(runId);
+        }
         if (run === null || workflow === null || stages === null) {
           return null;
         }
-        let progress = readRunStageProgress(run.stageProgress);
-        if (progress === null) {
-          progress = foldStages(stages, await this.movesOf(runId, em));
-          await this.store(runId, progress, em);
+        const progress = foldStages(stages, await this.movesOf(runId, em));
+        if (readRunStageProgress(run.stageProgress)?.rev !== progress.rev) {
+          await this.sync(runId, progress, em);
         }
-        const loaded = { workflow, stages, progress };
-        this.cache.set(runId, loaded);
+        const loaded = {
+          stages,
+          progress,
+          leadId: leadAgentId(workflow.nodes, workflow.edges),
+        };
+        if (run.archivedAt === null) {
+          this.cache.set(runId, loaded);
+        }
         return loaded;
       });
     } catch (error) {
@@ -189,6 +226,10 @@ export class StageService {
       }
       const moves = await this.movesOf(runId, em);
       const before = foldStages(stages, moves);
+      const column = readRunStageProgress(run.stageProgress);
+      if (column !== null && column.rev !== before.rev) {
+        await this.sync(runId, before, em);
+      }
       if (
         options.expectedRev !== undefined &&
         options.expectedRev !== before.rev
@@ -246,8 +287,12 @@ export class StageService {
         ...moves,
         toMove(payload, row.createdAt),
       ]);
-      await this.store(runId, progress, em);
-      this.cache.set(runId, { workflow, stages, progress });
+      await this.sync(runId, progress, em);
+      this.cache.set(runId, {
+        stages,
+        progress,
+        leadId: leadAgentId(workflow.nodes, workflow.edges),
+      });
       return { ok: true, stages, workflow, progress, resets, payload };
     });
   }
@@ -350,17 +395,57 @@ export class StageService {
     });
   }
 
-  private async store(
+  private async sync(
     runId: string,
     progress: StageProgress,
     em: EntityManager,
   ): Promise<void> {
-    const stageProgress = writeRunStageProgress(progress);
-    await this.runDao.updateWithoutActivity(runId, { stageProgress }, em);
-    const announced = readRunStageProgress(stageProgress);
-    if (announced !== null) {
-      this.bus.publishRunStatus({ runId, status: null, stages: announced });
+    const stored = await this.store(runId, progress, em);
+    if (this.announcedRevs.get(runId) !== progress.rev) {
+      this.announcedRevs.set(runId, progress.rev);
+      const announced = readRunStageProgress(writeRunStageProgress(progress));
+      if (announced !== null) {
+        this.bus.publishRunStatus({ runId, status: null, stages: announced });
+      }
     }
+    if (stored) {
+      this.unsynced.delete(runId);
+      clearTimeout(this.retries.get(runId));
+      this.retries.delete(runId);
+      return;
+    }
+    this.unsynced.add(runId);
+    if (!this.retries.has(runId)) {
+      const timer = setTimeout(() => {
+        this.retries.delete(runId);
+        void this.writes.run(runId, async () => {
+          const cached = this.cache.get(runId);
+          if (cached !== undefined && this.unsynced.has(runId)) {
+            await this.sync(runId, cached.progress, this.em.fork());
+          }
+        });
+      }, STAGE_COLUMN_RETRY_MS);
+      timer.unref();
+      this.retries.set(runId, timer);
+    }
+  }
+
+  private async store(
+    runId: string,
+    progress: StageProgress,
+    em: EntityManager,
+  ): Promise<boolean> {
+    const stageProgress = writeRunStageProgress(progress);
+    let stored = true;
+    try {
+      await this.runDao.updateWithoutActivity(runId, { stageProgress }, em);
+    } catch (error) {
+      stored = false;
+      this.logger.error(
+        `run ${runId}: stage progress rev ${progress.rev} is not in its column, so the next read refolds it: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return stored;
   }
 }
 

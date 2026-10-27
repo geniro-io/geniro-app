@@ -203,6 +203,8 @@ then implement or fix, then review"), write it as stages:
 - \`next\` lists the stages that may follow; two or more mean the run takes
   ONE of them (implementation or fix), and a final stage has none;
 - exactly one stage starts the walk, and the stages never loop back;
+- the walk ends when the last stage is completed, so add no closing "Done" or
+  "Finished" stage: one nobody completes leaves the run with an open stage;
 - \`ownerHint\` names the agent node that usually does the stage — a hint,
   never a rule; leave it out when any agent may.
 

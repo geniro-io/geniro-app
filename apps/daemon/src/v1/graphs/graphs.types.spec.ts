@@ -247,6 +247,12 @@ describe('Workflow.stages', () => {
     }
   });
 
+  it('describes the stage walk without a terminal "done" stage', () => {
+    const description = WorkflowSchema.shape.stages.description ?? '';
+    expect(description).toContain('investigation');
+    expect(description).not.toMatch(/→\s*done\b/);
+  });
+
   it('reads a workflow written before stages existed', () => {
     const parsed = WorkflowSchema.safeParse({
       name: 'n',

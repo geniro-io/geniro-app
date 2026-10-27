@@ -109,3 +109,21 @@ export const Narrow: Story = {
     ],
   },
 };
+
+export const AgentsPanelWidth: Story = {
+  decorators: [
+    (story) => (
+      <div className="w-[280px] rounded-md border border-dashed border-border-strong">
+        {story()}
+      </div>
+    ),
+  ],
+  args: {
+    stages: [
+      { ...FORK[0]!, status: 'done' },
+      { ...FORK[1]!, status: 'current' },
+      { ...FORK[2]!, status: 'not_taken' },
+      { ...FORK[3]!, status: 'pending' },
+    ],
+  },
+};

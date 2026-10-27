@@ -296,6 +296,13 @@ describe('WorkflowMetaDialog', () => {
 
     const FORK_COLUMNS = [['Investigation'], ['Implementation', 'Fix']];
 
+    function fillDoneWhen(text: string): void {
+      const htmlFor = Array.from(container.querySelectorAll('label')).find(
+        (l) => l.textContent === 'Done when',
+      )!.htmlFor;
+      type(document.getElementById(htmlFor) as HTMLInputElement, text);
+    }
+
     function pressText(label: string): void {
       act(() => {
         Array.from(container.querySelectorAll('button'))
@@ -365,11 +372,8 @@ describe('WorkflowMetaDialog', () => {
         container.querySelector('[data-slot="stage-schema-editor"]'),
       ).not.toBeNull();
       pressText('Add stage');
-      const doneWhen = Array.from(container.querySelectorAll('label')).find(
-        (l) => l.textContent === 'Done when',
-      )!.htmlFor;
-      type(document.getElementById(doneWhen) as HTMLInputElement, 'It works');
-      pressText('Save stages');
+      fillDoneWhen('It works');
+      pressText('Done');
 
       expect(
         container.querySelector('[data-slot="stage-schema-editor"]'),
@@ -413,11 +417,50 @@ describe('WorkflowMetaDialog', () => {
           .find((o) => o.textContent?.includes('Delete'))!
           .click();
       });
-      pressText('Save stages');
+      pressText('Done');
       expect(graphColumns()).toBeNull();
       expect(emptyState()).toContain('No stages yet');
       submit();
       expect(onSubmit).toHaveBeenCalledWith({ name: 'Team' });
+    });
+
+    it('keeps the stage edits through a re-render with an equal initial, and resets on reopening', () => {
+      const copy = (): WorkflowMeta => ({
+        name: 'Team',
+        stages: STAGES.map((stage) => ({ ...stage })),
+      });
+      render({ initial: copy() });
+      pressText('Edit stages');
+      pressText('Add stage');
+      fillDoneWhen('Shipped');
+      pressText('Done');
+      expect(graphColumns()!.flat()).toHaveLength(4);
+
+      pressText('Edit stages');
+      pressText('Add stage');
+      render({ initial: copy() });
+      expect(
+        container.querySelector('[data-slot="stage-schema-editor"]'),
+      ).not.toBeNull();
+      expect(
+        container.querySelectorAll('[data-slot="stage-row"]'),
+      ).toHaveLength(5);
+      pressText('Cancel');
+      expect(graphColumns()!.flat()).toHaveLength(4);
+
+      render({ open: false, initial: copy() });
+      render({ initial: copy() });
+      expect(graphColumns()).toEqual(FORK_COLUMNS);
+    });
+
+    it('takes the stages a re-read brought while open, so a later Save does not write the old ones back', () => {
+      render({ initial: { name: 'Team', stages: STAGES } });
+      const reread = STAGES.slice(0, 1).map((stage) => ({
+        ...stage,
+        next: undefined,
+      }));
+      render({ initial: { name: 'Team', stages: reread } });
+      expect(graphColumns()!.flat()).toHaveLength(1);
     });
 
     it('does not submit the form from the editor’s buttons', () => {

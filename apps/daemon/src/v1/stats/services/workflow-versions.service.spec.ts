@@ -270,6 +270,90 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
       expect(await readFile(join(dir, restored.backup), 'utf8')).toBe(before);
     });
 
+    describe('with stages', () => {
+      const olderStages: NonNullable<Workflow['stages']> = [
+        {
+          id: 'build',
+          title: 'Build',
+          doneWhen: 'It compiles',
+          next: ['ship'],
+        },
+        { id: 'ship', title: 'Ship', doneWhen: 'It is released' },
+      ];
+      const newerStages: NonNullable<Workflow['stages']> = [
+        { id: 'plan', title: 'Plan', doneWhen: 'A plan exists' },
+      ];
+
+      it('writes the version’s own stages over the file’s different ones', async () => {
+        const stagedOlder = { ...older, stages: olderStages };
+        const stagedVersion = workflowVersionOf(stagedOlder);
+        await versionDao.register(
+          'dev-team',
+          stagedVersion,
+          canonicalGraphJson(canonicalGraphOf(stagedOlder)),
+          created,
+        );
+        await store.save('dev-team', { ...newer, stages: newerStages });
+        const { hash } = await store.get('dev-team');
+
+        const restored = await restoring.restore(
+          'dev-team',
+          stagedVersion,
+          hash,
+        );
+
+        const { workflow } = await store.get('dev-team');
+        expect(workflow.stages).toEqual(olderStages);
+        expect(restored.version).toBe(stagedVersion);
+        expect(
+          await readFile(join(dir, 'dev-team.geniro.yaml'), 'utf8'),
+        ).toContain('id: build');
+      });
+
+      it('keeps the stages when the file already has the version’s stages', async () => {
+        const stagedOlder = { ...older, stages: olderStages };
+        const stagedVersion = workflowVersionOf(stagedOlder);
+        await versionDao.register(
+          'dev-team',
+          stagedVersion,
+          canonicalGraphJson(canonicalGraphOf(stagedOlder)),
+          created,
+        );
+        await store.save('dev-team', { ...newer, stages: olderStages });
+        const { hash } = await store.get('dev-team');
+
+        await restoring.restore('dev-team', stagedVersion, hash);
+
+        expect((await store.get('dev-team')).workflow.stages).toEqual(
+          olderStages,
+        );
+      });
+
+      it('restores a stage-less version to a workflow without stages', async () => {
+        await store.save('dev-team', { ...newer, stages: newerStages });
+        const { hash } = await store.get('dev-team');
+
+        await restoring.restore('dev-team', OLDER, hash);
+
+        const { workflow } = await store.get('dev-team');
+        expect(workflow.stages).toBeUndefined();
+        expect(workflowVersionOf(workflow)).toBe(OLDER);
+      });
+
+      it('numbers a stage edit as a version of its own', async () => {
+        const staged = { ...newer, stages: newerStages };
+        await store.save('dev-team', staged);
+        const { hash } = await store.get('dev-team');
+
+        await restoring.restore('dev-team', OLDER, hash);
+
+        expect(
+          (await versionDao.graphsOf('dev-team')).map((graph) => graph.version),
+        ).toContain(workflowVersionOf(staged));
+        expect(workflowVersionOf(staged)).not.toBe(workflowVersionOf(newer));
+      });
+    });
+
     it('records the graph it replaces when no run stamped it, so it can be restored back', async () => {
       const { hash } = await store.get('dev-team');
 

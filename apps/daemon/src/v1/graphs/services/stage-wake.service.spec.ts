@@ -7,9 +7,9 @@ import type {
 } from '../../agents/chat.types';
 import type { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { HostWakeBus } from '../../agents/services/host-wake.bus';
-import type { Workflow } from '../graphs.types';
+import type { StageMoveResult, Workflow } from '../graphs.types';
 import type { GraphExecutorService } from './graph-executor.service';
-import type { StageMoveResult, StageService } from './stage.service';
+import type { StageService } from './stage.service';
 import { StageWakeService } from './stage-wake.service';
 
 const WORKFLOW: Workflow = {
@@ -63,6 +63,7 @@ function setUp(options: {
   waiting?: boolean;
   notes?: Note[];
   noteRefused?: boolean;
+  noLead?: boolean;
 }): {
   service: StageWakeService;
   published: HostWake[];
@@ -72,8 +73,10 @@ function setUp(options: {
   notified: RunStatusEvent[];
   settled: ((runId: string) => void)[];
   setCachedRev: (rev: number) => void;
+  bumpGeneration: () => void;
 } {
   let cachedRev = (options.progress ?? PROGRESS).rev;
+  let generation = 0;
   const notes: Note[] = [...(options.notes ?? [])];
   const notified: RunStatusEvent[] = [];
   const settled: ((runId: string) => void)[] = [];
@@ -94,11 +97,12 @@ function setUp(options: {
       options.progress === null
         ? null
         : {
-            workflow: WORKFLOW,
+            leadId: options.noLead === true ? null : 'lead',
             stages: WORKFLOW.stages!,
             progress: options.progress ?? PROGRESS,
           },
     cached: () => ({ progress: { ...PROGRESS, rev: cachedRev } }),
+    generation: () => generation,
     isWaiting: async () => options.waiting === true,
     notesOf: async () => [...notes],
     note: async (
@@ -140,6 +144,9 @@ function setUp(options: {
     settled,
     setCachedRev: (rev) => {
       cachedRev = rev;
+    },
+    bumpGeneration: () => {
+      generation += 1;
     },
   };
 }
@@ -290,11 +297,48 @@ describe('StageWakeService.nudgeIfStalled', () => {
     expect(h.published[1]!.withdrawn).toBeUndefined();
   });
 
+  it('drops a held nudge once the run was archived, even if it comes back at the same revision', async () => {
+    const h = setUp({ canWake: true });
+    await h.service.nudgeIfStalled('run-1');
+    const [nudge] = h.published;
+    expect(nudge!.withdrawn?.()).toBe(false);
+    h.bumpGeneration();
+    expect(nudge!.withdrawn?.()).toBe(true);
+  });
+
   it('wakes nobody when the nudge row was refused — the run was archived or deleted meanwhile', async () => {
     const h = setUp({ canWake: true, noteRefused: true });
     await h.service.nudgeIfStalled('run-1');
     expect(h.published).toEqual([]);
     expect(h.continued).toEqual([]);
+  });
+
+  it('writes no stalled row and notifies nobody when the stalled row was refused — the run was archived or deleted meanwhile', async () => {
+    const h = setUp({
+      canWake: true,
+      noteRefused: true,
+      notes: [{ action: 'nudge', stageId: 'build', rev: 3 }],
+    });
+    await h.service.nudgeIfStalled('run-1');
+    expect(h.notified).toEqual([]);
+  });
+
+  it('writes no nudge row for a workflow whose trigger starts no agent, and tells the user the stage is stuck at once', async () => {
+    const h = setUp({ canWake: true, noLead: true });
+    await h.service.nudgeIfStalled('run-1');
+    expect(h.notes).toEqual([{ action: 'stalled', stageId: 'build', rev: 3 }]);
+    expect(h.published).toEqual([]);
+    expect(h.continued).toEqual([]);
+    expect(h.notified).toEqual([
+      {
+        runId: 'run-1',
+        status: null,
+        notify: 'Stage Build is still open, and the agents have stopped.',
+      },
+    ]);
+    await h.service.nudgeIfStalled('run-1');
+    expect(h.notes).toHaveLength(1);
+    expect(h.notified).toHaveLength(1);
   });
 
   it('nudges again once a move has changed the revision', async () => {

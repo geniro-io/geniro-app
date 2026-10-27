@@ -1,3 +1,5 @@
+import { Logger } from '@nestjs/common';
+
 import { HOST_MOVE_STAGE_TOOL } from '../../../agents/chat.types';
 import type { CallBroker } from '../../../graphs/services/call-broker.service';
 import type { StageService } from '../../../graphs/services/stage.service';
@@ -13,6 +15,7 @@ import { moveStageSchema } from './move-stage.schema';
 
 export class MoveStageTool extends BaseMcpTool {
   readonly name = HOST_MOVE_STAGE_TOOL;
+  private readonly logger = new Logger(MoveStageTool.name);
 
   constructor(
     private readonly stages: StageService,
@@ -37,6 +40,9 @@ export class MoveStageTool extends BaseMcpTool {
     args: Record<string, unknown>,
     { runId, nodeId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
+    if (!this.stages.canUse(runId, nodeId)) {
+      return this.text('Not moved: this run has no stages you can move.', true);
+    }
     const request = readMoveStage(args);
     if ('error' in request) {
       return this.invalidArgs(request.error);
@@ -54,8 +60,11 @@ export class MoveStageTool extends BaseMcpTool {
       );
       return this.text(reply.text, reply.isError);
     } catch (error) {
+      this.logger.error(
+        `run ${runId} could not move a stage: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return this.text(
-        `Not moved: ${error instanceof Error ? error.message : String(error)}`,
+        'Not moved: the move could not be saved. Try again.',
         true,
       );
     }

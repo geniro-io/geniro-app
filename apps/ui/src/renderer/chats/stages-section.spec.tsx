@@ -172,6 +172,39 @@ describe('StagesSection', () => {
     }
   });
 
+  it('keeps Reopen visible on touch and narrow screens, beside the meta instead of over it', () => {
+    const plan = row(mount(), 'plan');
+    const classes = (el: Element | null): string => el?.className ?? '';
+    const aside = plan.querySelector('[data-slot="stage-entry-aside"]');
+    const action = buttonNamed(plan, 'Reopen Plan…')!.parentElement;
+    const meta = plan.querySelector(
+      '[data-slot="stage-status"]',
+    )!.parentElement;
+    expect(classes(action)).toContain('pointer-coarse:opacity-100');
+    expect(classes(action)).toContain('max-sm:opacity-100');
+    expect(classes(aside)).toContain('pointer-coarse:flex');
+    expect(classes(aside)).toContain('max-sm:flex');
+    expect(classes(meta)).not.toMatch(
+      /(^|\s)(group-hover|group-focus-within)\//,
+    );
+    expect(classes(meta)).toContain(
+      'sm:pointer-fine:group-hover/stage:opacity-0',
+    );
+  });
+
+  it('lets the meta give way before the entry title does', () => {
+    const plan = row(mount(), 'plan');
+    const aside = plan.querySelector('[data-slot="stage-entry-aside"]');
+    const title = plan.querySelector('[data-slot="stage-entry-title"]');
+    expect(aside?.className).toContain('min-w-0');
+    expect(aside?.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+    expect(aside?.className).toMatch(/(^|\s)shrink-\d{2,}(\s|$)/);
+    expect(title?.className).toContain('truncate');
+    const actor = plan.querySelector('[data-slot="stage-actor"]');
+    expect(actor?.className).toContain('truncate');
+    expect(actor?.className).toContain('min-w-0');
+  });
+
   it('draws an archived run’s stages without a single action', () => {
     const el = mount({ archived: true });
     expect(el.querySelector('[data-slot="stage-done-when"]')?.textContent).toBe(

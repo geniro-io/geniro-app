@@ -48,11 +48,11 @@ const entryTitleVariants = cva('min-w-0 truncate', {
 });
 
 const entryMetaVariants = cva(
-  'flex items-baseline gap-1 text-[11px] text-muted-foreground',
+  'flex min-w-0 items-baseline gap-1 text-[11px] text-muted-foreground',
   {
     variants: {
       withAction: {
-        true: '[grid-area:1/1] transition-opacity group-focus-within/stage:opacity-0 group-hover/stage:opacity-0',
+        true: '[grid-area:1/1] transition-opacity sm:pointer-fine:group-focus-within/stage:opacity-0 sm:pointer-fine:group-hover/stage:opacity-0',
         false: '',
       },
     },
@@ -76,22 +76,30 @@ export function StageEntry({
   const withAction = action !== undefined && action !== null;
   const meta = (
     <span className={entryMetaVariants({ withAction })}>
-      <span data-slot="stage-status">{word}</span>
+      <span data-slot="stage-status" className="shrink-0">
+        {word}
+      </span>
       {stage.by === undefined ? null : (
         <>
-          <span aria-hidden="true">·</span>
+          <span aria-hidden="true" className="shrink-0">
+            ·
+          </span>
           <span
             data-slot="stage-actor"
             data-actor={stage.by.kind}
-            className="max-w-[7rem] truncate">
+            className="max-w-[7rem] min-w-0 truncate">
             {stageActorLabel(stage.by, agentName)}
           </span>
         </>
       )}
       {stage.at === undefined ? null : (
         <>
-          <span aria-hidden="true">·</span>
-          <time dateTime={stage.at}>{stageTimeAgo(stage.at)}</time>
+          <span aria-hidden="true" className="shrink-0">
+            ·
+          </span>
+          <time dateTime={stage.at} className="shrink-0">
+            {stageTimeAgo(stage.at)}
+          </time>
         </>
       )}
     </span>
@@ -115,10 +123,12 @@ export function StageEntry({
         {stage.chosen === undefined ? null : (
           <StageBranch title={stageTitleOf(progress, stage.chosen)} />
         )}
-        <span className="ml-auto grid shrink-0 justify-items-end pl-2">
+        <span
+          data-slot="stage-entry-aside"
+          className="ml-auto grid min-w-0 shrink-100 grid-cols-[minmax(0,1fr)] justify-items-end pl-2 max-sm:flex max-sm:items-baseline max-sm:gap-2 pointer-coarse:flex pointer-coarse:items-baseline pointer-coarse:gap-2">
           {meta}
           {withAction ? (
-            <span className="flex items-center opacity-0 transition-opacity [grid-area:1/1] group-focus-within/stage:opacity-100 group-hover/stage:opacity-100">
+            <span className="flex shrink-0 items-center opacity-0 transition-opacity [grid-area:1/1] group-focus-within/stage:opacity-100 group-hover/stage:opacity-100 max-sm:opacity-100 pointer-coarse:opacity-100">
               {action}
             </span>
           ) : null}

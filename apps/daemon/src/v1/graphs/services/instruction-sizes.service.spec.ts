@@ -173,7 +173,17 @@ describe('InstructionSizesService', () => {
       workflow: { ...DEV_TEAM, stages },
       ...SETTINGS,
     }).nodes;
-    const map = stageMapPrompt(stages, DEV_TEAM.nodes);
+    const map = [
+      'This workflow has stages every run walks, in order:',
+      '1. Build (build) — then Review (review)',
+      '   Done when: built',
+      '2. Review (review) — final stage — usually done by reviewer',
+      '   Done when: approved',
+      '',
+      `Each of your turns starts with the current stage. When the current stage's "done when" holds, mark it with move_stage (action "complete", a one-line summary). Skip a stage that does not apply with action "skip" and the reason; at a stage with ONE-of branches, name the branch you take as "next". If an earlier stage turns out unfinished, reopen it with action "reopen" and the reason — that also reopens every stage after it.`,
+      'Any agent of the run may move a stage; "usually done by" is a hint, not a rule. Move only the stage you finished, and only when it is the current one.',
+    ].join('\n');
+    expect(stageMapPrompt(stages, DEV_TEAM.nodes)).toBe(map);
     for (const size of sizes) {
       const sources = size.parts.map((part) => part.source);
       expect(sources).toContain('stageMap');

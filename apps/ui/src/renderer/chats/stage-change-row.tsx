@@ -21,7 +21,7 @@ import type {
   StageChangeAction,
   StageChangePayload,
 } from './stage-change-payload';
-import { ThreadUiMemoryContext } from './thread-ui-memory';
+import { ThreadUiMemoryContext, useThreadFlag } from './thread-ui-memory';
 
 export const RunStagesContext = createContext<StageProgress | null>(null);
 
@@ -87,13 +87,15 @@ export function stageChangeVerb(change: StageChangePayload): string {
 export function ClampedText({
   text,
   className,
+  memoryKey,
 }: {
   text: string;
   className?: string;
+  memoryKey?: string;
 }): React.JSX.Element {
   const ref = useRef<HTMLParagraphElement>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
+  const [expanded, setExpanded] = useThreadFlag(memoryKey, false);
+  const [overflows, setOverflows] = useState(expanded);
   useLayoutEffect(() => {
     const element = ref.current;
     if (element === null || expanded) {
@@ -153,6 +155,7 @@ const iconVariants = cva('mt-[3px] size-3.5 shrink-0', {
       warning: 'text-warning',
       destructive: 'text-destructive',
     },
+    superseded: { true: 'opacity-60', false: '' },
   },
 });
 
@@ -165,6 +168,7 @@ const verbVariants = cva('', {
       warning: 'text-warning',
       destructive: 'text-destructive',
     },
+    superseded: { true: 'opacity-60', false: '' },
   },
 });
 
@@ -194,12 +198,14 @@ export function StageChangeRow({
   nextTitle,
   time,
   superseded = false,
+  memoryKey,
 }: {
   change: StageChangePayload;
   actor: string;
   nextTitle?: string;
   time?: string;
   superseded?: boolean;
+  memoryKey?: string;
 }): React.JSX.Element {
   const runId = useContext(ThreadUiMemoryContext);
   const { verb, Icon, tone } = STAGE_ACTION_VIEW[change.action];
@@ -209,10 +215,7 @@ export function StageChangeRow({
       data-action={change.action}
       data-tone={tone}
       data-superseded={superseded || undefined}
-      className={cn(
-        'relative flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1 text-xs transition-colors hover:bg-accent/50 has-[[data-slot=stage-reveal]:focus-visible]:ring-[3px] has-[[data-slot=stage-reveal]:focus-visible]:ring-ring/50',
-        superseded && 'opacity-60',
-      )}>
+      className="relative flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1 text-xs transition-colors hover:bg-accent/50 has-[[data-slot=stage-reveal]:focus-visible]:ring-[3px] has-[[data-slot=stage-reveal]:focus-visible]:ring-ring/50">
       {runId === null ? null : (
         <button
           type="button"
@@ -222,14 +225,16 @@ export function StageChangeRow({
           onClick={() => revealAgentsPanel(runId)}
         />
       )}
-      <Icon aria-hidden="true" className={iconVariants({ tone })} />
+      <Icon aria-hidden="true" className={iconVariants({ tone, superseded })} />
       <div className="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-baseline gap-1.5 text-sm">
           <p data-slot="stage-headline" className="m-0 shrink-0">
             <span className="font-semibold text-foreground">
               {change.stageTitle}
             </span>{' '}
-            <span data-slot="stage-verb" className={verbVariants({ tone })}>
+            <span
+              data-slot="stage-verb"
+              className={verbVariants({ tone, superseded })}>
               {verb}
             </span>
           </p>
@@ -261,7 +266,11 @@ export function StageChangeRow({
         </div>
         {change.text === '' ? null : (
           <div data-slot="stage-summary">
-            <ClampedText text={change.text} className="text-muted-foreground" />
+            <ClampedText
+              text={change.text}
+              className="text-muted-foreground"
+              {...(memoryKey === undefined ? {} : { memoryKey })}
+            />
           </div>
         )}
       </div>

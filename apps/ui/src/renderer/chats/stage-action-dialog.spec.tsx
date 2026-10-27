@@ -12,7 +12,6 @@ import {
   StageActionDialog,
   type StageActionRequest,
   STAGES_MOVED_MESSAGE,
-  stagesReopenResets,
 } from './stage-action-dialog';
 
 (
@@ -188,6 +187,41 @@ describe('StageActionDialog', () => {
     });
   });
 
+  it('offers two branches with the same title as separate choices and sends the picked id', async () => {
+    const twins: StageProgress = {
+      ...FORK,
+      stages: [
+        { ...FORK.stages[0]!, next: ['fix-a', 'fix-b', 'review'] },
+        { id: 'fix-a', title: 'Fix', status: 'pending', next: ['review'] },
+        { id: 'fix-b', title: 'Fix', status: 'pending', next: ['review'] },
+        { id: 'review', title: 'Review', status: 'pending', next: [] },
+      ],
+    };
+    const onMove = vi
+      .fn()
+      .mockResolvedValue({ progress: twins, woke: true, hasLead: true });
+    const { el } = mount({
+      request: { action: 'complete', stageId: 'investigate', rev: 4 },
+      progress: twins,
+      onMove,
+    });
+    const labels = [
+      ...el.querySelectorAll<HTMLButtonElement>('[role="group"] button'),
+    ].map((button) => button.textContent);
+    expect(labels).toEqual(['Fix (fix-a)', 'Fix (fix-b)', 'Review']);
+
+    type(el, 'Both are plausible');
+    pick(el, 'Fix (fix-b)');
+    const pressed = [
+      ...el.querySelectorAll<HTMLButtonElement>('[role="group"] button'),
+    ].map((button) => button.getAttribute('aria-pressed'));
+    expect(pressed).toEqual(['false', 'true', 'false']);
+    await submit(el);
+    expect(onMove).toHaveBeenCalledWith(
+      expect.objectContaining({ next: 'fix-b' }),
+    );
+  });
+
   it('needs a reason before anything is sent', () => {
     const { el } = mount({
       request: { action: 'skip', stageId: 'review', rev: 7 },
@@ -288,25 +322,5 @@ describe('StageActionDialog', () => {
   it('draws nothing while closed', () => {
     const { el } = mount({ request: null, progress: WALKED });
     expect(el.querySelector('[role="dialog"]')).toBeNull();
-  });
-});
-
-describe('stagesReopenResets', () => {
-  it('takes every finished or current stage reachable from the reopened one', () => {
-    expect(stagesReopenResets(WALKED, 'plan')).toEqual(['build', 'review']);
-    expect(stagesReopenResets(WALKED, 'build')).toEqual(['review']);
-  });
-
-  it('leaves out the reopened stage itself on a loop back to it', () => {
-    const looping: StageProgress = {
-      rev: 3,
-      current: 'review',
-      position: { index: 2, total: 2 },
-      stages: [
-        { id: 'fix', title: 'Fix', status: 'done', next: ['review'] },
-        { id: 'review', title: 'Review', status: 'current', next: ['fix'] },
-      ],
-    };
-    expect(stagesReopenResets(looping, 'fix')).toEqual(['review']);
   });
 });

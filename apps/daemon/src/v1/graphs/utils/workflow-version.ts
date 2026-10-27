@@ -7,14 +7,15 @@ import { type Workflow, WorkflowSchema } from '../graphs.types';
 /**
  * The part of a workflow that decides how a run executes: every node field
  * (a node's name and description reach callee prompts), the edges without
- * their label (nothing that runs reads it) and the active-turn cap. The
- * workflow's own name, description and canvas layout are left out, so editing
- * them never makes a new version.
+ * their label (nothing that runs reads it), the active-turn cap and the stage
+ * graph in its authored order. The workflow's own name, description and canvas
+ * layout are left out, so editing them never makes a new version.
  */
 export interface CanonicalGraph {
   maxActiveTurns: number | null;
   nodes: Workflow['nodes'];
   edges: Omit<Workflow['edges'][number], 'label'>[];
+  stages?: Workflow['stages'];
 }
 
 function byText(a: string, b: string): number {
@@ -56,6 +57,7 @@ export function canonicalGraphOf(workflow: Workflow): CanonicalGraph {
     edges: workflow.edges
       .map(({ label: _label, ...edge }) => edge)
       .sort((a, b) => byText(edgeIdentity(a), edgeIdentity(b))),
+    stages: workflow.stages?.length ? workflow.stages : undefined,
   };
 }
 
@@ -107,9 +109,9 @@ export function canonicalGraphYaml(json: string): string | null {
   if (workflow === null) {
     return null;
   }
-  const { maxActiveTurns, nodes, edges } = workflow;
+  const { maxActiveTurns, nodes, edges, stages } = workflow;
   // The JSON round trip drops undefined fields, as the library writer does.
   return new Document(
-    JSON.parse(JSON.stringify({ maxActiveTurns, nodes, edges })),
+    JSON.parse(JSON.stringify({ maxActiveTurns, nodes, edges, stages })),
   ).toString();
 }

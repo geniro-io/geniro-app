@@ -4815,6 +4815,13 @@ export interface RunStatusEvent {
    */
   spendUpdatedAt?: number;
   /**
+   * When one of this run's monitors last started or ended — absent on every
+   * other announce. A marker like {@link spendUpdatedAt}: it says only "read
+   * run state's `monitors` again", since a monitor's end row can wait for the
+   * agent's turn to finish while the monitor is already gone.
+   */
+  monitorsChangedAt?: number;
+  /**
    * The run's new status, or null when this event only says what the run is
    * DOING and asserts nothing about whether it is still going.
    *

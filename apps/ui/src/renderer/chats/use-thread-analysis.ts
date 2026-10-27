@@ -14,6 +14,16 @@ export type ThreadAnalysisMark = 'none' | 'idle' | 'working' | 'waiting';
 
 type Reading = Pick<RunDto, 'id' | 'status' | 'awaiting'> | null;
 
+/**
+ * Whether a run is itself an analysis — of a thread, or of a workflow across
+ * its runs. An analysis is never analysed in turn.
+ */
+export function isAnalysisRun(
+  run: Pick<RunDto, 'analysisSourceRunId' | 'analysisWorkflowSlug'>,
+): boolean {
+  return run.analysisSourceRunId != null || run.analysisWorkflowSlug != null;
+}
+
 /** The mark one reading of the analysis row makes. */
 export function analysisMarkOf(reading: Reading): ThreadAnalysisMark {
   if (reading === null) {

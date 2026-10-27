@@ -14,6 +14,7 @@ import { PoolCooldowns } from './services/pool-cooldowns.store';
 import { RunWorkflowService } from './services/run-workflow.service';
 import { TaskBoardBroker } from './services/task-board.broker';
 import { WorkflowActionsService } from './services/workflow-actions.service';
+import { WorkflowAnalysisService } from './services/workflow-analysis.service';
 import { WorkflowChangeService } from './services/workflow-change.service';
 import { WorkflowChatService } from './services/workflow-chat.service';
 import { WorkflowProposalService } from './services/workflow-proposal.service';
@@ -58,6 +59,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     TaskBoardBroker,
     RunWorkflowService,
     WorkflowChatService,
+    WorkflowAnalysisService,
     WorkflowChangeService,
     WorkflowActionsService,
     WorkflowProposalService,

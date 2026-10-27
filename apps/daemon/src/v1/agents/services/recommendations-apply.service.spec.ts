@@ -39,6 +39,7 @@ const CARD: RecommendationsPayload = {
 function build(
   options: {
     analysis?: boolean;
+    workflowAnalysis?: boolean;
     card?: Partial<Item> | null;
     appliedCards?: number[];
   } = {},
@@ -50,7 +51,11 @@ function build(
       getById: () =>
         Promise.resolve({
           id: 'analysis',
-          analysisSourceRunId: options.analysis === false ? null : 'source',
+          analysisSourceRunId:
+            options.analysis === false || options.workflowAnalysis
+              ? null
+              : 'source',
+          analysisWorkflowSlug: options.workflowAnalysis ? 'team' : null,
         } as Run),
     } as unknown as RunDao,
     {
@@ -181,5 +186,15 @@ describe('RecommendationsApplyService.apply', () => {
         clientMessageId: 'press-1',
       }),
     ).rejects.toMatchObject({ errorCode: 'NOT_AN_ANALYSIS' });
+  });
+
+  it("applies a workflow analysis's card like a thread analysis's", async () => {
+    await expect(
+      build({ workflowAnalysis: true }).service.apply('analysis', {
+        cardSeq: 5,
+        ids: ['W-1'],
+        clientMessageId: 'press-1',
+      }),
+    ).resolves.toEqual({ seq: 9 });
   });
 });

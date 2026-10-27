@@ -30,6 +30,7 @@ const run1: ChatRun = {
   taskIdentifier: null,
   analysisSourceRunId: null,
   analysisSourceSeq: null,
+  analysisWorkflowSlug: null,
   awaiting: null,
   holdingFor: 0,
   awaitingCalls: 0,

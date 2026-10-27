@@ -381,7 +381,7 @@ import { useRunState } from './use-run-state';
 import { useRunTeamNotes } from './use-run-team-notes';
 import { useRunWaterfall } from './use-run-waterfall';
 import { useRunWorkFolders } from './use-run-work-folders';
-import { useThreadAnalysis } from './use-thread-analysis';
+import { isAnalysisRun, useThreadAnalysis } from './use-thread-analysis';
 import {
   rowPullRequestOf,
   threadPullRequestsOf,
@@ -2145,6 +2145,13 @@ export function Chats({
   /** An analysis chat's header chip: the thread it reads, one press away. */
   const analysisSourceOf = useCallback(
     (run: ChatRun): { label: string; onOpen: () => void } | null => {
+      const workflowSlug = run.analysisWorkflowSlug;
+      if (workflowSlug != null) {
+        return {
+          label: `workflow ${workflowNames.get(workflowSlug) ?? workflowSlug}`,
+          onOpen: () => onOpenWorkflow?.(workflowSlug),
+        };
+      }
       const sourceId = run.analysisSourceRunId;
       if (sourceId == null) {
         return null;
@@ -2155,7 +2162,7 @@ export function Chats({
         onOpen: () => void activateRun(sourceId),
       };
     },
-    [activateRun, workflowNames],
+    [activateRun, workflowNames, onOpenWorkflow],
   );
 
   /** The thread the Analyze thread dialog is open for (null = closed). */
@@ -4678,8 +4685,7 @@ export function Chats({
   const analysisMark = useThreadAnalysis({
     chatApi,
     client,
-    sourceRunId:
-      activeRun && activeRun.analysisSourceRunId == null ? activeRun.id : null,
+    sourceRunId: activeRun && !isAnalysisRun(activeRun) ? activeRun.id : null,
     refreshKey: analysisGeneration,
   });
   // The repository a TASK run's worktree was cut from, for the header chip —
@@ -9176,7 +9182,7 @@ export function Chats({
                               onUnarchive={handleUnarchiveRun}
                               // An analysis is not itself analysed.
                               onAnalyze={
-                                run.analysisSourceRunId == null
+                                !isAnalysisRun(run)
                                   ? handleAnalyzeRun
                                   : undefined
                               }
@@ -10611,7 +10617,7 @@ export function Chats({
                           : undefined
                       }
                       onAnalyzeThread={
-                        activeRun && activeRun.analysisSourceRunId == null
+                        activeRun && !isAnalysisRun(activeRun)
                           ? () => handleAnalyzeRun(activeRun.id)
                           : undefined
                       }
@@ -10901,7 +10907,9 @@ export function Chats({
                 />
                 <AnalysisDialog
                   key={`${analysisOf?.id ?? ''}:${analysisGeneration}`}
-                  source={analysisOf}
+                  subject={
+                    analysisOf ? { kind: 'thread', run: analysisOf } : null
+                  }
                   sourceLabel={
                     analysisOf ? runLabel(analysisOf, workflowNames) : ''
                   }
@@ -10920,7 +10928,9 @@ export function Chats({
                   }}
                 />
                 <AnalyzeThreadDialog
-                  source={analyzingRun}
+                  subject={
+                    analyzingRun ? { kind: 'thread', run: analyzingRun } : null
+                  }
                   replaces={
                     analyzingRun !== null && analysisOf?.id === analyzingRun.id
                   }

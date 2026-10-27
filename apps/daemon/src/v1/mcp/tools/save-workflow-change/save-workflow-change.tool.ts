@@ -141,9 +141,11 @@ export class SaveWorkflowChangeTool extends BaseMcpTool {
     if ('status' in turn) {
       return this.text(`Nothing saved: ${turn.reason}.`, true);
     }
-    let workflow: Awaited<ReturnType<ThreadReaderService['workflowOf']>>;
+    let workflow: Awaited<
+      ReturnType<ThreadReaderService['analysedWorkflowOf']>
+    >;
     try {
-      workflow = await this.threads.workflowOf(turn.sourceRunId);
+      workflow = await this.threads.analysedWorkflowOf(turn);
     } catch (error) {
       return this.failed(runId, error);
     }

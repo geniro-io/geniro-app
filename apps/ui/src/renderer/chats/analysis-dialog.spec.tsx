@@ -106,7 +106,9 @@ function chatState(overrides: Partial<HostedChatState>): HostedChatState {
 }
 
 const getThreadAnalysis = vi.fn();
+const getWorkflowAnalysis = vi.fn();
 const APIS = {
+  workflows: { getWorkflowAnalysis },
   chats: {
     readRunState: vi.fn(async () => emptyRunState()),
     getThreadAnalysis,
@@ -143,6 +145,7 @@ describe('AnalysisDialog', () => {
     hosted.state = chatState({});
     hosted.args = null;
     getThreadAnalysis.mockReset();
+    getWorkflowAnalysis.mockReset();
   });
 
   afterEach(() => {
@@ -161,7 +164,7 @@ describe('AnalysisDialog', () => {
     await act(async () => {
       root.render(
         <AnalysisDialog
-          source={source}
+          subject={source === null ? null : { kind: 'thread', run: source }}
           sourceLabel="Shelf — three open pull requests"
           apis={APIS}
           handle={null}
@@ -194,6 +197,43 @@ describe('AnalysisDialog', () => {
 
     getThreadAnalysis.mockResolvedValueOnce({ analysis: null });
     await expect(hosted.args!.open()).rejects.toThrow('no analysis');
+  });
+
+  it("opens a workflow's analysis by its slug, and refuses a workflow with none", async () => {
+    await act(async () => {
+      root.render(
+        <AnalysisDialog
+          subject={{ kind: 'workflow', slug: 'dev-team', name: 'Dev Team' }}
+          sourceLabel="Dev Team"
+          apis={APIS}
+          handle={null}
+          client={null as unknown as DaemonClient}
+          capabilities={null}
+          capabilitiesLoading={false}
+          recentConfigDirs={{}}
+          configProfiles={[]}
+          applyRecommendations={vi.fn(async () => {})}
+          onNewAnalysis={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+    });
+
+    // Its own subject: never the builder chat's conversation about the slug.
+    expect(hosted.args?.subject).toBe('workflow-analysis:dev-team');
+    getWorkflowAnalysis.mockResolvedValueOnce({
+      analysis: { id: 'analysis-1', status: 'running' },
+    });
+    await expect(hosted.args!.open()).resolves.toMatchObject({
+      id: 'analysis-1',
+    });
+    expect(getWorkflowAnalysis).toHaveBeenCalledWith({ slug: 'dev-team' });
+    expect(getThreadAnalysis).not.toHaveBeenCalled();
+
+    getWorkflowAnalysis.mockResolvedValueOnce({ analysis: null });
+    await expect(hosted.args!.open()).rejects.toThrow(
+      'This workflow has no analysis yet.',
+    );
   });
 
   describe('a message a Stop dropped', () => {

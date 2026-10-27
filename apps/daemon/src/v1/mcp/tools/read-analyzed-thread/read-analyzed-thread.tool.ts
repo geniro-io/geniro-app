@@ -3,9 +3,11 @@ import { Logger } from '@nestjs/common';
 import { HOST_ANALYZED_THREAD_TOOL } from '../../../agents/chat.types';
 import type { AnalysisBroker } from '../../../agents/services/analysis.broker';
 import {
+  maskedAnswer,
   pagedAnswer,
   type ThreadReaderService,
 } from '../../../agents/services/thread-reader.service';
+import { analysedSourceOf } from '../../../agents/utils/analysed-runs';
 import type { WorkflowChangeService } from '../../../graphs/services/workflow-change.service';
 import type {
   McpCallContext,
@@ -16,16 +18,16 @@ import { BaseMcpTool } from '../base-mcp-tool';
 import { readAnalyzedThreadInstructions } from './read-analyzed-thread.instructions';
 import {
   analyzedThreadResultText,
-  maskedAnswer,
   readAnalyzedThreadArgs,
 } from './read-analyzed-thread.reader';
 import { readAnalyzedThreadSchema } from './read-analyzed-thread.schema';
 
 /**
  * `read_analyzed_thread` — an analysis chat's paged read of the one thread it
- * analyses. Offered only while an analysis turn runs, and carries no
- * `readOnlyHint` (codex would skip its approval); its auto-approval is
- * `isHostAnalysisReadCall`'s, scoped by the broker to that one source.
+ * analyses, or of the runs a workflow analysis was started on. Offered only
+ * while an analysis turn runs, and carries no `readOnlyHint` (codex would skip
+ * its approval); its auto-approval is `isHostAnalysisReadCall`'s, scoped by
+ * the broker to those sources.
  */
 export class ReadAnalyzedThreadTool extends BaseMcpTool {
   readonly name = HOST_ANALYZED_THREAD_TOOL;
@@ -69,7 +71,11 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
           analyzedThreadResultText(await this.threads.read(turn, read.query)),
         );
       }
-      const workflow = await this.threads.workflowOf(turn.sourceRunId);
+      const named = analysedSourceOf(turn, read.query.runId);
+      if ('error' in named) {
+        return this.text(analyzedThreadResultText(named));
+      }
+      const workflow = await this.threads.analysedWorkflowOf(turn, named);
       if (workflow === null) {
         return this.text(
           analyzedThreadResultText({

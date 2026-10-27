@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import type { RunWire } from '../../agents/chat.types';
 import { ChatService } from '../../agents/services/chat.service';
+import { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
 import type { StartWorkflowChatInput } from '../graphs.types';
 import { composeWorkflowChatInstructions } from '../utils/workflow-chat-instructions';
 import { WorkflowStoreService } from './workflow-store.service';
@@ -49,6 +50,7 @@ export class WorkflowChatService {
   constructor(
     private readonly store: WorkflowStoreService,
     private readonly chats: ChatService,
+    private readonly analyses: ThreadAnalysisService,
   ) {}
 
   /**
@@ -129,7 +131,7 @@ export class WorkflowChatService {
 
   /**
    * **Destructive and irreversible**: delete a workflow and every chat about
-   * it.
+   * it — its builder chats and its analyses.
    *
    * A chat whose only subject is a file that no longer exists has nothing left
    * to talk about — and its agent still carries a brief naming that file, so
@@ -149,5 +151,6 @@ export class WorkflowChatService {
   async deleteWorkflow(slug: string): Promise<void> {
     await this.store.delete(slug);
     await this.discard(slug);
+    await this.analyses.deleteWorkflowAnalyses(slug);
   }
 }

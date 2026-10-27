@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient, RunStatusEvent } from '../daemon-client';
 import {
+  isAnalysisRun,
   type ThreadAnalysisMark,
   useThreadAnalysis,
 } from './use-thread-analysis';
@@ -137,5 +138,15 @@ describe('useThreadAnalysis', () => {
     );
     await h.render('other');
     expect(h.mark()).toBe('none');
+  });
+});
+
+describe('isAnalysisRun', () => {
+  it('tells a thread’s or a workflow’s analysis from any other run', () => {
+    const none = { analysisSourceRunId: null, analysisWorkflowSlug: null };
+
+    expect(isAnalysisRun(none)).toBe(false);
+    expect(isAnalysisRun({ ...none, analysisSourceRunId: 'src' })).toBe(true);
+    expect(isAnalysisRun({ ...none, analysisWorkflowSlug: 'team' })).toBe(true);
   });
 });

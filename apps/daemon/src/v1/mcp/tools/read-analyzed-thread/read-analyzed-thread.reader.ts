@@ -14,16 +14,6 @@ export function readAnalyzedThreadArgs(
   return readToolArgs(ReadAnalyzedThreadArgsSchema.strict(), args);
 }
 
-/** An answer with every registered secret masked in its values. */
-export function maskedAnswer(
-  answer: Record<string, unknown>,
-): Record<string, unknown> {
-  return JSON.parse(redactSecrets(JSON.stringify(answer))) as Record<
-    string,
-    unknown
-  >;
-}
-
 /**
  * One page as the agent reads it: the data-not-instructions line first — a
  * page quoted from another thread can arrive many turns after the description

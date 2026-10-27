@@ -287,6 +287,11 @@ class FakeRunDao {
       .filter((run) => run.analysisSourceRunId === sourceRunId)
       .reverse();
   }
+  async listWorkflowAnalyses(slug: string): Promise<Run[]> {
+    return [...this.runs.values()]
+      .filter((run) => run.analysisWorkflowSlug === slug)
+      .reverse();
+  }
   /**
    * Mirrors the real query — chat runs only, filtered by archive scope, then
    * narrowed to the one run or cut to the limit a page names.
@@ -2760,6 +2765,20 @@ describe('ChatService', () => {
       expect(workflowBuilders.canEdit(analysis.id, SINGLE_AGENT_NODE)).toBe(
         false,
       );
+      await settle(claude);
+
+      const workflowAnalysis = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        analysisWorkflow: {
+          slug: 'team',
+          runs: [{ runId: ordinary.id, snapshotSeq: 0, working: false }],
+        },
+      });
+      await service.sendMessage(workflowAnalysis.id, 'hello');
+      expect(
+        workflowProposals.canPropose(workflowAnalysis.id, SINGLE_AGENT_NODE),
+      ).toBe(false);
       await settle(claude);
     });
 
@@ -5596,6 +5615,35 @@ describe('ChatService', () => {
     });
   });
 
+  describe('findWorkflowAnalysis', () => {
+    it("answers the workflow's newest analysis, or the caller's own while it exists", async () => {
+      const { service } = setup();
+      const analysisWorkflow = {
+        slug: 'team',
+        runs: [{ runId: 'r1', snapshotSeq: 3, working: false }],
+      };
+      expect(await service.findWorkflowAnalysis('team')).toBeNull();
+      const older = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        analysisWorkflow,
+      });
+      const newer = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        analysisWorkflow,
+      });
+
+      expect((await service.findWorkflowAnalysis('team'))?.id).toBe(newer.id);
+      expect((await service.findWorkflowAnalysis('team', older.id))?.id).toBe(
+        older.id,
+      );
+      expect(await service.findWorkflowAnalysis('other')).toBeNull();
+      // The workflow's analysis is no thread's.
+      expect(await service.findAnalysis('r1')).toBeNull();
+    });
+  });
+
   describe('listChats', () => {
     it('lists only the page it is asked for', async () => {
       const { service } = setup();
@@ -6622,6 +6670,40 @@ describe('ChatService', () => {
     claude.finish();
     await drain();
     expect(analyses.canAnalyse(analysis.id, SINGLE_AGENT_NODE)).toBe(false);
+  });
+
+  it('installs the analysis tools on a workflow analysis, scoped to the runs it was started on', async () => {
+    const turns: unknown[] = [];
+    const { service, analyses, claude } = setup({
+      analysisSink: (turn) => {
+        turns.push(turn);
+        return { turn } as never;
+      },
+    });
+    const runs = [
+      { runId: 'newest', snapshotSeq: 12, working: true },
+      { runId: 'older', snapshotSeq: 40, working: false },
+    ];
+    const analysis = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      analysisWorkflow: { slug: 'team', runs },
+    });
+
+    await service.sendMessage(analysis.id, 'analyse');
+
+    expect(analyses.canAnalyse(analysis.id, SINGLE_AGENT_NODE)).toBe(true);
+    expect(turns).toEqual([
+      {
+        analysisRunId: analysis.id,
+        sourceRunId: 'newest',
+        snapshotSeq: 12,
+        sourceWorking: true,
+        workflow: { slug: 'team', runs },
+      },
+    ]);
+    claude.finish();
+    await drain();
   });
 
   it('refuses an Apply while a turn runs, and writes nothing into it', async () => {

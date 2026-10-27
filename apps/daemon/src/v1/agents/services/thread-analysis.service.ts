@@ -9,38 +9,27 @@ import {
 import { ConflictException, NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
-import { type AgentKind, isTerminalRunStatus } from '../../runs/runs.types';
+import { isTerminalRunStatus } from '../../runs/runs.types';
 import {
+  type AnalysedRun,
   ANALYSIS_DEFAULT_APPROVAL,
-  type ChatApprovalMode,
   type RunWire,
+  type StartThreadAnalysis,
+  type StartWorkflowAnalysis,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
-import type { AgentOptionsSnapshot } from '../utils/agent-options';
+import { isAnalysisRun } from '../utils/analysed-runs';
 import { resolveValidDirectory } from '../utils/resolve-directory';
 import {
   analysedThreadKindOf,
   threadAnalysisBrief,
   threadAnalysisGuide,
+  workflowAnalysisBrief,
+  workflowAnalysisGuide,
 } from '../utils/thread-analysis-guide';
 import { AgentEventBus } from './agent-events.bus';
 import { ChatService } from './chat.service';
-
-/** What the "Analyze thread" dialog sends — see `AnalyzeThreadDto`. */
-export interface StartThreadAnalysis {
-  agentKind: AgentKind;
-  /** Omitted = {@link ANALYSIS_DEFAULT_APPROVAL}. */
-  approval?: ChatApprovalMode;
-  model?: string;
-  effort?: string;
-  configDir?: string;
-  cwd?: string;
-  focus?: string;
-  customInstructions?: string;
-  replyLanguage?: string;
-  agentOptions?: AgentOptionsSnapshot;
-}
 
 /** The folder canonicalized, or null when it is missing or not readable. */
 function existingFolder(path: string): string | null {
@@ -148,7 +137,7 @@ export class ThreadAnalysisService
         'an archived thread cannot be analysed — restore it first',
       );
     }
-    if (source.analysisSourceRunId !== null) {
+    if (isAnalysisRun(source)) {
       throw new ConflictException(
         'ANALYSIS_OF_ANALYSIS',
         'this thread is itself an analysis — analyse the thread it reads instead',
@@ -225,6 +214,103 @@ export class ThreadAnalysisService
     // Its own row as it reads after the brief, not the copy taken before it —
     // the popup opens on this, and a `pending` copy would show no Stop.
     return (await this.chats.findAnalysis(source.id, run.id)) ?? run;
+  }
+
+  /** The workflow's analysis as it reads now, or null when it has none. */
+  findWorkflowAnalysis(slug: string): Promise<RunWire | null> {
+    return this.chats.findWorkflowAnalysis(slug);
+  }
+
+  /**
+   * Start a workflow's analysis over its newest runs: ONE chat per workflow,
+   * replacing the one it had on the same terms as {@link start}. The runs are
+   * chosen here, from every run of the workflow, never from a list a client
+   * loaded; each is read up to its own snapshot.
+   */
+  async startWorkflow(
+    target: { slug: string; name: string },
+    input: StartWorkflowAnalysis,
+  ): Promise<RunWire> {
+    const em = this.em.fork();
+    const candidates = await this.runDao.newestWorkflowRuns(
+      target.slug,
+      input.runs,
+      em,
+    );
+    const runs: AnalysedRun[] = [];
+    for (const candidate of candidates) {
+      const { snapshotSeq, working } = await this.snapshotOf(candidate.id, em);
+      if (snapshotSeq >= 0) {
+        runs.push({ runId: candidate.id, snapshotSeq, working });
+      }
+    }
+    if (runs.length === 0) {
+      throw new ConflictException(
+        'ANALYSIS_NO_RUNS',
+        'the workflow has no runs to analyse yet — run it first',
+      );
+    }
+    const newest = candidates.find((run) => run.id === runs[0]!.runId);
+    const cwd =
+      input.cwd !== undefined
+        ? resolveValidDirectory(input.cwd, {
+            errorCode: 'ANALYSIS_FOLDER_GONE',
+            noun: 'folder',
+          })
+        : newest?.cwd == null
+          ? null
+          : existingFolder(newest.cwd);
+    if (cwd === null) {
+      throw new ConflictException(
+        'ANALYSIS_FOLDER_GONE',
+        "the newest run's folder no longer exists — pick a folder to run the analysis in",
+      );
+    }
+    const earlier = (
+      await this.runDao.listWorkflowAnalyses(target.slug, em)
+    ).map((analysis) => analysis.id);
+    const run = await this.chats.createChat({
+      agentKind: input.agentKind,
+      cwd,
+      approval: input.approval ?? ANALYSIS_DEFAULT_APPROVAL,
+      model: input.model,
+      effort: input.effort,
+      configDir: input.configDir,
+      customInstructions: input.customInstructions,
+      replyLanguage: input.replyLanguage,
+      agentOptions: input.agentOptions,
+      title: `Analysis: ${target.name}`,
+      taskInstructions: workflowAnalysisGuide(input.focus ?? null),
+      analysisWorkflow: { slug: target.slug, runs },
+    });
+    try {
+      await this.chats.sendMessage(
+        run.id,
+        workflowAnalysisBrief({ name: target.name, runs: runs.length }),
+      );
+    } catch (error) {
+      await this.chats.delete(run.id).catch(() => undefined);
+      throw error;
+    }
+    await this.deleteRuns(`workflow ${target.slug}`, earlier);
+    return (await this.chats.findWorkflowAnalysis(target.slug, run.id)) ?? run;
+  }
+
+  /** Delete every analysis of a library workflow — the workflow is gone. */
+  async deleteWorkflowAnalyses(slug: string): Promise<void> {
+    const analyses = await this.runDao.listWorkflowAnalyses(
+      slug,
+      this.em.fork(),
+    );
+    await this.deleteRuns(
+      `workflow ${slug}`,
+      analyses.map((analysis) => analysis.id),
+    );
+  }
+
+  /** The slugs of every workflow some analysis was started on. */
+  analysedWorkflowSlugs(): Promise<string[]> {
+    return this.runDao.workflowAnalysisSlugs(this.em.fork());
   }
 
   /** Delete every analysis of a thread. */

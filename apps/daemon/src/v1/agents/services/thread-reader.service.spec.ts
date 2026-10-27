@@ -11,6 +11,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from 'vitest';
 
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
@@ -595,5 +596,333 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     );
 
     expect(answer.error).toBe('SOURCE_GONE');
+  });
+
+  describe('a workflow analysis', () => {
+    async function workflowRun(
+      id: string,
+      createdAt: number,
+      runOutcomes: string | null = null,
+      title = `Run ${id}`,
+    ): Promise<void> {
+      const run = new Run();
+      run.id = id;
+      run.title = title;
+      run.status = 'completed';
+      run.workflowId = 'team';
+      run.createdAt = new Date(T0 + createdAt);
+      run.runOutcomes = runOutcomes;
+      const fork = orm.em.fork();
+      fork.persist(run);
+      await fork.flush();
+    }
+
+    async function row(
+      runId: string,
+      seq: number,
+      kind: ItemKind,
+      payload: unknown,
+      seconds: number,
+      nodeId: string,
+    ): Promise<void> {
+      const fork = orm.em.fork();
+      const at = new Date(T0 + seconds * 1000);
+      fork.create(Item, {
+        runId,
+        seq,
+        kind,
+        nodeId,
+        payload: JSON.stringify(payload),
+        createdAt: at,
+        updatedAt: at,
+      });
+      await fork.flush();
+    }
+
+    const turn = (model: string, costUsd: number, durationMs: number) => ({
+      usage: { durationMs, costUsd, contextModel: model },
+    });
+
+    const scope = {
+      sourceRunId: 'wf-new',
+      snapshotSeq: 3,
+      sourceWorking: false,
+      workflow: {
+        slug: 'team',
+        runs: [
+          { runId: 'wf-new', snapshotSeq: 3, working: false },
+          { runId: 'wf-old', snapshotSeq: 1, working: false },
+          { runId: 'wf-gone', snapshotSeq: 4, working: false },
+        ],
+      },
+    };
+
+    beforeEach(async () => {
+      await workflowRun(
+        'wf-new',
+        2_000,
+        JSON.stringify({
+          'o/r#7': {
+            seq: 2,
+            draft: false,
+            reviewRounds: 2,
+            acceptance: 'accepted',
+            questionsAsked: 0,
+          },
+        }),
+      );
+      await workflowRun('wf-old', 1_000);
+      await row('wf-new', 0, 'message', { text: 'go' }, 0, 'dev');
+      await row('wf-new', 1, 'turn_complete', turn('opus', 3, 6_000), 6, 'dev');
+      await row('wf-new', 2, 'turn_complete', turn('opus', 1, 2_000), 9, 'dev');
+      // Written after the analysis began: past this run's snapshot.
+      await row(
+        'wf-new',
+        4,
+        'turn_complete',
+        turn('opus', 9, 9_000),
+        30,
+        'dev',
+      );
+      await row('wf-old', 0, 'message', { text: 'go' }, 0, 'dev');
+      await row(
+        'wf-old',
+        1,
+        'turn_complete',
+        turn('sonnet', 1, 4_000),
+        4,
+        'dev',
+      );
+    });
+
+    it("compares the runs and each node's models, every turn up to each run's own snapshot", async () => {
+      const answer = await reader.read(scope, { view: 'runs' });
+
+      expect(answer.workflow).toBe('team');
+      expect(answer.runs).toEqual([
+        expect.objectContaining({
+          runId: 'wf-new',
+          turns: 2,
+          costUsd: 4,
+          pullRequests: [
+            {
+              pullRequest: 'o/r#7',
+              acceptance: 'accepted',
+              reviewRounds: 2,
+              draft: false,
+            },
+          ],
+        }),
+        expect.objectContaining({ runId: 'wf-old', turns: 1, costUsd: 1 }),
+        { runId: 'wf-gone', gone: true },
+      ]);
+      expect(answer.models).toEqual([
+        expect.objectContaining({
+          node: 'dev',
+          model: 'opus',
+          runs: 1,
+          turns: 2,
+          costUsd: 4,
+          costPerTurnUsd: 2,
+        }),
+        expect.objectContaining({
+          node: 'dev',
+          model: 'sonnet',
+          runs: 1,
+          turns: 1,
+          costUsd: 1,
+        }),
+      ]);
+    });
+
+    it('pages a long comparison rather than dropping runs, and names a run with no rows yet', async () => {
+      const many = Array.from({ length: 30 }, (_, index) => `wf-${index}`);
+      for (const [index, id] of many.entries()) {
+        await workflowRun(id, 10_000 + index, null, `${id} ${'t'.repeat(600)}`);
+        await row(id, 0, 'message', { text: 'go' }, 0, 'dev');
+        for (let seq = 1; seq <= 3; seq += 1) {
+          await row(
+            id,
+            seq,
+            'turn_complete',
+            turn(`model-${seq}`, 1, 1_000),
+            seq,
+            `node-${seq}-${'x'.repeat(60)}`,
+          );
+        }
+      }
+      await workflowRun('wf-empty', 9_000);
+      const wide = {
+        ...scope,
+        workflow: {
+          slug: 'team',
+          runs: [
+            ...many.map((runId) => ({ runId, snapshotSeq: 3, working: false })),
+            { runId: 'wf-empty', snapshotSeq: 0, working: false },
+          ],
+        },
+      };
+
+      let text = '';
+      let offset: number | undefined = 0;
+      while (offset !== undefined) {
+        const page = await reader.read(wide, { view: 'runs', offset });
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(
+          PAGE_BYTES,
+        );
+        text += page.text as string;
+        offset = (page.next as { offset: number } | null)?.offset;
+      }
+      const whole = JSON.parse(text) as {
+        runs: { runId: string; note?: string }[];
+        models: unknown[];
+      };
+
+      expect(whole.runs).toHaveLength(31);
+      expect(whole.runs.at(-1)).toMatchObject({
+        runId: 'wf-empty',
+        note: 'The run has no rows yet.',
+      });
+      expect(whole.models).toHaveLength(3);
+    });
+
+    it('masks a registered secret in the comparison before cutting it into pages', async () => {
+      const secret = 'ghp_SECRETsecretSECRETsecret0123456789';
+      registerSecret(secret, 'github token');
+      const many = Array.from({ length: 40 }, (_, index) => `wf-m${index}`);
+      for (const [index, id] of many.entries()) {
+        await workflowRun(
+          id,
+          20_000 + index,
+          null,
+          `${id} ${secret} ${'p'.repeat(index * 37)}`,
+        );
+        await row(id, 0, 'message', { text: 'go' }, 0, 'dev');
+        await row(id, 1, 'turn_complete', turn('opus', 1, 1_000), 1, 'dev');
+      }
+      const wide = {
+        ...scope,
+        workflow: {
+          slug: 'team',
+          runs: many.map((runId) => ({
+            runId,
+            snapshotSeq: 1,
+            working: false,
+          })),
+        },
+      };
+
+      const pages: string[] = [];
+      let offset: number | undefined = 0;
+      while (offset !== undefined) {
+        const page = await reader.read(wide, { view: 'runs', offset });
+        pages.push(page.text as string);
+        offset = (page.next as { offset: number } | null)?.offset;
+      }
+
+      expect(pages.length).toBeGreaterThan(1);
+      for (const page of pages) {
+        expect(page).not.toContain('ghp_SECRET');
+        expect(page).not.toContain('0123456789');
+      }
+    });
+
+    it('cuts every later page from the comparison the first page was cut from, and refuses one that lapsed', async () => {
+      const now = vi.spyOn(Date, 'now');
+      try {
+        now.mockReturnValue(1_000_000);
+        const first = await reader.read(scope, { view: 'runs' });
+        const fork = orm.em.fork();
+        (await fork.findOneOrFail(Run, { id: 'wf-new' })).status = 'failed';
+        await fork.flush();
+        // A later page within the window is cut from the same text, though a
+        // run moved on; a read from the start folds afresh.
+        now.mockReturnValue(1_000_000 + 4 * 60_000);
+        expect(JSON.stringify(first)).not.toContain('"statusNow":"failed"');
+        expect(
+          (await reader.read(scope, { view: 'runs', offset: 10 })).error,
+        ).toBeUndefined();
+        expect(
+          JSON.stringify(await reader.read(scope, { view: 'runs' })),
+        ).toContain('"statusNow":"failed"');
+        // The window is counted from the last read, not the first.
+        now.mockReturnValue(1_000_000 + 8 * 60_000);
+        expect(
+          (await reader.read(scope, { view: 'runs', offset: 10 })).error,
+        ).toBeUndefined();
+
+        now.mockReturnValue(1_000_000 + 20 * 60_000);
+        expect(
+          (await reader.read(scope, { view: 'runs', offset: 10 })).error,
+        ).toBe('RUNS_CHANGED');
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it('reads one of its runs by runId, and refuses a run it was not started on', async () => {
+      const older = await reader.read(scope, {
+        view: 'items',
+        runId: 'wf-old',
+      });
+      const newest = await reader.read(scope, { view: 'items' });
+      const stranger = await reader.read(scope, {
+        view: 'items',
+        runId: 'source',
+      });
+
+      expect(older.snapshotSeq).toBe(1);
+      expect(newest.snapshotSeq).toBe(3);
+      expect(stranger.error).toBe('NOT_ANALYSED');
+    });
+
+    it('names its own workflow to view=workflow and the save, with the newest run’s start copy only while that run exists', async () => {
+      const fork = orm.em.fork();
+      const newest = await fork.findOneOrFail(Run, { id: 'wf-new' });
+      newest.workflowSnapshot = 'name: Team';
+      await fork.flush();
+
+      expect(await reader.analysedWorkflowOf(scope)).toEqual({
+        slug: 'team',
+        snapshot: 'name: Team',
+      });
+      expect(
+        await reader.analysedWorkflowOf({ ...scope, sourceRunId: 'wf-gone' }),
+      ).toEqual({ slug: 'team', snapshot: null });
+      const older = await fork.findOneOrFail(Run, { id: 'wf-old' });
+      older.workflowSnapshot = 'name: Team v1';
+      await fork.flush();
+      // A run named reads against its own copy.
+      expect(
+        await reader.analysedWorkflowOf(scope, {
+          sourceRunId: 'wf-old',
+          snapshotSeq: 1,
+          sourceWorking: false,
+        }),
+      ).toEqual({ slug: 'team', snapshot: 'name: Team v1' });
+      expect(
+        await reader.analysedWorkflowOf({
+          sourceRunId: 'source',
+          snapshotSeq: 0,
+          sourceWorking: false,
+        }),
+      ).toBeNull();
+    });
+
+    it('answers view=runs only for a workflow analysis, and a thread analysis no other run', async () => {
+      const thread = {
+        sourceRunId: 'source',
+        snapshotSeq: 0,
+        sourceWorking: false,
+      };
+
+      expect((await reader.read(thread, { view: 'runs' })).error).toBe(
+        'UNSUPPORTED',
+      );
+      expect(
+        (await reader.read(thread, { view: 'overview', runId: 'wf-new' }))
+          .error,
+      ).toBe('NOT_ANALYSED');
+    });
   });
 });

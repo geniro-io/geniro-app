@@ -12,9 +12,9 @@ import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 /**
  * The rendezvous behind the analysis tools (`read_analyzed_thread` and its
  * siblings) — mechanics in {@link HostSinkBroker}. A chat holds a sink only
- * while one of its turns runs AND it is an analysis (`Run.analysisSourceRunId`
- * set), which is what keeps the tools off every other chat's listing and
- * scopes them to the one source the analysis was started on.
+ * while one of its turns runs AND it is an analysis (`analysisTurnOf`), which
+ * is what keeps the tools off every other chat's listing and scopes them to
+ * what the analysis was started on — one source, or a workflow's runs.
  */
 @Injectable()
 export class AnalysisBroker extends HostSinkBroker<AnalysisSink> {

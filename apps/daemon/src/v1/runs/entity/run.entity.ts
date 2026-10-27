@@ -28,10 +28,11 @@ export class Run extends TimestampsEntity {
   title: string | null = null;
 
   /**
-   * Working directory for a single-agent chat run — the user's chosen project
-   * folder, which the adapter spawns the CLI in. Null for graph runs. The
-   * daemon validates this path before spawning so the headless agent is scoped
-   * to the user's project and never the daemon's own cwd (the app repo).
+   * Working directory of the run — the user's chosen project folder, which
+   * the adapter spawns the CLI in; a workflow run is refused without one
+   * (`RUN_NOT_CONFIGURED`). The daemon validates this path before spawning so
+   * the headless agent is scoped to the user's project and never the daemon's
+   * own cwd (the app repo).
    */
   @Property({ type: 'string', nullable: true })
   cwd: string | null = null;
@@ -525,6 +526,24 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'boolean', nullable: true })
   analysisSourceWorking: boolean | null = null;
+
+  /**
+   * The library workflow this chat was started to ANALYSE across its recent
+   * runs ("Analyze & improve"), or null for every other chat. A workflow
+   * analysis carries no {@link analysisSourceRunId}: it reads the runs named
+   * in {@link analysisRuns} instead, and belongs to the workflow — deleting
+   * one of those runs leaves it, deleting the workflow takes it.
+   */
+  @Property({ type: 'string', nullable: true })
+  analysisWorkflowSlug: string | null = null;
+
+  /**
+   * The runs a workflow analysis reads, newest first, each with the seq its
+   * reads stop at and whether it was working then — JSON
+   * (`utils/analysed-runs.ts`). Null for every chat that is not one.
+   */
+  @Property({ type: 'text', nullable: true })
+  analysisRuns: string | null = null;
 
   /**
    * Where this run sits in the PINNED band at the top of its own scope, or

@@ -54,7 +54,7 @@ function tool(slug: string | null, answers: Record<string, unknown>[] = []) {
       analysis,
       builders,
       {
-        workflowOf: () =>
+        analysedWorkflowOf: () =>
           Promise.resolve(slug === null ? null : { slug, snapshot: null }),
       } as unknown as ThreadReaderService,
       {

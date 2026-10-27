@@ -262,6 +262,7 @@ const run1: ChatRun = {
   taskIdentifier: null,
   analysisSourceRunId: null,
   analysisSourceSeq: null,
+  analysisWorkflowSlug: null,
   awaiting: null,
   holdingFor: 0,
   awaitingCalls: 0,
@@ -4554,6 +4555,7 @@ describe('Chats workflow runs', () => {
     taskIdentifier: null,
     analysisSourceRunId: null,
     analysisSourceSeq: null,
+    analysisWorkflowSlug: null,
     awaiting: null,
     holdingFor: 0,
     awaitingCalls: 0,
@@ -6449,6 +6451,7 @@ describe('Chats — handing a conversation to the user', () => {
       taskIdentifier: null,
       analysisSourceRunId: null,
       analysisSourceSeq: null,
+      analysisWorkflowSlug: null,
       awaiting: null,
       holdingFor: 0,
       awaitingCalls: 0,
@@ -18573,6 +18576,37 @@ describe('Chats — a thread’s analysis lives in its popup', () => {
     expect(container.textContent).toContain('no run: r1');
     expect(document.querySelector('[data-slot="analysis-dialog"]')).toBeNull();
     expect(document.querySelector('[data-slot="analyze-thread"]')).toBeNull();
+  });
+
+  // Reached only by a direct link or the processes panel: its chip is the
+  // way back, and it is not analysed in turn.
+  it("leads a workflow's analysis opened as the thread back to its workflow", async () => {
+    api.listChats.mockResolvedValue([
+      {
+        ...run1,
+        id: 'wf-analysis',
+        title: 'Analysis: Review Pair',
+        analysisWorkflowSlug: 'review-pair',
+      },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const onOpenWorkflow = vi.fn();
+    const { client } = makeClient();
+    const container = await mount(client, undefined, { onOpenWorkflow });
+    await clickRun(container, 'Analysis: Review Pair');
+
+    const chip = container.querySelector<HTMLButtonElement>(
+      '[data-slot="analysis-source-chip"]',
+    );
+    expect(chip?.textContent).toContain('Analyzing: workflow review-pair');
+    await act(async () => {
+      chip!.click();
+    });
+    expect(onOpenWorkflow).toHaveBeenCalledWith('review-pair');
+    expect(analyzeButton(container)).toBeNull();
+    expect(api.getThreadAnalysis).not.toHaveBeenCalledWith({
+      runId: 'wf-analysis',
+    });
   });
 });
 

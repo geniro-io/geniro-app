@@ -10,7 +10,8 @@ import { isHostToolCall } from './host-tool';
  *
  * The one history reader that is auto-approved, and only because of how it is
  * installed: it exists solely on an analysis chat, reads the ONE thread the
- * user clicked "Analyze" on, up to the moment they clicked, and every answer
+ * user clicked "Analyze" on — or the runs the daemon chose for a workflow's
+ * "Analyze & improve" — each up to the moment they clicked, and every answer
  * leads with the data-not-instructions line and is masked of registered
  * secrets. The general history tools (`search_chats`, `read_chat_context`)
  * read every project and stay behind a card. A large thread takes dozens of

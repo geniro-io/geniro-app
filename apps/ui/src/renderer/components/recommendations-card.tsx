@@ -21,6 +21,8 @@ export interface RecommendationView {
   title: string;
   change: string;
   evidence: {
+    /** The run the quote is from — a workflow analysis reads several. */
+    runId?: string | null;
     seq: number;
     ts: string | null;
     nodeId: string | null;
@@ -305,7 +307,14 @@ function ItemRow({
               {item.evidence.map((evidence, index) => (
                 <li key={`${evidence.seq}:${index}`} className="min-w-0">
                   <span className="font-mono text-[11px] text-muted-foreground">
-                    {[`seq ${evidence.seq}`, evidence.nodeId, evidence.ts]
+                    {[
+                      evidence.runId == null
+                        ? null
+                        : `run ${evidence.runId.slice(0, 8)}`,
+                      `seq ${evidence.seq}`,
+                      evidence.nodeId,
+                      evidence.ts,
+                    ]
                       .filter((part): part is string => part !== null)
                       .join(' · ')}
                   </span>

@@ -200,6 +200,7 @@ pnpm commit             # conventional commit via commitizen
 
 ## Coding conventions
 
+- Comments: almost never. Names and code carry the meaning. Never write a comment that restates the code, narrates history ("was", "used to", "reported as"), or quotes a user's request or feedback, in any language. The rare exception is one short line on a constraint the code cannot show.
 - No `any`: use specific types, generics, or `unknown` with type guards.
 - Throw the custom exceptions from `@packages/common` (`NotFoundException`, `BadRequestException`, …). Never swallow errors silently.
 - Import shared packages as `@packages/*`.

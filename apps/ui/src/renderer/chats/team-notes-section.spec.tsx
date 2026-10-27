@@ -208,3 +208,81 @@ describe('TeamNotesSection — arrivals and the reader’s place', () => {
     expect(pill()).toBeUndefined();
   });
 });
+
+describe('TeamNotesSection — a press anywhere on a note opens it', () => {
+  const longNote = (seq: number): TeamNote => ({
+    ...note(seq),
+    text: 'a long note '.repeat(40),
+  });
+
+  function showJumpable(notes: TeamNote[]): ReturnType<typeof vi.fn> {
+    const onJump = vi.fn();
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => {
+      root!.render(
+        <TeamNotesSection
+          notes={notes}
+          agentName={agentName}
+          onJump={onJump}
+        />,
+      );
+    });
+    return onJump;
+  }
+
+  const card = (seq: number): HTMLElement =>
+    [...host!.querySelectorAll<HTMLElement>('[data-slot="team-note"]')].find(
+      (li) =>
+        li
+          .querySelector('li > button')
+          ?.getAttribute('aria-label')
+          ?.includes(` note ${seq} `) === true,
+    )!;
+
+  it('opens the note from its words, not only from its heading', () => {
+    const onJump = showJumpable([note(9), note(4)]);
+    const words = card(4).querySelector<HTMLElement>('[class*="break-words"]');
+    act(() => {
+      words!.click();
+    });
+    expect(onJump).toHaveBeenCalledExactlyOnceWith(4);
+  });
+
+  it('opens the note once from its heading', () => {
+    const onJump = showJumpable([note(9)]);
+    act(() => {
+      card(9).querySelector<HTMLButtonElement>('li > button')!.click();
+    });
+    expect(onJump).toHaveBeenCalledExactlyOnceWith(9);
+  });
+
+  it('leaves Show more to unfold the note rather than open it', () => {
+    const onJump = showJumpable([longNote(9)]);
+    const more = [...card(9).querySelectorAll('button')].find(
+      (button) => button.textContent === 'Show more',
+    );
+    act(() => {
+      more!.click();
+    });
+    expect(onJump).not.toHaveBeenCalled();
+    expect(more!.textContent).toBe('Show less');
+  });
+
+  it('does not open the note when the press ends a text selection', () => {
+    const onJump = showJumpable([note(9)]);
+    const words = card(9).querySelector<HTMLElement>('[class*="break-words"]')!;
+    const range = document.createRange();
+    range.selectNodeContents(words);
+    window.getSelection()!.addRange(range);
+    try {
+      act(() => {
+        words.click();
+      });
+    } finally {
+      window.getSelection()!.removeAllRanges();
+    }
+    expect(onJump).not.toHaveBeenCalled();
+  });
+});

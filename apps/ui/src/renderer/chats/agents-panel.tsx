@@ -2332,25 +2332,50 @@ export function AgentsPanel({
           open={popup === 'notes'}
           onClose={closePopup}
           title={<PopupTitle icon={NotebookPen}>Notes</PopupTitle>}
-          className="max-w-lg">
-          <div className="flex flex-col gap-2">
-            {/* Mounted only while open (the dialog draws nothing shut), so
-                closing it is the field's way out: its owed text is saved then. */}
-            <ThreadNotes
-              key={notes.runId}
-              notes={notes.value}
-              onSave={notes.onSave}
-              autoFocus
-            />
-            {/* The placeholder says the agent never sees them, but only while
-                the field is empty — the commonest moment to wonder is with
-                text already in it. */}
-            <p
-              data-slot="thread-notes-hint"
-              className="m-0 text-xs text-muted-foreground">
-              Only you see these — they are never sent to the agent. Saved as
-              you type.
-            </p>
+          className={teamNotes.length > 0 ? 'max-w-2xl' : 'max-w-lg'}>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2">
+              {/* Mounted only while open (the dialog draws nothing shut), so
+                  closing it is the field's way out: its owed text is saved then. */}
+              <ThreadNotes
+                key={notes.runId}
+                notes={notes.value}
+                onSave={notes.onSave}
+                autoFocus
+              />
+              {/* The placeholder says the agent never sees them, but only while
+                  the field is empty — the commonest moment to wonder is with
+                  text already in it. */}
+              <p
+                data-slot="thread-notes-hint"
+                className="m-0 text-xs text-muted-foreground">
+                Only you see these — they are never sent to the agent. Saved as
+                you type.
+              </p>
+            </div>
+            <div className="-mx-3">
+              <TeamNotesSection
+                notes={teamNotes}
+                loaded={teamNotesLoaded}
+                agentName={teamNoteAgentName}
+                onJump={
+                  timeline
+                    ? (seq) => {
+                        closePopup();
+                        timeline.onJump(seq);
+                      }
+                    : undefined
+                }
+                onOpenAll={
+                  onOpenTeamNotes
+                    ? () => {
+                        closePopup();
+                        onOpenTeamNotes();
+                      }
+                    : undefined
+                }
+              />
+            </div>
           </div>
         </Dialog>
       ) : null}
@@ -2429,7 +2454,7 @@ export function AgentsPanel({
         notes ? (
           <ThreadNotesButton
             key="notes"
-            hasNotes={hasThreadNotes(notes.value)}
+            hasNotes={hasThreadNotes(notes.value) || teamNotes.length > 0}
             onOpen={() => setPopup('notes')}
             className={size}
           />

@@ -2,6 +2,7 @@ import { type ComponentType, StrictMode } from 'react';
 import type { Root } from 'react-dom/client';
 
 import { ErrorBoundary } from './components/error-boundary';
+import { TooltipLayer } from './components/ui/tooltip';
 
 /** Rethrows during render, so a failure from BEFORE React is caught by the boundary like any other. */
 function RenderFailure({ error }: { error: unknown }): never {
@@ -32,6 +33,7 @@ export async function renderLoadedApp(
         <ErrorBoundary reload={reload}>
           <App />
         </ErrorBoundary>
+        <TooltipLayer />
       </StrictMode>,
     );
   } catch (error) {
@@ -40,6 +42,7 @@ export async function renderLoadedApp(
         <ErrorBoundary reload={reload}>
           <RenderFailure error={error} />
         </ErrorBoundary>
+        <TooltipLayer />
       </StrictMode>,
     );
   }

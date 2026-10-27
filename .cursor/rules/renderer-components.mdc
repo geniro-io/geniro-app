@@ -35,6 +35,7 @@ Every styled element goes through the layers in order: token → primitive → s
 - Pickable answer options: `option-list`, whose `arity` (`many` / `one` / `none`) decides the drawing. Never `chip` (labels can be sentences).
 - Dismissible error strip: `error-banner`. `error-text` alone is for a form field, where typing clears it.
 - Clipboard: `copy-button`, which owns the write and the copied feedback.
+- Tooltips: a plain `title` attribute. `TooltipLayer` (`components/ui/tooltip.tsx`, mounted once in `boot-app.tsx`) draws every one in the design system instead of the OS; never build a per-control hover tip for plain text. A tip that holds controls or a reading is a `hover-popover`.
 - Reaching an MCP listing: `mcp-dialog-button` (opens `mcp-section` in a `dialog`); its open state belongs to the caller.
 - Remembering a boolean the user set: `use-persisted-flag`. Inside a chat thread use `chats/thread-ui-memory.ts` (`useThreadFlag` / `useThreadOverride` / `useThreadFlags`) instead, so the choice stays with that thread.
 - Side-panel blocks and outward links: `panel-section` + `panel-link-row`.

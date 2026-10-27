@@ -3817,6 +3817,85 @@ describe('AgentsPanel — thread notes', () => {
     }
   });
 
+  describe('the agents’ team notes in the same popup', () => {
+    const teamNote: TeamNote = {
+      seq: 12,
+      kind: 'decision',
+      text: 'ship behind the flag',
+      nodeId: 'worker',
+      conversationId: null,
+      callId: null,
+      createdAt: '2026-10-26T09:00:00.000Z',
+      supersedes: null,
+      supersededBy: null,
+    };
+
+    it('lists them under the user’s own field', () => {
+      const el = render(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={agents}
+          onOpenThread={vi.fn()}
+          teamNotes={[teamNote]}
+          notes={{ runId: 'run-1', value: 'mine', onSave: vi.fn() }}
+        />,
+      );
+      click(el.querySelector('button[aria-label="Open thread notes"]'));
+      const dialog = el.querySelector<HTMLElement>('[role="dialog"]')!;
+      expect(notesField(dialog)?.value).toBe('mine');
+      const section = dialog.querySelector('section[aria-label="Team notes"]');
+      expect(section?.textContent).toContain('ship behind the flag');
+      expect(section?.textContent).toContain('Worker');
+      expect(
+        notesField(dialog)!.compareDocumentPosition(section!) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it('marks the control as holding notes when only the agents wrote any', () => {
+      const el = render(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={agents}
+          onOpenThread={vi.fn()}
+          teamNotes={[teamNote]}
+          notes={{ runId: 'run-1', value: null, onSave: vi.fn() }}
+        />,
+      );
+      const button = el.querySelector<HTMLButtonElement>(
+        'button[aria-label="Open thread notes"]',
+      );
+      expect(button?.dataset.hasNotes).toBe('true');
+    });
+
+    it('closes the popup and opens the note in the transcript on a press', () => {
+      const onJump = vi.fn();
+      const el = render(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={agents}
+          onOpenThread={vi.fn()}
+          teamNotes={[teamNote]}
+          timeline={{
+            markers: [],
+            onJump,
+            partialReason: null,
+            inProgress: false,
+          }}
+          notes={{ runId: 'run-1', value: null, onSave: vi.fn() }}
+        />,
+      );
+      click(el.querySelector('button[aria-label="Open thread notes"]'));
+      click(
+        el.querySelector(
+          '[role="dialog"] section[aria-label="Team notes"] li > button',
+        ),
+      );
+      expect(onJump).toHaveBeenCalledWith(12);
+      expect(el.querySelector('[role="dialog"]')).toBeNull();
+    });
+  });
+
   it('offers to ADD notes when the thread has none', () => {
     const el = renderFolded(
       <AgentsPanel

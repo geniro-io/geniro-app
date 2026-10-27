@@ -1,4 +1,5 @@
 import { RunOutcomeAcceptanceSchema } from '../../../agents/chat.types';
+import { OUTCOME_SUMMARY_MAX } from './record-outcome.reader';
 
 /** `record_outcome`'s arguments. */
 export function recordOutcomeSchema(): Record<string, unknown> {
@@ -30,6 +31,12 @@ export function recordOutcomeSchema(): Record<string, unknown> {
         enum: [...RunOutcomeAcceptanceSchema.options],
         description:
           "The user's verdict on the change: accepted, changes_requested, not_yet, or not_needed.",
+      },
+      summary: {
+        type: 'string',
+        maxLength: OUTCOME_SUMMARY_MAX,
+        description:
+          'Optional. One to three sentences a person reads on the outcome: what the change does, what the user asked to change, or what is still open before acceptance.',
       },
     },
     required: ['pr_number', 'pr_url', 'draft', 'review_rounds', 'acceptance'],

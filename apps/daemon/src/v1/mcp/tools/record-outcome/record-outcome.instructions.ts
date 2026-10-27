@@ -8,7 +8,9 @@ export function recordOutcomeInstructions(): string {
     'request replaces its earlier outcome, so send every field each time. `review_rounds` counts the ' +
     "reviews of the pull request run after it was built; `acceptance` is the user's verdict: " +
     '`accepted`, `changes_requested`, `not_yet`, or `not_needed` when the pull request needs no ' +
-    'acceptance. geniro counts the questions put to the user itself — do not report them. Nothing ' +
+    'acceptance. Give `summary` a sentence or three a person can read on the outcome — what the ' +
+    'change does and, unless it was accepted, what the user asked to change or what is still open. ' +
+    'geniro counts the questions put to the user itself — do not report them. Nothing ' +
     'waits on this call and nobody is told about it; it never replaces reporting to whoever called ' +
     'you, and a team note (team_note) is still where to tell other agents something.'
   );

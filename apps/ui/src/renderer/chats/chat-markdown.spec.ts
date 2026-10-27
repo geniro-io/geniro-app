@@ -203,6 +203,18 @@ describe('chatToMarkdown', () => {
     );
     expect(out).not.toContain('"workflowSlug"');
 
+    const withSummary = chatToMarkdown(
+      workflowDoc([
+        nodeRow('manager', 'run_outcome', {
+          ...payload,
+          summary: 'Move the retry behind a flag.',
+        }),
+      ]),
+    );
+    expect(withSummary).toContain(
+      'changes requested — no questions\n\nMove the retry behind a flag.',
+    );
+
     const unreadable = chatToMarkdown(
       workflowDoc([
         nodeRow('manager', 'run_outcome', { ...payload, acceptance: 'x' }),

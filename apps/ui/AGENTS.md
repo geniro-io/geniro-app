@@ -237,7 +237,7 @@ One home for each concern:
 **Pull requests and changes:**
 
 - A thread's pull requests are only those it opened or its CLI recorded it touching (the run wire's `pullRequests`, each marked `opened`; a task card shows only the opened ones), addressed by URL (`use-thread-pull-requests.ts` over `readPullRequestsByRef`). That hook is the only source for the panel, the sidebar and the shelf.
-- A pull request's recorded outcome (`record_outcome`) is the daemon's `DisplayedPullRequest.outcome`, never folded from the window: the shelf chip draws its acceptance mark beside the number from it, and a `run_outcome` transcript row reads superseded once that outcome's seq is newer than its own (`RunOutcomesContext`). `daemon-client.ts` carries it through every run-status announce.
+- A pull request's recorded outcome (`record_outcome`) is the daemon's `DisplayedPullRequest.outcome`, never folded from the window: the shelf chip draws its acceptance mark beside the number from it, and a `run_outcome` transcript row reads superseded once that outcome's seq is newer than its own (`RunOutcomesContext`). The row opens on a press into the agent's summary, every figure and the pull request's link row; its title and state come from the same `use-thread-pull-requests.ts` answers the panel draws (`RunOutcomes.resolved`), so a surface that asks none draws the number alone. `daemon-client.ts` carries it through every run-status announce.
 - A sidebar row names the thread's newest resolved pull request among those it opened, and a touched one only for a thread that opened none — never in place of an opened one that did not resolve (`rowPullRequestOf`).
 - A ref GitHub could not answer still draws a row.
 - The renderer replaces the run's list wholesale on each announce.

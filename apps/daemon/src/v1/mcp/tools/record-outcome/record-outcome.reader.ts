@@ -10,6 +10,8 @@ import { readToolArgs } from '../tool-args';
 
 /** Far past any real pull request URL; refused rather than stored in a ledger that is never pruned. */
 const PR_URL_MAX = 2048;
+/** A few sentences; refused past it, never cut. */
+export const OUTCOME_SUMMARY_MAX = 1000;
 
 const RecordOutcomeArgsSchema = z
   .object({
@@ -22,6 +24,14 @@ const RecordOutcomeArgsSchema = z
     draft: z.boolean(),
     review_rounds: z.number().int().min(0),
     acceptance: RunOutcomeAcceptanceSchema,
+    summary: z
+      .string()
+      .trim()
+      .max(
+        OUTCOME_SUMMARY_MAX,
+        `summary is over ${OUTCOME_SUMMARY_MAX} characters`,
+      )
+      .optional(),
   })
   .strict();
 
@@ -39,6 +49,7 @@ export function readRecordOutcome(
     draft: read.query.draft,
     reviewRounds: read.query.review_rounds,
     acceptance: read.query.acceptance,
+    summary: read.query.summary || null,
   };
 }
 

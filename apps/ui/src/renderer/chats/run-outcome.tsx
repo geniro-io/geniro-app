@@ -1,6 +1,7 @@
 import { Check, Clock, type LucideIcon, Minus, RefreshCw } from 'lucide-react';
 import { createContext } from 'react';
 
+import type { PullRequestRefResult } from '../../shared/contracts';
 import {
   type DisplayedPullRequest,
   type PullRequestOutcome,
@@ -70,10 +71,16 @@ export interface RunOutcomes {
   newest: ReadonlyMap<string, PullRequestOutcome>;
   /** The run's pull requests span several repositories, so a number needs its repo. */
   showRepo: boolean;
+  /**
+   * What GitHub said about each of the run's pull requests — title, state,
+   * size — where the surface asked; empty where it did not.
+   */
+  resolved: ReadonlyMap<string, PullRequestRefResult>;
 }
 
 export function runOutcomesOf(
   pullRequests: readonly DisplayedPullRequest[] | undefined,
+  resolved: readonly PullRequestRefResult[] = [],
 ): RunOutcomes {
   const newest = new Map<string, PullRequestOutcome>();
   const repos = new Set<string>();
@@ -83,7 +90,11 @@ export function runOutcomesOf(
       newest.set(pullRequestOutcomeKey(row), row.outcome);
     }
   }
-  return { newest, showRepo: repos.size > 1 };
+  const byKey = new Map<string, PullRequestRefResult>();
+  for (const result of resolved) {
+    byKey.set(pullRequestOutcomeKey(result.ref), result);
+  }
+  return { newest, showRepo: repos.size > 1, resolved: byKey };
 }
 
 /**
@@ -94,6 +105,7 @@ export function runOutcomesOf(
 export const RunOutcomesContext = createContext<RunOutcomes>({
   newest: new Map(),
   showRepo: false,
+  resolved: new Map(),
 });
 
 function plural(count: number, one: string, many: string): string {

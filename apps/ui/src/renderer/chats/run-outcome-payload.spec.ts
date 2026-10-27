@@ -28,8 +28,21 @@ describe('readRunOutcomePayload', () => {
       reviewRounds: 1,
       acceptance: 'not_needed',
       questionsAsked: 0,
+      summary: null,
       nodeId: 'manager',
     });
+  });
+
+  it('reads the summary when the agent gave one, and a blank or mistyped one as none', () => {
+    expect(
+      readRunOutcomePayload({ ...PAYLOAD, summary: 'Needs a flag.' })?.summary,
+    ).toBe('Needs a flag.');
+    expect(
+      readRunOutcomePayload({ ...PAYLOAD, summary: '  ' })?.summary,
+    ).toBeNull();
+    expect(
+      readRunOutcomePayload({ ...PAYLOAD, summary: 4 })?.summary,
+    ).toBeNull();
   });
 
   it('reads nothing from a payload missing or mistyping a field it draws', () => {

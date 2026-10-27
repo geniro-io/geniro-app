@@ -5018,12 +5018,20 @@ export function Chats({
     [activeRun, resolvedThreadPullRequests],
   );
   /** Each of the open thread's pull requests' newest recorded outcome. */
-  // Keyed on the list alone: a run-status announce that carries no list keeps
-  // its reference, and a fresh value here re-renders every transcript row.
+  // Keyed on the list and GitHub's answers alone, never `activeRun`: a
+  // run-status announce that carries no list keeps its reference, and a fresh
+  // value here re-renders every transcript row.
   const activeRunPullRequests = activeRun?.pullRequests;
   const activeRunOutcomes = useMemo(
-    () => runOutcomesOf(activeRunPullRequests),
-    [activeRunPullRequests],
+    () =>
+      runOutcomesOf(
+        activeRunPullRequests,
+        threadPullRequestsOf(
+          { pullRequests: activeRunPullRequests },
+          resolvedThreadPullRequests,
+        ),
+      ),
+    [activeRunPullRequests, resolvedThreadPullRequests],
   );
   /** The ONE pull request each sidebar row names ({@link rowPullRequestOf}). */
   const rowPullRequestByRun = useMemo(() => {

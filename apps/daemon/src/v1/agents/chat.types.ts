@@ -3326,7 +3326,8 @@ export type RunOutcomeAcceptance = z.infer<typeof RunOutcomeAcceptanceSchema>;
 /**
  * The payload of a `run_outcome` row: one pull request's delivery outcome as a
  * workflow node recorded it. `questionsAsked` and `workflowSlug` are the
- * daemon's, stamped at the write; the rest is the node's. `nodeId` /
+ * daemon's, stamped at the write; the rest is the node's. `summary` is absent
+ * when the node gave none. `nodeId` /
  * `conversationId` / `callId` name the recording conversation as on a team
  * note.
  *
@@ -3342,6 +3343,7 @@ export const RunOutcomePayloadSchema = z.object({
   reviewRounds: z.number().int(),
   acceptance: RunOutcomeAcceptanceSchema,
   questionsAsked: z.number().int(),
+  summary: z.string().optional(),
   workflowSlug: z.string().nullable(),
   nodeId: z.string(),
   conversationId: z.string().nullable(),
@@ -3368,6 +3370,8 @@ export interface RunOutcomeInput {
   draft: boolean;
   reviewRounds: number;
   acceptance: RunOutcomeAcceptance;
+  /** Null when the call gave none. */
+  summary: string | null;
 }
 
 export type RunOutcomeWriteOutcome =

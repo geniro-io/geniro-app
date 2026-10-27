@@ -758,19 +758,21 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (outcome === null) {
         return null;
       }
-      const newest = runOutcomes.newest.get(
-        pullRequestOutcomeKey({
-          owner: outcome.prOwner,
-          repo: outcome.prRepo,
-          number: outcome.prNumber,
-        }),
-      );
+      const key = pullRequestOutcomeKey({
+        owner: outcome.prOwner,
+        repo: outcome.prRepo,
+        number: outcome.prNumber,
+      });
+      const newest = runOutcomes.newest.get(key);
       return (
         <RunOutcomeRow
           outcome={outcome}
           author={nodeName(item.nodeId)}
           superseded={newest !== undefined && newest.seq > item.seq}
           showRepo={runOutcomes.showRepo}
+          pullRequest={runOutcomes.resolved.get(key) ?? null}
+          recordedAt={item.createdAt}
+          memoryKey={`outcome:${item.id}`}
         />
       );
     }

@@ -146,6 +146,7 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
       reviewRounds: input.reviewRounds,
       acceptance: input.acceptance,
       questionsAsked,
+      ...(input.summary === null ? {} : { summary: input.summary }),
       workflowSlug: run.workflowId,
       nodeId: recorder.nodeId,
       conversationId: recorder.conversationId,

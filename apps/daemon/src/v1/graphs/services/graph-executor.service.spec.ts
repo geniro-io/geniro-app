@@ -6427,6 +6427,7 @@ describe('GraphExecutorService — agent calls', () => {
         draft: true,
         reviewRounds: 0,
         acceptance: 'not_yet',
+        summary: null,
       },
     );
 

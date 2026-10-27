@@ -284,6 +284,7 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
         words.acceptance,
         words.questions,
       ].join(' — '),
+      ...(outcome.summary === null ? [] : ['', outcome.summary]),
     ];
   },
 };

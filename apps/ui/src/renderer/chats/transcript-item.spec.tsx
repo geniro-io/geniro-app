@@ -1348,6 +1348,7 @@ describe('TranscriptItem — run outcomes', () => {
       ],
     ]),
     showRepo: false,
+    resolved: new Map(),
   });
 
   it('draws the outcome with its author, pull request and figures in words', () => {
@@ -1366,11 +1367,81 @@ describe('TranscriptItem — run outcomes', () => {
     expect(text).toContain('accepted');
     expect(text).toContain('1 question');
     expect(text).not.toContain('superseded');
+  });
+
+  it("opens on a press into the record and the pull request's link", () => {
+    render(
+      <TranscriptItem
+        item={item('run_outcome', outcome, 'orch')}
+        nodes={nodes}
+      />,
+    );
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[data-slot="run-outcome"] button[aria-expanded]',
+    );
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(
+      container.querySelector(
+        'a[href="https://github.com/acme/platform/pull/7381"]',
+      ),
+    ).toBeNull();
+
+    act(() => toggle?.click());
+
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
+    expect(
+      container.querySelector('[data-slot="run-outcome-detail"]')?.textContent,
+    ).toContain('Review rounds2');
     expect(
       container.querySelector(
         'a[href="https://github.com/acme/platform/pull/7381"]',
       ),
     ).not.toBeNull();
+  });
+
+  it("names the pull request's title once GitHub answered for it", () => {
+    render(
+      <RunOutcomesContext.Provider
+        value={{
+          ...newest(1),
+          resolved: new Map([
+            [
+              'acme/platform#7381',
+              {
+                ref: {
+                  owner: 'acme',
+                  repo: 'platform',
+                  number: 7381,
+                  url: outcome.prUrl,
+                },
+                pullRequest: {
+                  number: 7381,
+                  title: 'feat(api): retry uploads',
+                  state: 'open',
+                  isDraft: true,
+                  headRefName: 'retry',
+                  isCrossRepository: false,
+                  headRepositoryOwner: 'acme',
+                  author: 'octo',
+                  url: outcome.prUrl,
+                  updatedAt: '2026-10-27T09:00:00Z',
+                  added: 10,
+                  removed: 2,
+                  changedFiles: 3,
+                },
+              },
+            ],
+          ]),
+        }}>
+        <TranscriptItem
+          item={item('run_outcome', outcome, 'orch')}
+          nodes={nodes}
+        />
+      </RunOutcomesContext.Provider>,
+    );
+    expect(
+      container.querySelector('[data-slot="run-outcome-title"]')?.textContent,
+    ).toBe('feat(api): retry uploads');
   });
 
   it("marks a row superseded once the daemon's newest outcome for its pull request is later", () => {

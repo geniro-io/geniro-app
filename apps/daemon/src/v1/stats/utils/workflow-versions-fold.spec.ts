@@ -100,6 +100,7 @@ function input(
     usage: [],
     polledKinds: ['cursor-agent'],
     graphs,
+    unrecorded: null,
     changesOf: () => CHANGES,
     ...overrides,
   };
@@ -249,5 +250,68 @@ describe('an inferred version, which is never registered', () => {
     ]);
     expect(result.versions[0]!.changes).toBeNull();
     expect(result.versions[1]!.changes).toBeNull();
+  });
+});
+
+describe('versions no run has stamped', () => {
+  it('keeps a recorded version with no runs as a row, numbered, with no dates', () => {
+    const result = foldWorkflowVersions(
+      input({ threads: [thread('a', V1, '2026-09-02T00:00:00Z')] }),
+    );
+
+    expect(result.versions[0]).toMatchObject({
+      version: V2,
+      ordinal: 2,
+      inferred: false,
+      recorded: true,
+      firstRunAt: null,
+      lastRunAt: null,
+      changes: CHANGES,
+      figures: { runs: 0, costUsd: null, avgCostUsd: null },
+    });
+    expect(result.totals.runs).toBe(1);
+  });
+
+  it('shows the library graph before its first run, first, diffed against the newest recorded version', () => {
+    const v3: Workflow = { ...v2, maxActiveTurns: 4 };
+    const edited = {
+      version: workflowVersionOf(v3),
+      graph: canonicalGraphJson(canonicalGraphOf(v3)),
+      firstSeenAt: new Date('2026-10-27T00:00:00Z'),
+    };
+    const changesOf = vi.fn(() => CHANGES);
+
+    const result = foldWorkflowVersions(
+      input({
+        currentVersion: edited.version,
+        unrecorded: edited,
+        threads: [thread('b', V2, '2026-10-02T00:00:00Z')],
+        changesOf,
+      }),
+    );
+
+    expect(result.versions[0]).toMatchObject({
+      version: edited.version,
+      ordinal: null,
+      recorded: false,
+      firstRunAt: null,
+      changes: CHANGES,
+      figures: { runs: 0 },
+    });
+    expect(changesOf).toHaveBeenCalledWith(graphs[1], edited);
+  });
+
+  it('gives no second row to a library graph an inferred version already shows', () => {
+    const result = foldWorkflowVersions(
+      input({
+        graphs: [],
+        currentVersion: V1,
+        unrecorded: { ...graphs[0]!, firstSeenAt: new Date() },
+        threads: [thread('old', V1, '2026-09-11T00:00:00Z', true)],
+      }),
+    );
+
+    expect(result.versions.map((row) => row.version)).toEqual([V1]);
+    expect(result.versions[0]!.recorded).toBe(true);
   });
 });

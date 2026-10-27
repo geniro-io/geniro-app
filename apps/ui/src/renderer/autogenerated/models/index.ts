@@ -10228,17 +10228,23 @@ export interface WorkflowVersionRow {
      */
     inferred: boolean;
     /**
-     * 
-     * @type {string}
+     * false only for the library graph before its first run or restore records it
+     * @type {boolean}
      * @memberof WorkflowVersionRow
      */
-    firstRunAt: string;
+    recorded: boolean;
     /**
      * 
      * @type {string}
      * @memberof WorkflowVersionRow
      */
-    lastRunAt: string;
+    firstRunAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionRow
+     */
+    lastRunAt: string | null;
     /**
      * 
      * @type {VersionChanges}

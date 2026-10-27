@@ -16,6 +16,8 @@ import {
   sameBackupOf,
 } from '../../graphs/utils/workflow-backup';
 import {
+  canonicalGraphJson,
+  canonicalGraphOf,
   canonicalGraphYaml,
   edgeIdentity,
   workflowOfCanonical,
@@ -64,9 +66,16 @@ export class WorkflowVersionsService {
     const em = this.em.fork();
     const threads = await this.activityDao.threadRowsBySlug(slug, em);
     const adapters = this.adapters.all();
+    const graphs = await this.versionDao.graphsOf(slug, em);
+    const current = await this.currentGraph(slug);
     return foldWorkflowVersions({
       slug,
-      currentVersion: await this.currentVersion(slug),
+      currentVersion: current?.version ?? null,
+      unrecorded:
+        current !== null &&
+        !graphs.some((graph) => graph.version === current.version)
+          ? current
+          : null,
       threads,
       usage: await this.usageDao.rowsByRuns(
         threads.map((thread) => thread.runId),
@@ -75,7 +84,7 @@ export class WorkflowVersionsService {
       polledKinds: [...adapters.keys()].filter((kind) =>
         pollsSpendFor(adapters, kind),
       ),
-      graphs: await this.versionDao.graphsOf(slug, em),
+      graphs,
       changesOf: (previous, next) => this.changesOf(slug, previous, next),
     });
   }
@@ -88,6 +97,10 @@ export class WorkflowVersionsService {
    * does), and the write quotes the hash it was read at, so a save landing in between is
    * refused rather than overwritten. A version is restorable only while its graph is
    * recorded: an inferred one never was.
+   *
+   * The graph being replaced is recorded too when no run has stamped it (an edit not run
+   * yet), numbered as of now, so the table keeps it and it can be restored back. One a
+   * run has stamped already has its row: recorded, or inferred and kept unnumbered.
    */
   async restore(
     slug: string,
@@ -127,9 +140,26 @@ export class WorkflowVersionsService {
     const backup =
       (await sameBackupOf(directory, slug, current.source)) ??
       (await backUpWorkflow(directory, slug, current.source));
+    const replaced = parseWorkflowYaml(current.source);
+    const replacedVersion = workflowVersionOf(replaced);
+    const em = this.em.fork();
+    if (
+      replacedVersion !== version &&
+      !(await this.activityDao.threadRowsBySlug(slug, em)).some(
+        (thread) => thread.version === replacedVersion,
+      )
+    ) {
+      await this.versionDao.register(
+        slug,
+        replacedVersion,
+        canonicalGraphJson(canonicalGraphOf(replaced)),
+        new Date(),
+        em,
+      );
+    }
     const saved = await this.store.save(
       slug,
-      restoredWorkflow(graph, parseWorkflowYaml(current.source)),
+      restoredWorkflow(graph, replaced),
       current.hash,
     );
     return {
@@ -163,10 +193,17 @@ export class WorkflowVersionsService {
     return changes;
   }
 
-  /** The library graph's version, or null when the file is gone or no longer reads. */
-  private async currentVersion(slug: string): Promise<string | null> {
+  /** The library's graph and its version, or null when the file is gone or no longer reads. */
+  private async currentGraph(
+    slug: string,
+  ): Promise<WorkflowVersionGraph | null> {
     try {
-      return workflowVersionOf((await this.store.get(slug)).workflow);
+      const { workflow } = await this.store.get(slug);
+      return {
+        version: workflowVersionOf(workflow),
+        graph: canonicalGraphJson(canonicalGraphOf(workflow)),
+        firstSeenAt: new Date(),
+      };
     } catch {
       return null;
     }

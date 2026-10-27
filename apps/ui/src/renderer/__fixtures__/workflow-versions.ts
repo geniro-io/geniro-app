@@ -38,6 +38,7 @@ export const DEV_TEAM_VERSIONS: WorkflowVersionsDto = {
       version: 'b7c1e09a44d2f310',
       ordinal: 2,
       inferred: false,
+      recorded: true,
       firstRunAt: '2026-10-02T09:00:00.000Z',
       lastRunAt: '2026-10-20T15:00:00.000Z',
       changes: { added: 9, removed: 2, diff: DIFF },
@@ -52,6 +53,7 @@ export const DEV_TEAM_VERSIONS: WorkflowVersionsDto = {
       version: '5d06e8b741aa90c3',
       ordinal: 1,
       inferred: false,
+      recorded: true,
       firstRunAt: '2026-09-20T10:00:00.000Z',
       lastRunAt: '2026-09-28T10:00:00.000Z',
       changes: null,
@@ -66,6 +68,7 @@ export const DEV_TEAM_VERSIONS: WorkflowVersionsDto = {
       version: '41aa90c3e8b75d06',
       ordinal: null,
       inferred: true,
+      recorded: true,
       firstRunAt: '2026-09-11T10:00:00.000Z',
       lastRunAt: '2026-09-11T10:00:00.000Z',
       changes: null,
@@ -81,6 +84,7 @@ export const DEV_TEAM_VERSIONS: WorkflowVersionsDto = {
     version: null,
     ordinal: null,
     inferred: false,
+    recorded: true,
     firstRunAt: '2026-09-08T08:00:00.000Z',
     lastRunAt: '2026-09-08T08:00:00.000Z',
     changes: null,
@@ -111,4 +115,40 @@ export const NEVER_RUN_VERSIONS: WorkflowVersionsDto = {
     avgCostUsd: null,
     estimatedCostUsd: null,
   },
+};
+
+/**
+ * The same history after the graph was edited and not run since: the library's graph is
+ * a row of its own, current, with no number until its first run.
+ */
+export const EDITED_SINCE_LAST_RUN: WorkflowVersionsDto = {
+  ...DEV_TEAM_VERSIONS,
+  currentVersion: 'c3a9e1f0b2d47e58',
+  versions: [
+    {
+      version: 'c3a9e1f0b2d47e58',
+      ordinal: null,
+      inferred: false,
+      recorded: false,
+      firstRunAt: null,
+      lastRunAt: null,
+      changes: {
+        added: 1,
+        removed: 1,
+        diff: `--- a/dev-team.geniro.yaml
++++ b/dev-team.geniro.yaml
+@@ -1,2 +1,2 @@
+-maxActiveTurns: 3
++maxActiveTurns: 4
+ nodes:`,
+      },
+      figures: {
+        runs: 0,
+        costUsd: null,
+        avgCostUsd: null,
+        estimatedCostUsd: null,
+      },
+    },
+    ...DEV_TEAM_VERSIONS.versions,
+  ],
 };

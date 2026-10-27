@@ -35,6 +35,11 @@ export interface WorkflowVersionsInput {
   polledKinds: readonly string[];
   /** The workflow's recorded versions, oldest first. */
   graphs: readonly WorkflowVersionGraph[];
+  /**
+   * The library's graph when no version records it yet: edited since its last run, or
+   * never run. It is the current version all the same, so it gets a row.
+   */
+  unrecorded: WorkflowVersionGraph | null;
   /** What `next` changed against `previous`, or null when either graph no longer reads. */
   changesOf: (
     previous: WorkflowVersionGraph,
@@ -110,15 +115,21 @@ function rowOf(
   totals: ReadonlyMap<string, ChatTotalsWire>,
   ordinal: number | null,
   changes: VersionChangesWire | null,
+  recorded = true,
 ): WorkflowVersionRowWire {
   const times = threads.map((thread) => thread.occurredAt.getTime());
   return {
     version,
     ordinal,
     inferred:
-      version !== null && threads.every((thread) => thread.inferred === true),
-    firstRunAt: new Date(Math.min(...times)).toISOString(),
-    lastRunAt: new Date(Math.max(...times)).toISOString(),
+      threads.length > 0 &&
+      version !== null &&
+      threads.every((thread) => thread.inferred === true),
+    recorded,
+    firstRunAt:
+      times.length === 0 ? null : new Date(Math.min(...times)).toISOString(),
+    lastRunAt:
+      times.length === 0 ? null : new Date(Math.max(...times)).toISOString(),
     changes,
     figures: figuresOf(threads, totals),
   };
@@ -150,6 +161,13 @@ export function foldWorkflowVersions(
     byVersion.set(thread.version, list);
   }
 
+  // A recorded version no run has stamped yet (the graph a restore replaced) is a row of
+  // its own, so it can be restored back.
+  for (const graph of input.graphs) {
+    if (!byVersion.has(graph.version)) {
+      byVersion.set(graph.version, []);
+    }
+  }
   const rows = [...byVersion].map(([version, threads]) => {
     const ordinal = ordinals.get(version) ?? null;
     const previous =
@@ -168,8 +186,26 @@ export function foldWorkflowVersions(
   rows.sort(
     (a, b) =>
       (b.ordinal ?? 0) - (a.ordinal ?? 0) ||
-      b.lastRunAt.localeCompare(a.lastRunAt),
+      (b.lastRunAt ?? '').localeCompare(a.lastRunAt ?? ''),
   );
+  const unrecorded =
+    input.unrecorded !== null && !byVersion.has(input.unrecorded.version)
+      ? input.unrecorded
+      : null;
+  if (unrecorded !== null) {
+    // The library's graph ahead of every recorded one, against the newest of them.
+    const newest = input.graphs[input.graphs.length - 1];
+    rows.unshift(
+      rowOf(
+        unrecorded.version,
+        [],
+        totals,
+        null,
+        newest === undefined ? null : input.changesOf(newest, unrecorded),
+        false,
+      ),
+    );
+  }
 
   return {
     slug: input.slug,

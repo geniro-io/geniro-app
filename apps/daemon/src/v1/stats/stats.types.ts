@@ -506,8 +506,16 @@ export const WorkflowVersionRowSchema = z
       .describe(
         'every run of it predates graph copies, so the graph was frozen after the run started',
       ),
-    firstRunAt: z.string(),
-    lastRunAt: z.string(),
+    recorded: z
+      .boolean()
+      .describe(
+        'false only for the library graph before its first run or restore records it',
+      ),
+    firstRunAt: z
+      .string()
+      .nullable()
+      .describe('null for a version not run yet'),
+    lastRunAt: z.string().nullable().describe('null for a version not run yet'),
     changes: VersionChangesSchema.nullable().describe(
       'null for the first recorded version, an inferred one and the runs with no graph copy',
     ),

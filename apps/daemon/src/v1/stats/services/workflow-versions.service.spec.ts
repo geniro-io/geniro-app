@@ -270,6 +270,53 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
       expect(await readFile(join(dir, restored.backup), 'utf8')).toBe(before);
     });
 
+    it('records the graph it replaces when no run stamped it, so it can be restored back', async () => {
+      const { hash } = await store.get('dev-team');
+
+      await restoring.restore('dev-team', OLDER, hash);
+
+      const read = await restoring.read('dev-team');
+      expect(read.currentVersion).toBe(OLDER);
+      expect(read.versions.map((row) => [row.version, row.ordinal])).toEqual([
+        [workflowVersionOf(newer), 2],
+        [OLDER, 1],
+      ]);
+
+      const back = await restoring.restore(
+        'dev-team',
+        workflowVersionOf(newer),
+        (await store.get('dev-team')).hash,
+      );
+      expect(back.version).toBe(workflowVersionOf(newer));
+      expect((await restoring.read('dev-team')).currentVersion).toBe(
+        workflowVersionOf(newer),
+      );
+    });
+
+    it('records nothing new for a replaced graph a run already stamped', async () => {
+      await workflowThread('ran-newer', workflowVersionOf(newer));
+      const { hash } = await store.get('dev-team');
+
+      await restoring.restore('dev-team', OLDER, hash);
+
+      expect(
+        (await versionDao.graphsOf('dev-team')).map((graph) => graph.version),
+      ).toEqual([OLDER]);
+    });
+
+    it('shows the library graph before its first run as the current row', async () => {
+      const read = await restoring.read('dev-team');
+
+      expect(read.versions[0]).toMatchObject({
+        version: workflowVersionOf(newer),
+        recorded: false,
+        ordinal: null,
+        figures: { runs: 0 },
+      });
+      expect(read.currentVersion).toBe(workflowVersionOf(newer));
+      expect(read.versions[0]!.changes!.diff).toContain('+  - id: qa');
+    });
+
     it('refuses a copy read before the file changed, writing nothing', async () => {
       const { hash } = await store.get('dev-team');
       await store.save('dev-team', { ...newer, description: 'Edited since' });

@@ -42,9 +42,9 @@ function rowKey(row: WorkflowVersionRow): string {
   return row.version ?? 'unversioned';
 }
 
-/** A row opens when its graph is recorded: a numbered version. */
+/** A row opens when its graph is known: a numbered version, or the library's graph not run yet. */
 function opens(row: WorkflowVersionRow): boolean {
-  return row.ordinal !== null;
+  return row.ordinal !== null || !row.recorded;
 }
 
 function isCurrent(
@@ -56,6 +56,9 @@ function isCurrent(
 
 /** Why a row has no diff to show. */
 function noDiffReason(row: WorkflowVersionRow): string {
+  if (!row.recorded) {
+    return 'no recorded version to compare with';
+  }
   if (row.version === null) {
     return 'these runs kept no graph copy';
   }
@@ -68,6 +71,9 @@ function noDiffReason(row: WorkflowVersionRow): string {
 }
 
 function dateRange(row: WorkflowVersionRow): string {
+  if (row.firstRunAt === null || row.lastRunAt === null) {
+    return 'not run yet';
+  }
   const first = DATE.format(new Date(row.firstRunAt));
   const last = DATE.format(new Date(row.lastRunAt));
   return first === last ? first : `${first} – ${last}`;
@@ -85,7 +91,9 @@ function Unmeasured({ reason }: { reason: string }): React.JSX.Element {
 
 function AvgCost({ figures }: { figures: VersionFigures }): React.JSX.Element {
   return figures.avgCostUsd === null ? (
-    <Unmeasured reason="no cost reported" />
+    <Unmeasured
+      reason={figures.runs === 0 ? 'not run yet' : 'no cost reported'}
+    />
   ) : (
     <>{markEstimate(formatUsd(figures.avgCostUsd), figures.estimatedCostUsd)}</>
   );
@@ -131,6 +139,9 @@ function VersionLabel({
       <span className="font-mono">{row.version.slice(0, 8)}</span>
       {row.ordinal !== null ? (
         <span className="text-muted-foreground">#{row.ordinal}</span>
+      ) : null}
+      {!row.recorded ? (
+        <span className="text-muted-foreground">numbered on its first run</span>
       ) : null}
       {current ? <Badge variant="success">current</Badge> : null}
       {row.inferred ? <Badge variant="outline">inferred</Badge> : null}
@@ -349,7 +360,7 @@ function VersionView({
         <VersionLabel row={row} current={current} />
         <span className="text-muted-foreground">{dateRange(row)}</span>
         {row.changes ? <LineCounts changes={row.changes} /> : null}
-        {onRestore && !current ? (
+        {onRestore && !current && row.ordinal !== null ? (
           <span className="ml-auto flex items-center gap-2">
             {restoreBlockedReason !== null ? (
               <span className="text-muted-foreground">
@@ -391,7 +402,7 @@ function VersionView({
 function summaryLine(data: WorkflowVersionsDto): string {
   const parts = [
     plural(data.totals.runs, 'run'),
-    plural(data.versions.length, 'version'),
+    plural(data.versions.filter((row) => row.recorded).length, 'version'),
   ];
   if (data.totals.avgCostUsd !== null) {
     parts.push(

@@ -3,6 +3,7 @@ import { useState } from 'react';
 
 import {
   DEV_TEAM_VERSIONS,
+  EDITED_SINCE_LAST_RUN,
   NEVER_RUN_VERSIONS,
 } from '../__fixtures__/workflow-versions';
 import { Button } from '../components/ui/button';
@@ -73,4 +74,9 @@ export const RestoreHeldBack: Story = {
   args: {
     restoreBlockedReason: 'The chat’s agent is working on this workflow.',
   },
+};
+
+/** The graph was edited after its last run: the library's graph is current and not numbered yet. */
+export const EditedSinceLastRun: Story = {
+  args: { data: EDITED_SINCE_LAST_RUN },
 };

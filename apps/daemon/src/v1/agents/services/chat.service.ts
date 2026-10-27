@@ -5420,15 +5420,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // `read_workflows` is NOT here: like the history tools, a read of the
         // user's data outside this chat is the user's to allow.
         isHostWorkflowProposalCall(hostServerName, toolName) ||
-        // A builder chat's own read, backup and save — see
+        // A builder chat's own read, backup and check — see
         // `isHostBuilderWorkflowCall`.
         (run.editsWorkflowSlug !== null &&
-          isHostBuilderWorkflowCall(
-            hostServerName,
-            toolName,
-            mode !== undefined &&
-              adapter.getConfig().approval.workspaceEditsUnasked.includes(mode),
-          )) ||
+          isHostBuilderWorkflowCall(hostServerName, toolName)) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited
@@ -6703,8 +6698,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               }),
             })
           : null;
-      // Only an ORDINARY chat proposes workflows: a builder chat changes its
-      // own workflow and an analysis the analysed one, both through
+      // Only an ORDINARY chat proposes whole workflows: a builder chat
+      // proposes changes to its own through the `WorkflowBuilderBroker` sink
+      // below, and an analysis saves the analysed one through
       // `save_workflow_change` — see `WorkflowProposalBroker`.
       const disposeWorkflowProposals =
         mcpEndpoint &&

@@ -29,6 +29,7 @@ import {
   redactConfigDirs,
 } from '../utils/config-dir-redaction';
 import { WORKFLOW_BACKUP_DIR } from '../utils/workflow-backup';
+import type { WorkflowEdit } from '../utils/workflow-edits';
 import type { GraphExecutorService } from './graph-executor.service';
 import { WorkflowProposalService } from './workflow-proposal.service';
 import { WorkflowStoreService } from './workflow-store.service';
@@ -420,6 +421,192 @@ describe('WorkflowProposalService', () => {
     await writeFile(join(dir, 'keep.txt'), 'x');
     await proposed({ workflow: TEAM });
     await expect(readdir(dir)).resolves.toEqual(['keep.txt']);
+  });
+
+  describe("a builder chat's change", () => {
+    const TO_SONNET = [{ path: 'nodes/reviewer/model', value: 'sonnet' }];
+
+    it('applies the edits to the file as it stands and cards what, why and the difference', async () => {
+      const { hash } = await store.create(TEAM, 'team');
+
+      const prepared = await service.prepareChange({
+        slug: 'team',
+        edits: TO_SONNET,
+        summary: ' Reviewer on sonnet ',
+        reason: ' The user asked\nfor a cheaper reviewer. ',
+      });
+
+      expect(prepared).toEqual({
+        ok: true,
+        proposal: {
+          mode: 'replace',
+          autoAgents: ['reviewer'],
+          summary: 'Reviewer on sonnet',
+          reason: 'The user asked\nfor a cheaper reviewer.',
+          slug: 'team',
+          replacesName: 'Review Team',
+          diff: expect.objectContaining({
+            identical: false,
+            changedNodes: [expect.objectContaining({ id: 'reviewer' })],
+          }),
+          baseHash: hash,
+          workflow: FASTER,
+        },
+      });
+      expect((await store.get('team')).workflow).toEqual(TEAM);
+    });
+
+    it('holds a change to the graph rules, not to whether it could run yet', async () => {
+      // A workflow is built up over several changes: an agent nobody feeds
+      // yet would fail a run start, and is still a change worth carding.
+      await store.create(TEAM, 'team');
+
+      const prepared = await service.prepareChange({
+        slug: 'team',
+        edits: [
+          {
+            path: 'nodes/-',
+            value: {
+              id: 'tester',
+              kind: 'agent',
+              agent: 'codex',
+              approval: 'ask',
+            },
+          },
+        ],
+      });
+
+      expect(prepared.ok).toBe(true);
+      expect(assertRunnable).not.toHaveBeenCalled();
+    });
+
+    it('refuses edits that do not apply, break the graph, or change nothing', async () => {
+      await store.create(TEAM, 'team');
+      const refusal = async (edits: WorkflowEdit[]) => {
+        const prepared = await service.prepareChange({ slug: 'team', edits });
+        return prepared.ok ? null : prepared.code;
+      };
+
+      expect(await refusal([{ find: 'no such text', replace: 'x' }])).toBe(
+        'INVALID_EDIT',
+      );
+      expect(
+        await refusal([
+          {
+            path: 'edges/-',
+            value: { from: 'coder', to: 'ghost', kind: 'data' },
+          },
+        ]),
+      ).toBe('INVALID_WORKFLOW');
+      expect(
+        await refusal([{ path: 'nodes/reviewer/approval', value: 'auto' }]),
+      ).toBe('NOTHING_TO_CHANGE');
+    });
+
+    it('refuses a deleted file, and an unreadable one by its first line only', async () => {
+      await expect(
+        service.prepareChange({ slug: 'team', edits: TO_SONNET }),
+      ).resolves.toMatchObject({ ok: false, code: 'WORKFLOW_GONE' });
+
+      await writeFile(
+        store.locate('team').path,
+        'name: Team\nnodes: [\n  configDir: /Users/me/.claude-work\n',
+      );
+      const unreadable = await service.prepareChange({
+        slug: 'team',
+        edits: TO_SONNET,
+      });
+      expect(unreadable).toMatchObject({
+        ok: false,
+        code: 'WORKFLOW_UNREADABLE',
+      });
+      expect(unreadable.ok ? '' : unreadable.message).not.toContain(
+        '.claude-work',
+      );
+    });
+
+    it('puts a profile written back as its token back as its path', async () => {
+      const withProfile: Workflow = {
+        ...TEAM,
+        nodes: TEAM.nodes.map((node) =>
+          node.id === 'coder'
+            ? { ...node, configDir: '/Users/me/.claude-work' }
+            : node,
+        ),
+      };
+      await store.create(withProfile, 'team');
+      const token = configDirToken('/Users/me/.claude-work');
+
+      const kept = await service.prepareChange({
+        slug: 'team',
+        edits: [
+          { path: 'nodes/reviewer/configDir', value: token },
+          ...TO_SONNET,
+        ],
+      });
+      const guessed = await service.prepareChange({
+        slug: 'team',
+        edits: [
+          {
+            path: 'nodes/reviewer/configDir',
+            value: configDirToken('/Users/me/.other'),
+          },
+        ],
+      });
+
+      expect(kept.ok ? kept.proposal.workflow.nodes[2] : null).toMatchObject({
+        id: 'reviewer',
+        configDir: '/Users/me/.claude-work',
+      });
+      expect(guessed).toMatchObject({ ok: false, code: 'CONFIG_DIR_UNKNOWN' });
+    });
+
+    it('saves exactly the carded change on Approve, backing the file up first', async () => {
+      await store.create(TEAM, 'team');
+      const before = await readFile(store.locate('team').path, 'utf8');
+
+      await expect(
+        service.proposeChange('run-1', {
+          slug: 'team',
+          edits: TO_SONNET,
+          summary: 'Reviewer on sonnet',
+          reason: 'The user asked for it.',
+        }),
+      ).resolves.toMatchObject({ status: 'shown' });
+      expect(approvals.listByRun('run-1')[0]).toMatchObject({
+        toolName: 'propose_workflow',
+        input: { mode: 'replace', reason: 'The user asked for it.' },
+      });
+      expect((await store.get('team')).workflow).toEqual(TEAM);
+
+      approvals.resolve('run-1', standingCard('run-1'), true);
+
+      const { message } = await verdictAfterPress();
+      expect(message).toContain("Approved — saved as 'team'");
+      expect((await store.get('team')).workflow).toEqual(FASTER);
+      const backups = await readdir(join(dir, WORKFLOW_BACKUP_DIR));
+      await expect(
+        readFile(join(dir, WORKFLOW_BACKUP_DIR, backups[0]!), 'utf8'),
+      ).resolves.toBe(before);
+    });
+
+    it('saves nothing on Approve when the canvas changed the file after the card went up', async () => {
+      await store.create(TEAM, 'team');
+      await service.proposeChange('run-1', { slug: 'team', edits: TO_SONNET });
+      await store.save('team', {
+        ...TEAM,
+        description: 'edited on the canvas',
+      });
+
+      approvals.resolve('run-1', standingCard('run-1'), true);
+
+      const { outcome } = await verdictAfterPress();
+      expect(outcome).toEqual({ kind: 'not-saved', cause: 'changed' });
+      expect((await store.get('team')).workflow).toEqual({
+        ...TEAM,
+        description: 'edited on the canvas',
+      });
+    });
   });
 
   describe('the card', () => {

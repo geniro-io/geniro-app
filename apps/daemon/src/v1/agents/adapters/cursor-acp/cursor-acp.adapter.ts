@@ -471,12 +471,6 @@ export class CursorAcpAdapter extends AgentAdapter {
          * here that costs something.
          */
         modes: ['auto', 'ask'],
-        /**
-         * An in-workspace write never asks, in any mode — {@link
-         * cursorAutoDecision} — `acceptEdits` included, which an older run may
-         * still hold and rides through.
-         */
-        workspaceEditsUnasked: ['auto', 'ask', 'acceptEdits'],
         /** The protocol guarantees them; there is no binary fact to prove. */
         probedModes: [],
         degradeOnProbeFail: {},

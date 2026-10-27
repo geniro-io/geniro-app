@@ -4436,14 +4436,6 @@ export interface AdapterConfig {
      */
     readonly soleModeDegradeReason:
       ((requested: AgentApprovalMode) => string) | null;
-    /**
-     * The modes in which this CLI writes a file inside the run's folder with
-     * no permission request. A geniro write that stands in for such an edit —
-     * a workflow builder chat's `save_workflow_change` — is approved in the
-     * same modes, so the checked path never costs a card the direct edit
-     * would not.
-     */
-    readonly workspaceEditsUnasked: readonly AgentApprovalMode[];
   };
 
   // ── Reasoning effort ────────────────────────────────────────────────────

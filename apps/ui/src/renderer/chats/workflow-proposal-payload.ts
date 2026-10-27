@@ -45,6 +45,8 @@ export interface ParsedWorkflowProposal {
   slug: string;
   /** The agent's own line, never trusted as a description of the change. */
   summary: string | null;
+  /** The agent's own account of why, never trusted either. */
+  reason: string | null;
   /** Every agent that runs tools without asking, as the daemon names them. */
   autoAgents: string[];
   /** Replace only: the name of the workflow being overwritten. */
@@ -227,6 +229,10 @@ function readDiff(value: unknown): ProposalDiff | null {
   };
 }
 
+function trimmedText(value: unknown): string | null {
+  return isString(value) && value.trim() !== '' ? value.trim() : null;
+}
+
 /** The proposal on a card, or null to draw the permission body instead. */
 export function readWorkflowProposal(
   input: unknown,
@@ -240,16 +246,15 @@ export function readWorkflowProposal(
   if (workflow === null || autoAgents === null) {
     return null;
   }
-  const summary =
-    isString(proposal.summary) && proposal.summary.trim() !== ''
-      ? proposal.summary.trim()
-      : null;
+  const summary = trimmedText(proposal.summary);
+  const reason = trimmedText(proposal.reason);
   if (proposal.mode === 'create') {
     return {
       mode: 'create',
       workflow,
       slug: proposal.slug,
       summary,
+      reason,
       autoAgents,
       replacesName: null,
       diff: null,
@@ -267,6 +272,7 @@ export function readWorkflowProposal(
     workflow,
     slug: proposal.slug,
     summary,
+    reason,
     autoAgents,
     replacesName: proposal.replacesName,
     diff,
@@ -324,6 +330,7 @@ export function proposalScanText(proposal: ParsedWorkflowProposal): string {
       proposal.workflow,
       proposal.diff,
       proposal.summary,
+      proposal.reason,
       proposal.replacesName,
       proposal.autoAgents,
     ],

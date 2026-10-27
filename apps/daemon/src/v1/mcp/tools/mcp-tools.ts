@@ -134,7 +134,11 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
       deps.workflowBuilders,
       deps.workflowStore,
     ),
-    new ProposeWorkflowTool(deps.workflowGate, deps.workflowProposals),
+    new ProposeWorkflowTool(
+      deps.workflowGate,
+      deps.workflowBuilders,
+      deps.workflowProposals,
+    ),
     new ReadAnalyzedThreadTool(
       deps.analysis,
       deps.threads,

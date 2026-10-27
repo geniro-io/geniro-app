@@ -1,6 +1,6 @@
 import {
   HOST_ANALYZED_THREAD_TOOL,
-  HOST_BACKUP_WORKFLOW_TOOL,
+  HOST_PROPOSE_WORKFLOW_TOOL,
   HOST_READ_WORKFLOWS_TOOL,
   HOST_RECOMMENDATION_MARKS_TOOL,
 } from '../../../agents/chat.types';
@@ -19,14 +19,14 @@ const SAVE_OUTCOME =
 export function saveWorkflowChangeInstructions(forBuilder: boolean): string {
   if (forBuilder) {
     return (
-      'Save a change to the workflow this chat edits — the ONLY way to change it; never write the workflow file yourself. ' +
-      'Use it when the user asks you to change this workflow: read the file with your own tools, then pass only the EDITS, applied to the file as it stands — never the whole workflow. ' +
+      'Check a change to the workflow this chat edits WITHOUT saving it: answers the diff the edits make to the file as it stands, or why they would be refused. ' +
+      `Use it when you want to try out a set of edits before you put them on a card; to make the change, send the same edits to ${HOST_PROPOSE_WORKFLOW_TOOL}, which shows the user what changes and why and saves it on their Approve. ` +
+      'Read the file with your own tools, then pass only the EDITS — never the whole workflow. ' +
       EDIT_SHAPES +
       `A configDir token "${CONFIG_DIR_TOKEN_PREFIX}…>" from ${HOST_READ_WORKFLOWS_TOOL} keeps that profile when written back unchanged. ` +
       'It refuses an edit that does not apply, a token that names no profile of this workflow, an invalid graph, and a file something else changed during this turn (read it again and re-apply). ' +
-      'A file that cannot be loaded is refused WORKFLOW_UNREADABLE: only then fix what the refusal names in the file with your own file tools, and save again. ' +
-      `Set dryRun to see the diff without saving. It takes no backup: call ${HOST_BACKUP_WORKFLOW_TOOL} first when the change is one the user may want undone. ` +
-      'Do NOT use it for a change the user did not ask for.'
+      'A file that cannot be loaded is refused WORKFLOW_UNREADABLE: only then fix what the refusal names in the file with your own file tools. ' +
+      'Do NOT use it to make a change — it never saves.'
     );
   }
   return (

@@ -5,7 +5,8 @@
  * walk: a claude chat proposing a new workflow, then a cursor chat proposing
  * its replacement). The third was produced by the daemon's own
  * `diffWorkflows` and `agentsThatRunAuto` over the first workflow and a richer
- * replacement, because no recorded run switched an agent to `auto`.
+ * replacement, because no recorded run switched an agent to `auto`; its
+ * `reason` is written for it, as a builder chat's proposal carries one.
  */
 
 export const RECORDED_NEW_PROPOSAL: unknown = {
@@ -118,6 +119,8 @@ export const REPLACE_TO_AUTO_PROPOSAL: unknown = {
   'autoAgents': ['Coder (coder)', 'Tester (tester) — pool member 2'],
   'summary':
     'Add a tester between the coder and the reviewer; the coder now runs without asking.',
+  'reason':
+    'The user asked for tests before review.\nThe coder waited on every edit, so it now runs unattended.',
   'slug': 'review-pair',
   'replacesName': 'Review Pair',
   'diff': {

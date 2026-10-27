@@ -6,60 +6,7 @@ import {
 } from '../../../agents/chat.types';
 import type { ToolArgs } from '../../mcp.types';
 import { readToolArgs } from '../tool-args';
-
-/** Edits per save — a change that needs more is a new workflow, made in the builder. */
-const MAX_WORKFLOW_EDITS = 50;
-
-/** One edit — `WorkflowEdit` (`graphs/utils/workflow-edits.ts`) says what each shape does. */
-const WorkflowEditSchema = z.union([
-  z
-    .object({
-      find: z
-        .string()
-        .min(1)
-        .describe(
-          'Exact text inside one string value of the workflow (a role, the instructions), occurring exactly once in the whole workflow',
-        ),
-      replace: z.string().describe('What replaces it'),
-    })
-    .strict(),
-  z
-    .object({
-      path: z
-        .string()
-        .min(1)
-        .describe('The field to delete, e.g. "nodes/reviewer/model"'),
-      remove: z.literal(true),
-    })
-    .strict(),
-  z
-    .object({
-      path: z
-        .string()
-        .min(1)
-        .describe(
-          'The field to set, "/"-separated; in a list a segment is an index, an element\'s id ("nodes/reviewer/model") or "-" to append ("edges/-")',
-        ),
-      value: z.unknown().describe('The new value, any JSON'),
-    })
-    .strict(),
-]);
-
-/** The edits, described against the copy of the workflow the agent read. */
-function editsField(readCopy: string) {
-  return z
-    .array(WorkflowEditSchema)
-    .min(1)
-    .max(MAX_WORKFLOW_EDITS)
-    .describe(
-      `The changes, applied in order to ${readCopy} — only what changes, never the whole workflow`,
-    );
-}
-
-const dryRunField = z
-  .boolean()
-  .optional()
-  .describe('true answers the diff without saving');
+import { editsField } from '../workflow-edit-args';
 
 /** An analysis's save: what it changes, and which applied recommendations that carries out. */
 export const SaveWorkflowChangeArgsSchema = z.object({
@@ -76,21 +23,24 @@ export const SaveWorkflowChangeArgsSchema = z.object({
     .min(1)
     .max(MAX_RECOMMENDATIONS_PER_TARGET)
     .describe('The W-n ids this change carries out'),
-  dryRun: dryRunField,
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('true answers the diff without saving'),
 });
 export type SaveWorkflowChangeArgs = z.infer<
   typeof SaveWorkflowChangeArgsSchema
 >;
 
 /**
- * A builder chat's save: no recommendation ids — the user's request in that
- * chat is the authority — and no hash, since the agent reads the file with
- * its own tools; the daemon tracks the version per turn. Either field is
- * refused as unknown.
+ * A builder chat's check: only the edits. It never saves — the change is
+ * written behind `propose_workflow`'s card — so it takes no `dryRun`; no
+ * recommendation ids and no hash either, since the agent reads the file with
+ * its own tools and the daemon tracks the version per turn. Each is refused as
+ * unknown.
  */
 export const BuilderWorkflowChangeArgsSchema = z.object({
   edits: editsField('the workflow file as it stands'),
-  dryRun: dryRunField,
 });
 export type BuilderWorkflowChangeArgs = z.infer<
   typeof BuilderWorkflowChangeArgsSchema

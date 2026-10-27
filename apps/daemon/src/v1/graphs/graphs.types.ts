@@ -23,6 +23,7 @@ import {
   NodeStatusSchema,
 } from '../runs/runs.types';
 import type { WorkflowDiff } from './utils/workflow-diff';
+import type { WorkflowEdit } from './utils/workflow-edits';
 
 /**
  * The workflow domain model — the zod half of the Geniro graph-core port
@@ -691,12 +692,17 @@ export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
 /** How long an agent's one-line `summary` for a proposal card may be. */
 export const WORKFLOW_SUMMARY_MAX = 200;
 
+/** How long an agent's `reason` for a proposal card may be. */
+export const WORKFLOW_REASON_MAX = 1000;
+
 const WorkflowProposalBaseSchema = z.object({
   workflow: WorkflowSchema,
   /** The library file the approval writes, fixed when the card was raised. */
   slug: z.string(),
   /** The agent's one line for the card — its own words, never trusted. */
   summary: z.string().optional(),
+  /** Why the agent proposes it, for the card — its own words, never trusted. */
+  reason: z.string().optional(),
   /**
    * Every agent that would run tools without asking — `approval: 'auto'` only,
    * a pool member's own or inherited; an `acceptEdits` agent, which edits files
@@ -737,6 +743,19 @@ export interface WorkflowProposalRequest {
   /** The library slug this proposal replaces; absent for a new workflow. */
   replaces?: string;
   summary?: string;
+  reason?: string;
+}
+
+/**
+ * What a workflow's builder chat sends `propose_workflow`: edits to the file
+ * as it stands, never the whole workflow. The slug is the chat's own, never
+ * the model's.
+ */
+export interface WorkflowChangeProposalRequest {
+  slug: string;
+  edits: WorkflowEdit[];
+  summary?: string;
+  reason?: string;
 }
 
 /** What `propose_workflow` tells the agent. */

@@ -3,17 +3,19 @@ import { describe, expect, it } from 'vitest';
 import {
   proposeWorkflowResultText,
   readProposeWorkflowArgs,
+  readProposeWorkflowChangeArgs,
 } from './propose-workflow.reader';
 
 const WORKFLOW = { name: 'Team', nodes: [], edges: [] };
 
 describe('readProposeWorkflowArgs', () => {
-  it('reads a workflow with an optional target and summary', () => {
+  it('reads a workflow with an optional target, summary and reason', () => {
     expect(
       readProposeWorkflowArgs({
         workflow: WORKFLOW,
         replaces: 'team',
         summary: 'adds a reviewer',
+        reason: 'nothing checks the coder',
       }),
     ).toEqual({
       ok: true,
@@ -21,6 +23,7 @@ describe('readProposeWorkflowArgs', () => {
         workflow: WORKFLOW,
         replaces: 'team',
         summary: 'adds a reviewer',
+        reason: 'nothing checks the coder',
       },
     });
     // A model's null for an unset optional reads as absent.
@@ -58,6 +61,64 @@ describe('readProposeWorkflowArgs', () => {
     ).toBe(false);
     expect(readProposeWorkflowArgs({ workflow: 'name: Team' }).ok).toBe(false);
     expect(readProposeWorkflowArgs({}).ok).toBe(false);
+  });
+});
+
+describe('readProposeWorkflowChangeArgs', () => {
+  const EDITS = [{ path: 'nodes/reviewer/model', value: 'sonnet' }];
+
+  it("reads a builder chat's edits with what they change and why", () => {
+    expect(
+      readProposeWorkflowChangeArgs({
+        edits: EDITS,
+        summary: 'Reviewer on sonnet',
+        reason:
+          'The user asked for a cheaper reviewer.\nIt reviews small diffs.',
+      }),
+    ).toEqual({
+      ok: true,
+      query: {
+        edits: EDITS,
+        summary: 'Reviewer on sonnet',
+        reason:
+          'The user asked for a cheaper reviewer.\nIt reviews small diffs.',
+      },
+    });
+  });
+
+  it('requires both the summary and the reason the card shows', () => {
+    expect(
+      readProposeWorkflowChangeArgs({ edits: EDITS, summary: 'x' }).ok,
+    ).toBe(false);
+    expect(
+      readProposeWorkflowChangeArgs({ edits: EDITS, reason: 'x' }).ok,
+    ).toBe(false);
+  });
+
+  it("refuses a whole workflow or a target: the slug is the chat's", () => {
+    const base = { edits: EDITS, summary: 's', reason: 'r' };
+    expect(
+      readProposeWorkflowChangeArgs({ ...base, workflow: WORKFLOW }).ok,
+    ).toBe(false);
+    expect(
+      readProposeWorkflowChangeArgs({ ...base, replaces: 'other' }).ok,
+    ).toBe(false);
+    expect(readProposeWorkflowChangeArgs({ ...base, edits: [] }).ok).toBe(
+      false,
+    );
+  });
+
+  it('refuses a reason past its cap or carrying hidden text', () => {
+    const base = { edits: EDITS, summary: 's' };
+    expect(
+      readProposeWorkflowChangeArgs({ ...base, reason: 'x'.repeat(1001) }).ok,
+    ).toBe(false);
+    expect(
+      readProposeWorkflowChangeArgs({ ...base, reason: 'x'.repeat(1000) }).ok,
+    ).toBe(true);
+    expect(
+      readProposeWorkflowChangeArgs({ ...base, reason: 'one\u202Etwo' }).ok,
+    ).toBe(false);
   });
 });
 

@@ -14,15 +14,15 @@ import { appliesOf } from '../../agents/utils/recommendations-card';
 import { userInstructionFiles } from '../../agents/utils/user-instruction-files';
 import type { AgentKind } from '../../runs/runs.types';
 import type { Workflow } from '../graphs.types';
-import { firstLineOf, restoreConfigDirs } from '../utils/config-dir-redaction';
+import { firstLineOf } from '../utils/config-dir-redaction';
+import { editWorkflow, WORKFLOW_FILE_EDIT_COPY } from '../utils/edit-workflow';
 import {
   backUpWorkflow,
   readWorkflowSource,
   sameBackupOf,
 } from '../utils/workflow-backup';
-import { checkWorkflow } from '../utils/workflow-check';
 import { diffWorkflows } from '../utils/workflow-diff';
-import { applyWorkflowEdits, type WorkflowEdit } from '../utils/workflow-edits';
+import type { WorkflowEdit } from '../utils/workflow-edits';
 import { parseWorkflowSnapshot } from '../utils/workflow-snapshot';
 import { parseWorkflowYaml } from '../utils/workflow-yaml';
 import { WorkflowStoreService } from './workflow-store.service';
@@ -189,34 +189,21 @@ export class WorkflowChangeService {
     // against, which its next save is then held to — after a repair too.
     const version =
       authority.kind === 'builder' ? { currentHash: current.hash } : {};
-    const edited = applyWorkflowEdits(
+    // A builder chat may have read the workflow through `read_workflows`, which
+    // shows every `configDir` as a token: one it wrote back is put back as its
+    // path.
+    const edited = editWorkflow(
       current.workflow,
       change.edits,
       authority.kind === 'apply'
         ? 'view="workflow", as the decoded string rather than its JSON escapes'
-        : 'the workflow file, as the string value itself rather than its YAML quoting or line folding',
+        : WORKFLOW_FILE_EDIT_COPY,
+      authority.kind === 'builder',
     );
     if (!edited.ok) {
-      return { ...refuse('INVALID_EDIT', edited.message), ...version };
+      return { ...refuse(edited.error, edited.message), ...version };
     }
-    const checked = checkWorkflow(edited.workflow);
-    if (!checked.ok) {
-      return { ...refuse('INVALID_WORKFLOW', checked.message), ...version };
-    }
-    // A builder chat may have read the workflow through `read_workflows`, which
-    // shows every `configDir` as a token: one it wrote back is put back as its
-    // path.
-    const restored =
-      authority.kind === 'builder'
-        ? restoreConfigDirs(checked.workflow, current.workflow)
-        : checked;
-    if (!restored.ok) {
-      return {
-        ...refuse('CONFIG_DIR_UNKNOWN', restored.message),
-        ...version,
-      };
-    }
-    const next = restored.workflow;
+    const next = edited.workflow;
     const diff = diffWorkflows(current.workflow, next);
     if (change.dryRun) {
       return { dryRun: true, saved: false, diff, ...version };

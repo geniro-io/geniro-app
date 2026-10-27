@@ -23,13 +23,12 @@ import {
 import { saveWorkflowChangeSchema } from './save-workflow-change.schema';
 
 /**
- * `save_workflow_change` — the one write to the workflow library an analysis
- * or a workflow's own builder chat has, through `WorkflowChangeService`'s
- * checks — and, for an analysis, its timed backup (a builder chat backs up
- * with `backup_workflow`). An analysis's save is not auto-approved: outside
- * `auto` the user confirms the write as well as the Apply that asked for it. A
- * builder chat's is approved where its own file edit would be
- * (`isHostBuilderWorkflowCall`).
+ * `save_workflow_change` — an analysis's one write to the workflow library,
+ * through `WorkflowChangeService`'s checks and its timed backup. It is not
+ * auto-approved: outside `auto` the user confirms the write as well as the
+ * Apply that asked for it. A workflow's own builder chat gets it as a check
+ * that writes nothing (its change is written behind `propose_workflow`'s
+ * card), approved without asking (`isHostBuilderWorkflowCall`).
  */
 export class SaveWorkflowChangeTool extends BaseMcpTool {
   readonly name = HOST_WORKFLOW_CHANGE_TOOL;
@@ -103,12 +102,14 @@ export class SaveWorkflowChangeTool extends BaseMcpTool {
         },
         slug: turn.slug,
         edits: read.query.edits,
-        dryRun: read.query.dryRun ?? false,
+        // A builder chat's change is written behind `propose_workflow`'s
+        // card, never by this call.
+        dryRun: true,
       },
-      // The turn's next save is checked against the version this one wrote,
-      // or a refusal for a changed file found (which the agent is told to
-      // read again) — or, after a refusal for a file that cannot be loaded,
-      // against nothing: the agent repairs it itself.
+      // The turn's next check is held to the version this one read, or a
+      // refusal for a changed file found (which the agent is told to read
+      // again) — or, after a refusal for a file that cannot be loaded, to
+      // nothing: the agent repairs it itself.
       (answer) => {
         if (answer.error === 'WORKFLOW_UNREADABLE') {
           return this.builders.noteVersion(runId, nodeId, turn.turnStartedAt, {
@@ -116,7 +117,7 @@ export class SaveWorkflowChangeTool extends BaseMcpTool {
             acceptsAnyVersion: true,
           });
         }
-        const known = answer.saved === true ? answer.hash : answer.currentHash;
+        const known = answer.currentHash;
         return typeof known === 'string'
           ? this.builders.noteVersion(runId, nodeId, turn.turnStartedAt, {
               savedHash: known,

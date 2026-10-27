@@ -85,6 +85,17 @@ describe('readWorkflowProposal', () => {
       parsed({ ...(RECORDED_NEW_PROPOSAL as object), summary: '   ' }).summary,
     ).toBeNull();
   });
+
+  it('reads the reason trimmed with its line breaks, and none when blank or absent', () => {
+    expect(parsed(REPLACE_TO_AUTO_PROPOSAL).reason).toBe(
+      'The user asked for tests before review.\nThe coder waited on every edit, so it now runs unattended.',
+    );
+    expect(
+      parsed({ ...(REPLACE_TO_AUTO_PROPOSAL as object), reason: ' \n ' })
+        .reason,
+    ).toBeNull();
+    expect(parsed(RECORDED_NEW_PROPOSAL).reason).toBeNull();
+  });
 });
 
 describe('readProposalOutcome', () => {

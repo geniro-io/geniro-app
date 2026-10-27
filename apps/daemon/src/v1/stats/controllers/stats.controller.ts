@@ -8,9 +8,22 @@ import {
   LineSnapshotAckDto,
   LineSnapshotDto,
 } from '../dto/line-snapshot.dto';
-import { UsageStatsDto, UsageStatsQueryDto } from '../dto/stats.dto';
+import {
+  RestoreWorkflowVersionDto,
+  UsageStatsDto,
+  UsageStatsQueryDto,
+  WorkflowVersionRestoredDto,
+  WorkflowVersionsDto,
+  WorkflowVersionsQueryDto,
+} from '../dto/stats.dto';
 import { StatsService } from '../services/stats.service';
-import type { LineBaselineWire, UsageStatsWire } from '../stats.types';
+import { WorkflowVersionsService } from '../services/workflow-versions.service';
+import type {
+  LineBaselineWire,
+  UsageStatsWire,
+  WorkflowVersionRestoredWire,
+  WorkflowVersionsWire,
+} from '../stats.types';
 
 /**
  * What the app has spent, and on what.
@@ -22,13 +35,34 @@ import type { LineBaselineWire, UsageStatsWire } from '../stats.types';
 @ApiTags('stats')
 @ApiBearerAuth()
 export class StatsController {
-  constructor(private readonly stats: StatsService) {}
+  constructor(
+    private readonly stats: StatsService,
+    private readonly versions: WorkflowVersionsService,
+  ) {}
 
   @Get('usage')
   @ApiOperation({ operationId: 'readUsageStats' })
   @ZodResponse({ status: 200, type: UsageStatsDto })
   readUsage(@Query() query: UsageStatsQueryDto): Promise<UsageStatsWire> {
     return this.stats.usage(query.from, query.to);
+  }
+
+  @Get('workflow-versions')
+  @ApiOperation({ operationId: 'readWorkflowVersions' })
+  @ZodResponse({ status: 200, type: WorkflowVersionsDto })
+  readWorkflowVersions(
+    @Query() query: WorkflowVersionsQueryDto,
+  ): Promise<WorkflowVersionsWire> {
+    return this.versions.read(query.slug);
+  }
+
+  @Post('workflow-versions/restore')
+  @ApiOperation({ operationId: 'restoreWorkflowVersion' })
+  @ZodResponse({ status: 201, type: WorkflowVersionRestoredDto })
+  restoreWorkflowVersion(
+    @Body() body: RestoreWorkflowVersionDto,
+  ): Promise<WorkflowVersionRestoredWire> {
+    return this.versions.restore(body.slug, body.version, body.baseHash);
   }
 
   @Post('line-baselines')

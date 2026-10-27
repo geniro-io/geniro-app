@@ -72,6 +72,9 @@ export type TriggerKind = z.infer<typeof TriggerKindSchema>;
  * node without becoming one of its producers.
  */
 export const EDGE_KINDS = ['data', 'call', 'instruction'] as const;
+
+/** A library workflow's slug — a plain file-name segment, so no path traversal is possible. */
+export const SLUG_RE = /^[a-z0-9][a-z0-9-_]*$/i;
 export const EdgeKindSchema = z.enum(EDGE_KINDS).meta({ id: 'EdgeKind' });
 export type EdgeKind = z.infer<typeof EdgeKindSchema>;
 

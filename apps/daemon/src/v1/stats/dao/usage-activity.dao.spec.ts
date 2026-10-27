@@ -588,4 +588,77 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       ).toBeNull();
     });
   });
+
+  describe('the workflow ledger stamps', () => {
+    const created = at('2026-10-01T10:00:00.000Z');
+    const version = {
+      slug: 'dev-team',
+      version: 'abcdef0123456789',
+      inferred: false,
+    };
+
+    it('writes the thread row when the recorder has not yet, then stamps it', async () => {
+      await dao.stampThreadVersion('run-1', created, version);
+
+      const rows = await dao.threadRowsBySlug('dev-team');
+      expect(rows).toEqual([
+        {
+          runId: 'run-1',
+          occurredAt: created,
+          slug: 'dev-team',
+          version: 'abcdef0123456789',
+          inferred: false,
+        },
+      ]);
+      expect(await orm.em.fork().count(UsageActivity, {})).toBe(1);
+    });
+
+    it('stamps the row the recorder already wrote, keeping it single', async () => {
+      await dao.insertThreadOnce('run-1', created);
+      await dao.stampThreadVersion('run-1', created, version);
+
+      expect(await orm.em.fork().count(UsageActivity, {})).toBe(1);
+      expect((await dao.threadRowsBySlug('dev-team'))[0]?.version).toBe(
+        'abcdef0123456789',
+      );
+    });
+
+    it('reads every asked run that has a row, and none that has not', async () => {
+      await dao.stampThreadVersion('run-1', created, version);
+
+      const rows = await dao.threadRowsByRuns(['run-1', 'run-gone']);
+      expect([...rows.keys()]).toEqual(['run-1']);
+    });
+
+    it('lists only thread rows of the asked workflow', async () => {
+      await dao.stampThreadVersion('run-1', created, version);
+      await dao.stampThreadVersion('run-2', created, {
+        ...version,
+        slug: 'other',
+      });
+      await dao.insertThreadOnce('chat-1', created);
+      // A run_outcome row of the same run carries the same workflow slug.
+      await dao.upsertRunOutcome({
+        runId: 'run-1',
+        sourceSeq: 10,
+        occurredAt: created,
+        workflowSlug: 'dev-team',
+        prOwner: 'acme',
+        prRepo: 'platform',
+        prNumber: 87,
+        prUrl: 'https://github.com/acme/platform/pull/87',
+        draft: false,
+        reviewRounds: 1,
+        acceptance: 'accepted',
+        questionsAsked: 0,
+      });
+
+      expect(
+        (await dao.threadRowsBySlug('dev-team')).map((row) => row.runId),
+      ).toEqual(['run-1']);
+      expect(
+        (await dao.threadRowsByRuns(['run-1'])).get('run-1'),
+      ).toMatchObject({ version: 'abcdef0123456789' });
+    });
+  });
 });

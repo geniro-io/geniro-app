@@ -103,6 +103,30 @@ export interface LineSnapshotRow {
   partial: boolean;
 }
 
+/** What the workflow ledger writes on a run's thread row when the run is created. */
+export interface ThreadVersionStamp {
+  slug: string;
+  /** Null when the run kept no graph copy it can read. */
+  version: string | null;
+  inferred: boolean | null;
+}
+
+/** One workflow run's thread row, as the versions table reads it. */
+export interface ThreadLedgerRow {
+  runId: string;
+  occurredAt: Date;
+  slug: string | null;
+  version: string | null;
+  inferred: boolean | null;
+}
+
+/** One `workflow_versions` row. */
+export interface WorkflowVersionGraph {
+  version: string;
+  graph: string;
+  firstSeenAt: Date;
+}
+
 /** One lines snapshot, as the fold reads it. A null count is a measurement that was never made. */
 export interface LineSnapshotRead {
   runId: string;
@@ -434,3 +458,100 @@ export const UsageStatsWireSchema = z.object({
 // class name — the dangling `$ref` `setupSwagger` fails the boot on. The nested
 // shapes above carry ids precisely because they are not roots.
 export type UsageStatsWire = z.infer<typeof UsageStatsWireSchema>;
+
+/**
+ * What a set of runs cost. Folded over the runs' own ledger rows, a deleted run's
+ * included; null means not measured, never zero.
+ */
+export const VersionFiguresSchema = z
+  .object({
+    runs: z.number(),
+    costUsd: z.number().nullable().describe('null when no run reported a cost'),
+    avgCostUsd: z
+      .number()
+      .nullable()
+      .describe('costUsd over the runs that reported one'),
+    estimatedCostUsd: z
+      .number()
+      .nullable()
+      .describe('the part of costUsd geniro priced, not billed by a CLI'),
+  })
+  .meta({ id: 'VersionFigures' });
+export type VersionFiguresWire = z.infer<typeof VersionFiguresSchema>;
+
+/** A version's graph against the version recorded before it, as `git diff` prints it. */
+export const VersionChangesSchema = z
+  .object({
+    added: z.number().describe('lines the diff adds'),
+    removed: z.number().describe('lines the diff removes'),
+    diff: z
+      .string()
+      .describe("unified diff of the two graphs' YAML; empty when they match"),
+  })
+  .meta({ id: 'VersionChanges' });
+export type VersionChangesWire = z.infer<typeof VersionChangesSchema>;
+
+export const WorkflowVersionRowSchema = z
+  .object({
+    version: z
+      .string()
+      .nullable()
+      .describe('null for the runs that kept no graph copy'),
+    ordinal: z
+      .number()
+      .nullable()
+      .describe('1 for the first version recorded, in order of first use'),
+    inferred: z
+      .boolean()
+      .describe(
+        'every run of it predates graph copies, so the graph was frozen after the run started',
+      ),
+    recorded: z
+      .boolean()
+      .describe(
+        'false only for the library graph before its first run or restore records it',
+      ),
+    firstRunAt: z
+      .string()
+      .nullable()
+      .describe('null for a version not run yet'),
+    lastRunAt: z.string().nullable().describe('null for a version not run yet'),
+    changes: VersionChangesSchema.nullable().describe(
+      'null for the first recorded version, an inferred one and the runs with no graph copy',
+    ),
+    figures: VersionFiguresSchema,
+  })
+  .meta({ id: 'WorkflowVersionRow' });
+export type WorkflowVersionRowWire = z.infer<typeof WorkflowVersionRowSchema>;
+
+/** One workflow's runs grouped by the graph version they ran. */
+export const WorkflowVersionsWireSchema = z.object({
+  slug: z.string(),
+  currentVersion: z
+    .string()
+    .nullable()
+    .describe("the library graph's version; null when the file cannot be read"),
+  versions: z.array(WorkflowVersionRowSchema).describe('newest first'),
+  unversioned: WorkflowVersionRowSchema.nullable().describe(
+    'the runs that kept no graph copy, or null when there are none',
+  ),
+  totals: VersionFiguresSchema.describe(
+    'folded over every run of the workflow, not summed from the rows',
+  ),
+});
+// No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
+export type WorkflowVersionsWire = z.infer<typeof WorkflowVersionsWireSchema>;
+
+/** A version written back to the library as the workflow's graph. */
+export const WorkflowVersionRestoredSchema = z.object({
+  slug: z.string(),
+  version: z.string().describe('the graph version the library file now holds'),
+  hash: z.string().describe('the file hash the next save must quote'),
+  backup: z
+    .string()
+    .describe('where the replaced file was copied, relative to the library'),
+});
+// No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
+export type WorkflowVersionRestoredWire = z.infer<
+  typeof WorkflowVersionRestoredSchema
+>;

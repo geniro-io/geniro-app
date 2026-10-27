@@ -5461,6 +5461,31 @@ export interface ResetWakesCancelledDto {
 /**
  * 
  * @export
+ * @interface RestoreWorkflowVersionDto
+ */
+export interface RestoreWorkflowVersionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof RestoreWorkflowVersionDto
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RestoreWorkflowVersionDto
+     */
+    version: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RestoreWorkflowVersionDto
+     */
+    baseHash?: string;
+}
+/**
+ * 
+ * @export
  * @interface RetriedDto
  */
 export interface RetriedDto {
@@ -9660,6 +9685,62 @@ export interface UsageStatsDto {
 /**
  * 
  * @export
+ * @interface VersionChanges
+ */
+export interface VersionChanges {
+    /**
+     * lines the diff adds
+     * @type {number}
+     * @memberof VersionChanges
+     */
+    added: number;
+    /**
+     * lines the diff removes
+     * @type {number}
+     * @memberof VersionChanges
+     */
+    removed: number;
+    /**
+     * unified diff of the two graphs' YAML; empty when they match
+     * @type {string}
+     * @memberof VersionChanges
+     */
+    diff: string;
+}
+/**
+ * 
+ * @export
+ * @interface VersionFigures
+ */
+export interface VersionFigures {
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionFigures
+     */
+    runs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionFigures
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionFigures
+     */
+    avgCostUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof VersionFigures
+     */
+    estimatedCostUsd: number | null;
+}
+/**
+ * 
+ * @export
  * @interface Workflow
  */
 export interface Workflow {
@@ -10091,6 +10172,129 @@ export const WorkflowTriggerNodeKindEnum = {
 } as const;
 export type WorkflowTriggerNodeKindEnum = typeof WorkflowTriggerNodeKindEnum[keyof typeof WorkflowTriggerNodeKindEnum];
 
+/**
+ * 
+ * @export
+ * @interface WorkflowVersionRestoredDto
+ */
+export interface WorkflowVersionRestoredDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionRestoredDto
+     */
+    slug: string;
+    /**
+     * the graph version the library file now holds
+     * @type {string}
+     * @memberof WorkflowVersionRestoredDto
+     */
+    version: string;
+    /**
+     * the file hash the next save must quote
+     * @type {string}
+     * @memberof WorkflowVersionRestoredDto
+     */
+    hash: string;
+    /**
+     * where the replaced file was copied, relative to the library
+     * @type {string}
+     * @memberof WorkflowVersionRestoredDto
+     */
+    backup: string;
+}
+/**
+ * 
+ * @export
+ * @interface WorkflowVersionRow
+ */
+export interface WorkflowVersionRow {
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionRow
+     */
+    version: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof WorkflowVersionRow
+     */
+    ordinal: number | null;
+    /**
+     * every run of it predates graph copies, so the graph was frozen after the run started
+     * @type {boolean}
+     * @memberof WorkflowVersionRow
+     */
+    inferred: boolean;
+    /**
+     * false only for the library graph before its first run or restore records it
+     * @type {boolean}
+     * @memberof WorkflowVersionRow
+     */
+    recorded: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionRow
+     */
+    firstRunAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionRow
+     */
+    lastRunAt: string | null;
+    /**
+     * 
+     * @type {VersionChanges}
+     * @memberof WorkflowVersionRow
+     */
+    changes: VersionChanges | null;
+    /**
+     * 
+     * @type {VersionFigures}
+     * @memberof WorkflowVersionRow
+     */
+    figures: VersionFigures;
+}
+/**
+ * 
+ * @export
+ * @interface WorkflowVersionsDto
+ */
+export interface WorkflowVersionsDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionsDto
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowVersionsDto
+     */
+    currentVersion: string | null;
+    /**
+     * newest first
+     * @type {Array<WorkflowVersionRow>}
+     * @memberof WorkflowVersionsDto
+     */
+    versions: Array<WorkflowVersionRow>;
+    /**
+     * 
+     * @type {WorkflowVersionRow}
+     * @memberof WorkflowVersionsDto
+     */
+    unversioned: WorkflowVersionRow | null;
+    /**
+     * folded over every run of the workflow, not summed from the rows
+     * @type {VersionFigures}
+     * @memberof WorkflowVersionsDto
+     */
+    totals: VersionFigures;
+}
 /**
  * 
  * @export

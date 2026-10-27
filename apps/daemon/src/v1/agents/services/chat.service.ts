@@ -821,9 +821,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * chat run with no live registry handle is closed: a synthetic terminal `error`
    * item so the transcript doesn't dangle, and the run is marked `failed`.
    *
-   * Called from `main.ts` AFTER the schema sync (not via an OnApplicationBootstrap
-   * hook, which fires before the additive `schema.update` and would query tables
-   * that don't exist yet on a fresh install).
+   * Called from `main.ts` AFTER the schema sync and before listen, so no turn can
+   * start on a run this is about to close.
    *
    * `cause` is why the previous daemon stopped, as the UI recorded it; the row
    * carries it so the task board can tell a stop it may continue from a crash it

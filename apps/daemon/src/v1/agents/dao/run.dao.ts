@@ -7,10 +7,12 @@ import type {
   ChatListScope,
   ContextLevel,
   PromptCacheTtlReason,
+  RunFacts,
   RunListPage,
   RunPullRequest,
   SettleFigures,
 } from '../chat.types';
+import { idBatches } from '../utils/id-batches';
 import { positive } from '../utils/positive-figure';
 import { readRunPullRequests } from '../utils/pull-request-capture';
 
@@ -183,6 +185,53 @@ export class RunDao extends BaseDao<Run> {
       },
     );
     return rows.map((run) => ({ id: run.id, workflowId: run.workflowId }));
+  }
+
+  /**
+   * Who these runs are — never their graph copy, which runs to hundreds of KB a run. `'every-workflow-run'` reads every workflow run. A run that no
+   * longer exists is absent.
+   */
+  async runFacts(
+    runIds: readonly string[] | 'every-workflow-run',
+    txEm?: EntityManager,
+  ): Promise<RunFacts[]> {
+    const read = async (where: FilterQuery<Run>): Promise<RunFacts[]> =>
+      (
+        await this.getRepo(txEm).find(where, {
+          fields: ['id', 'workflowId', 'createdAt'],
+          disableIdentityMap: true,
+        })
+      ).map((run) => ({
+        id: run.id,
+        workflowId: run.workflowId,
+        createdAt: run.createdAt,
+      }));
+    if (runIds === 'every-workflow-run') {
+      return read({ workflowId: { $ne: null } });
+    }
+    const facts: RunFacts[] = [];
+    for (const batch of idBatches(runIds)) {
+      facts.push(...(await read({ id: { $in: batch } })));
+    }
+    return facts;
+  }
+
+  /** These runs' graph copies (`Run.workflowSnapshot`), by run id; a run that no longer exists is absent. */
+  async workflowSnapshots(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, string | null>> {
+    const out = new Map<string, string | null>();
+    for (const batch of idBatches(runIds)) {
+      const rows = await this.getRepo(txEm).find(
+        { id: { $in: batch } },
+        { fields: ['id', 'workflowSnapshot'], disableIdentityMap: true },
+      );
+      for (const run of rows) {
+        out.set(run.id, run.workflowSnapshot);
+      }
+    }
+    return out;
   }
 
   /**

@@ -4628,6 +4628,13 @@ export interface RunCreatedEvent {
   createdAt: string;
 }
 
+/** A run's identity, read without its graph copy (`RunDao.runFacts`). */
+export interface RunFacts {
+  id: string;
+  workflowId: string | null;
+  createdAt: Date;
+}
+
 /** One pull request a thread has been seen to OPEN, read out of its own transcript. */
 export interface CapturedPullRequest {
   owner: string;

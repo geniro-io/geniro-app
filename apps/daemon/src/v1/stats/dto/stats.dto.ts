@@ -1,7 +1,12 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-import { UsageStatsWireSchema } from '../stats.types';
+import { SLUG_RE } from '../../graphs/graphs.types';
+import {
+  UsageStatsWireSchema,
+  WorkflowVersionRestoredSchema,
+  WorkflowVersionsWireSchema,
+} from '../stats.types';
 
 /**
  * HTTP DTOs for the stats route.
@@ -38,3 +43,34 @@ export class UsageStatsQueryDto extends createZodDto(usageStatsQuerySchema) {}
 
 /** What the app has spent over a period — see {@link UsageStatsWireSchema}. */
 export class UsageStatsDto extends createZodDto(UsageStatsWireSchema) {}
+
+/** Which workflow's versions to read: a library slug, in the library's own charset. */
+export const workflowVersionsQuerySchema = z.object({
+  slug: z.string().min(1).regex(SLUG_RE),
+});
+export class WorkflowVersionsQueryDto extends createZodDto(
+  workflowVersionsQuerySchema,
+) {}
+
+/** One workflow's runs by graph version — see {@link WorkflowVersionsWireSchema}. */
+export class WorkflowVersionsDto extends createZodDto(
+  WorkflowVersionsWireSchema,
+) {}
+
+/**
+ * Write a recorded version back as the workflow's graph. `baseHash` is the file hash the
+ * caller's copy was read at; a file changed since is refused, never overwritten.
+ */
+export const restoreWorkflowVersionSchema = z.object({
+  slug: z.string().min(1).regex(SLUG_RE),
+  version: z.string().regex(/^[0-9a-f]{16}$/),
+  baseHash: z.string().min(1).optional(),
+});
+export class RestoreWorkflowVersionDto extends createZodDto(
+  restoreWorkflowVersionSchema,
+) {}
+
+/** The restored version and the file's new hash — see {@link WorkflowVersionRestoredSchema}. */
+export class WorkflowVersionRestoredDto extends createZodDto(
+  WorkflowVersionRestoredSchema,
+) {}

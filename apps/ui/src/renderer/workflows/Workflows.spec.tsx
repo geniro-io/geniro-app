@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonHandle } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { DEV_TEAM_VERSIONS } from '../__fixtures__/workflow-versions';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import { withHistoryPages } from '../__tests__/history-page';
 import { emptyRunState } from '../__tests__/run-state';
@@ -51,8 +52,12 @@ const {
   getCapabilities,
   listAgentMcpServers,
   measureInstructionSizes,
+  readWorkflowVersions,
+  restoreWorkflowVersion,
 } = vi.hoisted(() => ({
   measureInstructionSizes: vi.fn(),
+  readWorkflowVersions: vi.fn(),
+  restoreWorkflowVersion: vi.fn(),
   listAgentMcpServers: vi.fn(),
   getCapabilities: vi.fn(),
   createWorkflow: vi.fn(),
@@ -96,6 +101,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       updateChatSettings: vi.fn(),
     }),
     capabilities: { getCapabilities },
+    stats: { readWorkflowVersions, restoreWorkflowVersion },
     agents: withVocabulary({
       listAgentModels: vi.fn(async () => []),
       // Each of these three answers a LISTING, not a bare array — the hooks
@@ -238,6 +244,18 @@ beforeEach(() => {
   deleteWorkflow
     .mockReset()
     .mockImplementation(async () => ({ deleted: true }));
+  readWorkflowVersions.mockReset().mockImplementation(async () => ({
+    slug: 'dev-team',
+    currentVersion: null,
+    versions: [],
+    unversioned: null,
+    totals: {
+      runs: 0,
+      costUsd: null,
+      avgCostUsd: null,
+      estimatedCostUsd: null,
+    },
+  }));
 });
 
 afterEach(() => {
@@ -1103,8 +1121,69 @@ describe('Workflows — the builder header', () => {
       'Auto-layout',
       'Export…',
       'Edit name and description',
+      'Versions…',
       'Delete workflow',
     ]);
+  });
+
+  it('opens the open workflow’s versions from the overflow, reading them only then', async () => {
+    await openBuilder();
+    expect(readWorkflowVersions).not.toHaveBeenCalled();
+
+    await menuRow('Versions…');
+
+    expect(readWorkflowVersions).toHaveBeenCalledWith({ slug: 'dev-team' });
+    expect(document.body.textContent).toContain('Versions of');
+    expect(document.body.textContent).toContain("This workflow hasn't run yet");
+  });
+
+  it('restores a version quoting the hash the canvas was read at, then reads the file back', async () => {
+    readWorkflowVersions.mockImplementation(async () => DEV_TEAM_VERSIONS);
+    restoreWorkflowVersion.mockReset().mockImplementation(async () => ({
+      slug: 'dev-team',
+      version: '5d06e8b741aa90c3',
+      hash: 'restored-1',
+      backup: '.backups/dev-team.2026-10-27T10-00-00.yaml',
+    }));
+    await openBuilder();
+    const readsBefore = getWorkflow.mock.calls.length;
+
+    await menuRow('Versions…');
+    await press('Show version 5d06e8b7');
+    await press('Restore this version');
+    await press('Restore #1?');
+
+    expect(restoreWorkflowVersion).toHaveBeenCalledWith({
+      restoreWorkflowVersionDto: {
+        slug: 'dev-team',
+        version: '5d06e8b741aa90c3',
+        baseHash: 'loaded-1',
+      },
+    });
+    expect(getWorkflow.mock.calls.length).toBe(readsBefore + 1);
+    expect(container.querySelector('footer')?.textContent).toContain(
+      'Restored version #1. The graph it replaced is backed up at .backups/dev-team.2026-10-27T10-00-00.yaml.',
+    );
+  });
+
+  it('raises the stale-copy banner when a restore meets a file changed since the canvas read it', async () => {
+    readWorkflowVersions.mockImplementation(async () => DEV_TEAM_VERSIONS);
+    restoreWorkflowVersion.mockReset().mockImplementation(async () => {
+      throw new Error(
+        'daemon POST /v1/stats/workflow-versions/restore failed (409): {"code":"WORKFLOW_CHANGED","message":"changed since this copy was read"}',
+      );
+    });
+    await openBuilder();
+
+    await menuRow('Versions…');
+    await press('Show version 5d06e8b7');
+    await press('Restore this version');
+    await press('Restore #1?');
+
+    expect(document.body.querySelector('[role="alert"]')).not.toBeNull();
+    expect(document.body.textContent).toContain(
+      'This workflow changed outside the builder',
+    );
   });
 
   it('does not delete on the menu row alone — it asks first', async () => {

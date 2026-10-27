@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
+import { idBatches } from '../../agents/utils/id-batches';
 import { UsageEvent } from '../entity/usage-event.entity';
 import { POLLED_SPEND_SEQ, type UsageEventInput } from '../stats.types';
 
@@ -106,6 +107,26 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
       changed = true;
     }
     return changed;
+  }
+
+  /**
+   * Every ledger row of these runs — finished turns and polled-spend rows alike — however
+   * old, read in windows of run ids (`idBatches`).
+   */
+  async rowsByRuns(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<UsageEvent[]> {
+    const rows: UsageEvent[] = [];
+    for (const batch of idBatches(runIds)) {
+      rows.push(
+        ...(await this.getRepo(txEm).find(
+          { runId: { $in: batch } },
+          { disableIdentityMap: true },
+        )),
+      );
+    }
+    return rows;
   }
 
   /** The polled-spend rows of `runIds`, by run, read in ONE query. */

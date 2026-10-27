@@ -142,6 +142,37 @@ describe('WorkflowProposalCard', () => {
     expect(el.textContent).not.toContain('Approving overwrites');
   });
 
+  it('says what the change does and why', () => {
+    const el = render(card());
+    expect(el.textContent).toContain(
+      'Add a tester between the coder and the reviewer; the coder now runs without asking.',
+    );
+    expect(
+      el.querySelector('[data-slot="workflow-proposal-reason"]')?.textContent,
+    ).toBe(
+      'Why: The user asked for tests before review.\nThe coder waited on every edit, so it now runs unattended.',
+    );
+  });
+
+  it('draws no reason line for a proposal that gave none', () => {
+    const el = render(card({ input: RECORDED_NEW_PROPOSAL }));
+    expect(
+      el.querySelector('[data-slot="workflow-proposal-reason"]'),
+    ).toBeNull();
+  });
+
+  it('holds Approve over a hidden character in the reason', () => {
+    const el = render(
+      card({
+        input: {
+          ...(REPLACE_TO_AUTO_PROPOSAL as object),
+          reason: 'Safe \u202Eetirw ton od\u202C',
+        },
+      }),
+    );
+    expect(buttonNamed(el, 'Approve')!.disabled).toBe(true);
+  });
+
   it('warns a replacement overwrites the saved workflow, after a backup', () => {
     const el = render(card());
     expect(el.textContent).toContain('Replaces Review Pair');

@@ -21,6 +21,8 @@ import {
   type PendingWorkflowProposal,
   PendingWorkflowProposalSchema,
   type ProposalOutcome,
+  type Workflow,
+  type WorkflowChangeProposalRequest,
   type WorkflowProposal,
   type WorkflowProposalRequest,
 } from '../graphs.types';
@@ -29,10 +31,12 @@ import {
   redactConfigDirText,
   restoreConfigDirs,
 } from '../utils/config-dir-redaction';
+import { editWorkflow, WORKFLOW_FILE_EDIT_COPY } from '../utils/edit-workflow';
 import { agentsThatRunAuto } from '../utils/unattended';
 import { backUpWorkflow, readWorkflowSource } from '../utils/workflow-backup';
 import { checkWorkflow } from '../utils/workflow-check';
 import { diffWorkflows } from '../utils/workflow-diff';
+import { parseWorkflowYaml } from '../utils/workflow-yaml';
 import { GraphExecutorService } from './graph-executor.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
@@ -92,14 +96,33 @@ export class WorkflowProposalService {
    * before the new one is written, so two racing proposals would otherwise
    * both find nothing standing and both stay on screen.
    */
-  async propose(
+  propose(
     runId: string,
     request: WorkflowProposalRequest,
+  ): Promise<ProposalOutcome> {
+    return this.raiseSerialized(runId, () => this.prepare(request));
+  }
+
+  /**
+   * A workflow builder chat's change to its own workflow, on the same card:
+   * the edits are carried out on the file as it stands now, and the card
+   * shows what that does to it and writes exactly that on Approve.
+   */
+  proposeChange(
+    runId: string,
+    request: WorkflowChangeProposalRequest,
+  ): Promise<ProposalOutcome> {
+    return this.raiseSerialized(runId, () => this.prepareChange(request));
+  }
+
+  private async raiseSerialized(
+    runId: string,
+    prepare: () => Promise<PreparedProposal>,
   ): Promise<ProposalOutcome> {
     const previous = this.raising.get(runId) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => this.proposeNow(runId, request));
+      .then(() => this.proposeNow(runId, prepare));
     this.raising.set(runId, next);
     try {
       return await next;
@@ -112,9 +135,9 @@ export class WorkflowProposalService {
 
   private async proposeNow(
     runId: string,
-    request: WorkflowProposalRequest,
+    prepare: () => Promise<PreparedProposal>,
   ): Promise<ProposalOutcome> {
-    const prepared = await this.prepare(request);
+    const prepared = await prepare();
     if (!prepared.ok) {
       return {
         status: 'refused',
@@ -441,13 +464,7 @@ export class WorkflowProposalService {
             message: hidePaths(error.message).slice(0, MAX_REFUSAL_LENGTH),
           };
     }
-    const summary = request.summary?.trim();
-    // Ahead of `workflow` in each card below: the generic card prints its
-    // input as JSON in a short scroll box, and this is what must be seen.
-    const summarized = {
-      autoAgents: agentsThatRunAuto(workflow),
-      ...(summary ? { summary } : {}),
-    };
+    const summarized = summarizedFor(workflow, request);
     if (current === null) {
       return {
         ok: true,
@@ -476,6 +493,69 @@ export class WorkflowProposalService {
         replacesName: current.workflow.name,
         diff,
         baseHash: current.hash,
+        workflow,
+      },
+    };
+  }
+
+  /**
+   * A builder chat's edits, applied to the library file as it stands and
+   * checked as its own save would be — the schema and the graph rules, not
+   * whether it could run yet: a workflow is built up over several changes. The
+   * card is a replacement pinned to the version the edits were applied to.
+   */
+  async prepareChange(
+    request: WorkflowChangeProposalRequest,
+  ): Promise<PreparedProposal> {
+    const file = await readWorkflowSource(
+      this.store.locate(request.slug).path,
+    ).catch(() => null);
+    if (file === null) {
+      return {
+        ok: false,
+        code: 'WORKFLOW_GONE',
+        message: `the workflow '${request.slug}' is no longer in the library — it is not re-created`,
+      };
+    }
+    let current: Workflow;
+    try {
+      current = parseWorkflowYaml(file.source);
+    } catch (error) {
+      // The parser quotes the file's lines around the fault, a profile path
+      // among them: the agent gets the first line, which names the fault.
+      return {
+        ok: false,
+        code: 'WORKFLOW_UNREADABLE',
+        message: `the file cannot be loaded (${firstLineOf(error instanceof Error ? error.message : String(error))}) — fix only what this names, in the file, with your own file tools, then propose the change again`,
+      };
+    }
+    const edited = editWorkflow(
+      current,
+      request.edits,
+      WORKFLOW_FILE_EDIT_COPY,
+      true,
+    );
+    if (!edited.ok) {
+      return { ok: false, code: edited.error, message: edited.message };
+    }
+    const workflow = edited.workflow;
+    const diff = diffWorkflows(current, workflow);
+    if (diff.identical) {
+      return {
+        ok: false,
+        code: 'NOTHING_TO_CHANGE',
+        message: `the edits leave '${request.slug}' as it stands`,
+      };
+    }
+    return {
+      ok: true,
+      proposal: {
+        mode: 'replace',
+        ...summarizedFor(workflow, request),
+        slug: request.slug,
+        replacesName: current.name,
+        diff,
+        baseHash: file.hash,
         workflow,
       },
     };
@@ -522,6 +602,23 @@ export class WorkflowProposalService {
     }
     return { outcome: 'saved', slug: proposal.slug, backup };
   }
+}
+
+/**
+ * What every card leads with. Ahead of `workflow`: the generic card prints its
+ * input as JSON in a short scroll box, and this is what must be seen.
+ */
+function summarizedFor(
+  workflow: Workflow,
+  request: { summary?: string; reason?: string },
+): Pick<WorkflowProposal, 'autoAgents' | 'summary' | 'reason'> {
+  const summary = request.summary?.trim();
+  const reason = request.reason?.trim();
+  return {
+    autoAgents: agentsThatRunAuto(workflow),
+    ...(summary ? { summary } : {}),
+    ...(reason ? { reason } : {}),
+  };
 }
 
 function verdictOf(

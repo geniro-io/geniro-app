@@ -3580,7 +3580,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       content: [
         {
           type: 'text',
-          text: 'Not proposed: workflows are proposed from ordinary chats only.',
+          text: "Not proposed: workflows are proposed from ordinary chats and a workflow's own builder chat only.",
         },
       ],
       isError: true,
@@ -3605,7 +3605,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     });
   });
 
-  it('lists a builder chat turn the save and the read it needs, never propose_workflow, each naming the other', async () => {
+  it('lists a builder chat turn the proposal, the check, the read and the backup, each naming the others it overlaps', async () => {
     const builders = new WorkflowBuilderBroker();
     builders.register('run-1', 'agent', {
       slug: 'team',
@@ -3658,25 +3658,31 @@ describe('McpServerService — what the descriptions tell a model', () => {
 
     expect(workflowTools).toEqual([
       HOST_READ_WORKFLOWS_TOOL,
+      HOST_PROPOSE_WORKFLOW_TOOL,
       HOST_WORKFLOW_CHANGE_TOOL,
       HOST_BACKUP_WORKFLOW_TOOL,
     ]);
+    // The builder's own words: edits to this workflow, not a whole one.
+    expect(described(HOST_PROPOSE_WORKFLOW_TOOL)).toMatch(
+      /the workflow this chat edits/,
+    );
+    expect(described(HOST_PROPOSE_WORKFLOW_TOOL)).toContain(
+      HOST_WORKFLOW_CHANGE_TOOL,
+    );
     expect(described(HOST_WORKFLOW_CHANGE_TOOL)).toContain(
-      HOST_BACKUP_WORKFLOW_TOOL,
+      HOST_PROPOSE_WORKFLOW_TOOL,
     );
     expect(described(HOST_BACKUP_WORKFLOW_TOOL)).toContain(
-      HOST_WORKFLOW_CHANGE_TOOL,
+      HOST_PROPOSE_WORKFLOW_TOOL,
     );
     expect(described(HOST_BACKUP_WORKFLOW_TOOL)).toMatch(/Do NOT use it/);
     expect(described(HOST_READ_WORKFLOWS_TOOL)).toContain(
-      HOST_WORKFLOW_CHANGE_TOOL,
-    );
-    expect(described(HOST_READ_WORKFLOWS_TOOL)).not.toContain(
       HOST_PROPOSE_WORKFLOW_TOOL,
     );
     expect(described(HOST_WORKFLOW_CHANGE_TOOL)).toContain(
       HOST_READ_WORKFLOWS_TOOL,
     );
+    expect(described(HOST_PROPOSE_WORKFLOW_TOOL)).toMatch(/Do not use it/);
     for (const name of workflowTools) {
       expect(described(name), `${name} never says when`).toMatch(
         /Use it (when|whenever)/,
@@ -3736,6 +3742,88 @@ describe('McpServerService — what the descriptions tell a model', () => {
 
     expect(result.isError).toBe(false);
     expect(result.content[0]!.text).toContain('"hash": "h1"');
+  });
+
+  it("hands a builder chat's propose_workflow edits to the proposal service under the chat's own slug", async () => {
+    const builders = new WorkflowBuilderBroker();
+    builders.register('run-1', 'agent', {
+      slug: 'team',
+      turnStartedAt: 0,
+      savedHash: null,
+      acceptsAnyVersion: false,
+    });
+    const propose = vi.fn();
+    const proposeChange = vi.fn(() =>
+      Promise.resolve({
+        status: 'shown' as const,
+        proposal: {
+          mode: 'replace' as const,
+          slug: 'team',
+          replacesName: 'Team',
+          baseHash: 'h1',
+          diff: {} as never,
+          autoAgents: [],
+          workflow: { name: 'Team', nodes: [], edges: [] },
+        },
+      }),
+    );
+    const tool = createMcpTools({
+      calls: new CallBroker(),
+      questions: new UserQuestionBroker(),
+      findings: new FindingsReportBroker(),
+      charts: new ChartBroker(),
+      metrics: new MetricsBroker(),
+      comparisons: new ComparisonBroker(),
+      galleries: new GalleryBroker(),
+      artifacts: new ArtifactBroker(),
+      actions: new ActionBroker(),
+      patches: new PatchBroker(),
+      plans: new PlanBroker(),
+      notices: new NotifyBroker(),
+      board: new TaskBoardBroker(),
+      history: new GlobalChatSearchService({} as ChatSearchIndexDao),
+      analysis: new AnalysisBroker(),
+      threads: {} as ThreadReaderService,
+      workflowChanges: {} as WorkflowChangeService,
+      workflowGate: new WorkflowProposalBroker(),
+      workflowBuilders: builders,
+      workflowStore: {} as WorkflowStoreService,
+      workflowProposals: {
+        propose,
+        proposeChange,
+      } as unknown as WorkflowProposalService,
+      shares: fakeShares(false).service,
+      monitors: monitorBroker().broker,
+      teamNotes: teamNoteBroker(),
+      runOutcomes: runOutcomeBroker(),
+    }).find((t) => t.handles(HOST_PROPOSE_WORKFLOW_TOOL))!;
+    const context = {
+      runId: 'run-1',
+      nodeId: 'agent',
+    } as Parameters<typeof tool.call>[2];
+    const edits = [{ path: 'name', value: 'Team 2' }];
+
+    const result = await tool.call(
+      HOST_PROPOSE_WORKFLOW_TOOL,
+      { edits, summary: 'Renames it', reason: 'The user asked.' },
+      context,
+    );
+    const whole = await tool.call(
+      HOST_PROPOSE_WORKFLOW_TOOL,
+      { workflow: { name: 'x' }, replaces: 'other' },
+      context,
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('End your turn now');
+    expect(proposeChange).toHaveBeenCalledWith('run-1', {
+      slug: 'team',
+      edits,
+      summary: 'Renames it',
+      reason: 'The user asked.',
+    });
+    expect(whole.content[0]!.text).toMatch(/^INVALID_ARGS/);
+    expect(propose).not.toHaveBeenCalled();
   });
 
   it('hands a listed propose_workflow call to the proposal service, and marks a refusal an error', async () => {

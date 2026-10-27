@@ -14,9 +14,10 @@ export interface WorkflowProposalSink {
 
 /**
  * Gates `read_workflows` and `propose_workflow` to ordinary chats: never a
- * workflow node, a workflow's own builder chat or an analysis — both of which
- * change a workflow through `save_workflow_change` (a builder chat also reads
- * the library, gated by `WorkflowBuilderBroker`).
+ * workflow node, a workflow's own builder chat or an analysis. An analysis
+ * changes a workflow through `save_workflow_change`; a builder chat reads the
+ * library and proposes changes to its own workflow through the same tools,
+ * gated by `WorkflowBuilderBroker` instead.
  */
 @Injectable()
 export class WorkflowProposalBroker extends HostSinkBroker<WorkflowProposalSink> {

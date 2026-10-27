@@ -18,10 +18,10 @@ export function readWorkflowsInstructions(forBuilder: boolean): string {
   if (forBuilder) {
     return (
       WHAT_IT_ANSWERS +
-      `a change through ${HOST_WORKFLOW_CHANGE_TOOL} that writes the token back unchanged keeps that ` +
-      'profile. ' +
+      `edits to ${HOST_PROPOSE_WORKFLOW_TOOL} or ${HOST_WORKFLOW_CHANGE_TOOL} that write the token back ` +
+      'unchanged keep that profile. ' +
       "Use it when you want the user's other workflows as examples, by name; read the workflow this " +
-      `chat edits from its file, which ${HOST_WORKFLOW_CHANGE_TOOL} changes. ` +
+      `chat edits from its file, which ${HOST_PROPOSE_WORKFLOW_TOOL} changes. ` +
       'It reads only; nothing here changes a workflow.'
     );
   }

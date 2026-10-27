@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   HOST_BACKUP_WORKFLOW_TOOL,
+  HOST_PROPOSE_WORKFLOW_TOOL,
   HOST_READ_WORKFLOWS_TOOL,
   HOST_WORKFLOW_CHANGE_TOOL,
 } from '../../agents/chat.types';
@@ -41,13 +42,29 @@ describe('composeWorkflowChatInstructions', () => {
     expect(BRIEF).toContain('slug `dev-team`');
   });
 
-  it('tells the agent to save the change, never write it or only describe it', () => {
+  it('tells the agent to propose every change on a card, never write it or only describe it', () => {
     expect(BRIEF).toMatch(
       new RegExp(
-        `Make every change with ${HOST_WORKFLOW_CHANGE_TOOL}, never by writing the\\s+file yourself`,
+        `Make every change by proposing it with ${HOST_PROPOSE_WORKFLOW_TOOL}, never\\s+by writing the file yourself`,
       ),
     );
     expect(BRIEF).toMatch(/An edit you\s+only\s+describe\s+never\s+happens/);
+  });
+
+  it('has the card say what changes and why, and the turn end on it', () => {
+    expect(BRIEF).toMatch(
+      /a one-line `summary` of what\s+they change and a `reason` saying why/,
+    );
+    expect(BRIEF).toMatch(/only when they approve/);
+    expect(BRIEF).toMatch(/END YOUR TURN/);
+  });
+
+  it('offers save_workflow_change as a check that saves nothing', () => {
+    expect(BRIEF).toMatch(
+      new RegExp(
+        `${HOST_WORKFLOW_CHANGE_TOOL} checks a set of edits against the file and\\s+answers the diff without saving`,
+      ),
+    );
   });
 
   it('tells the agent to read the WHOLE file before changing it', () => {
@@ -56,20 +73,26 @@ describe('composeWorkflowChatInstructions', () => {
     );
   });
 
-  it('lets the agent write the file itself only to repair YAML a save refused as unreadable', () => {
-    expect(BRIEF).toMatch(/when a save answers\s+WORKFLOW_UNREADABLE/);
-    expect(BRIEF).toMatch(/Fix only what that refusal\s+names/);
+  it('lets the agent write the file itself only to repair YAML refused as unreadable', () => {
+    expect(BRIEF).toMatch(
+      /when a proposal or a check\s+answers WORKFLOW_UNREADABLE/,
+    );
+    expect(BRIEF).toMatch(/Fix only what that\s+refusal names/);
   });
 
-  it('leaves the backup to the agent, through backup_workflow', () => {
+  it('backs the file up through backup_workflow when the user asks', () => {
     expect(BRIEF).toMatch(
-      new RegExp(`back the file up with\\s+${HOST_BACKUP_WORKFLOW_TOOL}`),
+      new RegExp(
+        `Back the file up with ${HOST_BACKUP_WORKFLOW_TOOL} whenever the user asks`,
+      ),
     );
   });
 
-  it('builds a new workflow through the save too, never by writing the document', () => {
+  it('builds a new workflow on one card too, never by writing the document', () => {
     expect(BRIEF).toMatch(
-      new RegExp(`set every part of it with ${HOST_WORKFLOW_CHANGE_TOOL}`),
+      new RegExp(
+        `propose every part of it on one ${HOST_PROPOSE_WORKFLOW_TOOL} card`,
+      ),
     );
     expect(BRIEF).not.toMatch(/write the whole document/);
   });
@@ -124,7 +147,8 @@ describe('composeWorkflowChatInstructions', () => {
     expect(BRIEF).toMatch(/Keep a sentence only if removing it would change/);
   });
 
-  it('routes every change through save_workflow_change, never the agent writing the file', () => {
+  it('routes every change through the workflow tools, never the agent writing the file', () => {
+    expect(BRIEF).toContain(HOST_PROPOSE_WORKFLOW_TOOL);
     expect(BRIEF).toContain(HOST_WORKFLOW_CHANGE_TOOL);
     expect(BRIEF).toContain(HOST_READ_WORKFLOWS_TOOL);
     expect(BRIEF).not.toMatch(/editing the file with your own file tools/);

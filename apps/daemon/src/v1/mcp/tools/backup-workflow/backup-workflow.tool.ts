@@ -18,7 +18,8 @@ import { backupWorkflowSchema } from './backup-workflow.schema';
 
 /**
  * `backup_workflow` — a workflow builder chat's backup of its own file, taken
- * when its agent decides; the builder's `save_workflow_change` takes none.
+ * when the user asks for one; an approved `propose_workflow` card takes its
+ * own before it saves.
  */
 export class BackupWorkflowTool extends BaseMcpTool {
   readonly name = HOST_BACKUP_WORKFLOW_TOOL;

@@ -267,6 +267,14 @@ export function WorkflowProposalCard({
           {proposal.summary}
         </p>
       ) : null}
+      {proposal.reason !== null ? (
+        <p
+          data-slot="workflow-proposal-reason"
+          className="m-0 text-xs break-words whitespace-pre-line">
+          <span className="font-medium">Why: </span>
+          <span className="text-muted-foreground">{proposal.reason}</span>
+        </p>
+      ) : null}
       {autoAgents.length > 0 ? (
         <div
           role="note"

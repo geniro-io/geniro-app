@@ -11,26 +11,28 @@ export interface WorkflowBuilderSink {
   slug: string;
   /**
    * When the turn began (epoch ms). The canvas does not save while the chat
-   * works, so a file written after this, before the turn's own first save,
+   * works, so a file written after this, before the turn's own first check,
    * was written by something else.
    */
   turnStartedAt: number;
   /**
-   * The file version this turn's last save wrote, or a refused save found;
-   * null until then. A later save of the turn is checked against it.
+   * The file version this turn's last check read, or a refused one found;
+   * null until then. A later check of the turn is held to it.
    */
   savedHash: string | null;
   /**
-   * The turn's last save was refused because the file cannot be loaded, and
-   * the agent repairs it itself: its next save takes the file as it stands.
+   * The turn's last check was refused because the file cannot be loaded, and
+   * the agent repairs it itself: its next check takes the file as it stands.
    */
   acceptsAnyVersion: boolean;
 }
 
 /**
- * Gates `save_workflow_change`, `backup_workflow` and `read_workflows` for a
- * workflow's own builder chat — the chat docked under the canvas. The writes
- * themselves are `WorkflowChangeService`'s, under its builder authority.
+ * Gates `propose_workflow`, `save_workflow_change`, `backup_workflow` and
+ * `read_workflows` for a workflow's own builder chat — the chat docked under
+ * the canvas. A change is written by `WorkflowProposalService` behind the
+ * proposal's card; the check is `WorkflowChangeService`'s, under its builder
+ * authority.
  */
 @Injectable()
 export class WorkflowBuilderBroker extends HostSinkBroker<WorkflowBuilderSink> {
@@ -52,9 +54,9 @@ export class WorkflowBuilderBroker extends HostSinkBroker<WorkflowBuilderSink> {
   }
 
   /**
-   * Remember what the turn now knows of the file, for its next save — only on
-   * the turn that started at `turnStartedAt`: a save answering after its turn
-   * ended (a Stop, then a new message) must not seed the next turn's check.
+   * Remember what the turn now knows of the file, for its next check — only
+   * on the turn that started at `turnStartedAt`: a check answering after its
+   * turn ended (a Stop, then a new message) must not seed the next turn's.
    */
   async noteVersion(
     runId: string,

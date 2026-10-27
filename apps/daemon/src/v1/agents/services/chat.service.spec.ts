@@ -10464,9 +10464,9 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toHaveLength(1);
   });
 
-  it("approves a builder chat's workflow read always, and its save where a file edit would be", async () => {
-    // The dock opens in acceptEdits, where the agent's own Edit of the YAML
-    // needs no card: a carded save would send it back to that edit.
+  it("approves a builder chat's read, check and proposal in every mode", async () => {
+    // None of them writes the file: the change is written behind the
+    // proposal's card, which is the user's decision.
     const answered = async (
       approval: 'acceptEdits' | 'ask',
     ): Promise<string[]> => {
@@ -10482,6 +10482,7 @@ describe('ChatService — approval modes (parity M1)', () => {
       for (const tool of [
         HOST_READ_WORKFLOWS_TOOL,
         HOST_WORKFLOW_CHANGE_TOOL,
+        HOST_PROPOSE_WORKFLOW_TOOL,
       ]) {
         claude.emit({
           type: 'approval_request',
@@ -10491,17 +10492,18 @@ describe('ChatService — approval modes (parity M1)', () => {
         });
       }
       await drain();
-      const approved = handle.respondApproval.mock.calls
+      return handle.respondApproval.mock.calls
         .filter(([, allowed]) => allowed === true)
         .map(([id]) => id as string);
-      return approved;
     };
 
-    expect(await answered('acceptEdits')).toEqual([
-      `p-${HOST_READ_WORKFLOWS_TOOL}`,
-      `p-${HOST_WORKFLOW_CHANGE_TOOL}`,
-    ]);
-    expect(await answered('ask')).toEqual([`p-${HOST_READ_WORKFLOWS_TOOL}`]);
+    for (const approval of ['acceptEdits', 'ask'] as const) {
+      expect(await answered(approval)).toEqual([
+        `p-${HOST_READ_WORKFLOWS_TOOL}`,
+        `p-${HOST_WORKFLOW_CHANGE_TOOL}`,
+        `p-${HOST_PROPOSE_WORKFLOW_TOOL}`,
+      ]);
+    }
   });
 
   it('auto-approves the show_comparison CALL, like every drawing tool', async () => {

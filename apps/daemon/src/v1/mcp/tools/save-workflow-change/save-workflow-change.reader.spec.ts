@@ -99,12 +99,12 @@ describe('SaveWorkflowChangeTool', () => {
     ]);
   });
 
-  it("saves a builder chat's own workflow, named by the chat and never by the model", async () => {
+  it("only checks a builder chat's own workflow, named by the chat and never by the model", async () => {
     const { save, saved } = tool('dev-team');
 
     const result = await save.call(
       'save_workflow_change',
-      { edits: [{ path: 'name', value: 'x' }], dryRun: true },
+      { edits: [{ path: 'name', value: 'x' }] },
       BUILDER_CONTEXT,
     );
 
@@ -124,9 +124,23 @@ describe('SaveWorkflowChangeTool', () => {
     ]);
   });
 
-  it('checks each later save of the turn against the version the last one wrote or found', async () => {
+  it("refuses a builder chat's dryRun: its change is saved behind the proposal card", async () => {
+    const { save, saved } = tool('dev-team');
+
+    const result = await save.call(
+      'save_workflow_change',
+      { edits: [{ path: 'name', value: 'x' }], dryRun: false },
+      BUILDER_CONTEXT,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/^INVALID_ARGS/);
+    expect(saved).toEqual([]);
+  });
+
+  it('holds each later check of the turn to the version the last one read or found', async () => {
     const { save, saved } = tool('dev-team', [
-      { saved: true, hash: 'written' },
+      { dryRun: true, saved: false, currentHash: 'read' },
       { saved: false, error: 'HASH_DRIFT', currentHash: 'found' },
     ]);
     const call = () =>
@@ -149,7 +163,7 @@ describe('SaveWorkflowChangeTool', () => {
       },
       {
         kind: 'builder',
-        savedHash: 'written',
+        savedHash: 'read',
         turnStartedAt: 5,
         acceptsAnyVersion: false,
       },
@@ -162,7 +176,7 @@ describe('SaveWorkflowChangeTool', () => {
     ]);
   });
 
-  it('never notes a version into the turn after the one a late save belongs to', async () => {
+  it('never notes a version into the turn after the one a late check belongs to', async () => {
     const builders = new WorkflowBuilderBroker();
     builders.register('builder', 'agent', {
       slug: 'team',
@@ -175,7 +189,7 @@ describe('SaveWorkflowChangeTool', () => {
       builders,
       {} as ThreadReaderService,
       {
-        // The user stops the turn and sends again while this save is out.
+        // The user stops the turn and sends again while this check is out.
         save: () => {
           builders.register('builder', 'agent', {
             slug: 'team',
@@ -183,7 +197,11 @@ describe('SaveWorkflowChangeTool', () => {
             savedHash: null,
             acceptsAnyVersion: false,
           });
-          return Promise.resolve({ saved: true, hash: 'late' });
+          return Promise.resolve({
+            dryRun: true,
+            saved: false,
+            currentHash: 'late',
+          });
         },
       } as unknown as WorkflowChangeService,
     );
@@ -202,10 +220,10 @@ describe('SaveWorkflowChangeTool', () => {
     });
   });
 
-  it('lets the next save take the repaired file after a refusal for a file it could not load', async () => {
+  it('lets the next check take the repaired file after a refusal for a file it could not load', async () => {
     const { save, saved } = tool('dev-team', [
       { saved: false, error: 'WORKFLOW_UNREADABLE', message: 'x' },
-      { saved: true, hash: 'repaired' },
+      { dryRun: true, saved: false, currentHash: 'repaired' },
     ]);
     const call = () =>
       save.call(

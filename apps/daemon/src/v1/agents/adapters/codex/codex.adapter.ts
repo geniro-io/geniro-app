@@ -235,8 +235,6 @@ export class CodexAdapter extends AgentAdapter {
       artifactToolNames: [],
       approval: {
         modes: ['auto', 'ask', 'acceptEdits', 'plan'],
-        /** `acceptEdits` passes in-folder file changes (`codex-session.spec`). */
-        workspaceEditsUnasked: ['auto', 'acceptEdits'],
         probedModes: [],
         degradeOnProbeFail: {},
         soleModeDegradeReason: null,

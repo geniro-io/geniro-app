@@ -167,7 +167,7 @@ export function TeamNotesSection({
                 setNewAbove(false);
               }
             }}>
-            <ul className="m-0 flex list-none flex-col gap-1 p-0">
+            <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
               {matching.slice(0, shown).map((note) => (
                 <TeamNoteEntry
                   key={note.seq}

@@ -400,7 +400,8 @@ function AnalyzeThreadButton({
 /**
  * The popups the panel's control row opens. Each is something ABOUT the
  * thread rather than part of it — its analysis, its load on the machine, the
- * user's own notes — so none of them takes room in the column; the column
+ * user's own notes and the agents' team notes — so none of them takes room in
+ * the column; the column
  * holds the thread's agents, pull requests and pages.
  *
  * One at a time, because each is a modal dialog.
@@ -429,8 +430,9 @@ function PopupTitle({
 
 /**
  * The way to the thread's notes, in the control row and on the folded rail:
- * opens them in a popup with the field focused. Tinted when the thread
- * already has notes, so the row still says there is something written there.
+ * opens them in a popup with the field focused — the user's own notes, and
+ * under them the team notes the run's agents wrote. Tinted when the thread
+ * already has either, so the row still says there is something written there.
  */
 function ThreadNotesButton({
   hasNotes,
@@ -2332,25 +2334,54 @@ export function AgentsPanel({
           open={popup === 'notes'}
           onClose={closePopup}
           title={<PopupTitle icon={NotebookPen}>Notes</PopupTitle>}
-          className="max-w-lg">
-          <div className="flex flex-col gap-2">
-            {/* Mounted only while open (the dialog draws nothing shut), so
-                closing it is the field's way out: its owed text is saved then. */}
-            <ThreadNotes
-              key={notes.runId}
-              notes={notes.value}
-              onSave={notes.onSave}
-              autoFocus
-            />
-            {/* The placeholder says the agent never sees them, but only while
-                the field is empty — the commonest moment to wonder is with
-                text already in it. */}
-            <p
-              data-slot="thread-notes-hint"
-              className="m-0 text-xs text-muted-foreground">
-              Only you see these — they are never sent to the agent. Saved as
-              you type.
-            </p>
+          className={teamNotes.length > 0 ? 'max-w-2xl' : 'max-w-lg'}>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2">
+              {/* Mounted only while open (the dialog draws nothing shut), so
+                  closing it is the field's way out: its owed text is saved then. */}
+              <ThreadNotes
+                key={notes.runId}
+                notes={notes.value}
+                onSave={notes.onSave}
+                autoFocus
+              />
+              {/* The placeholder says the agent never sees them, but only while
+                  the field is empty — the commonest moment to wonder is with
+                  text already in it. */}
+              <p
+                data-slot="thread-notes-hint"
+                className="m-0 text-xs text-muted-foreground">
+                Only you see these — they are never sent to the agent. Saved as
+                you type.
+              </p>
+            </div>
+            {/* Both kinds of note in one place: the user's own above, the
+                agents' shared ones below — "I should see team notes here".
+                Draws nothing for a run whose agents wrote none. The section's
+                own inset is taken back so its rows line up with the field. */}
+            <div className="-mx-3">
+              <TeamNotesSection
+                notes={teamNotes}
+                loaded={teamNotesLoaded}
+                agentName={teamNoteAgentName}
+                onJump={
+                  timeline
+                    ? (seq) => {
+                        closePopup();
+                        timeline.onJump(seq);
+                      }
+                    : undefined
+                }
+                onOpenAll={
+                  onOpenTeamNotes
+                    ? () => {
+                        closePopup();
+                        onOpenTeamNotes();
+                      }
+                    : undefined
+                }
+              />
+            </div>
           </div>
         </Dialog>
       ) : null}
@@ -2429,7 +2460,7 @@ export function AgentsPanel({
         notes ? (
           <ThreadNotesButton
             key="notes"
-            hasNotes={hasThreadNotes(notes.value)}
+            hasNotes={hasThreadNotes(notes.value) || teamNotes.length > 0}
             onOpen={() => setPopup('notes')}
             className={size}
           />

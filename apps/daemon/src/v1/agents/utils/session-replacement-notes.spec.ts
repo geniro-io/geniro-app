@@ -4,6 +4,7 @@ import type { AgentTurnInput } from '../adapters/adapter.types';
 import {
   deferredMcpChangeNote,
   endedCommandsNote,
+  isSlashCommand,
   stoppedCommandsNote,
   withSessionNote,
 } from './session-replacement-notes';
@@ -112,5 +113,18 @@ describe('deferredMcpChangeNote', () => {
       expect(text).toContain('not available');
       expect(text).toContain('still loaded');
     }
+  });
+});
+
+describe('isSlashCommand', () => {
+  it.each([
+    ['/review the diff', true],
+    ['  /compact keep the plan', true],
+    ['/skill', true],
+    ['/Users/me/x.ts is broken', false],
+    ['fix /review', false],
+    ['', false],
+  ])('reads %j as a slash command: %s', (prompt, expected) => {
+    expect(isSlashCommand(prompt)).toBe(expected);
   });
 });

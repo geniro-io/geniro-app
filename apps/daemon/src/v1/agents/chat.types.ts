@@ -3565,6 +3565,110 @@ export const RunOutcomePayloadSchema = z.object({
 });
 export type RunOutcomePayload = z.infer<typeof RunOutcomePayloadSchema>;
 
+export const HOST_MOVE_STAGE_TOOL = 'move_stage';
+
+export const STAGE_MOVE_ACTIONS = ['complete', 'skip', 'reopen'] as const;
+export const StageMoveActionSchema = z
+  .enum(STAGE_MOVE_ACTIONS)
+  .meta({ id: 'StageMoveAction' });
+export type StageMoveAction = z.infer<typeof StageMoveActionSchema>;
+
+export const StageChangeActionSchema = z
+  .enum([...STAGE_MOVE_ACTIONS, 'nudge', 'stalled'])
+  .meta({ id: 'StageChangeAction' });
+export type StageChangeAction = z.infer<typeof StageChangeActionSchema>;
+
+export const StageActorSchema = z
+  .discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('agent'),
+      nodeId: z.string(),
+      callId: z.string().optional(),
+    }),
+    z.object({ kind: z.literal('user'), via: z.enum(['desktop', 'remote']) }),
+    z.object({ kind: z.literal('system') }),
+  ])
+  .meta({ id: 'StageActor' });
+export type StageActor = z.infer<typeof StageActorSchema>;
+
+/** TWIN PARSER: readStageChangePayload in apps/ui/src/renderer/chats/stage-change-payload.ts. */
+export const StageChangePayloadSchema = z.object({
+  action: StageChangeActionSchema,
+  stageId: z.string(),
+  stageTitle: z.string(),
+  next: z.string().optional(),
+  text: z.string(),
+  rev: z.number().int(),
+  by: StageActorSchema,
+});
+export type StageChangePayload = z.infer<typeof StageChangePayloadSchema>;
+
+export const STAGE_STATUSES = [
+  'pending',
+  'current',
+  'done',
+  'skipped',
+  'not_taken',
+] as const;
+export const StageStatusSchema = z
+  .enum(STAGE_STATUSES)
+  .meta({ id: 'StageStatus' });
+export type StageStatus = z.infer<typeof StageStatusSchema>;
+
+export const StageProgressEntrySchema = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    status: StageStatusSchema,
+    next: z
+      .array(z.string())
+      .describe('the stages that may follow; two or more = one of them'),
+    chosen: z
+      .string()
+      .optional()
+      .describe('the branch the run took after this stage, at a fork'),
+    by: StageActorSchema.optional().describe('who finished or skipped it'),
+    text: z.string().optional().describe('their summary or reason'),
+    at: z.string().optional().describe('when it was finished or skipped'),
+    rev: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        "the move that last set its status — the one that finished, skipped or reopened it, or the reopen that reset it (a stage_change row's rev); absent while no move has",
+      ),
+  })
+  .meta({ id: 'StageProgressEntry' });
+export type StageProgressEntry = z.infer<typeof StageProgressEntrySchema>;
+
+export const StageProgressSchema = z
+  .object({
+    rev: z.number().int().describe('how many moves the run has made'),
+    current: z
+      .string()
+      .nullable()
+      .describe('the stage being worked on; null once the last one is done'),
+    position: z.object({
+      index: z.number().int(),
+      total: z.number().int(),
+    }),
+    stages: z.array(StageProgressEntrySchema),
+  })
+  .meta({ id: 'StageProgress' });
+export type StageProgress = z.infer<typeof StageProgressSchema>;
+
+export const TaskStageLineSchema = z
+  .object({
+    title: z
+      .string()
+      .nullable()
+      .describe('the current stage; null once every stage is done'),
+    index: z.number().int(),
+    total: z.number().int(),
+  })
+  .meta({ id: 'TaskStageLine' });
+export type TaskStageLine = z.infer<typeof TaskStageLineSchema>;
+
 /** A pull request's newest recorded outcome, as its run's display list carries it. */
 export const PullRequestOutcomeSchema = z
   .object({
@@ -5261,6 +5365,7 @@ export interface RunStatusEvent {
    * whole field exists to end.
    */
   taskList?: RunTaskGroup[];
+  stages?: StageProgress;
   /**
    * How long this run's agent has WORKED and how many tools it has called, as
    * the durable totals stand now — sent on a SETTLE alone.
@@ -6118,6 +6223,9 @@ export const RunWireSchema = z.object({
     .describe(
       "Each agent's own task list as it stands now, folded from the whole transcript",
     ),
+  stages: StageProgressSchema.nullable().describe(
+    "Where the run stands in its workflow's stage graph, folded by the daemon from every stage change; null when the workflow has no stages",
+  ),
   /**
    * This chat's worked milliseconds and tool count, TOTALLED across its turns.
    *

@@ -1090,6 +1090,47 @@ describe('Workflows — a graph the daemon would refuse', () => {
   });
 });
 
+describe('Workflows — a workflow’s stages', () => {
+  const STAGES = [
+    { id: 'plan', title: 'Plan', doneWhen: 'Plan agreed', next: ['build'] },
+    { id: 'build', title: 'Build', doneWhen: 'Built' },
+  ];
+
+  function opens(stages: unknown): void {
+    getWorkflow.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      workflow: {
+        ...EMPTY,
+        nodes: [{ id: 'trigger-1', kind: 'trigger', trigger: 'manual' }],
+        edges: [],
+        layout: { 'trigger-1': { x: 0, y: 0 } },
+        ...(stages === undefined ? {} : { stages }),
+      },
+    }));
+  }
+
+  it('rides every save of the canvas', async () => {
+    opens(STAGES);
+    await openBuilder();
+
+    await addFromPalette('Instructions');
+    await wait(900);
+
+    expect(savedRequests()[0]!.saveWorkflowDto.workflow.stages).toEqual(STAGES);
+  });
+
+  it('writes an empty list found on disk as no stages on its next save', async () => {
+    opens([]);
+    await openBuilder();
+
+    await addFromPalette('Instructions');
+    await wait(900);
+    expect('stages' in savedRequests()[0]!.saveWorkflowDto.workflow).toBe(
+      false,
+    );
+  });
+});
+
 describe('Workflows — deleting from the builder', () => {
   // The delete cleared the canvas and nothing else: the dock stayed open, so
   // the next workflow opened with it drawn — and a conversation about it

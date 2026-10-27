@@ -40,3 +40,27 @@ describe('POST /v1/workflows/runs/:runId/actions/:seq/press|dismiss', () => {
     expect(actions.dismiss).toHaveBeenCalledWith('run-w', 4, 'remote');
   });
 });
+
+describe('POST /v1/workflows/runs/:runId/stages', () => {
+  it('records a move through the gateway as remote, and one without the stamp as desktop', async () => {
+    const stageWakes = {
+      userMove: vi.fn(async (..._args: unknown[]) => ({})),
+    };
+    const controller = Object.create(
+      WorkflowsController.prototype,
+    ) as WorkflowsController;
+    Object.assign(controller, { stageWakes });
+    const dto = {
+      action: 'complete' as const,
+      stage: 'build',
+      text: 'built',
+      expectedRev: 3,
+    };
+
+    await controller.moveStage('run-w', dto, { 'x-geniro-via': 'remote' });
+    await controller.moveStage('run-w', dto, {});
+
+    const via = stageWakes.userMove.mock.calls.map((call) => call[2]);
+    expect(via).toEqual(['remote', 'desktop']);
+  });
+});

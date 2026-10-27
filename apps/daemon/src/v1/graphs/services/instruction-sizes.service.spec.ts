@@ -13,6 +13,7 @@ import {
 import type { Workflow, WorkflowAgentNode } from '../graphs.types';
 import { ANSWERING_A_CALL } from '../utils/callee-text';
 import { callSurfaceText } from '../utils/node-instructions';
+import { stageMapPrompt } from '../utils/stage-text';
 import { InstructionSizesService } from './instruction-sizes.service';
 
 const claude = new ClaudeAdapter();
@@ -43,7 +44,7 @@ const reviewer = {
 } as WorkflowAgentNode;
 
 /** The Dev Team's shape: a trigger-fed manager with blocks, a call-only callee. */
-const DEV_TEAM: Pick<Workflow, 'nodes' | 'edges'> = {
+const DEV_TEAM: Pick<Workflow, 'nodes' | 'edges' | 'stages'> = {
   nodes: [
     { id: 'trigger', kind: 'trigger', trigger: 'manual' },
     { id: 'settings', kind: 'instruction', instructions: 'TEAM SETTINGS' },
@@ -156,6 +157,46 @@ describe('InstructionSizesService', () => {
     expect(size?.parts.map((part) => part.source)).not.toContain(
       'replyLanguage',
     );
+  });
+
+  it("measures the run's stage map for every agent, between the wired blocks and the role", () => {
+    const stages: NonNullable<Workflow['stages']> = [
+      { id: 'build', title: 'Build', doneWhen: 'built', next: ['review'] },
+      {
+        id: 'review',
+        title: 'Review',
+        doneWhen: 'approved',
+        ownerHint: 'reviewer',
+      },
+    ];
+    const sizes = subject.measure({
+      workflow: { ...DEV_TEAM, stages },
+      ...SETTINGS,
+    }).nodes;
+    const map = [
+      'This workflow has stages every run walks, in order:',
+      '1. Build (build) — then Review (review)',
+      '   Done when: built',
+      '2. Review (review) — final stage — usually done by reviewer',
+      '   Done when: approved',
+      '',
+      `Each of your turns starts with the current stage. When the current stage's "done when" holds, mark it with move_stage (action "complete", a one-line summary). Skip a stage that does not apply with action "skip" and the reason; at a stage with ONE-of branches, name the branch you take as "next". If an earlier stage turns out unfinished, reopen it with action "reopen" and the reason — that also reopens every stage after it.`,
+      'Any agent of the run may move a stage; "usually done by" is a hint, not a rule. Move only the stage you finished, and only when it is the current one.',
+    ].join('\n');
+    expect(stageMapPrompt(stages, DEV_TEAM.nodes)).toBe(map);
+    for (const size of sizes) {
+      const sources = size.parts.map((part) => part.source);
+      expect(sources).toContain('stageMap');
+      expect(sources.indexOf('stageMap')).toBe(sources.indexOf('role') - 1);
+      expect(size.parts.find((p) => p.source === 'stageMap')?.chars).toBe(
+        map.length,
+      );
+    }
+    expect(
+      subject
+        .measure({ workflow: DEV_TEAM, ...SETTINGS })
+        .nodes.flatMap((n) => n.parts.map((p) => p.source)),
+    ).not.toContain('stageMap');
   });
 
   it('answers only for agent nodes', () => {

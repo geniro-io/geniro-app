@@ -91,7 +91,7 @@ export function TeamNoteEntry({
         <button
           type="button"
           onClick={() => onJump(note.seq)}
-          aria-label={`${note.kind} note ${note.seq} by ${author} — open it in the transcript`}
+          aria-label={`${note.kind} note by ${author} — open it in the transcript`}
           className="-mx-1 flex min-w-0 items-center justify-between gap-2 rounded px-1 text-left text-xs focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
           {header}
         </button>
@@ -117,7 +117,7 @@ export function TeamNoteEntry({
           ) : null}
           {superseded ? (
             <span className={cn(long && 'ml-auto')}>
-              superseded by note {note.supersededBy}
+              superseded by a newer note
             </span>
           ) : null}
         </div>

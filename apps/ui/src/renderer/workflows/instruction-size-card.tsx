@@ -18,6 +18,7 @@ const SOURCE_LABEL: Record<InstructionSizeSource, string> = {
   taskInstructions: 'Task card instructions',
   workflowInstructions: 'Workflow builder brief',
   instructionBlocks: 'Instruction block',
+  stageMap: 'Stage map',
   role: 'Role',
   answeringACall: 'Answering-a-call note',
   callSurface: 'Call block (May call)',

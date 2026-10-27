@@ -4117,6 +4117,7 @@ export const InstructionSizeSource = {
     TaskInstructions: 'taskInstructions',
     WorkflowInstructions: 'workflowInstructions',
     InstructionBlocks: 'instructionBlocks',
+    StageMap: 'stageMap',
     Role: 'role',
     AnsweringACall: 'answeringACall',
     CallSurface: 'callSurface'
@@ -4238,7 +4239,8 @@ export const ItemKind = {
     Action: 'action',
     ActionOutcome: 'action_outcome',
     TeamNote: 'team_note',
-    RunOutcome: 'run_outcome'
+    RunOutcome: 'run_outcome',
+    StageChange: 'stage_change'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -4683,6 +4685,57 @@ export interface MoveTaskStatusDto {
     to: TaskStatus;
 }
 
+
+/**
+ * 
+ * @export
+ * @interface MoveWorkflowRunStageDto
+ */
+export interface MoveWorkflowRunStageDto {
+    /**
+     * 
+     * @type {MoveWorkflowRunStageDtoStageMoveAction}
+     * @memberof MoveWorkflowRunStageDto
+     */
+    action: MoveWorkflowRunStageDtoStageMoveAction;
+    /**
+     * The id of the stage to move
+     * @type {string}
+     * @memberof MoveWorkflowRunStageDto
+     */
+    stage: string;
+    /**
+     * At a fork: the id of the stage the run takes
+     * @type {string}
+     * @memberof MoveWorkflowRunStageDto
+     */
+    next?: string;
+    /**
+     * What was done, or why
+     * @type {string}
+     * @memberof MoveWorkflowRunStageDto
+     */
+    text: string;
+    /**
+     * The stage revision the user was looking at; a different one is refused 409 STAGE_PROGRESS_CHANGED
+     * @type {number}
+     * @memberof MoveWorkflowRunStageDto
+     */
+    expectedRev: number;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const MoveWorkflowRunStageDtoStageMoveAction = {
+    Complete: 'complete',
+    Skip: 'skip',
+    Reopen: 'reopen'
+} as const;
+export type MoveWorkflowRunStageDtoStageMoveAction = typeof MoveWorkflowRunStageDtoStageMoveAction[keyof typeof MoveWorkflowRunStageDtoStageMoveAction];
 
 /**
  * 
@@ -6201,6 +6254,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     taskList: Array<RunTaskGroup>;
+    /**
+     * 
+     * @type {StageProgress}
+     * @memberof RunDto
+     */
+    stages: StageProgress | null;
     /**
      * 
      * @type {number}
@@ -8234,6 +8293,260 @@ export interface ShellOutputDto {
     unavailableReason: string | null;
 }
 /**
+ * @type StageActor
+ * 
+ * @export
+ */
+export type StageActor = StageActorOneOf | StageActorOneOf1 | StageActorOneOf2;
+/**
+ * 
+ * @export
+ * @interface StageActorOneOf
+ */
+export interface StageActorOneOf {
+    /**
+     * 
+     * @type {string}
+     * @memberof StageActorOneOf
+     */
+    kind: StageActorOneOfKindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof StageActorOneOf
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StageActorOneOf
+     */
+    callId?: string;
+}
+
+
+/**
+ * @export
+ */
+export const StageActorOneOfKindEnum = {
+    Agent: 'agent'
+} as const;
+export type StageActorOneOfKindEnum = typeof StageActorOneOfKindEnum[keyof typeof StageActorOneOfKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface StageActorOneOf1
+ */
+export interface StageActorOneOf1 {
+    /**
+     * 
+     * @type {string}
+     * @memberof StageActorOneOf1
+     */
+    kind: StageActorOneOf1KindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof StageActorOneOf1
+     */
+    via: StageActorOneOf1ViaEnum;
+}
+
+
+/**
+ * @export
+ */
+export const StageActorOneOf1KindEnum = {
+    User: 'user'
+} as const;
+export type StageActorOneOf1KindEnum = typeof StageActorOneOf1KindEnum[keyof typeof StageActorOneOf1KindEnum];
+
+/**
+ * @export
+ */
+export const StageActorOneOf1ViaEnum = {
+    Desktop: 'desktop',
+    Remote: 'remote'
+} as const;
+export type StageActorOneOf1ViaEnum = typeof StageActorOneOf1ViaEnum[keyof typeof StageActorOneOf1ViaEnum];
+
+/**
+ * 
+ * @export
+ * @interface StageActorOneOf2
+ */
+export interface StageActorOneOf2 {
+    /**
+     * 
+     * @type {string}
+     * @memberof StageActorOneOf2
+     */
+    kind: StageActorOneOf2KindEnum;
+}
+
+
+/**
+ * @export
+ */
+export const StageActorOneOf2KindEnum = {
+    System: 'system'
+} as const;
+export type StageActorOneOf2KindEnum = typeof StageActorOneOf2KindEnum[keyof typeof StageActorOneOf2KindEnum];
+
+/**
+ * 
+ * @export
+ * @interface StageMoveResultDto
+ */
+export interface StageMoveResultDto {
+    /**
+     * 
+     * @type {StageProgress}
+     * @memberof StageMoveResultDto
+     */
+    progress: StageProgress;
+    /**
+     * Whether the run's lead agent was woken, or will be when its turn ends
+     * @type {boolean}
+     * @memberof StageMoveResultDto
+     */
+    woke: boolean;
+    /**
+     * Whether the run has a lead agent to tell at all — false when its trigger starts no agent
+     * @type {boolean}
+     * @memberof StageMoveResultDto
+     */
+    hasLead: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface StageProgress
+ */
+export interface StageProgress {
+    /**
+     * how many moves the run has made
+     * @type {number}
+     * @memberof StageProgress
+     */
+    rev: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof StageProgress
+     */
+    current: string | null;
+    /**
+     * 
+     * @type {StageProgressPosition}
+     * @memberof StageProgress
+     */
+    position: StageProgressPosition;
+    /**
+     * 
+     * @type {Array<StageProgressEntry>}
+     * @memberof StageProgress
+     */
+    stages: Array<StageProgressEntry>;
+}
+/**
+ * 
+ * @export
+ * @interface StageProgressEntry
+ */
+export interface StageProgressEntry {
+    /**
+     * 
+     * @type {string}
+     * @memberof StageProgressEntry
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StageProgressEntry
+     */
+    title: string;
+    /**
+     * 
+     * @type {StageStatus}
+     * @memberof StageProgressEntry
+     */
+    status: StageStatus;
+    /**
+     * the stages that may follow; two or more = one of them
+     * @type {Array<string>}
+     * @memberof StageProgressEntry
+     */
+    next: Array<string>;
+    /**
+     * the branch the run took after this stage, at a fork
+     * @type {string}
+     * @memberof StageProgressEntry
+     */
+    chosen?: string;
+    /**
+     * who finished or skipped it
+     * @type {StageActor}
+     * @memberof StageProgressEntry
+     */
+    by?: StageActor;
+    /**
+     * their summary or reason
+     * @type {string}
+     * @memberof StageProgressEntry
+     */
+    text?: string;
+    /**
+     * when it was finished or skipped
+     * @type {string}
+     * @memberof StageProgressEntry
+     */
+    at?: string;
+    /**
+     * the move that last set its status — the one that finished, skipped or reopened it, or the reopen that reset it (a stage_change row's rev); absent while no move has
+     * @type {number}
+     * @memberof StageProgressEntry
+     */
+    rev?: number;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface StageProgressPosition
+ */
+export interface StageProgressPosition {
+    /**
+     * 
+     * @type {number}
+     * @memberof StageProgressPosition
+     */
+    index: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof StageProgressPosition
+     */
+    total: number;
+}
+
+/**
+ * 
+ * @export
+ */
+export const StageStatus = {
+    Pending: 'pending',
+    Current: 'current',
+    Done: 'done',
+    Skipped: 'skipped',
+    NotTaken: 'not_taken'
+} as const;
+export type StageStatus = typeof StageStatus[keyof typeof StageStatus];
+
+/**
  * 
  * @export
  * @interface StartShareSignInDto
@@ -8713,6 +9026,12 @@ export interface TaskDto {
      */
     pullRequests: Array<RunPullRequest>;
     /**
+     * 
+     * @type {TaskStageLine}
+     * @memberof TaskDto
+     */
+    stage: TaskStageLine | null;
+    /**
      * Order within the column, ascending and unique — gaps are expected, since a delete or a move leaves one and nothing renumbers
      * @type {number}
      * @memberof TaskDto
@@ -8800,6 +9119,31 @@ export const TaskSource = {
 } as const;
 export type TaskSource = typeof TaskSource[keyof typeof TaskSource];
 
+/**
+ * 
+ * @export
+ * @interface TaskStageLine
+ */
+export interface TaskStageLine {
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskStageLine
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TaskStageLine
+     */
+    index: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TaskStageLine
+     */
+    total: number;
+}
 
 /**
  * 
@@ -9225,6 +9569,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     taskList: Array<RunTaskGroup>;
+    /**
+     * 
+     * @type {StageProgress}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    stages: StageProgress | null;
     /**
      * 
      * @type {number}
@@ -9955,6 +10305,12 @@ export interface Workflow {
      * @memberof Workflow
      */
     layout?: { [key: string]: NodePosition; };
+    /**
+     * The workflow's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every agent of a run sees it and moves it with move_stage. Omitted = the workflow has no stages
+     * @type {Array<WorkflowStage>}
+     * @memberof Workflow
+     */
+    stages?: Array<WorkflowStage>;
 }
 /**
  * 
@@ -10257,6 +10613,49 @@ export type WorkflowInstructionNodeKindEnum = typeof WorkflowInstructionNodeKind
  * @export
  */
 export type WorkflowNode = WorkflowAgentNode | WorkflowInstructionNode | WorkflowTriggerNode;
+/**
+ * 
+ * @export
+ * @interface WorkflowStage
+ */
+export interface WorkflowStage {
+    /**
+     * Stable stage id: lowercase letters, digits and '-', at most 40 characters, never all digits (e.g. 'investigation')
+     * @type {string}
+     * @memberof WorkflowStage
+     */
+    id: string;
+    /**
+     * Short stage name shown to agents and the user
+     * @type {string}
+     * @memberof WorkflowStage
+     */
+    title: string;
+    /**
+     * What to do in this stage, in plain language
+     * @type {string}
+     * @memberof WorkflowStage
+     */
+    instructions?: string;
+    /**
+     * The condition that makes this stage finished
+     * @type {string}
+     * @memberof WorkflowStage
+     */
+    doneWhen: string;
+    /**
+     * Id of the agent node that usually does this stage — a hint, never a permission
+     * @type {string}
+     * @memberof WorkflowStage
+     */
+    ownerHint?: string;
+    /**
+     * Ids of the stages that may follow; two or more = the run takes ONE of them; omitted = a final stage
+     * @type {Array<string>}
+     * @memberof WorkflowStage
+     */
+    next?: Array<string>;
+}
 /**
  * 
  * @export

@@ -153,4 +153,10 @@ describe('composeWorkflowChatInstructions', () => {
     expect(BRIEF).toContain(HOST_READ_WORKFLOWS_TOOL);
     expect(BRIEF).not.toMatch(/editing the file with your own file tools/);
   });
+
+  it('tells the builder the stage walk ends at the last stage, so no closing "Done" stage is added', () => {
+    expect(BRIEF).toMatch(
+      /the walk ends when the last stage is completed, so add no closing "Done" or\s+"Finished" stage/,
+    );
+  });
 });

@@ -4,6 +4,7 @@ import {
   type ChatApprovalMode,
   ChatApprovalModeSchema,
   RunPullRequestSchema,
+  TaskStageLineSchema,
 } from '../agents/chat.types';
 import type { AgentOptionsSnapshot } from '../agents/utils/agent-options';
 import { type AgentKind, AgentKindSchema } from '../runs/runs.types';
@@ -304,6 +305,9 @@ export const TaskWireSchema = z.object({
     .describe(
       "Pull requests the task's run opened, oldest first, as captured from the agent output",
     ),
+  stage: TaskStageLineSchema.nullable().describe(
+    "Where the task's workflow run stands in its stage graph; null when it has no run or no stages",
+  ),
   position: z
     .number()
     .int()

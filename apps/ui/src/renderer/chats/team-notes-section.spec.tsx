@@ -212,7 +212,7 @@ describe('TeamNotesSection — arrivals and the reader’s place', () => {
 describe('TeamNotesSection — a press anywhere on a note opens it', () => {
   const longNote = (seq: number): TeamNote => ({
     ...note(seq),
-    text: 'a long note '.repeat(40),
+    text: `note ${seq} ${'a long note '.repeat(40)}`,
   });
 
   function showJumpable(notes: TeamNote[]): ReturnType<typeof vi.fn> {
@@ -235,10 +235,9 @@ describe('TeamNotesSection — a press anywhere on a note opens it', () => {
   const card = (seq: number): HTMLElement =>
     [...host!.querySelectorAll<HTMLElement>('[data-slot="team-note"]')].find(
       (li) =>
-        li
-          .querySelector('li > button')
-          ?.getAttribute('aria-label')
-          ?.includes(` note ${seq} `) === true,
+        `${li.querySelector('[class*="break-words"]')?.textContent ?? ''} `.startsWith(
+          `note ${seq} `,
+        ),
     )!;
 
   it('opens the note from its words, not only from its heading', () => {

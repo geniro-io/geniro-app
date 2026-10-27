@@ -23,6 +23,7 @@ import { readDisplayedPullRequests } from './pull-request-capture';
 import { readRunOutcomes } from './run-outcomes';
 import { readRunResetWakes } from './run-reset-wakes';
 import { searchIndexText } from './searchable-text';
+import { readRunStageProgress } from './stage-progress';
 import { readRunTaskList } from './task-list-fold';
 import { servedWorkedMs } from './wall-worked';
 
@@ -266,5 +267,6 @@ export function runToWire(
     // transcript window it loaded, and the whole list is stated only in the
     // earliest announcements.
     taskList: readRunTaskList(run.taskList),
+    stages: readRunStageProgress(run.stageProgress),
   };
 }

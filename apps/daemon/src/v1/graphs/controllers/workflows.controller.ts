@@ -44,11 +44,13 @@ import {
   ImportWorkflowDto,
   InstructionSizesDto,
   MeasureInstructionSizesDto,
+  MoveWorkflowRunStageDto,
   NodeStateDto,
   ResetWakesCancelledDto,
   RunWorkflowDto,
   RunWorkflowSnapshotDto,
   SaveWorkflowDto,
+  StageMoveResultDto,
   StartWorkflowChatDto,
   WorkflowChatsDiscardedDto,
   WorkflowDeletedDto,
@@ -60,12 +62,14 @@ import type {
   NodeStateWire,
   ResetWakesCancelled,
   RunWorkflowSnapshotWire,
+  StageMoveResultWire,
   WorkflowSummary,
   WorkflowWire,
 } from '../graphs.types';
 import { GraphExecutorService } from '../services/graph-executor.service';
 import { InstructionSizesService } from '../services/instruction-sizes.service';
 import { RunWorkflowService } from '../services/run-workflow.service';
+import { StageWakeService } from '../services/stage-wake.service';
 import { WorkflowActionsService } from '../services/workflow-actions.service';
 import { WorkflowAnalysisService } from '../services/workflow-analysis.service';
 import { WorkflowChatService } from '../services/workflow-chat.service';
@@ -92,6 +96,7 @@ export class WorkflowsController {
     private readonly actions: WorkflowActionsService,
     private readonly instructionSizes: InstructionSizesService,
     private readonly workflowAnalyses: WorkflowAnalysisService,
+    private readonly stageWakes: StageWakeService,
   ) {}
 
   /**
@@ -168,6 +173,27 @@ export class WorkflowsController {
       dto.text,
       dto.images,
       dto.clientMessageId,
+    );
+  }
+
+  @Post('runs/:runId/stages')
+  @ApiOperation({ operationId: 'moveWorkflowRunStage' })
+  @ZodResponse({ status: 201, type: StageMoveResultDto })
+  moveStage(
+    @Param('runId') runId: string,
+    @Body() dto: MoveWorkflowRunStageDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ): Promise<StageMoveResultWire> {
+    return this.stageWakes.userMove(
+      runId,
+      {
+        action: dto.action,
+        stage: dto.stage,
+        ...(dto.next !== undefined ? { next: dto.next } : {}),
+        text: dto.text,
+      },
+      cameViaRemote(headers) ? 'remote' : 'desktop',
+      dto.expectedRev,
     );
   }
 

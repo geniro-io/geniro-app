@@ -120,6 +120,7 @@ import { RunProcessSweep } from './services/run-process-sweep.service';
 import { RunProcessesService } from './services/run-processes.service';
 import { RunStateService } from './services/run-state.service';
 import { RunTeardownService } from './services/run-teardown.service';
+import { RunWriteQueue } from './services/run-write.queue';
 import { SessionTranscriptsService } from './services/session-transcripts.service';
 import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
@@ -481,6 +482,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunGroupsService,
     ShellOutputService,
     ItemSeqAllocator,
+    RunWriteQueue,
     SubagentRecoveryService,
     ItemCallIndexService,
     WallWorkService,
@@ -629,6 +631,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // the same allocator a chat's are, since its kept agent processes write
     // between passes.
     ItemSeqAllocator,
+    RunWriteQueue,
     // Exported for the graph executor's writes, which stamp each row's call
     // the way a chat's do.
     ItemCallIndexService,

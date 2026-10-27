@@ -95,6 +95,7 @@ import {
 import { RunWaterfallPopup } from './run-waterfall';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
+import { type RunStages, StagesSection } from './stages-section';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import { type AgentTaskRow, taskProgress } from './task-payload';
 import { agentNameOf } from './team-note-author';
@@ -1781,6 +1782,7 @@ export function AgentsPanel({
   threadPullRequests = [],
   workflows = [],
   onRevealWorkflow,
+  stages,
   tasksByAgent,
   shellsByAgent,
   workByAgent,
@@ -1868,6 +1870,7 @@ export function AgentsPanel({
   workflows?: readonly WorkflowEntry[];
   /** Take the reader to one workflow's card in the transcript. */
   onRevealWorkflow?: (workflowId: string) => void;
+  stages?: RunStages;
   /**
    * The run whose expanded context readouts this panel may offer, or null.
    */
@@ -3115,6 +3118,9 @@ export function AgentsPanel({
         {workflows.length > 0 && onRevealWorkflow !== undefined ? (
           <WorkflowsSection workflows={workflows} onReveal={onRevealWorkflow} />
         ) : null}
+        {stages === undefined ? null : (
+          <StagesSection stages={stages} agentName={teamNoteAgentName} />
+        )}
         {threadPullRequests.length > 0 ? (
           <ThreadPullRequestsSection results={threadPullRequests} />
         ) : null}

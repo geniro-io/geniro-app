@@ -14,6 +14,12 @@ import {
   CustomInstructionsSchema,
   PendingOwnedCardSchema,
   type PersistedResetWake,
+  type StageActor,
+  type StageChangePayload,
+  type StageMoveAction,
+  StageMoveActionSchema,
+  type StageProgress,
+  StageProgressSchema,
 } from '../agents/chat.types';
 import { createChatSchema } from '../agents/dto/chat.dto';
 import { TURN_INSTRUCTION_SOURCES } from '../agents/utils/agent-instructions';
@@ -554,6 +560,57 @@ export const WorkflowEdgeSchema = z
   })
   .meta({ id: 'WorkflowEdge' });
 
+/** TWIN: the stage limits in apps/ui/src/renderer/workflows/stage-validate.ts. */
+export const MAX_WORKFLOW_STAGES = 20;
+export const MAX_STAGE_TITLE_LENGTH = 80;
+export const MAX_STAGE_INSTRUCTIONS_LENGTH = 4000;
+export const MAX_STAGE_DONE_WHEN_LENGTH = 300;
+
+export const STAGE_ID_PATTERN = /^(?![0-9]+$)[a-z0-9][a-z0-9-]{0,39}$/;
+
+export const WorkflowStageSchema = z
+  .object({
+    id: z
+      .string()
+      .regex(STAGE_ID_PATTERN)
+      .describe(
+        "Stable stage id: lowercase letters, digits and '-', at most 40 characters, never all digits (e.g. 'investigation')",
+      ),
+    title: z
+      .string()
+      .regex(/\S/)
+      .max(MAX_STAGE_TITLE_LENGTH)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .describe('Short stage name shown to agents and the user'),
+    instructions: z
+      .string()
+      .max(MAX_STAGE_INSTRUCTIONS_LENGTH)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .optional()
+      .describe('What to do in this stage, in plain language'),
+    doneWhen: z
+      .string()
+      .regex(/\S/)
+      .max(MAX_STAGE_DONE_WHEN_LENGTH)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .describe('The condition that makes this stage finished'),
+    ownerHint: z
+      .string()
+      .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .optional()
+      .describe(
+        'Id of the agent node that usually does this stage — a hint, never a permission',
+      ),
+    next: z
+      .array(z.string().min(1))
+      .optional()
+      .describe(
+        'Ids of the stages that may follow; two or more = the run takes ONE of them; omitted = a final stage',
+      ),
+  })
+  .meta({ id: 'WorkflowStage' });
+
 /** Canvas position per node id — persisted so the canvas re-opens as drawn. */
 export const WorkflowLayoutSchema = z.record(
   z.string(),
@@ -593,6 +650,12 @@ export const WorkflowSchema = z
     nodes: z.array(WorkflowNodeSchema),
     edges: z.array(WorkflowEdgeSchema),
     layout: WorkflowLayoutSchema.optional(),
+    stages: z
+      .array(WorkflowStageSchema)
+      .optional()
+      .describe(
+        "The workflow's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every agent of a run sees it and moves it with move_stage. Omitted = the workflow has no stages",
+      ),
   })
   .meta({ id: 'Workflow' });
 
@@ -645,6 +708,7 @@ export type WorkflowInstructionNode = z.infer<
 >;
 export type WorkflowEdge = z.infer<typeof WorkflowEdgeSchema>;
 export type WorkflowLayout = z.infer<typeof WorkflowLayoutSchema>;
+export type WorkflowStage = z.infer<typeof WorkflowStageSchema>;
 export type Workflow = z.infer<typeof WorkflowSchema>;
 
 /**
@@ -1908,6 +1972,7 @@ export interface RunCallCapability {
    * capability with no team-note tools.
    */
   unreadTeamNotes?(caller: string): number;
+  currentStage?(): string | null;
   /**
    * Start another turn of a node's OWN conversation whose turns have all
    * ended, carrying `prompt` — how a question or a result that arrives after
@@ -1970,3 +2035,76 @@ export interface TaskBoardHandler {
     args: Record<string, unknown>,
   ): Promise<TaskBoardToolAnswer>;
 }
+
+export const StageMoveRequestSchema = z.object({
+  action: StageMoveActionSchema,
+  stage: z.string().min(1).describe('The id of the stage to move'),
+  next: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('At a fork: the id of the stage the run takes'),
+  text: z.string().describe('What was done, or why'),
+  expectedRev: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      'The stage revision the user was looking at; a different one is refused 409 STAGE_PROGRESS_CHANGED',
+    ),
+});
+export type StageMoveRequestWire = z.infer<typeof StageMoveRequestSchema>;
+
+export type StageMoveRequest = Omit<StageMoveRequestWire, 'expectedRev'>;
+
+export interface StageMove {
+  action: StageMoveAction;
+  stageId: string;
+  next?: string;
+  text: string;
+  by: StageActor;
+  at: string;
+}
+
+export type StageRefusalCode =
+  | 'NO_STAGES'
+  | 'STAGE_UNKNOWN'
+  | 'STAGE_NOT_CURRENT'
+  | 'STAGES_FINISHED'
+  | 'NEXT_REQUIRED'
+  | 'NEXT_INVALID'
+  | 'NOT_REOPENABLE'
+  | 'TEXT_REQUIRED'
+  | 'TEXT_TOO_LONG'
+  | 'STAGE_PROGRESS_CHANGED'
+  | 'RUN_ARCHIVED';
+
+export type StageMoveResult =
+  | {
+      ok: true;
+      stages: readonly WorkflowStage[];
+      workflow: Workflow;
+      progress: StageProgress;
+      resets: string[];
+      payload: StageChangePayload;
+    }
+  | {
+      ok: false;
+      code: StageRefusalCode;
+      message: string;
+    };
+
+export const StageMoveResultSchema = z.object({
+  progress: StageProgressSchema,
+  woke: z
+    .boolean()
+    .describe(
+      "Whether the run's lead agent was woken, or will be when its turn ends",
+    ),
+  hasLead: z
+    .boolean()
+    .describe(
+      'Whether the run has a lead agent to tell at all — false when its trigger starts no agent',
+    ),
+});
+export type StageMoveResultWire = z.infer<typeof StageMoveResultSchema>;

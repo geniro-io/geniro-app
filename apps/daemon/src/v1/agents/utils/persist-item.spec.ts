@@ -99,6 +99,33 @@ describe('runToWire', () => {
     expect(runToWire(new Run()).notes).toBeNull();
   });
 
+  it("projects the stage progress stored on the run's column", () => {
+    const progress = {
+      rev: 1,
+      current: 'build',
+      position: { index: 2, total: 2 },
+      stages: [
+        {
+          id: 'plan',
+          title: 'Plan',
+          status: 'done',
+          next: ['build'],
+          by: { kind: 'system' },
+          rev: 1,
+        },
+        { id: 'build', title: 'Build', status: 'current', next: [] },
+      ],
+    };
+    const run = new Run();
+    run.stageProgress = JSON.stringify(progress);
+
+    expect(runToWire(run).stages).toEqual(progress);
+  });
+
+  it('projects a run without stage progress as null', () => {
+    expect(runToWire(new Run()).stages).toBeNull();
+  });
+
   it('projects the run an analysis chat analyses, and the seq it stops at', () => {
     const run = new Run();
     run.analysisSourceRunId = 'source-run';

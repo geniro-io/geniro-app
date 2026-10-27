@@ -18,6 +18,7 @@ import { AgentsPanel } from './agents-panel';
 import { ArtifactShareContext } from './artifact-share';
 import { THREAD_PULL_REQUESTS_SETTLED_FLAG } from './panel-flags';
 import type { PublishedArtifact } from './published-artifact';
+import type { RunStages } from './stages-section';
 import { ThreadUiMemoryContext, writeThreadFlag } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
 import { mcpScopeKey } from './use-agent-mcp';
@@ -4294,12 +4295,15 @@ describe('AgentsPanel — team notes', () => {
     expect(rows[1]?.textContent).toContain('Worker · Call 3');
   });
 
-  it('marks a superseded note with the note that replaced it', () => {
+  it('marks a superseded note as replaced, without naming a note number', () => {
     const { el } = withNotes([
       teamNote(9, { supersedes: 4 }),
       teamNote(4, { supersededBy: 9 }),
     ]);
-    expect(section(el)?.textContent).toContain('superseded by note 9');
+    const rows = [...(section(el)?.querySelectorAll('li') ?? [])];
+    expect(rows[0]?.textContent).not.toContain('superseded');
+    expect(rows[1]?.textContent).toContain('superseded by a newer note');
+    expect(section(el)?.textContent).not.toMatch(/note 9|note 4/);
   });
 
   it('opens a note in the transcript on a press of its heading', () => {
@@ -4363,6 +4367,77 @@ describe('AgentsPanel — team notes', () => {
 
   it('draws no section for a run whose agents wrote none', () => {
     const { el } = withNotes([]);
+    expect(section(el)).toBeNull();
+  });
+});
+
+describe('AgentsPanel — the run’s stages', () => {
+  const stages = (): RunStages => ({
+    progress: {
+      rev: 1,
+      current: 'review',
+      position: { index: 2, total: 2 },
+      stages: [
+        {
+          id: 'build',
+          title: 'Build',
+          status: 'done',
+          next: ['review'],
+          by: { kind: 'agent', nodeId: 'orchestrator' },
+          text: 'compiled clean',
+        },
+        { id: 'review', title: 'Review', status: 'current', next: [] },
+      ],
+    },
+    definitions: null,
+    archived: false,
+  });
+
+  const pullRequest: PullRequestRefResult = {
+    ref: {
+      owner: 'acme',
+      repo: 'platform',
+      number: 7,
+      url: 'https://github.com/acme/platform/pull/7',
+    },
+    pullRequest: null,
+  };
+
+  const section = (el: HTMLElement): HTMLElement | null =>
+    el.querySelector('section[aria-label="Stages"]');
+
+  it('draws the section for a run with stages, ahead of its pull requests', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        stages={stages()}
+        threadPullRequests={[pullRequest]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const stagesSection = section(el);
+    const pullRequests = el.querySelector(
+      'section[aria-label="Pull requests"]',
+    );
+    expect(stagesSection).not.toBeNull();
+    expect(
+      stagesSection!.compareDocumentPosition(pullRequests!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      stagesSection!.querySelector('[data-slot="stage-actor"]')?.textContent,
+    ).toBe('Orchestrator');
+  });
+
+  it('draws no section for a run without stages', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+      />,
+    );
     expect(section(el)).toBeNull();
   });
 });

@@ -62,7 +62,7 @@ export function joinHostWakes(wakes: readonly HostWake[]): {
     prompt: wakes.map((wake) => wake.prompt).join('\n\n'),
     row: {
       severity: 'info',
-      message: wakes.map((wake) => wake.row.message).join(' '),
+      message: [...new Set(wakes.map((wake) => wake.row.message))].join(' '),
       shares: wakes.flatMap((wake) => wake.row.shares ?? []),
       woke: true,
     },

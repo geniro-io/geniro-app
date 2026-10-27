@@ -2,7 +2,11 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
-import type { ChatApprovalMode, RunPullRequest } from '../../agents/chat.types';
+import type {
+  ChatApprovalMode,
+  RunPullRequest,
+  TaskStageLine,
+} from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { ProjectDao } from '../../projects/dao/project.dao';
@@ -234,14 +238,18 @@ export class TasksService {
     tasks: readonly Task[],
     em: EntityManager,
   ): Promise<TaskWire[]> {
-    const byRun = await this.runDao.pullRequestsOf(
-      tasks
-        .map((task) => task.runId)
-        .filter((runId): runId is string => runId !== null),
-      em,
-    );
+    const runIds = tasks
+      .map((task) => task.runId)
+      .filter((runId): runId is string => runId !== null);
+    const facts = await this.runDao.boardFactsOf(runIds, em);
     return tasks.map((task) =>
-      toWire(task, task.runId === null ? [] : (byRun.get(task.runId) ?? [])),
+      task.runId === null
+        ? toWire(task, [], null)
+        : toWire(
+            task,
+            facts.pullRequests.get(task.runId) ?? [],
+            facts.stages.get(task.runId) ?? null,
+          ),
     );
   }
 
@@ -298,10 +306,14 @@ export class TasksService {
    */
   private async wireOf(task: Task, em: EntityManager): Promise<TaskWire> {
     if (task.runId === null) {
-      return toWire(task, []);
+      return toWire(task, [], null);
     }
-    const byRun = await this.runDao.pullRequestsOf([task.runId], em);
-    return toWire(task, byRun.get(task.runId) ?? []);
+    const facts = await this.runDao.boardFactsOf([task.runId], em);
+    return toWire(
+      task,
+      facts.pullRequests.get(task.runId) ?? [],
+      facts.stages.get(task.runId) ?? null,
+    );
   }
 
   async create(input: {
@@ -685,6 +697,7 @@ function toWire(
    * one query.
    */
   pullRequests: readonly RunPullRequest[],
+  stage: TaskStageLine | null,
 ): TaskWire {
   return {
     id: task.id,
@@ -710,6 +723,7 @@ function toWire(
     report: task.report,
     reportedAt: task.reportedAt?.toISOString() ?? null,
     pullRequests: [...pullRequests],
+    stage,
     position: task.position,
     priority: task.priority,
     dueDate: task.dueDate,

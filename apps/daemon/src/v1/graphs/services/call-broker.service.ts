@@ -4363,8 +4363,17 @@ export class CallBroker implements OnModuleInit {
     return this.runs.get(runId)?.capability.unreadTeamNotes?.(caller) ?? 0;
   }
 
+  currentStage(runId: string): string | null {
+    return this.runs.get(runId)?.capability.currentStage?.() ?? null;
+  }
+
   private unreadLine(state: RunCallState, caller: string): string | null {
-    return unreadTeamNotesLine(state.capability.unreadTeamNotes?.(caller) ?? 0);
+    const stage = state.capability.currentStage?.() ?? null;
+    const lines = [
+      stage === null ? null : `[geniro] Current stage: ${stage}.`,
+      unreadTeamNotesLine(state.capability.unreadTeamNotes?.(caller) ?? 0),
+    ].filter((line): line is string => line !== null);
+    return lines.length === 0 ? null : lines.join('\n');
   }
 
   /**

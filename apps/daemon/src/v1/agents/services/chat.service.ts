@@ -222,6 +222,7 @@ import { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
+import { RunWriteQueue } from './run-write.queue';
 import { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
@@ -801,6 +802,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly analyses: AnalysisBroker,
     private readonly analysisReports: AnalysisReportsService,
     private readonly workflowBuilders: WorkflowBuilderBroker,
+    private readonly runWrites: RunWriteQueue,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     @Optional() private readonly agentMcp?: AgentMcpService,
     /** The `monitor` tool's commands, stopped with the thread. Optional for the positional specs. */
@@ -3256,7 +3258,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // Shelving is not activity: the archive lists threads by when they were
       // last WORKED in, so this must not re-date the row to the moment it was
       // filed away (see `RunDao.updateWithoutActivity`).
-      await this.runDao.updateWithoutActivity(runId, { archivedAt }, em);
+      await this.runWrites.run(runId, () =>
+        this.runDao.updateWithoutActivity(runId, { archivedAt }, em),
+      );
       // Re-read rather than patch the entity in hand: the cancel above settles
       // this run through the turn's own finalizer, on a DIFFERENT fork, so the
       // row loaded before it still says `running` — and answering the archive

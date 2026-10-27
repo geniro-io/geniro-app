@@ -9,6 +9,8 @@ import { collapseImageBlocks } from './export-image-blocks';
 import { outcomeSegments } from './run-outcome';
 import { readRunOutcomePayload } from './run-outcome-payload';
 import { settlesOnContinuation } from './settled-status';
+import { readStageChangePayload } from './stage-change-payload';
+import { stageActorLabel, stageChangeVerb } from './stage-change-row';
 import {
   readSubagentDeclaration,
   subagentIdOf,
@@ -268,6 +270,14 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
     }
     // Verbatim, as a message is: the note is markdown already.
     return [parts.join(' — '), '', note.text];
+  },
+  stage_change: (item) => {
+    const change = readStageChangePayload(item.payload);
+    if (change === null) {
+      return null;
+    }
+    const head = `**◈ stage ${change.stageTitle}** — ${stageActorLabel(change.by, (id) => id)} — ${stageChangeVerb(change)}`;
+    return change.text === '' ? [head] : [head, '', change.text];
   },
   run_outcome: (item, agent) => {
     const outcome = readRunOutcomePayload(item.payload);

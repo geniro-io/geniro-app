@@ -392,3 +392,26 @@ describe('TaskCard — its thread waiting on the user', () => {
     expect(el.querySelector('[data-slot="wait-mark"]')).toBeNull();
   });
 });
+
+describe('TaskCard — its run’s stage line', () => {
+  const line = (el: HTMLElement): HTMLElement | null =>
+    el.querySelector('[data-slot="task-stage"]');
+
+  it('names the current stage and the daemon’s n/m under the title', () => {
+    const el = card({ stage: { title: 'Review', index: 2, total: 4 } });
+    expect(line(el)?.textContent).toBe('Review·2/4');
+    expect(el.getAttribute('aria-label')).toContain('stage 2 of 4: Review');
+  });
+
+  it('says the stages are done once the run has none left', () => {
+    const el = card({ stage: { title: null, index: 4, total: 4 } });
+    expect(line(el)?.textContent).toBe('Stages done');
+    expect(el.getAttribute('aria-label')).toContain('all stages done');
+  });
+
+  it('draws no line for a card whose run has no stage graph', () => {
+    const el = card({ stage: null });
+    expect(line(el)).toBeNull();
+    expect(el.getAttribute('aria-label')).not.toContain('stage');
+  });
+});

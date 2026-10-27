@@ -12,6 +12,7 @@ export function recordOutcomeInstructions(): string {
     'change does and, unless it was accepted, what the user asked to change or what is still open. ' +
     'geniro counts the questions put to the user itself — do not report them. Nothing ' +
     'waits on this call and nobody is told about it; it never replaces reporting to whoever called ' +
-    'you, and a team note (team_note) is still where to tell other agents something.'
+    'you, a team note (team_note) is still where to tell other agents something, and a run with ' +
+    'stages moves them with move_stage.'
   );
 }

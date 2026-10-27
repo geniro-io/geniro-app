@@ -90,10 +90,10 @@ export class WorkflowVersionsService {
   }
 
   /**
-   * Write a recorded version back as the workflow's graph: its nodes, edges and active-turn
-   * cap. The workflow keeps its own name and description, the canvas places of the nodes
-   * it still has, and the labels of the edges it still has — none of them is part of a
-   * version. The file as it stood is backed up first (`.backups/`, as an applied change
+   * Write a recorded version back as the workflow's graph: its nodes, edges, stages and
+   * active-turn cap. The workflow keeps its own name and description, the canvas places of
+   * the nodes it still has, and the labels of the edges it still has — none of them is part
+   * of a version. The file as it stood is backed up first (`.backups/`, as an applied change
    * does), and the write quotes the hash it was read at, so a save landing in between is
    * refused rather than overwritten. A version is restorable only while its graph is
    * recorded: an inferred one never was.
@@ -210,7 +210,7 @@ export class WorkflowVersionsService {
   }
 }
 
-/** `graph`'s nodes, edges and cap under `current`'s name, description, places and labels. */
+/** `graph`'s nodes, edges, cap and stages under `current`'s name, description, places and labels. */
 function restoredWorkflow(graph: Workflow, current: Workflow): Workflow {
   const ids = new Set(graph.nodes.map((node) => node.id));
   const labels = new Map(
@@ -235,5 +235,6 @@ function restoredWorkflow(graph: Workflow, current: Workflow): Workflow {
       return label === undefined ? edge : { ...edge, label };
     }),
     ...(Object.keys(layout).length === 0 ? {} : { layout }),
+    ...(graph.stages === undefined ? {} : { stages: graph.stages }),
   };
 }

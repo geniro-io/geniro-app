@@ -29,6 +29,7 @@ import {
 } from '../graphs.types';
 import { computeRunOrder } from '../utils/graph-order';
 import { validateWorkflowGraph } from '../utils/graph-validate';
+import { assertValidStages } from '../utils/stage-validate';
 import { workflowFileHash } from '../utils/workflow-hash';
 import {
   WORKFLOW_SCHEMA_FILE_NAME,
@@ -138,6 +139,7 @@ export class WorkflowStoreService {
   private validateGraph(workflow: Workflow): void {
     validateWorkflowGraph(workflow.nodes, workflow.edges);
     computeRunOrder(workflow.nodes, workflow.edges);
+    assertValidStages(workflow);
   }
 
   async list(): Promise<WorkflowSummary[]> {

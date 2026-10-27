@@ -2189,6 +2189,7 @@ export abstract class AgentAdapter {
       taskInstructions: input.taskInstructions,
       workflowInstructions: input.workflowInstructions,
       instructionBlocks: input.instructionBlocks,
+      stageMapPrompt: granted ? input.stageMapPrompt : null,
       systemPrompt: input.systemPrompt,
       answeringACallPrompt: input.answeringACallPrompt,
       callSurfacePrompt: granted ? input.callSurfacePrompt : null,
@@ -2513,6 +2514,8 @@ export abstract class AgentAdapter {
       // On the same composed block and the same reasoning: two graph nodes
       // wired to different instruction blocks must not share a process.
       input.instructionBlocks ?? null,
+      // Static per run (the snapshot's stages), so it restarts nothing.
+      input.stageMapPrompt ?? null,
       input.answeringACallPrompt ?? null,
       input.callSurfacePrompt ?? null,
       // Decides whether the host preamble is composed, so it is argv too. No

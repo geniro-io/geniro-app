@@ -12,6 +12,8 @@ import { InstructionSizesService } from './services/instruction-sizes.service';
 import { MonitorGraphDelivery } from './services/monitor-graph-delivery.service';
 import { PoolCooldowns } from './services/pool-cooldowns.store';
 import { RunWorkflowService } from './services/run-workflow.service';
+import { StageService } from './services/stage.service';
+import { StageWakeService } from './services/stage-wake.service';
 import { TaskBoardBroker } from './services/task-board.broker';
 import { WorkflowActionsService } from './services/workflow-actions.service';
 import { WorkflowAnalysisService } from './services/workflow-analysis.service';
@@ -58,6 +60,8 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     CallBroker,
     TaskBoardBroker,
     RunWorkflowService,
+    StageService,
+    StageWakeService,
     WorkflowChatService,
     WorkflowAnalysisService,
     WorkflowChangeService,
@@ -82,6 +86,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     CallBroker,
     TaskBoardBroker,
     RunWorkflowService,
+    StageService,
     WorkflowChangeService,
     WorkflowProposalService,
   ],

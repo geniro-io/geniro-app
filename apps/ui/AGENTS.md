@@ -239,6 +239,7 @@ One home for each concern:
 
 - A thread's pull requests are only those it opened or its CLI recorded it touching (the run wire's `pullRequests`, each marked `opened`; a task card shows only the opened ones), addressed by URL (`use-thread-pull-requests.ts` over `readPullRequestsByRef`). That hook is the only source for the panel, the sidebar and the shelf.
 - A pull request's recorded outcome (`record_outcome`) is the daemon's `DisplayedPullRequest.outcome`, never folded from the window: the shelf chip draws its acceptance mark beside the number from it, and a `run_outcome` transcript row reads superseded once that outcome's seq is newer than its own (`RunOutcomesContext`). The row opens on a press into the agent's summary, every figure and the pull request's link row; its title and state come from the same `use-thread-pull-requests.ts` answers the panel draws (`RunOutcomes.resolved`), so a surface that asks none draws the number alone. `daemon-client.ts` carries it through every run-status announce.
+- A workflow run's stage progress is the daemon's `RunDto.stages` (`StageProgress`), replaced whole by every `run_status.stages` (`run-status-row.ts`) — never folded from `stage_change` rows, so `n/m` and every status hold past the loaded window. The shelf chip (`stage-progress-chip.tsx`), the agents-panel Stages section (moves through `moveWorkflowRunStage` with `expectedRev`; a `409 STAGE_PROGRESS_CHANGED` keeps the dialog open) and the transcript row (`stage-change-row.tsx`, next-stage titles from `RunStagesContext`, provided once with the transcript's values (`TranscriptContexts`); a move's row reads superseded once its stage's `StageProgressEntry.rev` names a later move, a nudge's once the run's `rev` moved on) all draw it, and every stage graph is the one `components/stage-graph.tsx`. The board card's line reads `TaskDto.stage`; `use-board.ts` reloads on a stages-only announce for a run it holds.
 - A sidebar row names the thread's newest resolved pull request among those it opened, and a touched one only for a thread that opened none — never in place of an opened one that did not resolve (`rowPullRequestOf`).
 - A ref GitHub could not answer still draws a row.
 - The renderer replaces the run's list wholesale on each announce.
@@ -313,7 +314,7 @@ One home for each concern:
 - Never pair `line-clamp-*` with a `display` utility.
 - `ConfirmButton`'s variant excludes `destructive` at the type level, because it arms itself.
 - An instruction node never runs and has no `node_state`.
-- Agent-node fields that reach argv refuse NUL only, because the same schema reads saved YAML.
+- Agent-node fields that reach argv, and a stage's text, refuse NUL only, because the same schema reads saved YAML.
 - `node-validate.ts` mirrors every daemon refusal. Otherwise one bad field stops every later autosave.
 - `useAgentVocabulary` resolves during render off its cache, never from effect-set state.
 - Free-text model mode waits for a non-empty list.
@@ -336,6 +337,7 @@ One home for each concern:
 - After a socket reconnect, the dock reads back from the newest row held when the socket dropped. A turn ending is counted once, by row id. The dock holds anchors the way the chat screen does.
 - `RunDto.awaiting` follows the three-state rule: absent asserts nothing, and `null` clears.
 - `maxActiveTurns` (the "Change workflow" dialog's agents-at-once row: a switch — off is no limit of its own, the machine ceiling — and a `Stepper` from 1 to the ceiling, so no value outside the range can be entered) rides `WorkflowMeta` through `fromFlow`, `canvasSnapshot` (a required argument) and every save, like the description; dropping it from any one of them loses the cap or loops autosave.
+- `stages` (the workflow's stage graph) rides `WorkflowMeta` through `fromFlow`, `canvasSnapshot` (a required argument) and every save the same way, and an empty list is written as ABSENT, never `[]`. The "Change workflow" dialog shows it as `StageGraph` and edits it in `stage-schema-editor.tsx`, which validates with `workflows/stage-validate.ts` — a twin of the daemon's `validateStages`, so the editor refuses exactly what the save would. A stage whose `ownerHint` names a deleted agent is a warning, never a refusal (it would stop every autosave).
 - Agent pools are capped at the twin `MAX_AGENT_POOL_EXTRA_MEMBERS`. Call instances name their member (`CallBlockEntry.member`). Hand-offs above the page arrive as anchors.
 
 ### Settings

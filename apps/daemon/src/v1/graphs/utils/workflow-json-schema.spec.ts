@@ -8,6 +8,8 @@ import {
   WorkflowAgentPoolMemberSchema,
   WorkflowEdgeSchema,
   WorkflowInstructionNodeSchema,
+  WorkflowSchema,
+  WorkflowStageSchema,
   WorkflowTriggerNodeSchema,
 } from '../graphs.types';
 import { workflowJsonSchema } from './workflow-json-schema';
@@ -17,7 +19,7 @@ interface JsonObjectSchema {
   required?: string[];
 }
 
-const SCHEMA = JSON.parse(workflowJsonSchema()) as {
+const SCHEMA = JSON.parse(workflowJsonSchema()) as JsonObjectSchema & {
   $defs: Record<string, JsonObjectSchema & { enum?: string[] }>;
 };
 
@@ -30,9 +32,16 @@ describe('workflowJsonSchema', () => {
     ['WorkflowInstructionNode', WorkflowInstructionNodeSchema],
     ['WorkflowAgentPoolMember', WorkflowAgentPoolMemberSchema],
     ['WorkflowEdge', WorkflowEdgeSchema],
+    ['WorkflowStage', WorkflowStageSchema],
   ])('describes every field of %s', (id, schema) => {
     expect(Object.keys(SCHEMA.$defs[id]!.properties).sort()).toEqual(
       Object.keys(schema.shape).sort(),
+    );
+  });
+
+  it('describes every top-level field of a workflow', () => {
+    expect(Object.keys(SCHEMA.properties).sort()).toEqual(
+      Object.keys(WorkflowSchema.shape).sort(),
     );
   });
 

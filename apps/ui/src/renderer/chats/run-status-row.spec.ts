@@ -51,4 +51,15 @@ describe('runStatusRowFields', () => {
     });
     expect(runStatusRowFields(announce())).not.toHaveProperty('taskList');
   });
+
+  it('writes the stage progress whole, and leaves it alone when absent', () => {
+    const stages = {
+      rev: 1,
+      current: 'build',
+      position: { index: 1, total: 2 },
+      stages: [],
+    };
+    expect(runStatusRowFields(announce({ stages }))).toEqual({ stages });
+    expect(runStatusRowFields(announce())).not.toHaveProperty('stages');
+  });
 });

@@ -169,7 +169,15 @@ export function NewTaskDialog({
   };
 
   const submit = (): void => {
-    const { folder, agentKind, workflowSlug, model, effort, approval } = draft;
+    const {
+      folder,
+      agentKind,
+      workflowSlug,
+      model,
+      effort,
+      approval,
+      configDir,
+    } = draft;
     onCreate(
       {
         title: title.trim(),
@@ -189,6 +197,7 @@ export function NewTaskDialog({
         ...(model === null ? {} : { model }),
         ...(effort === null ? {} : { effort }),
         ...(approval === null ? {} : { approval }),
+        ...(configDir === null ? {} : { configDir }),
       },
       { images: pictures, files, uploads },
     );

@@ -843,6 +843,8 @@ export function Tasks({
             cliDetections,
             agentsApi: apis?.agents ?? null,
             capabilitiesApi: apis?.capabilities ?? null,
+            recentConfigDirs,
+            configProfiles,
           }}
           onClose={() => {
             setNewTaskOpen(false);

@@ -1154,3 +1154,157 @@ describe('WorkflowChatPanel — the transcript is the chat screen’s own', () =
     expect(patchSettings).toHaveBeenCalledWith({ autoCompactPercent: 60 });
   });
 });
+
+describe('WorkflowChatPanel — the transcript follows its tail only while the reader is there', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    stubResizeObserver();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    window.geniro = createPreloadStub();
+    chat.current = chatState({ working: true });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.restoreAllMocks();
+  });
+
+  async function paint(): Promise<void> {
+    await act(async () => {
+      root.render(
+        <WorkflowChatPanel
+          slug="dev-team"
+          workflowName="Dev Team"
+          apis={APIS}
+          handle={null}
+          client={null as unknown as DaemonClient}
+          capabilities={null}
+          capabilitiesLoading={false}
+          recentConfigDirs={{}}
+          configProfiles={[]}
+          onClose={vi.fn()}
+          onBeforeSend={vi.fn(async () => {})}
+          onWorkingChange={vi.fn()}
+          onTurnSettled={vi.fn()}
+        />,
+      );
+    });
+  }
+
+  /**
+   * jsdom lays nothing out, so the box's geometry is defined here, and
+   * `scrollTop` keeps what is written to it — the follow's only write.
+   */
+  function layOut(box: HTMLElement): { top: number } {
+    const position = { top: 0 };
+    Object.defineProperty(box, 'scrollHeight', {
+      value: 4000,
+      configurable: true,
+    });
+    Object.defineProperty(box, 'clientHeight', {
+      value: 400,
+      configurable: true,
+    });
+    Object.defineProperty(box, 'scrollTop', {
+      configurable: true,
+      get: () => position.top,
+      set: (value: number) => {
+        position.top = value;
+      },
+    });
+    return position;
+  }
+
+  const transcript = (): HTMLElement => {
+    const box = container.querySelector<HTMLElement>(
+      '[data-slot="workflow-chat-transcript"]',
+    );
+    if (box === null) {
+      throw new Error('no transcript box');
+    }
+    return box;
+  };
+
+  const scrollTo = async (box: HTMLElement, top: number): Promise<void> => {
+    await act(async () => {
+      box.scrollTop = top;
+      box.dispatchEvent(new Event('scroll'));
+    });
+  };
+
+  const stream = async (text: string): Promise<void> => {
+    chat.current = chatState({
+      working: true,
+      liveText: new Map([[CHAT_LIVE_KEY, liveEntry({ text })]]),
+    });
+    await paint();
+  };
+
+  it('keeps a reader who scrolled up where they are while the agent streams', async () => {
+    await paint();
+    const box = transcript();
+    const position = layOut(box);
+    await scrollTo(box, 3600);
+    await scrollTo(box, 1200);
+
+    await stream('Adding the reviewer node');
+    await stream('Adding the reviewer node and wiring it');
+
+    expect(position.top).toBe(1200);
+  });
+
+  it('follows the stream while the reader is at the bottom', async () => {
+    await paint();
+    const box = transcript();
+    const position = layOut(box);
+    await scrollTo(box, 3600);
+
+    await stream('Adding the reviewer node');
+
+    expect(position.top).toBe(4000);
+  });
+
+  it('follows again once the reader scrolls back down to the bottom', async () => {
+    await paint();
+    const box = transcript();
+    const position = layOut(box);
+    await scrollTo(box, 3600);
+    await scrollTo(box, 1200);
+    await scrollTo(box, 3600);
+
+    await stream('Adding the reviewer node');
+
+    expect(position.top).toBe(4000);
+  });
+
+  it('follows again once the reader sends a message from above the tail', async () => {
+    chat.current = chatState({});
+    await paint();
+    const box = transcript();
+    const position = layOut(box);
+    await scrollTo(box, 3600);
+    await scrollTo(box, 1200);
+
+    await act(async () => {
+      const field = container.querySelector('textarea')!;
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )?.set?.call(field, 'add a reviewer');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="Send"]')!
+        .click();
+    });
+    await stream('Adding the reviewer node');
+
+    expect(position.top).toBe(4000);
+  });
+});

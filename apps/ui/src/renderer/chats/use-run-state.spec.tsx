@@ -32,6 +32,7 @@ const state = (calls: number): RunStateDto => ({
   workflowRows: [],
   artifactRows: [],
   shells: [],
+  monitors: [],
   actions: [],
   openToolCalls: [],
   throughSeq: -1,
@@ -146,6 +147,45 @@ describe('useRunState', () => {
     });
     await settle();
     expect(h.api.readRunState.mock.calls.length).toBe(before + 1);
+  });
+
+  it('re-reads when a monitor starts or ends, never for a batch of its output', async () => {
+    const h = harness('r1');
+    await h.render('r1');
+    const before = h.api.readRunState.mock.calls.length;
+    const notice = (event: 'start' | 'batch' | 'end') => ({
+      kind: 'system' as const,
+      payload: {
+        monitors: [
+          {
+            id: 'm1',
+            description: 'CI',
+            event,
+            ...(event === 'end' ? { end: { kind: 'exit', code: 0 } } : {}),
+            lines: [],
+            omitted: 0,
+          },
+        ],
+      },
+    });
+
+    await act(async () => {
+      h.emitItem(notice('batch'));
+    });
+    await settle();
+    expect(h.api.readRunState.mock.calls.length).toBe(before);
+
+    await act(async () => {
+      h.emitItem(notice('start'));
+    });
+    await settle();
+    expect(h.api.readRunState.mock.calls.length).toBe(before + 1);
+
+    await act(async () => {
+      h.emitItem(notice('end'));
+    });
+    await settle();
+    expect(h.api.readRunState.mock.calls.length).toBe(before + 2);
   });
 
   it('re-reads when a call it lists as queued writes its first status row', async () => {

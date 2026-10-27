@@ -3048,6 +3048,28 @@ export const OpenShellSchema = z
   .meta({ id: 'OpenShell' });
 export type OpenShell = z.infer<typeof OpenShellSchema>;
 
+/** One `monitor` command still running, as `MonitorRegistry` holds it. */
+export const OpenMonitorSchema = z
+  .object({
+    id: z.string().describe('the id the agent knows it by, e.g. `m1`'),
+    description: z.string(),
+    command: z.string(),
+    nodeId: z
+      .string()
+      .nullable()
+      .describe('which workflow node started it; null for a 1:1 chat'),
+    callId: z
+      .string()
+      .nullable()
+      .describe(
+        'the call its conversation was answering when it started; null for its own conversation',
+      ),
+    startedAt: z.string(),
+    endsAt: z.string().describe('when its timeout stops it, ISO-8601'),
+  })
+  .meta({ id: 'OpenMonitor' });
+export type OpenMonitor = z.infer<typeof OpenMonitorSchema>;
+
 /**
  * Every command the run still has running, over the WHOLE conversation.
  *
@@ -3805,6 +3827,9 @@ export const RunStateWireSchema = z.object({
   shells: z
     .array(OpenShellSchema)
     .describe('every DETACHED command still running'),
+  monitors: z
+    .array(OpenMonitorSchema)
+    .describe("every conversation's monitors still running, in start order"),
   actions: z
     .array(LiveActionSchema)
     .describe(

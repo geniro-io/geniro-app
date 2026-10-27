@@ -258,6 +258,14 @@ describe('WorkflowVersionsDialog', () => {
     expect(document.body.textContent).toContain('Restore this version');
   });
 
+  it('focuses the list on open, so no card wears a focus ring until Tab reaches it', () => {
+    render({ data: DEV_TEAM_VERSIONS });
+
+    expect(document.activeElement?.getAttribute('aria-label')).toBe(
+      'Versions, newest first',
+    );
+  });
+
   it('says a workflow that never ran has no versions yet', () => {
     render({ data: NEVER_RUN_VERSIONS });
 

@@ -1,5 +1,5 @@
 import { ArrowLeft, ChevronRight } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import type {
   VersionFigures,
@@ -178,9 +178,9 @@ function VersionCard({
       />
     </>
   );
+  // The current version is marked by its badge alone.
   const className = cn(
-    'flex w-full items-center gap-3 rounded-xl border bg-card px-4 py-3 text-left',
-    current ? 'border-success/50 bg-success/5' : 'border-border',
+    'flex w-full items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left',
     !opens(row) && 'opacity-75',
   );
   return (
@@ -191,7 +191,9 @@ function VersionCard({
           aria-label={`Show version ${row.version?.slice(0, 8) ?? ''}`}
           className={cn(
             className,
-            'min-h-11 transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
+            // Inset: the scrolling list clips anything drawn outside the card, which left
+            // the dialog's first-focused card with only a top and bottom line.
+            'min-h-11 transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset focus-visible:outline-none',
           )}
           onClick={() => onOpen(rowKey(row))}>
           {body}
@@ -350,6 +352,9 @@ export function WorkflowVersionsDialog({
   const narrow = useNarrowViewport();
   // The open version, by row key, so a re-read keeps the same one open.
   const [shown, setShown] = useState<string | null>(null);
+  // Opening focuses the list, not its first card: a focused card draws a ring that
+  // reads as a border on the current version. Tab still reaches every card.
+  const listRef = useRef<HTMLUListElement | null>(null);
   const close = (): void => {
     setShown(null);
     onClose();
@@ -420,10 +425,12 @@ export function WorkflowVersionsDialog({
           version. Press a version to see what it changed or to restore it.
         </p>
         <ul
+          ref={listRef}
+          tabIndex={-1}
           aria-label="Versions, newest first"
           // Full screen, the page scrolls the list; in a window, the list does.
           className={cn(
-            'flex flex-col gap-2',
+            'flex flex-col gap-2 outline-none',
             !narrow && 'max-h-[55vh] overflow-y-auto',
           )}>
           {rows.map((row) => (
@@ -445,6 +452,7 @@ export function WorkflowVersionsDialog({
       onClose={close}
       fullScreen={narrow}
       className={narrow ? undefined : 'max-h-[85vh] max-w-[48rem]'}
+      initialFocus={listRef}
       title={`Versions of ${workflowName}`}>
       {/* Full screen, the dialog pads nothing: the page's 16px gutter is ours. */}
       <div className={cn(narrow && 'p-4')}>{body}</div>

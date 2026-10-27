@@ -77,6 +77,7 @@ import {
   isSettledRunStatus,
   isWorkingRunStatus,
 } from './run-status';
+import { nextFollowState } from './scroll-follow';
 import { settleMomentOf } from './settled-status';
 import { TargetSelect } from './target-select';
 import { TranscriptEntryView } from './transcript-entry';
@@ -811,15 +812,37 @@ export function HostedChat({
   }, [durableEntries, chat.liveText, working, awaiting, runId]);
 
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  // The chat screen's follow rule (`nextFollowState`): a scroll UP releases the
+  // tail, reaching the bottom re-arms it. Refs, because a streamed token must
+  // not re-render the transcript to decide whether to scroll.
+  const followingRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+  useEffect(() => {
+    followingRef.current = true;
+  }, [runId]);
   useEffect(() => {
     const box = transcriptRef.current;
-    if (box !== null) {
-      box.scrollTop = box.scrollHeight;
+    if (box === null || !followingRef.current) {
+      return;
     }
+    box.scrollTop = box.scrollHeight;
+    lastScrollTopRef.current = box.scrollTop;
     // The LIVE plane too, not only the durable rows: a streaming answer grows
     // the box without adding an item, and following only items left the tail
     // of what the agent was writing off the bottom of a 320px dock (or a popup).
   }, [chat.items, chat.liveText]);
+  const onTranscriptScroll = useCallback(
+    (event: React.UIEvent<HTMLDivElement>): void => {
+      const box = event.currentTarget;
+      followingRef.current = nextFollowState(
+        followingRef.current,
+        box,
+        lastScrollTopRef.current,
+      );
+      lastScrollTopRef.current = box.scrollTop;
+    },
+    [],
+  );
 
   const send = useCallback(async (): Promise<void> => {
     const text = draft.trim();
@@ -833,6 +856,7 @@ export function HostedChat({
       return;
     }
     setComposeError(null);
+    followingRef.current = true;
     const sentKeys = attachments.attachments.map(
       (attachment) => attachment.key,
     );
@@ -928,6 +952,7 @@ export function HostedChat({
 
       <div
         ref={transcriptRef}
+        onScroll={onTranscriptScroll}
         data-slot={transcriptSlot}
         className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
         {chat.loading && chat.items.length === 0 ? (

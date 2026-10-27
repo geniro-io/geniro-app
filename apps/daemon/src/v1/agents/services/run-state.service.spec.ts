@@ -18,6 +18,7 @@ import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
 import { NO_CALL_INDEX } from '../__tests__/no-call-index';
+import type { MonitorOwner, MonitorSnapshot } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -26,6 +27,7 @@ import { ApprovalRegistry } from './approval-registry';
 import { ChatActionsService } from './chat-actions.service';
 import type { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
+import type { MonitorRegistry } from './monitor.registry';
 import { RunStateService } from './run-state.service';
 
 /**
@@ -67,7 +69,7 @@ describe('RunStateService (in-memory sqlite)', () => {
   /** The allocator the read asks how far the run is written. */
   let seqs: ItemSeqAllocator;
 
-  function service(): RunStateService {
+  function service(running: MonitorSnapshot[] = []): RunStateService {
     const shells = {
       read: () => Promise.resolve({ shells: [] }),
     } as unknown as ChatShellsService;
@@ -110,6 +112,10 @@ describe('RunStateService (in-memory sqlite)', () => {
         NO_CALL_INDEX,
         seqs,
       ),
+      {
+        list: (runId: string) =>
+          running.filter((monitor) => monitor.owner.runId === runId),
+      } as unknown as MonitorRegistry,
     );
   }
 
@@ -229,6 +235,61 @@ describe('RunStateService (in-memory sqlite)', () => {
 
   it('answers a run that does not exist with a 404', async () => {
     await expect(service().read('nope')).rejects.toThrow(/not found/);
+  });
+
+  it("lists every conversation's running monitors, a chat's with no node", async () => {
+    await createRun('completed');
+    const monitor = (
+      id: string,
+      owner: Partial<MonitorOwner>,
+    ): MonitorSnapshot => ({
+      id,
+      description: `watch ${id}`,
+      command: `gh pr checks ${id} --watch`,
+      startedAt: '2026-10-27T10:00:00.000Z',
+      endsAt: '2026-10-27T10:10:00.000Z',
+      timeoutMs: 600_000,
+      events: 0,
+      pid: 4242,
+      owner: {
+        runId: 'run-a',
+        nodeId: 'chat',
+        caller: 'chat',
+        conversationId: null,
+        callId: null,
+        target: 'chat',
+        ...owner,
+      },
+    });
+    const state = await service([
+      monitor('m1', {}),
+      monitor('m2', {
+        nodeId: 'reviewer',
+        callId: 'call-3',
+        target: 'workflow',
+      }),
+      monitor('m1', { runId: 'run-b' }),
+    ]).read('run-a');
+    expect(state.monitors).toEqual([
+      {
+        id: 'm1',
+        description: 'watch m1',
+        command: 'gh pr checks m1 --watch',
+        nodeId: null,
+        callId: null,
+        startedAt: '2026-10-27T10:00:00.000Z',
+        endsAt: '2026-10-27T10:10:00.000Z',
+      },
+      {
+        id: 'm2',
+        description: 'watch m2',
+        command: 'gh pr checks m2 --watch',
+        nodeId: 'reviewer',
+        callId: 'call-3',
+        startedAt: '2026-10-27T10:00:00.000Z',
+        endsAt: '2026-10-27T10:10:00.000Z',
+      },
+    ]);
   });
 
   it('returns the cards the registry still holds, as the rows they were persisted as', async () => {

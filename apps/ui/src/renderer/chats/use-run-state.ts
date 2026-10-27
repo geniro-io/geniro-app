@@ -97,6 +97,7 @@ const EMPTY: RunStateDto = {
   workflowRows: [],
   artifactRows: [],
   shells: [],
+  monitors: [],
   actions: [],
   openToolCalls: [],
   // Nothing read yet: no ending is the daemon's to state.
@@ -118,7 +119,8 @@ function movesRunState(event: RunStatusEvent): boolean {
     event.holdingFor !== undefined ||
     event.awaitingCalls !== undefined ||
     event.shellsOpen !== undefined ||
-    event.subagentsOut !== undefined
+    event.subagentsOut !== undefined ||
+    event.monitorsChangedAt !== undefined
   );
 }
 

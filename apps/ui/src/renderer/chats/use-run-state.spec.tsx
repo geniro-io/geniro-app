@@ -32,6 +32,7 @@ const state = (calls: number): RunStateDto => ({
   workflowRows: [],
   artifactRows: [],
   shells: [],
+  monitors: [],
   actions: [],
   openToolCalls: [],
   throughSeq: -1,
@@ -143,6 +144,18 @@ describe('useRunState', () => {
 
     await act(async () => {
       h.emitItem({ kind: 'tool_call', payload: { id: 't2', name: 'Task' } });
+    });
+    await settle();
+    expect(h.api.readRunState.mock.calls.length).toBe(before + 1);
+  });
+
+  it('re-reads when the daemon says a monitor started or ended — its end row can wait for the turn', async () => {
+    const h = harness('r1');
+    await h.render('r1');
+    const before = h.api.readRunState.mock.calls.length;
+
+    await act(async () => {
+      h.emitStatus({ monitorsChangedAt: 1 });
     });
     await settle();
     expect(h.api.readRunState.mock.calls.length).toBe(before + 1);

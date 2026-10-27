@@ -9,6 +9,7 @@ export function emptyRunState(): RunStateDto {
     workflowRows: [],
     artifactRows: [],
     shells: [],
+    monitors: [],
     actions: [],
     openToolCalls: [],
     throughSeq: -1,

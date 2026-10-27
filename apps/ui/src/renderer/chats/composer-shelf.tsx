@@ -10,6 +10,7 @@ import { useContext } from 'react';
 
 import type { PullRequestRefResult } from '../../shared/contracts';
 import type {
+  OpenMonitor,
   PullRequestOutcome,
   RunResetWake,
   TeamNote,
@@ -22,6 +23,7 @@ import { cn } from '../components/ui/utils';
 import type { AgentThread } from './agent-activity';
 import type { ChangesSummary } from './changes-tree';
 import { formatElapsed, RunSettledContext, useSecondsTick } from './live-row';
+import { MonitorRows } from './monitor-list';
 import {
   revealAgentsPanel,
   revealThreadPullRequests,
@@ -473,6 +475,55 @@ export function RunningShellChips({
         leftRunningOf={leftRunningOf}
         onOpen={onOpen}
         onKill={onKill}
+      />
+    </HoverPopover>
+  );
+}
+
+/**
+ * The monitors this thread's agents have running RIGHT NOW, as a shelf chip:
+ * a spinner, a count, and the list behind it, each row with its own Stop.
+ *
+ * Read off run state's `monitors` — the daemon's registry, never a fold of the
+ * monitor rows in the window — so a monitor started pages above the loaded
+ * window still shows. Drawn only while one runs, like the terminals chip.
+ */
+export function RunningMonitorChips({
+  monitors,
+  agentNameOf,
+  onStop,
+}: {
+  monitors: readonly OpenMonitor[];
+  /** Names each row's agent; absent in a 1:1 chat. */
+  agentNameOf?: (nodeId: string) => string;
+  onStop?: (monitor: OpenMonitor) => void | Promise<void>;
+}): React.JSX.Element | null {
+  const count = monitors.length;
+  if (count === 0) {
+    return null;
+  }
+  return (
+    <HoverPopover
+      slot="running-monitors"
+      openOn="click"
+      label={`${count} monitor${count === 1 ? '' : 's'} running`}
+      panelLabel="Monitors"
+      side="top"
+      align="start"
+      className={SHELF_CHIP_WRAPPER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      panelClassName="max-h-64 w-[22rem] overflow-y-auto"
+      trigger={
+        <>
+          <Spinner className="size-3.5" />
+          <span className="font-medium">Monitors</span>
+          <span className="text-muted-foreground tabular-nums">{count}</span>
+        </>
+      }>
+      <MonitorRows
+        monitors={monitors}
+        agentNameOf={agentNameOf}
+        onStop={onStop}
       />
     </HoverPopover>
   );

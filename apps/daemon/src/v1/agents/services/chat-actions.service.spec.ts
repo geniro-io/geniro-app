@@ -26,6 +26,7 @@ import { ApprovalRegistry } from './approval-registry';
 import { ChatActionsService } from './chat-actions.service';
 import type { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
+import type { MonitorRegistry } from './monitor.registry';
 import { RunStateService } from './run-state.service';
 
 /**
@@ -89,6 +90,7 @@ describe('ChatActionsService (in-memory sqlite)', () => {
       { all: () => new Map() } as unknown as AgentAdapterRegistry,
       seqs,
       actions,
+      { list: () => [] } as unknown as MonitorRegistry,
     );
     await runs.create({ id: 'run-a', status: 'running', workflowId: null });
   });

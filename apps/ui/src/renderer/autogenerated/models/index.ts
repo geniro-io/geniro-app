@@ -4843,6 +4843,55 @@ export type NodeStatus = typeof NodeStatus[keyof typeof NodeStatus];
 /**
  * 
  * @export
+ * @interface OpenMonitor
+ */
+export interface OpenMonitor {
+    /**
+     * the id the agent knows it by, e.g. `m1`
+     * @type {string}
+     * @memberof OpenMonitor
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenMonitor
+     */
+    description: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenMonitor
+     */
+    command: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenMonitor
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenMonitor
+     */
+    callId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenMonitor
+     */
+    startedAt: string;
+    /**
+     * when its timeout stops it, ISO-8601
+     * @type {string}
+     * @memberof OpenMonitor
+     */
+    endsAt: string;
+}
+/**
+ * 
+ * @export
  * @interface OpenShell
  */
 export interface OpenShell {
@@ -6591,6 +6640,12 @@ export interface RunStateDto {
      * @memberof RunStateDto
      */
     shells: Array<OpenShell>;
+    /**
+     * every conversation's monitors still running, in start order
+     * @type {Array<OpenMonitor>}
+     * @memberof RunStateDto
+     */
+    monitors: Array<OpenMonitor>;
     /**
      * the buttons agents published that can still be pressed, newest first
      * @type {Array<LiveAction>}
@@ -9144,6 +9199,12 @@ export interface ThreadOverviewDtoState {
      * @memberof ThreadOverviewDtoState
      */
     shells: Array<OpenShell>;
+    /**
+     * every conversation's monitors still running, in start order
+     * @type {Array<OpenMonitor>}
+     * @memberof ThreadOverviewDtoState
+     */
+    monitors: Array<OpenMonitor>;
     /**
      * the buttons agents published that can still be pressed, newest first
      * @type {Array<LiveAction>}

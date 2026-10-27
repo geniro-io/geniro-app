@@ -385,6 +385,12 @@ export interface RunStatusEvent {
    */
   spendUpdatedAt?: number;
   /**
+   * When one of this run's monitors last started or ended — the signal to read
+   * run state's `monitors` again. TWIN PARSER of the daemon's `RunStatusEvent`;
+   * a marker like {@link spendUpdatedAt}, read by `useRunState`.
+   */
+  monitorsChangedAt?: number;
+  /**
    * The pull requests this run shows (opened, and touched by its CLI's own
    * record), when a capture pass has just changed them.
    *
@@ -630,6 +636,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     shellsOpen,
     subagentsOut,
     spendUpdatedAt,
+    monitorsChangedAt,
     pullRequests,
     taskList,
     resetWakes,
@@ -730,6 +737,10 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // and re-fetch on every render.
     ...(typeof spendUpdatedAt === 'number' && Number.isFinite(spendUpdatedAt)
       ? { spendUpdatedAt }
+      : {}),
+    ...(typeof monitorsChangedAt === 'number' &&
+    Number.isFinite(monitorsChangedAt)
+      ? { monitorsChangedAt }
       : {}),
     // Every entry checked, not merely the array: this arrives as a socket
     // payload rather than through the generated client, and a half-shaped ref

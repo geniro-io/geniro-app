@@ -28,13 +28,20 @@ function mount(ui: React.ReactNode): HTMLDivElement {
 }
 
 function pointer(
-  type: 'pointerover' | 'pointerout' | 'pointerdown',
+  type: 'pointerover' | 'pointerout' | 'pointerdown' | 'pointermove',
   target: Element,
-  init: { relatedTarget?: Element | null; pointerType?: string } = {},
+  init: {
+    relatedTarget?: Element | null;
+    pointerType?: string;
+    x?: number;
+    y?: number;
+  } = {},
 ): void {
   const event = new MouseEvent(type, {
     bubbles: true,
     relatedTarget: init.relatedTarget ?? null,
+    clientX: init.x ?? 0,
+    clientY: init.y ?? 0,
   });
   if (init.pointerType !== undefined) {
     Object.defineProperty(event, 'pointerType', { value: init.pointerType });
@@ -46,6 +53,14 @@ function pointer(
 
 const tooltip = (): HTMLElement | null =>
   document.querySelector('[role="tooltip"]');
+
+function placeAt(
+  element: Element,
+  box: { left: number; top: number; width: number; height: number },
+): void {
+  element.getBoundingClientRect = () =>
+    new DOMRect(box.left, box.top, box.width, box.height);
+}
 
 const wait = (ms: number): void => {
   act(() => {
@@ -177,6 +192,80 @@ describe('TooltipLayer', () => {
     expect(button.getAttribute('title')).toBe('Archive');
   });
 
+  it('draws the title of an element under a covering control, which hit testing skips', () => {
+    const el = mount(
+      <div data-testid="row">
+        <time title="Last activity: Oct 27" style={{ pointerEvents: 'none' }}>
+          5m
+        </time>
+        <button type="button" aria-label="Open the thread" />
+      </div>,
+    );
+    const time = el.querySelector('time')!;
+    const cover = el.querySelector('button')!;
+    placeAt(time, { left: 200, top: 10, width: 30, height: 16 });
+    placeAt(cover, { left: 0, top: 0, width: 260, height: 40 });
+
+    pointer('pointerover', cover, { x: 20, y: 20 });
+    pointer('pointermove', cover, { x: 210, y: 18 });
+    wait(16);
+    wait(TOOLTIP_OPEN_DELAY_MS);
+
+    expect(tooltip()?.textContent).toBe('Last activity: Oct 27');
+    expect(time.hasAttribute('title')).toBe(false);
+
+    pointer('pointermove', cover, { x: 20, y: 20 });
+    wait(16);
+
+    expect(tooltip()).toBeNull();
+    expect(time.getAttribute('title')).toBe('Last activity: Oct 27');
+  });
+
+  it('draws the title of a disabled button that takes no pointer events', () => {
+    const el = mount(
+      <span data-testid="wrapper">
+        <button
+          type="button"
+          disabled
+          title="Waiting for the upload to finish"
+          style={{ pointerEvents: 'none' }}>
+          Send
+        </button>
+      </span>,
+    );
+    const wrapper = el.querySelector('span')!;
+    const button = el.querySelector('button')!;
+    placeAt(button, { left: 100, top: 100, width: 60, height: 30 });
+
+    pointer('pointerover', wrapper, { x: 120, y: 110 });
+    wait(TOOLTIP_OPEN_DELAY_MS);
+
+    expect(tooltip()?.textContent).toBe('Waiting for the upload to finish');
+  });
+
+  it('draws nothing for a hidden element under the pointer', () => {
+    const el = mount(
+      <div>
+        <button
+          type="button"
+          aria-hidden="true"
+          title="Jump to the latest message"
+          style={{ pointerEvents: 'none' }}
+        />
+        <p>text</p>
+      </div>,
+    );
+    const hidden = el.querySelector('button')!;
+    const text = el.querySelector('p')!;
+    placeAt(hidden, { left: 0, top: 0, width: 100, height: 100 });
+
+    pointer('pointerover', text, { x: 50, y: 50 });
+    wait(TOOLTIP_OPEN_DELAY_MS);
+
+    expect(tooltip()).toBeNull();
+    expect(hidden.getAttribute('title')).toBe('Jump to the latest message');
+  });
+
   it('closes when the element it belongs to goes away', () => {
     function Removable(): React.JSX.Element | null {
       const [shown, setShown] = useState(true);
@@ -226,7 +315,18 @@ describe('placeTooltip', () => {
       viewport,
     );
     expect(placed.left).toBe(800 - 120 - 8);
-    expect(placed.left + placed.arrow).toBe(760);
+    expect(placed.arrow).toBe(760 - placed.left);
+  });
+
+  it('stays inside the window over an element with no room on either side, without an arrow', () => {
+    const placed = placeTooltip(
+      { left: 300, top: 12, bottom: 598, width: 30 },
+      { width: 200, height: 29 },
+      viewport,
+    );
+    expect(placed.top).toBeGreaterThanOrEqual(8);
+    expect(placed.top + 29).toBeLessThanOrEqual(600 - 8);
+    expect(placed.arrow).toBeNull();
   });
 
   it('never puts the arrow into the tooltip’s rounded corner', () => {

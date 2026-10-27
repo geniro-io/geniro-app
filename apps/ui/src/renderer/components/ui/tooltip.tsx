@@ -17,31 +17,84 @@ export function placeTooltip(
   anchor: Pick<DOMRect, 'left' | 'top' | 'bottom' | 'width'>,
   tip: { width: number; height: number },
   viewport: { width: number; height: number },
-): { left: number; top: number; side: 'top' | 'bottom'; arrow: number } {
+): {
+  left: number;
+  top: number;
+  side: 'top' | 'bottom';
+  arrow: number | null;
+} {
   const below = viewport.height - anchor.bottom - GAP_PX - EDGE_MARGIN_PX;
   const above = anchor.top - GAP_PX - EDGE_MARGIN_PX;
-  const side = tip.height <= below || below >= above ? 'bottom' : 'top';
-  const top =
+  const fits = tip.height <= below || tip.height <= above;
+  const side =
+    tip.height <= below || (tip.height > above && below >= above)
+      ? 'bottom'
+      : 'top';
+  const wanted =
     side === 'bottom'
       ? anchor.bottom + GAP_PX
       : anchor.top - GAP_PX - tip.height;
+  const top = Math.min(
+    Math.max(wanted, EDGE_MARGIN_PX),
+    Math.max(EDGE_MARGIN_PX, viewport.height - tip.height - EDGE_MARGIN_PX),
+  );
   const centre = anchor.left + anchor.width / 2;
   const left = Math.min(
     Math.max(centre - tip.width / 2, EDGE_MARGIN_PX),
     Math.max(EDGE_MARGIN_PX, viewport.width - tip.width - EDGE_MARGIN_PX),
   );
-  const arrow = Math.min(
-    Math.max(centre - left, ARROW_INSET_PX),
-    Math.max(ARROW_INSET_PX, tip.width - ARROW_INSET_PX),
-  );
+  const arrow = fits
+    ? Math.min(
+        Math.max(centre - left, ARROW_INSET_PX),
+        Math.max(ARROW_INSET_PX, tip.width - ARROW_INSET_PX),
+      )
+    : null;
   return { left, top, side, arrow };
 }
+
+const TITLED = `[title]:not([title=""]):not(iframe), [${PARKED_ATTR}]`;
 
 function titledElement(node: EventTarget | null): Element | null {
   if (!(node instanceof Element)) {
     return null;
   }
-  return node.closest(`[title]:not([title=""]):not(iframe), [${PARKED_ATTR}]`);
+  return node.closest(TITLED);
+}
+
+function titledBeneath(hit: Element, x: number, y: number): Element | null {
+  let scope: Element | null = hit;
+  for (let depth = 0; scope !== null && depth < 3; depth += 1) {
+    let best: Element | null = null;
+    let bestArea = Number.POSITIVE_INFINITY;
+    for (const element of scope.querySelectorAll(TITLED)) {
+      const r = element.getBoundingClientRect();
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) {
+        continue;
+      }
+      if (element.closest('[aria-hidden="true"]') !== null) {
+        continue;
+      }
+      if (
+        typeof element.checkVisibility === 'function' &&
+        !element.checkVisibility({
+          opacityProperty: true,
+          visibilityProperty: true,
+        })
+      ) {
+        continue;
+      }
+      const area = r.width * r.height;
+      if (area < bestArea) {
+        best = element;
+        bestArea = area;
+      }
+    }
+    if (best !== null) {
+      return best;
+    }
+    scope = scope.parentElement;
+  }
+  return null;
 }
 
 function park(element: Element): string {
@@ -74,7 +127,10 @@ export function TooltipLayer(): React.JSX.Element | null {
 
   React.useEffect(() => {
     let active: Element | null = null;
+    let activeBeneath = false;
     let pressed = false;
+    let moveFrame = 0;
+    let lastMove: PointerEvent | null = null;
     let openTimer: ReturnType<typeof setTimeout> | null = null;
     let closedAt = Number.NEGATIVE_INFINITY;
     let shown = false;
@@ -120,15 +176,21 @@ export function TooltipLayer(): React.JSX.Element | null {
         unpark(active);
       }
       active = null;
+      activeBeneath = false;
       pressed = false;
       hide();
     };
 
-    const onOver = (event: PointerEvent): void => {
+    const consider = (event: PointerEvent): void => {
       if (event.pointerType === 'touch') {
         return;
       }
-      const element = titledElement(event.target);
+      const own = titledElement(event.target);
+      const element =
+        own ??
+        (event.target instanceof Element
+          ? titledBeneath(event.target, event.clientX, event.clientY)
+          : null);
       if (element === active) {
         return;
       }
@@ -137,6 +199,7 @@ export function TooltipLayer(): React.JSX.Element | null {
         return;
       }
       active = element;
+      activeBeneath = own === null;
       park(element);
       watcher.observe(element, {
         attributes: true,
@@ -148,12 +211,27 @@ export function TooltipLayer(): React.JSX.Element | null {
         warm ? 0 : TOOLTIP_OPEN_DELAY_MS,
       );
     };
+    const onMove = (event: PointerEvent): void => {
+      lastMove = event;
+      if (moveFrame !== 0) {
+        return;
+      }
+      moveFrame = requestAnimationFrame(() => {
+        moveFrame = 0;
+        if (lastMove !== null) {
+          consider(lastMove);
+        }
+      });
+    };
     const onOut = (event: PointerEvent): void => {
       if (active === null) {
         return;
       }
       const next = event.relatedTarget;
       if (next instanceof Node && active.contains(next)) {
+        return;
+      }
+      if (activeBeneath && next !== null) {
         return;
       }
       release();
@@ -166,7 +244,8 @@ export function TooltipLayer(): React.JSX.Element | null {
       hide();
     };
 
-    document.addEventListener('pointerover', onOver, true);
+    document.addEventListener('pointerover', consider, true);
+    document.addEventListener('pointermove', onMove, true);
     document.addEventListener('pointerout', onOut, true);
     document.addEventListener('pointerdown', onPress, true);
     document.addEventListener('keydown', onPress, true);
@@ -176,8 +255,10 @@ export function TooltipLayer(): React.JSX.Element | null {
     });
     window.addEventListener('blur', release);
     return () => {
-      document.removeEventListener('pointerover', onOver, true);
+      document.removeEventListener('pointerover', consider, true);
+      document.removeEventListener('pointermove', onMove, true);
       document.removeEventListener('pointerout', onOut, true);
+      cancelAnimationFrame(moveFrame);
       document.removeEventListener('pointerdown', onPress, true);
       document.removeEventListener('keydown', onPress, true);
       document.removeEventListener('wheel', onScroll, true);
@@ -235,7 +316,7 @@ export function TooltipLayer(): React.JSX.Element | null {
           : { left: position.left, top: position.top }
       }
       className="pointer-events-none fixed z-60 max-w-[min(24rem,calc(100vw-16px))] rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs leading-snug font-medium break-words whitespace-pre-line text-popover-foreground shadow-panel-lg">
-      {position === null ? null : (
+      {position === null || position.arrow === null ? null : (
         <span
           aria-hidden
           data-slot="tooltip-arrow"

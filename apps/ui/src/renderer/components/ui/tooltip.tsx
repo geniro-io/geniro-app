@@ -1,12 +1,14 @@
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 
+import { cn } from './utils';
+
 /**
  * How long a pointer must rest on an element before its tooltip shows —
- * quicker than the system's ~1s, slow enough that sweeping across a toolbar
- * draws nothing.
+ * far quicker than the system's (seconds, reported as "появляется только через
+ * 3 секунды"), slow enough that sweeping across a toolbar draws nothing.
  */
-export const TOOLTIP_OPEN_DELAY_MS = 450;
+export const TOOLTIP_OPEN_DELAY_MS = 300;
 
 /**
  * After a tooltip closes, the next one within this window opens at once: a
@@ -15,21 +17,26 @@ export const TOOLTIP_OPEN_DELAY_MS = 450;
  */
 const TOOLTIP_WARM_MS = 500;
 
-const GAP_PX = 6;
+/** Clear of the element by enough to hold the arrow. */
+const GAP_PX = 8;
 const EDGE_MARGIN_PX = 8;
+/** How close the arrow may come to the tooltip's rounded corner. */
+const ARROW_INSET_PX = 12;
 
 /** Where an element's `title` is parked while its tooltip owns the text. */
 const PARKED_ATTR = 'data-tooltip-title';
 
 /**
  * Where a tooltip goes: centred under its element, above it when there is no
- * room below, and kept `EDGE_MARGIN_PX` inside the window either way.
+ * room below, and kept `EDGE_MARGIN_PX` inside the window either way. `arrow`
+ * is how far across the tooltip its arrow sits — still under the element's
+ * centre when the clamp has pushed the tooltip aside.
  */
 export function placeTooltip(
   anchor: Pick<DOMRect, 'left' | 'top' | 'bottom' | 'width'>,
   tip: { width: number; height: number },
   viewport: { width: number; height: number },
-): { left: number; top: number; side: 'top' | 'bottom' } {
+): { left: number; top: number; side: 'top' | 'bottom'; arrow: number } {
   const below = viewport.height - anchor.bottom - GAP_PX - EDGE_MARGIN_PX;
   const above = anchor.top - GAP_PX - EDGE_MARGIN_PX;
   const side = tip.height <= below || below >= above ? 'bottom' : 'top';
@@ -37,12 +44,16 @@ export function placeTooltip(
     side === 'bottom'
       ? anchor.bottom + GAP_PX
       : anchor.top - GAP_PX - tip.height;
-  const centred = anchor.left + anchor.width / 2 - tip.width / 2;
+  const centre = anchor.left + anchor.width / 2;
   const left = Math.min(
-    Math.max(centred, EDGE_MARGIN_PX),
+    Math.max(centre - tip.width / 2, EDGE_MARGIN_PX),
     Math.max(EDGE_MARGIN_PX, viewport.width - tip.width - EDGE_MARGIN_PX),
   );
-  return { left, top, side };
+  const arrow = Math.min(
+    Math.max(centre - left, ARROW_INSET_PX),
+    Math.max(ARROW_INSET_PX, tip.width - ARROW_INSET_PX),
+  );
+  return { left, top, side, arrow };
 }
 
 /** The element whose `title` a pointer over `node` would show, if any. */
@@ -96,10 +107,9 @@ export function TooltipLayer(): React.JSX.Element | null {
     text: string;
     anchor: Element;
   } | null>(null);
-  const [position, setPosition] = React.useState<{
-    left: number;
-    top: number;
-  } | null>(null);
+  const [position, setPosition] = React.useState<ReturnType<
+    typeof placeTooltip
+  > | null>(null);
   const tipRef = React.useRef<HTMLDivElement | null>(null);
   const tipId = React.useId();
 
@@ -246,9 +256,13 @@ export function TooltipLayer(): React.JSX.Element | null {
           { width: window.innerWidth, height: window.innerHeight },
         );
         setPosition((was) =>
-          was !== null && was.left === next.left && was.top === next.top
+          was !== null &&
+          was.left === next.left &&
+          was.top === next.top &&
+          was.side === next.side &&
+          was.arrow === next.arrow
             ? was
-            : { left: next.left, top: next.top },
+            : next,
         );
       }
       frame = requestAnimationFrame(follow);
@@ -272,7 +286,24 @@ export function TooltipLayer(): React.JSX.Element | null {
           ? { left: 0, top: 0, visibility: 'hidden' }
           : { left: position.left, top: position.top }
       }
-      className="pointer-events-none fixed z-60 max-w-[min(24rem,calc(100vw-16px))] rounded-md border border-border/60 bg-popover px-2 py-1 text-xs leading-snug break-words whitespace-pre-line text-popover-foreground shadow-panel-md">
+      // The app's popover surface, not a system-looking label — "выглядит
+      // так же, как и до этого … некрасивый системный лейбл": the hairline,
+      // the large shadow and the arrow onto its control are what the OS's
+      // own tooltip has none of.
+      className="pointer-events-none fixed z-60 max-w-[min(24rem,calc(100vw-16px))] rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs leading-snug font-medium break-words whitespace-pre-line text-popover-foreground shadow-panel-lg">
+      {position === null ? null : (
+        <span
+          aria-hidden
+          data-slot="tooltip-arrow"
+          style={{ left: position.arrow }}
+          className={cn(
+            'absolute size-2 -translate-x-1/2 rotate-45 border-border bg-popover',
+            position.side === 'bottom'
+              ? '-top-1 border-t border-l'
+              : '-bottom-1 border-r border-b',
+          )}
+        />
+      )}
       {tip.text}
     </div>,
     document.body,

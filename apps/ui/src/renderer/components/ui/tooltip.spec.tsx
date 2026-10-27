@@ -220,7 +220,28 @@ describe('placeTooltip', () => {
         { width: 60, height: 20 },
         viewport,
       ),
-    ).toEqual({ left: 90, top: 126, side: 'bottom' });
+    ).toEqual({ left: 90, top: 128, side: 'bottom', arrow: 30 });
+  });
+
+  it('keeps the arrow on the element’s centre when the window edge pushes the tooltip aside', () => {
+    // A button near the right edge, centre x=760: the tooltip is pushed left.
+    const placed = placeTooltip(
+      { left: 750, top: 100, bottom: 120, width: 20 },
+      { width: 120, height: 24 },
+      viewport,
+    );
+    expect(placed.left).toBe(800 - 120 - 8);
+    expect(placed.left + placed.arrow).toBe(760);
+  });
+
+  it('never puts the arrow into the tooltip’s rounded corner', () => {
+    // Flush against the edge, centre x=795: past where the corner begins.
+    const placed = placeTooltip(
+      { left: 790, top: 100, bottom: 120, width: 10 },
+      { width: 120, height: 24 },
+      viewport,
+    );
+    expect(placed.arrow).toBe(120 - 12);
   });
 
   it('goes above an element with no room below it', () => {
@@ -230,7 +251,7 @@ describe('placeTooltip', () => {
       viewport,
     );
     expect(placed.side).toBe('top');
-    expect(placed.top).toBe(570 - 6 - 20);
+    expect(placed.top).toBe(570 - 8 - 20);
   });
 
   it('keeps inside the window at either edge', () => {

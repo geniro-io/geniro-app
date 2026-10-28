@@ -1,7 +1,6 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';

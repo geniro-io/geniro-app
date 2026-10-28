@@ -95,7 +95,7 @@ export class RunKindRowsCache implements OnModuleInit {
   rowsOf(
     runId: string,
     kinds: readonly ItemKind[],
-    atLeast = -1,
+    atLeast: number | 'fresh' = -1,
   ): Promise<readonly Item[]> {
     return this.rowsOfView(
       runId,

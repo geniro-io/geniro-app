@@ -18,14 +18,11 @@ import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
 import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
-import { NO_CALL_INDEX } from '../__tests__/no-call-index';
 import type { MonitorOwner, MonitorSnapshot } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
-import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
-import { ChatActionsService } from './chat-actions.service';
 import type { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { MonitorRegistry } from './monitor.registry';
@@ -72,7 +69,8 @@ describe('RunStateService (in-memory sqlite)', () => {
   let seqs: ItemSeqAllocator;
 
   /** What the read asked `RunKindRowsCache` for. */
-  let cacheReads: { kinds: string[]; atLeast: number | undefined }[] = [];
+  let cacheReads: { kinds: string[]; atLeast: number | 'fresh' | undefined }[] =
+    [];
 
   function service(running: MonitorSnapshot[] = []): RunStateService {
     const shells = {
@@ -110,13 +108,6 @@ describe('RunStateService (in-memory sqlite)', () => {
       shells,
       adapters,
       seqs,
-      new ChatActionsService(
-        orm.em,
-        items,
-        new AgentEventBus(),
-        NO_CALL_INDEX,
-        seqs,
-      ),
       {
         list: (runId: string) =>
           running.filter((monitor) => monitor.owner.runId === runId),

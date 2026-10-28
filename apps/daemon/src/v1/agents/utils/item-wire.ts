@@ -1,5 +1,4 @@
-import type { Item } from '../../runs/entity/item.entity';
-import type { ItemWire } from '../chat.types';
+import type { ItemWire, WireRow } from '../chat.types';
 import { OUTSIDE_ANY_CALL } from './call-membership';
 import { parseJsonColumn } from './json-util';
 
@@ -9,7 +8,7 @@ import { parseJsonColumn } from './json-util';
  * string. The one projection every route serving transcript rows goes through,
  * so a page and the rows it is anchored by cannot differ in shape.
  */
-export function itemToWire(item: Item): ItemWire {
+export function itemToWire(item: WireRow): ItemWire {
   return {
     id: item.id,
     runId: item.runId,

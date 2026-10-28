@@ -4,6 +4,8 @@ import type { ItemKind } from '../../runs/runs.types';
 import type { ItemWire } from '../chat.types';
 import {
   anchorNeedsOf,
+  callRowsIn,
+  callSpansFrom,
   conversationCallIds,
   pageBoundsOf,
   workflowEdgeRows,
@@ -124,5 +126,29 @@ describe('workflowEdgeRows', () => {
 describe('pageBoundsOf', () => {
   it('reads an empty page as needing nothing', () => {
     expect(pageBoundsOf([])).toBeNull();
+  });
+});
+
+describe('callSpansFrom and callRowsIn', () => {
+  // A settle is filed under its call (`inCall`), whatever its payload names.
+  const rows: ItemWire[] = [
+    row(1, 'call_started', { callId: 'call-1' }),
+    row(2, 'call_started', { callId: 'call-2' }),
+    { ...row(5, 'call_result', { callId: 'stale' }), inCall: 'call-1' },
+    row(6, 'call_started', { callId: 'call-3' }),
+  ];
+
+  it('reads where each call starts and settles, an unsettled one left open', () => {
+    expect(callSpansFrom(rows)).toEqual([
+      { callId: 'call-1', startSeq: 1, settleSeq: 5 },
+      { callId: 'call-2', startSeq: 2, settleSeq: null },
+      { callId: 'call-3', startSeq: 6, settleSeq: null },
+    ]);
+  });
+
+  it('keeps the start and settle rows of the calls asked for', () => {
+    expect(callRowsIn(rows, new Set(['call-1'])).map((r) => r.seq)).toEqual([
+      1, 5,
+    ]);
   });
 });

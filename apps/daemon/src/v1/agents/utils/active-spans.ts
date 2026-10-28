@@ -36,13 +36,6 @@ export const SPAN_ROW_KINDS = [
   'subagent_info',
 ] as const satisfies readonly ItemKind[];
 
-/** The card kinds among {@link SPAN_ROW_KINDS}: the fold reads only their `id` and `callId`. */
-export const SPAN_CARD_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
-  'approval_request',
-  'approval_verdict',
-  'unanswerable',
-]);
-
 /**
  * The wall-clock stretches in which SOME agent of a run was working, merged —
  * what the chat header's clock is drawn from on a WORKFLOW run.

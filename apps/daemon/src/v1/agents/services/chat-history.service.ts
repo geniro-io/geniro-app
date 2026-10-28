@@ -1,7 +1,6 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
-import type { Item } from '../../runs/entity/item.entity';
 import type { ItemKind } from '../../runs/runs.types';
 import type {
   ChatHistoryWire,
@@ -9,11 +8,15 @@ import type {
   HistoryWindow,
   ItemWire,
   SeqRange,
+  WireRow,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { OUTSIDE_ANY_CALL } from '../utils/call-membership';
+import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import {
   anchorNeedsOf,
+  callRowsIn,
+  callSpansFrom,
   callStartOf,
   conversationCallIds,
   isOutside,
@@ -26,6 +29,7 @@ import { itemToWire } from '../utils/item-wire';
 import { parseJsonColumn, payloadString } from '../utils/json-util';
 import { ChatService } from './chat.service';
 import { ItemCallIndexService } from './item-call-index.service';
+import { RunKindRowsCache } from './run-kind-rows.cache';
 
 /**
  * The kinds of a call's rows a folded card and the readings beside it (each
@@ -94,13 +98,46 @@ export class ChatHistoryService {
     private readonly itemDao: ItemDao,
     private readonly chats: ChatService,
     private readonly calls: ItemCallIndexService,
+    private readonly kindRows: RunKindRowsCache,
   ) {}
 
+  /**
+   * Every `call_started` and `call_result` row of the run, as they stand now —
+   * read at most once for one page, however many of its reads ask.
+   */
+  private callRowsOnce(runId: string): () => Promise<ItemWire[]> {
+    let rows: Promise<ItemWire[]> | undefined;
+    return () =>
+      (rows ??= this.kindRows
+        .rowsOf(runId, ['call_started', 'call_result'], 'fresh')
+        .then((cached) => cached.map(itemToWire)));
+  }
+
+  /**
+   * One page and its anchors, with every base64 image block collapsed to a
+   * line naming it (`collapseImageBlocks`): the transcript draws a tool result's
+   * image block as its JSON, and a page of a long run carries megabytes of them.
+   */
   async read(
     runId: string,
     afterSeq = -1,
     window?: HistoryWindow,
     conversation?: HistoryConversation,
+  ): Promise<ChatHistoryWire> {
+    const { items, anchors } = await this.readRows(
+      runId,
+      afterSeq,
+      window,
+      conversation,
+    );
+    return { items: servedRows(items), anchors: servedRows(anchors) };
+  }
+
+  private async readRows(
+    runId: string,
+    afterSeq: number,
+    window: HistoryWindow | undefined,
+    conversation: HistoryConversation | undefined,
   ): Promise<ChatHistoryWire> {
     const inCalls =
       conversation === undefined
@@ -115,7 +152,13 @@ export class ChatHistoryService {
           ? items.slice(0, -1)
           : items.slice(1)
         : items;
-    const anchors = await this.anchorsFor(runId, kept, inCalls !== undefined);
+    const callRows = this.callRowsOnce(runId);
+    const anchors = await this.anchorsFor(
+      runId,
+      kept,
+      inCalls !== undefined,
+      callRows,
+    );
     if (
       inCalls === undefined ||
       conversation === undefined ||
@@ -132,7 +175,7 @@ export class ChatHistoryService {
         }
       }
     };
-    add(await this.callsAcross(runId, kept));
+    add(await this.callsAcross(runId, kept, callRows));
     add(await this.cardRowsFor(runId, [...kept, ...byId.values()]));
     add(await this.deadCardsOf(runId, kept));
     return {
@@ -152,12 +195,14 @@ export class ChatHistoryService {
   private async callsAcross(
     runId: string,
     page: readonly ItemWire[],
+    callRows: () => Promise<ItemWire[]>,
   ): Promise<ItemWire[]> {
     const bounds = pageBoundsOf(page);
     if (bounds === null) {
       return [];
     }
-    const across = (await this.itemDao.callSpansOf(runId))
+    const rows = await callRows();
+    const across = callSpansFrom(rows)
       .filter(
         (span) =>
           span.startSeq < bounds.firstSeq &&
@@ -171,9 +216,7 @@ export class ChatHistoryService {
       await this.calls.callStartsOf(runId),
       new Set(across),
     );
-    return (await this.itemDao.callRowsOf(runId, [...conversations])).map(
-      itemToWire,
-    );
+    return callRowsIn(rows, conversations);
   }
 
   /**
@@ -230,11 +273,11 @@ export class ChatHistoryService {
       return [];
     }
     const em = this.em.fork();
-    const rows: Item[] = [];
+    const rows: WireRow[] = [];
     for (const callId of callIds) {
       const newest = (
         pick: Parameters<ItemDao['newestRowsInCall']>[2],
-      ): Promise<Item[]> =>
+      ): Promise<WireRow[]> =>
         this.itemDao.newestRowsInCall(runId, callId, pick, em);
       for (const read of CARD_READS) {
         rows.push(...(await newest(read)));
@@ -346,6 +389,7 @@ export class ChatHistoryService {
      * is outside the page when the page does not hold it.
      */
     scoped = false,
+    callRows = this.callRowsOnce(runId),
   ): Promise<ItemWire[]> {
     const bounds = pageBoundsOf(page);
     if (bounds === null) {
@@ -392,20 +436,11 @@ export class ChatHistoryService {
           await this.calls.callStartsOf(runId),
           needs.callIds,
         );
-        add(
-          (await this.itemDao.callRowsOf(runId, [...conversations], em)).map(
-            itemToWire,
-          ),
-        );
+        add(callRowsIn(await callRows(), conversations));
       } else {
-        const outside = (
-          await this.itemDao.rowsOfKinds(
-            runId,
-            ['call_started', 'call_result'],
-            callRange,
-            em,
-          )
-        ).map(itemToWire);
+        const outside = (await callRows()).filter((row) =>
+          isOutside(row.seq, bounds),
+        );
         // The chains are read over EVERY start row the run has — the page's
         // own included — since a conversation can run through the page and
         // out of it on both sides.
@@ -456,4 +491,11 @@ export class ChatHistoryService {
 
     return [...anchors.values()].sort((a, b) => a.seq - b.seq);
   }
+}
+
+function servedRows(rows: readonly ItemWire[]): ItemWire[] {
+  return rows.map((row) => {
+    const payload = collapseImageBlocks(row.payload);
+    return payload === row.payload ? row : { ...row, payload };
+  });
 }

@@ -90,7 +90,6 @@ describe('ChatActionsService (in-memory sqlite)', () => {
       } as unknown as ChatShellsService,
       { all: () => new Map() } as unknown as AgentAdapterRegistry,
       seqs,
-      actions,
       { list: () => [] } as unknown as MonitorRegistry,
       kindRowsPassthrough(items),
     );

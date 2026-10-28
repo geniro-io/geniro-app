@@ -8,6 +8,7 @@ import type { AgentSessionRegistry } from './agent-session.registry';
 import type { ChatService } from './chat.service';
 import { ChatShellsService } from './chat-shells.service';
 import type { ItemSeqAllocator } from './item-seq.allocator';
+import type { RunKindRowsCache } from './run-kind-rows.cache';
 
 /**
  * The machine, faked at the two module seams `kill` reads it through — the
@@ -100,7 +101,6 @@ function service(
   const written: WrittenRow[] = [];
   const published: WrittenRow[] = [];
   const itemDao = {
-    shellLifecycleRows: async () => rows,
     toolCallsByIds: async (_runId: string, ids: readonly string[]) => {
       asked.push([...ids]);
       return calls
@@ -204,6 +204,19 @@ function service(
           })) ?? null,
       } as unknown as AgentSessionRegistry,
       NO_CALL_INDEX,
+      {
+        rowsOf: async (
+          _runId: string,
+          kinds: readonly string[],
+          atLeast: unknown,
+        ) => {
+          expect([kinds, atLeast]).toEqual([
+            ['shell_open', 'shell_info'],
+            'fresh',
+          ]);
+          return rows;
+        },
+      } as unknown as RunKindRowsCache,
     ),
     asked,
     written,

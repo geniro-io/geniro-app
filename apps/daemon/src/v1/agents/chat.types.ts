@@ -6815,3 +6815,17 @@ export interface KindRowsView {
   kinds: readonly ItemKind[];
   keep?: (row: Item) => boolean;
 }
+
+/** The columns of a stored row the wire projection (`itemToWire`) reads. */
+export type WireRow = Pick<
+  Item,
+  | 'id'
+  | 'runId'
+  | 'nodeId'
+  | 'seq'
+  | 'kind'
+  | 'role'
+  | 'payload'
+  | 'createdAt'
+  | 'inCall'
+>;

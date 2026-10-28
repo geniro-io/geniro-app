@@ -55,9 +55,17 @@ const BREAKDOWN: AgentContextUsage = {
 function usageRowsOf(
   rows: readonly { nodeId: string | null; payload: string }[],
   callRecords: readonly unknown[] = [],
+  spanRows: (
+    runId: string,
+    kinds: readonly string[],
+    atLeast: unknown,
+  ) => Promise<unknown[]> = () => Promise.resolve([]),
 ): RunKindRowsCache {
   return {
-    rowsOf: () => Promise.resolve(rows),
+    rowsOf: (runId: string, kinds: readonly string[], atLeast: unknown) =>
+      kinds.includes('status')
+        ? spanRows(runId, kinds, atLeast)
+        : Promise.resolve(rows),
     rowsOfView: () => Promise.resolve(callRecords),
   } as unknown as RunKindRowsCache;
 }
@@ -141,7 +149,6 @@ function build(opts: {
     } as unknown as RunDao,
     {
       maxSeq: () => Promise.resolve(opts.maxSeq ?? 7),
-      turnSpanRows,
     } as unknown as ItemDao,
     {
       listByRun: () => Promise.resolve(opts.workflow?.states ?? []),
@@ -203,6 +210,8 @@ function build(opts: {
     usageRowsOf(
       opts.workflow?.rows ??
         (opts.payloads ?? []).map((payload) => ({ nodeId: null, payload })),
+      [],
+      turnSpanRows,
     ),
   );
   service.onModuleInit();
@@ -1577,7 +1586,22 @@ describe('ChatMetricsService.readTotalsResponse', () => {
 
     await service.readTotalsResponse('run-1');
 
-    expect(turnSpanRows).toHaveBeenCalledWith('run-1', expect.anything());
+    // Every kind a stretch is folded from, cards and background units
+    // included: a kind left out puts a wait back on the working clock.
+    expect(turnSpanRows).toHaveBeenCalledWith(
+      'run-1',
+      [
+        'status',
+        'turn_complete',
+        'approval_request',
+        'approval_verdict',
+        'unanswerable',
+        'shell_open',
+        'shell_info',
+        'subagent_info',
+      ],
+      'fresh',
+    );
   });
 
   it('sends a wait still open as an open-ended paused stretch', async () => {

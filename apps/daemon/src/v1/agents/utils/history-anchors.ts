@@ -262,6 +262,65 @@ export function rowsWithId(
   });
 }
 
+/**
+ * The call a start or settle row belongs to: a settle is filed under its call
+ * (`inCall`), a start names it in its payload.
+ */
+function callOfCallRow(row: ItemWire): string | null {
+  if (
+    row.kind === 'call_result' &&
+    typeof row.inCall === 'string' &&
+    row.inCall !== ''
+  ) {
+    return row.inCall;
+  }
+  return callField(row.payload, 'callId');
+}
+
+/**
+ * Where each call starts and settles, as seqs, from a run's `call_started` and
+ * `call_result` rows in seq order. A call with no settle row is still open (or
+ * was cut off).
+ */
+export function callSpansFrom(
+  rows: readonly ItemWire[],
+): { callId: string; startSeq: number; settleSeq: number | null }[] {
+  const spans = new Map<
+    string,
+    { callId: string; startSeq: number; settleSeq: number | null }
+  >();
+  for (const row of rows) {
+    const callId = callOfCallRow(row);
+    if (callId === null || callId.length === 0) {
+      continue;
+    }
+    const span = spans.get(callId);
+    if (row.kind === 'call_started') {
+      if (span === undefined) {
+        spans.set(callId, { callId, startSeq: row.seq, settleSeq: null });
+      }
+    } else if (
+      row.kind === 'call_result' &&
+      span !== undefined &&
+      span.settleSeq === null
+    ) {
+      span.settleSeq = row.seq;
+    }
+  }
+  return [...spans.values()];
+}
+
+/** The start and settle rows, among `rows`, of the calls in `callIds`. */
+export function callRowsIn(
+  rows: readonly ItemWire[],
+  callIds: ReadonlySet<string>,
+): ItemWire[] {
+  return rows.filter((row) => {
+    const callId = callOfCallRow(row);
+    return callId !== null && callIds.has(callId);
+  });
+}
+
 /** Rows naming a call of `callIds` in their payload. */
 export function rowsOfCalls(
   rows: readonly ItemWire[],

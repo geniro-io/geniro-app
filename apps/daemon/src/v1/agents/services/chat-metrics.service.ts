@@ -20,7 +20,11 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
-import { activeSpansFrom, pausedSpansFrom } from '../utils/active-spans';
+import {
+  activeSpansFrom,
+  pausedSpansFrom,
+  SPAN_ROW_KINDS,
+} from '../utils/active-spans';
 import {
   CALL_RECORDS,
   callConversation,
@@ -624,7 +628,7 @@ export class ChatMetricsService implements OnModuleInit {
   async readClockSpans(
     runId: string,
   ): Promise<Pick<ChatTotalsResponse, 'activeSpans' | 'pausedSpans'>> {
-    const rows = await this.itemDao.turnSpanRows(runId, this.em.fork());
+    const rows = await this.kindRows.rowsOf(runId, SPAN_ROW_KINDS, 'fresh');
     const paused = pausedSpansFrom(rows);
     return {
       activeSpans: activeSpansFrom(rows, paused),

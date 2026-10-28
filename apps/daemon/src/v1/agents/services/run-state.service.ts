@@ -13,6 +13,7 @@ import type {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { foldActions } from '../utils/action-fold';
 import { rowsWithId, workflowEdgeRows } from '../utils/history-anchors';
 import { itemToWire } from '../utils/item-wire';
 import { payloadString } from '../utils/json-util';
@@ -23,7 +24,6 @@ import {
 } from '../utils/run-state-folds';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ApprovalRegistry } from './approval-registry';
-import { ChatActionsService } from './chat-actions.service';
 import { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { MonitorRegistry } from './monitor.registry';
@@ -52,7 +52,6 @@ export class RunStateService {
     private readonly shells: ChatShellsService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly seqs: ItemSeqAllocator,
-    private readonly actions: ChatActionsService,
     private readonly monitors: MonitorRegistry,
     private readonly kindRows: RunKindRowsCache,
   ) {}
@@ -210,7 +209,13 @@ export class RunStateService {
       artifactRows,
       shells: (await this.shells.read(runId)).shells,
       monitors: this.monitors.list(runId).map(openMonitor),
-      actions: await this.actions.live(runId, em),
+      actions: foldActions(
+        await this.kindRows.rowsOf(
+          runId,
+          ['action', 'action_outcome'],
+          throughSeq,
+        ),
+      ).live,
       turnStartedAt,
     };
   }

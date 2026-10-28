@@ -1369,6 +1369,42 @@ describe('groupTranscript', () => {
       expect(callBlockActivity(block)).toBe('Read File');
     });
 
+    it('does not name a tool that has returned', () => {
+      const started = [
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Check it.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't1', name: 'Bash', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+      ];
+      expect(callBlockActivity(callBlockOf(started))).toBe('Bash');
+
+      const returned = callBlockOf([
+        ...started,
+        item(
+          'tool_result',
+          { id: 't1', name: null, result: 'ok', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'reasoning',
+          { text: 'reading the output', callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+      expect(callBlockActivity(returned)).toBeNull();
+    });
+
     it('is null while the callee has done nothing either', () => {
       // Which is what keeps `<callee> is thinking...` as the honest line for
       // the one state it was ever true of.
@@ -2117,8 +2153,14 @@ describe('groupTranscript — call blocks', () => {
           ),
         ),
       ).find(isBlock)!;
-      expect(callBlockActivity(firstCallOnly)).toBe('Bash');
       expect(callBlockSummary(firstCallOnly)).toBe('v1 is done');
+      const firstCallMidCommand = groupTranscript(
+        items.slice(
+          0,
+          items.findIndex((row) => row.kind === 'tool_result'),
+        ),
+      ).find(isBlock)!;
+      expect(callBlockActivity(firstCallMidCommand)).toBe('Bash');
     });
 
     it('a continuation with NO row yet already joins the card, drawn at its own ask', () => {

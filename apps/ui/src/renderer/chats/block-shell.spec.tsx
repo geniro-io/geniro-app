@@ -278,16 +278,11 @@ describe('BlockPendingLine', () => {
   });
 
   it('keeps the clamp classes on the TEXT the spinner sits beside', () => {
-    // The clamp is what the shut/open bands read off this line
-    // (`call-block.spec.tsx`'s `[data-slot="block-pending"]` checks) — it
-    // must stay findable and unchanged by the spinner's own wrapper.
     act(() =>
-      root.render(
-        <BlockPendingLine clamp="three">a long line</BlockPendingLine>,
-      ),
+      root.render(<BlockPendingLine clamp="one">a long line</BlockPendingLine>),
     );
     const line = container.querySelector('[data-slot="block-pending"]');
-    expect(line?.className).toContain('line-clamp-3');
+    expect(line?.className).toContain('truncate');
   });
 });
 

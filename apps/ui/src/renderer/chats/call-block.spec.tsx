@@ -1133,17 +1133,8 @@ describe('CallBlock', () => {
     ).toBeNull();
   });
 
-  it('clamps a running callee’s status line to three lines, one when shut', () => {
-    // REPORTED as "когда последнее сообщение агента, которого мы вызываем в
-    // workflow, превышает три строки, мы должны обрезать до третьей строки",
-    // against a call card holding twenty-five lines of grey italic text. The
-    // line is one sentence — `<callee> is running <tool>` — and the TOOL NAME
-    // is what runs long: an ACP agent's tool title is routinely the whole
-    // shell command, so the status line rendered a program.
-    //
-    // The class IS the mechanism here rather than a proxy for it: jsdom
-    // computes no layout, so the clamp itself is unobservable, and there is
-    // nothing else a revert could leave behind.
+  it('cuts a running callee’s status line to one line, shut and open', () => {
+    // jsdom computes no layout, so the class is the only observable of the cut.
     const longCommand =
       'cd /Users/x/Projects/ManifestOS && gh pr list --state open --base main ' +
       '--json number,title,headRefName,author,updatedAt,changedFiles,files ' +
@@ -1171,19 +1162,14 @@ describe('CallBlock', () => {
     }
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
 
-    // SHUT — one line, which is this band's own documented rule.
     const shutLine = container.querySelector('[data-slot="block-pending"]');
     expect(shutLine?.className).toContain('truncate');
-    expect(shutLine?.className).not.toContain('line-clamp-3');
 
     expand();
 
-    // OPEN — three, the reported ask.
     const openLine = container.querySelector('[data-slot="block-pending"]');
-    expect(openLine?.className).toContain('line-clamp-3');
-    // The sentence still names the tool: clamping shortens what is drawn, not
-    // what is said.
-    expect(openLine?.textContent).toContain('is running');
+    expect(openLine?.className).toContain('truncate');
+    expect(openLine?.textContent).toContain(`is running ${longCommand}`);
   });
 
   it('opens the CALLEE conversation’s full readout from the footer ring — plan limits included', async () => {

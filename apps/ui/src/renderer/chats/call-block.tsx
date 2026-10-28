@@ -817,11 +817,7 @@ export const CallBlock = memo(function CallBlock({
           />
         ) : null}
         {status === 'running' && !liveTail ? (
-          // THREE lines — the reported ask. The full command is still in the
-          // callee's own tool rows directly above; what this line is for is
-          // "what is it on right now", which three lines answer and
-          // twenty-five bury.
-          <BlockPendingLine clamp="three">{pendingLine}</BlockPendingLine>
+          <BlockPendingLine clamp="one">{pendingLine}</BlockPendingLine>
         ) : null}
         {block.calleeNodeId !== null ? (
           <CallMessagePanel

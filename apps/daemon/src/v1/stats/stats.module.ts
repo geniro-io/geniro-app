@@ -2,12 +2,12 @@ import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { GraphsModule } from '../graphs/graphs.module';
+import { ProjectsModule } from '../projects/projects.module';
 import { StatsController } from './controllers/stats.controller';
 import { LineBaselineDao } from './dao/line-baseline.dao';
 import { UsageActivityDao } from './dao/usage-activity.dao';
 import { UsageEventDao } from './dao/usage-event.dao';
 import { WorkflowVersionDao } from './dao/workflow-version.dao';
-import { ProjectRootsService } from './services/project-roots.service';
 import { RunOutcomeLedgerService } from './services/run-outcome-ledger.service';
 import { StatsService } from './services/stats.service';
 import { UsageActivityRecorderService } from './services/usage-activity-recorder.service';
@@ -34,14 +34,13 @@ import { WorkflowVersionsService } from './services/workflow-versions.service';
  * than as a query over the transcript.
  */
 @Module({
-  imports: [AgentsModule, GraphsModule],
+  imports: [AgentsModule, GraphsModule, ProjectsModule],
   controllers: [StatsController],
   providers: [
     UsageEventDao,
     UsageActivityDao,
     LineBaselineDao,
     UsageEventBus,
-    ProjectRootsService,
     StatsService,
     UsageRecorderService,
     UsageActivityRecorderService,

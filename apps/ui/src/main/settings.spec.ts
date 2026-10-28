@@ -652,6 +652,17 @@ describe('sharing settings', () => {
   );
 });
 
+describe('memory settings', () => {
+  it('a half-valid memory object keeps its valid field and defaults the other', () => {
+    writeRaw({ memory: { enabled: false, agentWrites: 'bogus' } });
+
+    expect(readSettings().memory).toEqual({
+      enabled: false,
+      agentWrites: 'active',
+    });
+  });
+});
+
 describe('onSettingsWritten', () => {
   it('tells a listener every write, with the settings as written', () => {
     const seen: boolean[] = [];

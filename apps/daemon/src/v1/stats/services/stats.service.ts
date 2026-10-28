@@ -14,6 +14,7 @@ import {
   addUsage,
   emptyTotals,
 } from '../../agents/utils/usage-figures';
+import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import type { Run } from '../../runs/entity/run.entity';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
@@ -34,7 +35,6 @@ import {
   tallyUnpricedTurn,
 } from '../utils/polled-spend';
 import { eachLocalDay, localDateKey } from '../utils/usage-fold';
-import { ProjectRootsService } from './project-roots.service';
 import { UsageEventBus } from './usage-events.bus';
 
 /** What a range resolves to when the caller names neither end and the ledger is empty. */

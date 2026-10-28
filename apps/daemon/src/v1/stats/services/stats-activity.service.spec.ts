@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { Run } from '../../runs/entity/run.entity';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
@@ -20,7 +21,6 @@ import {
   type UsageEventInput,
   type UsageRecordedEvent,
 } from '../stats.types';
-import { ProjectRootsService } from './project-roots.service';
 import { StatsService } from './stats.service';
 import { UsageEventBus } from './usage-events.bus';
 

@@ -1,5 +1,7 @@
 import type { RequestId } from '@modelcontextprotocol/sdk/types.js';
 
+import type { MemoryActor } from '../memory/memory.types';
+
 /**
  * One row of a `tools/list` answer — what a model reads about a tool.
  *
@@ -102,3 +104,9 @@ export interface McpTool {
  */
 export type ToolArgs<TQuery> =
   { ok: true; query: TQuery } | { ok: false; error: string };
+
+/** Where a shared-memory call stands: the run's project and who is calling. */
+export interface MemoryCallScope {
+  projectId: string | null;
+  actor: MemoryActor;
+}

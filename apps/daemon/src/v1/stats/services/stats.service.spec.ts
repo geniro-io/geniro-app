@@ -12,6 +12,7 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
+import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
@@ -22,7 +23,6 @@ import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
 import { polledSpendRows } from '../utils/polled-spend';
-import { ProjectRootsService } from './project-roots.service';
 import { StatsService } from './stats.service';
 import { UsageEventBus } from './usage-events.bus';
 

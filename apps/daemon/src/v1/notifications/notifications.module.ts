@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { DiagnosticsModule } from '../diagnostics/diagnostics.module';
+import { MemoryModule } from '../memory/memory.module';
 import { SharesModule } from '../shares/shares.module';
 import { StatsModule } from '../stats/stats.module';
 import { TasksModule } from '../tasks/tasks.module';
@@ -22,13 +23,15 @@ import { WsPresenceService } from './services/ws-presence.service';
   // `StatsModule` for the usage bus, and `TasksModule` for the task bus, on the
   // same terms: each module observes its own writes, this channel observes
   // each bus, and nothing under any of them depends on the gateway — so there
-  // is still no cycle. `SharesModule` for the share bus, likewise.
+  // is still no cycle. `SharesModule` for the share bus and `MemoryModule` for
+  // the memory bus, likewise.
   imports: [
     AgentsModule,
     DiagnosticsModule,
     StatsModule,
     TasksModule,
     SharesModule,
+    MemoryModule,
   ],
   providers: [NotificationsGateway, WsPresenceService],
   // Exported for the idle shutdown: "is anyone connected?" is a fact only this

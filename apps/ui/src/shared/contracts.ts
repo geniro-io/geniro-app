@@ -326,6 +326,20 @@ export const DEFAULT_SHARING: SharingSettings = {
   autoRevokeAfterDays: null,
 };
 
+/** Whether an agent's memory write is saved at once or waits for the user's review. */
+export type MemoryAgentWrites = 'active' | 'pending';
+
+export interface MemorySettings {
+  /** Off gives agents no memory tools. */
+  enabled: boolean;
+  agentWrites: MemoryAgentWrites;
+}
+
+export const DEFAULT_MEMORY: MemorySettings = {
+  enabled: true,
+  agentWrites: 'active',
+};
+
 export interface Settings {
   /** First-run onboarding finished (gates the renderer's initial route). */
   onboardingComplete: boolean;
@@ -476,6 +490,12 @@ export interface Settings {
    * may not write it.
    */
   sharing: SharingSettings;
+  /**
+   * Whether agents get memory tools, and whether their writes wait for the
+   * user's review. Owned here (settings.json) and pushed to every daemon this
+   * app starts; the daemon keeps it in memory only.
+   */
+  memory: MemorySettings;
   /**
    * Delete a chat this many days after it was ARCHIVED, or `null` to keep the
    * archive for ever.
@@ -721,6 +741,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notificationsEnabled: true,
   remoteAccessEnabled: true,
   sharing: DEFAULT_SHARING,
+  memory: DEFAULT_MEMORY,
   archiveRetentionDays: null,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
   keptSessionIdleMinutes: DEFAULT_KEPT_SESSION_IDLE_MINUTES,

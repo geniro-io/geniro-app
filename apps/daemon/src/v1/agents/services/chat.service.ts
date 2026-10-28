@@ -136,6 +136,7 @@ import { isHostChartCall } from '../utils/host-chart';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
 import { hostGalleryDownloads, isHostGalleryCall } from '../utils/host-gallery';
+import { isHostMemoryCall } from '../utils/host-memory';
 import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostNotifyCall } from '../utils/host-notify';
 import { hostPatchResultText, isHostPatchCall } from '../utils/host-patch';
@@ -5487,6 +5488,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // analysis and scoped to its one source — see `isHostAnalysisReadCall`.
         isHostAnalysisReadCall(hostServerName, toolName) ||
         isHostRecommendationsCall(hostServerName, toolName) ||
+        // The shared memory: its limits live in `MemoryService` — see
+        // `isHostMemoryCall`.
+        isHostMemoryCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;

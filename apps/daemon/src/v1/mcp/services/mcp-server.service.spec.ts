@@ -22,6 +22,9 @@ import {
   HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
+  HOST_MEMORY_SAVE_TOOL,
+  HOST_MEMORY_SEARCH_TOOL,
+  HOST_MEMORY_TOOLS,
   HOST_METRICS_TOOL,
   HOST_MOVE_STAGE_TOOL,
   HOST_NOTIFY_TOOL,
@@ -104,6 +107,12 @@ import {
   ANSWERING_WITH_CALLS_OUT,
 } from '../../graphs/utils/callee-text';
 import { callerKey } from '../../graphs/utils/caller-key';
+import type {
+  MemoryActor,
+  MemorySaveInput,
+  MemorySaveOutcome,
+} from '../../memory/memory.types';
+import type { MemoryService } from '../../memory/services/memory.service';
 import { AgentKind } from '../../runs/runs.types';
 import type { ShareService } from '../../shares/services/share.service';
 import type { AgentShareOutcome } from '../../shares/shares.types';
@@ -197,6 +206,8 @@ function service(
   galleryImages = new GalleryImageService({} as AttachmentStoreService, {
     download: () => Promise.reject(new Error('no download in this case')),
   }),
+  // Off unless a case turns it on: no memory tool is listed.
+  memory = fakeMemory(false).service,
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -228,6 +239,7 @@ function service(
       // Never asked by the cases that list tools.
       workflowProposals: {} as WorkflowProposalService,
       shares,
+      memory,
     }),
     {
       token: 'launch',
@@ -328,6 +340,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
       undefined,
       runOutcomes,
       stageService({ runId: 'run-1', nodeId: 'agent' }),
+      undefined,
+      fakeMemory(true).service,
     ),
     'run-1',
     'agent',
@@ -465,6 +479,46 @@ function galleryService(
     ] as const),
     galleryImages,
   );
+}
+
+/**
+ * A MemoryService double: the user's switch, the run's project, and every save
+ * it was handed with the scope the tool resolved for it.
+ */
+function fakeMemory(enabled: boolean) {
+  const saved: {
+    actor: MemoryActor;
+    input: MemorySaveInput;
+    projectId: string | null;
+  }[] = [];
+  const state = { enabled };
+  const service = {
+    get enabled() {
+      return state.enabled;
+    },
+    scopeOf: () => Promise.resolve('project-1'),
+    actorOf: (runId: string) =>
+      Promise.resolve({
+        kind: 'agent',
+        runId,
+        agentKind: 'claude',
+        model: 'opus',
+      } satisfies MemoryActor),
+    search: () => Promise.resolve([]),
+    save: (
+      actor: MemoryActor,
+      input: MemorySaveInput,
+      projectId: string | null,
+    ): Promise<MemorySaveOutcome> => {
+      saved.push({ actor, input, projectId });
+      return Promise.resolve({
+        kind: 'refused',
+        code: 'INVALID_ENTRY',
+        reason: 'double',
+      });
+    },
+  } as unknown as MemoryService;
+  return { service, saved, state };
 }
 
 /** A ShareService double: the user's switch, and every agent share it was asked for. */
@@ -647,6 +701,96 @@ describe('McpServerService', () => {
     expect(result.serverInfo).toMatchObject({
       name: 'geniro-daemon',
       version: '9.9.9',
+    });
+  });
+
+  describe('shared memory', () => {
+    /**
+     * A service with every default but the memory service. Typed by position:
+     * a parameter added before it makes this assignment fail to compile.
+     */
+    function memoryService(memory: MemoryService): McpServerService {
+      const args: Parameters<typeof service> = [];
+      args[26] = memory;
+      return service(...args);
+    }
+
+    it('lists the four memory tools after the chat history tools while memory is on, and none while it is off', async () => {
+      const names = async (memory: MemoryService) => {
+        const { json } = await post(
+          memoryService(memory),
+          'run-1',
+          'agent',
+          rpc('tools/list', {}),
+        );
+        return (json().result as { tools: ToolListing[] }).tools.map(
+          (t) => t.name,
+        );
+      };
+
+      const on = await names(fakeMemory(true).service);
+      expect(
+        on.slice(
+          on.indexOf(HOST_READ_CHAT_CONTEXT_TOOL) + 1,
+          on.indexOf(HOST_READ_CHAT_CONTEXT_TOOL) +
+            1 +
+            HOST_MEMORY_TOOLS.length,
+        ),
+      ).toEqual([...HOST_MEMORY_TOOLS]);
+      expect(await names(fakeMemory(false).service)).not.toEqual(
+        expect.arrayContaining([HOST_MEMORY_SEARCH_TOOL]),
+      );
+    });
+
+    it('refuses a memory call once the user has turned memory off', async () => {
+      const memory = fakeMemory(true);
+      const target = memoryService(memory.service);
+      memory.state.enabled = false;
+
+      const { json } = await post(
+        target,
+        'run-1',
+        'agent',
+        rpc('tools/call', {
+          name: HOST_MEMORY_SAVE_TOOL,
+          arguments: { title: 'x', body: 'y' },
+        }),
+      );
+
+      const result = json().result as {
+        isError: boolean;
+        content: { text: string }[];
+      };
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toMatch(/^MEMORY_DISABLED/);
+      expect(memory.saved).toEqual([]);
+    });
+
+    it('hands memory_save the run’s project and the caller, never taken from the arguments', async () => {
+      const memory = fakeMemory(true);
+
+      await post(
+        memoryService(memory.service),
+        'run-1',
+        'agent',
+        rpc('tools/call', {
+          name: HOST_MEMORY_SAVE_TOOL,
+          arguments: { title: 'Use pnpm', body: 'never npm', scope: 'global' },
+        }),
+      );
+
+      expect(memory.saved).toEqual([
+        {
+          actor: {
+            kind: 'agent',
+            runId: 'run-1',
+            agentKind: 'claude',
+            model: 'opus',
+          },
+          input: { title: 'Use pnpm', body: 'never npm', scope: 'global' },
+          projectId: 'project-1',
+        },
+      ]);
     });
   });
 
@@ -3426,6 +3570,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       runOutcomes: outcomes,
       board: new TaskBoardBroker(),
       shares: fakeShares(false).service,
+      memory: fakeMemory(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
     }).find((t) => t.handles(HOST_RECORD_OUTCOME_TOOL))!;
@@ -3982,6 +4127,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       workflowStore: {} as WorkflowStoreService,
       workflowProposals: {} as WorkflowProposalService,
       shares: fakeShares(false).service,
+      memory: fakeMemory(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4078,6 +4224,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       workflowStore: store,
       workflowProposals: {} as WorkflowProposalService,
       shares: fakeShares(false).service,
+      memory: fakeMemory(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4143,6 +4290,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         proposeChange,
       } as unknown as WorkflowProposalService,
       shares: fakeShares(false).service,
+      memory: fakeMemory(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4212,6 +4360,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       workflowStore: {} as WorkflowStoreService,
       workflowProposals: { propose } as unknown as WorkflowProposalService,
       shares: fakeShares(false).service,
+      memory: fakeMemory(false).service,
     } as Parameters<typeof createMcpTools>[0]);
     const tool = tools.find((t) => t.handles(HOST_PROPOSE_WORKFLOW_TOOL))!;
 

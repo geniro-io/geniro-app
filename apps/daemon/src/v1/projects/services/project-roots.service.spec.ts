@@ -15,8 +15,8 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { Project } from '../../projects/entity/project.entity';
 import { Task } from '../../tasks/entity/task.entity';
+import { Project } from '../entity/project.entity';
 import { ProjectRootsService } from './project-roots.service';
 
 describe('ProjectRootsService (in-memory sqlite)', () => {

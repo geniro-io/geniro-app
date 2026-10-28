@@ -7,6 +7,7 @@ apis/DiagnosticsApi.ts
 apis/GroupsApi.ts
 apis/HandoffApi.ts
 apis/LabelInstructionsApi.ts
+apis/MemoriesApi.ts
 apis/ProjectsApi.ts
 apis/SharesApi.ts
 apis/StatsApi.ts

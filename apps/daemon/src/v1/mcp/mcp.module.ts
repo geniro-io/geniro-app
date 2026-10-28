@@ -28,6 +28,8 @@ import { TaskBoardBroker } from '../graphs/services/task-board.broker';
 import { WorkflowChangeService } from '../graphs/services/workflow-change.service';
 import { WorkflowProposalService } from '../graphs/services/workflow-proposal.service';
 import { WorkflowStoreService } from '../graphs/services/workflow-store.service';
+import { MemoryModule } from '../memory/memory.module';
+import { MemoryService } from '../memory/services/memory.service';
 import { ShareService } from '../shares/services/share.service';
 import { SharesModule } from '../shares/shares.module';
 import { McpController } from './controllers/mcp.controller';
@@ -48,7 +50,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
  * ({@link createMcpTools}).
  */
 @Module({
-  imports: [AgentsModule, GraphsModule, SharesModule],
+  imports: [AgentsModule, GraphsModule, SharesModule, MemoryModule],
   controllers: [McpController],
   providers: [
     {
@@ -73,6 +75,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         notices: NotifyBroker,
         board: TaskBoardBroker,
         history: GlobalChatSearchService,
+        memory: MemoryService,
         analysis: AnalysisBroker,
         threads: ThreadReaderService,
         workflowChanges: WorkflowChangeService,
@@ -102,6 +105,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           notices,
           board,
           history,
+          memory,
           analysis,
           threads,
           workflowChanges,
@@ -131,6 +135,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         NotifyBroker,
         TaskBoardBroker,
         GlobalChatSearchService,
+        MemoryService,
         AnalysisBroker,
         ThreadReaderService,
         WorkflowChangeService,

@@ -941,6 +941,7 @@ export function HostedChat({
         openSubagentDetail: null,
         runOutcomes,
         runStages: null,
+        openTeamNote: null,
         cardBacked,
         loadImage: loadMarkdownImage,
         loadMetrics,

@@ -44,7 +44,7 @@ export function revealWorkflows(runId: string | null): void {
 
 /**
  * Unfold this thread's agents panel — where the shelf's chips send a reader
- * for the whole of what they preview (every workflow, every team note).
+ * for the whole of what they preview (every workflow, every stage).
  */
 export function revealAgentsPanel(runId: string | null): void {
   if (runId === null) {

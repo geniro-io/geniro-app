@@ -11,7 +11,7 @@ const CLEAR = 'clear';
 const kindValue = (kind: TeamNoteKind): string => `kind:${kind}`;
 const authorValue = (name: string): string => `author:${name}`;
 
-/** The kind and author filters over a set of notes, shared by the panel and the full view. */
+/** The kind and author filters over a set of team notes. */
 export interface TeamNoteFilters {
   kinds: readonly TeamNoteKind[];
   authors: readonly string[];
@@ -82,7 +82,7 @@ export function TeamNotesFilter({
   className,
 }: {
   filters: TeamNoteFilters;
-  /** The trigger's size — the panel's row is tighter than the full view's toolbar. */
+  /** The trigger's size. */
   className?: string;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);

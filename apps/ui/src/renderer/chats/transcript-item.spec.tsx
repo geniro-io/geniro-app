@@ -12,6 +12,7 @@ import { NotSentMessagesContext } from './not-sent-messages';
 import { formatClockTime } from './relative-time';
 import { RunOutcomesContext } from './run-outcome';
 import { RunStagesContext } from './stage-change-row';
+import { TeamNoteOpenContext } from './team-note-row';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import {
   cardBackedRequestIds,
@@ -1312,6 +1313,51 @@ describe('TranscriptItem — team notes', () => {
     expect(text).toContain('replaces an earlier note');
     expect(text).not.toMatch(/note \d/);
     expect(text).toContain('Orders are paged by cursor.');
+  });
+
+  const teamNoteItem = (): ChatItem => ({
+    ...item('team_note', {
+      kind: 'pitfall',
+      text: 'npm ci fails here, see [the guide](https://example.com/guide).',
+      supersedes: null,
+      nodeId: 'orch',
+      conversationId: null,
+    }),
+    seq: 42,
+  });
+
+  it('opens the notes popup on the note from a press on the row or its heading, never from its link', () => {
+    const openNote = vi.fn();
+    render(
+      <TeamNoteOpenContext.Provider value={openNote}>
+        <TranscriptItem item={teamNoteItem()} />
+      </TeamNoteOpenContext.Provider>,
+    );
+    const bubble = container.querySelector<HTMLElement>('[data-role="tool"]')!;
+    act(() => {
+      bubble.querySelector<HTMLAnchorElement>('a')?.click();
+    });
+    expect(openNote).not.toHaveBeenCalled();
+
+    act(() => {
+      bubble.querySelector<HTMLElement>('[class*="break-words"]')!.click();
+    });
+    expect(openNote).toHaveBeenCalledExactlyOnceWith(42);
+
+    act(() => {
+      bubble
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="pitfall team note by orch — open it in notes"]',
+        )!
+        .click();
+    });
+    expect(openNote).toHaveBeenCalledTimes(2);
+    expect(openNote).toHaveBeenLastCalledWith(42);
+  });
+
+  it('draws the row as plain text where no notes popup is mounted', () => {
+    render(<TranscriptItem item={teamNoteItem()} />);
+    expect(container.querySelector('[data-role="tool"] button')).toBeNull();
   });
 
   it('draws nothing for a team_note row whose payload is not a note', () => {

@@ -44,7 +44,7 @@ const meta = {
       }),
     ],
     agentName: (nodeId: string) => NAMES[nodeId] ?? nodeId,
-    onJump: () => {},
+    onOpen: () => {},
   },
   decorators: [
     (story) => (

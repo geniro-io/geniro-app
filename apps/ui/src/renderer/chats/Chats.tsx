@@ -215,6 +215,7 @@ import {
   unsentMessageContent,
   userDeliveryId,
 } from './not-sent-messages';
+import { NotesDialog } from './notes-dialog';
 import { OlderMessagesControl } from './older-messages-control';
 import { PromptCacheNotice } from './prompt-cache-notice';
 import {
@@ -302,7 +303,7 @@ import {
 } from './task-payload';
 import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
 import { agentNameOf } from './team-note-author';
-import { TeamNotesDialog } from './team-notes-dialog';
+import { hasThreadNotes } from './thread-notes';
 import { forgetThread, writeThreadFlag } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -6536,14 +6537,23 @@ export function Chats({
       ),
     [transcriptRows],
   );
-  /** The run's team notes, read from the daemon — a workflow run's only. */
-  /** The team notes' full view, opened from the panel section or the chip. */
-  const [teamNotesOpen, setTeamNotesOpen] = useState(false);
+  /**
+   * The notes popup while open — the user's own notes and the team notes —
+   * with the team note it was opened on: from the agents panel's control row,
+   * the shelf chip, or a note's row in the transcript.
+   */
+  const [notesView, setNotesView] = useState<{
+    selected: number | null;
+  } | null>(null);
   // A thread switch closes it: it belongs to the run it was opened over.
   useEffect(() => {
-    setTeamNotesOpen(false);
+    setNotesView(null);
   }, [activeRunId]);
-  const { notes: teamNotes, loaded: teamNotesLoaded } = useRunTeamNotes(
+  const openTeamNote = useCallback((seq: number) => {
+    setNotesView({ selected: seq });
+  }, []);
+  /** The run's team notes, read from the daemon — a workflow run's only. */
+  const { notes: teamNotes } = useRunTeamNotes(
     chatApi,
     activeRun?.workflowId != null ? activeRunId : null,
     latestTeamNoteSeq,
@@ -8858,17 +8868,23 @@ export function Chats({
       <TeamNotesChip
         notes={teamNotes}
         agentName={shelfAgentName}
-        onJump={jumpToSeq}
-        onOpenAll={() => setTeamNotesOpen(true)}
+        onOpen={(seq) => setNotesView({ selected: seq })}
       />
       {/* Mounted only while open and keyed by the run, so its search and
-          filters start clean on every open and never carry to another thread. */}
-      {teamNotesOpen ? (
-        <TeamNotesDialog
-          key={activeRunId ?? 'no-run'}
+          filters start clean on every open and never carry to another thread,
+          and closing it is the notes field's way out: its owed text is saved. */}
+      {notesView !== null && activeRun ? (
+        <NotesDialog
+          key={activeRun.id}
           open
-          onClose={() => setTeamNotesOpen(false)}
-          notes={teamNotes}
+          onClose={() => setNotesView(null)}
+          threadNotes={{
+            runId: activeRun.id,
+            value: activeRun.notes,
+            onSave: (text) => handleSetRunNotes(activeRun.id, text),
+          }}
+          teamNotes={teamNotes}
+          initialSelected={notesView.selected}
           agentName={shelfAgentName}
           onJump={jumpToSeq}
         />
@@ -9815,6 +9831,9 @@ export function Chats({
                     <TranscriptContexts
                       runOutcomes={activeRunOutcomes}
                       runStages={activeRun?.stages ?? null}
+                      openTeamNote={
+                        activeRun?.workflowId != null ? openTeamNote : null
+                      }
                       collapseToolSteps={collapseToolSteps}
                       runActivity={activeActivity}
                       turnDurations={turnDurations}
@@ -10592,9 +10611,6 @@ export function Chats({
                       timeline={timelinePanel}
                       artifacts={artifacts}
                       publishedArtifacts={publishedArtifacts}
-                      teamNotes={teamNotes}
-                      teamNotesLoaded={teamNotesLoaded}
-                      onOpenTeamNotes={() => setTeamNotesOpen(true)}
                       threadPullRequests={openedByActiveThread}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}
@@ -10660,10 +10676,10 @@ export function Chats({
                       notes={
                         activeRun
                           ? {
-                              runId: activeRun.id,
-                              value: activeRun.notes,
-                              onSave: (text) =>
-                                handleSetRunNotes(activeRun.id, text),
+                              written:
+                                hasThreadNotes(activeRun.notes) ||
+                                teamNotes.length > 0,
+                              onOpen: () => setNotesView({ selected: null }),
                             }
                           : undefined
                       }

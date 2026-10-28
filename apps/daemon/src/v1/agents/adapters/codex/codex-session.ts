@@ -15,6 +15,7 @@ import {
   encodeNotification,
   encodeResult,
   type JsonRpcId,
+  replyIdOfPrefix,
 } from '../utils/json-rpc.utils';
 import { PendingRequests } from '../utils/json-rpc-pending.utils';
 import {
@@ -284,6 +285,19 @@ export class CodexSession implements TurnDriver {
       case 'unknown':
         return [];
     }
+  }
+
+  /** A reply too long to read is answered as a refusal, so nothing waits on it. */
+  onDroppedLine(prefix: string, length: number): AgentEvent[] {
+    const id = replyIdOfPrefix(prefix);
+    return id === null
+      ? []
+      : this.onMessage({
+          id,
+          error: {
+            message: `its reply was ${length} characters, too long to read as one line`,
+          },
+        });
   }
 
   buildApprovalResponse(

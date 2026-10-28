@@ -2868,6 +2868,10 @@ export abstract class AgentAdapter {
             ? 'turn'
             : 'payload',
         mapper: (obj) => rememberRecovery(driver.onMessage(obj)),
+        onDroppedLine: driver.onDroppedLine
+          ? (prefix, length) =>
+              rememberRecovery(driver.onDroppedLine!(prefix, length))
+          : undefined,
         spawn: this.options.spawn,
         logger: this.options.logger,
         questionToolName: this.getConfig().questionToolName,

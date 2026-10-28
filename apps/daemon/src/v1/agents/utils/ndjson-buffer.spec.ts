@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { MAX_BUFFERED_LINE_CHARS, NdjsonBuffer } from './ndjson-buffer';
+import {
+  MAX_BUFFERED_LINE_CHARS,
+  NdjsonBuffer,
+  OVERSIZED_LINE_PREFIX_CHARS,
+} from './ndjson-buffer';
 
 describe('NdjsonBuffer', () => {
   it('parses multiple complete lines from a single chunk', () => {
@@ -107,36 +111,62 @@ describe('NdjsonBuffer', () => {
 });
 
 describe('NdjsonBuffer bounded reassembly buffer', () => {
-  it('drops an over-cap un-terminated line exactly once and recovers on the next line', () => {
-    // A misbehaving user-configured binary can stream bytes with no newline —
-    // the reassembly buffer must stay bounded like the stderr tail and PTY
-    // scrollback, not grow for the turn's whole lifetime.
+  it('skips an over-cap line to its newline, reports it once with its length, and parses the next line', () => {
     const objs: unknown[] = [];
     const onParseError = vi.fn();
+    const onOversizedLine = vi.fn();
     const buf = new NdjsonBuffer({
       onObject: (o) => objs.push(o),
       onParseError,
+      onOversizedLine,
     });
 
-    // Exactly at the cap: still buffered, not dropped (the cap is exclusive).
+    buf.push('{"id":2,"result":"');
     buf.push('x'.repeat(MAX_BUFFERED_LINE_CHARS));
+    buf.push('y'.repeat(1000));
+    expect(onOversizedLine).not.toHaveBeenCalled();
+
+    buf.push('"}\n{"a":1}\n');
+    const length =
+      '{"id":2,"result":"'.length + MAX_BUFFERED_LINE_CHARS + 1000 + 2;
+    expect(onOversizedLine).toHaveBeenCalledTimes(1);
+    expect(onOversizedLine).toHaveBeenCalledWith(
+      ('{"id":2,"result":"' + 'x'.repeat(MAX_BUFFERED_LINE_CHARS)).slice(
+        0,
+        OVERSIZED_LINE_PREFIX_CHARS,
+      ),
+      length,
+    );
     expect(onParseError).not.toHaveBeenCalled();
-
-    // One char past the cap tips the drop: reported once, with a bounded
-    // 256-char preview instead of the multi-MB payload.
-    buf.push('x');
-    expect(onParseError).toHaveBeenCalledTimes(1);
-    const [preview, error] = onParseError.mock.calls[0] as [string, Error];
-    expect(preview).toBe('x'.repeat(256));
-    expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain('oversized un-terminated line dropped');
-    expect(objs).toEqual([]); // the dropped prefix never reaches onObject
-
-    // The buffer was reset — a following well-formed line parses cleanly
-    // instead of being glued to the dropped prefix (which would parse-error).
-    buf.push('{"a":1}\n');
     expect(objs).toEqual([{ a: 1 }]);
-    expect(onParseError).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an exactly-at-cap line buffered rather than dropping it', () => {
+    const objs: unknown[] = [];
+    const onOversizedLine = vi.fn();
+    const buf = new NdjsonBuffer({
+      onObject: (o) => objs.push(o),
+      onOversizedLine,
+    });
+    const body = 'x'.repeat(MAX_BUFFERED_LINE_CHARS - '{"b":""}'.length);
+    buf.push(`{"b":"${body}`);
+    buf.push('"}');
+    buf.push('\n');
+    expect(onOversizedLine).not.toHaveBeenCalled();
+    expect(objs).toEqual([{ b: body }]);
+  });
+
+  it('reports an over-cap line the stream ended inside at flush', () => {
+    const onOversizedLine = vi.fn();
+    const buf = new NdjsonBuffer({ onObject: vi.fn(), onOversizedLine });
+    buf.push('z'.repeat(MAX_BUFFERED_LINE_CHARS + 1));
+    buf.push('z'.repeat(9));
+    buf.flush();
+    expect(onOversizedLine).toHaveBeenCalledTimes(1);
+    expect(onOversizedLine).toHaveBeenCalledWith(
+      'z'.repeat(OVERSIZED_LINE_PREFIX_CHARS),
+      MAX_BUFFERED_LINE_CHARS + 10,
+    );
   });
 
   it('never falsely drops a large-but-under-cap line once its newline arrives', () => {

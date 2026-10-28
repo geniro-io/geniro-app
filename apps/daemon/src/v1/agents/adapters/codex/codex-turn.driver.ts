@@ -279,7 +279,9 @@ export class CodexTurnDriver {
     if (resume) {
       this.session.request(
         CODEX_METHODS.threadResume,
-        { threadId: resume, ...params },
+        // The reply otherwise carries the whole history as one line (9.7M
+        // characters for a 35 MB rollout on 0.162.0), and nothing reads it.
+        { threadId: resume, ...params, excludeTurns: true },
         'thread_resume',
         events,
       );

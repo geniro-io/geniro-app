@@ -261,6 +261,53 @@ describe('opening a conversation', () => {
     ).toEqual([]);
   });
 
+  it('reopens a thread without asking for its history back', () => {
+    const session = newSession(turnInput({ resumeSessionId: THREAD }));
+    session.onStdinReady(io());
+    expect(frameFor('thread/resume').params).toMatchObject({
+      threadId: THREAD,
+      excludeTurns: true,
+    });
+  });
+
+  it('fails the turn when the reply to its resume was too long to read', () => {
+    const session = newSession(turnInput({ resumeSessionId: THREAD }));
+    session.onStdinReady(io());
+    const resume = frameFor('thread/resume');
+    const events = session.onDroppedLine(
+      `{"id":${String(resume.id)},"result":{"thread":{"id":"${THREAD}","turns":[`,
+      9_677_834,
+    );
+    expect(events).toEqual([
+      {
+        type: 'error',
+        message:
+          'codex could not reopen this conversation: its reply was 9677834 characters, too long to read as one line',
+      },
+    ]);
+    expect(frames().some((frame) => frame.method === 'turn/start')).toBe(false);
+    expect(
+      feed(session, { id: resume.id, result: { thread: { id: THREAD } } }),
+    ).toEqual([]);
+  });
+
+  it('leaves its requests waiting when the dropped line answered none of them', () => {
+    const session = newSession(turnInput({ resumeSessionId: THREAD }));
+    session.onStdinReady(io());
+    expect(
+      session.onDroppedLine(
+        '{"method":"item/completed","params":{"item":{"type":"commandExecution"',
+        9_000_000,
+      ),
+    ).toEqual([]);
+    expect(
+      feed(session, {
+        id: frameFor('thread/resume').id,
+        result: { thread: { id: THREAD }, model: 'gpt-5.5' },
+      }),
+    ).toContainEqual({ type: 'session', sessionId: THREAD });
+  });
+
   it('keeps the original thread for a retry when codex refuses to resume it', () => {
     const session = newSession(turnInput({ resumeSessionId: THREAD }));
     session.onStdinReady(io());

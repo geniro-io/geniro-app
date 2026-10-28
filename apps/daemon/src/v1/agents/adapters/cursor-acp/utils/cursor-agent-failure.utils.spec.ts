@@ -153,6 +153,48 @@ describe('CURSOR_TRANSIENT_FAILURE_PATTERN', () => {
     }
   });
 
+  it('names the socket reset, the one admitted [unknown]', () => {
+    const message = readCursorAgentFailure(
+      '\n\nError: RetriableError: [unknown] Premature close',
+    );
+    expect(message).not.toBeNull();
+    expect(CURSOR_TRANSIENT_FAILURE_PATTERN.test(message!)).toBe(true);
+    expect(
+      CURSOR_TRANSIENT_FAILURE_PATTERN.test(
+        'Error: RetriableError: [unknown] HTTP 464',
+      ),
+    ).toBe(false);
+  });
+
+  it('names the closed request writer Cursor staff call transient', () => {
+    const message = readCursorAgentFailure(
+      '\n\nError: RetriableError: WritableIterable is closed',
+    );
+    expect(message).not.toBeNull();
+    expect(CURSOR_TRANSIENT_FAILURE_PATTERN.test(message!)).toBe(true);
+  });
+
+  it('names the same failures in the -32603 reply a prompt answers when the drop escapes the catch block', () => {
+    // Run 0d6b2220 (2026.10.19-6bbf2c4): the background-task completion drain
+    // threw after the prompt handler's catch, and the reply carried the cause
+    // only in `data.details` — read by `classifyMessage` as below.
+    for (const reply of [
+      'Internal error: [aborted] read ECONNRESET',
+      'Internal error: [unknown] Premature close',
+      'Internal error: [canceled] http/2 stream closed with error code CANCEL (0x8)',
+      'Internal error: Connection stalled',
+    ]) {
+      expect(CURSOR_TRANSIENT_FAILURE_PATTERN.test(reply)).toBe(true);
+    }
+    for (const reply of [
+      'Internal error',
+      'Internal error: Failed to initialize session services',
+      'Internal error: [internal] Input token limit exceeded',
+    ]) {
+      expect(CURSOR_TRANSIENT_FAILURE_PATTERN.test(reply)).toBe(false);
+    }
+  });
+
   it('does not widen to a failure that merely starts like one of them', () => {
     // The `\b` after the connection families, and the closed bracket after the
     // codes. Without them `Connection stalledness` and `[resource_exhausted_x]`

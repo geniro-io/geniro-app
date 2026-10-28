@@ -71,6 +71,11 @@ export function classifyMessage(obj: unknown): IncomingMessage {
   if (error) {
     const message = asString(error.message);
     const code = error.code;
+    const data = asRecord(error.data);
+    const detail =
+      asString(error.data) ??
+      asString(data?.message) ??
+      asString(data?.details);
     return {
       kind: 'error',
       id,
@@ -84,7 +89,9 @@ export function classifyMessage(obj: unknown): IncomingMessage {
         // the bare words `Invalid params`, which names nothing the user could
         // act on; the reply that produced this change also carried
         // `Invalid value for effort: max`, which names the whole problem.
-        asString(asRecord(error.data)?.message),
+        // The ACP SDK's catch-all puts a thrown error's text under `details`,
+        // or the parsed value itself when that text was JSON.
+        detail,
       ),
     };
   }

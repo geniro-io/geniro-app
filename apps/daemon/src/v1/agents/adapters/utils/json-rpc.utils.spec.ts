@@ -59,6 +59,42 @@ describe('classifyMessage', () => {
     });
   });
 
+  it('keeps a thrown error’s text, which the ACP SDK puts under `data.details`', () => {
+    // cursor-agent 2026.10.19-6bbf2c4, its connection cut while the
+    // background-task drain streamed: the reply verbatim.
+    expect(
+      classifyMessage({
+        id: 1,
+        error: {
+          code: -32603,
+          message: 'Internal error',
+          data: { details: '[aborted] read ECONNRESET' },
+        },
+      }),
+    ).toEqual({
+      kind: 'error',
+      id: 1,
+      message: 'Internal error: [aborted] read ECONNRESET',
+    });
+  });
+
+  it('keeps a detail the SDK handed back as a bare JSON string', () => {
+    expect(
+      classifyMessage({
+        id: 1,
+        error: {
+          code: -32603,
+          message: 'Internal error',
+          data: 'stream reset',
+        },
+      }),
+    ).toEqual({
+      kind: 'error',
+      id: 1,
+      message: 'Internal error: stream reset',
+    });
+  });
+
   it('does not say the same thing twice when the detail repeats the category', () => {
     expect(
       classifyMessage({

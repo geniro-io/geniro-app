@@ -1390,12 +1390,29 @@ export const CURSOR_AGENT_FAILURE_UNAUTHENTICATED = '[unauthenticated]';
  *   `Connection stalled`, because the keepalive's timeout is shorter than the
  *   30s stall threshold and wins the race whenever the wire goes quiet.
  *
+ * - **`[unknown] Premature close`** — the socket reset under an http/2 stream
+ *   (`ERR_STREAM_PREMATURE_CLOSE`, `transportFailureKind: socket_reset` in its
+ *   debug log), admitted by its message because `[unknown]` alone names
+ *   nothing. MEASURED on 2026.10.19-6bbf2c4 (run `0d6b2220`): every stream of
+ *   one process dropped at once, twice, 15 minutes apart, and the sub-agents'
+ *   streams resumed on their own while the parent's died.
+ * - **`WritableIterable is closed`** — its request writer closed under the
+ *   request. Cursor staff call it transient and say a re-sent `session/prompt`
+ *   on the same session usually carries on
+ *   (forum.cursor.com/t/169334, 2026.08.11-e8db854).
+ *
+ * Each shape arrives under one of two prefixes. `Error: RetriableError:` is
+ * the chunk its prompt handler writes from its catch block. `Internal error:`
+ * is the `-32603` reply (category plus `data.details`) when the failure
+ * escapes that block — the background-task completion drain runs after it, so
+ * a drop there carries no class name, and the message is the only anchor.
+ *
  * RE-CHECK by driving a cursor account into a 429 and reading whether a
  * resumed prompt is served. The resume now waits between attempts for a
  * different reason — see `CURSOR_TRANSIENT_RESUME_DELAYS_MS`.
  */
 export const CURSOR_TRANSIENT_FAILURE_PATTERN =
-  /^Error: RetriableError: (\[(canceled|unavailable|aborted|deadline_exceeded|resource_exhausted)\]|\[internal\] HTTP\/2 keepalive ping timed out|Stream ended without turnEnded|Connection (stalled|failed)\b)/;
+  /^(Error: RetriableError|Internal error): (\[(canceled|unavailable|aborted|deadline_exceeded|resource_exhausted)\]|\[unknown\] Premature close|WritableIterable is closed|\[internal\] HTTP\/2 keepalive ping timed out|Stream ended without turnEnded|Connection (stalled|failed)\b)/;
 
 /**
  * What geniro sends when a turn died on one of those — see

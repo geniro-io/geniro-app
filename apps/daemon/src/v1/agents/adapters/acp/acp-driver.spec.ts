@@ -2704,6 +2704,86 @@ describe('AcpSession turn completion', () => {
       }
     });
 
+    it('resumes a drop the prompt answers as an error reply, keeping what the agent said', () => {
+      // cursor-agent 2026.10.19-6bbf2c4 (run 0d6b2220): a drop inside its
+      // background-task drain escapes the catch block that writes `Error: …`,
+      // so the prompt answers `-32603` with the cause under `data.details`.
+      const h = primed(resumable());
+      h.feed(chunk('agent_message_chunk', 'Reading the diff.'));
+
+      const events = h.feed({
+        id: 3,
+        error: {
+          code: -32603,
+          message: 'Internal error',
+          data: { details: '[canceled] http/2 stream closed' },
+        },
+      });
+
+      expect(events).toEqual([
+        { type: 'text', text: 'Reading the diff.' },
+        expect.objectContaining({
+          type: 'notice',
+          message: expect.stringContaining('attempt 1 of 2'),
+        }),
+      ]);
+      expect(h.sentAll('session/prompt').at(-1)!.params).toEqual({
+        sessionId: 's',
+        prompt: [{ type: 'text', text: 'continue where you left off' }],
+      });
+      h.feed(chunk('agent_message_chunk', 'FINISHED'));
+      expect(
+        h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
+      ).toEqual([
+        { type: 'text', text: 'FINISHED' },
+        expect.objectContaining({ type: 'turn_complete' }),
+      ]);
+    });
+
+    it('fails the turn on an error reply that is not a drop', () => {
+      const h = primed(resumable());
+      h.feed(RUNNING_STEP);
+
+      expect(
+        h.feed({
+          id: 3,
+          error: {
+            code: -32603,
+            message: 'Internal error',
+            data: { details: 'Input token limit exceeded' },
+          },
+        }),
+      ).toEqual([
+        {
+          type: 'tool_result',
+          id: 't1',
+          name: 'Run tests',
+          result: CUT_OFF_TOOL_RESULT,
+          isError: true,
+        },
+        {
+          type: 'error',
+          message:
+            'acp prompt failed: Internal error: Input token limit exceeded',
+        },
+      ]);
+      expect(h.sentAll('session/prompt')).toHaveLength(1);
+    });
+
+    it('forgets a reported drop once the agent carries on past it', () => {
+      // cursor-agent drains background-task completions after reporting a
+      // failure, and that drain continues the conversation in the same prompt.
+      const h = primed(resumable());
+      h.feed(chunk('agent_message_chunk', DROP));
+      h.feed(chunk('agent_message_chunk', 'Launching the reviewers.'));
+
+      expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+        { type: 'text', text: 'Launching the reviewers.' },
+        expect.objectContaining({ type: 'turn_complete' }),
+      ]);
+      expect(h.sentAll('session/prompt')).toHaveLength(1);
+    });
+
     it('does not resume a failure that is not a dropped connection', () => {
       // `[internal] Input token limit exceeded` is a RetriableError too, and a
       // continuation would only hit the same limit again.

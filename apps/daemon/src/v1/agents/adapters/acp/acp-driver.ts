@@ -1786,14 +1786,33 @@ export class AcpTurnDriver {
       this.dropSupersededFailure(id);
       return this.flushPending();
     }
-    const events: AgentEvent[] = [];
     if (kind === 'prompt') {
-      this.promptOutstanding = false;
-      this.clearInterrupt();
-      events.push(...this.dropped(this.queuedFollowUps.splice(0)));
+      return this.onPromptFailed(message);
     }
-    events.push({ type: 'error', message: `acp ${kind} failed: ${message}` });
-    return events;
+    return [{ type: 'error', message: `acp ${kind} failed: ${message}` }];
+  }
+
+  /**
+   * The turn's own last prompt answered with an error rather than a stop
+   * reason — the same failure {@link onPromptComplete} reads from a reported
+   * one, met where the CLI's own catch block does not reach it (cursor-agent
+   * 2026.10.19-6bbf2c4 drains background-task completions after that block, so
+   * a dropped stream there answers `-32603` instead of writing `Error: …`).
+   */
+  private onPromptFailed(message: string): AgentEvent[] {
+    this.promptOutstanding = false;
+    this.clearInterrupt();
+    this.agentFailure = null;
+    const dropped = this.dropped(this.queuedFollowUps.splice(0));
+    const events: AgentEvent[] = [...this.flushPending(), ...dropped];
+    const stillRunning = this.settleCutOffToolCalls(events);
+    if (this.resumeAfterTransientFailure(message, events, stillRunning)) {
+      return events;
+    }
+    return [
+      ...events,
+      { type: 'error', message: `acp prompt failed: ${message}` },
+    ];
   }
 
   private onInitialized(result: unknown): AgentEvent[] {
@@ -3469,6 +3488,23 @@ export class AcpTurnDriver {
   }
 
   /**
+   * Forget a reported failure the agent has since talked past. cursor-agent
+   * drains background-task completions after reporting one, and that drain
+   * carries the conversation on (measured on 2026.10.19-6bbf2c4: a
+   * `userMessageAction` died on `[unknown] Premature close` and the agent went
+   * on to launch nine reviewers in the same prompt).
+   */
+  private forgetOutlivedFailure(): void {
+    if (this.agentFailure === null) {
+      return;
+    }
+    this.session.options.logger?.warn(
+      `acp: the agent carried on after reporting a failure: ${this.agentFailure}`,
+    );
+    this.agentFailure = null;
+  }
+
+  /**
    * Carry the turn on after the agent reported only a DROPPED CONNECTION — true
    * when a continuation went out, or is scheduled, and the turn is therefore
    * not over.
@@ -4797,6 +4833,7 @@ export class AcpTurnDriver {
           this.agentFailure = failure;
           return [];
         }
+        this.forgetOutlivedFailure();
         this.textChunks.push(text);
         this.requestProgressed = true;
         // A new step, generated from every result before it.

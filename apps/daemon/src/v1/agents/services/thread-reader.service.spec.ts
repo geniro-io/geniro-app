@@ -959,6 +959,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       newest.customInstructions = 'MINE';
       newest.replyLanguage = 'Russian';
       newest.taskInstructions = 'CARD';
+      newest.memoryIndex = 'INDEX';
       await fork.flush();
 
       expect(await reader.analysedWorkflowOf(scope)).toEqual({
@@ -968,6 +969,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           customInstructions: 'MINE',
           replyLanguage: 'Russian',
           taskInstructions: 'CARD',
+          memoryIndex: 'INDEX',
         },
       });
       expect(
@@ -990,6 +992,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           customInstructions: null,
           replyLanguage: null,
           taskInstructions: null,
+          memoryIndex: null,
         },
       });
       expect(

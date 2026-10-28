@@ -22,6 +22,7 @@ import {
   type InterruptCause,
   interruptCauseClause,
 } from '../../../utils/stop-cause';
+import { MemoryService } from '../../memory/services/memory.service';
 import { Run } from '../../runs/entity/run.entity';
 import {
   type AgentKind,
@@ -808,6 +809,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly analysisReports: AnalysisReportsService,
     private readonly workflowBuilders: WorkflowBuilderBroker,
     private readonly runWrites: RunWriteQueue,
+    private readonly memory: MemoryService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     @Optional() private readonly agentMcp?: AgentMcpService,
     /** The `monitor` tool's commands, stopped with the thread. Optional for the positional specs. */
@@ -2051,6 +2053,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         configDir,
       );
     }
+    const memory = await this.memory.runSnapshot({
+      taskId: input.taskId ?? null,
+      cwd,
+    });
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -2075,6 +2081,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // adapter an empty string to compose around.
         customInstructions: input.customInstructions?.trim() || null,
         replyLanguage: input.replyLanguage?.trim() || null,
+        ...memory,
         taskInstructions: input.taskInstructions?.trim() || null,
         editsWorkflowSlug: input.editsWorkflowSlug ?? null,
         workflowInstructions: input.workflowInstructions?.trim() || null,
@@ -5525,6 +5532,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // (`AgentAdapter.sessionKey` hashes it).
       const customInstructions = settings.customInstructions ?? undefined;
       const replyLanguage = settings.replyLanguage ?? undefined;
+      const memoryIndex = settings.memoryIndex ?? undefined;
+      const nativeMemoryOff = settings.nativeMemoryOff === true;
       // Off the row too; `TaskRunsService` rewrites it before continuing a
       // card's thread, which is the one time it is meant to change.
       const taskInstructions = settings.taskInstructions ?? undefined;
@@ -6849,6 +6858,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           configDir,
           customInstructions,
           replyLanguage,
+          memoryIndex,
+          nativeMemoryOff,
           taskInstructions,
           workflowInstructions,
           agentOptions,

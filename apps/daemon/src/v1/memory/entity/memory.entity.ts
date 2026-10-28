@@ -74,4 +74,12 @@ export class Memory extends TimestampsEntity {
 
   @Property({ type: DateTimeType, nullable: true })
   lastUsedAt: Date | null = null;
+
+  /**
+   * When the user last made this entry active by hand (approved or restored);
+   * any save since clears it. With a user's or an import's own entries, it is
+   * what admits an entry to a run's memory index.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  approvedAt: Date | null = null;
 }

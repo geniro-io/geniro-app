@@ -3250,6 +3250,18 @@ export interface AgentTurnInput {
    */
   replyLanguage?: string | null;
   /**
+   * The shared memory's title index, as snapshotted onto `Run.memoryIndex`;
+   * composed right after {@link customInstructions}, and only where the turn's
+   * MCP tools were delivered, since it sends the agent to `memory_read`.
+   */
+  memoryIndex?: string | null;
+  /**
+   * Whether this run switches its CLI's own memory off (`Run.nativeMemoryOff`),
+   * so an agent keeps one memory rather than two that disagree; each adapter
+   * owns how.
+   */
+  nativeMemoryOff?: boolean;
+  /**
    * What the board card this run works asks of it — its label instructions and
    * geniro's report ask, as stored on `Run.taskInstructions`. Undefined for
    * every run no card started.
@@ -3502,6 +3514,7 @@ export type TurnInstructionInput = Pick<
   | 'internalProbe'
   | 'replyLanguage'
   | 'customInstructions'
+  | 'memoryIndex'
   | 'taskInstructions'
   | 'workflowInstructions'
   | 'instructionBlocks'

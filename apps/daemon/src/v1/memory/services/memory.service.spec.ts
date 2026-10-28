@@ -3,7 +3,7 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   MEMORY_TEXT_TRIGGERS,
@@ -23,15 +23,19 @@ import { TaskDao } from '../../tasks/dao/task.dao';
 import { Task } from '../../tasks/entity/task.entity';
 import { MemoryDao } from '../dao/memory.dao';
 import { Memory } from '../entity/memory.entity';
-import type {
-  MemoryActor,
-  MemoryChangedEvent,
-  MemorySaveOutcome,
-  MemoryTextDatabase,
+import {
+  DEFAULT_MEMORY_CONFIG,
+  MEMORY_INDEX_PREFACE,
+  type MemoryActor,
+  type MemoryChangedEvent,
+  type MemorySaveOutcome,
+  type MemoryTextDatabase,
 } from '../memory.types';
 import { MemoryService } from './memory.service';
 import { MemoryEventBus } from './memory-events.bus';
 import { MemoryTextIndexService } from './memory-text-index.service';
+
+const USER: MemoryActor = { kind: 'user' };
 
 const AGENT: MemoryActor = {
   kind: 'agent',
@@ -644,6 +648,266 @@ describe('MemoryService', () => {
       globalNew.handle,
       globalOld.handle,
     ]);
+  });
+
+  describe('a new run’s snapshot', () => {
+    const FACTS = { taskId: null, cwd: '/repo/app' };
+
+    beforeEach(() => {
+      db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+    });
+
+    async function project() {
+      const em = db.em.fork();
+      em.persist(make(Project, { id: 'p1', name: 'App', folder: '/repo/app' }));
+      await em.flush();
+    }
+
+    function indexLines(index: string | null): string[] {
+      return (index ?? '').split('\n');
+    }
+
+    it('caps the index at 2 KB on whole lines and ends with the +N more footer', async () => {
+      const titles = Array.from(
+        { length: 30 },
+        (_, n) => `Note ${n} ${'word '.repeat(20)}end`,
+      );
+      const em = db.em.fork();
+      titles.forEach((title, n) =>
+        em.persist(
+          make(Memory, {
+            handle: n + 1,
+            title,
+            body: 'x',
+            type: 'project',
+            status: 'active',
+            sourceActor: 'user',
+          }),
+        ),
+      );
+      await em.flush();
+
+      const { memoryIndex } = await db.service.runSnapshot(FACTS);
+
+      const lines = indexLines(memoryIndex);
+      const listed = lines.slice(1, -1);
+      expect(Buffer.byteLength(memoryIndex ?? '')).toBeLessThanOrEqual(2048);
+      expect(lines[0]).toBe(MEMORY_INDEX_PREFACE);
+      expect(listed.length).toBeGreaterThan(0);
+      expect(listed.length).toBeLessThan(30);
+      for (const line of listed) {
+        expect(titles.some((title) => line.includes(` ${title} (`))).toBe(true);
+      }
+      expect(lines.at(-1)).toBe(
+        `(+${30 - listed.length} more — memory_search)`,
+      );
+    });
+
+    it('orders project entries before global, most recently used first', async () => {
+      await project();
+      const globalOld = created(
+        await db.service.save(USER, { title: 'Global old', body: 'x' }, null),
+      );
+      const globalNew = created(
+        await db.service.save(USER, { title: 'Global new', body: 'x' }, null),
+      );
+      const own = created(
+        await db.service.save(USER, { title: 'Own rule', body: 'x' }, 'p1'),
+      );
+      await db.service.save(USER, { title: 'Theirs', body: 'x' }, 'p2');
+      await db.em
+        .fork()
+        .nativeUpdate(
+          Memory,
+          { id: globalOld.id },
+          { lastUsedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) },
+        );
+      await db.service.read([globalNew.handle], 'p1');
+
+      const { memoryIndex } = await db.service.runSnapshot(FACTS);
+
+      expect(indexLines(memoryIndex)).toEqual([
+        MEMORY_INDEX_PREFACE,
+        `- ${own.handle} [project] Own rule (project)`,
+        `- ${globalNew.handle} [project] Global new (global, used today)`,
+        `- ${globalOld.handle} [project] Global old (global, used 3d ago)`,
+      ]);
+    });
+
+    it('omits pending and forgotten entries', async () => {
+      const kept = created(
+        await db.service.save(USER, { title: 'Kept', body: 'x' }, null),
+      );
+      const gone = created(
+        await db.service.save(USER, { title: 'Gone', body: 'x' }, null),
+      );
+      await db.service.forget(AGENT, gone.handle, 'wrong', null);
+      db.service.setConfig({ enabled: true, agentWrites: 'pending' });
+      await db.service.save(AGENT, { title: 'Waiting', body: 'x' }, null);
+
+      const { memoryIndex } = await db.service.runSnapshot(FACTS);
+
+      expect(indexLines(memoryIndex).slice(1)).toEqual([
+        `- ${kept.handle} [project] Kept (global)`,
+      ]);
+    });
+
+    it('masks a secret registered after a title was saved', async () => {
+      const secret = 'sk-title-0123456789abcdef';
+      await db.service.save(
+        USER,
+        { title: `Key ${secret} rotates`, body: 'x' },
+        null,
+      );
+      registerSecret(secret, 'late');
+
+      const { memoryIndex } = await db.service.runSnapshot(FACTS);
+
+      expect(memoryIndex).toContain('Key ');
+      expect(memoryIndex).toContain(' rotates');
+      expect(memoryIndex).not.toContain(secret);
+    });
+
+    it('carries no index for a run that may see no entry, and nothing at all while memory is off', async () => {
+      await db.service.save(USER, { title: 'Theirs', body: 'x' }, 'p2');
+
+      const empty = await db.service.runSnapshot(FACTS);
+      db.service.setConfig({ enabled: false, agentWrites: 'active' });
+      const off = await db.service.runSnapshot(FACTS);
+
+      expect(empty).toEqual({ nativeMemoryOff: false, memoryIndex: null });
+      expect(off).toEqual({ nativeMemoryOff: false, memoryIndex: null });
+    });
+
+    it('carries nothing until the user’s settings have arrived, then the index alone', async () => {
+      const fresh = await memoryDb();
+      try {
+        await fresh.service.save(USER, { title: 'Kept', body: 'x' }, null);
+
+        const before = await fresh.service.runSnapshot(FACTS);
+        fresh.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const after = await fresh.service.runSnapshot(FACTS);
+
+        expect(before).toEqual({ nativeMemoryOff: false, memoryIndex: null });
+        expect(after.memoryIndex).toContain('Kept');
+        expect(after.nativeMemoryOff).toBe(false);
+      } finally {
+        await fresh.orm.close();
+      }
+    });
+
+    it.each([
+      ['the user’s own', 'user', null, true],
+      ['an import’s', 'import', null, true],
+      ['an agent’s unreviewed', 'agent', null, false],
+      ['an analysis chat’s unreviewed', 'analysis', null, false],
+      ['an agent’s approved', 'agent', new Date('2026-10-01T00:00:00Z'), true],
+    ] as const)(
+      'lists %s entry: %s',
+      async (_label, sourceActor, approvedAt, listed) => {
+        const em = db.em.fork();
+        em.persist(
+          make(Memory, {
+            handle: 1,
+            title: 'Rule',
+            body: 'x',
+            type: 'user',
+            status: 'active',
+            sourceActor,
+            approvedAt,
+          }),
+        );
+        await em.flush();
+
+        const { memoryIndex } = await db.service.runSnapshot(FACTS);
+
+        expect(indexLines(memoryIndex).slice(1)).toEqual(
+          listed ? ['- m1 [user] Rule (global)'] : [],
+        );
+      },
+    );
+
+    it('admits an agent’s entry the user approves while it is already active', async () => {
+      const theirs = created(
+        await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, null),
+      );
+
+      const approved = await db.service.setStatus(USER, theirs.id, 'active');
+      const { memoryIndex } = await db.service.runSnapshot(FACTS);
+
+      expect(approved).toMatchObject({
+        kind: 'changed',
+        entry: { status: 'active', approvedAt: expect.any(String) },
+      });
+      expect(indexLines(memoryIndex).slice(1)).toEqual([
+        `- ${theirs.handle} [project] Theirs (global)`,
+      ]);
+    });
+
+    it('keeps the first approval when the user approves an entry again', async () => {
+      const theirs = created(
+        await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, null),
+      );
+      const first = await db.service.setStatus(USER, theirs.id, 'active');
+
+      const again = await db.service.setStatus(USER, theirs.id, 'active');
+
+      expect(first.kind === 'changed' && first.entry.approvedAt).toBeTruthy();
+      expect(again).toMatchObject({
+        kind: 'changed',
+        entry: {
+          approvedAt: first.kind === 'changed' ? first.entry.approvedAt : null,
+          rev: first.kind === 'changed' ? first.entry.rev : -1,
+        },
+      });
+    });
+
+    it('leaves an agent’s unreviewed entry out until the user approves it, and again once an agent rewrites it', async () => {
+      const mine = created(
+        await db.service.save(USER, { title: 'Mine', body: 'x' }, null),
+      );
+      const theirs = created(
+        await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, null),
+      );
+      const listed = async () =>
+        indexLines((await db.service.runSnapshot(FACTS)).memoryIndex).slice(1);
+
+      const before = await listed();
+      await db.service.setStatus(USER, theirs.id, 'forgotten');
+      await db.service.setStatus(USER, theirs.id, 'active');
+      const approved = await listed();
+      const current = await db.service.read([theirs.handle], null);
+      await db.service.save(
+        AGENT,
+        {
+          handle: theirs.handle,
+          rev: current.entries[0]!.rev,
+          title: 'Theirs',
+          body: 'rewritten',
+        },
+        null,
+      );
+      const rewritten = await listed();
+
+      expect(before).toEqual([`- ${mine.handle} [project] Mine (global)`]);
+      expect(approved.map((line) => line.split(' ')[1])).toEqual(
+        expect.arrayContaining([mine.handle, theirs.handle]),
+      );
+      expect(rewritten.map((line) => line.split(' ')[1])).toEqual([
+        mine.handle,
+      ]);
+    });
+
+    it('starts the run without an index when the read fails', async () => {
+      await db.service.save(USER, { title: 'Kept', body: 'x' }, null);
+      vi.spyOn(db.service, 'listVisible').mockRejectedValueOnce(
+        new Error('disk gone'),
+      );
+
+      const snapshot = await db.service.runSnapshot(FACTS);
+
+      expect(snapshot).toEqual({ nativeMemoryOff: false, memoryIndex: null });
+    });
   });
 
   it('refuses an agent write while memory is off', async () => {

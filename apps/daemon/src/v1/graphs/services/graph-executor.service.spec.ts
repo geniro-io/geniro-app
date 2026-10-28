@@ -107,6 +107,7 @@ import {
   type WallClockRow,
 } from '../../agents/utils/wall-worked';
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
+import type { MemoryService } from '../../memory/services/memory.service';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
@@ -1112,6 +1113,8 @@ function setup(
      * a turn for a background delegate.
      */
     claudeSpawn?: SpawnFn;
+    /** What the shared memory hands a new run; memory off when absent. */
+    memory?: Pick<MemoryService, 'runSnapshot'>;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -1522,6 +1525,9 @@ function setup(
     ),
     wallTurns as unknown as WallTurnDao,
     kindRowsPassthrough(itemDao),
+    (opts.memory ?? {
+      runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
+    }) as unknown as MemoryService,
     artifacts,
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.
@@ -7166,6 +7172,41 @@ describe('GraphExecutorService — agent calls', () => {
     );
   });
 
+  it('startRunBySlug snapshots the shared memory onto the run row and every node, whatever memory holds later', async () => {
+    const asked: unknown[] = [];
+    let index = 'INDEX AT START';
+    const { service, claude, runDao, storeGet } = setup(4870, {
+      memory: {
+        runSnapshot: async (facts) => {
+          asked.push(facts);
+          return { nativeMemoryOff: true, memoryIndex: index };
+        },
+      },
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      taskId: 'task-9',
+    });
+    index = 'INDEX AFTER A SAVE';
+    await drain();
+
+    expect(asked).toEqual([{ taskId: 'task-9', cwd: run.cwd }]);
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      memoryIndex: 'INDEX AT START',
+      nativeMemoryOff: true,
+    });
+    expect(claude.starts.length).toBeGreaterThan(0);
+    for (const start of claude.starts) {
+      expect(start.input).toMatchObject({
+        memoryIndex: 'INDEX AT START',
+        nativeMemoryOff: true,
+      });
+    }
+  });
+
   it('startRunBySlug carries the reply language through to the run row and every node', async () => {
     const { service, claude, runDao, storeGet } = setup();
     storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
@@ -7319,6 +7360,36 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
 
     expect(claude.starts[2]!.input.replyLanguage).toBe('Russian');
+  });
+
+  it('a follow-up pass on a settled run carries the memory snapshot, never a fresh one', async () => {
+    let asked = 0;
+    let index = 'INDEX AT START';
+    const { service, claude, storeGet } = setup(4870, {
+      memory: {
+        runSnapshot: async () => {
+          asked += 1;
+          return { nativeMemoryOff: true, memoryIndex: index };
+        },
+      },
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+    const run = await service.startRunBySlug('lin', { cwd: dir, prompt: 'go' });
+    await drain();
+    completeTurn(claude.starts[0]!, 'A done');
+    await drain();
+    completeTurn(claude.starts[1]!, 'B done');
+    await drain();
+    index = 'INDEX AFTER A SAVE';
+
+    await service.sendMessage(run.id, 'one more thing');
+    await drain();
+
+    expect(asked).toBe(1);
+    expect(claude.starts[2]!.input).toMatchObject({
+      memoryIndex: 'INDEX AT START',
+      nativeMemoryOff: true,
+    });
   });
 
   it('startRunBySlug propagates a library miss without creating a run', async () => {

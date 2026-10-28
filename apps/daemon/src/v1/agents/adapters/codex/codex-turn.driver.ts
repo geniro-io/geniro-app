@@ -101,7 +101,10 @@ export interface CodexTurnOptions {
   input: AgentTurnInput;
   /** The composed instruction block, sent as the thread's developer text. */
   developerInstructions: string;
-  /** Thread config overrides — geniro's MCP endpoint — or null for none. */
+  /**
+   * Thread config overrides — geniro's MCP endpoint and the memories switch —
+   * or null for none.
+   */
   config: Record<string, unknown> | null;
   policy: CodexTurnPolicy;
   /**

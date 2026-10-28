@@ -149,6 +149,7 @@ describe('ReadAnalyzedThreadTool', () => {
       customInstructions: 'MINE',
       replyLanguage: 'Russian',
       taskInstructions: 'CARD',
+      memoryIndex: 'INDEX',
     };
     const describeWorkflow = vi.fn<WorkflowChangeService['describe']>(() =>
       Promise.resolve({ slug: 'dev-team' }),

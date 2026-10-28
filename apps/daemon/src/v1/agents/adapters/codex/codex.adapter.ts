@@ -76,6 +76,7 @@ import {
   CODEX_MCP_REPLACE_STRATEGY,
   CODEX_MCP_SERVERS_KEY,
   CODEX_MCP_UPSERT_STRATEGY,
+  CODEX_MEMORIES_FEATURE_KEY,
   CODEX_METHODS,
   CODEX_MODELS_CACHE_FILE,
   CODEX_MODELS_TTL_MS,
@@ -586,19 +587,26 @@ export class CodexAdapter extends AgentAdapter {
    */
   private codexTurnOptions(input: AgentTurnInput): CodexTurnOptions {
     const endpoint = input.mcpEndpoint ?? null;
+    const config = {
+      ...(endpoint === null
+        ? {}
+        : {
+            [codexMcpServerKey(endpoint.serverName)]: {
+              url: endpoint.url,
+              http_headers: { Authorization: `Bearer ${endpoint.token}` },
+              tool_timeout_sec: CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC,
+            },
+          }),
+      // In every thread config, endpoint or not, for a run that switches
+      // native memory off.
+      ...(input.nativeMemoryOff === true
+        ? { [CODEX_MEMORIES_FEATURE_KEY]: false }
+        : {}),
+    };
     return {
       input,
       developerInstructions: this.composeSystemPrompt(input, endpoint !== null),
-      config:
-        endpoint === null
-          ? null
-          : {
-              [codexMcpServerKey(endpoint.serverName)]: {
-                url: endpoint.url,
-                http_headers: { Authorization: `Bearer ${endpoint.token}` },
-                tool_timeout_sec: CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC,
-              },
-            },
+      config: Object.keys(config).length > 0 ? config : null,
       policy: codexTurnPolicy(input.approvalMode),
       autoCompactTokens: this.autoCompactTokens(input),
       // geniro's own server is never switched off, whatever the node lists:

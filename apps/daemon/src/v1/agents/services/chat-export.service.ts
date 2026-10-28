@@ -106,6 +106,8 @@ function exportRun(run: Run): ChatExportRunWire {
     replyLanguage: run.replyLanguage,
     taskInstructions: run.taskInstructions,
     workflowInstructions: run.workflowInstructions,
+    memoryIndex: run.memoryIndex,
+    nativeMemoryOff: run.nativeMemoryOff,
     agentOptions:
       run.agentOptions === null ? null : readAgentOptions(run.agentOptions),
     lastMetricsReading: parseOrNull(run.lastMetricsReading),

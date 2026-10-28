@@ -27,6 +27,7 @@ import {
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
+import type { MemoryService } from '../../memory/services/memory.service';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -141,6 +142,10 @@ import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
 import { WorkflowBuilderBroker } from './workflow-builder.broker';
 import { WorkflowProposalBroker } from './workflow-proposal.broker';
+
+const MEMORY_OFF: Pick<MemoryService, 'runSnapshot'> = {
+  runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
+};
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
 class FakeRunDao {
@@ -1073,6 +1078,8 @@ function setup(
     /** The monitor registry a Stop reaches, when a test drives one. */
     monitors?: MonitorRegistry;
     runWrites?: RunWriteQueue;
+    /** What the shared memory hands a new run; memory off when absent. */
+    memory?: Pick<MemoryService, 'runSnapshot'>;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
     contextWindows?: Record<string, number>;
     /** What claude resolves each name to — see `fakeAdapter`'s `resolutions`. */
@@ -1341,6 +1348,7 @@ function setup(
     } as unknown as AnalysisReportsService,
     workflowBuilders,
     opts.runWrites ?? new RunWriteQueue(),
+    (opts.memory ?? MEMORY_OFF) as unknown as MemoryService,
     {
       token: 'launch',
       version: '0.0.0',
@@ -8044,6 +8052,46 @@ describe('ChatService', () => {
     expect(claude.start.mock.calls[0]?.[0].customInstructions).toBe(
       'Always answer in British English.',
     );
+  });
+
+  it('snapshots the shared memory onto the run and spawns every turn with it, whatever memory holds later', async () => {
+    const asked: unknown[] = [];
+    let index = 'INDEX AT CREATION';
+    const { service, claude, runDao } = setup({
+      memory: {
+        runSnapshot: async (facts) => {
+          asked.push(facts);
+          return { nativeMemoryOff: true, memoryIndex: index };
+        },
+      },
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      taskId: 'task-7',
+    });
+    index = 'INDEX AFTER A SAVE';
+
+    await service.sendMessage(run.id, 'go');
+    expect(asked).toEqual([{ taskId: 'task-7', cwd: run.cwd }]);
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      memoryIndex: 'INDEX AT CREATION',
+      nativeMemoryOff: true,
+    });
+    expect(claude.start.mock.calls[0]?.[0]).toMatchObject({
+      memoryIndex: 'INDEX AT CREATION',
+      nativeMemoryOff: true,
+    });
+  });
+
+  it('leaves a run created while memory is off with no index and the CLI’s own memory alone', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'go');
+    const input = claude.start.mock.calls[0]?.[0];
+    expect(input?.memoryIndex).toBeUndefined();
+    expect(input?.nativeMemoryOff).toBe(false);
   });
 
   it('snapshots the reply language onto the run, trimmed, and spawns every turn with it', async () => {

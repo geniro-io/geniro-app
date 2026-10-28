@@ -357,6 +357,51 @@ describe('the turn', () => {
     });
   });
 
+  it('switches the CLI’s own memories off in the thread config only for a run that switches native memory off, endpoint or not', () => {
+    const threadConfig = (input: AgentTurnInput): unknown => {
+      const written: string[] = [];
+      adapterWith()
+        .driver(input)
+        .onStdinReady?.({
+          write: (payload) => {
+            written.push(payload);
+            return true;
+          },
+          emit: () => undefined,
+        });
+      return written
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              method?: string;
+              params?: Record<string, unknown>;
+            },
+        )
+        .find((frame) => frame.method === 'thread/start')?.params?.config;
+    };
+    const endpoint = {
+      url: 'http://127.0.0.1:47615/v1/mcp/run/node',
+      token: 'call-token',
+      serverName: 'geniro-0123abcd',
+    };
+
+    expect(threadConfig({ prompt: 'x', cwd: '/repo' })).toBeUndefined();
+    expect(
+      threadConfig({ prompt: 'x', cwd: '/repo', nativeMemoryOff: true }),
+    ).toEqual({ 'features.memories': false });
+    expect(
+      threadConfig({
+        prompt: 'x',
+        cwd: '/repo',
+        nativeMemoryOff: true,
+        mcpEndpoint: endpoint,
+      }),
+    ).toMatchObject({
+      'features.memories': false,
+      'mcp_servers.geniro-0123abcd': { url: endpoint.url },
+    });
+  });
+
   it('tells the agent about the call tools only when they are registered', () => {
     const instructionsFor = (input: AgentTurnInput): string => {
       const written: string[] = [];

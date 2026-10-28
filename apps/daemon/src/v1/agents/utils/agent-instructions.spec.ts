@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type { AgentTurnInput } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
@@ -273,6 +274,37 @@ describe('the composed block', () => {
     expect(composed({ customInstructions: '  BE TERSE\n\n' })).toBe(
       `${GENIRO_UI_PREAMBLE}\n\nBE TERSE`,
     );
+  });
+
+  it('masks a secret registered after the run snapshotted its memory index', () => {
+    const secret = 'sk-index-0123456789abcdef';
+    registerSecret(secret, 'late');
+    try {
+      const [part] = turnInstructionParts({
+        includePreamble: false,
+        memoryIndex: `- m1 [user] Key ${secret} rotates (global)`,
+      });
+
+      expect(part?.text).toContain('Key ');
+      expect(part?.text).not.toContain(secret);
+    } finally {
+      clearSecrets();
+    }
+  });
+
+  it('puts the memory index right after the user’s own instructions, ahead of a card’s', () => {
+    const parts = turnInstructionParts({
+      customInstructions: 'GLOBAL',
+      memoryIndex: 'MEMORY',
+      taskInstructions: 'CARD',
+    });
+
+    expect(parts.map((part) => part.source)).toEqual([
+      'preamble',
+      'customInstructions',
+      'memoryIndex',
+      'taskInstructions',
+    ]);
   });
 });
 

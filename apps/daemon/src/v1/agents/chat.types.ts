@@ -919,6 +919,7 @@ export interface AnalysedWorkflowRef {
     customInstructions: string | null;
     replyLanguage: string | null;
     taskInstructions: string | null;
+    memoryIndex: string | null;
   } | null;
 }
 
@@ -4348,6 +4349,18 @@ export const ChatExportRunSchema = z
       .nullable()
       .describe(
         'What a workflow-editing chat was told about the file it owns, as snapshotted onto the run; null for every chat outside the workflow builder',
+      ),
+    memoryIndex: z
+      .string()
+      .nullable()
+      .describe(
+        "The shared memory's title index this run's agents were given, as snapshotted at creation; null when memory was off or held nothing the run could see",
+      ),
+    nativeMemoryOff: z
+      .boolean()
+      .nullable()
+      .describe(
+        "Whether this run switched each CLI's own memory off, as decided at creation; null for a run predating it",
       ),
     agentOptions: AgentOptionsSchema.nullable().describe(
       'The per-CLI switches AS THIS RUN SNAPSHOTTED THEM; an id it does not carry — or null, a run that snapshotted none — reads as that option’s default rather than as off',

@@ -614,6 +614,7 @@ describe('WorkflowChangeService', () => {
         customInstructions: 'MINE',
         replyLanguage: null,
         taskInstructions: 'CARD',
+        memoryIndex: 'INDEX',
       },
     );
     const sizes = described.instructionSizes as {
@@ -630,6 +631,7 @@ describe('WorkflowChangeService', () => {
       expect.arrayContaining([
         expect.objectContaining({ source: 'customInstructions', chars: 4 }),
         expect.objectContaining({ source: 'taskInstructions', chars: 4 }),
+        expect.objectContaining({ source: 'memoryIndex', chars: 5 }),
         expect.objectContaining({ source: 'role', chars: 9 }),
       ]),
     );

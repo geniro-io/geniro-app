@@ -76,6 +76,8 @@ function doc(items: ItemDto[]): ChatExportDto {
       customInstructions: null,
       replyLanguage: null,
       workflowInstructions: null,
+      memoryIndex: null,
+      nativeMemoryOff: null,
       taskInstructions: null,
       agentOptions: null,
       lastMetricsReading: null,

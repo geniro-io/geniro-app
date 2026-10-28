@@ -322,6 +322,24 @@ export class Run extends TimestampsEntity {
   replyLanguage: string | null = null;
 
   /**
+   * The shared memory's title index this run's agents were given
+   * (`MemoryService.runSnapshot`), composed right after
+   * {@link customInstructions}; null when memory was off or held nothing the
+   * run may see. A snapshot for {@link customInstructions}' reason: a live read
+   * would respawn the kept CLI whenever any agent saved a note.
+   */
+  @Property({ type: 'text', nullable: true })
+  memoryIndex: string | null = null;
+
+  /**
+   * Whether each CLI's own memory is switched off for this run, decided when
+   * it was created (`MemoryService.runSnapshot`). Null for every row predating
+   * it, read as not switched off.
+   */
+  @Property({ type: 'boolean', nullable: true })
+  nativeMemoryOff: boolean | null = null;
+
+  /**
    * What the board card this run works asks of its agent — the card's LABEL
    * instructions and geniro's own report ask, already composed; null for every
    * run no card started.

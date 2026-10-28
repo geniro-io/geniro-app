@@ -94,6 +94,7 @@ import {
   CLAUDE_DEFAULT_MODEL_VALUE,
   CLAUDE_DEFAULT_PROFILE_DIR,
   CLAUDE_DENY_MESSAGE,
+  CLAUDE_DISABLE_AUTO_MEMORY_ENV,
   CLAUDE_EFFORT_FLAG,
   CLAUDE_EMPTY_MCP_CONFIG,
   CLAUDE_HOME_SETTINGS_FILE,
@@ -2240,6 +2241,11 @@ export class ClaudeAdapter extends AgentAdapter {
       // in every prompt, useless without their browser extension.
       ...(this.agentOption(input, CLAUDE_BROWSER_TOOLS_OPTION)
         ? { [CLAUDE_BROWSER_TOOLS_ENV]: '1' }
+        : {}),
+      // A run that switches native memory off keeps one memory, geniro's,
+      // rather than two that disagree.
+      ...(input.nativeMemoryOff === true
+        ? { [CLAUDE_DISABLE_AUTO_MEMORY_ENV]: '1' }
         : {}),
       ...(input.configDir ? { [CLAUDE_CONFIG_DIR_ENV]: input.configDir } : {}),
       ...input.env,

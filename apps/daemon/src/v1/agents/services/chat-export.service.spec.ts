@@ -109,6 +109,8 @@ function build(
                 replyLanguage: 'Russian',
                 taskInstructions: 'label block and report ask',
                 workflowInstructions: null,
+                memoryIndex: 'Memory index …\n- m1 [user] Terse (global)',
+                nativeMemoryOff: false,
                 agentOptions: null,
                 lastMetricsReading:
                   'lastMetricsReading' in opts
@@ -199,6 +201,10 @@ describe('ChatExportService', () => {
     expect(doc.run.customInstructions).toBe('always answer in Russian');
     expect(doc.run.replyLanguage).toBe('Russian');
     expect(doc.run.taskInstructions).toBe('label block and report ask');
+    expect(doc.run.memoryIndex).toBe(
+      'Memory index …\n- m1 [user] Terse (global)',
+    );
+    expect(doc.run.nativeMemoryOff).toBe(false);
     expect(doc.run.agentOptions).toBeNull();
     expect(doc.run.pendingContext).toBeNull();
     expect(doc.run.lastMetricsReading).toEqual({

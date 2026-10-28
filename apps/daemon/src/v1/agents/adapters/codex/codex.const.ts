@@ -473,6 +473,19 @@ export const CODEX_APPS_SERVER_NAME = 'codex_apps';
 export const CODEX_APPS_FEATURE_KEY = 'features.apps';
 
 /**
+ * Switches off the CLI's own memories feature in a thread whose run asks for
+ * it (`AgentTurnInput.nativeMemoryOff`), so the agent keeps one memory.
+ *
+ * MEASURED on 0.162.0 in a throwaway `CODEX_HOME` with memories on and a
+ * seeded `memories/memory_summary.md`: a thread without the key recalled the
+ * summary's codeword, one with `features.memories = false` in its thread
+ * config did not. The key is type-checked (a string is refused with -32600,
+ * "expected a boolean in `features`"). Off by default, so it matters only to
+ * a user who turned memories on.
+ */
+export const CODEX_MEMORIES_FEATURE_KEY = 'features.memories';
+
+/**
  * Why a node cannot switch off a plugin's server for its own turns. MEASURED
  * on 0.161.0: `plugins.<id>.enabled = false` in the thread config does remove
  * the plugin's server (`cua_repl` of `unified-computer-use@openai-bundled`) —

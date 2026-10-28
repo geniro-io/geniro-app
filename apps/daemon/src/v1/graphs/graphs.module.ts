@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { ConfigDirPinService } from '../agents/services/config-dir-pin.service';
+import { MemoryModule } from '../memory/memory.module';
 import { CapabilitiesController } from './controllers/capabilities.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
 import { CallBroker } from './services/call-broker.service';
@@ -35,7 +36,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
  * `AgentAdapterRegistry` that {@link AgentsModule} exports.
  */
 @Module({
-  imports: [AgentsModule],
+  imports: [AgentsModule, MemoryModule],
   controllers: [WorkflowsController, CapabilitiesController],
   providers: [
     {

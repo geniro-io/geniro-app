@@ -378,6 +378,17 @@ export const CURSOR_SEEDED_CONFIG_FILE = 'cli-config.json';
 /** The env var the CLI resolves its config directory from. */
 export const CURSOR_CONFIG_DIR_ENV = 'CURSOR_CONFIG_DIR';
 
+export const CURSOR_CREDENTIAL_STORE_ENV = 'AGENT_CLI_CREDENTIAL_STORE';
+export const CURSOR_AUTH_TOKEN_ENV = 'CURSOR_AUTH_TOKEN';
+export const CURSOR_API_KEY_ENV = 'CURSOR_API_KEY';
+export const CURSOR_AUTH_FILE_NAME = 'auth.json';
+export const CURSOR_AUTH_INFO_CONFIG_KEY = 'authInfo';
+export const CURSOR_COMPILE_CACHE_PATH = [
+  'Library',
+  'Caches',
+  'cursor-compile-cache',
+] as const;
+
 // ── The per-turn DATA directory (a node's switched-off MCP servers) ───────
 //
 // `utils/cursor-data-dir.utils.ts` carries the bundle reading and the probe.

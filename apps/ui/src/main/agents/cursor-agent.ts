@@ -1,3 +1,6 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   type CliAgentDescriptor,
   jsonBooleanField,
@@ -15,9 +18,21 @@ export const CURSOR_AGENT_DESCRIPTOR: CliAgentDescriptor = {
   // (verified on 2026.08.11-e8db854). Its human output has a THIRD state,
   // `Partially authenticated (missing refresh token)`, that matched neither
   // wording — a half-expired session read as ready while turns failed.
+  // A named configuration's account is the CLI's file store under that
+  // directory as HOME; its Keychain login ignores every config directory.
   loginProbe: {
     args: ['status', '--format', 'json'],
     read: jsonBooleanField('isAuthenticated'),
+    profileEnv: (dir) => ({
+      HOME: dir,
+      AGENT_CLI_CREDENTIAL_STORE: 'file',
+      NODE_COMPILE_CACHE: join(
+        homedir(),
+        'Library',
+        'Caches',
+        'cursor-compile-cache',
+      ),
+    }),
   },
   // `about --format json` answers `{"latestStatus": …, "latestVersion": …}`
   // (measured 2026-09-03 on 2026.08.31-4057e58). Its bundle switches on exactly

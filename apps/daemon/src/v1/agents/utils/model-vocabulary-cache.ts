@@ -244,7 +244,7 @@ export class ModelVocabularyCache<T> {
  * login report different subscriptions (`max` against `team`) from the same CLI
  * binary, so the version already in the entry cannot stand in for it.
  *
- * A CLI whose account is NOT decided by a config directory — cursor, whose
+ * A CLI whose account is NOT decided by a config directory — one whose
  * `configDir.unavailableReason` says exactly that — passes null and keeps the
  * key it always had.
  *

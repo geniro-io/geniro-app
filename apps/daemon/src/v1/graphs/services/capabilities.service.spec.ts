@@ -143,11 +143,9 @@ describe('CapabilitiesService', () => {
     );
   });
 
-  it('states claude’s support as null and cursor’s refusal as a real sentence', () => {
-    // The two live values. `null` is the affirmative answer; a non-empty
-    // string is both the refusal and the reason shown for it — an empty one
-    // would render as a refusal with no explanation, which is the silent
-    // failure the field was added to prevent.
+  it('states claude’s and cursor’s support as null', () => {
+    // `null` is the affirmative answer: the renderer draws a CLI's named
+    // configurations only for a null here.
     const byAgent = new Map(
       service()
         .service.capabilitiesWire()
@@ -155,8 +153,7 @@ describe('CapabilitiesService', () => {
     );
 
     expect(byAgent.get('claude')).toBeNull();
-    expect(byAgent.get('cursor-agent')).toEqual(expect.any(String));
-    expect(byAgent.get('cursor-agent')).not.toBe('');
+    expect(byAgent.get('cursor-agent')).toBeNull();
   });
 });
 

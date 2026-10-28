@@ -42,7 +42,7 @@ export const CLAUDE_DESCRIPTOR: CliAgentDescriptor = {
   loginProbe: {
     args: ['auth', 'status', '--json'],
     read: jsonBooleanField('loggedIn'),
-    configDirEnv: 'CLAUDE_CONFIG_DIR',
+    profileEnv: (dir) => ({ CLAUDE_CONFIG_DIR: dir }),
   },
   // Measured three ways on 2.1.251: `claude update` checks and installs in one
   // step with no `--check`, `~/.claude.json` caches no latest-version figure,

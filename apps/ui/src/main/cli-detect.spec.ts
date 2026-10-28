@@ -427,14 +427,12 @@ describe('detectClis', () => {
         '/p/work': true,
         '/p/lab': false,
       });
-      // cursor keeps its account outside the directory, so it is not asked.
       expect(cursor?.profileLogins ?? {}).toEqual({});
     });
 
     it('asks each CLI only about ITS OWN named configurations, each under its own variable', async () => {
       // A directory belongs to one CLI: `claude auth status` pointed at a codex
-      // home would answer for nobody (and could write claude state there), and
-      // cursor keeps its account outside any directory, so it is asked of none.
+      // home would answer for nobody (and could write claude state there).
       const binDir = sandboxDir('bin');
       fakeBinary(binDir, 'claude');
       fakeBinary(binDir, 'codex');
@@ -466,8 +464,14 @@ describe('detectClis', () => {
               );
             }
           } else if (args[0] === 'status') {
+            const profile =
+              opts?.env?.AGENT_CLI_CREDENTIAL_STORE === 'file'
+                ? opts.env.HOME
+                : undefined;
             cb(null, {
-              stdout: JSON.stringify({ isAuthenticated: true }),
+              stdout: JSON.stringify({
+                isAuthenticated: profile === undefined,
+              }),
               stderr: '',
             });
           } else {
@@ -517,20 +521,33 @@ describe('detectClis', () => {
         '/p/codex-work': true,
         '/p/codex-lab': false,
       });
-      expect(of('cursor-agent')?.profileLogins).toEqual({});
+      expect(of('cursor-agent')?.loggedIn).toBe(true);
+      expect(of('cursor-agent')?.profileLogins).toEqual({
+        '/p/cursor-x': false,
+      });
       // And no probe ever ran under another CLI's directory: the claude probe
-      // sees only claude's, the codex probe only codex's.
-      const seen = (name: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'): unknown[] =>
+      // sees only claude's, the codex probe only codex's, and cursor's file
+      // store only cursor's.
+      const seen = (
+        name: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME' | 'AGENT_CLI_CREDENTIAL_STORE',
+      ): { path: string; value: unknown }[] =>
         mocks.calls
-          .map((call) => call.options?.env?.[name])
-          .filter((value) => value !== undefined);
-      expect(new Set(seen('CLAUDE_CONFIG_DIR'))).toEqual(
-        new Set(['/p/claude-work']),
-      );
-      expect([...new Set(seen('CODEX_HOME'))].sort()).toEqual([
-        '/p/codex-lab',
-        '/p/codex-work',
-      ]);
+          .map((call) => ({
+            path: call.path,
+            value: call.options?.env?.[name],
+          }))
+          .filter(({ value }) => value !== undefined);
+      expect(
+        new Set(seen('CLAUDE_CONFIG_DIR').map(({ value }) => value)),
+      ).toEqual(new Set(['/p/claude-work']));
+      expect(
+        [...new Set(seen('CODEX_HOME').map(({ value }) => value))].sort(),
+      ).toEqual(['/p/codex-lab', '/p/codex-work']);
+      expect(
+        seen('AGENT_CLI_CREDENTIAL_STORE').every(({ path }) =>
+          path.endsWith('cursor-agent'),
+        ),
+      ).toBe(true);
     });
   });
 

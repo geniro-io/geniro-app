@@ -75,7 +75,7 @@ export interface TranscriptValues {
   /** Each pull request's newest recorded outcome — see `RunOutcomesContext`. */
   runOutcomes: RunOutcomes;
   runStages: StageProgress | null;
-  /** Open the Team notes popup on one note — see `TeamNoteOpenContext`. */
+  /** Open the notes popup on one note — see `TeamNoteOpenContext`. */
   openTeamNote: ((seq: number) => void) | null;
 }
 

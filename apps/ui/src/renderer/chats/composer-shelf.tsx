@@ -881,7 +881,7 @@ const TEAM_NOTES_PREVIEW = 5;
 
 /**
  * The run's team notes as a shelf chip: a count, and on a press the newest
- * few, each a press away from the Team notes popup opened on it, and the way
+ * few, each a press away from the notes popup opened on it, and the way
  * to the whole list there. Durable like the task list — a note outlives the
  * turn that wrote it — so it sits among the durable chips. Hidden at zero.
  */
@@ -893,7 +893,7 @@ export function TeamNotesChip({
   /** Newest first, as the daemon lists them. */
   notes: readonly TeamNote[];
   agentName: (nodeId: string) => string;
-  /** Open the Team notes popup, on one note or on none. */
+  /** Open the notes popup, on one note or on none. */
   onOpen: (seq: number | null) => void;
 }): React.JSX.Element | null {
   if (notes.length === 0) {
@@ -959,7 +959,7 @@ export function TeamNotesChip({
               close();
               onOpen(null);
             }}>
-            Open the full view
+            Open all notes
           </Button>
         </div>
       )}

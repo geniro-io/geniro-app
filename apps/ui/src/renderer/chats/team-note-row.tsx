@@ -8,7 +8,7 @@ import { TeamNoteKindBadge } from './team-note-kind';
 import type { TeamNotePayload } from './team-note-payload';
 
 /**
- * Open the run's Team notes popup with one note picked, by the seq of the row
+ * Open the run's notes popup with one note picked, by the seq of the row
  * that holds it; null where no popup is mounted.
  */
 export const TeamNoteOpenContext = createContext<
@@ -18,7 +18,7 @@ export const TeamNoteOpenContext = createContext<
 /**
  * A note an agent wrote to the run's team notes (`team_note`), as its row in
  * the author's flow or its call's card. Compact on purpose: the note is for
- * the other agents, and a press opens the Team notes popup on it, where a
+ * the other agents, and a press opens the notes popup on it, where a
  * person reads them together.
  */
 export function TeamNoteRow({
@@ -73,7 +73,7 @@ export function TeamNoteRow({
         <button
           type="button"
           onClick={() => openNote(seq)}
-          aria-label={`${note.kind} team note${author === null ? '' : ` by ${author}`} — open it in Team notes`}
+          aria-label={`${note.kind} team note${author === null ? '' : ` by ${author}`} — open it in notes`}
           className={cn(
             headingClass,
             '-mx-1 rounded px-1 text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',

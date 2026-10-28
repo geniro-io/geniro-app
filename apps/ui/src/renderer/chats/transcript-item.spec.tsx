@@ -1326,7 +1326,7 @@ describe('TranscriptItem — team notes', () => {
     seq: 42,
   });
 
-  it('opens the Team notes popup on the note from a press on the row or its heading, never from its link', () => {
+  it('opens the notes popup on the note from a press on the row or its heading, never from its link', () => {
     const openNote = vi.fn();
     render(
       <TeamNoteOpenContext.Provider value={openNote}>
@@ -1347,7 +1347,7 @@ describe('TranscriptItem — team notes', () => {
     act(() => {
       bubble
         .querySelector<HTMLButtonElement>(
-          'button[aria-label="pitfall team note by orch — open it in Team notes"]',
+          'button[aria-label="pitfall team note by orch — open it in notes"]',
         )!
         .click();
     });
@@ -1355,7 +1355,7 @@ describe('TranscriptItem — team notes', () => {
     expect(openNote).toHaveBeenLastCalledWith(42);
   });
 
-  it('draws the row as plain text where no Team notes popup is mounted', () => {
+  it('draws the row as plain text where no notes popup is mounted', () => {
     render(<TranscriptItem item={teamNoteItem()} />);
     expect(container.querySelector('[data-role="tool"] button')).toBeNull();
   });

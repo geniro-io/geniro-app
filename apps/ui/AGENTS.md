@@ -255,7 +255,8 @@ One home for each concern:
 - Which hook remembers a boolean, in a thread or outside one: `.claude/rules/renderer-components.md` → _The one home for…_.
 - Two things are deliberately not per thread: the context readout's drill-downs and the builder palette.
 - The agents panel is always rendered when a chat is open and starts folded per thread. Nothing but its per-thread fold shows or hides it: no show/hide toggle, no header button, no auto-open on an artifact.
-- The agents panel's column holds only what belongs to the thread: its agents, workflows, pull requests and pages. The run waterfall, the processes readout and the thread notes open in popups from its control row (and rail), never as sections in the column; their reads are gated on that popup being open (`onPopupChange`), never on the panel being unfolded.
+- The agents panel's column holds only what belongs to the thread: its agents, workflows, pull requests and pages. The run waterfall, the processes readout and the notes open in popups from its control row (and rail), never as sections in the column; the waterfall's and processes' reads are gated on that popup being open (`onPopupChange`), never on the panel being unfolded.
+- The notes popup (`chats/notes-dialog.tsx`: the user's own notes, then a workflow run's team notes) is the chat screen's, not the panel's: the control row's notes button, the shelf's Team notes chip and a `team_note` row in the transcript (`TeamNoteOpenContext`) all open it, the last two on the pressed note.
 - Read the MCP listing only when its disclosure opens (`mcpOpen`).
 
 **Fast actions** (`chats/fast-action-bar.tsx`, `settings/fast-actions.tsx`, `Settings.fastActions`):

@@ -1241,7 +1241,7 @@ describe('TeamNotesChip', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('counts the notes, and a note in its panel opens the Team notes popup on that note', () => {
+  it('counts the notes, and a note in its panel opens the notes popup on that note', () => {
     const onOpen = mount([note(9), note(4)]);
     expect(container.textContent).toContain('Team notes');
     expect(container.textContent).toContain('2');
@@ -1256,7 +1256,7 @@ describe('TeamNotesChip', () => {
     expect(onOpen).toHaveBeenCalledExactlyOnceWith(4);
   });
 
-  it('opens the full view on no note from its panel, and no longer sends the reader to the agents panel', () => {
+  it('opens all notes on no note from its panel, and no longer sends the reader to the agents panel', () => {
     const onOpen = mount([note(9)]);
     act(() => {
       container.querySelector<HTMLButtonElement>('button')!.click();
@@ -1267,7 +1267,7 @@ describe('TeamNotesChip', () => {
     ).toBe(false);
     act(() =>
       buttons
-        .find((button) => button.textContent === 'Open the full view')
+        .find((button) => button.textContent === 'Open all notes')
         ?.click(),
     );
     expect(onOpen).toHaveBeenCalledExactlyOnceWith(null);

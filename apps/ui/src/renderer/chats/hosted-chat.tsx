@@ -36,6 +36,7 @@ import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { configDirCapabilityFrom } from '../workflows/use-config-dir-capability';
 import { CHAT_AGENT_KEY, computeAgentActivity } from './agent-activity';
+import { appendDraft } from './append-draft';
 import { ApprovalCard } from './approval-card';
 import { PLAN_WITHHELD } from './approval-mode-select';
 import { chatContextFigures, useContextRing } from './chat-context';
@@ -186,6 +187,11 @@ function chipsOfRun(run: RunDto, draft: ChipValues): ChipValues {
  * (`AnalysisDialog`). This renders the header the frame hands it, the
  * transcript and the composer, as siblings for the frame's own column.
  */
+export interface DraftRequest {
+  id: number;
+  text: string;
+}
+
 export function HostedChat({
   chat,
   ownerKey,
@@ -198,6 +204,7 @@ export function HostedChat({
   draftChips: draftChipsProp,
   onDraftChipsChange,
   initialDraft = '',
+  draftRequest = null,
   active = true,
   header,
   emptyText,
@@ -233,6 +240,12 @@ export function HostedChat({
   draftChips?: ChipValues;
   onDraftChipsChange?: Dispatch<SetStateAction<ChipValues>>;
   initialDraft?: string;
+  /**
+   * Text another control on the screen asks to put in the composer, focused
+   * for the user to finish and send. A new `id` asks again; typing already
+   * there is kept, the text going after it.
+   */
+  draftRequest?: DraftRequest | null;
   /** Whether the frame is on screen. Its settings are read again when it is. */
   active?: boolean;
   /** The frame's header, drawn from what this reads of the run. */
@@ -368,6 +381,30 @@ export function HostedChat({
     setComposeError(null);
     clearAttachments();
   }, [ownerKey, runId, clearAttachments, initialDraft]);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const draftRequestId = draftRequest?.id ?? null;
+  const draftRequestText = draftRequest?.text ?? '';
+  const appliedDraftRequest = useRef<number | null>(null);
+  // Held until the conversation is open: the composer is disabled before, and
+  // opening it resets the draft (the effect above runs first in that commit).
+  useEffect(() => {
+    if (
+      draftRequestId === null ||
+      runId === null ||
+      appliedDraftRequest.current === draftRequestId
+    ) {
+      return;
+    }
+    appliedDraftRequest.current = draftRequestId;
+    setDraft((current) => appendDraft(current, draftRequestText));
+    requestAnimationFrame(() => {
+      const box = composerRef.current;
+      if (box !== null) {
+        box.focus();
+        box.setSelectionRange(box.value.length, box.value.length);
+      }
+    });
+  }, [draftRequestId, draftRequestText, runId]);
   const attachBusy = attachments.reading || fileAttach.uploading;
   const attachBusyTitle = attachments.reading
     ? 'Reading the image…'
@@ -1021,6 +1058,7 @@ export function HostedChat({
           onAttachFiles={fileAttach.attach}
           onPasteImages={attachments.addFromClipboard}
           textareaProps={{
+            ref: composerRef,
             value: draft,
             rows: 2,
             disabled: chat.run === null,

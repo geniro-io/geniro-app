@@ -7,6 +7,7 @@ import {
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
+  STAGES_PROPOSAL,
 } from '../__fixtures__/workflow-proposals';
 
 // React Flow measures through ResizeObserver, which jsdom has none of; the
@@ -324,6 +325,84 @@ describe('WorkflowProposalCard', () => {
     const el = render(card({ input: multiline }));
     expect(el.querySelector('[data-slot="hazard-warning"]')).toBeNull();
     expect(buttonNamed(el, 'Approve')!.disabled).toBe(false);
+  });
+
+  it('draws the stages a proposal walks and names each stage change', () => {
+    const el = render(card({ input: STAGES_PROPOSAL }));
+    expect(el.textContent).toContain('2 agents · 2 connections · 3 stages');
+    const stages = el.querySelector('[data-slot="workflow-proposal-stages"]');
+    expect(stages?.querySelector('svg')?.getAttribute('aria-label')).toMatch(
+      /Plan.*Build.*Review/,
+    );
+    const rows = [...el.querySelectorAll('[data-slot="workflow-diff"] li')].map(
+      (row) => row.textContent,
+    );
+    expect(rows).toEqual([
+      '+stage review added',
+      '~stage build · next: ["ship"] → ["review"]',
+      '−stage ship removed',
+    ]);
+  });
+
+  it('shows every stage title and the text its agents read, on a new workflow too', () => {
+    const replace = STAGES_PROPOSAL as {
+      workflow: { stages: Record<string, unknown>[] };
+    };
+    const created = {
+      ...(RECORDED_NEW_PROPOSAL as object),
+      workflow: {
+        ...(RECORDED_NEW_PROPOSAL as { workflow: object }).workflow,
+        stages: replace.workflow.stages.map((stage) =>
+          stage.id === 'build'
+            ? { ...stage, instructions: 'Write the tests first.' }
+            : stage,
+        ),
+      },
+    };
+    const el = render(card({ input: created }));
+    const items = [
+      ...el.querySelectorAll('[data-slot="workflow-proposal-stage-text"] > li'),
+    ].map((item) => item.textContent);
+    expect(items).toEqual([
+      'PlanDone when The approach is agreed.',
+      'BuildWrite the tests first.Done when The change is implemented with tests.',
+      'ReviewDone when The reviewer approved the change.',
+    ]);
+  });
+
+  it('draws no stages block for a workflow without stages', () => {
+    const el = render(card());
+    expect(
+      el.querySelector('[data-slot="workflow-proposal-stages"]'),
+    ).toBeNull();
+    expect(el.textContent).not.toContain('stages');
+  });
+
+  it('holds Approve over a control character in an old stage value the change list decodes', () => {
+    const input = STAGES_PROPOSAL as { diff: Record<string, unknown> };
+    const tricked = {
+      ...input,
+      diff: {
+        ...input.diff,
+        changedStages: [
+          {
+            id: 'build',
+            fields: [
+              {
+                field: 'doneWhen',
+                before: JSON.stringify('Old \u001b[2Jdone'),
+                after: '"Tests pass"',
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const el = render(card({ input: tricked }));
+    expect(
+      el.querySelector('[data-slot="hazard-warning"]')?.textContent,
+    ).toContain('U+001B');
+    expect(buttonNamed(el, 'Approve')!.disabled).toBe(true);
   });
 
   it('falls back to the permission body for an unparseable payload', () => {

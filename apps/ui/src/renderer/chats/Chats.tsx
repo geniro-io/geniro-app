@@ -117,6 +117,7 @@ import {
 import { AgentsPanel, type AgentsPanelPopup } from './agents-panel';
 import { AnalysisDialog } from './analysis-dialog';
 import { AnalyzeThreadDialog } from './analyze-thread-dialog';
+import { appendDraft } from './append-draft';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
@@ -5277,11 +5278,7 @@ export function Chats({
    * a row read as two instructions rather than one run-on sentence.
    */
   const insertFastAction = useCallback((action: FastAction): void => {
-    setInput((current) =>
-      current.trim() === ''
-        ? action.description
-        : `${current.replace(/\s+$/, '')}\n\n${action.description}`,
-    );
+    setInput((current) => appendDraft(current, action.description));
     // A COUNTER rather than a direct focus call: the caret belongs at the end
     // of the text this press just added, and the textarea's DOM value is still
     // the old one until React commits. The effect below runs after that.

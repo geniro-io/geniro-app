@@ -3,10 +3,13 @@
  *
  * The first two were read back from a real run's `geniro.db` (milestone 1's
  * walk: a claude chat proposing a new workflow, then a cursor chat proposing
- * its replacement). The third was produced by the daemon's own
+ * its replacement), with the diff's empty stage lists added by hand. The third was produced by the daemon's own
  * `diffWorkflows` and `agentsThatRunAuto` over the first workflow and a richer
  * replacement, because no recorded run switched an agent to `auto`; its
- * `reason` is written for it, as a builder chat's proposal carries one.
+ * `reason` is written for it, as a builder chat's proposal carries one. The
+ * fourth, a builder chat's stage change, is `diffWorkflows` over the second
+ * workflow walking plan → build → ship and the same one walking plan → build
+ * → review.
  */
 
 export const RECORDED_NEW_PROPOSAL: unknown = {
@@ -76,6 +79,9 @@ export const RECORDED_REPLACE_PROPOSAL: unknown = {
     ],
     'addedEdges': [],
     'removedEdges': [],
+    'addedStages': [],
+    'removedStages': [],
+    'changedStages': [],
   },
   'baseHash': 'ee8c95bacfb3ad04',
   'workflow': {
@@ -177,6 +183,9 @@ export const REPLACE_TO_AUTO_PROPOSAL: unknown = {
       'style → coder (instruction)',
     ],
     'removedEdges': ['coder → reviewer (data)'],
+    'addedStages': [],
+    'removedStages': [],
+    'changedStages': [],
   },
   'baseHash': 'ee8c95bacfb3ad04',
   'workflow': {
@@ -245,6 +254,94 @@ export const REPLACE_TO_AUTO_PROPOSAL: unknown = {
         'from': 'style',
         'to': 'coder',
         'kind': 'instruction',
+      },
+    ],
+  },
+};
+
+export const STAGES_PROPOSAL: unknown = {
+  'mode': 'replace',
+  'autoAgents': [],
+  'summary': 'Walk every run through plan, build and review.',
+  'reason': 'The user asked for a review step after the build.',
+  'slug': 'review-pair',
+  'replacesName': 'Review Pair',
+  'diff': {
+    'identical': false,
+    'workflowFields': [],
+    'addedNodes': [],
+    'removedNodes': [],
+    'changedNodes': [],
+    'addedEdges': [],
+    'removedEdges': [],
+    'addedStages': ['review'],
+    'removedStages': ['ship'],
+    'changedStages': [
+      {
+        'id': 'build',
+        'fields': [
+          {
+            'field': 'next',
+            'before': '["ship"]',
+            'after': '["review"]',
+          },
+        ],
+      },
+    ],
+  },
+  'baseHash': 'ee8c95bacfb3ad04',
+  'workflow': {
+    'name': 'Review Pair',
+    'nodes': [
+      {
+        'id': 'start',
+        'kind': 'trigger',
+        'trigger': 'manual',
+      },
+      {
+        'id': 'coder',
+        'kind': 'agent',
+        'agent': 'claude',
+        'approval': 'ask',
+      },
+      {
+        'id': 'reviewer',
+        'kind': 'agent',
+        'agent': 'claude',
+        'approval': 'ask',
+      },
+    ],
+    'edges': [
+      {
+        'from': 'start',
+        'to': 'coder',
+        'kind': 'data',
+      },
+      {
+        'from': 'coder',
+        'to': 'reviewer',
+        'kind': 'data',
+      },
+    ],
+    'stages': [
+      {
+        'id': 'plan',
+        'title': 'Plan',
+        'doneWhen': 'The approach is agreed.',
+        'next': ['build'],
+      },
+      {
+        'id': 'build',
+        'title': 'Build',
+        'doneWhen': 'The change is implemented with tests.',
+        'ownerHint': 'coder',
+        'next': ['review'],
+      },
+      {
+        'id': 'review',
+        'title': 'Review',
+        'doneWhen': 'The reviewer approved the change.',
+        'ownerHint': 'reviewer',
       },
     ],
   },

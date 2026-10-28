@@ -4,6 +4,7 @@ import {
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
+  STAGES_PROPOSAL,
 } from '../__fixtures__/workflow-proposals';
 import {
   diffRows,
@@ -60,6 +61,13 @@ describe('readWorkflowProposal', () => {
       { ...replace, mode: 'merge' },
       { ...replace, diff: undefined },
       { ...replace, diff: { identical: false } },
+      {
+        ...replace,
+        diff: {
+          ...(replace.diff as object),
+          changedStages: [{ id: 'build', fields: [{ field: 'next' }] }],
+        },
+      },
       { ...replace, autoAgents: 'Coder' },
       {
         ...replace,
@@ -73,6 +81,14 @@ describe('readWorkflowProposal', () => {
       {
         ...replace,
         workflow: { ...replace.workflow, nodes: [{ id: 'x', kind: 'loop' }] },
+      },
+      { ...replace, workflow: { ...replace.workflow, stages: 'plan' } },
+      {
+        ...replace,
+        workflow: {
+          ...replace.workflow,
+          stages: [{ id: 'plan', title: 'Plan' }],
+        },
       },
     ];
     for (const input of unreadable) {
@@ -301,6 +317,36 @@ describe('diffRows', () => {
         scope: 'node',
         subject: 'reviewer',
         detail: { field: 'approval', before: 'auto', after: 'ask' },
+        toAuto: false,
+      },
+    ]);
+  });
+
+  it('lists each added, changed and removed stage by id', () => {
+    const proposal = parsed(STAGES_PROPOSAL);
+    expect(diffRows(proposal.diff!, proposal.workflow)).toEqual([
+      {
+        key: 'added-stage:review',
+        marker: 'added',
+        scope: 'stage',
+        subject: 'review',
+        detail: null,
+        toAuto: false,
+      },
+      {
+        key: 'changed-stage:build:next',
+        marker: 'changed',
+        scope: 'stage',
+        subject: 'build',
+        detail: { field: 'next', before: '["ship"]', after: '["review"]' },
+        toAuto: false,
+      },
+      {
+        key: 'removed-stage:ship',
+        marker: 'removed',
+        scope: 'stage',
+        subject: 'ship',
+        detail: null,
         toAuto: false,
       },
     ]);

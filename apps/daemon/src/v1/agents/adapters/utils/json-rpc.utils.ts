@@ -95,6 +95,26 @@ export function classifyMessage(obj: unknown): IncomingMessage {
     : { kind: 'unknown' };
 }
 
+const REPLY_PREFIX =
+  /^\s*\{(?:"jsonrpc":"2\.0",)?"id":(-?\d+|"(?:[^"\\]|\\.)*"),(?:"jsonrpc":"2\.0",)?"(?:result|error)":/;
+
+/**
+ * The id of the reply a line begins, read from its first characters alone —
+ * for a line too long to parse whole. Null for a request, a notification, or a
+ * reply whose id does not come first.
+ */
+export function replyIdOfPrefix(prefix: string): JsonRpcId | null {
+  const match = REPLY_PREFIX.exec(prefix);
+  if (match === null) {
+    return null;
+  }
+  try {
+    return asJsonRpcId(JSON.parse(match[1]!));
+  } catch {
+    return null;
+  }
+}
+
 function frame(message: Record<string, unknown>): string {
   return `${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`;
 }

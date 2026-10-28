@@ -8,6 +8,7 @@ import {
   encodeRequestId,
   encodeResult,
   JSONRPC_METHOD_NOT_FOUND,
+  replyIdOfPrefix,
 } from './json-rpc.utils';
 
 describe('classifyMessage', () => {
@@ -114,6 +115,27 @@ describe('classifyMessage', () => {
     expect(classifyMessage('a string').kind).toBe('unknown');
     expect(classifyMessage([1, 2]).kind).toBe('unknown');
     expect(classifyMessage({ id: 1 }).kind).toBe('unknown');
+  });
+});
+
+describe('replyIdOfPrefix', () => {
+  it('reads the id of a reply from its first characters', () => {
+    expect(
+      replyIdOfPrefix('{"id":2,"result":{"thread":{"id":"t","turns":['),
+    ).toBe(2);
+    expect(
+      replyIdOfPrefix('{"jsonrpc":"2.0","id":"a\\"b","error":{"code"'),
+    ).toBe('a"b');
+    expect(replyIdOfPrefix('{"id":7,"jsonrpc":"2.0","result":null')).toBe(7);
+  });
+
+  it('reads no id from a request, a notification or a cut-off id', () => {
+    expect(
+      replyIdOfPrefix('{"id":4,"method":"item/tool/call","params":{'),
+    ).toBeNull();
+    expect(replyIdOfPrefix('{"method":"item/completed","params":{')).toBeNull();
+    expect(replyIdOfPrefix('{"id":123')).toBeNull();
+    expect(replyIdOfPrefix('{"result":{"id":2},"id":2')).toBeNull();
   });
 });
 

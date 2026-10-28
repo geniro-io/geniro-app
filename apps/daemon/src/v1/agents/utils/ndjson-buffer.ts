@@ -17,26 +17,46 @@ export interface NdjsonBufferOptions {
    * (skip) — defensiveness means a malformed line degrades gracefully.
    */
   onParseError?: (line: string, error: unknown) => void;
+  /**
+   * Called once for a line longer than {@link MAX_BUFFERED_LINE_CHARS}, when
+   * its newline (or the stream's end) arrives: its first
+   * {@link OVERSIZED_LINE_PREFIX_CHARS} characters and its whole length. The
+   * line is never parsed, and none of it reaches the lines after it.
+   */
+  onOversizedLine?: (prefix: string, length: number) => void;
 }
 
 /**
  * Cap on the un-newlined reassembly buffer — the same bounded-buffer
  * discipline as spawn-cli's stderr tail and the PTY scrollback cap. The
  * spawned binary is user-configurable, and one that streams bytes without a
- * newline would otherwise grow `buf` for the turn's whole lifetime. A real
- * stream-json line never approaches this; an overflowing prefix is dropped
- * and reported through `onParseError`.
+ * newline would otherwise grow `buf` for the turn's whole lifetime. A line
+ * past it is skipped to its newline and reported through `onOversizedLine`.
  */
 export const MAX_BUFFERED_LINE_CHARS = 8 * 1024 * 1024;
 
+export const OVERSIZED_LINE_PREFIX_CHARS = 256;
+
 export class NdjsonBuffer {
   private buf = '';
+  private oversized: { prefix: string; length: number } | null = null;
 
   constructor(private readonly opts: NdjsonBufferOptions) {}
 
   /** Feed a stdout chunk; emits every complete line it now contains. */
   push(chunk: string): void {
-    this.buf += chunk;
+    let rest = chunk;
+    if (this.oversized !== null) {
+      const end = rest.indexOf('\n');
+      if (end === -1) {
+        this.oversized.length += rest.length;
+        return;
+      }
+      this.oversized.length += end;
+      this.endOversized();
+      rest = rest.slice(end + 1);
+    }
+    this.buf += rest;
     let nl = this.buf.indexOf('\n');
     while (nl !== -1) {
       const line = this.buf.slice(0, nl);
@@ -45,15 +65,11 @@ export class NdjsonBuffer {
       nl = this.buf.indexOf('\n');
     }
     if (this.buf.length > MAX_BUFFERED_LINE_CHARS) {
-      const droppedLength = this.buf.length;
-      const preview = this.buf.slice(0, 256);
+      this.oversized = {
+        prefix: this.buf.slice(0, OVERSIZED_LINE_PREFIX_CHARS),
+        length: this.buf.length,
+      };
       this.buf = '';
-      this.opts.onParseError?.(
-        preview,
-        new Error(
-          `oversized un-terminated line dropped (${droppedLength} chars buffered)`,
-        ),
-      );
     }
   }
 
@@ -63,12 +79,22 @@ export class NdjsonBuffer {
    * lost without this.
    */
   flush(): void {
+    if (this.oversized !== null) {
+      this.endOversized();
+      return;
+    }
     if (this.buf.length === 0) {
       return;
     }
     const line = this.buf;
     this.buf = '';
     this.consume(line);
+  }
+
+  private endOversized(): void {
+    const { prefix, length } = this.oversized!;
+    this.oversized = null;
+    this.opts.onOversizedLine?.(prefix, length);
   }
 
   private consume(rawLine: string): void {

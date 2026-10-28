@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent, AgentUsage } from '../adapters/adapter.types';
-import { runHeadlessCli } from './spawn-cli';
+import { MAX_BUFFERED_LINE_CHARS } from './ndjson-buffer';
+import { runCliSession, runHeadlessCli } from './spawn-cli';
 
 const noopMapper = (): AgentEvent[] => [];
 
@@ -486,6 +487,52 @@ describe('runHeadlessCli — a one-turn CLI that ignores stdin EOF', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('a stream line too long to read', () => {
+  it('is handed to the driver, whose answer reaches the turn, and is logged with its length', () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const warn = vi.fn();
+    const onDroppedLine = vi.fn(
+      (prefix: string, length: number): AgentEvent[] => [
+        { type: 'error', message: `dropped ${prefix.slice(0, 8)} ${length}` },
+      ],
+    );
+    const session = runCliSession({
+      command: 'codex',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: noopMapper,
+      onDroppedLine,
+      spawn,
+      logger: { warn },
+      listProcessGroups: () => Promise.resolve(null),
+    });
+    session.startTurn({ onEvent: (e) => events.push(e) });
+
+    const line = `{"id":2,"result":"${'x'.repeat(MAX_BUFFERED_LINE_CHARS)}"}`;
+    child.stdout.emitData(line.slice(0, 1000));
+    child.stdout.emitData(line.slice(1000));
+    expect(onDroppedLine).not.toHaveBeenCalled();
+    child.stdout.emitData('\n');
+
+    expect(onDroppedLine).toHaveBeenCalledTimes(1);
+    expect(onDroppedLine.mock.calls[0]![1]).toBe(line.length);
+    expect(events).toContainEqual({
+      type: 'error',
+      message: `dropped {"id":2, ${line.length}`,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `skipped a stream line of ${line.length} characters`,
+      ),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('skipped unparseable stream line'),
+    );
   });
 });
 

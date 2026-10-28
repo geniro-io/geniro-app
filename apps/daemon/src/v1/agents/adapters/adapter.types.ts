@@ -3764,6 +3764,13 @@ export interface TurnDriver {
   /** Map one parsed stdout line to zero or more normalized events. */
   onMessage(obj: unknown): AgentEvent[];
   /**
+   * A stdout line too long to read was skipped (`MAX_BUFFERED_LINE_CHARS`):
+   * its first characters and its length. For a protocol whose lost reply would
+   * leave a request waiting for good — answer it here instead. Undefined = the
+   * line is only logged.
+   */
+  onDroppedLine?(prefix: string, length: number): AgentEvent[];
+  /**
    * Encode one approval verdict as the payload the CLI expects. Undefined =
    * this CLI has no approval protocol and `respondApproval` is a no-op.
    */

@@ -16,7 +16,7 @@ import { buildChildEnv } from './child-env';
 import { trackDetachedChild } from './child-journal';
 import { foldTurnComplete, foldUsage } from './fold-turn-complete';
 import { createGroupTerminator } from './kill-tree';
-import { NdjsonBuffer } from './ndjson-buffer';
+import { MAX_BUFFERED_LINE_CHARS, NdjsonBuffer } from './ndjson-buffer';
 import {
   commandTargets,
   descendantsOf,
@@ -254,6 +254,8 @@ export interface CliSessionOptions {
   stdinLifetime: StdinLifetime;
   /** Maps each parsed stream-json object to zero or more normalized events. */
   mapper: (obj: unknown) => AgentEvent[];
+  /** `TurnDriver.onDroppedLine`: a line too long to read was skipped. */
+  onDroppedLine?: (prefix: string, length: number) => AgentEvent[];
   spawn?: SpawnFn;
   logger?: SessionLogger;
   /**
@@ -3319,6 +3321,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       opts.logger?.warn(
         `${opts.command}: skipped unparseable stream line: ${line.slice(0, 200)}`,
       ),
+    onOversizedLine: (prefix, length) => {
+      opts.logger?.warn(
+        `${opts.command}: skipped a stream line of ${length} characters, over the ${MAX_BUFFERED_LINE_CHARS} read as one line: ${prefix.slice(0, 200)}`,
+      );
+      for (const event of opts.onDroppedLine?.(prefix, length) ?? []) {
+        emit(event);
+      }
+    },
   });
 
   child.stdout?.setEncoding('utf8');

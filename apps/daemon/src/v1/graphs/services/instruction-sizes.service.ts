@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
-import { joinTurnInstructionParts } from '../../agents/utils/agent-instructions';
+import {
+  approxInstructionTokens,
+  joinTurnInstructionParts,
+} from '../../agents/utils/agent-instructions';
 import type {
   InstructionBlock,
   InstructionSizePart,
@@ -18,16 +21,12 @@ import {
 } from '../utils/node-instructions';
 import { stageMapOf } from '../utils/stage-text';
 
-/**
- * The common rough rule for English prose. The readout says "approximate"
- * because each model's tokenizer differs, and none of them is run here.
- */
-const CHARS_PER_TOKEN = 4;
-
 export interface InstructionSizesInput {
   workflow: Pick<Workflow, 'nodes' | 'edges' | 'stages'>;
   customInstructions?: string;
   replyLanguage?: string;
+  /** A board card's instructions — known only when measuring for one run. */
+  taskInstructions?: string;
 }
 
 /**
@@ -37,8 +36,9 @@ export interface InstructionSizesInput {
  * graph helpers the executor uses, so the total is the block a run sends.
  *
  * What a saved workflow cannot know is left out: a board card's instructions
- * and the builder chat's brief belong to one run, and ACP's `<host-context>`
- * wrapper is added after composition.
+ * belong to one run (measured only when the caller names that run's), the
+ * builder chat's brief to one chat, and ACP's `<host-context>` wrapper is
+ * added after composition.
  */
 @Injectable()
 export class InstructionSizesService {
@@ -62,6 +62,7 @@ export class InstructionSizesService {
           answeringACall: onDemand.has(node.id),
           customInstructions: input.customInstructions,
           replyLanguage: input.replyLanguage,
+          taskInstructions: input.taskInstructions,
           stageMap,
         }),
       );
@@ -77,6 +78,7 @@ export class InstructionSizesService {
       answeringACall: boolean;
       customInstructions: string | undefined;
       replyLanguage: string | undefined;
+      taskInstructions: string | undefined;
       stageMap: string | null;
     },
   ): NodeInstructionSize {
@@ -85,6 +87,7 @@ export class InstructionSizesService {
       {
         customInstructions: context.customInstructions,
         replyLanguage: context.replyLanguage,
+        taskInstructions: context.taskInstructions,
         ...nodeInstructionFields(node, {
           blocks: context.blocks,
           callees: context.callees,
@@ -123,5 +126,5 @@ export class InstructionSizesService {
 }
 
 function sizeOf(chars: number): { chars: number; approxTokens: number } {
-  return { chars, approxTokens: Math.ceil(chars / CHARS_PER_TOKEN) };
+  return { chars, approxTokens: approxInstructionTokens(chars) };
 }

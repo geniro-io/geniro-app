@@ -5,13 +5,14 @@ import { Injectable } from '@nestjs/common';
 import { ConflictException } from '@packages/common';
 
 import {
+  type AnalysedWorkflowRef,
   RECOMMENDATION_ID_PREFIX,
   type RecommendationApply,
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { appliesOf } from '../../agents/utils/recommendations-card';
-import { userInstructionFiles } from '../../agents/utils/user-instruction-files';
+import { sizedUserInstructionFiles } from '../../agents/utils/user-instruction-files';
 import type { AgentKind } from '../../runs/runs.types';
 import type { Workflow } from '../graphs.types';
 import { firstLineOf } from '../utils/config-dir-redaction';
@@ -25,6 +26,7 @@ import { diffWorkflows } from '../utils/workflow-diff';
 import type { WorkflowEdit } from '../utils/workflow-edits';
 import { parseWorkflowSnapshot } from '../utils/workflow-snapshot';
 import { parseWorkflowYaml } from '../utils/workflow-yaml';
+import { InstructionSizesService } from './instruction-sizes.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
 /**
@@ -108,14 +110,21 @@ export class WorkflowChangeService {
     private readonly store: WorkflowStoreService,
     private readonly itemDao: ItemDao,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly instructionSizes: InstructionSizesService,
   ) {}
 
   /**
    * The workflow as the library holds it now, the hash a save must quote, how
-   * it differs from the copy a run started with, and the user-instructions
-   * file of every agent and pool member that copy ran.
+   * it differs from the copy a run started with, every agent's always-on
+   * instruction block measured, and the user-instructions file of every agent
+   * and pool member that copy ran, with its size.
    */
-  async describe(slug: string, snapshot: string | null): Promise<Answer> {
+  async describe(
+    slug: string,
+    snapshot: string | null,
+    /** What the run's turns were composed with beside the workflow; null when unknown. */
+    instructions: AnalysedWorkflowRef['instructions'] = null,
+  ): Promise<Answer> {
     const current = await this.readCurrent(slug);
     if (current === null) {
       return {
@@ -127,18 +136,61 @@ export class WorkflowChangeService {
     return {
       slug,
       hash: current.hash,
-      workflow: current.workflow,
-      changedSinceThisRun:
-        started.state === 'readable'
-          ? diffWorkflows(started.workflow, current.workflow)
-          : `unknown — the run's own copy is ${started.state}`,
-      userInstructions: userInstructionFiles(
+      instructionSizes: this.instructionSizesOf(
+        current.workflow,
+        started.state === 'readable' ? started.workflow : null,
+        instructions,
+      ),
+      userInstructions: await sizedUserInstructionFiles(
         this.adapters,
         runnersOf(
           started.state === 'readable' ? started.workflow : current.workflow,
         ),
       ),
+      changedSinceThisRun:
+        started.state === 'readable'
+          ? diffWorkflows(started.workflow, current.workflow)
+          : `unknown — the run's own copy is ${started.state}`,
+      workflow: current.workflow,
     };
+  }
+
+  /**
+   * Each agent node's always-on block as the library's copy composes it, with
+   * the run's own custom instructions, card instructions and reply language,
+   * and — where the run's own copy composed a different length — that length.
+   */
+  private instructionSizesOf(
+    current: Workflow,
+    started: Workflow | null,
+    instructions: AnalysedWorkflowRef['instructions'],
+  ): Answer[] {
+    const settings = {
+      customInstructions: instructions?.customInstructions ?? undefined,
+      replyLanguage: instructions?.replyLanguage ?? undefined,
+      taskInstructions: instructions?.taskInstructions ?? undefined,
+    };
+    const inThisRun = new Map(
+      (started === null
+        ? []
+        : this.instructionSizes.measure({ workflow: started, ...settings })
+            .nodes
+      ).map((node) => [node.nodeId, node]),
+    );
+    return this.instructionSizes
+      .measure({ workflow: current, ...settings })
+      .nodes.map((node) => {
+        const ran = inThisRun.get(node.nodeId);
+        return ran === undefined || ran.totalChars === node.totalChars
+          ? node
+          : {
+              ...node,
+              inThisRun: {
+                totalChars: ran.totalChars,
+                approxTokens: ran.approxTokens,
+              },
+            };
+      });
   }
 
   async save(change: WorkflowChange): Promise<Answer> {

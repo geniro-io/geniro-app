@@ -18,11 +18,13 @@ import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import type { ItemKind } from '../../runs/runs.types';
 import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { WallTurnDao } from '../dao/wall-turn.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ChatWaterfallService } from './chat-waterfall.service';
 import type { ItemCallIndexService } from './item-call-index.service';
@@ -41,12 +43,13 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let reader: ThreadReaderService;
   let itemDao: ItemDao;
+  let wallTurns: WallTurnDao;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, Item, NodeState],
+        entities: [Run, Item, NodeState, WallTurn],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -64,6 +67,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     await orm.schema.clear();
     const em = orm.em.fork();
     itemDao = new ItemDao(em);
+    wallTurns = new WallTurnDao(em);
     const runDao = new RunDao(em);
     const waterfall = new ChatWaterfallService(
       em,
@@ -87,6 +91,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           }),
         }),
       } as unknown as AgentAdapterRegistry,
+      wallTurns,
     );
     const run = new Run();
     run.id = 'source';
@@ -706,6 +711,15 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           runId: 'wf-new',
           turns: 2,
           costUsd: 4,
+          calls: 0,
+          nodes: [
+            expect.objectContaining({
+              node: 'dev',
+              turns: 2,
+              workedMs: 8_000,
+              costUsd: 4,
+            }),
+          ],
           pullRequests: [
             {
               pullRequest: 'o/r#7',
@@ -715,9 +729,22 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
             },
           ],
         }),
-        expect.objectContaining({ runId: 'wf-old', turns: 1, costUsd: 1 }),
+        expect.objectContaining({
+          runId: 'wf-old',
+          turns: 1,
+          costUsd: 1,
+          nodes: [
+            expect.objectContaining({
+              node: 'dev',
+              turns: 1,
+              workedMs: 4_000,
+              costUsd: 1,
+            }),
+          ],
+        }),
         { runId: 'wf-gone', gone: true },
       ]);
+      expect(answer.calls).toEqual([]);
       expect(answer.models).toEqual([
         expect.objectContaining({
           node: 'dev',
@@ -735,6 +762,53 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           costUsd: 1,
         }),
       ]);
+    });
+
+    // cursor reports no timing: its working time is the wall clock's ledger,
+    // and its completed turn is drawn from its lane's previous row.
+    it("times a node its CLI did not time by the wall clock, up to the run's snapshot", async () => {
+      await row('wf-old', 2, 'message', { text: 'checking' }, 100, 'qa');
+      await row('wf-old', 3, 'turn_complete', { usage: {} }, 100.002, 'qa');
+      await wallTurns.record('wf-old', [
+        { seq: 3, nodeId: 'qa', ms: 90_000 },
+        // Past the run's snapshot.
+        { seq: 5, nodeId: 'qa', ms: 40_000 },
+      ]);
+      const wider = {
+        ...scope,
+        workflow: {
+          slug: 'team',
+          runs: [{ runId: 'wf-old', snapshotSeq: 4, working: false }],
+        },
+      };
+
+      const answer = await reader.read(wider, { view: 'runs' });
+      const [old] = answer.runs as { nodes: Record<string, unknown>[] }[];
+
+      expect(old!.nodes).toEqual([
+        expect.objectContaining({ node: 'dev', workedMs: 4_000 }),
+        expect.objectContaining({
+          node: 'qa',
+          workedMs: 90_000,
+          busyMs: null,
+          criticalPathMs: null,
+        }),
+      ]);
+      expect(answer.nodes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ node: 'qa', workedMs: 90_000 }),
+        ]),
+      );
+      expect(answer.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            node: 'qa',
+            turns: 1,
+            timedTurns: 0,
+            avgTurnMs: null,
+          }),
+        ]),
+      );
     });
 
     it('pages a long comparison rather than dropping runs, and names a run with no rows yet', async () => {
@@ -882,26 +956,42 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       const fork = orm.em.fork();
       const newest = await fork.findOneOrFail(Run, { id: 'wf-new' });
       newest.workflowSnapshot = 'name: Team';
+      newest.customInstructions = 'MINE';
+      newest.replyLanguage = 'Russian';
+      newest.taskInstructions = 'CARD';
       await fork.flush();
 
       expect(await reader.analysedWorkflowOf(scope)).toEqual({
         slug: 'team',
         snapshot: 'name: Team',
+        instructions: {
+          customInstructions: 'MINE',
+          replyLanguage: 'Russian',
+          taskInstructions: 'CARD',
+        },
       });
       expect(
         await reader.analysedWorkflowOf({ ...scope, sourceRunId: 'wf-gone' }),
-      ).toEqual({ slug: 'team', snapshot: null });
+      ).toEqual({ slug: 'team', snapshot: null, instructions: null });
       const older = await fork.findOneOrFail(Run, { id: 'wf-old' });
       older.workflowSnapshot = 'name: Team v1';
       await fork.flush();
-      // A run named reads against its own copy.
+      // A run named reads against its own copy, with its own instructions.
       expect(
         await reader.analysedWorkflowOf(scope, {
           sourceRunId: 'wf-old',
           snapshotSeq: 1,
           sourceWorking: false,
         }),
-      ).toEqual({ slug: 'team', snapshot: 'name: Team v1' });
+      ).toEqual({
+        slug: 'team',
+        snapshot: 'name: Team v1',
+        instructions: {
+          customInstructions: null,
+          replyLanguage: null,
+          taskInstructions: null,
+        },
+      });
       expect(
         await reader.analysedWorkflowOf({
           sourceRunId: 'source',

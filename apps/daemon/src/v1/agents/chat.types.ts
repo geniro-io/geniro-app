@@ -907,6 +907,21 @@ export type AnalysisSource = Pick<
   'sourceRunId' | 'snapshotSeq' | 'sourceWorking'
 >;
 
+/**
+ * The workflow an analysis may read and change, the start copy of the run it
+ * is set against, and what that run's turns were composed with beside the
+ * workflow — null when that run is gone.
+ */
+export interface AnalysedWorkflowRef {
+  slug: string;
+  snapshot: string | null;
+  instructions: {
+    customInstructions: string | null;
+    replyLanguage: string | null;
+    taskInstructions: string | null;
+  } | null;
+}
+
 /** What one read is scoped to: the source, and for a workflow analysis its runs. */
 export type AnalysisReadScope = AnalysisSource & Pick<AnalysisTurn, 'workflow'>;
 
@@ -946,10 +961,22 @@ export interface FoldedRun {
     | 'inputTokens'
     | 'outputTokens'
     | 'costUsd'
+    | 'contextTokens'
+    | 'timingSource'
   >[];
   lanes: readonly Pick<
     RunWaterfallLane,
     'nodeId' | 'agentKind' | 'turns' | 'workedMs' | 'toolCalls' | 'costUsd'
+  >[];
+  /**
+   * Each node's turns its CLI did not time, as the wall-clock ledger measured
+   * them (`wall_turns`) through the run's snapshot — what a lane's CLI-only
+   * `workedMs` lacks.
+   */
+  wallWorkedMs: ReadonlyMap<string | null, number>;
+  calls: readonly Pick<
+    RunWaterfallCall,
+    'callerNodeId' | 'calleeNodeId' | 'status' | 'running' | 'durationMs'
   >[];
   /** The run's whole bill, a polled-spend CLI's included. */
   costUsd: number | null;
@@ -959,7 +986,13 @@ export interface FoldedRun {
   pooledNodes: ReadonlySet<string | null>;
   timeline: Pick<
     ThreadTimeline,
-    'wallMs' | 'activeMs' | 'waitingOnUserMs' | 'tools'
+    | 'wallMs'
+    | 'activeMs'
+    | 'waitingOnUserMs'
+    | 'criticalPathMs'
+    | 'criticalPath'
+    | 'nodes'
+    | 'tools'
   >;
 }
 
@@ -968,11 +1001,61 @@ export interface RunFigures {
   wallMs: number;
   activeMs: number;
   waitingOnUserMs: number;
+  criticalPathMs: number;
   turns: number;
   failedTurns: number;
   cancelledTurns: number;
   failedToolCalls: number;
+  /** Agent-to-agent calls dispatched. */
+  calls: number;
   costUsd: number | null;
+}
+
+/** One node's work in ONE analysed run. */
+export interface RunNodeFigures {
+  node: string;
+  agent: AgentKind | null;
+  turns: number;
+  failedTurns: number;
+  cancelledTurns: number;
+  /**
+   * Its working time: the CLI's own, plus the wall clock's for turns its CLI
+   * did not time — null when neither measured any.
+   */
+  workedMs: number | null;
+  /**
+   * Wall time in its turns blocked on neither a callee nor the user. This and
+   * the three below are null when a turn of it has no measured span (a
+   * completed turn its CLI did not time is drawn, not measured).
+   */
+  busyMs: number | null;
+  /** Wall time in its turns blocked on a synchronous call it made. */
+  waitingOnCalleeMs: number | null;
+  /** Wall time in its turns blocked on a card for the user. */
+  waitingOnUserMs: number | null;
+  /** How much of the run's critical path was this node's work. */
+  criticalPathMs: number | null;
+  toolCalls: number;
+  failedToolCalls: number;
+  costUsd: number | null;
+  /** The largest context reading any of its turns reported. */
+  maxContextTokens: number | null;
+}
+
+/** One caller→callee edge's calls, summed over every analysed run. */
+export interface CallFigures {
+  caller: string;
+  callee: string;
+  /** How many of the analysed runs made a call on this edge. */
+  runs: number;
+  calls: number;
+  /** Answered with a status other than "ok". */
+  failedCalls: number;
+  /** Not answered yet at the run's snapshot, drawn up to it. */
+  runningCalls: number;
+  totalMs: number;
+  avgMs: number;
+  maxMs: number;
 }
 
 /** One node's work summed over every analysed run, from its lanes. */
@@ -984,6 +1067,7 @@ export interface NodeFigures {
   turns: number;
   failedTurns: number;
   cancelledTurns: number;
+  /** The CLI's own working time plus the wall clock's for turns it did not time. */
   workedMs: number | null;
   toolCalls: number;
   costUsd: number | null;
@@ -1013,8 +1097,15 @@ export interface ModelFigures {
   cancelledTurns: number;
   /** Turns still in progress at their run's snapshot. */
   runningTurns: number;
+  /**
+   * Of `turns`, those with a measured span — what `durationMs` sums and
+   * `avgTurnMs` divides by. A completed turn its CLI did not time is drawn,
+   * not measured.
+   */
+  timedTurns: number;
   durationMs: number;
-  avgTurnMs: number;
+  /** Null when no turn was timed. */
+  avgTurnMs: number | null;
   toolCalls: number;
   inputTokens: number | null;
   outputTokens: number | null;

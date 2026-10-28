@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { FoldedRun } from '../chat.types';
 import {
+  callFigures,
   configuredModels,
   modelFigures,
   nodeFigures,
   runFigures,
+  runNodeFigures,
 } from './workflow-runs-fold';
 
 type Turn = FoldedRun['turns'][number];
@@ -26,6 +28,8 @@ function turn(patch: Partial<Turn>): Turn {
     inputTokens: 100,
     outputTokens: 10,
     costUsd: 0.5,
+    contextTokens: null,
+    timingSource: 'cli',
     ...patch,
   };
 }
@@ -51,6 +55,8 @@ function run(
     runId,
     turns,
     lanes: [lane({}), lane({ nodeId: 'qa', agentKind: 'cursor-agent' })],
+    calls: [],
+    wallWorkedMs: new Map(),
     costUsd: 9,
     nodeModels: new Map(),
     pooledNodes: new Set(),
@@ -58,8 +64,59 @@ function run(
       wallMs: 60_000,
       activeMs: 50_000,
       waitingOnUserMs: 5_000,
+      criticalPathMs: 40_000,
+      criticalPath: [],
+      nodes: [],
       tools: [],
     },
+    ...patch,
+  };
+}
+
+type Tool = FoldedRun['timeline']['tools'][number];
+
+function tool(patch: Partial<Tool>): Tool {
+  return {
+    seq: 1,
+    resultSeq: 2,
+    nodeId: 'dev',
+    name: 'Bash',
+    startMs: 0,
+    durationMs: 1,
+    open: false,
+    delegate: false,
+    failed: false,
+    ...patch,
+  };
+}
+
+type NodeTime = FoldedRun['timeline']['nodes'][number];
+
+function nodeTime(patch: Partial<NodeTime>): NodeTime {
+  return {
+    nodeId: 'dev',
+    inTurnsMs: 0,
+    waitingOnCalleeMs: 0,
+    waitingOnUserMs: 0,
+    busyMs: 0,
+    turns: 0,
+    toolCalls: 0,
+    delegateToolCalls: 0,
+    toolMs: 0,
+    delegateToolMs: 0,
+    ...patch,
+  };
+}
+
+type Call = FoldedRun['calls'][number];
+
+function call(patch: Partial<Call>): Call {
+  return {
+    callerNodeId: 'lead',
+    calleeNodeId: 'dev',
+    status: 'ok',
+    running: false,
+    durationMs: 1_000,
     ...patch,
   };
 }
@@ -86,6 +143,7 @@ describe('modelFigures', () => {
     expect(rows[0]).toMatchObject({
       runs: 1,
       turns: 30,
+      timedTurns: 30,
       durationMs: 30_000,
       avgTurnMs: 1_000,
       toolCalls: 60,
@@ -212,6 +270,30 @@ describe('modelFigures', () => {
     ]);
   });
 
+  // cursor reports no timing: its completed turn is drawn from the lane's
+  // previous row so the lane shows, a span of milliseconds.
+  it('counts a completed turn its CLI did not time, but times only the measured ones', () => {
+    const [row] = modelFigures([
+      run('r1', [
+        turn({ durationMs: 4_000 }),
+        turn({ timingSource: 'derived', durationMs: 2 }),
+        // Bracketed by status rows: a measured span.
+        turn({ timingSource: 'derived', outcome: 'failed', durationMs: 6_000 }),
+      ]),
+    ]);
+    const [untimed] = modelFigures([
+      run('r2', [turn({ timingSource: 'derived', durationMs: 2 })]),
+    ]);
+
+    expect(row).toMatchObject({
+      turns: 3,
+      timedTurns: 2,
+      durationMs: 10_000,
+      avgTurnMs: 5_000,
+    });
+    expect(untimed).toMatchObject({ turns: 1, timedTurns: 0, avgTurnMs: null });
+  });
+
   it('keeps a figure no turn reported as null, never zero', () => {
     const [row] = modelFigures([
       run('r1', [turn({ costUsd: null, inputTokens: null })]),
@@ -233,8 +315,15 @@ describe('nodeFigures', () => {
         lanes: [
           lane({ turns: 7, costUsd: 3, workedMs: 9_000 }),
           // A polled-spend CLI prices no turn; its lane carries the bill.
-          lane({ nodeId: 'qa', agentKind: 'cursor-agent', costUsd: 4 }),
+          lane({
+            nodeId: 'qa',
+            agentKind: 'cursor-agent',
+            costUsd: 4,
+            workedMs: null,
+          }),
         ],
+        // Its turns are timed by the wall clock alone.
+        wallWorkedMs: new Map([['qa', 7_000]]),
       }),
       run('r2', [], {
         lanes: [lane({ turns: 5, costUsd: 1, workedMs: null })],
@@ -258,6 +347,7 @@ describe('nodeFigures', () => {
         node: 'qa',
         agent: 'cursor-agent',
         runs: 1,
+        workedMs: 7_000,
         costUsd: 4,
       }),
     ]);
@@ -277,23 +367,15 @@ describe('runFigures', () => {
           ],
           {
             lanes: [lane({ turns: 4 }), lane({ nodeId: 'qa', turns: 2 })],
+            calls: [call({}), call({ status: 'failed' })],
             timeline: {
               wallMs: 60_000,
               activeMs: 50_000,
               waitingOnUserMs: 5_000,
-              tools: [
-                {
-                  seq: 1,
-                  resultSeq: 2,
-                  nodeId: 'dev',
-                  name: 'Bash',
-                  startMs: 0,
-                  durationMs: 1,
-                  open: false,
-                  delegate: false,
-                  failed: true,
-                },
-              ],
+              criticalPathMs: 42_000,
+              criticalPath: [],
+              nodes: [],
+              tools: [tool({ failed: true })],
             },
           },
         ),
@@ -302,12 +384,212 @@ describe('runFigures', () => {
       wallMs: 60_000,
       activeMs: 50_000,
       waitingOnUserMs: 5_000,
+      criticalPathMs: 42_000,
       turns: 6,
       failedTurns: 1,
       cancelledTurns: 1,
       failedToolCalls: 1,
+      calls: 2,
       costUsd: 9,
     });
+  });
+});
+
+describe('runNodeFigures', () => {
+  it("states each node's own share of one run: its time working and blocked, its critical path, tools and bill", () => {
+    const rows = runNodeFigures(
+      run(
+        'r1',
+        [
+          // More turns than any page of rows holds.
+          ...Array.from({ length: 45 }, () => turn({ contextTokens: 10_000 })),
+          turn({ outcome: 'failed', contextTokens: 80_000 }),
+          turn({ nodeId: 'qa', outcome: 'cancelled' }),
+        ],
+        {
+          lanes: [
+            lane({ turns: 46, workedMs: 300_000, toolCalls: 90, costUsd: 7 }),
+            lane({
+              nodeId: 'qa',
+              agentKind: 'cursor-agent',
+              workedMs: null,
+              costUsd: null,
+            }),
+          ],
+          timeline: {
+            wallMs: 600_000,
+            activeMs: 500_000,
+            waitingOnUserMs: 30_000,
+            criticalPathMs: 400_000,
+            criticalPath: [
+              { kind: 'work', nodeId: 'dev', startMs: 0, durationMs: 250_000 },
+              {
+                kind: 'waiting_on_user',
+                nodeId: 'dev',
+                startMs: 250_000,
+                durationMs: 30_000,
+              },
+              {
+                kind: 'work',
+                nodeId: 'qa',
+                startMs: 280_000,
+                durationMs: 20_000,
+              },
+              {
+                kind: 'work',
+                nodeId: 'dev',
+                startMs: 300_000,
+                durationMs: 100_000,
+              },
+            ],
+            nodes: [
+              nodeTime({
+                inTurnsMs: 420_000,
+                busyMs: 350_000,
+                waitingOnCalleeMs: 40_000,
+                waitingOnUserMs: 30_000,
+              }),
+            ],
+            tools: [
+              tool({ failed: true }),
+              tool({ failed: true, delegate: true }),
+              tool({ nodeId: 'qa', failed: true }),
+              tool({}),
+            ],
+          },
+        },
+      ),
+    );
+
+    expect(rows).toEqual([
+      {
+        node: 'dev',
+        agent: 'claude',
+        turns: 46,
+        failedTurns: 1,
+        cancelledTurns: 0,
+        workedMs: 300_000,
+        busyMs: 350_000,
+        waitingOnCalleeMs: 40_000,
+        waitingOnUserMs: 30_000,
+        criticalPathMs: 350_000,
+        toolCalls: 90,
+        failedToolCalls: 2,
+        costUsd: 7,
+        maxContextTokens: 80_000,
+      },
+      {
+        node: 'qa',
+        agent: 'cursor-agent',
+        turns: 1,
+        failedTurns: 0,
+        cancelledTurns: 1,
+        workedMs: null,
+        busyMs: null,
+        waitingOnCalleeMs: null,
+        waitingOnUserMs: null,
+        criticalPathMs: 20_000,
+        toolCalls: 2,
+        failedToolCalls: 1,
+        costUsd: null,
+        maxContextTokens: null,
+      },
+    ]);
+  });
+
+  // cursor reports no timing: the wall clock's ledger times its turns, and
+  // the waterfall draws each completed one from its lane's previous row.
+  it("times a node its CLI did not time by the wall clock, and leaves the drawn spans' figures unmeasured", () => {
+    const [qa] = runNodeFigures(
+      run(
+        'r1',
+        [
+          turn({ nodeId: 'qa', timingSource: 'derived', durationMs: 2 }),
+          turn({
+            nodeId: 'qa',
+            timingSource: 'derived',
+            outcome: 'failed',
+            durationMs: 9_000,
+          }),
+        ],
+        {
+          lanes: [
+            lane({
+              nodeId: 'qa',
+              agentKind: 'cursor-agent',
+              turns: 2,
+              workedMs: null,
+            }),
+          ],
+          wallWorkedMs: new Map([['qa', 5_249_368]]),
+          timeline: {
+            wallMs: 600_000,
+            activeMs: 500_000,
+            waitingOnUserMs: 0,
+            criticalPathMs: 9_002,
+            criticalPath: [
+              { kind: 'work', nodeId: 'qa', startMs: 0, durationMs: 9_002 },
+            ],
+            nodes: [
+              nodeTime({ nodeId: 'qa', inTurnsMs: 9_002, busyMs: 9_002 }),
+            ],
+            tools: [],
+          },
+        },
+      ),
+    );
+
+    expect(qa).toMatchObject({
+      node: 'qa',
+      turns: 2,
+      workedMs: 5_249_368,
+      busyMs: null,
+      waitingOnCalleeMs: null,
+      waitingOnUserMs: null,
+      criticalPathMs: null,
+    });
+  });
+});
+
+describe('callFigures', () => {
+  it('sums every call on each caller→callee edge over the runs, longest total first', () => {
+    const rows = callFigures([
+      run('r1', [], {
+        calls: [
+          ...Array.from({ length: 40 }, () => call({ durationMs: 2_000 })),
+          call({ status: 'failed', durationMs: 9_000 }),
+          call({ calleeNodeId: 'qa', durationMs: 500 }),
+        ],
+      }),
+      run('r2', [], {
+        calls: [call({ status: null, running: true, durationMs: 4_000 })],
+      }),
+    ]);
+
+    expect(rows).toEqual([
+      {
+        caller: 'lead',
+        callee: 'dev',
+        runs: 2,
+        calls: 42,
+        failedCalls: 1,
+        runningCalls: 1,
+        totalMs: 93_000,
+        avgMs: 2_214,
+        maxMs: 9_000,
+      },
+      {
+        caller: 'lead',
+        callee: 'qa',
+        runs: 1,
+        calls: 1,
+        failedCalls: 0,
+        runningCalls: 0,
+        totalMs: 500,
+        avgMs: 500,
+        maxMs: 500,
+      },
+    ]);
   });
 });
 

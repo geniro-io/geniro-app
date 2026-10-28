@@ -69,6 +69,17 @@ describe('WallTurnDao (in-memory sqlite)', () => {
     expect([...(await dao.chatSums(['run-1']))]).toEqual([['run-1', 4_000]]);
   });
 
+  it("sums a node's turns only through the seq it is asked to stop at", async () => {
+    await dao.record('run-1', [
+      { seq: 3, nodeId: 'qa', ms: 1_000 },
+      { seq: 7, nodeId: 'qa', ms: 2_000 },
+      { seq: 8, nodeId: 'qa', ms: 4_000 },
+    ]);
+
+    expect((await dao.nodeSums('run-1', undefined, 7)).get('qa')).toBe(3_000);
+    expect((await dao.nodeSums('run-1')).get('qa')).toBe(7_000);
+  });
+
   it("sums a run's whole wall time — every node's and a chat's — and no other run's", async () => {
     await dao.record('run-1', [
       { seq: 1, nodeId: 'qa', ms: 1_000 },

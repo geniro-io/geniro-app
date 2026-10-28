@@ -6,6 +6,7 @@ import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { type ItemKind, ItemKindSchema } from '../../runs/runs.types';
 import {
+  type AnalysedWorkflowRef,
   ANALYSIS_SPAN_KINDS,
   type AnalysisReadScope,
   type AnalysisSource,
@@ -16,18 +17,21 @@ import {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { WallTurnDao } from '../dao/wall-turn.dao';
 import { analysedSourceOf } from '../utils/analysed-runs';
 import { CHAT_LANE, laneOf } from '../utils/analysis-lane';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { asRecord } from '../utils/json-util';
 import { readRunOutcomes } from '../utils/run-outcomes';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
-import { userInstructionFiles } from '../utils/user-instruction-files';
+import { sizedUserInstructionFiles } from '../utils/user-instruction-files';
 import {
+  callFigures,
   configuredModels,
   modelFigures,
   nodeFigures,
   runFigures,
+  runNodeFigures,
 } from '../utils/workflow-runs-fold';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ThreadTimelineService } from './thread-timeline.service';
@@ -135,6 +139,7 @@ export class ThreadReaderService {
     private readonly itemDao: ItemDao,
     private readonly timelines: ThreadTimelineService,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly wallTurns: WallTurnDao,
   ) {}
 
   async read(
@@ -246,6 +251,12 @@ export class ThreadReaderService {
         runId: run.id,
         turns: reading.fold.turns,
         lanes: reading.fold.lanes,
+        calls: reading.fold.calls,
+        wallWorkedMs: await this.wallTurns.nodeSums(
+          analysed.runId,
+          em,
+          analysed.snapshotSeq,
+        ),
         costUsd: reading.fold.totals.costUsd,
         ...configuredModels(run.workflowSnapshot),
         timeline: reading.timeline,
@@ -254,6 +265,7 @@ export class ThreadReaderService {
       runs.push({
         ...header,
         ...runFigures(entry),
+        nodes: runNodeFigures(entry),
         ...(pullRequests.length === 0 ? {} : { pullRequests }),
       });
     }
@@ -263,6 +275,7 @@ export class ThreadReaderService {
       workflow: slug,
       runs,
       nodes: nodeFigures(folded),
+      calls: callFigures(folded),
       models: modelFigures(folded),
       next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=workflow runId=… is the workflow as the library holds it now, against that run's copy.",
     });
@@ -295,14 +308,20 @@ export class ThreadReaderService {
    * The library slug and run-start snapshot of a WORKFLOW source, or null for
    * a plain chat (or a source that is gone).
    */
-  async workflowOf(
-    sourceRunId: string,
-  ): Promise<{ slug: string; snapshot: string | null } | null> {
+  async workflowOf(sourceRunId: string): Promise<AnalysedWorkflowRef | null> {
     const run = await this.runDao.getById(sourceRunId, this.em.fork());
     if (run === null || run.workflowId === null) {
       return null;
     }
-    return { slug: run.workflowId, snapshot: run.workflowSnapshot };
+    return {
+      slug: run.workflowId,
+      snapshot: run.workflowSnapshot,
+      instructions: {
+        customInstructions: run.customInstructions,
+        replyLanguage: run.replyLanguage,
+        taskInstructions: run.taskInstructions,
+      },
+    };
   }
 
   /**
@@ -315,15 +334,14 @@ export class ThreadReaderService {
     turn: AnalysisReadScope,
     /** The analysed run whose start copy the library is set against. */
     read: AnalysisSource = turn,
-  ): Promise<{ slug: string; snapshot: string | null } | null> {
+  ): Promise<AnalysedWorkflowRef | null> {
     const source = await this.workflowOf(read.sourceRunId);
     if (!turn.workflow) {
       return source;
     }
-    return {
-      slug: turn.workflow.slug,
-      snapshot: source?.slug === turn.workflow.slug ? source.snapshot : null,
-    };
+    return source?.slug === turn.workflow.slug
+      ? source
+      : { slug: turn.workflow.slug, snapshot: null, instructions: null };
   }
 
   private async overview(source: AnalysisSource, run: Run): Promise<Answer> {
@@ -356,7 +374,7 @@ export class ThreadReaderService {
         // A workflow's agents differ per node: view=workflow lists theirs.
         ...(kind === 'chat' && run.agentKind !== null
           ? {
-              userInstructions: userInstructionFiles(this.adapters, [
+              userInstructions: await sizedUserInstructionFiles(this.adapters, [
                 { agent: run.agentKind, configDir: run.configDir },
               ]),
             }

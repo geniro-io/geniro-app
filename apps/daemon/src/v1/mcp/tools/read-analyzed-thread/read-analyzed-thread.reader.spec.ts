@@ -120,7 +120,11 @@ describe('ReadAnalyzedThreadTool', () => {
     };
     const reader = {
       analysedWorkflowOf: () =>
-        Promise.resolve({ slug: 'dev-team', snapshot: null }),
+        Promise.resolve({
+          slug: 'dev-team',
+          snapshot: null,
+          instructions: null,
+        }),
     };
 
     const first = textOf(
@@ -140,6 +144,35 @@ describe('ReadAnalyzedThreadTool', () => {
     expect(page.next.offset).toBeGreaterThan(0);
   });
 
+  it("measures the workflow view's instructions with what the run itself was composed with", async () => {
+    const instructions = {
+      customInstructions: 'MINE',
+      replyLanguage: 'Russian',
+      taskInstructions: 'CARD',
+    };
+    const describeWorkflow = vi.fn<WorkflowChangeService['describe']>(() =>
+      Promise.resolve({ slug: 'dev-team' }),
+    );
+
+    await tool(
+      {
+        analysedWorkflowOf: () =>
+          Promise.resolve({
+            slug: 'dev-team',
+            snapshot: 'name: Team',
+            instructions,
+          }),
+      },
+      { describe: describeWorkflow },
+    ).call('read_analyzed_thread', { view: 'workflow' }, CONTEXT);
+
+    expect(describeWorkflow).toHaveBeenCalledWith(
+      'dev-team',
+      'name: Team',
+      instructions,
+    );
+  });
+
   it('tells a plain chat analysis there is no workflow', async () => {
     const result = await tool({
       analysedWorkflowOf: () => Promise.resolve(null),
@@ -150,7 +183,7 @@ describe('ReadAnalyzedThreadTool', () => {
 
   it('refuses a workflow view of a run the analysis does not read, reading nothing', async () => {
     const analysedWorkflowOf = vi.fn(() =>
-      Promise.resolve({ slug: 'dev-team', snapshot: null }),
+      Promise.resolve({ slug: 'dev-team', snapshot: null, instructions: null }),
     );
 
     const result = await tool({ analysedWorkflowOf }).call(

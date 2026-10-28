@@ -12,12 +12,17 @@ import { join } from 'node:path';
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
+import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
+import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import type { ItemDao } from '../../agents/dao/item.dao';
-import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { Workflow } from '../graphs.types';
 import { configDirToken } from '../utils/config-dir-redaction';
 import { WORKFLOW_BACKUP_DIR } from '../utils/workflow-backup';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
+import { InstructionSizesService } from './instruction-sizes.service';
 import {
   type WorkflowChange,
   type WorkflowChangeAuthority,
@@ -73,6 +78,13 @@ describe('WorkflowChangeService', () => {
           }),
         }),
       } as unknown as AgentAdapterRegistry,
+      new InstructionSizesService(
+        new AgentAdapterRegistry([
+          new ClaudeAdapter(),
+          new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
+          new CodexAdapter({ clientVersion: '1.0.0' }),
+        ]),
+      ),
     );
   });
 
@@ -549,14 +561,108 @@ describe('WorkflowChangeService', () => {
       workflowSnapshotOf(ran),
     );
 
+    const unmeasured = { exists: false, chars: null, approxTokens: null };
     expect(described.userInstructions).toEqual([
-      { agent: 'claude', configDir: null, path: 'home-of-claude/RULES.md' },
-      { agent: 'codex', configDir: null, path: 'home-of-codex/RULES.md' },
+      {
+        agent: 'claude',
+        configDir: null,
+        path: 'home-of-claude/RULES.md',
+        ...unmeasured,
+      },
+      {
+        agent: 'codex',
+        configDir: null,
+        path: 'home-of-codex/RULES.md',
+        ...unmeasured,
+      },
       {
         agent: 'claude',
         configDir: '/profiles/work',
         path: '/profiles/work/RULES.md',
+        ...unmeasured,
       },
+    ]);
+  });
+
+  it("measures every agent's always-on instructions as the library composes them, with the run's own settings and card", async () => {
+    const roles: Workflow = {
+      ...WF,
+      nodes: [
+        { ...WF.nodes[0]!, role: 'Build it.' } as Workflow['nodes'][number],
+        {
+          ...WF.nodes[1]!,
+          role: 'Review it.',
+        } as Workflow['nodes'][number],
+      ],
+    };
+    await store.save('dev-team', roles);
+    const ran: Workflow = {
+      ...roles,
+      nodes: [
+        roles.nodes[0]!,
+        {
+          ...roles.nodes[1]!,
+          role: `Review it. ${'Be thorough. '.repeat(50)}`,
+        } as Workflow['nodes'][number],
+      ],
+    };
+
+    const described = await service.describe(
+      'dev-team',
+      workflowSnapshotOf(ran),
+      {
+        customInstructions: 'MINE',
+        replyLanguage: null,
+        taskInstructions: 'CARD',
+      },
+    );
+    const sizes = described.instructionSizes as {
+      nodeId: string;
+      totalChars: number;
+      approxTokens: number;
+      parts: { source: string; chars: number }[];
+      inThisRun?: { totalChars: number; approxTokens: number };
+    }[];
+
+    expect(sizes.map((node) => node.nodeId)).toEqual(['builder', 'reviewer']);
+    const [builder, reviewer] = sizes;
+    expect(builder!.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: 'customInstructions', chars: 4 }),
+        expect.objectContaining({ source: 'taskInstructions', chars: 4 }),
+        expect.objectContaining({ source: 'role', chars: 9 }),
+      ]),
+    );
+    expect(builder!.parts.map((part) => part.source)).not.toContain(
+      'replyLanguage',
+    );
+    expect(builder).not.toHaveProperty('inThisRun');
+    // The run paid for the longer role it started with.
+    expect(reviewer!.inThisRun!.totalChars).toBe(
+      reviewer!.totalChars + 'Be thorough. '.repeat(50).trim().length + 1,
+    );
+  });
+
+  it('measures each user-instructions file as it stands now', async () => {
+    await writeFile(join(dir, 'RULES.md'), 'x'.repeat(41));
+    const sized = new WorkflowChangeService(
+      { fork: () => ({}) } as unknown as EntityManager,
+      store,
+      {} as ItemDao,
+      {
+        for: () => ({
+          userInstructionsFile: () => ({ path: join(dir, 'RULES.md') }),
+        }),
+      } as unknown as AgentAdapterRegistry,
+      new InstructionSizesService(
+        new AgentAdapterRegistry([new ClaudeAdapter()]),
+      ),
+    );
+
+    const described = await sized.describe('dev-team', null);
+
+    expect(described.userInstructions).toEqual([
+      expect.objectContaining({ exists: true, chars: 41, approxTokens: 11 }),
     ]);
   });
 });

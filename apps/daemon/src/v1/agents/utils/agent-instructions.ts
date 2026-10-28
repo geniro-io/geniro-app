@@ -15,7 +15,8 @@
  */
 
 /**
- * What geniro tells every agent about the surface its words land on.
+ * What geniro tells every agent about the surface its words land on, and about
+ * the tools of its own it offers there.
  *
  * **This exists to CONTRADICT the CLI's own system prompt, not merely to
  * inform.** Claude Code ships the line `- Text you output outside of tool use
@@ -53,11 +54,25 @@
  * a file and embed it, which is the same job one of those tools does properly —
  * a live card instead of a picture of one. The preamble leads the instruction
  * stack, so its phrasing is the default habit, and a default that competes with
- * a tool wins by being read first. It still names no tool: this text is not
- * gated on the MCP endpoint having been delivered (on ACP it is said once per
- * session and never repeated), so it must stay true on a turn where none of
- * them is registered — hence "where a tool is offered", which is a condition
- * the agent can check and geniro cannot.
+ * a tool wins by being read first. Every tool it names is named conditionally:
+ * this text is not gated on the MCP endpoint having been delivered (on ACP it
+ * is said once per session and never repeated), and a workflow node is offered
+ * only some of them, so it must stay true on a turn where none of them is
+ * registered — hence "where a tool is offered" and "a tool missing from your
+ * list is not offered", conditions the agent can check and geniro cannot.
+ *
+ * The tools section exists because a tool's own description is not read until
+ * the agent reaches for the tool: claude lists MCP tools by name only and loads
+ * a schema on demand, so nothing in its context said WHEN `monitor` or
+ * `publish_action` was the move. Measured over this machine's 360 plain claude
+ * chats from 2026-09-15 to 2026-10-28: a `sleep` polling loop in 161 of them
+ * and a CI wait (`gh run watch`, `gh pr checks`) in 155, against geniro's
+ * `monitor` in 1 (claude's own `Monitor`, before it was withheld, in 12),
+ * `publish_action` in 3 and `notify_user` in none. So each line names a
+ * situation and its tool, and leaves the how to the tool's description. The
+ * `Monitor` sentence answers claude's own Bash tool, whose description and
+ * `sleep` refusal (2.1.295) send the model to a `Monitor` tool geniro withholds
+ * (`CLAUDE_WITHHELD_TOOLS`); it names no CLI, so elsewhere it says nothing.
  *
  * The paragraph about text BEFORE A TOOL CALL is the one claim here about the
  * API rather than the renderer, and it is measured: on Opus 5.5 (and Fable
@@ -91,17 +106,28 @@ Renders:
 - GitHub-flavored markdown — headings, lists, tables, task lists, syntax-highlighted code fences, links, blockquotes.
 - Images, written as markdown: \`![alt](/full/path/to/file.png)\`. Give the FULL path to a file on this machine, always — a relative path is measured against this conversation's own working directory, which is frequently not the directory you wrote the file in, and the picture then fails to load. When you have an image the user should see — a screenshot you captured, a diagram you rendered to a file — embed it this way instead of only naming its path. This is for a picture you already have: where a tool is offered for drawing the thing itself, that tool's output is a live card in this transcript, so prefer it over rendering your own image of the same thing.
 
-- A PAGE of your own, where the \`show_artifact\` tool is offered: an HTML document this app shows beside the conversation and opens full-screen, with your own layout and working interaction. Reach for it when the answer is something to look at rather than to read in order; the tool's own description says what it can and cannot do.
-
-- A BUTTON the user can press later, where the \`publish_action\` tool is offered: it is shown in this chat, and a press sends the message you gave it — to you, or in a workflow to the agent the user's messages go to — stops a process you left running, or runs a command once the user has confirmed it. Reach for it when your next step waits on something only the user will see happen, such as a pull request being merged, to let them stop a preview server once they are done with it, or to let them run a step only they should decide to run.
-
 Does not render:
 - Remote image URLs in markdown (\`![](https://…)\`). This app's content security policy refuses them; only local file paths work there. Where \`show_gallery\` is offered, it takes a picture's URL itself.
 - Terminal control sequences, ANSI colour codes, and box-drawing used for alignment.
 
 Text you write before a tool call in the same response may reach the user only as a one-line summary, not in full. So when you ask the user a question, put everything they need to decide into the question itself — the question text, each option's description, and, where the question tool takes one, an option's preview, which is shown in full as markdown. Anything else the user must read in full goes in a message that ends your turn, with no tool call after it.
 
-Nothing else about how you work changes, including how long your responses should be.`;
+Nothing else about how you write your replies changes, including how long they should be.
+
+## Geniro's own tools
+
+Beside your CLI's tools, this app offers tools of its own, named below (in your tool list a name may carry a prefix naming this app's server). When a situation below comes up, use its tool rather than a workaround; the tool's own description says how. Where your CLI lists tools by name only, load the tool first. A tool missing from your list is not offered on this turn.
+
+- \`monitor\`: waiting on something slow that reports as it goes — a CI run, a deploy, a long build or test run, a log line you need, or a condition you would otherwise re-check in a loop. Start it as a monitor and, with nothing else to do, end your turn: its output wakes you, so never poll it with sleep loops. Where your CLI's own instructions name a \`Monitor\` tool, this is the one to use.
+- \`publish_action\`: a BUTTON in this chat. A press sends the message you gave it — to you, or in a workflow to the agent the user's messages go to — stops a process you left running, or runs a command once the user has confirmed it. Use it when your next step waits on something only the user will see happen, such as a pull request being merged; whenever you leave a server or watcher running for the user, so they can stop it once they are done with it; and for a step only they should decide to run.
+- \`notify_user\`: once, at the very end, when you have finished but leave something running for the user, such as a dev server.
+- \`show_chart\` for several readings of one thing, \`show_metrics\` for one current figure each of several things, \`show_comparison\` for options you weigh against the same criteria and pick between, \`show_gallery\` for several pictures that belong together: each draws a live card, so reach for it before writing the same data as a table, an ASCII chart or a list of paths.
+- \`show_artifact\`: a PAGE of your own — an HTML document this app shows beside the conversation and opens full-screen, with your own layout and working interaction — for an answer to look at rather than read in order, such as a report or a dashboard.
+- \`report_findings\`: the defects a code review found, all in one call.
+- \`propose_plan\`: a plan the user approves before you start, when you have not been told to go ahead and the request could be read more than one way or touches something hard to undo. \`propose_patch\`: a change to one file you would rather hand the user to apply than make yourself.
+- \`search_chats\`, then \`read_chat_context\`: an earlier decision, fix or context from another conversation.
+- \`list_tasks\`, \`get_task\`, \`create_task\`, \`update_task\`: the user's task board, when they ask to find, file or change work on it.
+- \`read_workflows\`, then \`propose_workflow\`: a saved team of agents (a workflow) the user asks you to build or change.`;
 
 /**
  * The instruction parts one turn contributes, in the order they are joined.

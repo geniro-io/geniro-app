@@ -28,14 +28,22 @@ export interface ProposalDiffField {
   after: string;
 }
 
+export interface ProposalDiffEntry {
+  id: string;
+  fields: ProposalDiffField[];
+}
+
 export interface ProposalDiff {
   identical: boolean;
   workflowFields: string[];
   addedNodes: string[];
   removedNodes: string[];
-  changedNodes: { id: string; fields: ProposalDiffField[] }[];
+  changedNodes: ProposalDiffEntry[];
   addedEdges: string[];
   removedEdges: string[];
+  addedStages: string[];
+  removedStages: string[];
+  changedStages: ProposalDiffEntry[];
 }
 
 export interface ParsedWorkflowProposal {
@@ -159,6 +167,19 @@ function isEdge(value: unknown): boolean {
   );
 }
 
+function isStage(value: unknown): boolean {
+  const stage = record(value);
+  return (
+    stage !== null &&
+    isString(stage.id) &&
+    isString(stage.title) &&
+    isString(stage.doneWhen) &&
+    optionalString(stage.instructions) &&
+    optionalString(stage.ownerHint) &&
+    (stage.next === undefined || stringList(stage.next) !== null)
+  );
+}
+
 function readWorkflow(value: unknown): Workflow | null {
   const workflow = record(value);
   if (
@@ -168,40 +189,30 @@ function readWorkflow(value: unknown): Workflow | null {
     !Array.isArray(workflow.nodes) ||
     !Array.isArray(workflow.edges) ||
     !workflow.nodes.every(isNode) ||
-    !workflow.edges.every(isEdge)
+    !workflow.edges.every(isEdge) ||
+    !(
+      workflow.stages === undefined ||
+      (Array.isArray(workflow.stages) && workflow.stages.every(isStage))
+    )
   ) {
     return null;
   }
   return workflow as unknown as Workflow;
 }
 
-function readDiff(value: unknown): ProposalDiff | null {
-  const diff = record(value);
-  if (diff === null || typeof diff.identical !== 'boolean') {
+function readChangedEntries(value: unknown): ProposalDiffEntry[] | null {
+  if (!Array.isArray(value)) {
     return null;
   }
-  const lists = {
-    workflowFields: stringList(diff.workflowFields),
-    addedNodes: stringList(diff.addedNodes),
-    removedNodes: stringList(diff.removedNodes),
-    addedEdges: stringList(diff.addedEdges),
-    removedEdges: stringList(diff.removedEdges),
-  };
-  if (Object.values(lists).some((list) => list === null)) {
-    return null;
-  }
-  if (!Array.isArray(diff.changedNodes)) {
-    return null;
-  }
-  const changedNodes: ProposalDiff['changedNodes'] = [];
-  for (const entry of diff.changedNodes) {
-    const node = record(entry);
-    if (node === null || !isString(node.id) || !Array.isArray(node.fields)) {
+  const entries: ProposalDiffEntry[] = [];
+  for (const raw of value) {
+    const entry = record(raw);
+    if (entry === null || !isString(entry.id) || !Array.isArray(entry.fields)) {
       return null;
     }
     const fields: ProposalDiffField[] = [];
-    for (const raw of node.fields) {
-      const field = record(raw);
+    for (const rawField of entry.fields) {
+      const field = record(rawField);
       if (
         field === null ||
         !isString(field.field) ||
@@ -216,16 +227,49 @@ function readDiff(value: unknown): ProposalDiff | null {
         after: field.after,
       });
     }
-    changedNodes.push({ id: node.id, fields });
+    entries.push({ id: entry.id, fields });
+  }
+  return entries;
+}
+
+function readDiff(value: unknown): ProposalDiff | null {
+  const diff = record(value);
+  if (diff === null || typeof diff.identical !== 'boolean') {
+    return null;
+  }
+  const workflowFields = stringList(diff.workflowFields);
+  const addedNodes = stringList(diff.addedNodes);
+  const removedNodes = stringList(diff.removedNodes);
+  const addedEdges = stringList(diff.addedEdges);
+  const removedEdges = stringList(diff.removedEdges);
+  const addedStages = stringList(diff.addedStages);
+  const removedStages = stringList(diff.removedStages);
+  const changedNodes = readChangedEntries(diff.changedNodes);
+  const changedStages = readChangedEntries(diff.changedStages);
+  if (
+    workflowFields === null ||
+    addedNodes === null ||
+    removedNodes === null ||
+    addedEdges === null ||
+    removedEdges === null ||
+    addedStages === null ||
+    removedStages === null ||
+    changedNodes === null ||
+    changedStages === null
+  ) {
+    return null;
   }
   return {
     identical: diff.identical,
-    workflowFields: lists.workflowFields!,
-    addedNodes: lists.addedNodes!,
-    removedNodes: lists.removedNodes!,
+    workflowFields,
+    addedNodes,
+    removedNodes,
     changedNodes,
-    addedEdges: lists.addedEdges!,
-    removedEdges: lists.removedEdges!,
+    addedEdges,
+    removedEdges,
+    addedStages,
+    removedStages,
+    changedStages,
   };
 }
 
@@ -339,7 +383,10 @@ export function proposalScanText(proposal: ParsedWorkflowProposal): string {
   // A changed field's values arrive JSON-quoted and are drawn decoded
   // (`shown`), so the decoded form is scanned too: the quoted form hides a
   // control character behind its `\u` escape.
-  for (const { fields } of proposal.diff?.changedNodes ?? []) {
+  for (const { fields } of [
+    ...(proposal.diff?.changedNodes ?? []),
+    ...(proposal.diff?.changedStages ?? []),
+  ]) {
     for (const { before, after } of fields) {
       strings.push(shown(before), shown(after));
     }
@@ -393,9 +440,9 @@ export type DiffMarker = 'changed' | 'added' | 'removed';
 export interface DiffRow {
   key: string;
   marker: DiffMarker;
-  /** What the subject names: the workflow's own field, a node, a wire. */
-  scope: 'workflow' | 'node' | 'wire';
-  /** A workflow field's name, a node id, or a wire as `from → to (kind)`. */
+  /** What the subject names: the workflow's own field, a node, a wire, a stage. */
+  scope: 'workflow' | 'node' | 'wire' | 'stage';
+  /** A workflow field's name, a node id, a wire as `from → to (kind)`, or a stage id. */
   subject: string;
   /** For a changed field: which one, and from what to what. */
   detail: { field: string; before: string; after: string } | null;
@@ -515,6 +562,32 @@ export function diffRows(diff: ProposalDiff, workflow: Workflow): DiffRow[] {
       marker: 'removed',
       scope: 'wire',
       subject: edge,
+      detail: null,
+      toAuto: false,
+    })),
+    ...diff.addedStages.map((id): DiffRow => ({
+      key: `added-stage:${id}`,
+      marker: 'added',
+      scope: 'stage',
+      subject: id,
+      detail: null,
+      toAuto: false,
+    })),
+    ...diff.changedStages.flatMap(({ id, fields }) =>
+      fields.map(({ field, before, after }): DiffRow => ({
+        key: `changed-stage:${id}:${field}`,
+        marker: 'changed',
+        scope: 'stage',
+        subject: id,
+        detail: { field, before: shown(before), after: shown(after) },
+        toAuto: false,
+      })),
+    ),
+    ...diff.removedStages.map((id): DiffRow => ({
+      key: `removed-stage:${id}`,
+      marker: 'removed',
+      scope: 'stage',
+      subject: id,
       detail: null,
       toAuto: false,
     })),

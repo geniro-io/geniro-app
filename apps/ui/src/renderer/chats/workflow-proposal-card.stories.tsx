@@ -5,6 +5,7 @@ import {
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
+  STAGES_PROPOSAL,
 } from '../__fixtures__/workflow-proposals';
 import { ApprovalCard } from './approval-card';
 import { PROPOSE_WORKFLOW } from './geniro-tool';
@@ -36,6 +37,11 @@ export const PendingNew: Story = {};
 /** A replacement that switches two agents to running unasked. */
 export const PendingReplaceWithAuto: Story = {
   args: { input: REPLACE_TO_AUTO_PROPOSAL },
+};
+
+/** A builder chat's stage change: the walk it proposes and each stage it touches. */
+export const PendingStages: Story = {
+  args: { input: STAGES_PROPOSAL },
 };
 
 export const SettledSaved: Story = {

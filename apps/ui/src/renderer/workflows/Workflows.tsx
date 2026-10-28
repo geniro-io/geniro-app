@@ -56,6 +56,7 @@ import {
 } from '../chats/approval-mode-select';
 import { AutoCompactSelect } from '../chats/auto-compact-select';
 import { ConfigDirSelect } from '../chats/config-dir-select';
+import type { DraftRequest } from '../chats/hosted-chat';
 import { mcpConfigActions } from '../chats/mcp-config-actions';
 import { ModelSelect } from '../chats/model-select';
 import { useAgentContextWindows } from '../chats/use-agent-context-windows';
@@ -93,6 +94,7 @@ import { AgentAvatar } from './agent-avatar';
 import { AgentCallsCard } from './agent-calls-card';
 import { AgentPoolEditor } from './agent-pool-editor';
 import { BuilderStatusBar } from './builder-status-bar';
+import { CanvasStages } from './canvas-stages';
 import { EDGE_TYPES, NODE_TYPES } from './flow-types';
 import {
   autoLayout,
@@ -133,6 +135,7 @@ import {
   modelChangePatch,
 } from './node-schema';
 import { agentCallInfo } from './node-validate';
+import { StageSchemaEditor } from './stage-schema-editor';
 import { useAutosave } from './use-autosave';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
 import { useInstructionSizes } from './use-instruction-sizes';
@@ -181,6 +184,8 @@ const INITIAL_FIT = { maxZoom: 1 };
  *  bar is now always on screen, so a message with no expiry would sit there
  *  as stale news long after the action. */
 const NOTICE_TTL_MS = 6_000;
+const ADD_STAGES_DRAFT = 'Add stages every run of this workflow walks: ';
+const CHANGE_STAGES_DRAFT = 'Change the stages: ';
 
 /**
  * The Workflows page: compose a DAG of agents on a React Flow canvas, backed
@@ -323,6 +328,12 @@ export function Workflows({
   // that workflow: a turn it was following has to be able to report that it
   // ended, or autosave stays suspended and the agent's edit is never reloaded.
   const [chatMounted, setChatMounted] = useState(false);
+  const [chatDraft, setChatDraft] = useState<DraftRequest | null>(null);
+  const chatDraftCount = useRef(0);
+  const [stagesEditorOpen, setStagesEditorOpen] = useState(false);
+  const [stagesEditorFocus, setStagesEditorFocus] = useState<string | null>(
+    null,
+  );
   const [firstChat, setFirstChat] = useState<{
     slug: string;
     agent: CliKind;
@@ -420,6 +431,7 @@ export function Workflows({
         openGeneration.current += 1;
         loadedHashRef.current = hash;
         setStaleCopy(false);
+        setChatDraft(null);
         setActiveSlug(slug);
         setName(workflow.name);
         setDescription(workflow.description ?? '');
@@ -505,6 +517,8 @@ export function Workflows({
     setChatMounted(false);
     setChatWorking(false);
     setChatAwaiting(null);
+    setChatDraft(null);
+    setStagesEditorOpen(false);
     setLeavePrompt(false);
     void refreshList();
   }, [refreshList, setNodes, setEdges]);
@@ -521,6 +535,13 @@ export function Workflows({
     () => nodes.flatMap((node) => (node.type === 'agent' ? [node.id] : [])),
     [nodes],
   );
+
+  const askChat = useCallback((text: string) => {
+    setChatMounted(true);
+    setChatOpen(true);
+    chatDraftCount.current += 1;
+    setChatDraft({ id: chatDraftCount.current, text });
+  }, []);
 
   /** Persist the canvas under the given meta; true on success. */
   const persist = useCallback(
@@ -1873,6 +1894,13 @@ export function Workflows({
             proOptions={PRO_OPTIONS}>
             <Background />
             <Controls />
+            <CanvasStages
+              stages={stages ?? []}
+              onEdit={(stageId) => {
+                setStagesEditorFocus(stageId);
+                setStagesEditorOpen(true);
+              }}
+            />
           </ReactFlow>
         </div>
 
@@ -2393,6 +2421,7 @@ export function Workflows({
           initialDraft={
             firstChat?.slug === activeSlug ? firstChat.draft : undefined
           }
+          draftRequest={chatDraft}
           apis={apis}
           handle={handle}
           client={client}
@@ -2435,6 +2464,26 @@ export function Workflows({
         agentIds={agentIds}
         onClose={() => setRenameOpen(false)}
         onSubmit={(meta) => void renameWorkflow(meta)}
+        {...(activeSlug === null
+          ? {}
+          : {
+              onAskChat: (hasStages: boolean) => {
+                setRenameOpen(false);
+                askChat(hasStages ? CHANGE_STAGES_DRAFT : ADD_STAGES_DRAFT);
+              },
+            })}
+      />
+
+      <StageSchemaEditor
+        open={stagesEditorOpen}
+        stages={stages}
+        agentIds={agentIds}
+        initialSelectedId={stagesEditorFocus}
+        onClose={() => setStagesEditorOpen(false)}
+        onSave={(saved) => {
+          setStages(saved.length > 0 ? saved : undefined);
+          setStagesEditorOpen(false);
+        }}
       />
 
       <WorkflowVersionsDialog

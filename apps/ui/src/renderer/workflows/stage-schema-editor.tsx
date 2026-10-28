@@ -105,12 +105,15 @@ export function StageSchemaEditor({
   open,
   stages,
   agentIds,
+  initialSelectedId = null,
   onClose,
   onSave,
 }: {
   open: boolean;
   stages: readonly WorkflowStage[] | undefined;
   agentIds: readonly string[];
+  /** The stage selected on opening; the first one when absent or unknown. */
+  initialSelectedId?: string | null;
   onClose: () => void;
   onSave: (stages: WorkflowStage[]) => void;
 }): React.JSX.Element {
@@ -126,7 +129,11 @@ export function StageSchemaEditor({
   useEffect(() => {
     if (open) {
       setDraft([...(stages ?? [])]);
-      setSelectedId(stages?.[0]?.id ?? null);
+      setSelectedId(
+        stages?.some((stage) => stage.id === initialSelectedId)
+          ? initialSelectedId
+          : (stages?.[0]?.id ?? null),
+      );
       setTouched(new Set());
       setAttempted(false);
     }

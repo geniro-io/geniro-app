@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import {
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
+  STAGES_PROPOSAL,
 } from '../__fixtures__/workflow-proposals';
 import { WorkflowDiffList } from './workflow-diff-list';
 import { diffRows, readWorkflowProposal } from './workflow-proposal-payload';
@@ -28,6 +29,11 @@ export const ToAuto: Story = {};
 /** The recorded replacement: one agent goes back to asking. */
 export const OneChange: Story = {
   args: { rows: rowsOf(RECORDED_REPLACE_PROPOSAL) },
+};
+
+/** A builder chat's stage change: one stage added, one rewired, one removed. */
+export const Stages: Story = {
+  args: { rows: rowsOf(STAGES_PROPOSAL) },
 };
 
 export const Identical: Story = { args: { rows: [] } };

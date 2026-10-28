@@ -24,6 +24,10 @@ function rowText(row: DiffRow): string {
       return row.detail === null
         ? `${row.subject} ${MARKER[row.marker].word}`
         : `${row.subject} · ${row.detail.field}: ${row.detail.before} → ${row.detail.after}`;
+    case 'stage':
+      return row.detail === null
+        ? `stage ${row.subject} ${MARKER[row.marker].word}`
+        : `stage ${row.subject} · ${row.detail.field}: ${row.detail.before} → ${row.detail.after}`;
   }
 }
 

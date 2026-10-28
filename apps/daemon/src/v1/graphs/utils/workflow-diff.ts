@@ -3,16 +3,17 @@ import type { Workflow } from '../graphs.types';
 /** How much of one changed value a diff quotes. */
 const MAX_QUOTED_CHARS = 400;
 
-/** One node whose definition differs, and which of its fields did. */
-export interface ChangedNode {
+/** One node or stage whose definition differs, and which of its fields did. */
+export interface ChangedEntry {
   id: string;
   fields: { field: string; before: string; after: string }[];
 }
 
 /**
- * What changed between two workflows, by node id and edge — structural rather
- * than a text diff of the YAML, which reports a reordered list as a rewrite
- * and says nothing about which node a changed line belongs to.
+ * What changed between two workflows, by node id, stage id and edge —
+ * structural rather than a text diff of the YAML, which reports a reordered
+ * list as a rewrite and says nothing about which node a changed line belongs
+ * to.
  *
  * TWIN PARSER: `readDiff` / `diffRows` in
  * `apps/ui/src/renderer/chats/workflow-proposal-payload.ts`, which reads the
@@ -23,9 +24,12 @@ export interface WorkflowDiff {
   workflowFields: string[];
   addedNodes: string[];
   removedNodes: string[];
-  changedNodes: ChangedNode[];
+  changedNodes: ChangedEntry[];
   addedEdges: string[];
   removedEdges: string[];
+  addedStages: string[];
+  removedStages: string[];
+  changedStages: ChangedEntry[];
 }
 
 function quote(value: unknown): string {
@@ -43,23 +47,15 @@ function edgeKey(edge: Workflow['edges'][number]): string {
   return `${edge.from} → ${edge.to} (${edge.kind})`;
 }
 
-export function diffWorkflows(before: Workflow, after: Workflow): WorkflowDiff {
-  const workflowFields = [
-    ...new Set([...Object.keys(before), ...Object.keys(after)]),
-  ].filter(
-    (field) =>
-      field !== 'nodes' &&
-      field !== 'edges' &&
-      !same(
-        (before as Record<string, unknown>)[field],
-        (after as Record<string, unknown>)[field],
-      ),
-  );
-  const beforeNodes = new Map(before.nodes.map((node) => [node.id, node]));
-  const afterNodes = new Map(after.nodes.map((node) => [node.id, node]));
-  const changedNodes: ChangedNode[] = [];
-  for (const [id, next] of afterNodes) {
-    const previous = beforeNodes.get(id);
+function diffById<T extends { id: string }>(
+  before: readonly T[],
+  after: readonly T[],
+): { added: string[]; removed: string[]; changed: ChangedEntry[] } {
+  const beforeById = new Map(before.map((entry) => [entry.id, entry]));
+  const afterById = new Map(after.map((entry) => [entry.id, entry]));
+  const changed: ChangedEntry[] = [];
+  for (const [id, next] of afterById) {
+    const previous = beforeById.get(id);
     if (previous === undefined) {
       continue;
     }
@@ -78,27 +74,61 @@ export function diffWorkflows(before: Workflow, after: Workflow): WorkflowDiff {
         after: quote((next as Record<string, unknown>)[field]),
       }));
     if (fields.length > 0) {
-      changedNodes.push({ id, fields });
+      changed.push({ id, fields });
     }
   }
+  return {
+    added: [...afterById.keys()].filter((id) => !beforeById.has(id)),
+    removed: [...beforeById.keys()].filter((id) => !afterById.has(id)),
+    changed,
+  };
+}
+
+/** Whether the stages both sides keep are listed in another order. */
+function stagesReordered(
+  before: readonly { id: string }[],
+  after: readonly { id: string }[],
+): boolean {
+  const kept = new Set(after.map((stage) => stage.id));
+  const was = before.map((stage) => stage.id).filter((id) => kept.has(id));
+  const had = new Set(was);
+  const now = after.map((stage) => stage.id).filter((id) => had.has(id));
+  return was.some((id, index) => now[index] !== id);
+}
+
+export function diffWorkflows(before: Workflow, after: Workflow): WorkflowDiff {
+  const workflowFields = [
+    ...new Set([...Object.keys(before), ...Object.keys(after)]),
+  ].filter(
+    (field) =>
+      field !== 'nodes' &&
+      field !== 'edges' &&
+      field !== 'stages' &&
+      !same(
+        (before as Record<string, unknown>)[field],
+        (after as Record<string, unknown>)[field],
+      ),
+  );
+  if (stagesReordered(before.stages ?? [], after.stages ?? [])) {
+    workflowFields.push('stages');
+  }
+  const nodes = diffById(before.nodes, after.nodes);
+  const stages = diffById(before.stages ?? [], after.stages ?? []);
   const beforeEdges = new Set(before.edges.map(edgeKey));
   const afterEdges = new Set(after.edges.map(edgeKey));
   const diff = {
     workflowFields,
-    addedNodes: [...afterNodes.keys()].filter((id) => !beforeNodes.has(id)),
-    removedNodes: [...beforeNodes.keys()].filter((id) => !afterNodes.has(id)),
-    changedNodes,
+    addedNodes: nodes.added,
+    removedNodes: nodes.removed,
+    changedNodes: nodes.changed,
     addedEdges: [...afterEdges].filter((edge) => !beforeEdges.has(edge)),
     removedEdges: [...beforeEdges].filter((edge) => !afterEdges.has(edge)),
+    addedStages: stages.added,
+    removedStages: stages.removed,
+    changedStages: stages.changed,
   };
   return {
-    identical:
-      diff.workflowFields.length === 0 &&
-      diff.addedNodes.length === 0 &&
-      diff.removedNodes.length === 0 &&
-      diff.changedNodes.length === 0 &&
-      diff.addedEdges.length === 0 &&
-      diff.removedEdges.length === 0,
+    identical: Object.values(diff).every((list) => list.length === 0),
     ...diff,
   };
 }

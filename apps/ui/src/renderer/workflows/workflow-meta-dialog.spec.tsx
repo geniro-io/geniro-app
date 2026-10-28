@@ -36,6 +36,7 @@ function render(
     error?: string | null;
     initial?: WorkflowMeta;
     maxActiveTurnsCeiling?: number | null;
+    onAskChat?: (hasStages: boolean) => void;
   } = {},
 ): void {
   act(() => {
@@ -56,6 +57,7 @@ function render(
         agentIds={['coder']}
         onClose={onClose}
         onSubmit={onSubmit}
+        {...(props.onAskChat ? { onAskChat: props.onAskChat } : {})}
       />,
     );
   });
@@ -468,6 +470,45 @@ describe('WorkflowMetaDialog', () => {
       pressText('Add stages');
       pressText('Add stage');
       expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('hands adding stages to the chat, and changing saved ones, without submitting', () => {
+      const onAskChat = vi.fn();
+      render({ initial: { name: 'Team' }, onAskChat });
+      pressText('Add with chat');
+      expect(onAskChat).toHaveBeenLastCalledWith(false);
+
+      render({ initial: { name: 'Team', stages: STAGES }, onAskChat });
+      pressText('Change with chat');
+      expect(onAskChat).toHaveBeenLastCalledWith(true);
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('holds the chat back while the dialog has unsaved changes, which handing over would drop', () => {
+      const onAskChat = vi.fn();
+      render({ initial: { name: 'Team', stages: STAGES }, onAskChat });
+      type(nameInput(), 'Team two');
+      const ask = [...container.querySelectorAll('button')].find(
+        (b) => b.textContent?.trim() === 'Change with chat',
+      )!;
+      expect(ask.getAttribute('aria-disabled')).toBe('true');
+      expect(ask.title).toContain('Save or cancel your changes first');
+      pressText('Change with chat');
+      expect(onAskChat).not.toHaveBeenCalled();
+
+      type(nameInput(), 'Team');
+      expect(ask.hasAttribute('aria-disabled')).toBe(false);
+      pressText('Change with chat');
+      expect(onAskChat).toHaveBeenCalledWith(true);
+    });
+
+    it('offers no chat where there is none to ask', () => {
+      render({ initial: { name: 'Team', stages: STAGES } });
+      const labels = [...container.querySelectorAll('button')].map((b) =>
+        b.textContent?.trim(),
+      );
+      expect(labels).not.toContain('Change with chat');
+      expect(labels).toContain('Edit stages');
     });
   });
 });

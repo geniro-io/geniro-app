@@ -169,6 +169,9 @@ type SpineRow = Pick<
   'id' | 'seq' | 'kind' | 'role' | 'nodeId' | 'inCall' | 'createdAt'
 >;
 
+/** Seqs of one run unstamped per statement by `forgetInCalls`. */
+const FORGET_WINDOW_SEQS = 2_000;
+
 /** Spine rows read per statement; the event loop turns between windows. */
 const SPINE_WINDOW_ROWS = 5_000;
 
@@ -1960,12 +1963,35 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
-  /** Unstamp every row — the stamps of a membership rule that has since changed. */
+  /**
+   * Unstamp every row — the stamps of a membership rule that has since changed.
+   * Run by run in windows of {@link FORGET_WINDOW_SEQS} seqs with the event
+   * loop turning between them: one statement over the whole table rewrites
+   * every row and held a live daemon for 30 s on a long-used profile.
+   */
   async forgetInCalls(txEm?: EntityManager): Promise<number> {
-    return this.getRepo(txEm).nativeUpdate(
-      { inCall: { $ne: null } },
-      { inCall: null },
-    );
+    const em = txEm ?? this.em.fork();
+    const runs = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('runs')
+      .select('id')
+      .execute();
+    let forgotten = 0;
+    for (const { id: runId } of runs) {
+      const through = await this.maxSeq(runId, em);
+      for (let from = -1; from < through; from += FORGET_WINDOW_SEQS) {
+        forgotten += await this.getRepo(em).nativeUpdate(
+          {
+            runId,
+            seq: { $gt: from, $lte: from + FORGET_WINDOW_SEQS },
+            inCall: { $ne: null },
+          },
+          { inCall: null },
+        );
+        await yieldToEventLoop();
+      }
+    }
+    return forgotten;
   }
 
   /** Whether one run still holds a row no build stamped with `inCall`. */

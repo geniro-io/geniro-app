@@ -3,7 +3,15 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
@@ -1368,6 +1376,39 @@ describe('ItemDao (in-memory sqlite)', () => {
     expect(await dao.callResultSessions('run-a', 3, 4)).toEqual([
       { calleeNodeId: 'dev', sessionId: 'sess-2' },
     ]);
+  });
+
+  it('unstamps every row of every run, across the windows it clears them in', async () => {
+    await new RunDao(orm.em.fork()).create({
+      id: 'run-a',
+      status: 'completed',
+      workflowId: 'dev',
+    });
+    const at = new Date(Date.UTC(2026, 9, 27));
+    await orm.em.fork().insertMany(
+      Item,
+      [0, 1_999, 2_000, 4_500].map((seq) => ({
+        id: `r-${seq}`,
+        runId: 'run-a',
+        seq,
+        kind: 'message' as const,
+        payload: '{}',
+        inCall: 'call-1',
+        createdAt: at,
+        updatedAt: at,
+      })),
+    );
+    const update = vi.spyOn(
+      orm.em.fork().getRepository(Item).constructor.prototype,
+      'nativeUpdate',
+    );
+
+    expect(await dao.forgetInCalls()).toBe(4);
+    expect(
+      (await orm.em.fork().find(Item, { runId: 'run-a' })).map((r) => r.inCall),
+    ).toEqual([null, null, null, null]);
+    expect(update.mock.calls.length).toBeGreaterThanOrEqual(3);
+    update.mockRestore();
   });
 
   describe('timelineSpine', () => {

@@ -25,15 +25,14 @@ describe('EventLoopWatchdogService', () => {
     vi.restoreAllMocks();
   });
 
-  it('warns with how long the loop could not turn once it turns again', async () => {
+  it('warns with how long the loop could not turn, even when its check is the first thing to run after the block', async () => {
     const warn = vi
       .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => undefined);
     watchdog.onModuleInit();
     await turn();
 
-    blockFor(EVENT_LOOP_BLOCK_WARN_MS + 200);
-    await turn();
+    blockFor(EVENT_LOOP_BLOCK_WARN_MS + 400);
     watchdog.check();
 
     expect(warn).toHaveBeenCalledTimes(1);

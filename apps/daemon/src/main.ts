@@ -38,6 +38,7 @@ import { ItemCallIndexService } from './v1/agents/services/item-call-index.servi
 import { MonitorChatDelivery } from './v1/agents/services/monitor-chat-delivery.service';
 import { MonitorOutcomeSweep } from './v1/agents/services/monitor-outcome-sweep.service';
 import { PartialStreamService } from './v1/agents/services/partial-stream.service';
+import { PayloadRefsSweepService } from './v1/agents/services/payload-refs-sweep.service';
 import { PullRequestCaptureService } from './v1/agents/services/pull-request-capture.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
 import { WallWorkService } from './v1/agents/services/wall-work.service';
@@ -131,6 +132,7 @@ let monitorChats: MonitorChatDelivery | null = null;
 let hostWakeChats: HostWakeChatDelivery | null = null;
 let shares: ShareService | null = null;
 let wallWork: WallWorkService | null = null;
+let payloadRefs: PayloadRefsSweepService | null = null;
 let pullRequests: PullRequestCaptureService | null = null;
 bootstrapper.addExtension(
   buildHttpServerExtension(
@@ -200,6 +202,10 @@ bootstrapper.addExtension(
         // before the wall ledger existed, and the ledger's per-turn key makes
         // it safe beside the live catch-up.
         void wallWork?.sweepAllQuietly();
+        // Off the boot path for the same reason: it copies the payload fields
+        // lookups filter on into their columns for every row written before
+        // the columns existed — a run it has not reached is read the slow way.
+        void payloadRefs?.sweepAllQuietly();
         // Off the boot path for the same reason: it re-reads from the start
         // every run scanned under an older pull-request rule — the one pass that
         // does, since a listing only carries a run on from its marker.
@@ -316,6 +322,7 @@ bootstrapper.addExtension(
       hostWakeChats = app.get(HostWakeChatDelivery);
       shares = app.get(ShareService);
       wallWork = app.get(WallWorkService);
+      payloadRefs = app.get(PayloadRefsSweepService);
       pullRequests = app.get(PullRequestCaptureService);
 
       // Sweep what a prior crash left behind — per-turn files and directories

@@ -25,6 +25,7 @@ import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ItemCallIndexService } from './item-call-index.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
+import { RunKindRowsCache } from './run-kind-rows.cache';
 
 const RECOVERY_DELAYS_MS = [0, 2_000, 10_000] as const;
 /** How long after boot recent runs are reconciled — after the daemon listens. */
@@ -95,6 +96,7 @@ export class SubagentRecoveryService
     private readonly seqs: ItemSeqAllocator,
     private readonly calls: ItemCallIndexService,
     private readonly sessions: AgentSessionRegistry,
+    private readonly kindRows: RunKindRowsCache,
   ) {}
 
   onModuleInit(): void {
@@ -359,7 +361,7 @@ export class SubagentRecoveryService
     }
     const settled: { id: string; version: number }[] = [];
     const declarations = (
-      await this.items.rowsOfKinds(runId, ['subagent_info'], undefined, em)
+      await this.kindRows.rowsOf(runId, ['subagent_info'])
     ).map(itemToWire);
     const refs = new Map<
       string,

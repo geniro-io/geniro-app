@@ -9,7 +9,12 @@ import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
-import { readCallSeed, sessionMember } from '../../agents/utils/call-seed';
+import { RunKindRowsCache } from '../../agents/services/run-kind-rows.cache';
+import {
+  CALL_RECORDS,
+  readCallSeed,
+  sessionMember,
+} from '../../agents/utils/call-seed';
 import {
   nodePoolSessionMember,
   readNodePoolMembers,
@@ -50,6 +55,7 @@ export class HandoffService {
     private readonly runWorkflows: RunWorkflowService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly sessions: AgentSessionRegistry,
+    private readonly kindRows: RunKindRowsCache,
   ) {}
 
   /**
@@ -217,7 +223,9 @@ export class HandoffService {
     configDir: string | null;
   } | null> {
     let member = sessionMember(
-      readCallSeed(await this.itemDao.callRecordRows(run.id, em)).records,
+      readCallSeed(
+        await this.kindRows.rowsOfView(run.id, CALL_RECORDS, 'fresh'),
+      ).records,
       sessionId,
     );
     if (
@@ -292,7 +300,7 @@ export class HandoffService {
       if (snapshotNodePoolProfiles(run.workflowSnapshot).has(nodeId)) {
         const member =
           readNodePoolMembers(
-            await this.itemDao.rowsOfKinds(run.id, ['system'], undefined, em),
+            await this.itemDao.poolHandOffRows(run.id, em),
           ).get(nodeId) ?? 1;
         const profile = snapshotMemberProfile(
           run.workflowSnapshot,

@@ -9,6 +9,7 @@ import type { RunDao } from '../dao/run.dao';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { ChatWaterfallService } from './chat-waterfall.service';
 import type { PolledSpendService } from './polled-spend.service';
+import type { RunKindRowsCache } from './run-kind-rows.cache';
 
 interface StoredRow {
   seq: number;
@@ -33,24 +34,14 @@ function row(
   return { seq, kind, nodeId, payload, secondsIn };
 }
 
-const PAYLOAD_KINDS = new Set([
-  'turn_complete',
-  'error',
-  'turn_cancelled',
-  'subagent_info',
-  'call_started',
-  'call_result',
-  'approval_request',
-  'approval_verdict',
-  'status',
-]);
-
 interface NodeStateStub {
   nodeId: string;
   agentKind: string | null;
   polledCostCents?: number | null;
   polledCostEvents?: number | null;
 }
+
+let payloadReads: string[][] = [];
 
 function build(
   rows: StoredRow[],
@@ -77,32 +68,23 @@ function build(
     toolUsage = [],
     workflowSnapshot = null,
   } = options;
+  payloadReads = [];
   return new ChatWaterfallService(
     { fork: () => ({}) } as unknown as EntityManager,
     {
-      timelineSpine: () =>
-        Promise.resolve(
-          rows.map(({ seq, kind, nodeId, payload, secondsIn, inCall }) => ({
-            seq,
-            kind,
-            inCall: inCall ?? null,
-            role:
-              kind === 'message'
-                ? ((payload as { role?: string } | null)?.role ?? null)
-                : null,
-            nodeId,
-            createdAt: at(secondsIn),
-          })),
-        ),
-      waterfallPayloadRows: () =>
+      timelineSpine: (_runId: string, _em: unknown, maxSeq?: number) =>
         Promise.resolve(
           rows
-            .filter((r) => PAYLOAD_KINDS.has(r.kind))
-            .map(({ seq, kind, nodeId, payload, secondsIn }) => ({
+            .filter((r) => maxSeq === undefined || r.seq <= maxSeq)
+            .map(({ seq, kind, nodeId, payload, secondsIn, inCall }) => ({
               seq,
               kind,
+              inCall: inCall ?? null,
+              role:
+                kind === 'message'
+                  ? ((payload as { role?: string } | null)?.role ?? null)
+                  : null,
               nodeId,
-              payload: JSON.stringify(payload),
               createdAt: at(secondsIn),
             })),
         ),
@@ -170,6 +152,22 @@ function build(
     {
       pollsSpend: (kind: string | null) => kind === 'cursor-agent',
     } as unknown as PolledSpendService,
+    {
+      rowsOf: (_runId: string, kinds: readonly string[]) => {
+        payloadReads.push([...kinds]);
+        return Promise.resolve(
+          rows
+            .filter((r) => kinds.includes(r.kind))
+            .map(({ seq, kind, nodeId, payload, secondsIn }) => ({
+              seq,
+              kind,
+              nodeId,
+              payload: JSON.stringify(payload),
+              createdAt: at(secondsIn),
+            })),
+        );
+      },
+    } as unknown as RunKindRowsCache,
   );
 }
 
@@ -1448,20 +1446,41 @@ describe('ChatWaterfallService', () => {
     expect(recordedSettled?.turns).toEqual([]);
   });
 
-  it('reads only the rows at or below the snapshot seq it is given', async () => {
-    const asked: (number | undefined)[] = [];
-    const service = build([]);
-    const dao = (service as unknown as { itemDao: ItemDao }).itemDao;
-    dao.timelineSpine = (_runId, _em, maxSeq) => {
-      asked.push(maxSeq);
-      return Promise.resolve([]);
-    };
-    dao.waterfallPayloadRows = (_runId, _em, maxSeq) => {
-      asked.push(maxSeq);
-      return Promise.resolve([]);
-    };
+  it('folds only the rows at or below the snapshot seq it is given', async () => {
+    const service = build([
+      row(0, 'message', { role: 'user', text: 'go' }, 0),
+      row(1, 'turn_complete', { usage: { costUsd: 0.1 } }, 10),
+      row(2, 'message', { role: 'user', text: 'again' }, 20),
+      row(3, 'turn_complete', { usage: { costUsd: 0.2 } }, 30),
+    ]);
 
-    expect(await service.fold('run-a', 41)).toBeNull();
-    expect(asked).toEqual([41, 41]);
+    const folded = await service.fold('run-a', 1);
+
+    expect(folded?.to).toBe(iso(10));
+    expect(folded?.totals.costUsd).toBeCloseTo(0.1, 10);
+  });
+
+  it('reads no tool row’s payload: tool calls are drawn from the spine alone', async () => {
+    const service = build([
+      row(0, 'tool_call', { id: 't1' }, 0),
+      row(1, 'tool_result', { id: 't1' }, 1),
+      row(2, 'turn_complete', { usage: { costUsd: 0.1 } }, 2),
+    ]);
+
+    await service.fold('run-a');
+
+    expect(payloadReads.flat()).not.toContain('tool_call');
+    expect(payloadReads.flat()).not.toContain('tool_result');
+    expect(payloadReads.flat()).toEqual(
+      expect.arrayContaining([
+        'turn_complete',
+        'subagent_info',
+        'call_started',
+        'call_result',
+        'approval_request',
+        'approval_verdict',
+        'status',
+      ]),
+    );
   });
 });

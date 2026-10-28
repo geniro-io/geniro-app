@@ -22,6 +22,7 @@ import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
 import { activeSpansFrom, pausedSpansFrom } from '../utils/active-spans';
 import {
+  CALL_RECORDS,
   callConversation,
   readCallSeed,
   sessionMember,
@@ -52,13 +53,18 @@ import {
   snapshotNodePoolProfiles,
   snapshotPoolKinds,
 } from '../utils/snapshot-config-dirs';
-import { sumUsagePayloads, turnAgentKindOf } from '../utils/usage-figures';
+import {
+  sumUsagePayloads,
+  turnAgentKindOf,
+  USAGE_ITEM_KINDS,
+} from '../utils/usage-figures';
 import { servedWorkedMs } from '../utils/wall-worked';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { PolledSpendService } from './polled-spend.service';
+import { RunKindRowsCache } from './run-kind-rows.cache';
 
 /**
  * What a chat's context window holds, and what the thread has cost.
@@ -153,6 +159,7 @@ export class ChatMetricsService implements OnModuleInit {
     private readonly polledSpend: PolledSpendService,
     private readonly configDirPins: ConfigDirPinService,
     private readonly wallTurns: WallTurnDao,
+    private readonly kindRows: RunKindRowsCache,
   ) {}
 
   /**
@@ -330,7 +337,7 @@ export class ChatMetricsService implements OnModuleInit {
             askedPlan: true,
             planNotReported: false,
           }),
-      this.turnPayloads(target, em),
+      this.turnPayloads(target),
     ]);
     // A live answer is FILED, which is the other half of making the next open
     // instant — without it the very first open of a chat pays two seconds, and
@@ -464,9 +471,9 @@ export class ChatMetricsService implements OnModuleInit {
       snapshotNodeConfigDirs(run.workflowSnapshot).get(nodeId) ?? null;
     if (snapshotNodePoolProfiles(run.workflowSnapshot).has(nodeId)) {
       const member =
-        readNodePoolMembers(
-          await this.itemDao.rowsOfKinds(runId, ['system'], undefined, em),
-        ).get(nodeId) ?? 1;
+        readNodePoolMembers(await this.itemDao.poolHandOffRows(runId, em)).get(
+          nodeId,
+        ) ?? 1;
       const profile = snapshotMemberProfile(
         run.workflowSnapshot,
         nodeId,
@@ -521,7 +528,7 @@ export class ChatMetricsService implements OnModuleInit {
     em: EntityManager,
   ): Promise<ReadingTarget | null> {
     const records = readCallSeed(
-      await this.itemDao.callRecordRows(runId, em),
+      await this.kindRows.rowsOfView(runId, CALL_RECORDS, 'fresh'),
     ).records;
     const conversation = callConversation(records, callId);
     if (conversation === null) {
@@ -586,19 +593,14 @@ export class ChatMetricsService implements OnModuleInit {
    * run for a chat, one node's for a node, and the calls of one conversation
    * for a call — the turns a callee ran under a call carry its `callId`.
    */
-  private async turnPayloads(
-    target: ReadingTarget,
-    em: EntityManager,
-  ): Promise<string[]> {
+  private async turnPayloads(target: ReadingTarget): Promise<string[]> {
+    const rows = await this.kindRows.rowsOf(target.runId, USAGE_ITEM_KINDS);
     if (target.callIds === null) {
-      return this.itemDao.usagePayloads(
-        target.runId,
-        em,
-        target.nodeId ?? undefined,
-      );
+      return rows
+        .filter((row) => target.nodeId === null || row.nodeId === target.nodeId)
+        .map((row) => row.payload);
     }
     const calls = new Set(target.callIds);
-    const rows = await this.itemDao.usageRowsWithNode(target.runId, em);
     return rows
       .filter((row) => {
         if (row.nodeId !== target.nodeId) {
@@ -712,7 +714,11 @@ export class ChatMetricsService implements OnModuleInit {
     }
     if (run.workflowId === null) {
       return applyPolledSpend(
-        sumUsagePayloads(await this.itemDao.usagePayloads(runId, em)),
+        sumUsagePayloads(
+          (await this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS)).map(
+            (row) => row.payload,
+          ),
+        ),
         run,
       );
     }
@@ -727,7 +733,7 @@ export class ChatMetricsService implements OnModuleInit {
         row.agentKind,
       ]),
     );
-    const rows = await this.itemDao.usageRowsWithNode(runId, em);
+    const rows = await this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS);
     const all = sumUsagePayloads(rows.map((row) => row.payload));
     // Judged per TURN: a pooled node's calls run on several CLIs, and its
     // turn rows name the member's CLI where it is not the node's own.

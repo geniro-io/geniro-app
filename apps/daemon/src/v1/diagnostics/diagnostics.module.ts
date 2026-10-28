@@ -4,6 +4,7 @@ import { AgentsModule } from '../agents/agents.module';
 import { DiagnosticsController } from './controllers/diagnostics.controller';
 import { DebugLogService } from './services/debug-log.service';
 import { DiagnosticsReportService } from './services/diagnostics-report.service';
+import { EventLoopWatchdogService } from './services/event-loop-watchdog.service';
 
 /**
  * The debug surface: the injectable face of the module-scope debug sink, the
@@ -19,7 +20,11 @@ import { DiagnosticsReportService } from './services/diagnostics-report.service'
 @Module({
   imports: [AgentsModule],
   controllers: [DiagnosticsController],
-  providers: [DebugLogService, DiagnosticsReportService],
+  providers: [
+    DebugLogService,
+    DiagnosticsReportService,
+    EventLoopWatchdogService,
+  ],
   exports: [DebugLogService],
 })
 export class DiagnosticsModule {}

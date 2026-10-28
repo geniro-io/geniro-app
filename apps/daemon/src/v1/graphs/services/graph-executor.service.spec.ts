@@ -24,6 +24,7 @@ import {
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { type FakeChild, fakeSpawn } from '../../agents/__tests__/fake-child';
 import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
+import { kindRowsPassthrough } from '../../agents/__tests__/kind-rows-passthrough';
 import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
 import { NO_COMMANDS } from '../../agents/__tests__/no-commands';
 import { NO_STOPS } from '../../agents/__tests__/no-stops';
@@ -406,15 +407,6 @@ class FakeItemDao {
         createdAt: i.createdAt,
       }));
   }
-  async usageRowsWithNode(
-    runId: string,
-  ): Promise<Pick<Item, 'nodeId' | 'payload' | 'createdAt'>[]> {
-    return this.ofKinds(runId, ['turn_complete']).map((i) => ({
-      nodeId: i.nodeId,
-      payload: i.payload,
-      createdAt: i.createdAt,
-    }));
-  }
   // `NO_CALL_INDEX` files every row in the run's own flow, so a row's call is
   // the one its payload names; the real grouping is pinned in `item.dao.spec.ts`.
   async ownToolCallsByCall(runId: string): Promise<OwnToolCallCount[]> {
@@ -445,23 +437,15 @@ class FakeItemDao {
     }
     return [...counts.values()];
   }
-  /** The call-seed read a follow-up folds — same shape rule as the two above. */
-  async callRecordRows(
-    runId: string,
-  ): Promise<Pick<Item, 'kind' | 'payload' | 'createdAt'>[]> {
-    return this.ofKinds(runId, [
-      'call_started',
-      'call_result',
-      'call_answer',
-      'system',
-    ]).map((i) => ({
-      kind: i.kind,
-      payload: i.payload,
-      createdAt: i.createdAt,
-    }));
-  }
-  async rowsOfKinds(runId: string, kinds: string[]): Promise<Item[]> {
+  async rowsOfKinds(runId: string, kinds: readonly string[]): Promise<Item[]> {
     return this.ofKinds(runId, kinds);
+  }
+  async poolHandOffRows(runId: string): Promise<Item[]> {
+    return this.ofKinds(runId, ['system']).filter(
+      (row) =>
+        (JSON.parse(row.payload) as Record<string, unknown> | null)
+          ?.nodePoolHandOff !== undefined,
+    );
   }
   async nodePoolContextRows(runId: string, nodeId: string): Promise<Item[]> {
     return this.items
@@ -501,7 +485,7 @@ class FakeItemDao {
         payload: i.payload,
       }));
   }
-  private ofKinds(runId: string, kinds: string[]): Item[] {
+  private ofKinds(runId: string, kinds: readonly string[]): Item[] {
     return this.items
       .filter((i) => i.runId === runId && kinds.includes(i.kind))
       .sort((a, b) => a.seq - b.seq);
@@ -1524,6 +1508,7 @@ function setup(
       join(dir, 'wall-work-marker'),
     ),
     wallTurns as unknown as WallTurnDao,
+    kindRowsPassthrough(itemDao),
     artifacts,
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.

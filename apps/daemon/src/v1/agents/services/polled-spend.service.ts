@@ -1,3 +1,5 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
@@ -9,7 +11,6 @@ import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
-import { asRecord, asString, parseJsonColumn } from '../utils/json-util';
 import { readNodeSessions } from '../utils/node-sessions';
 import { pollsSpendFor } from '../utils/polled-spend';
 import {
@@ -24,9 +25,11 @@ import {
 import {
   snapshotNodePoolProfiles,
   snapshotPoolKinds,
+  type SnapshotPoolProfile,
 } from '../utils/snapshot-config-dirs';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import { ItemSeqAllocator } from './item-seq.allocator';
 
 /**
  * The floor on how often this service asks an account, whatever asks it to.
@@ -72,6 +75,12 @@ const SETTLE_AFTER_MS = 24 * 60 * 60_000;
  */
 const ACCOUNT_LOOKBACK_MS = 30 * 24 * 60 * 60_000;
 
+/** How far before the last pooled-run read a later one starts, for a run whose copy was written just after its row. */
+const POOLED_RESCAN_MARGIN_MS = 10 * 60_000;
+
+/** Seqs of one run read per `call_result` statement; the event loop turns between them. */
+const CALL_SESSION_WINDOW_SEQS = 2_000;
+
 /**
  * How far before its node was created a never-priced conversation's events
  * may begin. A conversation geniro holds starts with a node of geniro's, so
@@ -82,9 +91,10 @@ const ACCOUNT_LOOKBACK_MS = 30 * 24 * 60 * 60_000;
 const NODE_START_SLACK_MS = 60 * 60_000;
 
 /**
- * The four columns a poll reads of a run. It writes runs only through
+ * The columns a poll reads of a run. It writes runs only through
  * `nativeUpdate`, so the rows are read-only projections and stay out of the
- * identity map.
+ * identity map. The graph copy is left out: it runs to hundreds of KB a run and
+ * is read once per run ({@link PolledSpendService.poolsOf}).
  */
 const RUN_READ = {
   fields: [
@@ -93,7 +103,6 @@ const RUN_READ = {
     'polledCostCents',
     'polledCostEvents',
     'polledSpendBuckets',
-    'workflowSnapshot',
   ],
   disableIdentityMap: true,
 } as const;
@@ -157,14 +166,45 @@ export class PolledSpendService implements OnModuleInit {
    * is dropped with its run.
    */
   private readonly polledRows = new Map<string, boolean>();
+  /**
+   * Each run's pooled members, parsed from its graph copy once: the copy is
+   * frozen once written, so only a run that has none yet is read again.
+   */
+  private readonly poolsByRun = new Map<
+    string,
+    Map<string, (SnapshotPoolProfile | null)[]>
+  >();
+  /**
+   * Per CLI, the runs whose graph copy pools a member of it, and the instant
+   * that list was read from. A run's copy is frozen as it is created, so after
+   * the first read only runs created since (less {@link POOLED_RESCAN_MARGIN_MS})
+   * are matched against their copies — plus the workflow runs that had no copy
+   * at the first read, which an older run gets only when it is next read.
+   */
+  /**
+   * Per run, the callee conversations its `call_result` rows name, read only
+   * past what is held: a poll visits every run of the CLI, and a reply row's
+   * text is never needed.
+   */
+  private readonly callSessions = new Map<
+    string,
+    { through: number; pairs: { calleeNodeId: string; sessionId: string }[] }
+  >();
+  /** Moves on every run deletion: a read that spans one keeps nothing it read. */
+  private deletionEpoch = 0;
+  private readonly pooledRuns = new Map<
+    AgentKind,
+    { ids: Set<string>; readAt: number; uncopied: Set<string> }
+  >();
 
   constructor(
     private readonly runDao: RunDao,
     private readonly nodeStates: NodeStateDao,
-    private readonly itemDao: ItemDao,
     private readonly em: EntityManager,
     private readonly bus: AgentEventBus,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly itemDao: ItemDao,
+    private readonly seqs: ItemSeqAllocator,
   ) {}
 
   /**
@@ -178,6 +218,13 @@ export class PolledSpendService implements OnModuleInit {
       void this.noteItem(event.runId, event.item.nodeId);
     });
     this.bus.allDeleted().subscribe((runId) => {
+      this.deletionEpoch += 1;
+      this.poolsByRun.delete(runId);
+      this.callSessions.delete(runId);
+      for (const pooled of this.pooledRuns.values()) {
+        pooled.ids.delete(runId);
+        pooled.uncopied.delete(runId);
+      }
       const prefix = `${runId}\u0000`;
       for (const key of [...this.polledRows.keys()]) {
         if (key.startsWith(prefix)) {
@@ -368,6 +415,136 @@ export class PolledSpendService implements OnModuleInit {
     }
   }
 
+  private async callSessionsOf(
+    runId: string,
+    em: EntityManager,
+  ): Promise<readonly { calleeNodeId: string; sessionId: string }[]> {
+    const deletionEpoch = this.deletionEpoch;
+    const kept = this.callSessions.get(runId);
+    const held = {
+      through: kept?.through ?? -1,
+      pairs: [...(kept?.pairs ?? [])],
+    };
+    const through = this.seqs.writtenThrough(
+      runId,
+      await this.itemDao.maxSeq(runId, em),
+    );
+    for (let from = held.through; from < through;) {
+      const to = Math.min(from + CALL_SESSION_WINDOW_SEQS, through);
+      for (const row of await this.itemDao.callResultSessions(
+        runId,
+        from,
+        to,
+        em,
+      )) {
+        if (
+          row.calleeNodeId !== null &&
+          row.sessionId !== null &&
+          row.sessionId !== ''
+        ) {
+          held.pairs.push({
+            calleeNodeId: row.calleeNodeId,
+            sessionId: row.sessionId,
+          });
+        }
+      }
+      from = to;
+      held.through = to;
+      if (from < through) {
+        await yieldToEventLoop();
+      }
+    }
+    if (this.deletionEpoch === deletionEpoch) {
+      this.callSessions.set(runId, held);
+    }
+    return held.pairs;
+  }
+
+  private async pooledRunIds(
+    kind: AgentKind,
+    em: EntityManager,
+  ): Promise<ReadonlySet<string>> {
+    const needle = `"agent":"${kind}"`;
+    const match = { workflowSnapshot: { $like: `%${needle}%` } };
+    const readAt = Date.now();
+    const known = this.pooledRuns.get(kind);
+    if (known === undefined) {
+      const ids = new Set<string>();
+      for (const row of await this.runDao.getAll(
+        match,
+        { fields: ['id'], disableIdentityMap: true },
+        em,
+      )) {
+        ids.add(row.id);
+      }
+      const uncopied = new Set<string>();
+      for (const row of await this.runDao.getAll(
+        { workflowId: { $ne: null }, workflowSnapshot: null },
+        { fields: ['id'], disableIdentityMap: true },
+        em,
+      )) {
+        uncopied.add(row.id);
+      }
+      this.pooledRuns.set(kind, { ids, readAt, uncopied });
+      return ids;
+    }
+    for (const row of await this.runDao.getAll(
+      {
+        ...match,
+        createdAt: { $gte: new Date(known.readAt - POOLED_RESCAN_MARGIN_MS) },
+      },
+      { fields: ['id'], disableIdentityMap: true },
+      em,
+    )) {
+      known.ids.add(row.id);
+    }
+    if (known.uncopied.size > 0) {
+      for (const row of await this.runDao.getAll(
+        { id: { $in: [...known.uncopied] }, workflowSnapshot: { $ne: null } },
+        { fields: ['id', 'workflowSnapshot'], disableIdentityMap: true },
+        em,
+      )) {
+        known.uncopied.delete(row.id);
+        if (row.workflowSnapshot?.includes(needle)) {
+          known.ids.add(row.id);
+        }
+      }
+    }
+    known.readAt = readAt;
+    return known.ids;
+  }
+
+  /** {@link poolsByRun} for these runs, reading the graph copies not parsed yet. */
+  private async poolsOf(
+    runIds: readonly string[],
+    em: EntityManager,
+  ): Promise<Map<string, Map<string, (SnapshotPoolProfile | null)[]>>> {
+    const missing = runIds.filter((id) => !this.poolsByRun.has(id));
+    const parsed = new Map<
+      string,
+      Map<string, (SnapshotPoolProfile | null)[]>
+    >();
+    if (missing.length > 0) {
+      for (const row of await this.runDao.getAll(
+        { id: { $in: missing } },
+        { fields: ['id', 'workflowSnapshot'], disableIdentityMap: true },
+        em,
+      )) {
+        const pools = snapshotNodePoolProfiles(row.workflowSnapshot);
+        parsed.set(row.id, pools);
+        if (row.workflowSnapshot !== null) {
+          this.poolsByRun.set(row.id, pools);
+        }
+      }
+    }
+    return new Map(
+      runIds.map((id) => [
+        id,
+        this.poolsByRun.get(id) ?? parsed.get(id) ?? new Map(),
+      ]),
+    );
+  }
+
   /**
    * Every node holding a conversation of this CLI, keyed `<runId>\0<nodeId>`,
    * with each conversation it is answerable for.
@@ -388,12 +565,8 @@ export class PolledSpendService implements OnModuleInit {
     const runIds = new Set(await this.nodeStates.runIdsForAgent(kind, em));
     // A pooled node's stamp is member 1's, so a run whose pool holds this CLI
     // is a candidate whatever it is stamped.
-    for (const pooled of await this.runDao.getAll(
-      { workflowSnapshot: { $like: `%"agent":"${kind}"%` } },
-      { fields: ['id'], disableIdentityMap: true },
-      em,
-    )) {
-      runIds.add(pooled.id);
+    for (const id of await this.pooledRunIds(kind, em)) {
+      runIds.add(id);
     }
     const runs = await this.runDao.getAll({ agentKind: kind }, RUN_READ, em);
     for (const row of runs) {
@@ -404,9 +577,16 @@ export class PolledSpendService implements OnModuleInit {
         ? []
         : await this.runDao.getAll({ id: { $in: [...runIds] } }, RUN_READ, em);
     const calls: { target: NodeTarget; sessionId: string }[] = [];
-    for (const row of [...runs, ...withNodes]) {
+    const rows = [...runs, ...withNodes];
+    const pools = await this.poolsOf(
+      rows.map((row) => row.id),
+      em,
+    );
+    for (const row of rows) {
+      await yieldToEventLoop();
       const byNode = new Map<string, NodeTarget>();
-      const pools = snapshotNodePoolProfiles(row.workflowSnapshot);
+      const nodePools =
+        pools.get(row.id) ?? new Map<string, (SnapshotPoolProfile | null)[]>();
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
         // A workflow's node on another CLI holds a session id from THAT CLI's
         // store, which this account has never heard of — never offer it. A
@@ -414,7 +594,7 @@ export class PolledSpendService implements OnModuleInit {
         if (
           row.agentKind !== kind &&
           state.agentKind !== kind &&
-          !(pools.get(state.nodeId) ?? []).some(
+          !(nodePools.get(state.nodeId) ?? []).some(
             (profile) => profile?.agentKind === kind,
           )
         ) {
@@ -444,16 +624,10 @@ export class PolledSpendService implements OnModuleInit {
       }
       // The conversations callers held with a node, as its `call_result` rows
       // record them — the only record on a run older than the session history.
-      for (const record of await this.itemDao.callRecordRows(row.id, em)) {
-        if (record.kind !== 'call_result') {
-          continue;
-        }
-        const payload = asRecord(parseJsonColumn(record.payload));
-        const callee = asString(payload?.calleeNodeId);
-        const sessionId = asString(payload?.sessionId);
-        const target = callee === null ? undefined : byNode.get(callee);
-        if (target !== undefined && sessionId !== null && sessionId !== '') {
-          calls.push({ target, sessionId });
+      for (const pair of await this.callSessionsOf(row.id, em)) {
+        const target = byNode.get(pair.calleeNodeId);
+        if (target !== undefined) {
+          calls.push({ target, sessionId: pair.sessionId });
         }
       }
     }

@@ -2,7 +2,11 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
-import { AgentKind, isTerminalRunStatus } from '../../runs/runs.types';
+import {
+  AgentKind,
+  isTerminalRunStatus,
+  type ItemKind,
+} from '../../runs/runs.types';
 import type {
   RunWaterfallCall,
   RunWaterfallDelegate,
@@ -43,8 +47,36 @@ import {
   sumUsagePayloads,
   turnAgentKindOf,
   turnMemberOf,
+  USAGE_ITEM_KINDS,
 } from '../utils/usage-figures';
 import { PolledSpendService } from './polled-spend.service';
+import { RunKindRowsCache } from './run-kind-rows.cache';
+
+/**
+ * The payload-bearing kinds the waterfall folds into spans.
+ *
+ * **`tool_call` / `tool_result` are deliberately absent**, and that omission is
+ * what makes the read affordable: they outnumber every other kind by orders of
+ * magnitude, while the waterfall draws them as a DENSITY — how many landed in
+ * each time bucket of each lane — which `ItemDao.timelineSpine`'s projection
+ * answers with no payload read at all.
+ *
+ * What remains is the handful of kinds whose span cannot be reconstructed
+ * without reading what they say: a turn's figures, a delegate's open/close
+ * flags, a call's participants and status, the id pairing an approval request
+ * to its verdict, and a node's own status — the only trace of a turn a cancel
+ * cut off before it could write a `turn_complete`. None of them is rewritten
+ * once written, so they are read through `RunKindRowsCache`.
+ */
+const WATERFALL_PAYLOAD_KINDS: readonly ItemKind[] = [
+  ...USAGE_ITEM_KINDS,
+  'subagent_info',
+  'call_started',
+  'call_result',
+  'approval_request',
+  'approval_verdict',
+  'status',
+];
 
 /**
  * How many spans of each kind one card carries.
@@ -106,6 +138,7 @@ export class ChatWaterfallService {
     private readonly nodeStateDao: NodeStateDao,
     private readonly runDao: RunDao,
     private readonly polledSpend: PolledSpendService,
+    private readonly kindRows: RunKindRowsCache,
   ) {}
 
   async read(runId: string): Promise<RunWaterfallWire> {
@@ -177,7 +210,13 @@ export class ChatWaterfallService {
     const [spine, payloadRows, nodeStates, delegateSeqs, handOffs] =
       await Promise.all([
         this.itemDao.timelineSpine(runId, em, maxSeq),
-        this.itemDao.waterfallPayloadRows(runId, em, maxSeq),
+        this.kindRows
+          .rowsOf(runId, WATERFALL_PAYLOAD_KINDS)
+          .then((rows) =>
+            maxSeq === undefined
+              ? rows
+              : rows.filter((row) => row.seq <= maxSeq),
+          ),
         this.nodeStateDao.listByRun(runId, em),
         this.itemDao.delegateToolCallSeqs(runId, em, maxSeq),
         run.workflowId === null

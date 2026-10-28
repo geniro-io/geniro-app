@@ -78,6 +78,7 @@ import {
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
+import { RunKindRowsCache } from '../../agents/services/run-kind-rows.cache';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
@@ -99,7 +100,11 @@ import {
   type AutoCompactReading,
 } from '../../agents/utils/auto-compact';
 import { BackgroundWorkCounts } from '../../agents/utils/background-work-counts';
-import { callNumber, readCallSeed } from '../../agents/utils/call-seed';
+import {
+  CALL_RECORDS,
+  callNumber,
+  readCallSeed,
+} from '../../agents/utils/call-seed';
 import { asksForSecret } from '../../agents/utils/card-questions';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
@@ -157,6 +162,7 @@ import { isSlashCommand } from '../../agents/utils/session-replacement-notes';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import { snapshotPoolKinds } from '../../agents/utils/snapshot-config-dirs';
 import {
+  ANSWERABILITY_KINDS,
   unanswerablePayload,
   unansweredRequests,
 } from '../../agents/utils/unanswerable';
@@ -165,6 +171,7 @@ import {
   carriesUsage,
   emptyTotals,
   turnMemberOf,
+  USAGE_ITEM_KINDS,
   type UsageFigures,
   usageFiguresFrom,
 } from '../../agents/utils/usage-figures';
@@ -229,7 +236,11 @@ import {
   instructionBlocksByNode,
   nodeInstructionFields,
 } from '../utils/node-instructions';
-import { openCalls, openNodeTurns } from '../utils/open-call-work';
+import {
+  OPEN_WORK_KINDS,
+  openCalls,
+  openNodeTurns,
+} from '../utils/open-call-work';
 import { MAX_PARALLEL_AGENTS } from '../utils/parallelism';
 import {
   advanceCacheClock,
@@ -758,6 +769,7 @@ export class GraphExecutorService
     private readonly calls: ItemCallIndexService,
     private readonly wallWork: WallWorkService,
     private readonly wallTurns: WallTurnDao,
+    private readonly kindRows: RunKindRowsCache,
     /**
      * The page tool (`show_artifact`) for workflow agents. Optional only so the
      * executor's specs, which construct it positionally, need not supply it.
@@ -1743,7 +1755,7 @@ export class GraphExecutorService
       workflow.nodes.some((node) => node.kind === 'agent' && node.pool?.length)
     ) {
       for (const [nodeId, member] of readNodePoolMembers(
-        await this.itemDao.rowsOfKinds(run.id, ['system'], undefined, em),
+        await this.itemDao.poolHandOffRows(run.id, em),
       )) {
         const node = workflow.nodes.find((node) => node.id === nodeId);
         if (node?.kind === 'agent' && poolMemberNode(node, member) !== null) {
@@ -1766,7 +1778,7 @@ export class GraphExecutorService
     // pass started over at `call-1` — colliding with the rows already there —
     // and every conversation the earlier pass had built was unreachable.
     const callSeed = readCallSeed(
-      await this.itemDao.callRecordRows(run.id, em),
+      await this.kindRows.rowsOfView(run.id, CALL_RECORDS, 'fresh'),
     );
     // Every node the DAG schedules starts the pass pending again, as it did the
     // first — one added to the workflow since included, which has no row yet.
@@ -2333,9 +2345,7 @@ export class GraphExecutorService
     const ownPoolMembers =
       poolKinds.size === 0
         ? new Map<string, number>()
-        : readNodePoolMembers(
-            await this.itemDao.rowsOfKinds(runId, ['system'], undefined, em),
-          );
+        : readNodePoolMembers(await this.itemDao.poolHandOffRows(runId, em));
     // Spend over EVERY turn the run wrote, per node, per call and per node's
     // own conversation — the figures a client's loaded window cannot sum.
     const nodeTotals = new Map<string, ChatTotalsWire>();
@@ -2366,7 +2376,7 @@ export class GraphExecutorService
     // The newest model each node's turns named, on the transcript fold's rule:
     // a turn that named none says nothing about a switch.
     const models = new Map<string, string>();
-    for (const turn of await this.itemDao.usageRowsWithNode(runId, em)) {
+    for (const turn of await this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS)) {
       if (turn.nodeId === null) {
         continue;
       }
@@ -2443,7 +2453,11 @@ export class GraphExecutorService
         start: NonNullable<NodeStateWire['calls'][number]['start']>;
       }
     >();
-    for (const row of await this.itemDao.callRecordRows(runId, em)) {
+    for (const row of await this.kindRows.rowsOfView(
+      runId,
+      CALL_RECORDS,
+      'fresh',
+    )) {
       if (row.kind !== 'call_started') {
         continue;
       }
@@ -2619,7 +2633,12 @@ export class GraphExecutorService
         });
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
-        const history = await this.itemDao.getByRun(run.id, -1, em);
+        const history = await this.itemDao.rowsOfKinds(
+          run.id,
+          [...ANSWERABILITY_KINDS, ...OPEN_WORK_KINDS],
+          undefined,
+          em,
+        );
         for (const request of unansweredRequests(history)) {
           await this.persist(
             em,

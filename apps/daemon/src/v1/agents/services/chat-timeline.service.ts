@@ -10,7 +10,12 @@ import type {
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { messageText } from '../utils/message-preview';
-import { carriesUsage, sumUsagePayloads } from '../utils/usage-figures';
+import {
+  carriesUsage,
+  sumUsagePayloads,
+  USAGE_ITEM_KINDS,
+} from '../utils/usage-figures';
+import { RunKindRowsCache } from './run-kind-rows.cache';
 
 /**
  * How much of a user message one marker carries.
@@ -53,6 +58,7 @@ export class ChatTimelineService {
     private readonly em: EntityManager,
     private readonly itemDao: ItemDao,
     private readonly runDao: RunDao,
+    private readonly kindRows: RunKindRowsCache,
   ) {}
 
   async read(runId: string): Promise<ChatTimelineWire> {
@@ -63,10 +69,12 @@ export class ChatTimelineService {
     if ((await this.runDao.getById(runId, em)) === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    const [spine, payloadRows] = await Promise.all([
-      this.itemDao.timelineSpine(runId, em),
-      this.itemDao.timelinePayloadRows(runId, em),
+    const [spine, messages, turns] = await Promise.all([
+      this.railSpine(runId, em),
+      this.itemDao.userMessagePayloadRows(runId, em),
+      this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS),
     ]);
+    const payloadRows = [...messages, ...turns].sort((a, b) => a.seq - b.seq);
     const markers = this.fold(spine, payloadRows);
     if (markers.length <= MAX_TIMELINE_MARKERS) {
       return { markers, partialReason: null };
@@ -78,6 +86,39 @@ export class ChatTimelineService {
       markers: markers.slice(-MAX_TIMELINE_MARKERS),
       partialReason: `showing the newest ${MAX_TIMELINE_MARKERS} messages — the conversation starts earlier than this rail does`,
     };
+  }
+
+  /**
+   * The rows {@link fold} reads, and no others: every message and reasoning
+   * row (the markers and what their stretches count), plus each stretch's last
+   * row (where its elapsed time ends). A run's tool calls and results — most of
+   * a long transcript — are never loaded.
+   */
+  private async railSpine(
+    runId: string,
+    em: EntityManager,
+  ): Promise<TimelineSpineRow[]> {
+    const said = await this.itemDao.spineRowsOfKinds(
+      runId,
+      ['message', 'reasoning'],
+      em,
+    );
+    const starts = said.filter(isUserMessage).map((row) => row.seq);
+    if (starts.length === 0) {
+      return said;
+    }
+    const ends = await this.itemDao.lastSpineRowsBefore(
+      runId,
+      [...starts.slice(1), Number.MAX_SAFE_INTEGER],
+      em,
+    );
+    const byId = new Map<string, TimelineSpineRow>(
+      said.map((row) => [row.id, row]),
+    );
+    for (const row of ends) {
+      byId.set(row.id, row);
+    }
+    return [...byId.values()].sort((a, b) => a.seq - b.seq);
   }
 
   /**
@@ -150,6 +191,7 @@ export class ChatTimelineService {
 }
 
 type TimelineSpineRow = {
+  id: string;
   seq: number;
   kind: string;
   role: string | null;

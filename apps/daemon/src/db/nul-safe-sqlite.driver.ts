@@ -6,6 +6,8 @@ import {
   SqlitePlatform,
 } from '@mikro-orm/sqlite';
 
+import { TimedSqliteConnection } from './slow-statement-log';
+
 /**
  * The SQLite platform, with the one character its escaping cannot carry.
  *
@@ -43,12 +45,13 @@ export class NulSafeSqlitePlatform extends SqlitePlatform {
 
 /**
  * `@mikro-orm/sqlite`'s own `SqliteDriver`, with {@link NulSafeSqlitePlatform}
- * in place of the stock platform — the stock driver's constructor is the same
- * call with `new SqlitePlatform()`, so nothing else about the wiring differs.
+ * in place of the stock platform and {@link TimedSqliteConnection} in place of
+ * the stock connection — the stock driver's constructor is the same call with
+ * `new SqlitePlatform()` and `SqliteConnection`.
  */
 export class NulSafeSqliteDriver extends AbstractSqlDriver<SqliteConnection> {
   constructor(config: Configuration) {
-    super(config, new NulSafeSqlitePlatform(), SqliteConnection, [
+    super(config, new NulSafeSqlitePlatform(), TimedSqliteConnection, [
       'kysely',
       'better-sqlite3',
     ]);

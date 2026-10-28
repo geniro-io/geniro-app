@@ -12,6 +12,7 @@ import type { ItemKind } from '../../runs/runs.types';
 import type { SeqRange } from '../chat.types';
 import { PULL_REQUEST_NAMING_KINDS } from '../utils/pull-request-capture';
 import { ItemDao } from './item.dao';
+import { RunDao } from './run.dao';
 
 /**
  * Real-driver DAO spec: the service specs run in-memory fakes that only MIRROR
@@ -60,6 +61,224 @@ describe('ItemDao (in-memory sqlite)', () => {
   ): Promise<Item> {
     return dao.create({ runId, seq, kind, payload });
   }
+
+  it('copies the payload fields lookups filter on into their columns when a row is written', async () => {
+    await insert(
+      'run-a',
+      1,
+      'tool_call',
+      JSON.stringify({
+        id: 'toolu_1',
+        name: 'Bash',
+        parentToolUseId: 'toolu_0',
+        callId: 'call-3',
+      }),
+    );
+    await insert(
+      'run-a',
+      2,
+      'tool_result',
+      JSON.stringify({ id: 7, name: null }),
+    );
+    await insert('run-a', 3, 'message', 'not json');
+
+    const rows = await orm.em
+      .fork()
+      .find(Item, { runId: 'run-a' }, { orderBy: { seq: 'asc' } });
+
+    expect(
+      rows.map((r) => [
+        r.payloadId,
+        r.toolNameLower,
+        r.parentToolUseId,
+        r.callId,
+      ]),
+    ).toEqual([
+      ['toolu_1', 'bash', 'toolu_0', 'call-3'],
+      [null, null, null, null],
+      [null, null, null, null],
+    ]);
+  });
+
+  describe('lookups by a copied payload field', () => {
+    /**
+     * Columns that disagree with the payload: a read through the column finds
+     * the row, a read through the payload does not — so each assertion shows
+     * which of the two the lookup used.
+     */
+    async function columnOnlyRows(runId: string): Promise<void> {
+      const at = new Date(Date.UTC(2026, 9, 27));
+      const row = (
+        seq: number,
+        kind: ItemKind,
+        columns: Partial<Item>,
+        payload = '{}',
+      ) => ({
+        id: `${runId}-${seq}`,
+        runId,
+        seq,
+        kind,
+        payload,
+        nodeId: 'qa',
+        inCall: 'call-1',
+        createdAt: at,
+        updatedAt: at,
+        ...columns,
+      });
+      await orm.em.fork().insertMany(Item, [
+        row(1, 'tool_call', {
+          payloadId: 'toolu_1',
+          toolNameLower: 'task',
+          parentToolUseId: 'toolu_parent',
+        }),
+        row(2, 'status', { callId: 'call-1' }),
+        row(3, 'tool_result', { payloadId: 'toolu_1' }),
+        row(4, 'call_started', { callId: 'call-1' }),
+        row(
+          5,
+          'system',
+          { callId: 'call-1' },
+          '{"queuedCall":true,"member":1}',
+        ),
+        row(6, 'tool_call', { payloadId: 'toolu_2' }),
+      ]);
+    }
+
+    async function lookups(runId: string) {
+      const seqs = (rows: readonly { seq: number }[]) => rows.map((r) => r.seq);
+      return {
+        byId: seqs(
+          await dao.rowsByPayloadId(runId, ['tool_call'], ['toolu_1']),
+        ),
+        byIdAfter: seqs(
+          await dao.rowsByPayloadId(runId, ['tool_result'], ['toolu_1'], {
+            after: 2,
+          }),
+        ),
+        byIdInCall: seqs(
+          await dao.rowsInCallById(
+            runId,
+            'call-1',
+            ['tool_result'],
+            ['toolu_1'],
+          ),
+        ),
+        callsById: (await dao.toolCallsByIds(runId, ['toolu_1'])).length,
+        byName: seqs(await dao.toolCallsNamed(runId, ['task'])),
+        delegates: [...(await dao.delegateToolCallCounts(runId, 10))],
+        delegateSeqs: await dao.delegateToolCallSeqs(runId),
+        own: (await dao.ownToolCallsByCall(runId)).map((c) => [
+          c.calls,
+          c.lastSeq,
+        ]),
+        ownThread: seqs(
+          await dao.newestRowsInCall(runId, 'call-1', {
+            kinds: ['tool_call'],
+            ownThread: true,
+            limit: 10,
+          }),
+        ),
+        pool: seqs(await dao.nodePoolContextRows(runId, 'qa')),
+        withStatus: [...(await dao.callIdsWithStatus(runId, ['call-1']))],
+        callRows: seqs(await dao.callRowsOf(runId, ['call-1'])),
+        handOffs: seqs(await dao.callHandOffRows(runId)),
+        queued: seqs(await dao.callQueueRows(runId)),
+        pair: await dao
+          .findToolCallPair(runId, 'toolu_1')
+          .then(({ call, result }) => [call?.seq ?? null, result?.seq ?? null]),
+      };
+    }
+
+    it('reads the columns of a run whose rows are stamped', async () => {
+      await new RunDao(orm.em.fork()).create({
+        id: 'run-a',
+        status: 'running',
+        workflowId: null,
+      });
+      await columnOnlyRows('run-a');
+
+      expect(await lookups('run-a')).toEqual({
+        byId: [1],
+        byIdAfter: [3],
+        byIdInCall: [3],
+        callsById: 1,
+        byName: [1],
+        delegates: [['toolu_parent', 1]],
+        delegateSeqs: [1],
+        own: [[1, 6]],
+        ownThread: [6],
+        pool: [3, 4, 6],
+        withStatus: ['call-1'],
+        callRows: [4],
+        handOffs: [5],
+        queued: [5],
+        pair: [1, 3],
+      });
+    });
+
+    it('reads the payload of a run the sweep has not stamped yet', async () => {
+      await new RunDao(orm.em.fork()).create({
+        id: 'run-a',
+        status: 'running',
+        workflowId: null,
+      });
+      await orm.em
+        .fork()
+        .nativeUpdate(Run, { id: 'run-a' }, { payloadRefsVersion: null });
+      await columnOnlyRows('run-a');
+
+      expect(await lookups('run-a')).toEqual({
+        byId: [],
+        byIdAfter: [],
+        byIdInCall: [],
+        callsById: 0,
+        byName: [],
+        delegates: [],
+        delegateSeqs: [],
+        own: [[2, 6]],
+        ownThread: [1, 6],
+        pool: [1, 3, 4, 6],
+        withStatus: [],
+        callRows: [],
+        handOffs: [],
+        queued: [],
+        pair: [null, null],
+      });
+    });
+
+    it('pairs a tool call by its exact id, the later of two results winning', async () => {
+      await new RunDao(orm.em.fork()).create({
+        id: 'run-a',
+        status: 'running',
+        workflowId: null,
+      });
+      await insert('run-a', 1, 'tool_call', JSON.stringify({ id: 'call-50' }));
+      await insert('run-a', 2, 'tool_call', JSON.stringify({ id: 'call-5' }));
+      await insert(
+        'run-a',
+        4,
+        'tool_result',
+        JSON.stringify({ id: 'call-5', n: 2 }),
+      );
+      await insert(
+        'run-a',
+        3,
+        'tool_result',
+        JSON.stringify({ id: 'call-5', n: 1 }),
+      );
+      await insert(
+        'run-a',
+        5,
+        'tool_result',
+        JSON.stringify({ id: 'call-50' }),
+      );
+
+      const { call, result } = await dao.findToolCallPair('run-a', 'call-5');
+
+      expect(call?.seq).toBe(2);
+      expect(result?.seq).toBe(4);
+    });
+  });
 
   it('reads one run’s team notes oldest first, and counts them up to a seq', async () => {
     const note = (text: string): string =>
@@ -618,86 +837,6 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('usagePayloads', () => {
-    it('takes only the turn_complete rows, and only this run’s', async () => {
-      // The kind filter and the run scoping are the whole query, and neither
-      // ever executed against a real driver: the metrics service stubs this
-      // method wholesale. A regression yields an empty list, which `sumTurns`
-      // turns into `turns: 0` with every figure null — the shape its own doc
-      // block defines as "not measured", so a broken query is indistinguishable
-      // from a CLI that reports no usage.
-      await insert('run-a', 0, 'message', JSON.stringify({ text: 'hello' }));
-      await insert(
-        'run-a',
-        1,
-        'turn_complete',
-        JSON.stringify({ usage: { costUsd: 0.1 } }),
-      );
-      await insert('run-a', 2, 'tool_call', JSON.stringify({ name: 'ls' }));
-      await insert(
-        'run-a',
-        3,
-        'turn_complete',
-        JSON.stringify({ usage: { costUsd: 0.2 } }),
-      );
-      await insert(
-        'run-b',
-        0,
-        'turn_complete',
-        JSON.stringify({ usage: { costUsd: 99 } }),
-      );
-
-      const payloads = await dao.usagePayloads('run-a');
-
-      expect(payloads.map((raw) => JSON.parse(raw))).toEqual([
-        { usage: { costUsd: 0.1 } },
-        { usage: { costUsd: 0.2 } },
-      ]);
-      // Deliberately NOT asserted: that the rows come back ascending by seq.
-      // `sumTurns` adds them, so it is order-independent — an assertion on the
-      // order would pin nothing and read as though it did.
-    });
-
-    it('takes the error row of a turn that FAILED after spending too', async () => {
-      // A session limit ends a turn in an `error` whose payload carries what
-      // the turn spent; selecting `turn_complete` alone left that out of every
-      // total. An error that spent nothing carries no `usage` and adds nothing.
-      await insert(
-        'run-a',
-        0,
-        'turn_complete',
-        JSON.stringify({ usage: { costUsd: 1.18 } }),
-      );
-      await insert(
-        'run-a',
-        1,
-        'error',
-        JSON.stringify({
-          message: "You've hit your session limit",
-          usage: { costUsd: 56.69 },
-        }),
-      );
-
-      const payloads = await dao.usagePayloads('run-a');
-
-      expect(payloads.map((raw) => JSON.parse(raw))).toContainEqual({
-        message: "You've hit your session limit",
-        usage: { costUsd: 56.69 },
-      });
-    });
-
-    it('answers an empty list for a run that has completed no turns', async () => {
-      await insert(
-        'run-a',
-        0,
-        'message',
-        JSON.stringify({ text: 'still going' }),
-      );
-
-      expect(await dao.usagePayloads('run-a')).toEqual([]);
-    });
-  });
-
   describe('turnSpanRows', () => {
     it('reads the turn, card and background rows of this run, in seq order', async () => {
       // A projection missing the card or background rows leaves every wait on
@@ -769,41 +908,6 @@ describe('ItemDao (in-memory sqlite)', () => {
       ]);
       expect(rows[0]!.createdAt.getTime()).toBe(card.createdAt.getTime());
       expect(rows[0]!.nodeId).toBe('qa');
-    });
-  });
-
-  describe('usageRowsWithNode', () => {
-    it('takes this run’s turn_complete rows WITH the node that wrote each', async () => {
-      // The node is what a workflow's per-agent spend is grouped by; a
-      // projection that dropped it would file every turn under no agent.
-      await dao.create({
-        runId: 'run-a',
-        seq: 0,
-        kind: 'turn_complete',
-        nodeId: 'engineer',
-        payload: JSON.stringify({ callId: 'call-1', usage: { costUsd: 1 } }),
-      });
-      await insert('run-a', 1, 'message');
-      await insert(
-        'run-b',
-        0,
-        'turn_complete',
-        JSON.stringify({ usage: { costUsd: 99 } }),
-      );
-
-      const rows = await dao.usageRowsWithNode('run-a');
-
-      expect(
-        rows.map((row) => ({
-          nodeId: row.nodeId,
-          payload: JSON.parse(row.payload) as unknown,
-        })),
-      ).toEqual([
-        {
-          nodeId: 'engineer',
-          payload: { callId: 'call-1', usage: { costUsd: 1 } },
-        },
-      ]);
     });
   });
 
@@ -1022,11 +1126,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       }
     });
 
-    it('takes only USER messages and finished turns into the payload read', async () => {
-      // The `$or` is what bounds the expensive half of the pair. An arm lost to
-      // a widened OR reads every agent message's payload too, and one lost to a
-      // dropped `runId` reads another conversation's — neither of which fails
-      // anything the service spec asserts.
+    it('reads only this run’s USER messages for the markers’ labels', async () => {
       await say('run-a', 0, 'user', 'the ask');
       await say('run-a', 1, 'assistant', 'the reply');
       await insert(
@@ -1038,20 +1138,15 @@ describe('ItemDao (in-memory sqlite)', () => {
       await insert('run-a', 3, 'tool_result', JSON.stringify({ out: 'x' }));
       await say('run-b', 0, 'user', 'another run');
 
-      const rows = await dao.timelinePayloadRows('run-a');
+      const rows = await dao.userMessagePayloadRows('run-a');
 
-      expect(rows.map((row) => [row.seq, row.kind])).toEqual([
-        [0, 'message'],
-        [2, 'turn_complete'],
-      ]);
+      expect(rows.map((row) => [row.seq, row.kind])).toEqual([[0, 'message']]);
       expect(JSON.parse(rows[0]!.payload)).toEqual({ text: 'the ask' });
     });
 
     it('orders both reads by seq, which is what the fold walks', async () => {
-      // The fold is two forward walks over these two lists and advances a
-      // pointer through the second. Insertion (rowid) order here is deliberately
-      // the reverse, so an ordering that came from the table rather than the
-      // query files every turn against the wrong segment.
+      // Insertion (rowid) order here is deliberately the reverse, so an ordering
+      // that came from the table rather than the query fails.
       await insert(
         'run-a',
         4,
@@ -1071,8 +1166,8 @@ describe('ItemDao (in-memory sqlite)', () => {
         1, 2, 3, 4,
       ]);
       expect(
-        (await dao.timelinePayloadRows('run-a')).map((r) => r.seq),
-      ).toEqual([1, 2, 3, 4]);
+        (await dao.userMessagePayloadRows('run-a')).map((r) => r.seq),
+      ).toEqual([1, 3]);
     });
   });
 
@@ -1236,89 +1331,79 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('waterfallPayloadRows', () => {
+  it('reads the callee and session of each call result in a seq range, and nothing of its reply', async () => {
+    await insert(
+      'run-a',
+      1,
+      'call_result',
+      JSON.stringify({
+        calleeNodeId: 'qa',
+        sessionId: 'sess-1',
+        answer: 'x'.repeat(10_000),
+      }),
+    );
+    await insert(
+      'run-a',
+      2,
+      'call_result',
+      JSON.stringify({ calleeNodeId: 'qa' }),
+    );
+    await insert(
+      'run-a',
+      3,
+      'call_result',
+      JSON.stringify({ calleeNodeId: 'qa', sessionId: 'sess-boundary' }),
+    );
+    await insert(
+      'run-a',
+      4,
+      'call_result',
+      JSON.stringify({ calleeNodeId: 'dev', sessionId: 'sess-2' }),
+    );
+
+    expect(await dao.callResultSessions('run-a', 0, 2)).toEqual([
+      { calleeNodeId: 'qa', sessionId: 'sess-1' },
+      { calleeNodeId: 'qa', sessionId: null },
+    ]);
+    expect(await dao.callResultSessions('run-a', 3, 4)).toEqual([
+      { calleeNodeId: 'dev', sessionId: 'sess-2' },
+    ]);
+  });
+
+  describe('timelineSpine', () => {
     it('stops at the snapshot seq it is given', async () => {
       await insert('run-a', 0, 'turn_complete', JSON.stringify({ usage: {} }));
       await insert('run-a', 5, 'turn_complete', JSON.stringify({ usage: {} }));
 
-      const rows = await dao.waterfallPayloadRows('run-a', undefined, 4);
-
-      expect(rows.map((row) => row.seq)).toEqual([0]);
       expect(
         (await dao.timelineSpine('run-a', undefined, 4)).map((row) => row.seq),
       ).toEqual([0]);
     });
 
-    it('leaves tool calls and results out, which is what makes the read affordable', async () => {
-      // The exclusion IS the design: tool rows outnumber every other kind by
-      // orders of magnitude, and the waterfall draws them as a density that
-      // `timelineSpine`'s projection already answers. Widen this `$in` and the
-      // route starts loading thousands of tool payloads per run to draw a
-      // picture that reads none of them — which nothing else in the suite sees,
-      // because the fold is handed whatever the fake DAO returns.
-      await insert('run-a', 0, 'tool_call', JSON.stringify({ id: 't1' }));
-      await insert('run-a', 1, 'tool_result', JSON.stringify({ id: 't1' }));
-      await insert(
-        'run-a',
-        2,
-        'turn_complete',
-        JSON.stringify({ usage: { costUsd: 0.1 } }),
-      );
-
-      const rows = await dao.waterfallPayloadRows('run-a');
-
-      expect(rows.map((row) => row.kind)).toEqual(['turn_complete']);
-    });
-
-    it('takes every kind whose span cannot be drawn without its payload', async () => {
-      const kinds: ItemKind[] = [
-        'turn_complete',
-        'subagent_info',
-        'call_started',
-        'call_result',
-        'approval_request',
-        'approval_verdict',
-      ];
-      for (const [index, kind] of kinds.entries()) {
-        await insert('run-a', index, kind, JSON.stringify({ k: kind }));
-      }
-
-      const rows = await dao.waterfallPayloadRows('run-a');
-
-      // A kind dropped from the `$in` silently deletes a whole lane from the
-      // card rather than failing anything.
-      expect(rows.map((row) => row.kind)).toEqual(kinds);
-    });
-
-    it('carries the node and the instant each row landed at', async () => {
-      // Both are load-bearing and neither is in `timelinePayloadRows`: the node
-      // picks the LANE, and `createdAt` is the only wall-clock the span has.
-      const at = new Date('2026-02-03T04:05:06.000Z');
-      await dao.create({
+    it('reads a run longer than one window whole, a seq two rows share at the window edge included', async () => {
+      const at = new Date(Date.UTC(2026, 9, 27));
+      const rows = Array.from({ length: 5_001 }, (_, seq) => ({
+        id: `r-${String(seq).padStart(5, '0')}`,
         runId: 'run-a',
-        seq: 0,
-        kind: 'call_started',
-        nodeId: 'manager',
-        payload: JSON.stringify({ callId: 'call-1' }),
+        seq,
+        kind: 'tool_call' as const,
+        role: 'assistant',
+        payload: '{}',
         createdAt: at,
-      });
+        updatedAt: at,
+      }));
+      rows.push({ ...rows[4_999]!, id: 'r-04999-b' });
+      await orm.em.fork().insertMany(Item, rows);
 
-      const [row] = await dao.waterfallPayloadRows('run-a');
+      const spine = await dao.timelineSpine('run-a');
 
-      expect(row?.nodeId).toBe('manager');
-      expect(row?.createdAt.getTime()).toBe(at.getTime());
-    });
-
-    it('answers for one run only, in seq order', async () => {
-      // Inserted in reverse so an ordering that came from the table rather than
-      // the query puts every span on the timeline backwards.
-      await insert('run-a', 2, 'turn_complete', JSON.stringify({ n: 2 }));
-      await insert('run-a', 1, 'call_started', JSON.stringify({ n: 1 }));
-      await insert('run-b', 0, 'turn_complete', JSON.stringify({ n: 0 }));
-
-      expect(
-        (await dao.waterfallPayloadRows('run-a')).map((r) => r.seq),
-      ).toEqual([1, 2]);
+      expect(spine).toHaveLength(5_002);
+      expect(spine.slice(4_998).map((row) => row.id)).toEqual([
+        'r-04998',
+        'r-04999',
+        'r-04999-b',
+        'r-05000',
+      ]);
     });
   });
 
@@ -1402,79 +1487,6 @@ describe('ItemDao (in-memory sqlite)', () => {
       ['callee', expect.any(Date)],
     ]);
     expect(await dao.toolCallsByIds('run-a', [])).toEqual([]);
-  });
-
-  it("reads a run's call rows and delivery notices in seq order", async () => {
-    // What the call seed folds after a daemon restart: the start (id, parties,
-    // the thread it continued) and the result (the callee's session), in the
-    // order they happened, so a continuation lands after its parent. Inserted
-    // out of order so the ordering has to be the query's, with a row of
-    // another kind and another run's call beside them.
-    await dao.create({
-      runId: 'run-a',
-      seq: 3,
-      kind: 'call_result',
-      nodeId: 'manager',
-      payload: JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
-    });
-    await dao.create({
-      runId: 'run-a',
-      seq: 0,
-      kind: 'call_started',
-      nodeId: 'manager',
-      payload: JSON.stringify({ callId: 'call-1' }),
-    });
-    await insert('run-a', 1);
-    await dao.create({
-      runId: 'run-a',
-      seq: 2,
-      kind: 'call_question',
-      nodeId: 'manager',
-      payload: JSON.stringify({ callId: 'call-1' }),
-    });
-    await dao.create({
-      runId: 'run-b',
-      seq: 0,
-      kind: 'call_started',
-      payload: JSON.stringify({ callId: 'call-1' }),
-    });
-    await dao.create({
-      runId: 'run-a',
-      seq: 4,
-      kind: 'call_answer',
-      payload: JSON.stringify({
-        outcome: 'undelivered',
-        message: 'correction',
-      }),
-    });
-    await dao.create({
-      runId: 'run-a',
-      seq: 5,
-      kind: 'system',
-      payload: JSON.stringify({ messageDeliveryNotices: ['delivery-1'] }),
-    });
-    await dao.create({
-      runId: 'run-a',
-      seq: 6,
-      kind: 'system',
-      payload: JSON.stringify({ message: 'unrelated system note' }),
-    });
-
-    const rows = await dao.callRecordRows('run-a');
-    expect(rows.map((row) => row.kind)).toEqual([
-      'call_started',
-      'call_result',
-      'call_answer',
-      'system',
-    ]);
-    // The column comes back as it is stored — JSON text — which the fold
-    // parses for itself.
-    expect(rows.map((row) => row.payload)).toEqual([
-      JSON.stringify({ callId: 'call-1' }),
-      JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
-      JSON.stringify({ outcome: 'undelivered', message: 'correction' }),
-      JSON.stringify({ messageDeliveryNotices: ['delivery-1'] }),
-    ]);
   });
 
   describe('toolUsage and delegateToolCallSeqs', () => {

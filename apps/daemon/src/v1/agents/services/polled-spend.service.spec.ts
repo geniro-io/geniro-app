@@ -134,6 +134,12 @@ interface Harness {
   reads: { where: unknown; options: unknown }[];
   /** The read for runs whose agent pool holds the polled CLI. */
   poolReads: { where: unknown; options: unknown }[];
+  /** The reads of runs' graph copies, by the run ids each asked for. */
+  snapshotReads: string[][];
+  /** The `call_result` reads, each from the seq it read past. */
+  callReads: { runId: string; afterSeq: number }[];
+  /** Announce a run deleted, as `AgentEventBus.publishRunDeleted` does. */
+  deleteRun: (runId: string) => void;
 }
 
 function harness(options: {
@@ -143,7 +149,7 @@ function harness(options: {
   cursorNodeRunIds?: string[];
   /** A workflow node's own agent, keyed `<runId>/<nodeId>`. */
   nodeAgents?: Record<string, AgentKind | null>;
-  /** Each run's call records, as `callRecordRows` answers them. */
+  /** Each run's `call_result` records, as `rowsOfKinds` answers them. */
   calls?: Record<string, { calleeNodeId: string; sessionId: string }[]>;
   delegates?: Record<string, string[]>;
 }): Harness {
@@ -153,7 +159,9 @@ function harness(options: {
   const counts = { listed: 0, nodeReads: 0 };
   const reads: Harness['reads'] = [];
   const poolReads: Harness['reads'] = [];
+  const snapshotReads: string[][] = [];
   let onItem: (event: ItemEvent) => void = () => undefined;
+  let onDeleted: (runId: string) => void = () => undefined;
 
   const runDao = {
     // Honours the FILTER: the service makes two different reads, the 1:1
@@ -162,23 +170,54 @@ function harness(options: {
       where?: {
         id?: { $in?: string[] };
         agentKind?: AgentKind;
-        workflowSnapshot?: { $like: string };
+        workflowSnapshot?: { $like: string } | { $ne: null } | null;
+        workflowId?: { $ne: null };
+        createdAt?: { $gte: Date };
       },
       opts?: unknown,
     ) => {
+      // The workflow runs with no graph copy yet, and the later re-check of
+      // which of them have one now.
+      if (where?.workflowSnapshot === null) {
+        return options.runs.filter(
+          (run) => run.workflowId !== null && run.workflowSnapshot === null,
+        );
+      }
+      if (
+        where?.workflowSnapshot !== undefined &&
+        '$ne' in where.workflowSnapshot
+      ) {
+        const ids = where.id?.$in ?? [];
+        return options.runs.filter(
+          (run) => ids.includes(run.id) && run.workflowSnapshot !== null,
+        );
+      }
       // The pool-candidate read: answered, but not counted as a listing —
       // `counts.listed` is how a spec tells that a poll ran at all.
-      const like = where?.workflowSnapshot?.$like;
+      const like =
+        where?.workflowSnapshot !== undefined &&
+        where.workflowSnapshot !== null &&
+        '$like' in where.workflowSnapshot
+          ? where.workflowSnapshot.$like
+          : undefined;
       if (like !== undefined) {
         poolReads.push({ where, options: opts });
         const needle = like.replaceAll('%', '');
-        return options.runs.filter((run) =>
-          (run.workflowSnapshot ?? '').includes(needle),
+        const since = where?.createdAt?.$gte.getTime() ?? -Infinity;
+        return options.runs.filter(
+          (run) =>
+            (run.workflowSnapshot ?? '').includes(needle) &&
+            (run.createdAt?.getTime() ?? 0) >= since,
         );
+      }
+      const ids = where?.id?.$in;
+      const fields = (opts as { fields?: string[] } | undefined)?.fields;
+      if (fields?.includes('workflowSnapshot') && ids !== undefined) {
+        snapshotReads.push(ids);
+        return options.runs.filter((run) => ids.includes(run.id));
       }
       counts.listed += 1;
       reads.push({ where, options: opts });
-      const ids = where?.id?.$in;
       if (ids !== undefined) {
         return options.runs.filter((run) => ids.includes(run.id));
       }
@@ -211,15 +250,21 @@ function harness(options: {
     },
   } as unknown as NodeStateDao;
 
+  const callReads: { runId: string; afterSeq: number }[] = [];
   const itemDao = {
-    callRecordRows: async (runId: string) =>
-      (options.calls?.[runId] ?? []).map(
-        (call) =>
-          ({
-            kind: 'call_result',
-            payload: JSON.stringify({ callerNodeId: 'manager', ...call }),
-          }) as Pick<Item, 'kind' | 'payload' | 'createdAt'>,
-      ),
+    maxSeq: async (runId: string) => (options.calls?.[runId] ?? []).length,
+    // Call `i` sits at seq `i + 1`.
+    callResultSessions: async (
+      runId: string,
+      afterSeq: number,
+      throughSeq: number,
+    ) => {
+      callReads.push({ runId, afterSeq });
+      return (options.calls?.[runId] ?? []).slice(
+        Math.max(afterSeq, 0),
+        throughSeq,
+      );
+    },
   } as unknown as ItemDao;
 
   const bus = {
@@ -230,7 +275,10 @@ function harness(options: {
       },
     }),
     allDeleted: () => ({
-      subscribe: () => ({ unsubscribe: () => undefined }),
+      subscribe: (fn: (runId: string) => void) => {
+        onDeleted = fn;
+        return { unsubscribe: () => undefined };
+      },
     }),
     publishRunStatus: (status: unknown) => published.push(status),
   } as unknown as AgentEventBus;
@@ -239,10 +287,11 @@ function harness(options: {
   const service = new PolledSpendService(
     runDao,
     nodeStates,
-    itemDao,
     em,
     bus,
     new AgentAdapterRegistry([new ClaudeAdapter(), adapter]),
+    itemDao,
+    { writtenThrough: (_runId: string, maxSeq: number) => maxSeq } as never,
   );
   service.onModuleInit();
   return {
@@ -255,6 +304,9 @@ function harness(options: {
     counts,
     reads,
     poolReads,
+    snapshotReads,
+    callReads,
+    deleteRun: (runId) => onDeleted(runId),
   };
 }
 
@@ -608,6 +660,89 @@ describe('PolledSpendService', () => {
     ]);
   });
 
+  it('reads each run’s call results once, then only the rows written since', async () => {
+    at(NOW);
+    const calls = {
+      wf: [{ calleeNodeId: 'qa', sessionId: 'call-conv' }],
+    };
+    const h = harness({
+      runs: [
+        cursorRun({
+          id: 'wf',
+          agentKind: null,
+          workflowId: 'dev',
+          workflowSnapshot: JSON.stringify({ nodes: [] }),
+        }),
+      ],
+      cursorNodeRunIds: ['wf'],
+      nodes: { wf: [node({ runId: 'wf', nodeId: 'qa' })] },
+      calls,
+    });
+    answerWith(event('call-conv', 10));
+
+    await h.service.refresh(true);
+    calls.wf.push({ calleeNodeId: 'qa', sessionId: 'later-conv' });
+    await h.service.refresh(true);
+
+    expect(h.callReads).toEqual([
+      { runId: 'wf', afterSeq: -1 },
+      { runId: 'wf', afterSeq: 1 },
+    ]);
+  });
+
+  it('reads a long run’s call results in seq windows', async () => {
+    at(NOW);
+    const h = harness({
+      runs: [
+        cursorRun({
+          id: 'wf',
+          agentKind: null,
+          workflowId: 'dev',
+          workflowSnapshot: JSON.stringify({ nodes: [] }),
+        }),
+      ],
+      cursorNodeRunIds: ['wf'],
+      nodes: { wf: [node({ runId: 'wf', nodeId: 'qa' })] },
+      calls: {
+        wf: Array.from({ length: 4_500 }, (_, n) => ({
+          calleeNodeId: 'qa',
+          sessionId: `conv-${n}`,
+        })),
+      },
+    });
+    answerWith(event('conv-0', 10));
+
+    await h.service.refresh(true);
+
+    expect(h.callReads.map((read) => read.afterSeq)).toEqual([
+      -1, 1_999, 3_999,
+    ]);
+  });
+
+  it('reads a deleted run’s call results afresh, should its id come back', async () => {
+    at(NOW);
+    const h = harness({
+      runs: [
+        cursorRun({
+          id: 'wf',
+          agentKind: null,
+          workflowId: 'dev',
+          workflowSnapshot: JSON.stringify({ nodes: [] }),
+        }),
+      ],
+      cursorNodeRunIds: ['wf'],
+      nodes: { wf: [node({ runId: 'wf', nodeId: 'qa' })] },
+      calls: { wf: [{ calleeNodeId: 'qa', sessionId: 'call-conv' }] },
+    });
+    answerWith(event('call-conv', 10));
+
+    await h.service.refresh(true);
+    h.deleteRun('wf');
+    await h.service.refresh(true);
+
+    expect(h.callReads.map((read) => read.afterSeq)).toEqual([-1, -1]);
+  });
+
   it('prices every DELEGATE a conversation spawned, on the node that launched it', async () => {
     // The largest share of the reported gap: each cursor sub-agent is billed
     // under its own conversation id, which no turn ever names.
@@ -766,17 +901,139 @@ describe('PolledSpendService', () => {
           'polledCostCents',
           'polledCostEvents',
           'polledSpendBuckets',
-          'workflowSnapshot',
         ],
         disableIdentityMap: true,
       });
     }
+    expect(h.snapshotReads).toEqual([['run-1', 'wf']]);
     expect(h.poolReads).toEqual([
       {
         where: { workflowSnapshot: { $like: '%"agent":"cursor-agent"%' } },
         options: { fields: ['id'], disableIdentityMap: true },
       },
     ]);
+  });
+
+  it('matches every run’s graph copy against the pooled CLI once, then only the runs created since', async () => {
+    const move = at(NOW);
+    const pooledCopy = JSON.stringify({
+      nodes: [
+        {
+          id: 'eng',
+          kind: 'agent',
+          agent: 'claude',
+          pool: [{ agent: 'cursor-agent' }],
+        },
+      ],
+    });
+    const runs = [
+      cursorRun({
+        id: 'old',
+        agentKind: null,
+        workflowId: 'dev',
+        workflowSnapshot: pooledCopy,
+        createdAt: new Date(NOW - 24 * HOUR),
+      }),
+    ];
+    const h = harness({ runs, nodes: {} });
+
+    await h.service.refresh(true);
+    runs.push(
+      cursorRun({
+        id: 'new',
+        agentKind: null,
+        workflowId: 'dev',
+        workflowSnapshot: pooledCopy,
+        createdAt: new Date(NOW + HOUR),
+      }),
+    );
+    move(NOW + 2 * HOUR);
+    await h.service.refresh(true);
+
+    expect(
+      h.poolReads.map(
+        (read) =>
+          (read.where as { createdAt?: { $gte: Date } }).createdAt?.$gte,
+      ),
+    ).toEqual([undefined, new Date(NOW - 10 * 60_000)]);
+    expect(h.reads.at(-1)?.where).toEqual({ id: { $in: ['old', 'new'] } });
+  });
+
+  it('finds an older run whose pooled graph copy was frozen after the first read', async () => {
+    const move = at(NOW);
+    const old = cursorRun({
+      id: 'old',
+      agentKind: null,
+      workflowId: 'dev',
+      workflowSnapshot: null,
+      createdAt: new Date(NOW - 90 * 24 * HOUR),
+    });
+    const h = harness({ runs: [old], nodes: {} });
+
+    await h.service.refresh(true);
+    old.workflowSnapshot = JSON.stringify({
+      nodes: [
+        {
+          id: 'eng',
+          kind: 'agent',
+          agent: 'claude',
+          pool: [{ agent: 'cursor-agent' }],
+        },
+      ],
+    });
+    move(NOW + HOUR);
+    await h.service.refresh(true);
+
+    expect(h.reads.at(-1)?.where).toEqual({ id: { $in: ['old'] } });
+  });
+
+  it('parses a run’s graph copy once, and keeps asking for a run that has none yet', async () => {
+    at(NOW);
+    const workflow = cursorRun({
+      id: 'wf',
+      agentKind: null,
+      workflowId: 'dev',
+      workflowSnapshot: JSON.stringify({ nodes: [] }),
+    });
+    const h = harness({
+      runs: [cursorRun({ workflowSnapshot: null }), workflow],
+      cursorNodeRunIds: ['wf'],
+      nodes: {
+        'run-1': [holding('conv-1')],
+        wf: [node({ runId: 'wf', nodeId: 'qa', agentSessionId: 'conv-wf' })],
+      },
+    });
+    answerWith(event('conv-1', 10), event('conv-wf', 20));
+
+    await h.service.refresh(true);
+    await h.service.refresh(true);
+
+    expect(h.snapshotReads).toEqual([['run-1', 'wf'], ['run-1']]);
+  });
+
+  it('reads a deleted run’s graph copy afresh, should its id come back', async () => {
+    at(NOW);
+    const h = harness({
+      runs: [
+        cursorRun({
+          id: 'wf',
+          agentKind: null,
+          workflowId: 'dev',
+          workflowSnapshot: JSON.stringify({ nodes: [] }),
+        }),
+      ],
+      cursorNodeRunIds: ['wf'],
+      nodes: {
+        wf: [node({ runId: 'wf', nodeId: 'qa', agentSessionId: 'conv-wf' })],
+      },
+    });
+    answerWith(event('conv-wf', 20));
+
+    await h.service.refresh(true);
+    h.deleteRun('wf');
+    await h.service.refresh(true);
+
+    expect(h.snapshotReads).toEqual([['wf'], ['wf']]);
   });
 
   it('prices a POOLED node whose cursor member held a conversation, whatever its last turn was stamped', async () => {
@@ -1008,10 +1265,14 @@ describe('PolledSpendService — which CLIs it asks', () => {
         ],
         writePolledSpend: async () => undefined,
       } as unknown as NodeStateDao,
-      { callRecordRows: async () => [] } as unknown as ItemDao,
       em,
       { publishRunStatus: () => undefined } as unknown as AgentEventBus,
       new AgentAdapterRegistry([adapter]),
+      {
+        maxSeq: async () => -1,
+        callResultSessions: async () => [],
+      } as unknown as ItemDao,
+      { writtenThrough: (_runId: string, maxSeq: number) => maxSeq } as never,
     );
     return { service, writes };
   }

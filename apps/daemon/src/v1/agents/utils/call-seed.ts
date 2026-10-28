@@ -3,6 +3,7 @@ import type {
   CallResultPayload,
   CallSeedRecord,
   CallStartedPayload,
+  KindRowsView,
   MessageDeliveryFailure,
   RunCallSeed,
 } from '../chat.types';
@@ -16,6 +17,17 @@ export interface CallSeedRow {
   /** When the row was written — a `call_result`'s is when its call ended. */
   createdAt?: Date;
 }
+
+/**
+ * The rows {@link readCallSeed} folds: every call row, and the `system` rows
+ * carrying the notices that acknowledge failed deliveries to their sender.
+ */
+export const CALL_RECORDS: KindRowsView = {
+  name: 'call-records',
+  kinds: ['call_started', 'call_result', 'call_answer', 'system'],
+  keep: (row) =>
+    row.kind !== 'system' || row.payload.includes('"messageDeliveryNotices"'),
+};
 
 /** The id the broker mints for a run's `n`th call — what {@link callNumber} reads back. */
 export function callIdOf(n: number): string {

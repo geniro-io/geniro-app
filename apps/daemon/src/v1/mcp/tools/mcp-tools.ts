@@ -24,6 +24,7 @@ import type { TaskBoardBroker } from '../../graphs/services/task-board.broker';
 import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
 import type { WorkflowProposalService } from '../../graphs/services/workflow-proposal.service';
 import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
+import type { MemoryService } from '../../memory/services/memory.service';
 import type { ShareService } from '../../shares/services/share.service';
 import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
@@ -36,6 +37,10 @@ import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
 import { ListAgentThreadsTool } from './list-agent-threads/list-agent-threads.tool';
 import { ListMonitorsTool } from './list-monitors/list-monitors.tool';
 import { MarkRecommendationsTool } from './mark-recommendations/mark-recommendations.tool';
+import { MemoryForgetTool } from './memory-forget/memory-forget.tool';
+import { MemoryReadTool } from './memory-read/memory-read.tool';
+import { MemorySaveTool } from './memory-save/memory-save.tool';
+import { MemorySearchTool } from './memory-search/memory-search.tool';
 import { MessageAgentTool } from './message-agent/message-agent.tool';
 import { MonitorTool } from './monitor/monitor.tool';
 import { MoveStageTool } from './move-stage/move-stage.tool';
@@ -86,6 +91,7 @@ export interface McpToolDeps {
   notices: NotifyBroker;
   board: TaskBoardBroker;
   history: GlobalChatSearchService;
+  memory: MemoryService;
   analysis: AnalysisBroker;
   threads: ThreadReaderService;
   workflowChanges: WorkflowChangeService;
@@ -135,6 +141,10 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new BoardTools(deps.board),
     new SearchChatsTool(deps.history),
     new ReadChatContextTool(deps.history),
+    new MemorySearchTool(deps.memory),
+    new MemoryReadTool(deps.memory),
+    new MemorySaveTool(deps.memory),
+    new MemoryForgetTool(deps.memory),
     new ReadWorkflowsTool(
       deps.workflowGate,
       deps.workflowBuilders,

@@ -4668,6 +4668,66 @@ export interface MeasureInstructionSizesDto {
 /**
  * 
  * @export
+ * @interface MemoryConfigAckDto
+ */
+export interface MemoryConfigAckDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemoryConfigAckDto
+     */
+    enabled: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryConfigAckDto
+     */
+    agentWrites: MemoryConfigAckDtoAgentWritesEnum;
+}
+
+
+/**
+ * @export
+ */
+export const MemoryConfigAckDtoAgentWritesEnum = {
+    Active: 'active',
+    Pending: 'pending'
+} as const;
+export type MemoryConfigAckDtoAgentWritesEnum = typeof MemoryConfigAckDtoAgentWritesEnum[keyof typeof MemoryConfigAckDtoAgentWritesEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemoryConfigDto
+ */
+export interface MemoryConfigDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemoryConfigDto
+     */
+    enabled: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryConfigDto
+     */
+    agentWrites: MemoryConfigDtoAgentWritesEnum;
+}
+
+
+/**
+ * @export
+ */
+export const MemoryConfigDtoAgentWritesEnum = {
+    Active: 'active',
+    Pending: 'pending'
+} as const;
+export type MemoryConfigDtoAgentWritesEnum = typeof MemoryConfigDtoAgentWritesEnum[keyof typeof MemoryConfigDtoAgentWritesEnum];
+
+/**
+ * 
+ * @export
  * @interface MoveTaskStatusDto
  */
 export interface MoveTaskStatusDto {

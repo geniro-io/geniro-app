@@ -57,9 +57,10 @@ export class ProjectDao extends BaseDao<Project> {
    *
    * Reads through the default `softDelete` filter, which is what makes it the
    * right question to ask: a deleted project keeps its row and its folder, and
-   * that folder is free again. `ProjectsService.refuseTakenFolder` is the one
-   * caller and the only thing keeping the answer singular — no unique index
-   * backs it, deliberately, per `Project.folder`. Named `findAny` rather than
+   * that folder is free again. `ProjectsService.refuseTakenFolder` is the only
+   * thing keeping the answer singular — no unique index backs it, deliberately,
+   * per `Project.folder`; `MemoryService.scopeOf` reads it to file a run's
+   * memory under its project. Named `findAny` rather than
    * `findBy` because rows written before that check existed could still
    * collide, and this would then answer with an arbitrary one of them.
    */

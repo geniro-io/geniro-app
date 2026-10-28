@@ -10,11 +10,13 @@ import { dirname, join } from 'node:path';
 import { app } from 'electron';
 
 import {
+  DEFAULT_MEMORY,
   DEFAULT_SETTINGS,
   DEFAULT_SHARING,
   MAX_CONFIG_PROFILES,
   MAX_FAST_ACTIONS,
   MAX_RUN_CONFIGS,
+  type MemorySettings,
   type Settings,
   type ShareDestination,
   type SharingSettings,
@@ -22,6 +24,7 @@ import {
 import {
   autoRevokeAfterDaysSchema,
   MAX_SHARE_DESTINATIONS,
+  memorySchema,
   settingsPatchSchema,
   shareDestinationSchema,
   shareSignInSchema,
@@ -112,6 +115,10 @@ export function readSettings(): Settings {
       }
       if (key === 'sharing') {
         salvaged[key] = salvageSharing(record[key]);
+        continue;
+      }
+      if (key === 'memory') {
+        salvaged[key] = salvageMemory(record[key]);
         continue;
       }
       if (key === 'configProfiles') {
@@ -245,6 +252,22 @@ function salvageSharing(value: unknown): SharingSettings {
     autoRevokeAfterDays: autoRevokeAfterDaysSchema
       .catch(null)
       .parse(record.autoRevokeAfterDays ?? null),
+  };
+}
+
+/** The memory settings field by field: one bad value keeps the other. */
+function salvageMemory(value: unknown): MemorySettings {
+  if (typeof value !== 'object' || value === null) {
+    return DEFAULT_MEMORY;
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    enabled: memorySchema.shape.enabled
+      .catch(DEFAULT_MEMORY.enabled)
+      .parse(record.enabled),
+    agentWrites: memorySchema.shape.agentWrites
+      .catch(DEFAULT_MEMORY.agentWrites)
+      .parse(record.agentWrites),
   };
 }
 

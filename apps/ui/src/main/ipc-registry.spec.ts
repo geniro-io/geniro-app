@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
       agentsMayShare: false,
       autoRevokeAfterDays: null,
     },
+    memory: { enabled: true, agentWrites: 'active' },
   };
   return {
     handlers,

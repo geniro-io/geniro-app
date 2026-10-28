@@ -16,6 +16,7 @@ import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
 import { GraphsModule } from './v1/graphs/graphs.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
 import { McpModule } from './v1/mcp/mcp.module';
+import { MemoryModule } from './v1/memory/memory.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
 import { WsPresenceService } from './v1/notifications/services/ws-presence.service';
 import { ProjectsModule } from './v1/projects/projects.module';
@@ -58,6 +59,7 @@ export class AppModule {
         ProjectsModule,
         TasksModule,
         SharesModule,
+        MemoryModule,
       ],
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },

@@ -67,6 +67,7 @@ import {
   HOST_BOARD_TOOLS,
   HOST_COMPARISON_TOOL,
   HOST_GALLERY_TOOL,
+  HOST_MEMORY_TOOLS,
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
@@ -10430,6 +10431,32 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(respond).not.toHaveBeenCalledWith('p-save', true, {});
     // Only the save is left waiting on the user.
     expect(approvals.listByRun(run.id)).toHaveLength(1);
+  });
+
+  it('auto-approves the four shared-memory tools on an ASK chat', async () => {
+    const { service, claude, approvals } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const server = hostMcpServerName(run.id);
+    for (const tool of HOST_MEMORY_TOOLS) {
+      claude.emit({
+        type: 'approval_request',
+        id: `p-${tool}`,
+        toolName: `mcp__${server}__${tool}`,
+        input: {},
+      });
+    }
+    await drain();
+
+    const respond = claude.handles[0]!.respondApproval;
+    for (const tool of HOST_MEMORY_TOOLS) {
+      expect(respond).toHaveBeenCalledWith(`p-${tool}`, true, {});
+    }
+    expect(approvals.listByRun(run.id)).toEqual([]);
   });
 
   it('does NOT auto-approve a shell call whose title merely names a host tool', async () => {

@@ -7,6 +7,7 @@ import { TaskDao } from '../tasks/dao/task.dao';
 import { ProjectsController } from './controllers/projects.controller';
 import { ProjectDao } from './dao/project.dao';
 import { ProjectQueueService } from './services/project-queue.service';
+import { ProjectRootsService } from './services/project-roots.service';
 import { ProjectsService } from './services/projects.service';
 
 /**
@@ -43,7 +44,8 @@ import { ProjectsService } from './services/projects.service';
     LabelInstructionDao,
     ProjectsService,
     ProjectQueueService,
+    ProjectRootsService,
   ],
-  exports: [ProjectDao, ProjectQueueService],
+  exports: [ProjectDao, ProjectQueueService, ProjectRootsService],
 })
 export class ProjectsModule {}

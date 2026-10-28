@@ -115,6 +115,7 @@ import {
   terminalStatus,
 } from '../../agents/utils/event-to-item';
 import { firstTurnWindow } from '../../agents/utils/first-turn-window';
+import { isHostMemoryCall } from '../../agents/utils/host-memory';
 import { hostMcpServerName } from '../../agents/utils/host-question';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
@@ -4912,6 +4913,15 @@ export class GraphExecutorService
               handle.respondApproval(event.id, true, event.input);
               return;
             }
+            if (
+              !isQuestion &&
+              isHostMemoryCall(hostMcpServerName(runId), event.toolName)
+            ) {
+              // The shared memory, at every approval level, as in a chat: its
+              // limits live in `MemoryService` — see `isHostMemoryCall`.
+              handle.respondApproval(event.id, true, event.input);
+              return;
+            }
           }
           // Anything durable ends a silent reasoning stretch — the tool call
           // the model went quiet to prepare carries no text delta to close it
@@ -5228,9 +5238,13 @@ export class GraphExecutorService
       const onBetweenTurnApproval = (request: {
         toolName: string;
       }): boolean | null =>
-        questionCapable &&
-        approval === 'auto' &&
-        !isUserQuestion(adapter.getConfig().questionToolName, request.toolName)
+        (questionCapable &&
+          approval === 'auto' &&
+          !isUserQuestion(
+            adapter.getConfig().questionToolName,
+            request.toolName,
+          )) ||
+        isHostMemoryCall(hostMcpServerName(runId), request.toolName)
           ? true
           : null;
       // One registry key per CONVERSATION, never per node: a callable DAG node

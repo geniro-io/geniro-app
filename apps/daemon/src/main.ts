@@ -55,6 +55,7 @@ import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 import { WorkflowProposalService } from './v1/graphs/services/workflow-proposal.service';
+import { MemoryTextIndexService } from './v1/memory/services/memory-text-index.service';
 import { ShareService } from './v1/shares/services/share.service';
 import { WorkflowLedgerService } from './v1/stats/services/workflow-ledger.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
@@ -251,11 +252,13 @@ bootstrapper.addExtension(
           );
         });
 
-      // The chat full-text index (`db/chat-text-index.ddl.ts`): AFTER the
-      // schema sync, because a sync that rebuilds `items` drops the triggers
-      // this re-creates, and BEFORE listen, so no message can be written
-      // between the backfill and the triggers that keep it current.
+      // The full-text indexes (`db/chat-text-index.ddl.ts`,
+      // `db/memory-text-index.ddl.ts`): AFTER the schema sync, because a sync
+      // that rebuilds `items` or `memories` drops the triggers these re-create,
+      // and BEFORE listen, so no row can be written between the backfill and
+      // the triggers that keep it current.
       await app.get(ChatTextIndexService).ensure();
+      await app.get(MemoryTextIndexService).ensure();
 
       // Reconcile chat runs left `running` by a prior crash / SIGKILL. Runs HERE
       // (after the schema sync, before listen) — not via an OnApplicationBootstrap

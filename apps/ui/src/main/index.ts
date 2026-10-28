@@ -20,6 +20,7 @@ import { readGitStamp } from './git-info';
 import { registerIpc } from './ipc';
 import { KeptSessionConfigPush } from './kept-session-config-push';
 import { flushWindowsThen } from './line-measurement-flush';
+import { MemoryConfigPush } from './memory-config-push';
 import {
   applyTheme,
   resolvedTheme,
@@ -164,12 +165,23 @@ const keptSessionConfigPush = new KeptSessionConfigPush((message) => {
     source: 'kept-session-config',
   });
 });
+/**
+ * The memory settings, the same way: the daemon holds them in memory (memory
+ * on, agent writes active until the first push), so every daemon is told on
+ * start, after a restart from Settings, and after any write that changed them.
+ */
+const memoryConfigPush = new MemoryConfigPush((message) => {
+  void reportMainLog(supervisor.getHandle(), 'warn', message, {
+    source: 'memory-config',
+  });
+});
 onSettingsWritten((settings) => {
   notifySettingsChanged(BrowserWindow.getAllWindows());
   void shareConfigPush.pushIfChanged(supervisor.getHandle(), settings.sharing);
   void keptSessionConfigPush.pushIfChanged(supervisor.getHandle(), {
     idleMinutes: settings.keptSessionIdleMinutes,
   });
+  void memoryConfigPush.pushIfChanged(supervisor.getHandle(), settings.memory);
 });
 
 /**
@@ -588,6 +600,7 @@ function pushDaemonConfig(handle: DaemonHandle): void {
   void keptSessionConfigPush.push(handle, {
     idleMinutes: settings.keptSessionIdleMinutes,
   });
+  void memoryConfigPush.push(handle, settings.memory);
 }
 
 /**

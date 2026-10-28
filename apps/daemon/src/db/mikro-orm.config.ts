@@ -5,6 +5,7 @@ import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/sqlite';
 
 import { environment } from '../environments';
 import { CHAT_TEXT_TABLES } from './chat-text-index.ddl';
+import { MEMORY_TEXT_TABLES } from './memory-text-index.ddl';
 import { NulSafeSqliteDriver } from './nul-safe-sqlite.driver';
 
 const { dbPath } = environment;
@@ -28,9 +29,9 @@ export default defineConfig({
   allowGlobalContext: true,
   namingStrategy: UnderscoreNamingStrategy,
   discovery: { checkDuplicateFieldNames: false },
-  // The chat full-text index is not an entity and must stay invisible to the
+  // The full-text indexes are not entities and must stay invisible to the
   // schema sync — see CHAT_TEXT_TABLES.
-  schemaGenerator: { skipTables: [CHAT_TEXT_TABLES] },
+  schemaGenerator: { skipTables: [CHAT_TEXT_TABLES, MEMORY_TEXT_TABLES] },
   // NO `extensions` and no `seeder` block, unlike the sibling's config, and
   // the omission is load-bearing twice over.
   //

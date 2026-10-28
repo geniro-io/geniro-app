@@ -28,6 +28,7 @@ import {
   extractStringField,
 } from '../../agents/utils/ws-payload';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { MemoryEventBus } from '../../memory/services/memory-events.bus';
 import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
@@ -143,6 +144,7 @@ export class NotificationsGateway
   private usageSubscription?: Subscription;
   private taskSubscription?: Subscription;
   private shareSubscription?: Subscription;
+  private memorySubscription?: Subscription;
   /**
    * Debug fan-out failures, counted rather than logged.
    *
@@ -164,6 +166,7 @@ export class NotificationsGateway
     private readonly partials: PartialStreamService,
     private readonly subagents: SubagentRecoveryService,
     private readonly shares: ShareEventBus,
+    private readonly memories: MemoryEventBus,
   ) {}
 
   afterInit(server: Server): void {
@@ -249,6 +252,22 @@ export class NotificationsGateway
       },
       error: (err: unknown) =>
         this.logger.error(`share event bus errored: ${String(err)}`),
+    });
+    // A memory write goes to EVERY client, paired devices included: the user
+    // reads and edits memory from the phone too. The event names the entry,
+    // never its text.
+    this.memorySubscription = this.memories.allChanges().subscribe({
+      next: (change) => {
+        try {
+          server.emit('memory_changed', change);
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast memory_changed for ${change.memoryId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`memory event bus errored: ${String(err)}`),
     });
     // A DESTROYED run goes to every client, and it is the one announcement
     // whose absence a client cannot recover from on its own.
@@ -372,6 +391,7 @@ export class NotificationsGateway
     this.statusSubscription?.unsubscribe();
     this.taskSubscription?.unsubscribe();
     this.shareSubscription?.unsubscribe();
+    this.memorySubscription?.unsubscribe();
     this.deletedSubscription?.unsubscribe();
     this.changedSubscription?.unsubscribe();
     this.groupsSubscription?.unsubscribe();

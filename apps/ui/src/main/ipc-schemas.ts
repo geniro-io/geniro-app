@@ -262,6 +262,15 @@ export const sharingSchema = z.strictObject({
 });
 
 /**
+ * TWIN PARSER: `MemoryConfigSchema` in `apps/daemon/src/v1/memory/memory.types.ts`,
+ * which `memory-config-push.ts` pushes this to.
+ */
+export const memorySchema = z.strictObject({
+  enabled: z.boolean(),
+  agentWrites: z.enum(['active', 'pending']),
+});
+
+/**
  * A `Partial<Settings>` patch. `strictObject` rejects unknown keys, so the
  * renderer can't write arbitrary fields into settings.json.
  */
@@ -354,6 +363,7 @@ export const settingsPatchSchema = z.strictObject({
   notificationsEnabled: z.boolean().optional(),
   remoteAccessEnabled: z.boolean().optional(),
   sharing: sharingSchema.optional(),
+  memory: memorySchema.optional(),
   // The retention window, or null for "keep the archive". Bounded to exactly
   // what the daemon's own schema accepts, so a value this side lets through can
   // never be one that route refuses — and NULLABLE rather than absent, because

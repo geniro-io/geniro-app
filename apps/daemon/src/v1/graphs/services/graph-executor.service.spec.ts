@@ -49,6 +49,7 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import {
   ChatApprovalModeSchema,
   type HistoryWindow,
+  HOST_MEMORY_SAVE_TOOL,
   type OwnToolCallCount,
   type RunCreatedEvent,
   type RunDeltaEvent,
@@ -97,6 +98,7 @@ import {
   callMembershipOf,
   OUTSIDE_ANY_CALL,
 } from '../../agents/utils/call-membership';
+import { hostMcpServerName } from '../../agents/utils/host-question';
 import type { ModelPriceLookup } from '../../agents/utils/model-prices';
 import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import { readRunStageProgress } from '../../agents/utils/stage-progress';
@@ -3273,6 +3275,73 @@ describe('GraphExecutorService', () => {
     expect(approvals.resolve(run.id, card, true)).toBe(false);
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+
+  it('approves an ask node’s shared-memory call without a card, and still cards another server’s', async () => {
+    const { service, claude, approvals } = setup();
+    const askFlow: Workflow = {
+      name: 'ask',
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' }],
+      edges: [],
+    };
+    const run = await service.startRun({
+      slug: 'ask',
+      workflow: triggered(askFlow),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    const input = { title: 'Use pnpm', body: 'never npm' };
+
+    claude.starts[0]!.emit({
+      type: 'approval_request',
+      id: 'req-mem',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_MEMORY_SAVE_TOOL}`,
+      input,
+    });
+    claude.starts[0]!.emit({
+      type: 'approval_request',
+      id: 'req-other',
+      toolName: `mcp__someone-else__${HOST_MEMORY_SAVE_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.starts[0]!.respondApproval).toHaveBeenCalledWith(
+      'req-mem',
+      true,
+      input,
+    );
+    expect(claude.starts[0]!.respondApproval).toHaveBeenCalledTimes(1);
+    expect(() => cardIdFor(approvals, run.id, 'req-other')).not.toThrow();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('approves an ask node’s shared-memory call between turns too, and holds anything else', async () => {
+    const { service, claude } = setup();
+    const askFlow: Workflow = {
+      name: 'ask',
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' }],
+      edges: [],
+    };
+    const run = await service.startRun({
+      slug: 'ask',
+      workflow: triggered(askFlow),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    const node = claude.starts[0]!;
+    completeTurn(node, 'done');
+    await drain();
+
+    expect(
+      node.betweenTurnApproval({
+        toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_MEMORY_SAVE_TOOL}`,
+      }),
+    ).toBe(true);
+    expect(node.betweenTurnApproval({ toolName: 'Bash' })).toBeNull();
   });
 
   it('closes a node’s card when its CLI withdraws the request', async () => {

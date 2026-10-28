@@ -55,6 +55,7 @@ const mocks = vi.hoisted(() => {
       agentsMayShare: false,
       autoRevokeAfterDays: null,
     },
+    memory: { enabled: true, agentWrites: 'active' },
     archiveRetentionDays: null,
     historyPageSize: 1000,
     keptSessionIdleMinutes: 60,

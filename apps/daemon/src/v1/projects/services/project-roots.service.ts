@@ -2,13 +2,14 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
 import { mainRepositoryOfWorktree } from '../../agents/utils/repository-root';
-import { Project } from '../../projects/entity/project.entity';
 import { Task } from '../../tasks/entity/task.entity';
+import { Project } from '../entity/project.entity';
 import { taskIdOfWorktree } from '../utils/task-worktree';
 
 /**
- * Which PROJECT a folder's spend belongs to — the folder itself, unless it is
- * a git worktree, in which case the repository the worktree was cut from.
+ * Which PROJECT a folder belongs to — for its spend in Stats and for the scope
+ * of a run's shared memory — the folder itself, unless it is a git worktree, in
+ * which case the repository the worktree was cut from.
  *
  * REPORTED as "By project includes worktrees — it should not count a worktree
  * as a project": every board card runs in a worktree of its own, so one

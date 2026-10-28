@@ -8,6 +8,7 @@ export * from './DiagnosticsApi';
 export * from './GroupsApi';
 export * from './HandoffApi';
 export * from './LabelInstructionsApi';
+export * from './MemoriesApi';
 export * from './ProjectsApi';
 export * from './SharesApi';
 export * from './StatsApi';

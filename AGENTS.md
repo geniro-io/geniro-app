@@ -55,7 +55,8 @@ Agents may file issues and open pull requests. The human version is [`CONTRIBUTI
 2. The PR title is the release: squash-merge PRs so semantic-release reads the title (a merge commit makes it read the branch's own commit messages instead), so use `type(scope): subject` (`fix(ui): …`, `feat(daemon): …`). Commit messages use the same format.
 3. Every PR body follows `.github/pull_request_template.md`. `gh pr create --body` replaces the template, so write its headings yourself, in order: `## Why` (with `Closes #N` when there is an issue), `## What changed`, `## How it was verified`, `## Not in this PR` ("nothing" when empty), `## AI assistance` (name the agent), `## Checklist` (tick only what was actually done).
 4. Before pushing, `pnpm full-check` passes and any fixes its `lint:fix` made are committed (CI runs `lint` without fixing). A changed daemon route or wire schema also needs `pnpm generate:api` with the regenerated client committed.
-5. One concern per PR; open it with `--draft` while unfinished.
+5. A change that adds a user-facing feature or changes how one behaves also updates `README.md` in the same PR: the matching section of *What's inside* (or a new one), its wording, and any figure or screenshot it cites. A removed feature leaves the README with it. Internal refactors, fixes that change nothing a user sees, and docs-only changes need no README edit.
+6. One concern per PR; open it with `--draft` while unfinished.
 
 The issue-heading and PR-heading lists above are twins of the forms and the template: change one, change the other in the same commit.
 

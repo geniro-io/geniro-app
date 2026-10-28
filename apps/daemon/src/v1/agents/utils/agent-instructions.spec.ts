@@ -4,8 +4,27 @@ import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-sto
 import type { AgentTurnInput } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { CLAUDE_WITHHELD_TOOLS } from '../adapters/claude/claude.const';
 import { CodexAdapter } from '../adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
+import {
+  HOST_ARTIFACT_TOOL,
+  HOST_CHART_TOOL,
+  HOST_COMPARISON_TOOL,
+  HOST_FINDINGS_TOOL,
+  HOST_GALLERY_TOOL,
+  HOST_METRICS_TOOL,
+  HOST_MONITOR_TOOL,
+  HOST_NOTIFY_TOOL,
+  HOST_PATCH_TOOL,
+  HOST_PLAN_TOOL,
+  HOST_PROPOSE_WORKFLOW_TOOL,
+  HOST_PUBLISH_ACTION_TOOL,
+  HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_READ_WORKFLOWS_TOOL,
+  HOST_SEARCH_CHATS_TOOL,
+  type HostBoardTool,
+} from '../chat.types';
 import {
   GENIRO_UI_PREAMBLE,
   joinTurnInstructionParts,
@@ -33,6 +52,33 @@ const TURN: AgentTurnInput = { prompt: 'go', cwd: '/proj' };
 function composed(parts: TurnInstructionParts): string {
   return joinTurnInstructionParts(turnInstructionParts(parts));
 }
+
+/** The one preamble line that starts with `prefix`. */
+function lineStartingWith(prefix: string): string {
+  const line = GENIRO_UI_PREAMBLE.split('\n').find((candidate) =>
+    candidate.startsWith(prefix),
+  );
+  if (line === undefined) {
+    throw new Error(`no preamble line starts with ${prefix}`);
+  }
+  return line;
+}
+
+/** The preamble from its tools heading on. */
+function toolsSection(): string {
+  const start = GENIRO_UI_PREAMBLE.indexOf("## Geniro's own tools");
+  if (start < 0) {
+    throw new Error('the preamble has no tools section');
+  }
+  return GENIRO_UI_PREAMBLE.slice(start);
+}
+
+const BOARD_TOOLS_NAMED: readonly HostBoardTool[] = [
+  'list_tasks',
+  'get_task',
+  'create_task',
+  'update_task',
+];
 
 describe('GENIRO_UI_PREAMBLE', () => {
   it('contradicts the terminal claim rather than only stating the truth', () => {
@@ -76,13 +122,17 @@ describe('GENIRO_UI_PREAMBLE', () => {
     // rendered to a file", which is the job `show_chart` does properly — the
     // tool draws a live card, an embedded PNG is a picture of one — and the
     // agent read the preamble first. The bullet must stay about a picture the
-    // agent ALREADY has.
-    expect(GENIRO_UI_PREAMBLE).not.toContain('chart');
+    // agent ALREADY has, and the numbers go to the tool.
+    const imageBullet = lineStartingWith('- Images');
+    expect(imageBullet).not.toContain('chart');
     // Conditional, and that is not a hedge: this text is not gated on the MCP
     // endpoint having been delivered, and on ACP it is said once per session
     // and never repeated, so it has to stay true on a turn where no such tool
     // is registered.
-    expect(GENIRO_UI_PREAMBLE).toContain('where a tool is offered');
+    expect(imageBullet).toContain('where a tool is offered');
+    expect(lineStartingWith(`- \`${HOST_CHART_TOOL}\``)).toContain(
+      'several readings of one thing',
+    );
   });
 
   it('does not promise remote image URLs, which the renderer CSP refuses', () => {
@@ -95,6 +145,74 @@ describe('GENIRO_UI_PREAMBLE', () => {
     expect(doesNotRender).toBeDefined();
     expect(renders).not.toContain('http');
     expect(doesNotRender).toContain('http');
+  });
+});
+
+describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
+  it('names every tool it points to by its wire name', () => {
+    // claude lists MCP tools by name only, so this section is the one place
+    // in its context that says when each is the move; a name that drifted
+    // from the tool's would point at nothing.
+    const section = toolsSection();
+    for (const name of [
+      HOST_MONITOR_TOOL,
+      HOST_PUBLISH_ACTION_TOOL,
+      HOST_NOTIFY_TOOL,
+      HOST_CHART_TOOL,
+      HOST_METRICS_TOOL,
+      HOST_COMPARISON_TOOL,
+      HOST_GALLERY_TOOL,
+      HOST_ARTIFACT_TOOL,
+      HOST_FINDINGS_TOOL,
+      HOST_PLAN_TOOL,
+      HOST_PATCH_TOOL,
+      HOST_SEARCH_CHATS_TOOL,
+      HOST_READ_CHAT_CONTEXT_TOOL,
+      ...BOARD_TOOLS_NAMED,
+      HOST_READ_WORKFLOWS_TOOL,
+      HOST_PROPOSE_WORKFLOW_TOOL,
+    ]) {
+      expect(section).toContain(`\`${name}\``);
+    }
+  });
+
+  it('sends a wait on slow output to monitor rather than a sleep loop', () => {
+    const line = lineStartingWith(`- \`${HOST_MONITOR_TOOL}\``);
+
+    expect(line).toContain('CI run');
+    expect(line).toContain('end your turn');
+    expect(line).toContain('never poll it with sleep loops');
+  });
+
+  it('names the tool that replaces each of claude’s own tools geniro withholds', () => {
+    // claude 2.1.295's Bash description and its `sleep` refusal tell the model
+    // to use `Monitor`, which `--disallowedTools` removes on every geniro turn.
+    expect(CLAUDE_WITHHELD_TOOLS).toContain('Monitor');
+    expect(lineStartingWith(`- \`${HOST_MONITOR_TOOL}\``)).toContain(
+      '`Monitor`',
+    );
+    for (const name of CLAUDE_WITHHELD_TOOLS) {
+      expect(toolsSection()).toContain(`\`${name}\``);
+    }
+  });
+
+  it('offers a button that stops a server the agent leaves running', () => {
+    const line = lineStartingWith(`- \`${HOST_PUBLISH_ACTION_TOOL}\``);
+
+    expect(line).toContain('pull request being merged');
+    expect(line).toContain('whenever you leave a server or watcher running');
+  });
+
+  it('stays true on a turn that registers none of the tools', () => {
+    // Not gated on the MCP endpoint, and a workflow node is offered only some
+    // of these tools.
+    expect(toolsSection()).toContain(
+      'A tool missing from your list is not offered on this turn.',
+    );
+  });
+
+  it('names no CLI, since every CLI is handed the same text', () => {
+    expect(GENIRO_UI_PREAMBLE).not.toMatch(/claude|cursor|codex/i);
   });
 });
 

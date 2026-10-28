@@ -300,7 +300,7 @@ Full guides: `apps/ui/AGENTS.md` (renderer, chats, workflows, settings, notifica
 
 ### Agent instructions — the host preamble and the user's own
 
-- The preamble exists to contradict the CLI's own claim that output goes to a terminal. Every claim in it must match this renderer: GFM renders, local-path images render, remote images do not (CSP `img-src 'self' data:`). Never promise remote images or image output blocks, and say nothing about response length.
+- The preamble exists to contradict the CLI's own claim that output goes to a terminal, and to say when each of geniro's own tools is the move. Every claim in it must match this renderer: GFM renders, local-path images render, remote images do not (CSP `img-src 'self' data:`). Never promise remote images or image output blocks, and say nothing about response length.
 - Composition, order, per-CLI delivery, and the custom-instruction / reply-language snapshots: `apps/daemon/AGENTS.md` → _Agent instructions_. The Settings and workflow-inspector readouts of it: `apps/ui/AGENTS.md`.
 
 ### The daemon API client (generated — never hand-mirrored)

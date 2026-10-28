@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { atomicWrite } from '../../../../utils/atomic-file';
+import { registerSecret } from '../../../diagnostics/utils/redact';
 import { AgentKind } from '../../../runs/runs.types';
 import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
 import { adapterQuestionOf } from '../../utils/card-questions';
@@ -142,6 +143,12 @@ import {
   CURSOR_USAGE_METHOD,
   CURSOR_USAGE_REQUEST_TIMEOUT_MS,
 } from './cursor-acp.const';
+import {
+  cursorProfileAccountEnv,
+  cursorProfileRunEnv,
+  readCursorProfileAuthInfo,
+  readCursorProfileToken,
+} from './utils/cursor-account.utils';
 import { readCursorAgentFailure } from './utils/cursor-agent-failure.utils';
 import { readCursorContextUsage } from './utils/cursor-context-store.utils';
 import { seedCursorDataDir } from './utils/cursor-data-dir.utils';
@@ -585,10 +592,8 @@ export class CursorAcpAdapter extends AgentAdapter {
        * in the workspace, so a project that had one would not be wrong either.
        */
       skillRoots: {
-        // None: this CLI's ACCOUNT is not a config directory (see
-        // `configDir.unavailableReason`), so a run naming one changes nothing
-        // about which skills it can be invoked with, and the home roots below
-        // stand whatever a run asks for.
+        // A named configuration moves only the account; a run keeps the real
+        // home, so the home roots below stand whatever profile it names.
         profileAnchor: null,
         skills: [
           ['.cursor', 'skills'],
@@ -987,43 +992,12 @@ export class CursorAcpAdapter extends AgentAdapter {
           'cursor-agent searches conversation titles and folders only — it does not offer what was said inside them.',
       },
       configDir: {
-        /**
-         * `CURSOR_CONFIG_DIR` IS read by this binary — its own bundled source
-         * resolves it first, then `XDG_CONFIG_HOME/cursor`, then the default —
-         * and probing it (2026.08.04-aaa8809) with a fresh empty directory
-         * wrote `cli-config.json` and `statsig-cache.json` into it. So the
-         * mechanism exists. That much is unchanged.
-         *
-         * What it does NOT do is the thing this field is offered FOR: neither
-         * the toolbelt nor the ACCOUNT travels with the directory.
-         *
-         * - Toolbelt: the original probe's `mcp list` still reported the DEFAULT
-         *   profile's servers.
-         * - Account: re-measured 2026-08-12, because the reason this field used
-         *   to give ("geniro hands this CLI its identity as `CURSOR_API_KEY`")
-         *   stopped being true when that injection was removed. Pointed at a
-         *   fresh empty `CURSOR_CONFIG_DIR`, the CLI wrote a `cli-config.json`
-         *   carrying NO `authInfo` key — the real `~/.cursor/cli-config.json`
-         *   has one — and `cursor-agent status` run under that same directory
-         *   still reported the DEFAULT account. So the CLI writes its config
-         *   there while resolving the account from outside it.
-         *
-         * The verdict therefore stands on its own footing now: offering the
-         * control would promise a different subscription and deliver the same
-         * one. Re-probe both halves — an `authInfo` that lands inside the
-         * directory, and servers that follow it — before declaring it usable.
-         */
+        // No single variable carries the account; `configDirEnv` and
+        // `profileRunEnv` below do (`utils/cursor-account.utils.ts`).
         envVar: null,
-        unavailableReason:
-          'cursor-agent reads a config directory but keeps the account outside it — a fresh one still resolves the same login, so pointing a run at one would not change the subscription',
-        /**
-         * Moot while the field above refuses the switch outright — there is no
-         * profile to move a conversation TO — but stated rather than left to a
-         * default, because the two questions are genuinely separate and the
-         * next reader should not have to infer this one from the other.
-         */
+        unavailableReason: null,
         sessionCarryUnavailableReason:
-          'cursor-agent cannot be pointed at another profile at all, so there is nowhere to move a conversation to',
+          'cursor-agent has not been measured continuing a conversation under a second account, so the chat starts a fresh one',
       },
       userInstructions: {
         kind: 'unavailable',
@@ -1286,15 +1260,9 @@ export class CursorAcpAdapter extends AgentAdapter {
    * `execFile` either way — the answer requires WRITING two frames first.
    */
   override async listModels(
-    _input: AgentModelsInput,
+    input: AgentModelsInput,
     options: AgentCommandOptions = {},
   ): Promise<AgentModel[]> {
-    // The profile is ignored, and that is this CLI's own declaration rather
-    // than an omission: its ACCOUNT is not a config directory (probed — a
-    // fresh `CURSOR_CONFIG_DIR` still reports the default account), which is
-    // what `configDir.unavailableReason` says. So every run's model list is the
-    // same list, and the caller keys it under a null profile.
-
     // A DISPOSABLE folder, never the daemon's own cwd. A model vocabulary is an
     // ACCOUNT fact — `ModelsService` caches it per CLI version with no cwd in
     // the key — so no caller's folder belongs here; but `session/new` still
@@ -1318,6 +1286,7 @@ export class CursorAcpAdapter extends AgentAdapter {
       profile = seedCursorProfile({
         baseDir: this.profileBaseDir(),
         homeDir: this.cursorOptions.homeDir,
+        ...this.profileSeed(input.configDir),
       });
       const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
         ...options,
@@ -1332,7 +1301,10 @@ export class CursorAcpAdapter extends AgentAdapter {
           clientMeta: CURSOR_ACP_CLIENT_META,
         }),
         settleWhen: acpModelProbeSettled,
-        env: { [CURSOR_CONFIG_DIR_ENV]: profile },
+        env: {
+          [CURSOR_CONFIG_DIR_ENV]: profile,
+          ...this.profileRunEnv(input.configDir),
+        },
         timeoutMs: options.timeoutMs ?? CURSOR_MODEL_PROBE_TIMEOUT_MS,
       });
       return this.readModelProbe(stdout);
@@ -1577,10 +1549,9 @@ export class CursorAcpAdapter extends AgentAdapter {
   ): Promise<string | null | undefined> {
     const version = await this.resolveBinaryVersion(options);
     const kind = this.getConfig().kind;
-    // A NULL profile, always: this CLI's account is not a config directory
-    // (`configDir.unavailableReason`), so one answer serves every run and
-    // keying by profile would only split it into copies, each paying this
-    // CLI's own cold handshake — measured at 6–7s.
+    // A NULL profile, always: what a model offers is the model's, asked of the
+    // default account, and keying by profile would only split it into copies,
+    // each paying this CLI's own cold handshake — measured at 6–7s.
     const stored = this.vocabularyStore.read(
       kind,
       model,
@@ -2698,8 +2669,9 @@ export class CursorAcpAdapter extends AgentAdapter {
   protected override buildEnv(input: AgentTurnInput): Record<string, string> {
     const profile = this.turnProfiles.get(input);
     const dataDir = this.turnDataDirs.get(input);
+    const account = this.turnAccounts.get(input);
     return {
-      ...this.inheritedEnv(),
+      ...(account === undefined ? this.inheritedEnv() : account),
       // Runs BEFORE `input.env`, deliberately: a caller that names its own
       // config directory (a node pointed at a profile) must win over the
       // throwaway one, or the feature would be silently disabled by this.
@@ -2715,6 +2687,46 @@ export class CursorAcpAdapter extends AgentAdapter {
   private readonly turnProfiles = new WeakMap<AgentTurnInput, string>();
   /** Per-turn data directories, created by `prepareTurn` — see there. */
   private readonly turnDataDirs = new WeakMap<AgentTurnInput, string>();
+  /** A named configuration's account env, in place of the inherited one. */
+  private readonly turnAccounts = new WeakMap<
+    AgentTurnInput,
+    Record<string, string>
+  >();
+
+  protected override configDirEnv(
+    configDir: string | null | undefined,
+  ): Record<string, string> {
+    const dir = configDir?.trim();
+    return dir
+      ? cursorProfileAccountEnv(dir, this.cursorOptions.homeDir ?? homedir())
+      : {};
+  }
+
+  /** MCP servers and their sign-ins stay the real home's, whatever the profile. */
+  override runMcpLogin(
+    options: Parameters<AgentAdapter['runMcpLogin']>[0],
+  ): Promise<string | null> {
+    return super.runMcpLogin({ ...options, configDir: null });
+  }
+
+  private profileRunEnv(
+    configDir: string | null | undefined,
+  ): Record<string, string> {
+    const dir = configDir?.trim();
+    if (!dir) {
+      return {};
+    }
+    const token = readCursorProfileToken(dir);
+    registerSecret(token, 'cursor profile token');
+    return cursorProfileRunEnv(token);
+  }
+
+  private profileSeed(configDir: string | null | undefined): {
+    authInfo?: Record<string, unknown> | null;
+  } {
+    const dir = configDir?.trim();
+    return dir ? { authInfo: readCursorProfileAuthInfo(dir) } : {};
+  }
 
   /**
    * Give the turn its own `CURSOR_CONFIG_DIR`, seeded from the user's.
@@ -2770,8 +2782,12 @@ export class CursorAcpAdapter extends AgentAdapter {
       // so OFF has to be written as much as ON.
       maxMode: this.agentOption(input, CURSOR_MAX_MODE_OPTION),
       askForApprovals: cursorTurnAsks(input.approvalMode),
+      ...this.profileSeed(input.configDir),
     });
     this.turnProfiles.set(input, dir);
+    if (input.configDir?.trim()) {
+      this.turnAccounts.set(input, this.profileRunEnv(input.configDir));
+    }
     // A workflow node's switched-off MCP servers: this CLI reads which servers
     // to skip from its DATA directory's per-workspace `mcp-disabled.json`, so
     // such a turn gets a throwaway one whose list adds the node's to the user's
@@ -2803,6 +2819,7 @@ export class CursorAcpAdapter extends AgentAdapter {
     }
     return () => {
       this.turnProfiles.delete(input);
+      this.turnAccounts.delete(input);
       removeCursorProfile(dir);
       if (dataDir !== null) {
         this.turnDataDirs.delete(input);
@@ -2845,6 +2862,7 @@ export class CursorAcpAdapter extends AgentAdapter {
         baseDir: this.profileBaseDir(),
         sessionStoreDir: this.userSessionStoreDir(input.configDir),
         homeDir: this.cursorOptions.homeDir,
+        ...this.profileSeed(input.configDir),
       });
       const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
         ...options,
@@ -2860,7 +2878,10 @@ export class CursorAcpAdapter extends AgentAdapter {
           clientMeta: CURSOR_ACP_CLIENT_META,
         }),
         settleWhen: acpSessionListSettled,
-        env: { [CURSOR_CONFIG_DIR_ENV]: profile },
+        env: {
+          [CURSOR_CONFIG_DIR_ENV]: profile,
+          ...this.profileRunEnv(input.configDir),
+        },
         timeoutMs: options.timeoutMs ?? CURSOR_SESSION_LIST_TIMEOUT_MS,
       });
       return {
@@ -3030,6 +3051,7 @@ export class CursorAcpAdapter extends AgentAdapter {
         baseDir: this.profileBaseDir(),
         sessionStoreDir: this.sessionStoreDir(),
         homeDir: this.cursorOptions.homeDir,
+        ...this.profileSeed(input.configDir),
       });
       const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
         cwd: input.cwd,
@@ -3041,7 +3063,10 @@ export class CursorAcpAdapter extends AgentAdapter {
           clientMeta: CURSOR_ACP_CLIENT_META,
         }),
         settleWhen: acpSessionLoadSettled,
-        env: { [CURSOR_CONFIG_DIR_ENV]: profile },
+        env: {
+          [CURSOR_CONFIG_DIR_ENV]: profile,
+          ...this.profileRunEnv(input.configDir),
+        },
         timeoutMs: CURSOR_SESSION_LOAD_TIMEOUT_MS,
       });
       if (stdout === null) {
@@ -3064,8 +3089,8 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * Where the USER's own ACP conversations live — `<configDir>/acp-sessions`,
-   * or `~/.cursor/acp-sessions` when the run names no profile.
+   * Where the USER's own ACP conversations live — `<home>/.cursor/acp-sessions`,
+   * where a named configuration's directory is the home its CLI runs under.
    *
    * Distinct from {@link sessionStoreDir}, which is geniro's, and the two must
    * never be confused: one is read to offer an import, the other is written by
@@ -3073,8 +3098,8 @@ export class CursorAcpAdapter extends AgentAdapter {
    */
   private userSessionStoreDir(configDir: string | null): string {
     return join(
-      configDir ??
-        join(this.cursorOptions.homeDir ?? homedir(), CURSOR_HOME_DIR_NAME),
+      configDir ?? this.cursorOptions.homeDir ?? homedir(),
+      CURSOR_HOME_DIR_NAME,
       CURSOR_ACP_SESSIONS_DIR_NAME,
     );
   }

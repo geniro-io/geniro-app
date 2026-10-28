@@ -75,18 +75,12 @@ export interface LoginProbe {
     exitCode: number;
   }) => boolean | null;
   /**
-   * The env var that points this CLI at a config directory, when that
-   * directory also carries the ACCOUNT — so one probe per named configuration
-   * answers whether THAT account is signed in.
+   * The env that runs this CLI under one named configuration's ACCOUNT, so one
+   * probe per configuration answers whether THAT account is signed in.
    *
-   * claude's and codex's: their credentials live inside the directory
-   * (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` — measured on 2.1.280 and 0.157.1, an
-   * empty directory answers signed out and a signed-in profile signed in).
-   * cursor keeps its account outside the directory it reads (see the daemon's
-   * `configDir.unavailableReason`), so asking it per directory would report the
-   * default account N times.
+   * TWIN PARSER: the daemon adapter's `configDirEnv` for the same CLI.
    */
-  readonly configDirEnv?: string;
+  readonly profileEnv?: (dir: string) => Record<string, string>;
 }
 
 /** One "is there a newer version" question put to a CLI binary. */

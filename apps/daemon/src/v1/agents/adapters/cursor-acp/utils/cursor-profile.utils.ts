@@ -15,6 +15,7 @@ import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
   CURSOR_APPROVAL_MODE_CONFIG_KEY,
   CURSOR_ASKING_APPROVAL_MODE,
+  CURSOR_AUTH_INFO_CONFIG_KEY,
   CURSOR_HOME_DIR_NAME,
   CURSOR_MAX_MODE_CONFIG_KEY,
   CURSOR_PROFILE_DIR_PREFIX,
@@ -90,6 +91,8 @@ export interface CursorProfileSeed {
    * request in the driver anyway, and a probe profile runs no tools.
    */
   askForApprovals?: boolean;
+  /** A named configuration's own identity block; null drops the copied default account's. */
+  authInfo?: Record<string, unknown> | null;
 }
 
 /**
@@ -186,6 +189,9 @@ export function seedCursorProfile(seed: CursorProfileSeed): string {
           [CURSOR_APPROVAL_MODE_CONFIG_KEY]: CURSOR_ASKING_APPROVAL_MODE,
           [CURSOR_WEB_SEARCH_AUTO_ACCEPT_CONFIG_KEY]: false,
         }
+      : {}),
+    ...(seed.authInfo !== undefined
+      ? { [CURSOR_AUTH_INFO_CONFIG_KEY]: seed.authInfo ?? undefined }
       : {}),
   };
   if (

@@ -1076,6 +1076,17 @@ interface FakeCallContextRow {
   contextEstimated?: boolean;
 }
 
+function refuseConfigDirs(adapter: FakeAdapter): void {
+  const real = adapter.getConfig();
+  adapter.getConfig = () => ({
+    ...real,
+    configDir: {
+      ...real.configDir,
+      unavailableReason: 'this CLI keeps its account elsewhere',
+    },
+  });
+}
+
 function setup(
   runtimePort: number | null = 4870,
   opts: {
@@ -2172,11 +2183,12 @@ describe('GraphExecutorService', () => {
     expect(runDao.runs.size).toBe(0);
   });
 
-  it('leaves a cursor node’s config directory alone, never refusing over it', async () => {
-    // cursor-agent declares no plugin mechanism, so geniro must not invent a
-    // failure over a path that CLI would ignore anyway — nor pass it on as if
-    // it meant something. Without the config check this run would be refused.
+  it('leaves a node’s config directory alone on a CLI that cannot take one, never refusing over it', async () => {
+    // geniro must not invent a failure over a path that CLI would ignore
+    // anyway — nor pass it on as if it meant something. Without the config
+    // check this run would be refused.
     const { service, cursor } = setup();
+    refuseConfigDirs(cursor);
 
     await service.startRun({
       slug: 'cursor-plugin',
@@ -2210,6 +2222,7 @@ describe('GraphExecutorService', () => {
     // Deleting the notice leaves the previous spec green, which is why this
     // one exists beside it.
     const { service, itemDao, cursor } = setup();
+    refuseConfigDirs(cursor);
 
     await service.startRun({
       slug: 'cursor-plugin-notice',
@@ -2280,7 +2293,8 @@ describe('GraphExecutorService', () => {
   });
 
   it('names the POOL member whose setting it dropped', async () => {
-    const { service, itemDao } = setup();
+    const { service, itemDao, cursor } = setup();
+    refuseConfigDirs(cursor);
 
     await service.startRun({
       slug: 'pool-notice',

@@ -954,10 +954,9 @@ export function Settings({
    *
    * Asked of the daemon rather than decided here: it is the adapters that know
    * whether pointing a run at a config directory changes the account
-   * (`configDirs[].unavailableReason`), and cursor-agent's answer is that it does
-   * NOT — it reads the directory but keeps the account outside it. A renderer
-   * that allowlisted claude by name would be a second copy of that rule, free to
-   * disagree with the one the executor enforces.
+   * (`configDirs[].unavailableReason`). A renderer that allowlisted CLIs by name
+   * would be a second copy of that rule, free to disagree with the one the
+   * executor enforces.
    *
    * The action itself is deliberately NOT scoped: Settings configures the CLI,
    * so its sign-in and sign-out always act on the default profile. A run on

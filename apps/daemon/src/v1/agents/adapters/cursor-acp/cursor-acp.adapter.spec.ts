@@ -342,19 +342,6 @@ describe('CursorAcpAdapter spawn', () => {
     ).toBeNull();
   });
 
-  it('refuses a config directory without claiming geniro injects the account', () => {
-    // The old reason said cursor "takes its account from the API key geniro
-    // injects". That injection is gone, so the sentence would have been a
-    // falsehood shown to the user. The verdict stands on the re-probed reason.
-    const reason = new CursorAcpAdapter({
-      vocabularyStore: freshVocabularyStore(),
-      spawn: fakeSpawn().spawn,
-    }).getConfig().configDir.unavailableReason;
-    expect(reason).not.toBeNull();
-    expect(reason).not.toContain('geniro injects');
-    expect(reason).toContain('outside');
-  });
-
   it('opens the handshake on stdin and holds stdin open for the dialogue', () => {
     const { spawn, child } = fakeSpawn();
     new CursorAcpAdapter({
@@ -1445,6 +1432,180 @@ describe('CursorAcpAdapter turn shaping', () => {
     );
 
     expect(captured.env?.CURSOR_CONFIG_DIR).toBe('/explicit/profile');
+  });
+
+  describe('a named configuration', () => {
+    function cursorHome(authInfo: Record<string, unknown>): string {
+      const home = mkdtempSync(join(tmpdir(), 'cursor-home-spec-'));
+      dirs.push(home);
+      mkdirSync(join(home, '.cursor'));
+      writeFileSync(
+        join(home, '.cursor', 'cli-config.json'),
+        JSON.stringify({ approvalMode: 'allowlist', authInfo }),
+      );
+      return home;
+    }
+
+    function seededConfig(env: NodeJS.ProcessEnv | undefined): {
+      authInfo?: unknown;
+      approvalMode?: unknown;
+    } {
+      return JSON.parse(
+        readFileSync(join(env!.CURSOR_CONFIG_DIR!, 'cli-config.json'), 'utf8'),
+      ) as { authInfo?: unknown; approvalMode?: unknown };
+    }
+
+    it('is accepted', () => {
+      expect(
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+        }).getConfig().configDir.unavailableReason,
+      ).toBeNull();
+    });
+
+    it('runs its turn on its own account, held in memory, and never the user’s exported key', () => {
+      vi.stubEnv('CURSOR_API_KEY', 'user-exported-key-0000');
+      const home = cursorHome({ email: 'default@example.com' });
+      const configDir = cursorHome({ email: 'work@example.com' });
+      writeFileSync(
+        join(configDir, '.cursor', 'auth.json'),
+        JSON.stringify({
+          accessToken: 'work-access-token-0000',
+          refreshToken: 'work-refresh-token-0000',
+        }),
+      );
+      const { spawn, captured } = fakeSpawn();
+      const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+      dirs.push(profileDir);
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+        profileDir,
+        homeDir: home,
+      });
+      new AgentAdapterRegistry([adapter]);
+
+      adapter.start({ ...BASE, configDir }, () => {});
+
+      expect(captured.env?.AGENT_CLI_CREDENTIAL_STORE).toBe('memory');
+      expect(captured.env?.CURSOR_AUTH_TOKEN).toBe('work-access-token-0000');
+      expect(captured.env?.CURSOR_API_KEY).toBe('');
+      expect(captured.env?.HOME).toBe(process.env.HOME);
+      const seeded = seededConfig(captured.env);
+      expect(seeded.authInfo).toEqual({ email: 'work@example.com' });
+      expect(seeded.approvalMode).toBe('allowlist');
+    });
+
+    it('leaves a signed-out configuration signed out instead of borrowing the default login', () => {
+      const home = cursorHome({ email: 'default@example.com' });
+      const configDir = mkdtempSync(join(tmpdir(), 'cursor-work-spec-'));
+      dirs.push(configDir);
+      const { spawn, captured } = fakeSpawn();
+      const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+      dirs.push(profileDir);
+
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+        profileDir,
+        homeDir: home,
+      }).start({ ...BASE, configDir }, () => {});
+
+      expect(captured.env?.AGENT_CLI_CREDENTIAL_STORE).toBe('memory');
+      expect(captured.env?.CURSOR_AUTH_TOKEN).toBeUndefined();
+      expect(seededConfig(captured.env).authInfo).toBeUndefined();
+    });
+
+    it('leaves a turn with none on the CLI’s own login', () => {
+      vi.stubEnv('CURSOR_API_KEY', 'user-exported-key-0000');
+      const { spawn, captured } = fakeSpawn();
+      const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+      dirs.push(profileDir);
+
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+        profileDir,
+      }).start(BASE, () => {});
+
+      expect(captured.env?.AGENT_CLI_CREDENTIAL_STORE).toBeUndefined();
+      expect(captured.env?.CURSOR_API_KEY).toBe('user-exported-key-0000');
+    });
+
+    function recordingGroupSpawn(
+      record: (args: readonly string[], env: NodeJS.ProcessEnv) => void,
+    ): typeof spawn {
+      return ((
+        _command: string,
+        args: readonly string[],
+        options: { env?: NodeJS.ProcessEnv },
+      ) => {
+        record(args, options.env ?? {});
+        const fake = fakeGroupChild(4242);
+        queueMicrotask(() => fake.close(0));
+        return fake.child;
+      }) as unknown as typeof spawn;
+    }
+
+    it('signs in and out under its own home and the file store', async () => {
+      const spawned: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        homeDir: '/Users/me',
+        groupSpawnFn: recordingGroupSpawn((args, env) =>
+          spawned.push({ args: [...args], env }),
+        ),
+        execFileFn: ((
+          _command: string,
+          args: readonly string[],
+          options: { env?: NodeJS.ProcessEnv },
+          done: (err: null, stdout: string, stderr: string) => void,
+        ) => {
+          spawned.push({ args: [...args], env: options.env ?? {} });
+          queueMicrotask(() => done(null, '', ''));
+          return new FakeChild() as unknown as ChildProcess;
+        }) as unknown as typeof execFile,
+      });
+
+      await adapter.runLogin({
+        configDir: '/profiles/work',
+        timeoutMs: 1_000,
+        onSpawn: () => undefined,
+      });
+      await adapter.runLogout({
+        configDir: '/profiles/work',
+        timeoutMs: 1_000,
+      });
+
+      expect(spawned.map((row) => row.args)).toEqual([['login'], ['logout']]);
+      for (const row of spawned) {
+        expect(row.env.HOME).toBe('/profiles/work');
+        expect(row.env.AGENT_CLI_CREDENTIAL_STORE).toBe('file');
+        expect(row.env.NODE_COMPILE_CACHE).toBe(
+          '/Users/me/Library/Caches/cursor-compile-cache',
+        );
+      }
+    });
+
+    it('signs in to an MCP server under the real home, whatever profile asked', async () => {
+      const spawned: NodeJS.ProcessEnv[] = [];
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn: recordingGroupSpawn((_args, env) => spawned.push(env)),
+      });
+
+      await adapter.runMcpLogin({
+        server: 'linear',
+        cwd: process.cwd(),
+        configDir: '/profiles/work',
+        timeoutMs: 1_000,
+        onSpawn: () => undefined,
+      });
+
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]?.AGENT_CLI_CREDENTIAL_STORE).toBeUndefined();
+      expect(spawned[0]?.HOME).toBe(process.env.HOME);
+    });
   });
 
   it('runs a node’s switched-off MCP servers under a data dir whose disabled list adds them, and drops it with the session', async () => {
@@ -3613,6 +3774,29 @@ describe('CursorAcpAdapter misuse', () => {
       }).listModels({ configDir: null });
 
       expect(captured.args).toEqual(['acp']);
+    });
+
+    it('asks a named configuration’s account for its models', async () => {
+      vi.stubEnv('CURSOR_API_KEY', 'user-exported-key-0000');
+      const configDir = mkdtempSync(join(tmpdir(), 'cursor-work-spec-'));
+      dirs.push(configDir);
+      mkdirSync(join(configDir, '.cursor'));
+      writeFileSync(
+        join(configDir, '.cursor', 'auth.json'),
+        JSON.stringify({ accessToken: 'work-access-token-0000' }),
+      );
+      const { groupSpawnFn, captured } = fakeListing(SESSION_REPLY);
+
+      await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+      }).listModels({ configDir });
+
+      expect(captured.opts?.env?.AGENT_CLI_CREDENTIAL_STORE).toBe('memory');
+      expect(captured.opts?.env?.CURSOR_AUTH_TOKEN).toBe(
+        'work-access-token-0000',
+      );
+      expect(captured.opts?.env?.CURSOR_API_KEY).toBe('');
     });
 
     it('writes the handshake frames the answer depends on', async () => {

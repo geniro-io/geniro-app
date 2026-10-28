@@ -393,11 +393,9 @@ function CliInstallBand({
  * read "not signed in" beside runs that were working perfectly.
  *
  * `profileScoped` is per CLI and comes from the daemon's own
- * `configDirs[].unavailableReason`, never from a name: cursor-agent READS a
- * config directory but keeps the account outside it (probed — a fresh
- * `CURSOR_CONFIG_DIR` still reports the default account), so for that CLI there
- * is exactly one account and "Default profile" would invent a distinction it
- * does not have. Unknown — onboarding, or capabilities not yet answered — is
+ * `configDirs[].unavailableReason`, never from a name: a CLI that cannot run
+ * under another account has exactly one, and "Default profile" would invent a
+ * distinction it does not have. Unknown — onboarding, or capabilities not yet answered — is
  * treated as NOT scoped: at first run there are no profiles to distinguish, and
  * a prefix is worse than none if it might be wrong.
  *

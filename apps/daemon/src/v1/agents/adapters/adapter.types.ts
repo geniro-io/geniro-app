@@ -5049,7 +5049,8 @@ export interface AdapterConfig {
      * stops a run's `configDir` being validated, refused, or spawned for an
      * agent that would ignore it — geniro becoming the silent one is exactly
      * the failure the field exists to prevent. MUST agree with `envVar`: a
-     * null reason promises a var to carry it.
+     * null reason promises a var to carry it, or an adapter override of
+     * `configDirEnv` and of its turn env that carries the account instead.
      */
     readonly unavailableReason: string | null;
     /**

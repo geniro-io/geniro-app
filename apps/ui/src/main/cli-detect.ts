@@ -47,10 +47,12 @@ async function probeLogin(
   if (!probe) {
     return null;
   }
-  const env = probeEnv(kind);
-  if (configDir !== undefined && probe.configDirEnv !== undefined) {
-    env[probe.configDirEnv] = configDir;
-  }
+  const env = {
+    ...probeEnv(kind),
+    ...(configDir !== undefined && probe.profileEnv !== undefined
+      ? probe.profileEnv(configDir)
+      : {}),
+  };
   try {
     const { stdout, stderr } = await execFileAsync(path, [...probe.args], {
       timeout: 5000,
@@ -90,7 +92,7 @@ async function probeProfileLogins(
   path: string,
   settings: Settings,
 ): Promise<Record<string, boolean | null>> {
-  if (descriptorFor(kind).loginProbe?.configDirEnv === undefined) {
+  if (descriptorFor(kind).loginProbe?.profileEnv === undefined) {
     return {};
   }
   const answers = await Promise.all(

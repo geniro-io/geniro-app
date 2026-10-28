@@ -53,7 +53,7 @@ export const CODEX_DESCRIPTOR: CliAgentDescriptor = {
   // reads as unknown rather than as signed out).
   loginProbe: {
     args: ['login', 'status'],
-    configDirEnv: 'CODEX_HOME',
+    profileEnv: (dir) => ({ CODEX_HOME: dir }),
     read: ({ stderr, exitCode }) => {
       const text = stderr.trim().toLowerCase();
       if (exitCode === 0 && text.startsWith('logged in')) {

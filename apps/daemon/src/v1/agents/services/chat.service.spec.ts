@@ -8181,18 +8181,23 @@ describe('ChatService', () => {
   });
 
   it('createChat refuses a config directory on a CLI that cannot load one', async () => {
-    const { service } = setup();
+    const { service, cursor } = setup();
     const configDir = mkdtempSync(join(dir, 'plugins-'));
-    // The refusal carries the ADAPTER's own sentence — the chat picks its
-    // directory interactively, so "no" beats a field that silently does
-    // nothing (the workflow executor strips instead, and says why).
+    const real = cursor.adapter.getConfig();
+    cursor.adapter.getConfig = () => ({
+      ...real,
+      configDir: {
+        ...real.configDir,
+        unavailableReason: 'this CLI keeps its account elsewhere',
+      },
+    });
     await expect(
       service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
         configDir,
       }),
-    ).rejects.toThrow(/CONFIG_DIR_UNSUPPORTED|cursor/i);
+    ).rejects.toThrow(/this CLI keeps its account elsewhere/);
 
     // Same CLI, no config directory asked for: nothing to refuse.
     const run = await service.createChat({
@@ -8200,6 +8205,17 @@ describe('ChatService', () => {
       cwd: dir,
     });
     expect(run.configDir).toBeNull();
+  });
+
+  it('createChat keeps a cursor chat’s named configuration', async () => {
+    const { service } = setup();
+    const configDir = mkdtempSync(join(dir, 'cursor-work-'));
+    const run = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+      configDir,
+    });
+    expect(run.configDir).toBe(realpathSync(configDir));
   });
 
   it('spawns the turn with the chat’s config directory, and refuses once it is gone', async () => {
@@ -15142,7 +15158,15 @@ describe('ChatService — pointing an open chat at another account', () => {
     // The adapter owns the verdict, so no agent is named in the service. The
     // honest answer for a chat is "no" rather than a silently dropped field:
     // the profile is picked one control away from the agent picker.
-    const { service } = setup();
+    const { service, cursor } = setup();
+    const real = cursor.adapter.getConfig();
+    cursor.adapter.getConfig = () => ({
+      ...real,
+      configDir: {
+        ...real.configDir,
+        unavailableReason: 'this CLI keeps its account elsewhere',
+      },
+    });
     const run = await service.createChat({
       agentKind: 'cursor-agent',
       cwd: dir,
@@ -15150,7 +15174,20 @@ describe('ChatService — pointing an open chat at another account', () => {
 
     await expect(
       service.updateSettings(run.id, { configDir: profileB }),
-    ).rejects.toThrow('would not change the subscription');
+    ).rejects.toThrow('this CLI keeps its account elsewhere');
+  });
+
+  it('points a cursor chat at another account', async () => {
+    const { service, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+      configDir: profileA,
+    });
+
+    await service.updateSettings(run.id, { configDir: profileB });
+
+    expect(runDao.runs.get(run.id)?.configDir).toBe(profileB);
   });
 
   it('keeps the current profile, session and context when carrying the conversation fails', async () => {

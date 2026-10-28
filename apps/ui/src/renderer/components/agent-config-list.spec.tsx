@@ -397,9 +397,8 @@ describe('AgentConfigList — the account control matches the reported state', (
         ]}
         onSignIn={vi.fn()}
         onSignOut={vi.fn()}
-        // claude's account IS per-profile; cursor-agent's is not — it reads a
-        // config directory but keeps the account outside it, so a "Default
-        // profile" prefix there would invent a distinction it does not have.
+        // Only the kinds the daemon calls per-profile get the prefix; for any
+        // other it would invent a distinction the CLI does not have.
         profileScopedKinds={new Set(['claude'])}
       />,
     );

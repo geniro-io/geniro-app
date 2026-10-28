@@ -494,6 +494,7 @@ export function HostedChat({
           heldForBackgroundWork: run.holdingFor > 0,
           shellsRunning: run.shellsOpen > 0,
           subagentsOut: run.subagentsOut > 0,
+          monitorsRunning: run.monitorsOpen > 0,
         });
   const runSettledAt =
     run !== null && isSettledRunStatus(status)

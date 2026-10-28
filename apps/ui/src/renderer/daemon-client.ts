@@ -465,6 +465,12 @@ export interface RunStatusEvent {
    */
   monitorsChangedAt?: number;
   /**
+   * How many monitors this run has running, or `undefined` when this event
+   * says nothing about it — the {@link shellsOpen} twin the badge reads to show
+   * a thread waiting on a monitor.
+   */
+  monitorsOpen?: number;
+  /**
    * The pull requests this run shows (opened, and touched by its CLI's own
    * record), when a capture pass has just changed them.
    *
@@ -713,6 +719,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     subagentsOut,
     spendUpdatedAt,
     monitorsChangedAt,
+    monitorsOpen,
     pullRequests,
     taskList,
     stages,
@@ -819,6 +826,9 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     ...(typeof monitorsChangedAt === 'number' &&
     Number.isFinite(monitorsChangedAt)
       ? { monitorsChangedAt }
+      : {}),
+    ...(typeof monitorsOpen === 'number' && Number.isFinite(monitorsOpen)
+      ? { monitorsOpen: Math.max(0, Math.trunc(monitorsOpen)) }
       : {}),
     // Every entry checked, not merely the array: this arrives as a socket
     // payload rather than through the generated client, and a half-shaped ref

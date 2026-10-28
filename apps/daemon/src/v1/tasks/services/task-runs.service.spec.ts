@@ -117,6 +117,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     rootsWorking: 0,
     shellsOpen: 0,
     subagentsOut: 0,
+    monitorsOpen: 0,
     title: null,
     agentKind: 'claude',
     workflowId: null,

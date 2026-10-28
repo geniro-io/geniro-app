@@ -4,6 +4,7 @@ import {
   activityAfterAnnounce,
   displayRunStatus,
   isSettledRunStatus,
+  isWorkingRunStatus,
   RUN_STATUS_META,
   type RunStatusKind,
 } from './run-status';
@@ -283,6 +284,7 @@ describe('isSettledRunStatus', () => {
     'queued',
     'running',
     'held',
+    'monitoring',
     'needs-input',
     'untracked',
   ];
@@ -370,6 +372,57 @@ describe('a command still running after its turn', () => {
         displayRunStatus({ ...settled, status, shellsRunning: true }),
       ).toBe(status);
     }
+  });
+});
+
+describe('a monitor still running after its turn', () => {
+  const settled = {
+    status: 'completed' as const,
+    streaming: false,
+    awaitingAnswer: false,
+  };
+
+  it('reads a finished run as waiting on it', () => {
+    expect(displayRunStatus({ ...settled, monitorsRunning: true })).toBe(
+      'monitoring',
+    );
+    expect(RUN_STATUS_META.monitoring.label).toBe('waiting');
+    expect(displayRunStatus({ ...settled, monitorsRunning: false })).toBe(
+      'completed',
+    );
+  });
+
+  it('is outranked by the agent working, a question, and background work', () => {
+    expect(
+      displayRunStatus({ ...settled, monitorsRunning: true, streaming: true }),
+    ).toBe('running');
+    expect(
+      displayRunStatus({
+        ...settled,
+        monitorsRunning: true,
+        awaitingAnswer: true,
+      }),
+    ).toBe('needs-input');
+    expect(
+      displayRunStatus({
+        ...settled,
+        monitorsRunning: true,
+        shellsRunning: true,
+      }),
+    ).toBe('held');
+  });
+
+  it('never resurrects a run that stopped, failed, or never started', () => {
+    for (const status of ['cancelled', 'failed', 'pending'] as const) {
+      expect(
+        displayRunStatus({ ...settled, status, monitorsRunning: true }),
+      ).toBe(status);
+    }
+  });
+
+  it('is neither settled nor working', () => {
+    expect(isSettledRunStatus('monitoring')).toBe(false);
+    expect(isWorkingRunStatus('monitoring')).toBe(false);
   });
 });
 

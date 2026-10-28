@@ -203,6 +203,8 @@ export function runToWire(
    * callers, whose worked time lives per node.
    */
   wallWorkedMs: number | null = null,
+  /** How many monitors the run has running, from `MonitorRegistry`. */
+  monitorsOpen = 0,
 ): RunWire {
   return {
     id: run.id,
@@ -213,6 +215,7 @@ export function runToWire(
     rootsWorking,
     shellsOpen,
     subagentsOut,
+    monitorsOpen,
     title: run.title,
     agentKind: run.agentKind,
     workflowId: run.workflowId,

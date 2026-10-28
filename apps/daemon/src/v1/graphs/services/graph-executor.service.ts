@@ -2301,6 +2301,8 @@ export class GraphExecutorService
         // lasts as long as the callees do — see `RunWire.awaitingCalls`.
         this.callBroker.awaitingCalls(run.id),
         this.workingRoots.get(run.id)?.size ?? 0,
+        null,
+        this.monitors?.list(run.id).length ?? 0,
       ),
     );
   }

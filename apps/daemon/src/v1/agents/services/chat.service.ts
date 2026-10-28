@@ -8363,6 +8363,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       0,
       0,
       reads.wallMs,
+      this.monitors?.list(run.id).length ?? 0,
     );
   }
 

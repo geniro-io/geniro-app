@@ -209,7 +209,10 @@ function fitWidths(natural: number[], budget: number): number[] {
   return natural.map((width) => Math.min(width, low));
 }
 
-function useElementWidth(): [(el: HTMLDivElement | null) => void, number] {
+export function useElementWidth(): [
+  (el: HTMLDivElement | null) => void,
+  number,
+] {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
@@ -366,16 +369,23 @@ export function StageGraph<S extends StageGraphStage>({
   selectedId = null,
   errorIds,
   onSelect,
+  fitWidth,
   className,
 }: {
   stages: readonly S[];
   selectedId?: string | null;
   errorIds?: ReadonlySet<string>;
   onSelect?: (stageId: string) => void;
+  /**
+   * The room to fit into, for a container that sizes itself to the graph:
+   * measuring such a container would only ever read the graph's own width.
+   */
+  fitWidth?: number;
   className?: string;
 }): React.JSX.Element | null {
   const [hovered, setHovered] = useState<string | null>(null);
-  const [measure, available] = useElementWidth();
+  const [measure, measured] = useElementWidth();
+  const available = fitWidth ?? measured;
   if (stages.length === 0) {
     return null;
   }

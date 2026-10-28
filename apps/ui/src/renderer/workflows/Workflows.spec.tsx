@@ -1136,7 +1136,7 @@ describe('Workflows — a workflow’s stages', () => {
   async function pressInStages(label: string): Promise<void> {
     const control = [
       ...canvasStages()!.querySelectorAll<HTMLButtonElement>('button'),
-    ].find((button) => button.textContent?.trim() === label);
+    ].find((button) => button.getAttribute('aria-label') === label);
     if (control === undefined) {
       throw new Error(`no stages control named ${label}`);
     }
@@ -1179,20 +1179,35 @@ describe('Workflows — a workflow’s stages', () => {
     expect(window.localStorage.getItem('geniro.builder.stagesOpen')).toBe('0');
   });
 
-  it('opens the chat dock with a stage change started in its composer', async () => {
+  it('leaves the chat to the header toggle: the stage panel has no chat button', async () => {
     client = fakeClient();
     opens(STAGES);
     await openBuilder();
 
-    await pressInStages('Change with chat');
-    await wait(50);
+    const labels = [...canvasStages()!.querySelectorAll('button')].map(
+      (button) => button.getAttribute('aria-label') ?? button.textContent,
+    );
+    expect(labels).toEqual(['Edit stages', 'Hide the stage graph']);
+  });
 
-    expect(panel()!.hasAttribute('hidden')).toBe(false);
-    const composer = panel()!.querySelector<HTMLTextAreaElement>(
-      'textarea[aria-label="Ask for a workflow change"]',
-    )!;
-    expect(composer.value).toBe('Change the stages: ');
-    expect(document.activeElement).toBe(composer);
+  it('opens the stage editor on the stage pressed in the graph', async () => {
+    opens(STAGES);
+    await openBuilder();
+
+    await act(async () => {
+      canvasStages()!
+        .querySelector<SVGGElement>(
+          '[data-slot="stage-pill"][data-stage-id="build"]',
+        )!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const htmlFor = [...document.querySelectorAll('label')].find(
+      (label) => label.textContent === 'Title',
+    )!.htmlFor;
+    expect((document.getElementById(htmlFor) as HTMLInputElement).value).toBe(
+      'Build',
+    );
   });
 
   it('keeps what the user already typed and puts the stage request after it', async () => {
@@ -1212,7 +1227,13 @@ describe('Workflows — a workflow’s stages', () => {
       composer.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
-    await pressInStages('Change with chat');
+    await menuRow('Edit name and description');
+    const dialogAsk = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ].find((button) => button.textContent?.trim() === 'Change with chat')!;
+    await act(async () => {
+      dialogAsk.click();
+    });
     await wait(50);
 
     expect(composer.value).toBe('Rename the coder.\n\nChange the stages: ');
@@ -1242,7 +1263,7 @@ describe('Workflows — a workflow’s stages', () => {
     opens(STAGES);
     await openBuilder();
 
-    await pressInStages('Edit');
+    await pressInStages('Edit stages');
     const htmlFor = [...document.querySelectorAll('label')].find(
       (label) => label.textContent === 'Title',
     )!.htmlFor;

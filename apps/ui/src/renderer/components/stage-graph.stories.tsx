@@ -127,3 +127,8 @@ export const AgentsPanelWidth: Story = {
     ],
   },
 };
+
+/** Told how much room it has (`fitWidth`) instead of measuring its container: the pills narrow to fit. */
+export const FitWidth: Story = {
+  args: { fitWidth: 300 },
+};

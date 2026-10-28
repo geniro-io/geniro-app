@@ -331,6 +331,9 @@ export function Workflows({
   const [chatDraft, setChatDraft] = useState<DraftRequest | null>(null);
   const chatDraftCount = useRef(0);
   const [stagesEditorOpen, setStagesEditorOpen] = useState(false);
+  const [stagesEditorFocus, setStagesEditorFocus] = useState<string | null>(
+    null,
+  );
   const [firstChat, setFirstChat] = useState<{
     slug: string;
     agent: CliKind;
@@ -1893,10 +1896,10 @@ export function Workflows({
             <Controls />
             <CanvasStages
               stages={stages ?? []}
-              onEdit={() => setStagesEditorOpen(true)}
-              {...(activeSlug === null
-                ? {}
-                : { onAskChat: () => askChat(CHANGE_STAGES_DRAFT) })}
+              onEdit={(stageId) => {
+                setStagesEditorFocus(stageId);
+                setStagesEditorOpen(true);
+              }}
             />
           </ReactFlow>
         </div>
@@ -2475,6 +2478,7 @@ export function Workflows({
         open={stagesEditorOpen}
         stages={stages}
         agentIds={agentIds}
+        initialSelectedId={stagesEditorFocus}
         onClose={() => setStagesEditorOpen(false)}
         onSave={(saved) => {
           setStages(saved.length > 0 ? saved : undefined);

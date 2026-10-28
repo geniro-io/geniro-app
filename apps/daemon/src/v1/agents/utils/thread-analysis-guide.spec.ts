@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  HOST_CHART_TOOL,
+  HOST_METRICS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
   HOST_WORKFLOW_CHANGE_TOOL,
 } from '../chat.types';
@@ -103,6 +105,51 @@ describe('workflowAnalysisGuide', () => {
     expect(guide).toContain('## Where a fix belongs');
   });
 
+  it("has the analyst measure every agent's instructions and grade them on five marks", () => {
+    const guide = workflowAnalysisGuide(null);
+
+    expect(guide).toContain('5. Instruction size. Read view=workflow');
+    expect(guide).toContain('`instructionSizes`');
+    expect(guide).toContain('`inThisRun`');
+    expect(guide).toContain('6. Instruction quality.');
+    for (const mark of [
+      'clear (',
+      'specific (',
+      'consistent (',
+      'lean (',
+      'followed (',
+    ]) {
+      expect(guide).toContain(mark);
+    }
+  });
+
+  it('asks for the whole report in the reply, section by section, before the card', () => {
+    const guide = workflowAnalysisGuide(null);
+    const report = guide.indexOf('## The report');
+    const send = guide.indexOf('## What to send');
+    const sections = [
+      `1. Headline — one \`${HOST_METRICS_TOOL}\` scorecard`,
+      '2. Time per run — a table',
+      `3. Time per agent — one \`${HOST_CHART_TOOL}\` bar chart`,
+      '4. Calls between agents',
+      '5. Models — a table per agent and model',
+      '6. Instruction size — a table per agent',
+      '7. Instruction quality — a table per agent',
+      '8. Where the time went',
+      '9. The one change that matters most',
+    ].map((section) => guide.indexOf(section, report));
+
+    expect(report).toBeGreaterThan(-1);
+    expect(sections).not.toContain(-1);
+    expect([...sections].sort((a, b) => a - b)).toEqual(sections);
+    expect(sections.at(-1)!).toBeLessThan(send);
+    expect(guide).toContain('write "not measured" for a null');
+    expect(guide.slice(send)).toContain(
+      '1. The report above, whole, in your reply',
+    );
+    expect(guide).not.toContain('A short summary in your reply');
+  });
+
   it("adds the user's focus as its own section", () => {
     expect(workflowAnalysisGuide(' cheaper reviews ')).toContain(
       "## The user's focus for this analysis\n\ncheaper reviews",
@@ -113,7 +160,7 @@ describe('workflowAnalysisGuide', () => {
 describe('workflowAnalysisBrief', () => {
   it('names the workflow, how many runs, and where to start', () => {
     expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 5 })).toBe(
-      'Analyse the workflow "Dev Team" across its 5 latest runs: compare how its agents and their models did, and find what in the workflow or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=runs.',
+      'Analyse the workflow "Dev Team" across its 5 latest runs: report how long each run and each agent worked, how large and how good each agent\'s instructions are, and how its agents and their models compare, and find what in the workflow or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=runs.',
     );
     expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 1 })).toContain(
       'across its latest run:',

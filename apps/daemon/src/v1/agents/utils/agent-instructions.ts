@@ -277,3 +277,14 @@ export function joinTurnInstructionParts(
 ): string {
   return parts.map((part) => part.text).join(TURN_INSTRUCTION_SEPARATOR);
 }
+
+/**
+ * The common rough rule for English prose. A readout says "approximate"
+ * because each model's tokenizer differs, and none of them is run here.
+ */
+const CHARS_PER_TOKEN = 4;
+
+/** Roughly how many tokens an instruction text of `chars` characters takes. */
+export function approxInstructionTokens(chars: number): number {
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}

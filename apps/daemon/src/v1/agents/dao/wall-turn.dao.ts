@@ -97,20 +97,26 @@ export class WallTurnDao extends BaseDao<WallTurn> {
     return Number(row?.ms ?? 0);
   }
 
-  /** Each workflow node's recorded wall time in this run, by node id. */
+  /**
+   * Each workflow node's recorded wall time in this run, by node id — only
+   * the turns that ended at or before `throughSeq` when it is given.
+   */
   async nodeSums(
     runId: string,
     txEm?: EntityManager,
+    throughSeq?: number,
   ): Promise<Map<string, number>> {
-    const rows = await (txEm ?? this.em.fork())
+    let query = (txEm ?? this.em.fork())
       .getKysely<WallTurnDatabase>({ convertValues: false })
       .selectFrom('wall_turns')
       .select((eb) => ['node_id', eb.fn.sum<number>('ms').as('ms')])
       .where('run_id', '=', runId)
       .where('node_id', 'is not', null)
-      .where('deleted_at', 'is', null)
-      .groupBy('node_id')
-      .execute();
+      .where('deleted_at', 'is', null);
+    if (throughSeq !== undefined) {
+      query = query.where('seq', '<=', throughSeq);
+    }
+    const rows = await query.groupBy('node_id').execute();
     const out = new Map<string, number>();
     for (const row of rows) {
       if (row.node_id !== null) {

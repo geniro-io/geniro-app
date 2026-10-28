@@ -91,7 +91,11 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
             // Masked BEFORE paging: a secret cut across two chunks matches
             // in neither, and the per-chunk pass would let both halves out.
             maskedAnswer(
-              await this.workflows.describe(workflow.slug, workflow.snapshot),
+              await this.workflows.describe(
+                workflow.slug,
+                workflow.snapshot,
+                workflow.instructions,
+              ),
             ),
             read.query.offset ?? 0,
           ),

@@ -223,6 +223,7 @@ function liveReadingsOf(
   | 'holdingFor'
   | 'shellsOpen'
   | 'subagentsOut'
+  | 'monitorsOpen'
   | 'awaitingCalls'
   | 'rootsWorking'
 > {
@@ -231,6 +232,7 @@ function liveReadingsOf(
     holdingFor: run.holdingFor,
     shellsOpen: run.shellsOpen,
     subagentsOut: run.subagentsOut,
+    monitorsOpen: run.monitorsOpen,
     awaitingCalls: run.awaitingCalls,
     rootsWorking: run.rootsWorking,
   };
@@ -243,6 +245,7 @@ function announcesLiveReading(event: RunStatusEvent): boolean {
     event.holdingFor !== undefined ||
     event.shellsOpen !== undefined ||
     event.subagentsOut !== undefined ||
+    event.monitorsOpen !== undefined ||
     event.awaitingCalls !== undefined ||
     event.rootsWorking !== undefined
   );
@@ -2802,6 +2805,26 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           }
           return next;
         });
+      }
+      // The monitors twin: only an explicit count moves it, onto the row the
+      // badge reads.
+      if (event.monitorsOpen !== undefined) {
+        const count = event.monitorsOpen;
+        setRuns((prev) =>
+          prev.some(
+            (row) => row.id === event.runId && row.monitorsOpen !== count,
+          )
+            ? prev.map((row) =>
+                row.id === event.runId ? { ...row, monitorsOpen: count } : row,
+              )
+            : prev,
+        );
+        setOffScopeRuns((prev) =>
+          patchKeptRow(prev, event.runId, (row) => ({
+            ...row,
+            monitorsOpen: count,
+          })),
+        );
       }
       // The run row's own context reading, carried by every status broadcast
       // rather than only by the live deltas of the room this client happens to

@@ -38,6 +38,7 @@ const run1: ChatRun = {
   rootsWorking: 0,
   shellsOpen: 0,
   subagentsOut: 0,
+  monitorsOpen: 0,
   title: 'My chat',
   agentKind: 'claude',
   workflowId: null,

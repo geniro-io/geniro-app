@@ -80,6 +80,7 @@ function chatState(overrides: Partial<HostedChatState>): HostedChatState {
       holdingFor: 0,
       shellsOpen: 0,
       subagentsOut: 0,
+      monitorsOpen: 0,
     } as HostedChatState['run'],
     items: [],
     anchors: [],

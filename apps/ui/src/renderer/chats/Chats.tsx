@@ -6035,6 +6035,7 @@ export function Chats({
             // knowable for the open chat and no other, so the badge would
             // change when the user looked away.
             subagentsOut: delegatesOut.has(activeRun.id),
+            monitorsRunning: activeRun.monitorsOpen > 0,
           })
         : 'pending',
     [
@@ -8392,6 +8393,7 @@ export function Chats({
         // being on the wire — see this callback's own doc.
         shellsRunning: shellsOut.has(run.id),
         subagentsOut: delegatesOut.has(run.id),
+        monitorsRunning: run.monitorsOpen > 0,
         // Row-carried for every run, not just the focused one: seeded from the
         // run list's own `holdingFor` and then kept current by the live
         // announce, which is what makes it right for a thread the user is not
@@ -9177,6 +9179,7 @@ export function Chats({
                               archivedAt={run.archivedAt ?? null}
                               activity={activities.get(run.id) ?? null}
                               awaiting={run.awaiting}
+                              monitors={run.monitorsOpen}
                               agentKind={run.agentKind}
                               taskIdentifier={run.taskIdentifier}
                               pullRequest={

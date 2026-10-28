@@ -31,11 +31,14 @@ const snapshot: MonitorSnapshot = {
 describe('MonitorAnnouncer', () => {
   it('announces a start and an end on the run, never a batch of output', () => {
     let listener: ((event: MonitorEvent) => unknown) | null = null;
+    let running: MonitorSnapshot[] = [];
     const registry = {
       subscribe: (l: (event: MonitorEvent) => unknown) => {
         listener = l;
         return () => undefined;
       },
+      list: (runId: string) =>
+        running.filter((monitor) => monitor.owner.runId === runId),
     } as unknown as MonitorRegistry;
     const bus = new AgentEventBus();
     const seen: RunStatusEvent[] = [];
@@ -49,7 +52,9 @@ describe('MonitorAnnouncer', () => {
     });
     expect(seen).toEqual([]);
 
+    running = [snapshot];
     listener!({ type: 'start', monitor: snapshot });
+    running = [];
     listener!({
       type: 'end',
       monitor: snapshot,
@@ -63,11 +68,13 @@ describe('MonitorAnnouncer', () => {
         runId: 'run-a',
         status: null,
         monitorsChangedAt: expect.any(Number),
+        monitorsOpen: 1,
       }),
       expect.objectContaining({
         runId: 'run-a',
         status: null,
         monitorsChangedAt: expect.any(Number),
+        monitorsOpen: 0,
       }),
     ]);
   });

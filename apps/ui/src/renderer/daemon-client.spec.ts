@@ -345,6 +345,18 @@ describe('parseRunStatus — the run_status twin', () => {
     ).not.toHaveProperty('monitorsChangedAt');
   });
 
+  it('carries the running-monitor count, zero included, and drops one that is not a number', () => {
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, monitorsOpen: 2 }),
+    ).toMatchObject({ monitorsOpen: 2 });
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, monitorsOpen: 0 }),
+    ).toMatchObject({ monitorsOpen: 0 });
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, monitorsOpen: 'two' }),
+    ).not.toHaveProperty('monitorsOpen');
+  });
+
   it('carries which announced pull requests the run opened, reading a missing mark as touched', () => {
     const ref = (number: number) => ({
       owner: 'o',

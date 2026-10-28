@@ -445,6 +445,7 @@ describe('WorkflowChatPanel', () => {
       status: 'running',
       holdingFor: 0,
       subagentsOut: 0,
+      monitorsOpen: 0,
       shellsOpen: 1,
     } as WorkflowChatState['run'];
     chat.current = chatState({ working: true, run });

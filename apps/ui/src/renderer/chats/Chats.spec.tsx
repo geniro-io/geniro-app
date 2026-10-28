@@ -269,6 +269,7 @@ const run1: ChatRun = {
   rootsWorking: 0,
   shellsOpen: 0,
   subagentsOut: 0,
+  monitorsOpen: 0,
   title: 'My chat',
   agentKind: 'claude',
   workflowId: null,
@@ -2845,6 +2846,38 @@ describe('Chats — the system notifications a thread earns', () => {
     });
   });
 
+  it('badges a background thread waiting on its monitor, and still announces the turn ending', async () => {
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+    const row = (): string =>
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+        (el) => el.textContent?.includes('Second chat'),
+      )?.textContent ?? '';
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: null, monitorsOpen: 1 });
+    });
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+
+    expect(row()).toContain('waiting');
+    expect(row()).toContain('on a monitor');
+    expect(row()).not.toContain('completed');
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', kind: 'turn-end' }),
+    );
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: null, monitorsOpen: 0 });
+    });
+    expect(row()).toContain('completed');
+    expect(row()).not.toContain('on a monitor');
+  });
+
   it("posts the agent's OWN notification for a thread that finished and left a server running", async () => {
     // The ending the rule below cannot recognise: a finished agent with a dev
     // server still up looks exactly like one waiting on a test run, so its own
@@ -4563,6 +4596,7 @@ describe('Chats workflow runs', () => {
     rootsWorking: 1,
     shellsOpen: 0,
     subagentsOut: 0,
+    monitorsOpen: 0,
     title: 'Review team',
     agentKind: null,
     workflowId: 'review-team',
@@ -6460,6 +6494,7 @@ describe('Chats — handing a conversation to the user', () => {
       rootsWorking: 1,
       shellsOpen: 0,
       subagentsOut: 0,
+      monitorsOpen: 0,
       title: 'Review team',
       agentKind: null,
       workflowId: 'review-team',

@@ -6,7 +6,8 @@ import { MonitorRegistry } from './monitor.registry';
 /**
  * Tells clients the moment a run's set of running monitors changes, so run
  * state's `monitors` is re-read then: the row recording an end can wait for
- * the agent's turn to finish, while the monitor is already gone.
+ * the agent's turn to finish, while the monitor is already gone. The count
+ * rides along for every row's badge.
  */
 @Injectable()
 export class MonitorAnnouncer implements OnModuleInit {
@@ -20,10 +21,12 @@ export class MonitorAnnouncer implements OnModuleInit {
       if (event.type === 'batch') {
         return;
       }
+      const { runId } = event.monitor.owner;
       this.bus.publishRunStatus({
-        runId: event.monitor.owner.runId,
+        runId,
         status: null,
         monitorsChangedAt: Date.now(),
+        monitorsOpen: this.monitors.list(runId).length,
       });
     });
   }

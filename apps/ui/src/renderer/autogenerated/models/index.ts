@@ -6099,6 +6099,12 @@ export interface RunDto {
      */
     subagentsOut: number;
     /**
+     * Monitors this run has running; 0 when none are
+     * @type {number}
+     * @memberof RunDto
+     */
+    monitorsOpen: number;
+    /**
      * 
      * @type {string}
      * @memberof RunDto
@@ -9413,6 +9419,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     subagentsOut: number;
+    /**
+     * Monitors this run has running; 0 when none are
+     * @type {number}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    monitorsOpen: number;
     /**
      * 
      * @type {string}

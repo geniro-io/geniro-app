@@ -38,6 +38,7 @@ import {
   awaitingPhrase,
   HELD_ACTIVITY,
   isWorkingRunStatus,
+  monitoringPhrase,
   RUN_STATUS_META,
   RunStatusIcon,
   type RunStatusKind,
@@ -141,6 +142,7 @@ export const ChatListItem = memo(function ChatListItem({
   archivedAt = null,
   activity = null,
   awaiting = null,
+  monitors = 0,
   agentKind = null,
   taskIdentifier = null,
   pullRequest = null,
@@ -207,6 +209,8 @@ export const ChatListItem = memo(function ChatListItem({
    * stayed correct.
    */
   awaiting?: RunAwaiting | null;
+  /** How many monitors the run has running — the run row's `monitorsOpen`. */
+  monitors?: number;
   /**
    * Which CLI drives this thread — the daemon's own spelling, or null for a run
    * that recorded none. Ignored for a workflow, whose agents are per node; see
@@ -862,6 +866,10 @@ export const ChatListItem = memo(function ChatListItem({
           <span className="min-w-0 truncate text-muted-foreground">
             · {awaitingPhrase(awaiting)}
           </span>
+        ) : status === 'monitoring' ? (
+          <span className="min-w-0 truncate text-muted-foreground">
+            · {monitoringPhrase(monitors)}
+          </span>
         ) : isWorkingRunStatus(status) ? (
           /* Never conditional on there BEING a phrase: a null activity means
              "working, nothing named", not "say nothing", and treating the two
@@ -883,7 +891,9 @@ export const ChatListItem = memo(function ChatListItem({
             run is live on both of those counts too, so it is excluded with
             them: `waiting · 24m` was the reported row, and the `24m` is exactly
             the half of it that reads as a thread nobody has touched since. */}
-        {!isWorkingRunStatus(status) && status !== 'needs-input' ? (
+        {!isWorkingRunStatus(status) &&
+        status !== 'needs-input' &&
+        status !== 'monitoring' ? (
           <time
             dateTime={lastActivityAt}
             title={runDatesTitle({ lastActivityAt, createdAt, archivedAt })}

@@ -5221,6 +5221,13 @@ export interface RunStatusEvent {
    */
   monitorsChangedAt?: number;
   /**
+   * How many monitors this run has running, or `undefined` when this event
+   * says nothing about it. Sent beside {@link monitorsChangedAt}, on
+   * {@link shellsOpen}'s three-state terms: a display fact, so a settled
+   * thread whose agent waits on a monitor reads as waiting in every window.
+   */
+  monitorsOpen?: number;
+  /**
    * The run's new status, or null when this event only says what the run is
    * DOING and asserts nothing about whether it is still going.
    *
@@ -6077,6 +6084,16 @@ export const RunWireSchema = z.object({
     .describe(
       'Background sub-agents this run still has out; 0 when none are out',
     ),
+  /**
+   * Monitors this run has running, on the snapshot for {@link shellsOpen}'s
+   * reasons: a monitor outlives the turn that started it, and the agent is
+   * waiting on its output.
+   */
+  monitorsOpen: z
+    .number()
+    .int()
+    .min(0)
+    .describe('Monitors this run has running; 0 when none are'),
   title: z.string().nullable(),
   agentKind: AgentKindSchema.nullable(),
   workflowId: z

@@ -36,7 +36,7 @@ export const HOSTED_CHAT_PAGE = 120;
  * fields the header, the context ring and the delegate blocks read, and only
  * those the announce carries. The fields the chat screen's `patchRow` sets the
  * same way are `runStatusRowFields`; the rest here are this hook's own readings
- * of the shell and sub-agent counts and of the context, which the chat screen
+ * of the shell, sub-agent and monitor counts and of the context, which the chat screen
  * applies through handlers of its own (use-chat-run.ts).
  */
 function runRowPatch(event: RunStatusEvent): Partial<RunDto> {
@@ -46,6 +46,9 @@ function runRowPatch(event: RunStatusEvent): Partial<RunDto> {
   }
   if (event.subagentsOut !== undefined) {
     patch.subagentsOut = event.subagentsOut;
+  }
+  if (event.monitorsOpen !== undefined) {
+    patch.monitorsOpen = event.monitorsOpen;
   }
   // A reported 0 is not a measurement, so only a positive reading is kept.
   if (typeof event.contextTokens === 'number' && event.contextTokens > 0) {

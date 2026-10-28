@@ -14,6 +14,8 @@
  * here rather than being mirrored into each.
  */
 
+import { redactSecrets } from '../../diagnostics/utils/redact';
+
 /**
  * What geniro tells every agent about the surface its words land on, and about
  * the tools of its own it offers there.
@@ -162,6 +164,12 @@ export interface TurnInstructionParts {
   /** The user's own global custom instructions, as snapshotted onto the run. */
   customInstructions?: string | null;
   /**
+   * The shared memory's title index, as snapshotted onto `Run.memoryIndex`:
+   * entries the user wrote, imported or approved, led by a line saying it is
+   * data.
+   */
+  memoryIndex?: string | null;
+  /**
    * What the board card this run works asks of it — its label instructions,
    * then geniro's report ask, as stored on `Run.taskInstructions`. Absent for
    * every run no card started.
@@ -217,6 +225,7 @@ export const TURN_INSTRUCTION_SOURCES = [
   'backgroundWorkNote',
   'replyLanguage',
   'customInstructions',
+  'memoryIndex',
   'taskInstructions',
   'workflowInstructions',
   'instructionBlocks',
@@ -249,7 +258,9 @@ export const TURN_INSTRUCTION_SEPARATOR = '\n\n';
  * follows it: another fact about the host, this one per CLI. The user's reply
  * language comes next, ahead of their free text, so their own words can still
  * qualify it. The user's global
- * instructions come next, then what a board card asks of the run working it —
+ * instructions come next, then the shared memory's index — notes the user
+ * wrote or approved, which their standing instructions outrank — then what a board
+ * card asks of the run working it —
  * its label instructions, written for a class of card, and the report ask that
  * run needs.
  * A workflow-editing chat's brief sits beside that one: same kind of claim (the
@@ -279,6 +290,12 @@ export function turnInstructionParts(
       preamble ? replyLanguageInstruction(parts.replyLanguage) : null,
     ],
     ['customInstructions', parts.customInstructions],
+    // Masked again on every turn: a secret registered after the run started
+    // never rides a later turn's instructions.
+    [
+      'memoryIndex',
+      parts.memoryIndex ? redactSecrets(parts.memoryIndex) : null,
+    ],
     ['taskInstructions', parts.taskInstructions],
     ['workflowInstructions', parts.workflowInstructions],
     ['instructionBlocks', parts.instructionBlocks],

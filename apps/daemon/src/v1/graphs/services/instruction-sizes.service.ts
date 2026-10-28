@@ -27,6 +27,8 @@ export interface InstructionSizesInput {
   replyLanguage?: string;
   /** A board card's instructions — known only when measuring for one run. */
   taskInstructions?: string;
+  /** The shared memory's index — known only when measuring for one run. */
+  memoryIndex?: string;
 }
 
 /**
@@ -36,7 +38,8 @@ export interface InstructionSizesInput {
  * graph helpers the executor uses, so the total is the block a run sends.
  *
  * What a saved workflow cannot know is left out: a board card's instructions
- * belong to one run (measured only when the caller names that run's), the
+ * and the memory index belong to one run (measured only when the caller names
+ * that run's), the
  * builder chat's brief to one chat, and ACP's `<host-context>` wrapper is
  * added after composition.
  */
@@ -63,6 +66,7 @@ export class InstructionSizesService {
           customInstructions: input.customInstructions,
           replyLanguage: input.replyLanguage,
           taskInstructions: input.taskInstructions,
+          memoryIndex: input.memoryIndex,
           stageMap,
         }),
       );
@@ -79,6 +83,7 @@ export class InstructionSizesService {
       customInstructions: string | undefined;
       replyLanguage: string | undefined;
       taskInstructions: string | undefined;
+      memoryIndex: string | undefined;
       stageMap: string | null;
     },
   ): NodeInstructionSize {
@@ -88,6 +93,7 @@ export class InstructionSizesService {
         customInstructions: context.customInstructions,
         replyLanguage: context.replyLanguage,
         taskInstructions: context.taskInstructions,
+        memoryIndex: context.memoryIndex,
         ...nodeInstructionFields(node, {
           blocks: context.blocks,
           callees: context.callees,

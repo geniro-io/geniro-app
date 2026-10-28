@@ -157,7 +157,8 @@ export class WorkflowChangeService {
 
   /**
    * Each agent node's always-on block as the library's copy composes it, with
-   * the run's own custom instructions, card instructions and reply language,
+   * the run's own custom instructions, memory index, card instructions and
+   * reply language,
    * and — where the run's own copy composed a different length — that length.
    */
   private instructionSizesOf(
@@ -169,6 +170,7 @@ export class WorkflowChangeService {
       customInstructions: instructions?.customInstructions ?? undefined,
       replyLanguage: instructions?.replyLanguage ?? undefined,
       taskInstructions: instructions?.taskInstructions ?? undefined,
+      memoryIndex: instructions?.memoryIndex ?? undefined,
     };
     const inThisRun = new Map(
       (started === null

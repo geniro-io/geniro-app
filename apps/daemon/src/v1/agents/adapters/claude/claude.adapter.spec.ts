@@ -46,6 +46,7 @@ import {
   CLAUDE_BROWSER_TOOLS_OPTION,
   CLAUDE_COMMANDS_CHANGED_SUBTYPE,
   CLAUDE_CONFIG_DIR_ENV,
+  CLAUDE_DISABLE_AUTO_MEMORY_ENV,
   CLAUDE_EMPTY_MCP_CONFIG,
   CLAUDE_FAST_MODE_PARAMETER_ID,
   CLAUDE_MCP_CONFIG_FLAG,
@@ -330,6 +331,22 @@ describe('ClaudeAdapter', () => {
       () => {},
     );
     expect(turn.captured.env?.[CLAUDE_TODO_TOOLS_ENV]).toBe('1');
+  });
+
+  it('switches the CLI’s own auto memory off only for a run that switches native memory off', () => {
+    const off = fakeSpawn();
+    new ClaudeAdapter({ spawn: off.spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      () => {},
+    );
+    const on = fakeSpawn();
+    new ClaudeAdapter({ spawn: on.spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj', nativeMemoryOff: true },
+      () => {},
+    );
+
+    expect(off.captured.env).not.toHaveProperty(CLAUDE_DISABLE_AUTO_MEMORY_ENV);
+    expect(on.captured.env?.[CLAUDE_DISABLE_AUTO_MEMORY_ENV]).toBe('1');
   });
 
   it('hands over the browser tools only when the run’s option asks for them', () => {

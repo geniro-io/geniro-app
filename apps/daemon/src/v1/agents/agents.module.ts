@@ -7,6 +7,7 @@ import { DesktopOnlyGuard } from '../../auth/desktop-only.guard';
 import { environment } from '../../environments';
 import { DAEMON_VERSION } from '../../utils/daemon-version';
 import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
+import { MemoryModule } from '../memory/memory.module';
 import { ProjectDao } from '../projects/dao/project.dao';
 import type { AdapterDaemonDeps } from './adapters/adapter.types';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
@@ -157,6 +158,7 @@ import { defaultSpawn } from './utils/spawn-cli';
  * consumer reaches an adapter through `AgentAdapterRegistry`.
  */
 @Module({
+  imports: [MemoryModule],
   controllers: [
     ArtifactsController,
     ChatController,

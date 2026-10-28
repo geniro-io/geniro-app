@@ -1252,6 +1252,88 @@ describe('AgentAdapter sessions separate on the custom instructions', () => {
   });
 });
 
+describe('AgentAdapter sessions and the shared memory', () => {
+  const FIRST: AgentTurnInput = {
+    prompt: 'first',
+    cwd: '/proj',
+    memoryIndex: 'Memory index …\n- m1 [user] Terse (global)',
+    nativeMemoryOff: true,
+  };
+
+  async function sessionAfterFirstTurn(): Promise<
+    ReturnType<AgentAdapter['startSession']>
+  > {
+    const { spawn, child } = fakeSpawn();
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      FIRST,
+      { runScoped: true },
+    );
+    const turn = session.startTurn(FIRST, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+    return session;
+  }
+
+  it('reuses the process for a turn carrying the same snapshot', async () => {
+    const session = await sessionAfterFirstTurn();
+
+    expect(
+      session.startTurn({ ...FIRST, prompt: 'second' }, () => {}),
+    ).not.toBeNull();
+  });
+
+  it('reuses the process across an absent and a null index, the two ways a run says it has none', async () => {
+    const { spawn, child } = fakeSpawn();
+    const first: AgentTurnInput = { prompt: 'first', cwd: '/proj' };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      first,
+      { runScoped: true },
+    );
+    const turn = session.startTurn(first, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', memoryIndex: null },
+        () => {},
+      ),
+    ).not.toBeNull();
+  });
+
+  it('refuses a turn whose memory index differs from the spawn’s', async () => {
+    const session = await sessionAfterFirstTurn();
+
+    expect(
+      session.startTurn(
+        { ...FIRST, prompt: 'second', memoryIndex: null },
+        () => {},
+      ),
+    ).toBeNull();
+  });
+
+  it('refuses a turn whose native-memory switch differs from the spawn’s', async () => {
+    const session = await sessionAfterFirstTurn();
+
+    expect(
+      session.startTurn(
+        { ...FIRST, prompt: 'second', nativeMemoryOff: false },
+        () => {},
+      ),
+    ).toBeNull();
+  });
+
+  it('composes the index only where the turn’s MCP tools were delivered', () => {
+    const adapter = new SessionWithoutModeChangeAdapter(fakeSpawn().spawn);
+
+    const granted = adapter.turnInstructionParts(FIRST, true);
+    const withheld = adapter.turnInstructionParts(FIRST, false);
+
+    expect(granted.map((part) => part.source)).toContain('memoryIndex');
+    expect(withheld.map((part) => part.source)).not.toContain('memoryIndex');
+  });
+});
+
 describe('AgentAdapter sessions separate on a working directory made again', () => {
   const made: string[] = [];
   afterEach(() => {

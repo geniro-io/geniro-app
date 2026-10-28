@@ -476,6 +476,18 @@ export const CLAUDE_BROWSER_TOOLS_ENV = 'CLAUDE_CODE_ENABLE_CFC';
 export const CLAUDE_BROWSER_TOOLS_OPTION = 'browserTools';
 
 /**
+ * Switches off the CLI's own auto memory (`<configDir>/projects/<cwd>/memory/`)
+ * for a run that asks for it (`AgentTurnInput.nativeMemoryOff`), so the agent
+ * keeps one memory.
+ *
+ * Probe-verified on 2.1.295: a seeded `MEMORY.md` is recalled without it and
+ * not with it, and a folder's `CLAUDE.md` still loads with it. Told outright
+ * to "save to your auto memory", the model still writes the file with its
+ * ordinary Write tool; the CLI never loads it back.
+ */
+export const CLAUDE_DISABLE_AUTO_MEMORY_ENV = 'CLAUDE_CODE_DISABLE_AUTO_MEMORY';
+
+/**
  * Restricts a turn to `--mcp-config` servers only.
  *
  * NEVER passed on a turn of the user's: an agent must see the same MCP servers

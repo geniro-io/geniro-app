@@ -17,8 +17,9 @@ import { MemoryTextIndexService } from './services/memory-text-index.service';
  *
  * Its rows sit outside run teardown: a memory outlives the chat that wrote it.
  * It provides the run, node and task DAOs it reads rather than importing
- * `AgentsModule`, and imports only `ProjectsModule`, so `McpModule` and
- * `NotificationsModule` can import it without a cycle.
+ * `AgentsModule`, and imports only `ProjectsModule`, so `AgentsModule`,
+ * `GraphsModule`, `McpModule` and `NotificationsModule` can import it without
+ * a cycle.
  */
 @Module({
   imports: [ProjectsModule],

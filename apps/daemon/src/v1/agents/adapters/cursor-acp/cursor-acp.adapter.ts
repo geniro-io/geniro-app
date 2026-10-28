@@ -312,6 +312,10 @@ const CURSOR_HANDSHAKE_PROBE_TTL_MS = 10 * 60_000;
  *
  * The process is kept for the whole conversation, one turn after another —
  * see {@link CursorAcpAdapter.canHostSession}.
+ *
+ * `AgentTurnInput.nativeMemoryOff` is not read: the CLI keeps no memory of its
+ * own to switch off (checked on 2026.10.19 — its bundle names memories only in
+ * server RPC types, Cursor having removed Memories in 2.1).
  */
 export class CursorAcpAdapter extends AgentAdapter {
   /** The copies into `~/.cursor/mcp.json`, queued — see `copyPluginMcpServer`. */

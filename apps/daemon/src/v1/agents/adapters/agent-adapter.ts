@@ -2186,6 +2186,7 @@ export abstract class AgentAdapter {
       backgroundWorkNote: this.getConfig().backgroundWork.agentNote,
       replyLanguage: input.replyLanguage,
       customInstructions: input.customInstructions,
+      memoryIndex: granted ? input.memoryIndex : null,
       taskInstructions: input.taskInstructions,
       workflowInstructions: input.workflowInstructions,
       instructionBlocks: input.instructionBlocks,
@@ -2505,6 +2506,11 @@ export abstract class AgentAdapter {
       input.customInstructions ?? null,
       // The same block again, and argv on claude besides.
       input.replyLanguage ?? null,
+      // The same block again; snapshotted on the run, so a note saved while
+      // the run works restarts nothing.
+      input.memoryIndex ?? null,
+      // Env on claude and thread config on codex, both fixed at spawn.
+      input.nativeMemoryOff === true,
       // The same block again: a card whose label instructions changed since
       // this process was spawned must not be served by it.
       input.taskInstructions ?? null,

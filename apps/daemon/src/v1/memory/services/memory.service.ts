@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -26,14 +26,17 @@ import {
   memoryHandle,
   type MemoryHit,
   type MemoryRefusalCode,
+  type MemoryRunSnapshot,
   type MemorySaveInput,
   type MemorySaveOutcome,
+  type MemoryScopeFacts,
   type MemoryStatus,
   type MemoryStatusOutcome,
   parseMemoryHandle,
 } from '../memory.types';
 import {
   excerptOf,
+  memoryIndexText,
   similarTitles,
   titleCandidatesQuery,
 } from '../utils/memory-text';
@@ -55,7 +58,9 @@ type Refusal = Extract<MemorySaveOutcome, { kind: 'refused' }>;
  */
 @Injectable()
 export class MemoryService {
+  private readonly logger = new Logger(MemoryService.name);
   private config: MemoryConfig = DEFAULT_MEMORY_CONFIG;
+  private configured = false;
   private writes: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -75,6 +80,7 @@ export class MemoryService {
 
   setConfig(config: MemoryConfig): MemoryConfig {
     this.config = { ...config };
+    this.configured = true;
     return this.config;
   }
 
@@ -84,23 +90,57 @@ export class MemoryService {
    * to its repository), else none — global memory only.
    */
   async scopeOf(runId: string): Promise<string | null> {
+    const run = await this.runs.getById(runId, this.em.fork());
+    return run ? this.scopeFor(run) : null;
+  }
+
+  /** {@link scopeOf} for a run whose row does not exist yet. */
+  async scopeFor({ taskId, cwd }: MemoryScopeFacts): Promise<string | null> {
     const em = this.em.fork();
-    const run = await this.runs.getById(runId, em);
-    if (!run) {
-      return null;
-    }
-    if (run.taskId !== null) {
-      const task = await this.tasks.getById(run.taskId, em);
+    if (taskId !== null) {
+      const task = await this.tasks.getById(taskId, em);
       if (task && (await this.projects.getById(task.projectId, em))) {
         return task.projectId;
       }
     }
-    if (run.cwd === null) {
+    if (cwd === null) {
       return null;
     }
-    const root = (await this.roots.rootsOf([run.cwd])).get(run.cwd) ?? run.cwd;
+    const root = (await this.roots.rootsOf([cwd])).get(cwd) ?? cwd;
     const project = await this.projects.findAnyByFolder(root, em);
     return project?.id ?? null;
+  }
+
+  /**
+   * What a new run keeps of the shared memory for its whole life. Taken once,
+   * at creation: both fields reach `AgentAdapter.sessionKey`, so a live read
+   * would respawn a kept CLI whenever any agent saved a note or the user
+   * flipped the switch. A failed read costs the run its index, never its start.
+   *
+   * Until Electron's first push the daemon holds only the default, which may
+   * not be the user's: a run kept for its whole life is created without
+   * memory rather than with a setting nobody chose.
+   */
+  async runSnapshot(facts: MemoryScopeFacts): Promise<MemoryRunSnapshot> {
+    const none: MemoryRunSnapshot = {
+      nativeMemoryOff: false,
+      memoryIndex: null,
+    };
+    if (!this.configured || !this.enabled) {
+      return none;
+    }
+    try {
+      const entries = await this.listVisible(await this.scopeFor(facts));
+      return {
+        ...none,
+        memoryIndex: memoryIndexText(entries.filter(indexable), new Date()),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `memory index not read: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return none;
+    }
   }
 
   /**
@@ -238,8 +278,14 @@ export class MemoryService {
       if (!row) {
         return refused('NOT_FOUND', `no memory ${id}`);
       }
-      if (row.status !== status) {
+      const approves =
+        status === 'active' && actor.kind === 'user' && row.approvedAt === null;
+      if (row.status !== status || approves) {
         row.status = status;
+        row.approvedAt =
+          status === 'active' && actor.kind === 'user'
+            ? (row.approvedAt ?? new Date())
+            : null;
         row.forgetReason = status === 'forgotten' ? row.forgetReason : null;
         row.rev += 1;
         await em.flush();
@@ -497,6 +543,20 @@ export class MemoryService {
   }
 }
 
+/**
+ * Whether an entry may sit in a run's instructions: the user's own, an
+ * import's, or one the user approved. An agent's unreviewed entry is reached
+ * only through `memory_search`, a tool result framed as data — one an agent
+ * was steered into saving must not speak in every later run's instructions.
+ */
+function indexable(entry: MemoryEntry): boolean {
+  return (
+    entry.source.actor === 'user' ||
+    entry.source.actor === 'import' ||
+    entry.approvedAt !== null
+  );
+}
+
 function isAgent(actor: MemoryActor): boolean {
   return actor.kind === 'agent' || actor.kind === 'analysis';
 }
@@ -533,6 +593,7 @@ function targetProject(
 }
 
 function stampSource(row: Memory, actor: MemoryActor): void {
+  row.approvedAt = null;
   row.sourceActor = actor.kind;
   row.sourceAgentKind = 'agentKind' in actor ? actor.agentKind : null;
   row.sourceModel = 'model' in actor ? actor.model : null;
@@ -560,6 +621,7 @@ function toEntry(row: Memory): MemoryEntry {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
+    approvedAt: row.approvedAt?.toISOString() ?? null,
   };
 }
 

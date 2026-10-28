@@ -2380,6 +2380,18 @@ export interface ChatExportRun {
     workflowInstructions: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    memoryIndex: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ChatExportRun
+     */
+    nativeMemoryOff: boolean | null;
+    /**
+     * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof ChatExportRun
      */
@@ -4114,6 +4126,7 @@ export const InstructionSizeSource = {
     BackgroundWorkNote: 'backgroundWorkNote',
     ReplyLanguage: 'replyLanguage',
     CustomInstructions: 'customInstructions',
+    MemoryIndex: 'memoryIndex',
     TaskInstructions: 'taskInstructions',
     WorkflowInstructions: 'workflowInstructions',
     InstructionBlocks: 'instructionBlocks',

@@ -32,7 +32,9 @@ request from your fork.
    pnpm dev
    ```
 
-3. Make your change. Keep the pull request focused on one thing.
+3. Make your change. Keep the pull request focused on one thing. If it adds a
+   feature or changes how one behaves for users, update `README.md` in the
+   same pull request.
 4. Run the full check before pushing — CI runs the same gates:
 
    ```bash

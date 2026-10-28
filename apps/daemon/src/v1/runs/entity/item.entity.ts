@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  BeforeCreate,
   Entity,
   Index,
   PrimaryKey,
@@ -8,6 +9,7 @@ import {
 } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
+import { payloadRefsOf } from '../../agents/utils/payload-refs';
 import type { ItemKind } from '../runs.types';
 
 /** A persisted transcript item belonging to a run. */
@@ -30,6 +32,23 @@ import type { ItemKind } from '../runs.types';
 // is drawn from.
 @Index({ properties: ['runId', 'inCall', 'seq'] })
 @Index({ properties: ['runId', 'inCall', 'kind', 'seq'] })
+// The payload fields run-wide lookups filter on. Each column sits after
+// `payload` in the row, so reading it off the table walks the payload's
+// overflow pages: only a covering index makes the lookup cheap.
+@Index({ properties: ['runId', 'kind', 'payloadId'] })
+@Index({ properties: ['runId', 'kind', 'toolNameLower'] })
+@Index({
+  properties: [
+    'runId',
+    'kind',
+    'parentToolUseId',
+    'nodeId',
+    'inCall',
+    'seq',
+    'deletedAt',
+  ],
+})
+@Index({ properties: ['runId', 'kind', 'callId'] })
 export class Item extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();
@@ -78,4 +97,28 @@ export class Item extends TimestampsEntity {
    */
   @Property({ type: 'string', nullable: true })
   inCall: string | null = null;
+
+  /**
+   * `payload.id`, `payload.name` (lowercased), `payload.parentToolUseId` and
+   * `payload.callId`, copied when the row is written (`utils/payload-refs.ts`).
+   * A row written before the columns existed holds NULL in all four until the
+   * boot sweep stamps its run; `Run.payloadRefsVersion` says whether a run's
+   * columns can be trusted.
+   */
+  @Property({ type: 'string', nullable: true })
+  payloadId: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  toolNameLower: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  parentToolUseId: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  callId: string | null = null;
+
+  @BeforeCreate()
+  stampPayloadRefs(): void {
+    Object.assign(this, payloadRefsOf(this.payload));
+  }
 }

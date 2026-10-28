@@ -19,6 +19,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -70,6 +71,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       new NodeStateDao(em),
       runDao,
       { pollsSpend: () => false } as unknown as PolledSpendService,
+      kindRowsPassthrough(itemDao),
     );
     reader = new ThreadReaderService(
       em,

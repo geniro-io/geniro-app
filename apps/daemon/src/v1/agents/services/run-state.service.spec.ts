@@ -17,17 +17,16 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
-import { NO_CALL_INDEX } from '../__tests__/no-call-index';
+import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import type { MonitorOwner, MonitorSnapshot } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
-import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
-import { ChatActionsService } from './chat-actions.service';
 import type { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { MonitorRegistry } from './monitor.registry';
+import type { RunKindRowsCache } from './run-kind-rows.cache';
 import { RunStateService } from './run-state.service';
 
 /**
@@ -69,6 +68,10 @@ describe('RunStateService (in-memory sqlite)', () => {
   /** The allocator the read asks how far the run is written. */
   let seqs: ItemSeqAllocator;
 
+  /** What the read asked `RunKindRowsCache` for. */
+  let cacheReads: { kinds: string[]; atLeast: number | 'fresh' | undefined }[] =
+    [];
+
   function service(running: MonitorSnapshot[] = []): RunStateService {
     const shells = {
       read: () => Promise.resolve({ shells: [] }),
@@ -105,18 +108,23 @@ describe('RunStateService (in-memory sqlite)', () => {
       shells,
       adapters,
       seqs,
-      new ChatActionsService(
-        orm.em,
-        items,
-        new AgentEventBus(),
-        NO_CALL_INDEX,
-        seqs,
-      ),
       {
         list: (runId: string) =>
           running.filter((monitor) => monitor.owner.runId === runId),
       } as unknown as MonitorRegistry,
+      recordingCache(),
     );
+  }
+
+  function recordingCache(): RunKindRowsCache {
+    cacheReads = [];
+    const cache = kindRowsPassthrough(items);
+    const rowsOf = cache.rowsOf.bind(cache);
+    cache.rowsOf = (runId, kinds, atLeast) => {
+      cacheReads.push({ kinds: [...kinds], atLeast });
+      return rowsOf(runId, kinds, atLeast);
+    };
+    return cache;
   }
 
   async function createRun(
@@ -323,6 +331,21 @@ describe('RunStateService (in-memory sqlite)', () => {
       ['call-1', 'completed'],
       ['call-2', 'running'],
     ]);
+  });
+
+  it('reads calls, delegate declarations and workflow announcements incrementally, never short of the seq it reports', async () => {
+    await createRun('running', 'dev-team');
+    await insert(1, 'call_started', { callId: 'call-1', calleeNodeId: 'qa' });
+
+    const state = await service().read('run-a');
+
+    expect(cacheReads).toEqual(
+      expect.arrayContaining([
+        { kinds: ['call_started', 'call_result'], atLeast: state.throughSeq },
+        { kinds: ['subagent_info'], atLeast: state.throughSeq },
+        { kinds: ['workflow_info'], atLeast: state.throughSeq },
+      ]),
+    );
   });
 
   it('says which calls still wait under the run’s active-turn cap, until their turn begins', async () => {

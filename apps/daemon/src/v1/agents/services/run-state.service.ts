@@ -13,6 +13,7 @@ import type {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { foldActions } from '../utils/action-fold';
 import { rowsWithId, workflowEdgeRows } from '../utils/history-anchors';
 import { itemToWire } from '../utils/item-wire';
 import { payloadString } from '../utils/json-util';
@@ -23,10 +24,10 @@ import {
 } from '../utils/run-state-folds';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ApprovalRegistry } from './approval-registry';
-import { ChatActionsService } from './chat-actions.service';
 import { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { MonitorRegistry } from './monitor.registry';
+import { RunKindRowsCache } from './run-kind-rows.cache';
 
 /**
  * What a run holds as a whole, for the readouts that must not depend on how
@@ -51,8 +52,8 @@ export class RunStateService {
     private readonly shells: ChatShellsService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly seqs: ItemSeqAllocator,
-    private readonly actions: ChatActionsService,
     private readonly monitors: MonitorRegistry,
+    private readonly kindRows: RunKindRowsCache,
   ) {}
 
   async read(runId: string): Promise<RunStateWire> {
@@ -97,11 +98,10 @@ export class RunStateService {
     );
     const calls = foldRunCalls(
       wire(
-        await this.itemDao.rowsOfKinds(
+        await this.kindRows.rowsOf(
           runId,
           ['call_started', 'call_result'],
-          undefined,
-          em,
+          throughSeq,
         ),
       ),
       wire(await this.itemDao.callHandOffRows(runId, undefined, em)),
@@ -110,10 +110,10 @@ export class RunStateService {
     );
 
     const declarations = wire(
-      await this.itemDao.rowsOfKinds(runId, ['subagent_info'], undefined, em),
+      await this.kindRows.rowsOf(runId, ['subagent_info'], throughSeq),
     );
     const announcements = wire(
-      await this.itemDao.rowsOfKinds(runId, ['workflow_info'], undefined, em),
+      await this.kindRows.rowsOf(runId, ['workflow_info'], throughSeq),
     );
     const { launchNames, artifactNames } = this.toolNames();
     const named = wire(
@@ -209,7 +209,13 @@ export class RunStateService {
       artifactRows,
       shells: (await this.shells.read(runId)).shells,
       monitors: this.monitors.list(runId).map(openMonitor),
-      actions: await this.actions.live(runId, em),
+      actions: foldActions(
+        await this.kindRows.rowsOf(
+          runId,
+          ['action', 'action_outcome'],
+          throughSeq,
+        ),
+      ).live,
       turnStartedAt,
     };
   }

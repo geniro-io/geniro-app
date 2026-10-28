@@ -1,4 +1,12 @@
 import type { Item } from '../../runs/entity/item.entity';
+import type { ItemKind } from '../../runs/runs.types';
+
+/** The only kinds {@link openNodeTurns} and {@link openCalls} read. */
+export const OPEN_WORK_KINDS = [
+  'status',
+  'call_started',
+  'call_result',
+] as const satisfies readonly ItemKind[];
 
 /**
  * A node turn the transcript opened (`status: running`) and never settled.

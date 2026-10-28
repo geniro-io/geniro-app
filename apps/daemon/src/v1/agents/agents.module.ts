@@ -97,6 +97,7 @@ import { NotifyBroker } from './services/notify.broker';
 import { OllamaService } from './services/ollama.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { PatchBroker } from './services/patch.broker';
+import { PayloadRefsSweepService } from './services/payload-refs-sweep.service';
 import { PlanBroker } from './services/plan.broker';
 import { PolledSpendService } from './services/polled-spend.service';
 import { ProcessRegistry } from './services/process-registry';
@@ -106,6 +107,7 @@ import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunIdleReapService } from './services/run-idle-reap.service';
+import { RunKindRowsCache } from './services/run-kind-rows.cache';
 import { RunNamedPathsService } from './services/run-named-paths.service';
 import { RunOutcomeBroker } from './services/run-outcome.broker';
 import {
@@ -486,6 +488,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     SubagentRecoveryService,
     ItemCallIndexService,
     WallWorkService,
+    PayloadRefsSweepService,
+    RunKindRowsCache,
     MessageSendService,
     ItemDao,
     NodeStateDao,
@@ -638,6 +642,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Exported for the graph executor, which catches a node's wall-clock work
     // up after each turn its CLI did not time, and for the boot sweep.
     WallWorkService,
+    // Exported for the graph executor and the handoff, which read usage rows and call records through it.
+    RunKindRowsCache,
     MessageSendService,
     SkillHarvestStore,
     // Exported for the graph executor's own turn seam: a node's turn reports

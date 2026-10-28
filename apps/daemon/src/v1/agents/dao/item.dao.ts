@@ -1,7 +1,14 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
+
 import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
-import type { Expression, ExpressionBuilder, SqlBool } from 'kysely';
+import type {
+  AliasableExpression,
+  Expression,
+  ExpressionBuilder,
+  SqlBool,
+} from 'kysely';
 
 import { Item } from '../../runs/entity/item.entity';
 import type { ItemKind } from '../../runs/runs.types';
@@ -12,10 +19,15 @@ import type {
   RunPreview,
   SeqRange,
   ToolCallTime,
+  WireRow,
 } from '../chat.types';
-import { SPAN_CARD_KINDS, SPAN_ROW_KINDS } from '../utils/active-spans';
 import { parseJsonColumn, payloadString } from '../utils/json-util';
 import { messagePreview, messageText } from '../utils/message-preview';
+import {
+  PAYLOAD_REF_KEYS,
+  PAYLOAD_REFS_VERSION,
+  type PayloadRefs,
+} from '../utils/payload-refs';
 import {
   PULL_REQUEST_NAMING_KINDS,
   pullRequestNamingNeedles,
@@ -152,8 +164,130 @@ function payloadField<T = string | null>(
   ]);
 }
 
+type SpineRow = Pick<
+  Item,
+  'id' | 'seq' | 'kind' | 'role' | 'nodeId' | 'inCall' | 'createdAt'
+>;
+
+/** {@link SpineRow} without `inCall`, which sits after the payload's pages. */
+type RailRow = Omit<SpineRow, 'inCall'>;
+
+function railRowOf(row: {
+  id: string;
+  seq: number;
+  kind: Item['kind'];
+  role: Item['role'];
+  node_id: Item['nodeId'];
+  created_at: number;
+}): RailRow {
+  return {
+    id: row.id,
+    seq: row.seq,
+    kind: row.kind,
+    role: row.role,
+    nodeId: row.node_id,
+    createdAt: new Date(row.created_at),
+  };
+}
+
+const WIRE_COLUMNS = [
+  'id',
+  'run_id',
+  'node_id',
+  'seq',
+  'kind',
+  'role',
+  'payload',
+  'created_at',
+  'in_call',
+] as const;
+
+function wireRowOf(row: {
+  id: string;
+  run_id: string;
+  node_id: Item['nodeId'];
+  seq: number;
+  kind: Item['kind'];
+  role: Item['role'];
+  payload: string;
+  created_at: number;
+  in_call: Item['inCall'];
+}): WireRow {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    seq: row.seq,
+    kind: row.kind,
+    role: row.role,
+    payload: row.payload,
+    createdAt: new Date(row.created_at),
+    inCall: row.in_call,
+  };
+}
+
+/** Seqs of one run unstamped per statement by `forgetInCalls`. */
+const FORGET_WINDOW_SEQS = 2_000;
+
+/** Spine rows read per statement; the event loop turns between windows. */
+const SPINE_WINDOW_ROWS = 5_000;
+
+/** Segment-end seeks per stretch before the event loop is given a turn. */
+const SPINE_SEEKS_PER_TURN = 200;
+
+function spineRowOf(row: {
+  id: string;
+  seq: number;
+  kind: Item['kind'];
+  role: Item['role'];
+  node_id: Item['nodeId'];
+  in_call: Item['inCall'];
+  created_at: number;
+}): SpineRow {
+  return {
+    id: row.id,
+    seq: row.seq,
+    kind: row.kind,
+    role: row.role,
+    nodeId: row.node_id,
+    inCall: row.in_call,
+    createdAt: new Date(row.created_at),
+  };
+}
+
+const PAYLOAD_REF_PATHS = {
+  payload_id: `$.${PAYLOAD_REF_KEYS.payloadId}`,
+  tool_name_lower: `$.${PAYLOAD_REF_KEYS.toolNameLower}`,
+  parent_tool_use_id: `$.${PAYLOAD_REF_KEYS.parentToolUseId}`,
+  call_id: `$.${PAYLOAD_REF_KEYS.callId}`,
+} as const;
+
+type PayloadRefColumn = keyof typeof PAYLOAD_REF_PATHS;
+
+/**
+ * One of the payload fields `utils/payload-refs.ts` copies into a column: the
+ * indexed column on a run whose rows are all stamped, the payload itself on one
+ * the boot sweep has not reached (`ItemDao.payloadRefsStamped`).
+ */
+function payloadRef(
+  eb: ExpressionBuilder<ChatTextDatabase, 'items'>,
+  column: PayloadRefColumn,
+  stamped: boolean,
+): AliasableExpression<string | null> {
+  if (stamped) {
+    return eb.ref(column);
+  }
+  const field = payloadField<string | null>(eb, PAYLOAD_REF_PATHS[column]);
+  return column === 'tool_name_lower'
+    ? eb.fn<string | null>('lower', [field])
+    : field;
+}
+
 @Injectable()
 export class ItemDao extends BaseDao<Item> {
+  /** Runs seen stamped under the current rule — a stamp never reverts within a build. */
+  private readonly stampedRuns = new Set<string>();
+
   constructor(em: EntityManager) {
     super(em, Item);
   }
@@ -274,6 +408,7 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
   ): Promise<Item[]> {
     const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
     // The newest 200, picked newest first, then read back oldest first.
     const ids = (
       await em
@@ -287,8 +422,8 @@ export class ItemDao extends BaseDao<Item> {
             eb.and([
               eb('node_id', '=', nodeId),
               eb('kind', 'in', ['message', 'tool_call', 'tool_result']),
-              eb(payloadPath(eb, '$.callId'), 'is', null),
-              eb(payloadPath(eb, '$.parentToolUseId'), 'is', null),
+              eb(payloadRef(eb, 'call_id', stamped), 'is', null),
+              eb(payloadRef(eb, 'parent_tool_use_id', stamped), 'is', null),
             ]),
             eb.and([
               eb('node_id', '=', nodeId),
@@ -356,43 +491,25 @@ export class ItemDao extends BaseDao<Item> {
   /**
    * The two halves of ONE tool call of a run, by the CLI's own call id.
    *
-   * Narrowed in SQL rather than by scanning the transcript, because the row
-   * being looked for can be arbitrarily far back: a `pnpm dev` detached at the
-   * start of a long session is exactly the command someone opens the output of,
-   * and by then its launch sits thousands of items behind. The `$like` is over
-   * the payload TEXT — an id is not a column — so the parsed payload is
-   * re-checked below and the caller validates the id's shape before it gets
-   * here, which is what keeps a `%` out of the pattern.
+   * Looked up by `payload_id` rather than by scanning the transcript, because
+   * the row being looked for can be arbitrarily far back: a `pnpm dev` detached
+   * at the start of a long session is exactly the command someone opens the
+   * output of, and by then its launch sits thousands of items behind.
    */
   async findToolCallPair(
     runId: string,
     callId: string,
     txEm?: EntityManager,
   ): Promise<{ call: Item | null; result: Item | null }> {
-    const rows = await this.getRepo(txEm).find(
-      {
+    const matched = (
+      await this.rowsByPayloadId(
         runId,
-        kind: { $in: ['tool_call', 'tool_result'] },
-        payload: { $like: `%${callId}%` },
-      },
-      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
-    );
-    // `Item.payload` is JSON TEXT, not a parsed object — the column is `text`
-    // and only the wire projection parses it. Reading `.id` off the string
-    // matches nothing, which is a 404 for every command rather than an error.
-    const idOf = (item: Item): string | null => {
-      try {
-        const payload: unknown = JSON.parse(item.payload);
-        if (payload === null || typeof payload !== 'object') {
-          return null;
-        }
-        const value = (payload as { id?: unknown }).id;
-        return typeof value === 'string' ? value : null;
-      } catch {
-        return null;
-      }
-    };
-    const matched = rows.filter((row) => idOf(row) === callId);
+        ['tool_call', 'tool_result'],
+        [callId],
+        undefined,
+        txEm,
+      )
+    ).sort((a, b) => a.seq - b.seq);
     return {
       call: matched.find((row) => row.kind === 'tool_call') ?? null,
       // The LAST result wins: a transcript written before `ItemSeqAllocator`
@@ -641,99 +758,6 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Every payload of a run that can carry a turn's usage (`USAGE_ITEM_KINDS`),
-   * oldest first — what the thread's spend is summed from.
-   *
-   * Its own query rather than a filter over `getByRun`: a long conversation's
-   * transcript is thousands of rows of text and tool payloads, and the totals
-   * need the handful that carry usage. Projected to `payload` alone for the
-   * same reason.
-   */
-  async usagePayloads(
-    runId: string,
-    txEm?: EntityManager,
-    /** One workflow node's turns alone; absent means every row of the run. */
-    nodeId?: string,
-  ): Promise<string[]> {
-    const rows = await this.getRepo(txEm).find(
-      nodeId === undefined
-        ? { runId, kind: { $in: [...USAGE_ITEM_KINDS] } }
-        : { runId, kind: { $in: [...USAGE_ITEM_KINDS] }, nodeId },
-      {
-        orderBy: { seq: 'asc' },
-        fields: ['payload'],
-        disableIdentityMap: true,
-      },
-    );
-    return rows.map((row) => row.payload);
-  }
-
-  /**
-   * The rows a run's working STRETCHES are read from — its turn boundaries,
-   * cards and background units (`SPAN_ROW_KINDS`), in `seq` order, with node and
-   * time (`utils/active-spans`).
-   *
-   * A card's payload is projected down to the two fields the fold reads: an
-   * `approval_request` carries the plan, patch or question set it asks about,
-   * and every totals read would otherwise parse them all to find an id.
-   */
-  async turnSpanRows(
-    runId: string,
-    txEm?: EntityManager,
-  ): Promise<Pick<Item, 'kind' | 'nodeId' | 'createdAt' | 'payload'>[]> {
-    const [rows, cards] = await Promise.all([
-      this.getRepo(txEm).find(
-        {
-          runId,
-          kind: {
-            $in: SPAN_ROW_KINDS.filter((kind) => !SPAN_CARD_KINDS.has(kind)),
-          },
-        },
-        {
-          orderBy: { seq: 'asc' },
-          fields: ['seq', 'kind', 'nodeId', 'createdAt', 'payload'],
-          disableIdentityMap: true,
-        },
-      ),
-      (txEm ?? this.em.fork())
-        .getKysely<ChatTextDatabase>({ convertValues: false })
-        .selectFrom('items')
-        .select((eb) => {
-          return [
-            'seq',
-            'kind',
-            'node_id',
-            'created_at',
-            payloadField(eb, '$.id').as('card_id'),
-            payloadField(eb, '$.callId').as('call_id'),
-          ];
-        })
-        .where('run_id', '=', runId)
-        .where('deleted_at', 'is', null)
-        .where('kind', 'in', [...SPAN_CARD_KINDS])
-        .orderBy('seq', 'asc')
-        .execute(),
-    ]);
-    return [
-      ...rows,
-      ...cards.map((card) => ({
-        seq: card.seq,
-        kind: card.kind,
-        nodeId: card.node_id,
-        createdAt: new Date(card.created_at),
-        payload: JSON.stringify({ id: card.card_id, callId: card.call_id }),
-      })),
-    ]
-      .sort((a, b) => a.seq - b.seq)
-      .map(({ kind, nodeId, createdAt, payload }) => ({
-        kind,
-        nodeId,
-        createdAt,
-        payload,
-      }));
-  }
-
-  /**
    * One workflow node's clock rows — its turn boundaries and approval cards
    * (`WALL_CLOCK_ROW_KINDS`), every conversation of it, in `seq` order — what
    * its wall-measured turns are folded from (`utils/wall-worked`).
@@ -761,7 +785,7 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * The clock rows of one agent (`nodeId`, or null for a chat's), projected:
-   * a card down to its `id` and `callId` for {@link turnSpanRows}' reason (an
+   * a card down to its `id` and `callId`, the two fields the fold reads (an
    * `approval_request` carries the whole plan, patch or question set), a
    * message down to its role — and only a user's is read.
    */
@@ -846,25 +870,6 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Every usage-bearing row of a run (`USAGE_ITEM_KINDS`) with the node that
-   * ran it — what a workflow's per-node and per-CALL spend is summed from. The call a turn
-   * belongs to rides its payload (`callId`), so one read answers both grains.
-   */
-  async usageRowsWithNode(
-    runId: string,
-    txEm?: EntityManager,
-  ): Promise<Pick<Item, 'nodeId' | 'payload' | 'createdAt'>[]> {
-    return this.getRepo(txEm).find(
-      { runId, kind: { $in: [...USAGE_ITEM_KINDS] } },
-      {
-        orderBy: { seq: 'asc' },
-        fields: ['nodeId', 'payload', 'createdAt'],
-        disableIdentityMap: true,
-      },
-    );
-  }
-
-  /**
    * Every `run_outcome` row of every run, for the stats ledger's boot sweep. Served
    * by the `kind` index; a profile holds a handful per workflow run.
    */
@@ -885,10 +890,8 @@ export class ItemDao extends BaseDao<Item> {
    * runs — what the usage ledger's boot backfill sweeps to recover history
    * recorded before it existed.
    *
-   * Cross-run and carrying its row's identity, unlike {@link usagePayloads},
-   * which answers for ONE run and projects the payload alone. The backfill needs
-   * `runId` + `seq` to key each turn idempotently and `createdAt` to date it, so
-   * it cannot be expressed as a loop over that method.
+   * The backfill needs `runId` + `seq` to key each turn idempotently and
+   * `createdAt` to date it.
    *
    * Projected to those five fields and filtered to the kinds that carry usage:
    * this runs once per boot, and hydrating full rows would pull every
@@ -1135,69 +1138,146 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * Every row of one run as (seq, kind, role, nodeId, createdAt) — the
-   * conversation's SHAPE, with none of its content.
+   * conversation's SHAPE, with none of its content — what the waterfall draws
+   * its lanes and tool density from.
    *
-   * The projection is the point. The timeline needs to know where each user
-   * message sits, how many agent messages follow it and when the stretch ended,
-   * and none of those questions is about what was said — while `payload` is the
-   * TEXT column and a long transcript is most of the database. Reading it here
-   * would mean loading every diff and tool result in the run to count rows.
+   * `payload` is the TEXT column and a long transcript is most of the database,
+   * so it is never read here. A long run is still tens of thousands of rows, so
+   * they are read in windows of {@link SPINE_WINDOW_ROWS}, paged on
+   * `(seq, id)`, with the event loop turning between them.
    */
   async timelineSpine(
     runId: string,
     txEm?: EntityManager,
     /** Stop at this seq — an analysis reads its source as it stood when clicked. */
     maxSeq?: number,
-  ): Promise<
-    Pick<Item, 'seq' | 'kind' | 'role' | 'nodeId' | 'inCall' | 'createdAt'>[]
-  > {
-    return this.getRepo(txEm).find(
-      maxSeq === undefined ? { runId } : { runId, seq: { $lte: maxSeq } },
-      {
-        orderBy: { seq: 'asc' },
-        fields: ['seq', 'kind', 'role', 'nodeId', 'inCall', 'createdAt'],
-        disableIdentityMap: true,
-      },
-    );
+  ): Promise<SpineRow[]> {
+    const em = txEm ?? this.em.fork();
+    const rows: SpineRow[] = [];
+    let after: SpineRow | null = null;
+    for (;;) {
+      let query = this.spineQuery(runId, em);
+      if (maxSeq !== undefined) {
+        query = query.where('seq', '<=', maxSeq);
+      }
+      if (after !== null) {
+        const last: SpineRow = after;
+        query = query.where((eb) =>
+          eb.or([
+            eb('seq', '>', last.seq),
+            eb.and([eb('seq', '=', last.seq), eb('id', '>', last.id)]),
+          ]),
+        );
+      }
+      const window = (
+        await query
+          .orderBy('seq', 'asc')
+          .orderBy('id', 'asc')
+          .limit(SPINE_WINDOW_ROWS)
+          .execute()
+      ).map(spineRowOf);
+      rows.push(...window);
+      if (window.length < SPINE_WINDOW_ROWS) {
+        return rows;
+      }
+      after = window[window.length - 1]!;
+      await yieldToEventLoop();
+    }
   }
 
   /**
-   * Every row that OPENS or CLOSES a detached command, over the whole run.
-   *
-   * The renderer folds its running-shells list from the loaded transcript
-   * window, which is the newest `HISTORY_PAGE` items — so a command detached
-   * earlier than that has no row to fold and simply vanishes from the list,
-   * while the run goes on counting it and the badge goes on saying `working`.
-   * Measured on a real thread: 31,404 items, a window of 1,000, one command
-   * still open out of 1,314 opened.
-   *
-   * Sparse by construction — two kinds out of thirty — so reading them for the
-   * whole conversation costs a fraction of the transcript it is drawn from, and
-   * the `(run_id, seq)` index serves it directly.
+   * {@link timelineSpine}'s projection, less `inCall`, of one run's rows of
+   * `kinds` only, off the `(runId, kind, seq)` index.
    */
-  async shellLifecycleRows(
+  async spineRowsOfKinds(
     runId: string,
+    kinds: readonly ItemKind[],
     txEm?: EntityManager,
-  ): Promise<
-    Pick<Item, 'seq' | 'kind' | 'payload' | 'nodeId' | 'createdAt'>[]
-  > {
-    return this.getRepo(txEm).find(
-      { runId, $or: [{ kind: 'shell_open' }, { kind: 'shell_info' }] },
-      {
-        orderBy: { seq: 'asc' },
-        fields: ['seq', 'kind', 'payload', 'nodeId', 'createdAt'],
-        disableIdentityMap: true,
-      },
-    );
+  ): Promise<RailRow[]> {
+    return (
+      await this.railQuery(runId, txEm)
+        .where('kind', 'in', [...kinds])
+        .orderBy('seq', 'asc')
+        .execute()
+    ).map(railRowOf);
+  }
+
+  /**
+   * The rail's columns, every one stored ahead of `payload`: reading a column
+   * stored after it walks the payload's overflow pages, row by row.
+   */
+  private railQuery(runId: string, txEm?: EntityManager) {
+    return (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select(['id', 'seq', 'kind', 'role', 'node_id', 'created_at'])
+      .where('run_id', '=', runId)
+      .where('deleted_at', 'is', null);
+  }
+
+  /**
+   * The spine's columns, read as plain rows: a long run's spine is tens of
+   * thousands of rows, and building an entity for each costs several times the
+   * read itself.
+   */
+  private spineQuery(runId: string, txEm?: EntityManager) {
+    return (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select(['id', 'seq', 'kind', 'role', 'node_id', 'in_call', 'created_at'])
+      .where('run_id', '=', runId)
+      .where('deleted_at', 'is', null);
+  }
+
+  /**
+   * For each of `seqs`, the run's newest rows below it (every row sharing that
+   * seq), in {@link spineRowsOfKinds}'s projection — a seek on the `(runId, seq)`
+   * index each, however long the run is, with the event loop turning every
+   * {@link SPINE_SEEKS_PER_TURN} seeks, then one read of the rows found. A seq
+   * with no row below it answers nothing.
+   */
+  async lastSpineRowsBefore(
+    runId: string,
+    seqs: readonly number[],
+    txEm?: EntityManager,
+  ): Promise<RailRow[]> {
+    const em = txEm ?? this.em.fork();
+    const kysely = em.getKysely<ChatTextDatabase>({ convertValues: false });
+    const found = new Set<number>();
+    for (const [index, seq] of seqs.entries()) {
+      if (index > 0 && index % SPINE_SEEKS_PER_TURN === 0) {
+        await yieldToEventLoop();
+      }
+      const row = await kysely
+        .selectFrom('items')
+        .select('seq')
+        .where('run_id', '=', runId)
+        .where('seq', '<', seq)
+        .where('deleted_at', 'is', null)
+        .orderBy('seq', 'desc')
+        .limit(1)
+        .executeTakeFirst();
+      if (row !== undefined) {
+        found.add(row.seq);
+      }
+    }
+    if (found.size === 0) {
+      return [];
+    }
+    return (
+      await this.railQuery(runId, em)
+        .where('seq', 'in', [...found])
+        .orderBy('seq', 'asc')
+        .execute()
+    ).map(railRowOf);
   }
 
   /**
    * The tool calls behind a set of ids — how an open command gets its WORDS.
    *
    * A `shell_open` row names the call and the CLI's own work id and nothing
-   * else, so the command itself has to be read from the call it decorates.
-   * Matched by id, which is one JSON-path pass over the run's tool calls; the
-   * shell fold asks only while a command is open.
+   * else, so the command itself has to be read from the call it decorates,
+   * matched by id as {@link rowsByPayloadId} matches it.
    */
   async toolCallsByIds(
     runId: string,
@@ -1207,16 +1287,16 @@ export class ItemDao extends BaseDao<Item> {
     if (ids.length === 0) {
       return [];
     }
-    const rows = await (txEm ?? this.em.fork())
+    const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
+    const rows = await em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
       .select(['payload', 'node_id', 'created_at'])
       .where('run_id', '=', runId)
       .where('kind', '=', 'tool_call')
       .where('deleted_at', 'is', null)
-      // The id lives inside the JSON; compared exactly, as
-      // {@link rowsByPayloadId} compares it.
-      .where((eb) => payloadPath<string | null>(eb, '$.id'), 'in', [...ids])
+      .where((eb) => payloadRef(eb, 'payload_id', stamped), 'in', [...ids])
       .orderBy('seq', 'asc')
       .execute();
     return rows.map((row) => ({
@@ -1226,79 +1306,16 @@ export class ItemDao extends BaseDao<Item> {
     }));
   }
 
-  /**
-   * The payloads {@link timelineSpine} deliberately leaves out — the two kinds
-   * the timeline actually reads: a user message, for its opening words, and a
-   * turn's ending, for its usage figures (`USAGE_ITEM_KINDS`).
-   */
-  async timelinePayloadRows(
+  /** A run's user messages' payloads, for the timeline's marker labels. */
+  async userMessagePayloadRows(
     runId: string,
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'seq' | 'kind' | 'payload'>[]> {
     return this.getRepo(txEm).find(
-      {
-        runId,
-        $or: [
-          { kind: 'message', role: 'user' },
-          { kind: { $in: [...USAGE_ITEM_KINDS] } },
-        ],
-      },
+      { runId, kind: 'message', role: 'user' },
       {
         orderBy: { seq: 'asc' },
         fields: ['seq', 'kind', 'payload'],
-        disableIdentityMap: true,
-      },
-    );
-  }
-
-  /**
-   * The payload-bearing rows the waterfall folds into spans, with the node and
-   * the wall-clock instant each one landed at.
-   *
-   * **`tool_call` / `tool_result` are deliberately absent**, and that omission is
-   * what makes this read affordable: they outnumber every other kind by orders
-   * of magnitude, while the waterfall draws them as a DENSITY — how many landed
-   * in each time bucket of each lane — which is answered by
-   * `(kind, nodeId, createdAt)` alone. {@link timelineSpine} already projects
-   * exactly those columns for every row, so the tool lane costs no payload read
-   * at all.
-   *
-   * What remains is the handful of kinds whose span cannot be reconstructed
-   * without reading what they say: a turn's figures, a delegate's open/close
-   * flags, a call's participants and status, the id pairing an approval
-   * request to its verdict, and a node's own status — which is what records a
-   * turn that STARTED, the only trace left of one a cancel cut off before it
-   * could write a `turn_complete`. That kind is small enough to be free:
-   * measured across a real install, 1,680 rows and 81KB in the whole database,
-   * against 207,075 `tool_call` rows and 158MB.
-   */
-  async waterfallPayloadRows(
-    runId: string,
-    txEm?: EntityManager,
-    /** Stop at this seq, as {@link timelineSpine} does. */
-    maxSeq?: number,
-  ): Promise<
-    Pick<Item, 'seq' | 'kind' | 'payload' | 'nodeId' | 'createdAt'>[]
-  > {
-    return this.getRepo(txEm).find(
-      {
-        runId,
-        ...(maxSeq === undefined ? {} : { seq: { $lte: maxSeq } }),
-        kind: {
-          $in: [
-            ...USAGE_ITEM_KINDS,
-            'subagent_info',
-            'call_started',
-            'call_result',
-            'approval_request',
-            'approval_verdict',
-            'status',
-          ],
-        },
-      },
-      {
-        orderBy: { seq: 'asc' },
-        fields: ['seq', 'kind', 'payload', 'nodeId', 'createdAt'],
         disableIdentityMap: true,
       },
     );
@@ -1310,8 +1327,8 @@ export class ItemDao extends BaseDao<Item> {
    * Grouped IN SQLITE and never read into the daemon. `tool_call` is the kind
    * this module's every other projection exists to avoid — measured on this
    * install's busiest run, 14,884 rows and 9.2MB of payload — so folding the
-   * histogram here in JS would undo the whole reason `waterfallPayloadRows`
-   * names its six kinds. `json_extract` does it inside the engine and about
+   * histogram here in JS would undo the whole reason the waterfall's payload read
+   * leaves tool rows out. `json_extract` does it inside the engine and about
    * twenty rows come back: 237ms on that same run.
    *
    * A row whose payload names no tool is dropped by the `not null` — a call
@@ -1388,7 +1405,9 @@ export class ItemDao extends BaseDao<Item> {
     runId: string,
     txEm?: EntityManager,
   ): Promise<OwnToolCallCount[]> {
-    const rows = await (txEm ?? this.em.fork())
+    const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
+    const rows = await em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
       .select((eb) => [
@@ -1406,7 +1425,10 @@ export class ItemDao extends BaseDao<Item> {
       // An empty `parentToolUseId` names no delegate (`subagentIdOf`).
       .where(
         (eb) =>
-          eb.fn.coalesce(payloadField(eb, '$.parentToolUseId'), eb.val('')),
+          eb.fn.coalesce(
+            payloadRef(eb, 'parent_tool_use_id', stamped),
+            eb.val(''),
+          ),
         '=',
         '',
       )
@@ -1434,13 +1456,15 @@ export class ItemDao extends BaseDao<Item> {
     maxSeq: number,
     txEm?: EntityManager,
   ): Promise<Map<string, number>> {
-    const rows = await (txEm ?? this.em.fork())
+    const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
+    const rows = await em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom((db) =>
         db
           .selectFrom('items')
           .select((eb) =>
-            payloadField(eb, '$.parentToolUseId').as('delegate_id'),
+            payloadRef(eb, 'parent_tool_use_id', stamped).as('delegate_id'),
           )
           .where('run_id', '=', runId)
           .where('kind', '=', 'tool_call')
@@ -1468,14 +1492,20 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
     maxSeq?: number,
   ): Promise<number[]> {
-    let query = (txEm ?? this.em.fork())
+    const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
+    let query = em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
       .select('seq')
       .where('run_id', '=', runId)
       .where('kind', '=', 'tool_call')
       .where('deleted_at', 'is', null)
-      .where((eb) => payloadField(eb, '$.parentToolUseId'), 'is not', null);
+      .where(
+        (eb) => payloadRef(eb, 'parent_tool_use_id', stamped),
+        'is not',
+        null,
+      );
     if (maxSeq !== undefined) {
       query = query.where('seq', '<=', maxSeq);
     }
@@ -1702,6 +1732,7 @@ export class ItemDao extends BaseDao<Item> {
    * `(runId, inCall, kind, seq)` index, so a long call is walked only as far as
    * `limit` matching rows. `fromSeq` keeps only rows at or after that seq, and
    * `snapshot` only task lists that state the whole list (`mode: 'snapshot'`).
+   * One statement, read as plain rows: a page anchors hundreds of these.
    */
   async newestRowsInCall(
     runId: string,
@@ -1716,12 +1747,13 @@ export class ItemDao extends BaseDao<Item> {
       limit: number;
     },
     txEm?: EntityManager,
-  ): Promise<Item[]> {
+  ): Promise<WireRow[]> {
     const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
     let heads = em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
-      .select('id')
+      .select([...WIRE_COLUMNS])
       .where('run_id', '=', runId)
       .where('in_call', '=', callId)
       .where('deleted_at', 'is', null)
@@ -1740,7 +1772,7 @@ export class ItemDao extends BaseDao<Item> {
     }
     if (pick.ownThread === true) {
       heads = heads.where(
-        (eb) => payloadField(eb, '$.parentToolUseId'),
+        (eb) => payloadRef(eb, 'parent_tool_use_id', stamped),
         'is',
         null,
       );
@@ -1760,7 +1792,9 @@ export class ItemDao extends BaseDao<Item> {
         (eb) =>
           eb.fn<string>('trim', [
             eb.fn<string>('coalesce', [
-              payloadField<string>(eb, `$.${said}`),
+              said === 'name'
+                ? payloadRef(eb, 'tool_name_lower', stamped)
+                : payloadField<string>(eb, `$.${said}`),
               eb.val(''),
             ]),
             eb.val(' \t\n\r'),
@@ -1769,16 +1803,9 @@ export class ItemDao extends BaseDao<Item> {
         '',
       );
     }
-    const ids = (
-      await heads.orderBy('seq', 'desc').limit(pick.limit).execute()
-    ).map((head) => head.id);
-    if (ids.length === 0) {
-      return [];
-    }
-    return this.getRepo(em).find(
-      { id: { $in: ids } },
-      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
-    );
+    return (await heads.orderBy('seq', 'desc').limit(pick.limit).execute())
+      .map(wireRowOf)
+      .reverse();
   }
 
   /**
@@ -1792,82 +1819,31 @@ export class ItemDao extends BaseDao<Item> {
     kinds: readonly ItemKind[],
     ids: readonly string[],
     txEm?: EntityManager,
-  ): Promise<Item[]> {
+  ): Promise<WireRow[]> {
     if (ids.length === 0) {
       return [];
     }
     const em = txEm ?? this.em.fork();
-    const found: string[] = [];
+    const stamped = await this.payloadRefsStamped(runId, em);
+    const found: WireRow[] = [];
     for (let at = 0; at < ids.length; at += PAYLOAD_ID_BATCH) {
-      const heads = await em
+      const rows = await em
         .getKysely<ChatTextDatabase>({ convertValues: false })
         .selectFrom('items')
-        .select('id')
+        .select([...WIRE_COLUMNS])
         .where('run_id', '=', runId)
         .where('in_call', '=', callId)
         .where('kind', 'in', [...kinds])
         .where('deleted_at', 'is', null)
         .where(
-          (eb) => payloadField<string>(eb, '$.id'),
+          (eb) => payloadRef(eb, 'payload_id', stamped),
           'in',
           ids.slice(at, at + PAYLOAD_ID_BATCH),
         )
         .execute();
-      found.push(...heads.map((head) => head.id));
+      found.push(...rows.map(wireRowOf));
     }
-    if (found.length === 0) {
-      return [];
-    }
-    return this.getRepo(em).find(
-      { id: { $in: found } },
-      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
-    );
-  }
-
-  /**
-   * Where each call the run made starts and settles, as seqs — no payload
-   * beyond a start's call id is read, so a run's hundreds of calls cost a few
-   * numbers each. A call with no settle row is still open (or was cut off).
-   */
-  async callSpansOf(
-    runId: string,
-    txEm?: EntityManager,
-  ): Promise<{ callId: string; startSeq: number; settleSeq: number | null }[]> {
-    const em = txEm ?? this.em.fork();
-    const rows = await em
-      .getKysely<ChatTextDatabase>({ convertValues: false })
-      .selectFrom('items')
-      .select((eb) => [
-        'kind',
-        'seq',
-        'in_call',
-        payloadField(eb, '$.callId').as('call_id'),
-      ])
-      .where('run_id', '=', runId)
-      .where('kind', 'in', ['call_started', 'call_result'])
-      .where('deleted_at', 'is', null)
-      .orderBy('seq', 'asc')
-      .execute();
-    const spans = new Map<
-      string,
-      { callId: string; startSeq: number; settleSeq: number | null }
-    >();
-    for (const row of rows) {
-      const callId =
-        row.kind === 'call_result' && row.in_call ? row.in_call : row.call_id;
-      if (typeof callId !== 'string' || callId.length === 0) {
-        continue;
-      }
-      const span = spans.get(callId);
-      if (row.kind === 'call_started') {
-        if (span === undefined) {
-          spans.set(callId, { callId, startSeq: row.seq, settleSeq: null });
-        }
-      } else if (span !== undefined && span.settleSeq === null) {
-        span.settleSeq = row.seq;
-      }
-    }
-    return [...spans.values()];
+    return found.sort((a, b) => a.seq - b.seq);
   }
 
   /**
@@ -1885,6 +1861,7 @@ export class ItemDao extends BaseDao<Item> {
       return [];
     }
     const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
     const starts = (
       await em
         .getKysely<ChatTextDatabase>({ convertValues: false })
@@ -1893,7 +1870,7 @@ export class ItemDao extends BaseDao<Item> {
         .where('run_id', '=', runId)
         .where('kind', '=', 'call_started')
         .where('deleted_at', 'is', null)
-        .where((eb) => payloadField<string>(eb, '$.callId'), 'in', [...callIds])
+        .where((eb) => payloadRef(eb, 'call_id', stamped), 'in', [...callIds])
         .execute()
     ).map((row) => row.id);
     return this.getRepo(em).find(
@@ -1908,12 +1885,35 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
-  /** Unstamp every row — the stamps of a membership rule that has since changed. */
+  /**
+   * Unstamp every row — the stamps of a membership rule that has since changed.
+   * Run by run in windows of {@link FORGET_WINDOW_SEQS} seqs with the event
+   * loop turning between them: one statement over the whole table rewrites
+   * every row and held a live daemon for 30 s on a long-used profile.
+   */
   async forgetInCalls(txEm?: EntityManager): Promise<number> {
-    return this.getRepo(txEm).nativeUpdate(
-      { inCall: { $ne: null } },
-      { inCall: null },
-    );
+    const em = txEm ?? this.em.fork();
+    const runs = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('runs')
+      .select('id')
+      .execute();
+    let forgotten = 0;
+    for (const { id: runId } of runs) {
+      const through = await this.maxSeq(runId, em);
+      for (let from = -1; from < through; from += FORGET_WINDOW_SEQS) {
+        forgotten += await this.getRepo(em).nativeUpdate(
+          {
+            runId,
+            seq: { $gt: from, $lte: from + FORGET_WINDOW_SEQS },
+            inCall: { $ne: null },
+          },
+          { inCall: null },
+        );
+        await yieldToEventLoop();
+      }
+    }
+    return forgotten;
   }
 
   /** Whether one run still holds a row no build stamped with `inCall`. */
@@ -1944,6 +1944,94 @@ export class ItemDao extends BaseDao<Item> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /**
+   * One batch of a run's rows after `after`, in `(seq, id)` order, with the
+   * columns they carry now. Paged on both, since an older profile holds rows
+   * that share a seq.
+   */
+  async payloadRefsBatch(
+    runId: string,
+    after: { seq: number; id: string } | null,
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<
+    Pick<
+      Item,
+      | 'id'
+      | 'seq'
+      | 'payload'
+      | 'payloadId'
+      | 'toolNameLower'
+      | 'parentToolUseId'
+      | 'callId'
+    >[]
+  > {
+    return this.getRepo(txEm).find(
+      after === null
+        ? { runId }
+        : {
+            runId,
+            $or: [
+              { seq: { $gt: after.seq } },
+              { seq: after.seq, id: { $gt: after.id } },
+            ],
+          },
+      {
+        limit,
+        orderBy: { seq: 'asc', id: 'asc' },
+        fields: [
+          'id',
+          'seq',
+          'payload',
+          'payloadId',
+          'toolNameLower',
+          'parentToolUseId',
+          'callId',
+        ],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  async rememberPayloadRefs(
+    rows: readonly { id: string; refs: PayloadRefs }[],
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const em = txEm ?? this.em.fork();
+    await em.transactional(async (tx) => {
+      for (const { id, refs } of rows) {
+        await this.getRepo(tx as EntityManager).nativeUpdate({ id }, refs);
+      }
+    });
+  }
+
+  /**
+   * Whether every row of the run carries its payload columns
+   * (`Run.payloadRefsVersion`): a lookup reads the column when it does and the
+   * payload when it does not, so a run the boot sweep has not reached yet is
+   * answered the slow way rather than wrongly.
+   */
+  async payloadRefsStamped(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    if (this.stampedRuns.has(runId)) {
+      return true;
+    }
+    const em = txEm ?? this.em.fork();
+    const run = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('runs')
+      .select('payload_refs_version')
+      .where('id', '=', runId)
+      .executeTakeFirst();
+    const stamped = run?.payload_refs_version === PAYLOAD_REFS_VERSION;
+    if (stamped) {
+      this.stampedRuns.add(runId);
+    }
+    return stamped;
   }
 
   async rememberInCall(
@@ -2079,36 +2167,6 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * One run's calls and message receipts in seq order, including the notices
-   * that acknowledge failed deliveries to their sender.
-   *
-   * Durable for {@link subagentInfoRows}'s reason: the broker's call state is
-   * in memory and dies with the daemon, and a follow-up on a run that made
-   * calls under an earlier daemon has only these rows to continue them from
-   * (see `utils/call-seed.ts`). Bounded by the per-run turn cap per
-   * daemon lifetime, so it stays a handful of rows next to a transcript.
-   */
-  async callRecordRows(
-    runId: string,
-    txEm?: EntityManager,
-  ): Promise<Pick<Item, 'kind' | 'payload' | 'createdAt'>[]> {
-    return this.getRepo(txEm).find(
-      {
-        runId,
-        $or: [
-          { kind: { $in: ['call_started', 'call_result', 'call_answer'] } },
-          { kind: 'system', payload: { $like: '%"messageDeliveryNotices"%' } },
-        ],
-      },
-      {
-        orderBy: { seq: 'asc' },
-        fields: ['kind', 'payload', 'createdAt'],
-        disableIdentityMap: true,
-      },
-    );
-  }
-
-  /**
    * Every run that recorded a delegate recovery ref since `since`, once each.
    * Every run's `subagent_info` rows are matched against the payload text, so
    * this is a boot-time read, not a per-request one.
@@ -2132,13 +2190,11 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * One run's rows of `kinds`, optionally only those in `range` — the
-   * structural rows a page of transcript is anchored by (`ChatHistoryService`)
-   * and the run-wide readouts are folded from (`RunStateService`).
-   *
-   * Only kinds a run holds a handful of are asked for here (calls, delegate
-   * declarations, workflow announcements), which the `(runId, kind, seq)` index
-   * serves without touching the transcript's text.
+   * One run's rows of `kinds`, optionally only those in `range`, off the
+   * `(runId, kind, seq)` index — the structural rows a page of transcript is
+   * anchored by (`ChatHistoryService`), the kinds the boot reconciles fold
+   * (`ANSWERABILITY_KINDS`, `OPEN_WORK_KINDS`), and what `RunKindRowsCache`
+   * reads through. Never the transcript's text kinds.
    */
   async rowsOfKinds(
     runId: string,
@@ -2157,15 +2213,60 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * The callee and session each of one run's `call_result` rows in
+   * `(afterSeq, throughSeq]` names, in seq order — the two fields alone, so a
+   * reply's text never reaches the daemon.
+   */
+  async callResultSessions(
+    runId: string,
+    afterSeq: number,
+    throughSeq: number,
+    txEm?: EntityManager,
+  ): Promise<{ calleeNodeId: string | null; sessionId: string | null }[]> {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => [
+        payloadField(eb, '$.calleeNodeId').as('callee_node_id'),
+        payloadField(eb, '$.sessionId').as('session_id'),
+      ])
+      .where('run_id', '=', runId)
+      .where('kind', '=', 'call_result')
+      .where('deleted_at', 'is', null)
+      .where('seq', '>', afterSeq)
+      .where('seq', '<=', throughSeq)
+      .orderBy('seq', 'asc')
+      .execute();
+    return rows.map((row) => ({
+      calleeNodeId:
+        typeof row.callee_node_id === 'string' ? row.callee_node_id : null,
+      sessionId: typeof row.session_id === 'string' ? row.session_id : null,
+    }));
+  }
+
+  /** One run's rows of `kinds` with a seq in `(afterSeq, throughSeq]`, in seq order. */
+  async rowsOfKindsBetween(
+    runId: string,
+    kinds: readonly ItemKind[],
+    afterSeq: number,
+    throughSeq: number,
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        kind: { $in: [...kinds] },
+        seq: { $gt: afterSeq, $lte: throughSeq },
+      },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
    * One run's rows of `kinds` whose payload's top-level `id` is one of `ids`,
-   * optionally only those in `range`. A range narrows the `(runId, kind, seq)`
-   * index scan the JSON path is read over, which is what makes a lookup on
-   * one side of the newest page cheap.
-   *
-   * Matched with `json_extract` rather than a `$like` on the payload text: the
-   * id is compared EXACTLY (a pattern matches `call-5` inside `call-50`), and it
-   * is cheaper: a pattern is tested against the whole payload once per id,
-   * while the JSON path is read once per row.
+   * optionally only those in `range` — a seek on the `(runId, kind, payloadId)`
+   * index ({@link payloadRef}). The id is compared EXACTLY, never as a pattern
+   * on the payload text, which would match `call-5` inside `call-50`.
    */
   async rowsByPayloadId(
     runId: string,
@@ -2175,6 +2276,7 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
   ): Promise<Item[]> {
     const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
     const rows: Item[] = [];
     for (let at = 0; at < ids.length; at += PAYLOAD_ID_BATCH) {
       let heads = em
@@ -2184,10 +2286,8 @@ export class ItemDao extends BaseDao<Item> {
         .where('run_id', '=', runId)
         .where('kind', 'in', [...kinds])
         .where('deleted_at', 'is', null)
-        // Guarded by `payloadField`: one malformed payload must not fail the
-        // whole read.
         .where(
-          (eb) => payloadField<string>(eb, '$.id'),
+          (eb) => payloadRef(eb, 'payload_id', stamped),
           'in',
           ids.slice(at, at + PAYLOAD_ID_BATCH),
         );
@@ -2222,6 +2322,7 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
   ): Promise<Item[]> {
     const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
     let heads = em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
@@ -2229,8 +2330,8 @@ export class ItemDao extends BaseDao<Item> {
       .where('run_id', '=', runId)
       .where('kind', '=', 'system')
       .where('deleted_at', 'is', null)
-      .where((eb) => payloadPath(eb, '$.member'), 'is not', null)
-      .where((eb) => payloadPath(eb, '$.callId'), 'is not', null);
+      .where((eb) => payloadRef(eb, 'call_id', stamped), 'is not', null)
+      .where((eb) => payloadPath(eb, '$.member'), 'is not', null);
     if (range !== undefined) {
       heads = heads.where((eb) => seqRangeOf(eb, range));
     }
@@ -2251,6 +2352,7 @@ export class ItemDao extends BaseDao<Item> {
    */
   async callQueueRows(runId: string, txEm?: EntityManager): Promise<Item[]> {
     const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
     const heads = await em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
@@ -2258,8 +2360,8 @@ export class ItemDao extends BaseDao<Item> {
       .where('run_id', '=', runId)
       .where('kind', '=', 'system')
       .where('deleted_at', 'is', null)
+      .where((eb) => payloadRef(eb, 'call_id', stamped), 'is not', null)
       .where((eb) => payloadPath(eb, '$.queuedCall'), 'is not', null)
-      .where((eb) => payloadPath(eb, '$.callId'), 'is not', null)
       .execute();
     return this.rowsWithIds(
       heads.map((head) => head.id),
@@ -2277,15 +2379,16 @@ export class ItemDao extends BaseDao<Item> {
       return new Set();
     }
     const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
     const rows = await em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
-      .select((eb) => payloadPath(eb, '$.callId').as('callId'))
+      .select((eb) => payloadRef(eb, 'call_id', stamped).as('callId'))
       .distinct()
       .where('run_id', '=', runId)
       .where('kind', '=', 'status')
       .where('deleted_at', 'is', null)
-      .where((eb) => payloadPath(eb, '$.callId'), 'in', [...callIds])
+      .where((eb) => payloadRef(eb, 'call_id', stamped), 'in', [...callIds])
       .execute();
     return new Set(
       rows
@@ -2297,8 +2400,7 @@ export class ItemDao extends BaseDao<Item> {
   /**
    * One run's `tool_call` rows whose tool NAME, lowercased, is one of `names` —
    * the run's delegations and its artifact publishes, which the run-state route
-   * lists over the whole conversation. `json_extract` for
-   * {@link rowsByPayloadId}'s reason.
+   * lists over the whole conversation. `names` must be lowercase.
    */
   async toolCallsNamed(
     runId: string,
@@ -2306,6 +2408,7 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
   ): Promise<Item[]> {
     const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
     const heads = await em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
@@ -2313,11 +2416,9 @@ export class ItemDao extends BaseDao<Item> {
       .where('run_id', '=', runId)
       .where('kind', '=', 'tool_call')
       .where('deleted_at', 'is', null)
-      .where(
-        (eb) => eb.fn<string | null>('lower', [payloadPath(eb, '$.name')]),
-        'in',
-        [...names],
-      )
+      .where((eb) => payloadRef(eb, 'tool_name_lower', stamped), 'in', [
+        ...names,
+      ])
       .execute();
     return this.rowsWithIds(
       heads.map((head) => head.id),

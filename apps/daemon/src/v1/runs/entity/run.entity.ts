@@ -9,6 +9,7 @@ import type {
   PromptCacheTtlReason,
   RunGroupColor,
 } from '../../agents/chat.types';
+import { PAYLOAD_REFS_VERSION } from '../../agents/utils/payload-refs';
 import type { AgentKind, RunStatus } from '../runs.types';
 
 /** One execution of a workflow (graph) or a single-agent chat. */
@@ -681,6 +682,23 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'integer', nullable: true })
   pullRequestsScanVersion: number | null = null;
+
+  /**
+   * The `PAYLOAD_REFS_VERSION` every row of this run carries its payload
+   * columns under (`Item.payloadId` …), or null for a run whose older rows the
+   * boot sweep has not stamped yet — its lookups read the payload instead. A
+   * run created by this build is stamped from its first row.
+   *
+   * Set by `onCreate`, never an initializer: MikroORM writes an initializer
+   * into the column's DDL default, which would mark every run that existed
+   * before the column as stamped.
+   */
+  @Property({
+    type: 'integer',
+    nullable: true,
+    onCreate: () => PAYLOAD_REFS_VERSION,
+  })
+  payloadRefsVersion: number | null = null;
 
   /**
    * When this run was ARCHIVED — shelved out of the chat list but destroyed in

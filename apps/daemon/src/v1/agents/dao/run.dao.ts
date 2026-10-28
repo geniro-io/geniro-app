@@ -521,6 +521,43 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Every run whose rows were not all stamped with their payload columns under
+   * `version`, newest first — the threads opened next are stamped soonest.
+   * Archived runs included: unarchiving reads them again.
+   */
+  async listUnstampedPayloadRefs(
+    version: number,
+    txEm?: EntityManager,
+  ): Promise<string[]> {
+    const rows = await this.getRepo(txEm).find(
+      {
+        $or: [
+          { payloadRefsVersion: null },
+          { payloadRefsVersion: { $ne: version } },
+        ],
+      },
+      {
+        fields: ['id'],
+        orderBy: { createdAt: 'desc' },
+        disableIdentityMap: true,
+      },
+    );
+    return rows.map((run) => run.id);
+  }
+
+  /** Bookkeeping, not activity: a bare `nativeUpdate`, like {@link setResetWakes}. */
+  async markPayloadRefs(
+    runId: string,
+    version: number,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { payloadRefsVersion: version },
+    );
+  }
+
+  /**
    * Which pull requests each of these runs OPENED, keyed by run id.
    *
    * ONE query for a whole board. The tasks module draws a card's pull requests

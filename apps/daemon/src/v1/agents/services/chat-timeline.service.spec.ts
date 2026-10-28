@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
 import { ChatTimelineService } from './chat-timeline.service';
+import type { RunKindRowsCache } from './run-kind-rows.cache';
 
 interface StoredRow {
   seq: number;
@@ -50,33 +51,46 @@ function turn(seq: number, usage: unknown, secondsIn = 0): StoredRow {
 }
 
 function build(rows: StoredRow[], runExists = true) {
+  const spine = rows
+    .map(({ seq, kind, role, nodeId, createdAt }, index) => ({
+      id: `i-${index}`,
+      seq,
+      kind,
+      role,
+      nodeId: nodeId ?? null,
+      createdAt,
+    }))
+    .sort((a, b) => a.seq - b.seq);
   const service = new ChatTimelineService(
     { fork: () => ({}) } as unknown as EntityManager,
     {
-      timelineSpine: () =>
+      spineRowsOfKinds: (_runId: string, kinds: readonly string[]) =>
+        Promise.resolve(spine.filter((r) => kinds.includes(r.kind))),
+      lastSpineRowsBefore: (_runId: string, seqs: readonly number[]) =>
         Promise.resolve(
-          rows.map(({ seq, kind, role, nodeId, createdAt }) => ({
-            seq,
-            kind,
-            role,
-            nodeId: nodeId ?? null,
-            createdAt,
-          })),
+          seqs.flatMap((seq) => {
+            const below = spine.filter((r) => r.seq < seq);
+            return below.length === 0 ? [] : [below[below.length - 1]!];
+          }),
         ),
-      timelinePayloadRows: () =>
+      userMessagePayloadRows: () =>
         Promise.resolve(
           rows
-            .filter(
-              (r) =>
-                r.kind === 'turn_complete' ||
-                (r.kind === 'message' && r.role === 'user'),
-            )
+            .filter((r) => r.kind === 'message' && r.role === 'user')
             .map(({ seq, kind, payload }) => ({ seq, kind, payload })),
         ),
     } as unknown as ItemDao,
     {
       getById: () => Promise.resolve(runExists ? { id: 'run-1' } : null),
     } as unknown as RunDao,
+    {
+      rowsOf: () =>
+        Promise.resolve(
+          rows
+            .filter((r) => r.kind === 'turn_complete')
+            .map(({ seq, kind, payload }) => ({ seq, kind, payload })),
+        ),
+    } as unknown as RunKindRowsCache,
   );
   return service;
 }

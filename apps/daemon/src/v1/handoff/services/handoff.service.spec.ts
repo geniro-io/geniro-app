@@ -73,8 +73,11 @@ function build(
     { fork: () => ({}) } as never,
     { getById: () => Promise.resolve(run) } as never,
     {
-      callRecordRows: () => Promise.resolve(overrides.callRows ?? []),
-      rowsOfKinds: () => Promise.resolve(overrides.nodeRows ?? []),
+      rowsOfKinds: (_runId: string, kinds: readonly string[]) =>
+        kinds.length === 1 && kinds[0] === 'system'
+          ? Promise.reject(new Error('read every system row of the run'))
+          : Promise.resolve(overrides.nodeRows ?? []),
+      poolHandOffRows: () => Promise.resolve(overrides.nodeRows ?? []),
     } as never,
     {
       getByRunNode: () =>
@@ -97,6 +100,9 @@ function build(
       peek: (key: string) => (live.has(key) ? {} : null),
       holdsAnyUnder: (prefix: string) =>
         [...live].some((key) => key.startsWith(prefix)),
+    } as never,
+    {
+      rowsOfView: () => Promise.resolve(overrides.callRows ?? []),
     } as never,
   );
   return { service, handoffTarget, adapterFor };

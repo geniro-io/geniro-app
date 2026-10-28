@@ -24,6 +24,7 @@ import type { AgentSessionRegistry } from './agent-session.registry';
 import { ChatMetricsService } from './chat-metrics.service';
 import type { ConfigDirPinService } from './config-dir-pin.service';
 import type { PolledSpendService } from './polled-spend.service';
+import type { RunKindRowsCache } from './run-kind-rows.cache';
 
 /**
  * Every NAMED component of the wire shape populated, not just the top level.
@@ -49,6 +50,25 @@ const BREAKDOWN: AgentContextUsage = {
     { name: 'amplitude', tokens: 109_284, toolCount: 33, loadedToolCount: 0 },
   ],
 };
+
+/** The run's usage rows and call records, as `RunKindRowsCache` hands them out. */
+function usageRowsOf(
+  rows: readonly { nodeId: string | null; payload: string }[],
+  callRecords: readonly unknown[] = [],
+  spanRows: (
+    runId: string,
+    kinds: readonly string[],
+    atLeast: unknown,
+  ) => Promise<unknown[]> = () => Promise.resolve([]),
+): RunKindRowsCache {
+  return {
+    rowsOf: (runId: string, kinds: readonly string[], atLeast: unknown) =>
+      kinds.includes('status')
+        ? spanRows(runId, kinds, atLeast)
+        : Promise.resolve(rows),
+    rowsOfView: () => Promise.resolve(callRecords),
+  } as unknown as RunKindRowsCache;
+}
 
 /** One stored `turn_complete` payload, as the transcript holds it. */
 function turn(usage: Record<string, unknown> | null): string {
@@ -128,10 +148,7 @@ function build(opts: {
         ),
     } as unknown as RunDao,
     {
-      usagePayloads: () => Promise.resolve(opts.payloads ?? []),
-      usageRowsWithNode: () => Promise.resolve(opts.workflow?.rows ?? []),
       maxSeq: () => Promise.resolve(opts.maxSeq ?? 7),
-      turnSpanRows,
     } as unknown as ItemDao,
     {
       listByRun: () => Promise.resolve(opts.workflow?.states ?? []),
@@ -190,6 +207,12 @@ function build(opts: {
       },
     } as unknown as ConfigDirPinService,
     wallTurns as unknown as WallTurnDao,
+    usageRowsOf(
+      opts.workflow?.rows ??
+        (opts.payloads ?? []).map((payload) => ({ nodeId: null, payload })),
+      [],
+      turnSpanRows,
+    ),
   );
   service.onModuleInit();
   return {
@@ -228,9 +251,16 @@ describe('ChatMetricsService — one workflow node', () => {
   ) {
     const peek = vi.fn().mockReturnValue(null);
     const getByRunNode = vi.fn().mockResolvedValue(state);
-    const usagePayloads = vi
-      .fn()
-      .mockResolvedValue([turn({ inputTokens: 10, outputTokens: 5 })]);
+    const usageRows = [
+      {
+        nodeId: 'manager',
+        payload: turn({ inputTokens: 10, outputTokens: 5 }),
+      },
+      {
+        nodeId: 'engineer',
+        payload: turn({ inputTokens: 900, outputTokens: 1 }),
+      },
+    ];
     const maxSeq = vi.fn().mockResolvedValue(opts.maxSeq ?? 1);
     const readContextUsage = vi
       .fn()
@@ -252,9 +282,8 @@ describe('ChatMetricsService — one workflow node', () => {
         rememberMetricsReading: runRemember,
       } as unknown as RunDao,
       {
-        usagePayloads,
         maxSeq,
-        rowsOfKinds: () => Promise.resolve(opts.nodeRows ?? []),
+        poolHandOffRows: () => Promise.resolve(opts.nodeRows ?? []),
       } as unknown as ItemDao,
       {
         getByRunNode,
@@ -289,13 +318,13 @@ describe('ChatMetricsService — one workflow node', () => {
       } as unknown as PolledSpendService,
       { forRun: () => null } as unknown as ConfigDirPinService,
       wallTurns as unknown as WallTurnDao,
+      usageRowsOf(usageRows),
     );
     service.onModuleInit();
     return {
       service,
       peek,
       getByRunNode,
-      usagePayloads,
       maxSeq,
       readContextUsage,
       runRemember,
@@ -460,11 +489,7 @@ describe('ChatMetricsService — one workflow node', () => {
       live: null,
       sessionId: 'sess-manager',
     });
-    expect(built.usagePayloads).toHaveBeenCalledWith(
-      'run-1',
-      expect.anything(),
-      'manager',
-    );
+    expect(metrics.totals.inputTokens).toBe(10);
     expect(metrics.context).toEqual(BREAKDOWN);
     expect(ChatMetricsWireSchema.parse(metrics)).toEqual(metrics);
     // Filed on the NODE for the next open; the run row holds one reading per
@@ -581,31 +606,6 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
         rememberMetricsReading: runRemember,
       } as unknown as RunDao,
       {
-        callRecordRows: () =>
-          Promise.resolve([
-            started('call-1', 'engineer'),
-            result('call-1', 'engineer', 'sess-a'),
-            started('call-2', 'researcher'),
-            started('call-3', 'engineer', 'call-1'),
-            ...(opts.inFlight
-              ? []
-              : [
-                  result(
-                    'call-3',
-                    'engineer',
-                    'sess-b',
-                    opts.pooled ? 2 : undefined,
-                  ),
-                ]),
-          ]),
-        usageRowsWithNode: () =>
-          Promise.resolve([
-            callTurn('engineer', 'call-1', 10),
-            callTurn('engineer', null, 100),
-            callTurn('researcher', 'call-2', 1000),
-            callTurn('engineer', 'call-3', 20),
-          ]),
-        usagePayloads: () => Promise.resolve([]),
         maxSeq: () => Promise.resolve(9),
       } as unknown as ItemDao,
       {
@@ -642,6 +642,30 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       } as unknown as PolledSpendService,
       { forRun: () => null } as unknown as ConfigDirPinService,
       wallTurns as unknown as WallTurnDao,
+      usageRowsOf(
+        [
+          callTurn('engineer', 'call-1', 10),
+          callTurn('engineer', null, 100),
+          callTurn('researcher', 'call-2', 1000),
+          callTurn('engineer', 'call-3', 20),
+        ],
+        [
+          started('call-1', 'engineer'),
+          result('call-1', 'engineer', 'sess-a'),
+          started('call-2', 'researcher'),
+          started('call-3', 'engineer', 'call-1'),
+          ...(opts.inFlight
+            ? []
+            : [
+                result(
+                  'call-3',
+                  'engineer',
+                  'sess-b',
+                  opts.pooled ? 2 : undefined,
+                ),
+              ]),
+        ],
+      ),
     );
     service.onModuleInit();
     return {
@@ -1562,7 +1586,22 @@ describe('ChatMetricsService.readTotalsResponse', () => {
 
     await service.readTotalsResponse('run-1');
 
-    expect(turnSpanRows).toHaveBeenCalledWith('run-1', expect.anything());
+    // Every kind a stretch is folded from, cards and background units
+    // included: a kind left out puts a wait back on the working clock.
+    expect(turnSpanRows).toHaveBeenCalledWith(
+      'run-1',
+      [
+        'status',
+        'turn_complete',
+        'approval_request',
+        'approval_verdict',
+        'unanswerable',
+        'shell_open',
+        'shell_info',
+        'subagent_info',
+      ],
+      'fresh',
+    );
   });
 
   it('sends a wait still open as an open-ended paused stretch', async () => {

@@ -1,4 +1,5 @@
 import type { Item } from '../../runs/entity/item.entity';
+import type { ItemKind } from '../../runs/runs.types';
 import type { UnanswerableWire } from '../chat.types';
 import type { PendingApproval } from '../services/approval-registry';
 
@@ -38,6 +39,13 @@ export function unanswerablePayload(
 ): UnanswerableWire {
   return { id: approval.requestId, toolName: approval.toolName };
 }
+
+/** The only kinds {@link unansweredRequests} reads — what a caller loads, rather than the whole transcript. */
+export const ANSWERABILITY_KINDS = [
+  'approval_request',
+  'approval_verdict',
+  'unanswerable',
+] as const satisfies readonly ItemKind[];
 
 /**
  * Requests in a STORED transcript that were never answered and never closed.

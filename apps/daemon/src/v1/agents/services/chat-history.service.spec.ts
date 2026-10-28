@@ -9,6 +9,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import type { ItemWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
@@ -62,7 +63,13 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     const chats = {
       getHistory: () => Promise.resolve([...page]),
     } as unknown as ChatService;
-    return new ChatHistoryService(orm.em, dao, chats, callIndex());
+    return new ChatHistoryService(
+      orm.em,
+      dao,
+      chats,
+      callIndex(),
+      kindRowsPassthrough(dao),
+    );
   }
 
   function callIndex(): ItemCallIndexService {
@@ -82,8 +89,54 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
           await dao.getByRun(runId, afterSeq, orm.em.fork(), window, inCalls)
         ).map(itemToWire),
     } as unknown as ChatService;
-    return new ChatHistoryService(orm.em, dao, chats, callIndex());
+    return new ChatHistoryService(
+      orm.em,
+      dao,
+      chats,
+      callIndex(),
+      kindRowsPassthrough(dao),
+    );
   }
+
+  it('serves a tool result’s base64 image as a line naming it, on the page and among its anchors', async () => {
+    const screenshot = {
+      id: 't1',
+      result: [
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: 'image/png',
+            data: 'A'.repeat(4_096),
+          },
+        },
+      ],
+    };
+    await insert(1, 'tool_call', { id: 't1', name: 'screenshot' });
+    await insert(2, 'tool_result', screenshot);
+    const served = '[image: image/png, 3 KB]';
+
+    const page = await readingService().read('run-a', -1, {
+      limit: 1,
+      take: 'newest',
+    });
+    const anchored = await readingService().read('run-a', -1, {
+      limit: 1,
+      take: 'oldest',
+    });
+
+    expect(page.items.map((row) => row.payload)).toEqual([
+      { id: 't1', result: [served] },
+    ]);
+    expect(
+      anchored.anchors
+        .filter((row) => row.kind === 'tool_result')
+        .map((row) => row.payload),
+    ).toEqual([{ id: 't1', result: [served] }]);
+    expect(JSON.parse((await dao.getByRun('run-a', -1))[1]!.payload)).toEqual(
+      screenshot,
+    );
+  });
 
   describe('one conversation of a workflow run', () => {
     async function workflowRun(): Promise<void> {

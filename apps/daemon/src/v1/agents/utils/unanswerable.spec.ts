@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Item } from '../../runs/entity/item.entity';
 import type { ItemKind } from '../../runs/runs.types';
-import { unansweredRequests } from './unanswerable';
+import { ANSWERABILITY_KINDS, unansweredRequests } from './unanswerable';
 
 /** A stored transcript row — only the fields this reader touches. */
 function row(
@@ -84,5 +84,27 @@ describe('unansweredRequests', () => {
         row('approval_request', JSON.stringify({ id: 'a', toolName: 7 })),
       ]),
     ).toEqual([{ nodeId: null, payload: { id: 'a', toolName: 'tool' } }]);
+  });
+
+  it('answers the same from the rows of ANSWERABILITY_KINDS alone as from the whole transcript', () => {
+    const transcript = [
+      request('a'),
+      row('tool_call', JSON.stringify({ id: 'a' })),
+      row('approval_verdict', JSON.stringify({ id: 'a', allow: true })),
+      request('b'),
+      row('unanswerable', JSON.stringify({ id: 'b' })),
+      request('c'),
+      row('message', JSON.stringify({ id: 'c', text: 'not a verdict' })),
+    ];
+
+    const kinds: readonly ItemKind[] = ANSWERABILITY_KINDS;
+    expect(
+      unansweredRequests(
+        transcript.filter((item) => kinds.includes(item.kind)),
+      ),
+    ).toEqual(unansweredRequests(transcript));
+    expect(unansweredRequests(transcript)).toEqual([
+      { nodeId: null, payload: { id: 'c', toolName: 'Bash' } },
+    ]);
   });
 });

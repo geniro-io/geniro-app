@@ -555,6 +555,11 @@ class FakeItemDao {
       .filter((i) => i.runId === runId && i.seq > afterSeq)
       .sort((a, b) => a.seq - b.seq);
   }
+  async rowsOfKinds(runId: string, kinds: readonly string[]): Promise<Item[]> {
+    return this.items
+      .filter((i) => i.runId === runId && kinds.includes(i.kind))
+      .sort((a, b) => a.seq - b.seq);
+  }
   /** The real one's contract: rows of `kinds` whose payload's `id` is in `ids`. */
   async rowsByPayloadId(
     runId: string,

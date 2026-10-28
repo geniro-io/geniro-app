@@ -65,6 +65,11 @@ export class ItemCallIndexService {
   /** Moves when every stamp is cleared; a stamping pass that spans one starts over. */
   private epoch = 0;
 
+  /** Changes whenever every `inCall` stamp is cleared, so a reader holding rows knows to read them again. */
+  get stampEpoch(): number {
+    return this.epoch;
+  }
+
   private readonly markerPath: string;
 
   constructor(

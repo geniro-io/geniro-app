@@ -17,6 +17,7 @@ import {
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import type { SubagentRecoveryRef } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { ItemDao } from '../dao/item.dao';
@@ -92,6 +93,7 @@ describe('SubagentRecoveryService (SQLite)', () => {
       {
         subagentRecoveryBlocked: () => blocked,
       } as unknown as AgentSessionRegistry,
+      kindRowsPassthrough(items),
     );
     await runs.create({ id: 'run', status: 'completed' });
   });

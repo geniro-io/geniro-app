@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import { NO_CALL_INDEX } from '../__tests__/no-call-index';
 import { NO_COMMANDS } from '../__tests__/no-commands';
 import { NO_STOPS } from '../__tests__/no-stops';
@@ -89,8 +90,8 @@ describe('ChatActionsService (in-memory sqlite)', () => {
       } as unknown as ChatShellsService,
       { all: () => new Map() } as unknown as AgentAdapterRegistry,
       seqs,
-      actions,
       { list: () => [] } as unknown as MonitorRegistry,
+      kindRowsPassthrough(items),
     );
     await runs.create({ id: 'run-a', status: 'running', workflowId: null });
   });

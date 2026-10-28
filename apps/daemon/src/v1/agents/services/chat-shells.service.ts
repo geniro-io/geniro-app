@@ -24,6 +24,7 @@ import { AgentSessionRegistry } from './agent-session.registry';
 import { ChatService } from './chat.service';
 import { ItemCallIndexService } from './item-call-index.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
+import { RunKindRowsCache } from './run-kind-rows.cache';
 
 /** A Stop's answer for a listed command that nothing on the machine runs. */
 const ALREADY_STOPPED =
@@ -70,6 +71,7 @@ export class ChatShellsService {
      */
     private readonly sessions: AgentSessionRegistry,
     private readonly calls: ItemCallIndexService,
+    private readonly kindRows: RunKindRowsCache,
   ) {}
 
   async read(runId: string): Promise<ChatShellsWire> {
@@ -115,7 +117,11 @@ export class ChatShellsService {
         workId: string | null;
       }
     >();
-    for (const row of await this.itemDao.shellLifecycleRows(runId, em)) {
+    for (const row of await this.kindRows.rowsOf(
+      runId,
+      ['shell_open', 'shell_info'],
+      'fresh',
+    )) {
       const payload = asRecord(parse(row.payload));
       const id = asString(payload?.id);
       if (id === null || id === '') {

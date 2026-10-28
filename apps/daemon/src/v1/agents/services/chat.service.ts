@@ -185,7 +185,11 @@ import { assertChatRun } from '../utils/run-kind';
 import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { StandingQuestions } from '../utils/standing-questions';
-import { unanswerablePayload, unansweredRequests } from '../utils/unanswerable';
+import {
+  ANSWERABILITY_KINDS,
+  unanswerablePayload,
+  unansweredRequests,
+} from '../utils/unanswerable';
 import { cliTurnDurationMs } from '../utils/wall-worked';
 import { ActionBroker } from './action.broker';
 import { ActionPublishService } from './action-publish.service';
@@ -873,7 +877,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           ].filter((id): id is string => typeof id === 'string'),
         );
         for (const request of unansweredRequests(
-          await this.itemDao.getByRun(run.id, -1, em),
+          await this.itemDao.rowsOfKinds(
+            run.id,
+            ANSWERABILITY_KINDS,
+            undefined,
+            em,
+          ),
         ).filter((request) => !standing.has(request.payload.id))) {
           await this.persist(
             em,

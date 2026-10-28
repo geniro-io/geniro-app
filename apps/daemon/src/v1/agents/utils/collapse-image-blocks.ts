@@ -1,6 +1,7 @@
 /**
  * Base64 image blocks, collapsed to a line saying what they were — so a page
- * of a thread an analysis reads carries `[image: image/png, 171 KB]` rather
+ * of a thread an analysis reads, and every page the transcript route serves
+ * (`ChatHistoryService.read`), carries `[image: image/png, 171 KB]` rather
  * than the megabytes the agent looked at.
  *
  * TWIN PARSER: apps/ui/src/renderer/chats/export-image-blocks.ts — the same

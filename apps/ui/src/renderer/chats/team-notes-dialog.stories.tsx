@@ -84,6 +84,14 @@ type Story = StoryObj<typeof meta>;
 
 export const AllNotes: Story = {};
 
+export const OpenedOnANote: Story = {
+  args: { initialSelected: 214 },
+};
+
+export const OpenedOnASupersededNote: Story = {
+  args: { initialSelected: 120 },
+};
+
 export const NoNotesYet: Story = {
   args: { notes: [] },
 };

@@ -6536,13 +6536,21 @@ export function Chats({
       ),
     [transcriptRows],
   );
-  /** The run's team notes, read from the daemon — a workflow run's only. */
-  /** The team notes' full view, opened from the panel section or the chip. */
-  const [teamNotesOpen, setTeamNotesOpen] = useState(false);
+  /**
+   * The team notes popup while open, with the note it was opened on — from
+   * the notes popup, the chip, or a note's row in the transcript.
+   */
+  const [teamNotesView, setTeamNotesView] = useState<{
+    selected: number | null;
+  } | null>(null);
   // A thread switch closes it: it belongs to the run it was opened over.
   useEffect(() => {
-    setTeamNotesOpen(false);
+    setTeamNotesView(null);
   }, [activeRunId]);
+  const openTeamNote = useCallback((seq: number) => {
+    setTeamNotesView({ selected: seq });
+  }, []);
+  /** The run's team notes, read from the daemon — a workflow run's only. */
   const { notes: teamNotes, loaded: teamNotesLoaded } = useRunTeamNotes(
     chatApi,
     activeRun?.workflowId != null ? activeRunId : null,
@@ -8858,17 +8866,17 @@ export function Chats({
       <TeamNotesChip
         notes={teamNotes}
         agentName={shelfAgentName}
-        onJump={jumpToSeq}
-        onOpenAll={() => setTeamNotesOpen(true)}
+        onOpen={(seq) => setTeamNotesView({ selected: seq })}
       />
       {/* Mounted only while open and keyed by the run, so its search and
           filters start clean on every open and never carry to another thread. */}
-      {teamNotesOpen ? (
+      {teamNotesView !== null ? (
         <TeamNotesDialog
           key={activeRunId ?? 'no-run'}
           open
-          onClose={() => setTeamNotesOpen(false)}
+          onClose={() => setTeamNotesView(null)}
           notes={teamNotes}
+          initialSelected={teamNotesView.selected}
           agentName={shelfAgentName}
           onJump={jumpToSeq}
         />
@@ -9815,6 +9823,9 @@ export function Chats({
                     <TranscriptContexts
                       runOutcomes={activeRunOutcomes}
                       runStages={activeRun?.stages ?? null}
+                      openTeamNote={
+                        activeRun?.workflowId != null ? openTeamNote : null
+                      }
                       collapseToolSteps={collapseToolSteps}
                       runActivity={activeActivity}
                       turnDurations={turnDurations}
@@ -10594,7 +10605,9 @@ export function Chats({
                       publishedArtifacts={publishedArtifacts}
                       teamNotes={teamNotes}
                       teamNotesLoaded={teamNotesLoaded}
-                      onOpenTeamNotes={() => setTeamNotesOpen(true)}
+                      onOpenTeamNotes={() =>
+                        setTeamNotesView({ selected: null })
+                      }
                       threadPullRequests={openedByActiveThread}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}

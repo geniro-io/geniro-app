@@ -1,11 +1,12 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
-import { TeamNoteRow } from './team-note-row';
+import { TeamNoteOpenContext, TeamNoteRow } from './team-note-row';
 
 const meta = {
   title: 'Chats/TeamNoteRow',
   component: TeamNoteRow,
   args: {
+    seq: 214,
     author: 'Backend Engineer',
     note: {
       kind: 'contract',
@@ -41,4 +42,14 @@ export const PitfallReplacingAnEarlierNote: Story = {
 
 export const UnderItsAuthor: Story = {
   args: { author: null },
+};
+
+export const OpensTheTeamNotesPopup: Story = {
+  decorators: [
+    (story) => (
+      <TeamNoteOpenContext.Provider value={() => {}}>
+        {story()}
+      </TeamNoteOpenContext.Provider>
+    ),
+  ],
 };

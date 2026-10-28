@@ -97,17 +97,20 @@ export function MessageBubble({
   variant,
   role,
   className,
+  onClick,
   children,
 }: {
   variant: BubbleVariant;
   role?: string;
   className?: string;
+  onClick?: (event: React.MouseEvent<HTMLDivElement>) => void;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
     <div
       data-role={variant}
-      className={cn(bubbleVariants({ variant }), className)}>
+      className={cn(bubbleVariants({ variant }), className)}
+      onClick={onClick}>
       {role ? (
         <span
           className={cn(

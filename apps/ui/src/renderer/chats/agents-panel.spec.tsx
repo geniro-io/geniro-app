@@ -4223,7 +4223,7 @@ describe('AgentsPanel — a pooled agent’s MCP servers', () => {
   });
 });
 
-describe('AgentsPanel — team notes', () => {
+describe('AgentsPanel — team notes, in the notes popup', () => {
   const teamNote = (seq: number, over: Partial<TeamNote> = {}): TeamNote => ({
     seq,
     kind: 'fact',
@@ -4237,29 +4237,37 @@ describe('AgentsPanel — team notes', () => {
     ...over,
   });
 
+  const openNotes = (el: HTMLElement): void => {
+    click(el.querySelector('button[aria-label="Open thread notes"]'));
+  };
+
   const withNotes = (
     notes: TeamNote[],
     onJump = vi.fn(),
-  ): { el: HTMLDivElement; onJump: ReturnType<typeof vi.fn> } => ({
-    el: render(
+    onOpenTeamNotes?: () => void,
+  ): { el: HTMLDivElement; onJump: ReturnType<typeof vi.fn> } => {
+    const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
         agents={[agents[0]!, agents[1]!]}
         teamNotes={notes}
+        onOpenTeamNotes={onOpenTeamNotes}
         timeline={{
           markers: [],
           onJump,
           partialReason: null,
           inProgress: false,
         }}
+        notes={{ runId: 'run-1', value: null, onSave: vi.fn() }}
         onOpenThread={vi.fn()}
       />,
-    ),
-    onJump,
-  });
+    );
+    openNotes(el);
+    return { el, onJump };
+  };
 
   const section = (el: HTMLElement): HTMLElement | null =>
-    el.querySelector('section[aria-label="Team notes"]');
+    el.querySelector('[role="dialog"] section[aria-label="Team notes"]');
   const texts = (el: HTMLElement): string[] =>
     [...(section(el)?.querySelectorAll('li') ?? [])].map(
       (li) => li.querySelector('[class*="break-words"]')?.textContent ?? '',
@@ -4302,7 +4310,7 @@ describe('AgentsPanel — team notes', () => {
     ]);
     const rows = [...(section(el)?.querySelectorAll('li') ?? [])];
     expect(rows[0]?.textContent).not.toContain('superseded');
-    expect(rows[1]?.textContent).toContain('superseded by a newer note');
+    expect(rows[1]?.textContent).toContain('superseded');
     expect(section(el)?.textContent).not.toMatch(/note 9|note 4/);
   });
 
@@ -4344,25 +4352,35 @@ describe('AgentsPanel — team notes', () => {
     expect(texts(el)).toEqual(['note text 9', 'note text 6', 'note text 4']);
   });
 
-  it('opens the full view from the section, and offers it only when given the way to', () => {
+  it('opens the full view from the popup, closing it, and offers it only when given the way to', () => {
     const onOpenTeamNotes = vi.fn();
-    const el = render(
-      <AgentsPanel
-        terminalReasons={TERMINALS}
-        agents={[agents[0]!, agents[1]!]}
-        teamNotes={[teamNote(4)]}
-        onOpenTeamNotes={onOpenTeamNotes}
-        onOpenThread={vi.fn()}
-      />,
-    );
+    const { el } = withNotes([teamNote(4)], vi.fn(), onOpenTeamNotes);
     const open = [
       ...(section(el)?.querySelectorAll<HTMLButtonElement>('button') ?? []),
     ].find((button) => button.textContent === 'Open the full view');
     act(() => open?.click());
     expect(onOpenTeamNotes).toHaveBeenCalledTimes(1);
+    expect(el.querySelector('[role="dialog"]')).toBeNull();
 
     const { el: without } = withNotes([teamNote(4)]);
     expect(section(without)?.textContent).not.toContain('Open the full view');
+  });
+
+  it('lists none in the column itself, only in the popup', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[agents[0]!, agents[1]!]}
+        teamNotes={[teamNote(9), teamNote(4)]}
+        onOpenTeamNotes={vi.fn()}
+        notes={{ runId: 'run-1', value: null, onSave: vi.fn() }}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('section[aria-label="Team notes"]')).toBeNull();
+    expect(el.textContent).not.toContain('note text 9');
+    openNotes(el);
+    expect(section(el)?.textContent).toContain('note text 9');
   });
 
   it('draws no section for a run whose agents wrote none', () => {

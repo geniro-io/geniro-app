@@ -1220,11 +1220,7 @@ describe('TeamNotesChip', () => {
     supersededBy: null,
   });
 
-  function mount(
-    notes: ReturnType<typeof note>[],
-    onJump = vi.fn(),
-    onOpenAll?: () => void,
-  ) {
+  function mount(notes: ReturnType<typeof note>[], onOpen = vi.fn()) {
     container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
@@ -1233,12 +1229,11 @@ describe('TeamNotesChip', () => {
         <TeamNotesChip
           notes={notes}
           agentName={(id) => (id === 'engineer' ? 'Engineer' : id)}
-          onJump={onJump}
-          onOpenAll={onOpenAll}
+          onOpen={onOpen}
         />,
       );
     });
-    return onJump;
+    return onOpen;
   }
 
   it('draws nothing at zero notes', () => {
@@ -1246,8 +1241,8 @@ describe('TeamNotesChip', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('counts the notes, and a note in its panel opens that note in the transcript', () => {
-    const onJump = mount([note(9), note(4)]);
+  it('counts the notes, and a note in its panel opens the Team notes popup on that note', () => {
+    const onOpen = mount([note(9), note(4)]);
     expect(container.textContent).toContain('Team notes');
     expect(container.textContent).toContain('2');
     act(() => {
@@ -1258,19 +1253,23 @@ describe('TeamNotesChip', () => {
     ].filter((button) => button.textContent?.includes('Engineer · Call 2'));
     expect(rows).toHaveLength(2);
     act(() => rows[1]!.click());
-    expect(onJump).toHaveBeenCalledWith(4);
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(4);
   });
 
-  it('opens the full view from its panel', () => {
-    const onOpenAll = vi.fn();
-    mount([note(9)], vi.fn(), onOpenAll);
+  it('opens the full view on no note from its panel, and no longer sends the reader to the agents panel', () => {
+    const onOpen = mount([note(9)]);
     act(() => {
       container.querySelector<HTMLButtonElement>('button')!.click();
     });
-    const full = [
-      ...document.querySelectorAll<HTMLButtonElement>('button'),
-    ].find((button) => button.textContent === 'Open the full view');
-    act(() => full?.click());
-    expect(onOpenAll).toHaveBeenCalledTimes(1);
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')];
+    expect(
+      buttons.some((button) => button.textContent === 'Open in agents panel'),
+    ).toBe(false);
+    act(() =>
+      buttons
+        .find((button) => button.textContent === 'Open the full view')
+        ?.click(),
+    );
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(null);
   });
 });

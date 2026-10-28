@@ -1843,8 +1843,8 @@ export function AgentsPanel({
   publishedArtifacts?: readonly PublishedArtifact[];
   /**
    * Every team note of this workflow run, newest first (`team_note` /
-   * `team_notes`). Empty draws no section — every chat and every run whose
-   * agents wrote none.
+   * `team_notes`), listed in the notes popup and never in the column. Empty
+   * draws no section there — every chat and every run whose agents wrote none.
    */
   teamNotes?: readonly TeamNote[];
   /** Whether {@link teamNotes} has been read yet — see `TeamNotesSection`. */
@@ -3051,13 +3051,6 @@ export function AgentsPanel({
             })
           )}
         </ul>
-        <TeamNotesSection
-          notes={teamNotes}
-          loaded={teamNotesLoaded}
-          agentName={teamNoteAgentName}
-          onJump={timeline?.onJump}
-          onOpenAll={onOpenTeamNotes}
-        />
         {/* Its OWN block, under the agents rather than wedged above them: this
           panel is a list of agents under one heading, and a section inserted
           between that heading and its first card read as part of the list —

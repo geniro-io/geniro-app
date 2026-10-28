@@ -34,14 +34,28 @@ const agentName = (nodeId: string): string => NAMES[nodeId] ?? nodeId;
 const LONG = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join('\n');
 const NOTES = [
   note(9, { kind: 'pitfall', text: LONG }),
-  note(7, { kind: 'decision', nodeId: 'manager', text: 'page by cursor' }),
-  note(4, { kind: 'contract', callId: 'call-3', text: 'POST /orders' }),
+  note(7, {
+    kind: 'decision',
+    nodeId: 'manager',
+    text: 'page by cursor',
+    supersedes: 4,
+  }),
+  note(4, {
+    kind: 'contract',
+    callId: 'call-3',
+    text: 'POST /orders',
+    supersededBy: 7,
+  }),
 ];
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
 
-function mount(onClose = vi.fn(), onJump = vi.fn()) {
+function mount(
+  onClose = vi.fn(),
+  onJump = vi.fn(),
+  initialSelected: number | null = null,
+) {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -52,6 +66,7 @@ function mount(onClose = vi.fn(), onJump = vi.fn()) {
         onClose={onClose}
         notes={NOTES}
         agentName={agentName}
+        initialSelected={initialSelected}
         onJump={onJump}
       />,
     );
@@ -62,6 +77,19 @@ function mount(onClose = vi.fn(), onJump = vi.fn()) {
 const dialog = (): HTMLElement => document.querySelector('[role="dialog"]')!;
 const rows = (): string[] =>
   [...dialog().querySelectorAll('li')].map((li) => li.textContent ?? '');
+const card = (seq: number): HTMLElement =>
+  dialog().querySelector<HTMLElement>(`li[data-note-seq="${seq}"]`)!;
+const body = (seq: number): HTMLElement =>
+  card(seq).querySelector<HTMLElement>('[class*="break-words"]')!;
+const heading = (seq: number): HTMLButtonElement =>
+  card(seq).querySelector<HTMLButtonElement>('li > button')!;
+const buttonIn = (
+  element: HTMLElement,
+  label: string,
+): HTMLButtonElement | undefined =>
+  [...element.querySelectorAll<HTMLButtonElement>('button')].find(
+    (button) => button.textContent === label,
+  );
 const search = (text: string): void => {
   const input = dialog().querySelector<HTMLInputElement>(
     'input[aria-label="Search team notes"]',
@@ -84,13 +112,57 @@ afterEach(() => {
 });
 
 describe('TeamNotesDialog', () => {
-  it('lists every note whole — a long one with no Show more — with its author and call', () => {
+  it('lists every note by its first three lines, with its author and call, and no Show more', () => {
     mount();
     expect(rows()).toHaveLength(3);
-    expect(rows()[0]).toContain('line 12');
+    expect(body(9).className).toContain('line-clamp-3');
+    expect(heading(9).getAttribute('aria-expanded')).toBe('false');
     expect(dialog().textContent).not.toContain('Show more');
     expect(rows()[2]).toContain('Backend · Call 3');
     expect(dialog().textContent).toContain('3 notes');
+  });
+
+  it('shows a note whole on a press anywhere on it, and folds it back on a second press', () => {
+    mount();
+    act(() => body(9).click());
+    expect(body(9).className).not.toContain('line-clamp');
+    expect(heading(9).getAttribute('aria-expanded')).toBe('true');
+    expect(card(9).dataset.selected).toBe('true');
+    expect(buttonIn(card(9), 'Open in chat')).toBeDefined();
+
+    act(() => heading(7).click());
+    expect(body(9).className).toContain('line-clamp-3');
+    expect(card(7).dataset.selected).toBe('true');
+
+    act(() => heading(7).click());
+    expect(body(7).className).toContain('line-clamp-3');
+    expect(card(7).dataset.selected).toBeUndefined();
+  });
+
+  it('opens on the note it was opened for, whole', () => {
+    mount(vi.fn(), vi.fn(), 7);
+    expect(card(7).dataset.selected).toBe('true');
+    expect(body(7).className).not.toContain('line-clamp');
+    expect(body(9).className).toContain('line-clamp-3');
+  });
+
+  it('marks a superseded note as such in its heading', () => {
+    mount();
+    expect(heading(4).textContent).toContain('superseded');
+    expect(heading(7).textContent).not.toContain('superseded');
+  });
+
+  it('moves from a superseded note to the one replacing it, and back, clearing a search that hides it', () => {
+    mount(vi.fn(), vi.fn(), 4);
+    act(() => buttonIn(card(4), 'Show the newer note')!.click());
+    expect(card(7).dataset.selected).toBe('true');
+    expect(card(4).dataset.selected).toBeUndefined();
+
+    search('page by cursor');
+    expect(rows()).toHaveLength(1);
+    act(() => buttonIn(card(7), 'Show the note it replaces')!.click());
+    expect(rows()).toHaveLength(3);
+    expect(card(4).dataset.selected).toBe('true');
   });
 
   it('narrows by words in the text or the author, and says how many of all match', () => {
@@ -117,12 +189,12 @@ describe('TeamNotesDialog', () => {
     expect(rows()).toHaveLength(3);
   });
 
-  it('closes itself and opens the note in the transcript on a press of its heading', () => {
+  it('closes itself and opens a picked note in the transcript from Open in chat', () => {
     const { onClose, onJump } = mount();
-    act(() => {
-      dialog().querySelectorAll<HTMLButtonElement>('li > button')[1]!.click();
-    });
+    act(() => heading(7).click());
+    expect(onJump).not.toHaveBeenCalled();
+    act(() => buttonIn(card(7), 'Open in chat')!.click());
     expect(onClose).toHaveBeenCalled();
-    expect(onJump).toHaveBeenCalledWith(7);
+    expect(onJump).toHaveBeenCalledExactlyOnceWith(7);
   });
 });

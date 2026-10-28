@@ -44,6 +44,7 @@ import { RetryContext } from './retry-context';
 import { type RunOutcomes, RunOutcomesContext } from './run-outcome';
 import { RunStagesContext } from './stage-change-row';
 import { SubagentDetailContext } from './subagent-context';
+import { TeamNoteOpenContext } from './team-note-row';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { CollapseToolStepsContext } from './tool-group';
 import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
@@ -74,6 +75,8 @@ export interface TranscriptValues {
   /** Each pull request's newest recorded outcome — see `RunOutcomesContext`. */
   runOutcomes: RunOutcomes;
   runStages: StageProgress | null;
+  /** Open the Team notes popup on one note — see `TeamNoteOpenContext`. */
+  openTeamNote: ((seq: number) => void) | null;
 }
 
 /**
@@ -276,25 +279,28 @@ export function TranscriptContexts({
   openSubagentDetail,
   runOutcomes,
   runStages,
+  openTeamNote,
   children,
 }: TranscriptValues & { children: React.ReactNode }): React.JSX.Element {
   return (
     <RunOutcomesContext.Provider value={runOutcomes}>
-      <RunStagesContext.Provider value={runStages}>
-        <CollapseToolStepsContext.Provider value={collapseToolSteps}>
-          <RunActivityContext.Provider value={runActivity}>
-            <TurnDurationContext.Provider value={turnDurations}>
-              <RevealCallBlockContext.Provider value={revealCallBlock}>
-                <RevealCallContext.Provider value={revealCall}>
-                  <SubagentDetailContext.Provider value={openSubagentDetail}>
-                    {children}
-                  </SubagentDetailContext.Provider>
-                </RevealCallContext.Provider>
-              </RevealCallBlockContext.Provider>
-            </TurnDurationContext.Provider>
-          </RunActivityContext.Provider>
-        </CollapseToolStepsContext.Provider>
-      </RunStagesContext.Provider>
+      <TeamNoteOpenContext.Provider value={openTeamNote}>
+        <RunStagesContext.Provider value={runStages}>
+          <CollapseToolStepsContext.Provider value={collapseToolSteps}>
+            <RunActivityContext.Provider value={runActivity}>
+              <TurnDurationContext.Provider value={turnDurations}>
+                <RevealCallBlockContext.Provider value={revealCallBlock}>
+                  <RevealCallContext.Provider value={revealCall}>
+                    <SubagentDetailContext.Provider value={openSubagentDetail}>
+                      {children}
+                    </SubagentDetailContext.Provider>
+                  </RevealCallContext.Provider>
+                </RevealCallBlockContext.Provider>
+              </TurnDurationContext.Provider>
+            </RunActivityContext.Provider>
+          </CollapseToolStepsContext.Provider>
+        </RunStagesContext.Provider>
+      </TeamNoteOpenContext.Provider>
     </RunOutcomesContext.Provider>
   );
 }

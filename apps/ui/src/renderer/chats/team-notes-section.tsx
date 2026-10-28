@@ -16,7 +16,7 @@ const ARRIVAL_MARK_MS = 2_000;
 
 /**
  * Every team note of the open workflow run — the agents' shared contracts,
- * decisions, facts, pitfalls and pointers — newest first, under the agents.
+ * decisions, facts, pitfalls and pointers — newest first, in the notes popup.
  * A press on a note's heading opens its row in the transcript (inside its
  * call's card when a callee wrote it). Draws nothing at zero notes.
  */
@@ -37,8 +37,8 @@ export function TeamNotesSection({
   agentName: (nodeId: string) => string;
   onJump?: (seq: number) => void;
   /**
-   * Open every note in the full view — the way out of a 280px column for a
-   * reader who wants the notes whole. Absent draws no button.
+   * Open every note in the full view, for a reader who wants the notes
+   * whole. Absent draws no button.
    */
   onOpenAll?: () => void;
 }): React.JSX.Element | null {

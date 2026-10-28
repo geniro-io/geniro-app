@@ -24,11 +24,7 @@ import type { AgentThread } from './agent-activity';
 import type { ChangesSummary } from './changes-tree';
 import { formatElapsed, RunSettledContext, useSecondsTick } from './live-row';
 import { MonitorRows } from './monitor-list';
-import {
-  revealAgentsPanel,
-  revealThreadPullRequests,
-  revealWorkflows,
-} from './panel-flags';
+import { revealThreadPullRequests, revealWorkflows } from './panel-flags';
 import { ThreadPullRequestChip } from './pull-request-row';
 import { formatClockTime, formatRelativeTime } from './relative-time';
 import { pullRequestOutcomeKey } from './run-outcome';
@@ -885,24 +881,21 @@ const TEAM_NOTES_PREVIEW = 5;
 
 /**
  * The run's team notes as a shelf chip: a count, and on a press the newest
- * few, each a press away from its row in the transcript, and the way to the
- * whole list in the agents panel. Durable like the task list — a note outlives
- * the turn that wrote it — so it sits among the durable chips. Hidden at zero.
+ * few, each a press away from the Team notes popup opened on it, and the way
+ * to the whole list there. Durable like the task list — a note outlives the
+ * turn that wrote it — so it sits among the durable chips. Hidden at zero.
  */
 export function TeamNotesChip({
   notes,
   agentName,
-  onJump,
-  onOpenAll,
+  onOpen,
 }: {
   /** Newest first, as the daemon lists them. */
   notes: readonly TeamNote[];
   agentName: (nodeId: string) => string;
-  onJump: (seq: number) => void;
-  /** Open every note in the full view; absent draws no button for it. */
-  onOpenAll?: () => void;
+  /** Open the Team notes popup, on one note or on none. */
+  onOpen: (seq: number | null) => void;
 }): React.JSX.Element | null {
-  const runId = useContext(ThreadUiMemoryContext);
   if (notes.length === 0) {
     return null;
   }
@@ -937,7 +930,7 @@ export function TeamNotesChip({
                     type="button"
                     onClick={() => {
                       close();
-                      onJump(note.seq);
+                      onOpen(note.seq);
                     }}
                     className={cn(
                       'flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent',
@@ -958,32 +951,16 @@ export function TeamNotesChip({
               );
             })}
           </ul>
-          <div className="flex gap-1">
-            {onOpenAll === undefined ? null : (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="flex-1"
-                onClick={() => {
-                  close();
-                  onOpenAll();
-                }}>
-                Open the full view
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="flex-1"
-              onClick={() => {
-                close();
-                revealAgentsPanel(runId);
-              }}>
-              Open in agents panel
-            </Button>
-          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              close();
+              onOpen(null);
+            }}>
+            Open the full view
+          </Button>
         </div>
       )}
     </HoverPopover>

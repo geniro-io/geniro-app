@@ -758,7 +758,11 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'team_note': {
       const note = readTeamNotePayload(item.payload);
       return note === null ? null : (
-        <TeamNoteRow note={note} author={nodeName(item.nodeId)} />
+        <TeamNoteRow
+          seq={item.seq}
+          note={note}
+          author={nodeName(item.nodeId)}
+        />
       );
     }
     case 'run_outcome': {

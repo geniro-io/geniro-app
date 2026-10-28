@@ -76,6 +76,54 @@ function pooledBlock(completed = false): CallBlockEntry {
   return block;
 }
 
+const LONG_COMMAND =
+  '`python3 << \'PY\' import json, os, time DIR="/tmp/uat-letters" ' +
+  'def send(cmd, timeout=15): p=f"{DIR}/result.json" ' +
+  'if os.path.exists(p): os.remove(p) open(f"{DIR}/cmd.json","w")' +
+  '.write(json.dumps(cmd)) for _ in range(80): time.sleep(0.2)`';
+
+function commandBlock(returned: boolean): CallBlockEntry {
+  const rows: ItemDto[] = [
+    row(
+      1,
+      'call_started',
+      {
+        callId: 'call-2',
+        calleeNodeId: 'engineer',
+        title: 'Check the letters tab',
+        message: 'Check the letters tab in the client UI.',
+      },
+      'manager',
+    ),
+    row(2, 'status', { callId: 'call-2', status: 'running' }),
+    row(3, 'tool_call', {
+      callId: 'call-2',
+      id: 'tool-1',
+      name: LONG_COMMAND,
+      toolKind: 'execute',
+    }),
+  ];
+  if (returned) {
+    rows.push(
+      row(4, 'tool_result', { callId: 'call-2', id: 'tool-1', result: 'ok' }),
+      row(5, 'reasoning', { callId: 'call-2', text: 'Reading the output.' }),
+    );
+  }
+  const [block] = groupTranscript(rows);
+  if (block?.type !== 'call-block') {
+    throw new Error('Missing story call');
+  }
+  return block;
+}
+
+async function openCardAndTools(canvasElement: HTMLElement): Promise<void> {
+  const canvas = within(canvasElement);
+  await userEvent.click(
+    canvas.getByRole('button', { name: /check the letters tab/i }),
+  );
+  await userEvent.click(canvas.getByRole('button', { name: /ran 1 command/i }));
+}
+
 const meta = {
   title: 'Chats/CallBlock',
   component: CallBlock,
@@ -100,4 +148,14 @@ export const PoolSwitchOpened: Story = {
       }),
     );
   },
+};
+
+export const CommandRunning: Story = {
+  args: { block: commandBlock(false) },
+  play: async ({ canvasElement }) => openCardAndTools(canvasElement),
+};
+
+export const CommandReturned: Story = {
+  args: { block: commandBlock(true) },
+  play: async ({ canvasElement }) => openCardAndTools(canvasElement),
 };

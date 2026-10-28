@@ -514,33 +514,13 @@ export function BlockPendingLine({
   /** Whether the line carries the live spinner; the text itself never animates. */
   pulse?: boolean;
   /**
-   * How much of the line to show when it runs long.
-   *
-   * REPORTED as "когда последнее сообщение агента, которого мы вызываем в
-   * workflow, превышает три строки, мы должны обрезать до третьей строки", over
-   * a call card carrying twenty-five lines of grey italic text. It is one
-   * sentence — `QA is running <tool>` — and the tool NAME is what runs long:
-   * an ACP agent's tool title is routinely the whole shell command, `cd … && gh
-   * pr list … | python3 -c "…"`, so a status line rendered a program.
-   *
-   * Two clamps rather than one, because the two places this line appears want
-   * different answers and each already had one written down. The OPEN card
-   * gets `three`, which is the ask and matches `InlineClampText`, the clamp the
-   * callee's own result already uses. The SHUT band gets `one`, which is that
-   * band's own documented rule — it is a state readout, and its other arm
-   * (the callee's last words) has always been `truncate`; the pending arm was
-   * simply the one that never got it, so a long tool name grew the shut card
-   * exactly as it grew the open one.
-   *
-   * Never paired with a `display` utility: `line-clamp-*` works by setting
-   * `display: -webkit-box`, and a `block`/`flex` beside it silently cancels the
-   * clamp — the trap `renderer-components.md` records from a measured bug.
+   * Whether a long line is cut to one. The tool NAME is what runs long: an ACP
+   * agent's tool title is routinely the whole shell command, and the full
+   * command is already in the tool's own row.
    */
-  clamp?: 'none' | 'one' | 'three';
+  clamp?: 'none' | 'one';
 }): React.JSX.Element {
   return (
-    // The clamp sits on the inner span: `line-clamp-*` is `display:
-    // -webkit-box`, which a `flex` on the same element would cancel.
     <span
       className={cn(
         'flex min-w-0 items-center gap-1',
@@ -551,7 +531,6 @@ export function BlockPendingLine({
         data-slot="block-pending"
         className={cn(
           'text-[11px] text-muted-foreground italic',
-          clamp === 'three' && 'line-clamp-3',
           clamp === 'one' && 'block min-w-0 flex-1 truncate',
         )}>
         {children}

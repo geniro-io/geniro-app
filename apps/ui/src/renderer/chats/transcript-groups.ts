@@ -1509,8 +1509,9 @@ function lastSpokenIn(
 }
 
 /**
- * What the callee is DOING — the newest tool call's own name, or null when it
- * has made none.
+ * What the callee is DOING — the newest tool call still in flight, or null when
+ * none is: a tool that has returned is not what the callee is on, and naming it
+ * contradicts that tool's own row.
  *
  * A SECOND fold beside {@link callBlockSummary} rather than a fallback inside
  * it, because the two answer different questions: that one is what the callee
@@ -1564,8 +1565,15 @@ function newestToolNameIn(entries: readonly TranscriptEntry[]): string | null {
       // of tool calls from one node folds into a single group, so reading only
       // the newest pair lets a call that disclosed no name hide the named one
       // before it — and an ACP agent routinely discloses none.
+      if (entry.closed) {
+        continue;
+      }
       for (let p = entry.pairs.length - 1; p >= 0; p -= 1) {
-        const name = payloadString(entry.pairs[p]!.call.payload, 'name');
+        const pair = entry.pairs[p]!;
+        if (pair.result !== null) {
+          continue;
+        }
+        const name = payloadString(pair.call.payload, 'name');
         if (name !== null && name.trim().length > 0) {
           return name;
         }

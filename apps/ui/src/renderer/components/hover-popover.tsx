@@ -70,6 +70,7 @@ if (typeof document !== 'undefined') {
 export function HoverPopover({
   trigger,
   label,
+  title,
   panelLabel,
   side = 'bottom',
   align = 'end',
@@ -89,6 +90,8 @@ export function HoverPopover({
    * one, so a screen-reader user gets it without opening anything.
    */
   label: string;
+  /** The trigger's tooltip, for a trigger that draws no words of its own. */
+  title?: string;
   /** Names the panel itself, for the same reason. */
   panelLabel: string;
   /**
@@ -225,6 +228,7 @@ export function HoverPopover({
         type="button"
         aria-expanded={open}
         aria-label={label}
+        title={title}
         className={cn(
           'flex cursor-pointer items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
           triggerClassName,

@@ -179,3 +179,10 @@ export const SHELF_GROUP_CLASS = `flex ${SHELF_ITEM_HEIGHT} min-w-min items-cent
  */
 export const SHELF_YIELD_CLASS =
   'grid grid-cols-[minmax(0,max-content)] overflow-hidden';
+
+/**
+ * The right-hand cluster of status counters (tasks, notes, agents, sub-agents,
+ * monitors, terminals): glyph and figure only, the name in the tooltip.
+ */
+export const SHELF_STATUS_GROUP_CLASS =
+  'ml-auto flex shrink-0 items-center gap-1.5 empty:hidden';

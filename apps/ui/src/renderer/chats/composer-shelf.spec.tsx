@@ -13,6 +13,7 @@ import { ChatActionChips } from './action-chip';
 import type { AgentThread } from './agent-activity';
 import {
   ComposerShelf,
+  FolderChangesChip,
   formatContinueTime,
   type OpenCallChipRow,
   ResetWakeChip,
@@ -210,7 +211,10 @@ describe('RunningMonitorChips', () => {
       />,
     );
     const chip = el.querySelector('[data-slot="running-monitors"]')!;
-    expect(chip.textContent).toBe('Monitors2');
+    expect(chip.textContent).toBe('2');
+    expect(chip.querySelector('button')?.getAttribute('title')).toBe(
+      'Monitors · 2 running',
+    );
     expect(document.body.textContent).not.toContain('CI on #42');
 
     await press(el, 'running-monitors');
@@ -293,13 +297,24 @@ describe('RunningCallChips', () => {
     expect(rows[0]?.textContent).not.toContain('queued');
   });
 
-  it('does not spin while every call out is queued', () => {
-    const el = mount(
+  it('does not tint its glyph as working while every call out is queued', () => {
+    const queued = mount(
       <RunningCallChips calls={[call({ queued: true })]} onReveal={() => {}} />,
     );
-    const trigger = el.querySelector('[data-slot="running-calls"] button');
+    const trigger = queued.querySelector('[data-slot="running-calls"] button');
     expect(trigger?.getAttribute('aria-label')).toBe('1 queued');
-    expect(trigger?.querySelector('[data-status="queued"]')).not.toBeNull();
+    expect(trigger?.querySelector('svg')?.getAttribute('class')).not.toContain(
+      'text-primary',
+    );
+
+    const working = mount(
+      <RunningCallChips calls={[call()]} onReveal={() => {}} />,
+    );
+    expect(
+      working
+        .querySelector('[data-slot="running-calls"] button svg')
+        ?.getAttribute('class'),
+    ).toContain('text-primary');
   });
 
   it('draws nothing while no call is out', () => {
@@ -319,7 +334,7 @@ describe('RunningCallChips', () => {
     );
     expect(
       el.querySelector('[data-slot="running-calls"] button')?.textContent,
-    ).toBe('Agents2');
+    ).toBe('2');
     await press(el, 'running-calls');
     expect(revealed).toEqual([]);
     expect(
@@ -450,17 +465,12 @@ describe('RunningSubagentChips', () => {
     const chip = el.querySelector('[data-slot="running-subagents"]')!;
     // ONE, not two: the figure is the live half, or it would climb all turn
     // and never come down.
-    expect(chip.textContent).toContain('Sub-agents');
-    expect(chip.textContent).toContain('1');
-    // A SPINNER on the trigger, asked for by name. Honest because the chip is
-    // not drawn at all below `running > 0` — so whenever it is on screen, a
-    // delegate is working. Asserted on the TRIGGER rather than the chip's
-    // subtree, since the panel's own rows spin for their own reasons.
-    expect(
-      chip
-        .querySelector('[data-menu-trigger], button')
-        ?.querySelector('svg.animate-spin'),
-    ).not.toBeNull();
+    const trigger = chip.querySelector('button')!;
+    expect(trigger.textContent).toBe('1');
+    expect(trigger.getAttribute('title')).toBe('Sub-agents · 1 working');
+    expect(trigger.querySelector('svg')?.getAttribute('class')).toContain(
+      'text-primary',
+    );
     // Closed, the delegates are not in the DOM at all.
     expect(el.textContent).not.toContain('review the diff');
 
@@ -662,8 +672,10 @@ describe('TaskListChip', () => {
       <TaskListChip done={3} total={8} tasks={[task()]} live={true} />,
     );
     const chip = el.querySelector('[data-slot="open-tasks"]')!;
-    expect(chip.textContent).toContain('Tasks');
-    expect(chip.textContent).toContain('3/8');
+    expect(chip.textContent).toBe('3/8');
+    expect(chip.querySelector('button')?.getAttribute('title')).toBe(
+      'Tasks · 3 of 8 done',
+    );
   });
 
   it('holds the list itself behind the pair', async () => {
@@ -870,10 +882,21 @@ describe('the shelf — separate chips, ONE joined group', () => {
     // REPORTED: under a queue the reserved-but-empty row was a blank band
     // between the queue and the composer. Inline, the queue's header keeps the
     // reservation, so an empty shelf must not add a second one.
-    const el = mount(<ComposerShelf inline>{null}</ComposerShelf>);
+    const el = mount(
+      <ComposerShelf
+        inline
+        status={<RunningShellChips shells={[]} onOpen={() => {}} />}>
+        {null}
+      </ComposerShelf>,
+    );
     const shelf = el.querySelector('[data-slot="composer-shelf"]')!;
-    expect(shelf.className).toContain('empty:hidden');
+    // Hidden unless some child holds something: the status cluster's wrapper
+    // is always present, so a bare `:empty` would never match.
+    expect(shelf.className).toContain('[&:not(:has(>:not(:empty)))]:hidden');
     expect(shelf.className).toContain('min-w-0');
+    expect(
+      shelf.querySelector('[data-slot="shelf-status"]')!.childNodes,
+    ).toHaveLength(0);
   });
 
   it('keeps the chips SEPARATE — each its own card, with gaps', () => {
@@ -888,8 +911,21 @@ describe('the shelf — separate chips, ONE joined group', () => {
     // the mechanism.
     const el = mount(
       <ComposerShelf>
-        <TaskListChip done={1} total={2} tasks={[]} live={true} />
-        <RunningSubagentChips running={1} threads={[thread()]} />
+        <FolderChangesChip
+          summary={{ files: 2, added: 3, removed: 1 }}
+          onOpen={() => {}}
+        />
+        <ResetWakeChip
+          wakes={[
+            {
+              instant: 0,
+              continuesAt: 60_000,
+              resetsAt: '5pm',
+              callIds: ['call-1'],
+            },
+          ]}
+          onCancel={() => {}}
+        />
       </ComposerShelf>,
     );
     const shelf = el.querySelector('[data-slot="composer-shelf"]')!;
@@ -902,6 +938,45 @@ describe('the shelf — separate chips, ONE joined group', () => {
       expect(chip.className).toContain('shadow-panel-sm');
       // And the card's radius still beats HoverPopover's own `rounded-full`,
       // or a counter would fill as a lozenge inside its own chip.
+      expect(chip.className).not.toContain('rounded-full');
+    }
+  });
+
+  it('puts the status counters in ONE right-anchored cluster, glyph and figure only', () => {
+    const el = mount(
+      <ComposerShelf
+        status={
+          <>
+            <RunningSubagentChips running={1} threads={[thread()]} />
+            <TaskListChip done={1} total={2} tasks={[]} live={true} />
+          </>
+        }>
+        <ThreadPullRequestChips results={[pr(1)]} />
+      </ComposerShelf>,
+    );
+    const shelf = el.querySelector('[data-slot="composer-shelf"]')!;
+    const status = shelf.querySelector<HTMLElement>(
+      '[data-slot="shelf-status"]',
+    )!;
+    expect([...shelf.children].at(-1)).toBe(status);
+    expect(status.className).toContain('ml-auto');
+    expect(status.className).toContain('shrink-0');
+    expect(
+      [...status.querySelectorAll<HTMLElement>('button')].map((button) => [
+        button.textContent,
+        button.getAttribute('title'),
+      ]),
+    ).toEqual([
+      ['1', 'Sub-agents · 1 working'],
+      ['1/2', 'Tasks · 1 of 2 done'],
+    ]);
+    for (const chip of status.querySelectorAll<HTMLElement>('button')) {
+      // The same chip as every other item on the row — height, padding and
+      // card — only its content is shorter.
+      expect(chip.className).toContain('h-[26px]');
+      expect(chip.className).toContain('px-2');
+      expect(chip.className).toContain('rounded-lg');
+      expect(chip.className).toContain('shadow-panel-sm');
       expect(chip.className).not.toContain('rounded-full');
     }
   });
@@ -1243,8 +1318,9 @@ describe('TeamNotesChip', () => {
 
   it('counts the notes, and a note in its panel opens the notes popup on that note', () => {
     const onOpen = mount([note(9), note(4)]);
-    expect(container.textContent).toContain('Team notes');
-    expect(container.textContent).toContain('2');
+    const trigger = container.querySelector('[data-slot="team-notes"] button')!;
+    expect(trigger.textContent).toBe('2');
+    expect(trigger.getAttribute('title')).toBe('Team notes · 2');
     act(() => {
       container.querySelector<HTMLButtonElement>('button')!.click();
     });

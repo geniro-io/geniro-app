@@ -1,9 +1,12 @@
 import {
   AlarmClock,
   ArrowRightLeft,
+  Bot,
   GitCompare,
   GitPullRequest,
   NotebookPen,
+  Radar,
+  SquareTerminal,
   Workflow as WorkflowIcon,
 } from 'lucide-react';
 import { useContext } from 'react';
@@ -18,7 +21,6 @@ import type {
 import { DiffFigures } from '../components/diff-figures';
 import { HoverPopover } from '../components/hover-popover';
 import { Button } from '../components/ui/button';
-import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import type { AgentThread } from './agent-activity';
 import type { ChangesSummary } from './changes-tree';
@@ -28,13 +30,13 @@ import { revealThreadPullRequests, revealWorkflows } from './panel-flags';
 import { ThreadPullRequestChip } from './pull-request-row';
 import { formatClockTime, formatRelativeTime } from './relative-time';
 import { pullRequestOutcomeKey } from './run-outcome';
-import { RunStatusIcon } from './run-status';
 import {
   SHELF_CHIP_CLASS,
   SHELF_CHIP_TRIGGER_CLASS,
   SHELF_CHIP_WRAPPER_CLASS,
   SHELF_GROUP_CLASS,
   SHELF_SEGMENT_CLASS,
+  SHELF_STATUS_GROUP_CLASS,
 } from './shelf-chip';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
@@ -91,12 +93,18 @@ import { WorkflowChip, workflowShellStatus } from './workflow-block';
  * shelf therefore draws nothing (the header line already keeps the height), and
  * it hangs into the header's left padding so a chip sits at the same x as it
  * does in its own row.
+ *
+ * `status` is the compact counter cluster pushed to the row's right end. It is
+ * right-anchored, so it runs VOLATILE → DURABLE left to right: the chip that
+ * comes and goes most sits furthest from the edge and shifts nothing.
  */
 export function ComposerShelf({
   children,
+  status,
   inline = false,
 }: {
   children: React.ReactNode;
+  status?: React.ReactNode;
   inline?: boolean;
 }): React.JSX.Element {
   return (
@@ -104,10 +112,34 @@ export function ComposerShelf({
       data-slot="composer-shelf"
       className={cn(
         'flex min-h-7 items-center gap-1.5 overflow-hidden px-1',
-        inline && '-ml-2 min-w-0 empty:hidden',
+        inline && '-ml-2 min-w-0 [&:not(:has(>:not(:empty)))]:hidden',
       )}>
       {children}
+      {status === undefined ? null : (
+        <div data-slot="shelf-status" className={SHELF_STATUS_GROUP_CLASS}>
+          {status}
+        </div>
+      )}
     </div>
+  );
+}
+
+/** A status counter's face: its glyph, tinted while what it counts is working, and the figure. */
+function StatusFigure({
+  icon,
+  live = false,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  live?: boolean;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const Icon = icon;
+  return (
+    <>
+      <Icon className={cn('size-3.5 shrink-0', live && 'text-primary')} />
+      <span className="text-muted-foreground tabular-nums">{children}</span>
+    </>
   );
 }
 
@@ -380,44 +412,15 @@ export function ThreadPullRequestChips({
 }
 
 /**
- * The commands this thread has running on the machine RIGHT NOW, as a shelf
- * chip: a spinner, a count, and the list behind it.
+ * The commands this thread has running on the machine RIGHT NOW, as a status
+ * counter: the terminal glyph, a count, and the list behind it.
  *
- * It sits here rather than in the chat header because that is where it was
- * asked for — the shelf is the row of things a thread is currently producing,
- * and a running terminal is the most immediate of them. The interaction is the
- * header's own (`HoverPopover`), so the same white panel serves both; only the
- * anchor moved. It opens on a CLICK alone (`openOn="click"`), like every chip
- * on this row: its rows are controls, and a hover-opened panel closed under a
- * row being pressed.
- *
- * It is drawn as a SHELF CHIP (`SHELF_CHIP_CLASS`) with its neighbours' exact
- * three-part structure — MARK, NAME, FIGURE — and the parts are what two
- * rounds of reports were about. First it was a bare spinner and a number
- * ("должна быть не просто цифра… в таком же белом блоке"), then a terminal
- * glyph with the number and a trailing spinner, which was still wrong on both
- * the wording and the order: "там прям должно быть написано «Terminals»… а
- * вторая кнопочка должна быть вот эта вот Loader, которая должна находиться
- * где-то слева".
- *
- * So the SPINNER is the mark, in the leading slot where the pull request has
- * its state icon and the workflow its status mark. It is the right thing to
- * put there rather than a terminal glyph, because it carries what this chip is
- * FOR: every row behind it is live by construction (`groupRunningShells`
- * hands over only what nothing has settled), so the chip exists exactly while
- * something is running. `Terminals` is the name, in the same medium weight the
- * other two set their name in, and the count is the muted tabular figure that
- * trails it — `#78 Fix the shelf` and `Terminals 2` are then the same shape.
- *
- * The panel opens UPWARD. `Popover` does no collision detection, and this
- * trigger sits directly on top of the composer card — downward would open the
- * list over the textarea the user is about to type in.
- *
- * Nothing is drawn when nothing is running, unlike the header counter it
- * replaced: that one was deliberately drawn at zero because a reader scanning a
- * fixed row needs "none" told apart from "no such readout", and a shelf makes
- * that distinction for itself — it is a row of what EXISTS, and every chip on
- * it comes and goes.
+ * Every row behind it is live by construction (`groupRunningShells` hands over
+ * only what nothing has settled), so the chip exists exactly while something
+ * is running and its glyph is always tinted. It opens on a CLICK alone, like
+ * every chip on this row: its rows are controls, and a hover-opened panel
+ * closed under a row being pressed. The panel opens UPWARD — `Popover` does no
+ * collision detection, and downward would cover the textarea.
  */
 export function RunningShellChips({
   shells,
@@ -450,20 +453,19 @@ export function RunningShellChips({
       slot="running-shells"
       openOn="click"
       label={`${count} shell${count === 1 ? '' : 's'} running`}
+      title={`Terminals · ${count} running`}
       panelLabel="Shells"
       side="top"
-      align="start"
+      align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       // Bounded and scrolling, as in the header: a fan-out can hold a dozen,
       // and the rows are long — a command, not a name.
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
-        <>
-          <Spinner className="size-3.5" />
-          <span className="font-medium">Terminals</span>
-          <span className="text-muted-foreground tabular-nums">{count}</span>
-        </>
+        <StatusFigure icon={SquareTerminal} live>
+          {count}
+        </StatusFigure>
       }>
       <ShellRows
         shells={shells}
@@ -477,8 +479,9 @@ export function RunningShellChips({
 }
 
 /**
- * The monitors this thread's agents have running RIGHT NOW, as a shelf chip:
- * a spinner, a count, and the list behind it, each row with its own Stop.
+ * The monitors this thread's agents have running RIGHT NOW, as a status
+ * counter: the radar glyph, a count, and the list behind it, each row with its
+ * own Stop.
  *
  * Read off run state's `monitors` — the daemon's registry, never a fold of the
  * monitor rows in the window — so a monitor started pages above the loaded
@@ -503,18 +506,17 @@ export function RunningMonitorChips({
       slot="running-monitors"
       openOn="click"
       label={`${count} monitor${count === 1 ? '' : 's'} running`}
+      title={`Monitors · ${count} running`}
       panelLabel="Monitors"
       side="top"
-      align="start"
+      align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
-        <>
-          <Spinner className="size-3.5" />
-          <span className="font-medium">Monitors</span>
-          <span className="text-muted-foreground tabular-nums">{count}</span>
-        </>
+        <StatusFigure icon={Radar} live>
+          {count}
+        </StatusFigure>
       }>
       <MonitorRows
         monitors={monitors}
@@ -526,8 +528,8 @@ export function RunningMonitorChips({
 }
 
 /**
- * The delegates this thread has working RIGHT NOW, as a shelf chip: a glyph, a
- * name, the count, and the list behind it.
+ * The delegates this thread has working RIGHT NOW, as a status counter: the
+ * delegate glyph, the count, and the list behind it.
  *
  * It came from the CHAT HEADER, where it was a bare glyph-and-number in the
  * right-hand group beside the worked/spend figures, and it moved here on the
@@ -545,13 +547,8 @@ export function RunningMonitorChips({
  * apart. A shelf makes that distinction for itself — it is a row of what
  * EXISTS, and every chip on it comes and goes — so the zero state is the row
  * being one chip shorter, which is the same reading the terminals chip beside
- * it already gives.
- *
- * The MARK is the delegate glyph, not a spinner. That is a deliberate departure
- * from its neighbour, whose spinner was asked for by name: every row behind
- * `Terminals` is live by construction, while this list holds the FINISHED
- * delegates too — so a spinner here would claim something about rows it does
- * not describe, and two spinners on one row is noise besides.
+ * it already gives. Its glyph is tinted as live for the same reason: the chip
+ * is not drawn below `running > 0`, whatever finished rows the panel holds.
  *
  * The panel opens UPWARD, like every chip on this row: `Popover` does no
  * collision detection and this trigger sits directly on the composer card, so
@@ -595,9 +592,10 @@ export function RunningSubagentChips({
       slot="running-subagents"
       openOn="click"
       label={`${count} sub-${count === 1 ? 'agent' : 'agents'} working`}
+      title={`Sub-agents · ${count} working`}
       panelLabel="Sub-agents"
       side="top"
-      align="start"
+      align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       // Bounded and scrolling, as it was in the header: a delegating turn can
@@ -609,19 +607,9 @@ export function RunningSubagentChips({
         groups ? 'max-h-[26rem]' : 'max-h-64',
       )}
       trigger={
-        <>
-          {/* A SPINNER, like the terminals chip beside it — asked for by name
-              ("i wanna have loader for subagents chip as well"), and honest
-              here for exactly the reason it is honest there: this chip is not
-              drawn at all unless `running > 0`, so every time it is on screen a
-              delegate IS working. The earlier objection — that this list holds
-              the finished delegates too — is true of the PANEL behind the chip
-              and never of the chip, whose figure has always been the live count
-              alone. */}
-          <Spinner className="size-3.5" />
-          <span className="font-medium">Sub-agents</span>
-          <span className="text-muted-foreground tabular-nums">{count}</span>
-        </>
+        <StatusFigure icon={Bot} live>
+          {count}
+        </StatusFigure>
       }>
       {groups === undefined ? (
         <SubagentRows threads={threads} onOpen={onOpen} />
@@ -691,22 +679,19 @@ export function RunningCallChips({
       slot="running-calls"
       openOn="click"
       label={callsLine(calls)}
+      title={`Agents · ${callsLine(calls)}`}
       panelLabel="Agents working"
       side="top"
-      align="start"
+      align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
-        <>
-          {calls.every((call) => call.queued) ? (
-            <RunStatusIcon status="queued" className="size-3.5" />
-          ) : (
-            <Spinner className="size-3.5" />
-          )}
-          <span className="font-medium">Agents</span>
-          <span className="text-muted-foreground tabular-nums">{count}</span>
-        </>
+        <StatusFigure
+          icon={ArrowRightLeft}
+          live={calls.some((call) => !call.queued)}>
+          {count}
+        </StatusFigure>
       }>
       {(close) => (
         <CallRows
@@ -790,7 +775,7 @@ function CallRows({
 }
 
 /**
- * The agent's own TODO list as a shelf chip: the checklist glyph, the name, and
+ * The agent's own TODO list as a status counter: the checklist glyph and
  * `done/total` — with the list itself behind it.
  *
  * Moved off the chat header beside {@link RunningSubagentChips}, on the same
@@ -800,10 +785,9 @@ function CallRows({
  * answer to "what did it do, and what did it leave" — where a finished delegate
  * or a returned command is history the transcript already holds.
  *
- * That also fixes where it sits on the row. The shelf runs from durable to
- * volatile, so a chip that outlives the turn belongs among the pull requests
- * rather than out at the end with the terminals: chips that come and go must
- * not shift the ones that stay.
+ * That also fixes where it sits: at the right edge of the status cluster,
+ * which is anchored there, so the counters that come and go beside it never
+ * shift it.
  *
  * The FIGURE is the pair, never a bare remaining count. `6` says nothing about
  * whether that is six of seven or six of sixty and can only shrink, which reads
@@ -842,9 +826,10 @@ export function TaskListChip({
       slot="open-tasks"
       openOn="click"
       label={`${done} of ${total} ${total === 1 ? 'task' : 'tasks'} done`}
+      title={`Tasks · ${done} of ${total} done`}
       panelLabel="Task list"
       side="top"
-      align="start"
+      align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       // Grouped, the panel holds one bounded block per agent, so it needs a
@@ -856,13 +841,9 @@ export function TaskListChip({
         groups && 'max-h-[26rem] overflow-y-auto',
       )}
       trigger={
-        <>
-          <TaskIcon className="size-3.5 text-muted-foreground" />
-          <span className="font-medium">Tasks</span>
-          <span className="text-muted-foreground tabular-nums">
-            <TaskCount done={done} total={total} />
-          </span>
-        </>
+        <StatusFigure icon={TaskIcon}>
+          <TaskCount done={done} total={total} />
+        </StatusFigure>
       }>
       {/* Each list is bounded and scrolls itself, following the task that is
           RUNNING, so a thirteen-row list opens on the row that matters rather
@@ -883,7 +864,8 @@ const TEAM_NOTES_PREVIEW = 5;
  * The run's team notes as a shelf chip: a count, and on a press the newest
  * few, each a press away from the notes popup opened on it, and the way
  * to the whole list there. Durable like the task list — a note outlives the
- * turn that wrote it — so it sits among the durable chips. Hidden at zero.
+ * turn that wrote it — so it sits beside the task list at the durable end of
+ * the status cluster. Hidden at zero.
  */
 export function TeamNotesChip({
   notes,
@@ -904,21 +886,14 @@ export function TeamNotesChip({
       slot="team-notes"
       openOn="click"
       label={`${notes.length} team ${notes.length === 1 ? 'note' : 'notes'}`}
+      title={`Team notes · ${notes.length}`}
       panelLabel="Team notes"
       side="top"
-      align="start"
+      align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="w-[22rem]"
-      trigger={
-        <>
-          <NotebookPen className="size-3.5 text-muted-foreground" />
-          <span className="font-medium">Team notes</span>
-          <span className="text-muted-foreground tabular-nums">
-            {notes.length}
-          </span>
-        </>
-      }>
+      trigger={<StatusFigure icon={NotebookPen}>{notes.length}</StatusFigure>}>
       {(close) => (
         <div className="flex flex-col gap-1 p-2 text-xs">
           <ul className="m-0 flex list-none flex-col gap-0.5 p-0">

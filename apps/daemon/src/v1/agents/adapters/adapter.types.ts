@@ -310,17 +310,19 @@ export interface AgentModelCost {
 // `AgentSession.readContextUsage`) and so has no turn attached to it at all.
 
 /**
- * Which of {@link AgentSessionReadInput}'s two channels a CLI's reading comes
+ * Which of {@link AgentSessionReadInput}'s channels a CLI's reading comes
  * from.
  *
  * `live-process` is a question put to a RUNNING agent over its own stdin
  * dialogue, so the reading exists only while the run holds a session (claude).
  * `session-store` is read off what the CLI wrote to disk, so it survives the
- * process (cursor). The distinction is not decoration: it is what separates
- * "there was nobody to ask" from "we asked and got nothing", which are the two
- * sentences the readout has to choose between.
+ * process (cursor). `account` is asked of the vendor under the run's own
+ * profile login, so it needs neither (cursor's plan limits). The distinction is
+ * not decoration: it is what separates "there was nobody to ask" from "we asked
+ * and got nothing", which are the two sentences the readout has to choose
+ * between.
  */
-export type UsageReadChannel = 'live-process' | 'session-store';
+export type UsageReadChannel = 'live-process' | 'session-store' | 'account';
 
 /**
  * Whether one of the two window/plan questions can be put to this CLI at all,
@@ -483,6 +485,8 @@ export interface AgentSessionReadInput {
   live: AgentSession | null;
   /** That conversation's CLI session id, or null before the CLI names one. */
   sessionId: string | null;
+  /** The profile the run's agent runs under, null for the CLI's default. */
+  configDir: string | null;
 }
 
 /** Durable identity used only to read a lost delegate's existing CLI record. */

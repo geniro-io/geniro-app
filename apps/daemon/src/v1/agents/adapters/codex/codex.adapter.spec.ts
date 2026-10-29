@@ -1238,7 +1238,11 @@ describe('context readout', () => {
         );
       },
     } as unknown as AgentSession;
-    const usage = await adapter.readContextUsage({ live, sessionId: THREAD });
+    const usage = await adapter.readContextUsage({
+      live,
+      sessionId: THREAD,
+      configDir: null,
+    });
     expect(JSON.parse(asked!)).toMatchObject({
       method: 'mcpServerStatus/list',
       params: { threadId: THREAD },
@@ -1257,7 +1261,11 @@ describe('context readout', () => {
 
   it('has nothing to ask without a live process', async () => {
     await expect(
-      adapterWith().readContextUsage({ live: null, sessionId: THREAD }),
+      adapterWith().readContextUsage({
+        live: null,
+        sessionId: THREAD,
+        configDir: null,
+      }),
     ).resolves.toBeNull();
   });
 
@@ -1273,7 +1281,11 @@ describe('plan limits', () => {
   it('are asked of the running process, whose answer is the run’s own account', async () => {
     const adapter = adapterWith();
     await expect(
-      adapter.readPlanLimits({ live: null, sessionId: THREAD }),
+      adapter.readPlanLimits({
+        live: null,
+        sessionId: THREAD,
+        configDir: null,
+      }),
     ).resolves.toBeNull();
     let asked: { line: string; read: (obj: unknown) => unknown } | null = null;
     const live = {
@@ -1297,7 +1309,11 @@ describe('plan limits', () => {
         );
       },
     } as unknown as AgentSession;
-    const limits = await adapter.readPlanLimits({ live, sessionId: THREAD });
+    const limits = await adapter.readPlanLimits({
+      live,
+      sessionId: THREAD,
+      configDir: null,
+    });
     expect(asked).not.toBeNull();
     expect(limits).toEqual({
       plan: 'plus',

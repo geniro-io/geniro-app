@@ -810,8 +810,8 @@ describe('every shelf chip', () => {
     // shelf row rather than on its own trigger renders 15px medium beside 12px
     // neighbours. That was REPORTED once already, of these very counters in the
     // header ("давай сделаем меньше вот эти циферки"), and the fix travelled
-    // with them: `SHELF_STATUS_TRIGGER_CLASS` carries `text-[11px]` and
-    // `HoverPopover` puts it on the button itself.
+    // with them: `SHELF_CHIP_CLASS` carries `text-xs` and `HoverPopover` puts
+    // it on the button itself.
     //
     // Classes, not `getComputedStyle` — jsdom loads no stylesheet, so every
     // computed size here is the default and the assertion would pass with the
@@ -825,7 +825,7 @@ describe('every shelf chip', () => {
     const triggers = [...el.querySelectorAll<HTMLElement>('button')];
     expect(triggers).toHaveLength(2);
     for (const trigger of triggers) {
-      expect(trigger.className).toContain('text-[11px]');
+      expect(trigger.className).toContain('text-xs');
     }
   });
 });
@@ -971,10 +971,13 @@ describe('the shelf — separate chips, ONE joined group', () => {
       ['1/2', 'Tasks · 1 of 2 done'],
     ]);
     for (const chip of status.querySelectorAll<HTMLElement>('button')) {
-      expect(chip.className).toContain('h-[22px]');
-      expect(chip.className).toContain('rounded-md');
+      // The same chip as every other item on the row — height, padding and
+      // card — only its content is shorter.
+      expect(chip.className).toContain('h-[26px]');
+      expect(chip.className).toContain('px-2');
+      expect(chip.className).toContain('rounded-lg');
+      expect(chip.className).toContain('shadow-panel-sm');
       expect(chip.className).not.toContain('rounded-full');
-      expect(chip.className).not.toContain('shadow-panel-sm');
     }
   });
 

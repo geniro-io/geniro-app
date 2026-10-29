@@ -37,7 +37,6 @@ import {
   SHELF_GROUP_CLASS,
   SHELF_SEGMENT_CLASS,
   SHELF_STATUS_GROUP_CLASS,
-  SHELF_STATUS_TRIGGER_CLASS,
 } from './shelf-chip';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
@@ -138,8 +137,8 @@ function StatusFigure({
   const Icon = icon;
   return (
     <>
-      <Icon className={cn('size-3 shrink-0', live && 'text-primary')} />
-      <span>{children}</span>
+      <Icon className={cn('size-3.5 shrink-0', live && 'text-primary')} />
+      <span className="text-muted-foreground tabular-nums">{children}</span>
     </>
   );
 }
@@ -459,7 +458,7 @@ export function RunningShellChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       // Bounded and scrolling, as in the header: a fan-out can hold a dozen,
       // and the rows are long — a command, not a name.
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
@@ -512,7 +511,7 @@ export function RunningMonitorChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
         <StatusFigure icon={Radar} live>
@@ -598,7 +597,7 @@ export function RunningSubagentChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       // Bounded and scrolling, as it was in the header: a delegating turn can
       // hold a dozen live and forty finished, and a panel that grows with them
       // runs off the top of the window. Grouped, it holds a block per agent and
@@ -685,7 +684,7 @@ export function RunningCallChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
         <StatusFigure
@@ -832,7 +831,7 @@ export function TaskListChip({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       // Grouped, the panel holds one bounded block per agent, so it needs a
       // bound of its own — three agents' blocks stack past the top of the
       // window otherwise. Flat, the single block already bounds itself and a
@@ -892,7 +891,7 @@ export function TeamNotesChip({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="w-[22rem]"
       trigger={<StatusFigure icon={NotebookPen}>{notes.length}</StatusFigure>}>
       {(close) => (

@@ -750,6 +750,7 @@ export class ClaudeAdapter extends AgentAdapter {
          * of the line, and is repeated back to the caller unparsed.
          */
         resetsAtPatterns: [/resets\s+(.+)$/i],
+        serviceRefusalMarkers: [],
         isolatedEnvKeys: [
           ...CLAUDE_PROVIDER_ENV_KEYS,
           // Present when the APP was launched from inside a Claude Code session

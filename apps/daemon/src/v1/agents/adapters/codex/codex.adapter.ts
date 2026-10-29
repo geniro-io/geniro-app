@@ -342,6 +342,7 @@ export class CodexAdapter extends AgentAdapter {
         ],
         rateLimitPatterns: [/hit your usage limit/i],
         resetsAtPatterns: [/try again at ([^.\n]+)/i],
+        serviceRefusalMarkers: [],
         isolatedEnvKeys: [
           ...CODEX_CREDENTIAL_ENV_KEYS,
           ...CODEX_ACCOUNT_ENV_KEYS,

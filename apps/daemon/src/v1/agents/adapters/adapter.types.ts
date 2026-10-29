@@ -695,6 +695,12 @@ export interface AgentTurnFailure {
    * Null unless {@link class} is `rate_limited` AND the message named one.
    */
   readonly resetsAt: string | null;
+  /**
+   * Present when the message is the CLI's own sentence for its vendor's service
+   * refusing the request (`AdapterConfig.auth.serviceRefusalMarkers`) —
+   * a fact a caller cannot read off the sentence, so it blames its own messages.
+   */
+  readonly refusedByService?: true;
 }
 
 /**
@@ -4963,6 +4969,16 @@ export interface AdapterConfig {
      * limit wording at all and is why it is its own list.
      */
     readonly resetsAtPatterns: readonly RegExp[];
+    /**
+     * Whole failure messages that are this CLI's own sentence for its vendor's
+     * service refusing a request (account, plan, model or client version), read
+     * by `failureFrom` into {@link AgentTurnFailure.refusedByService}. Matched
+     * EXACTLY, after trimming: they are ordinary English, and the whole-message
+     * match is what tells the CLI's sentence from an agent quoting it.
+     *
+     * Evidence-gated like {@link expiredMarkers}; `[]` is a real answer.
+     */
+    readonly serviceRefusalMarkers: readonly string[];
     /**
      * Env var names that belong to THIS CLI and must reach no child by
      * inheritance — stripped by `utils/child-env.ts` from every process the

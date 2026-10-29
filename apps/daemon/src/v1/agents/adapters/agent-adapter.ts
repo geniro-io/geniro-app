@@ -720,7 +720,8 @@ export abstract class AgentAdapter {
    * class and no caller has to branch on its absence.
    */
   failureFrom(message: string): AgentTurnFailure {
-    const { rateLimitPatterns, resetsAtPatterns } = this.getConfig().auth;
+    const { rateLimitPatterns, resetsAtPatterns, serviceRefusalMarkers } =
+      this.getConfig().auth;
     if (rateLimitPatterns.some((pattern) => pattern.test(message))) {
       return {
         class: 'rate_limited',
@@ -730,7 +731,9 @@ export abstract class AgentAdapter {
     if (this.errorRecovery(message) === 'cli-login') {
       return { class: 'auth_expired', resetsAt: null };
     }
-    return { class: 'crashed', resetsAt: null };
+    return serviceRefusalMarkers.includes(message.trim())
+      ? { class: 'crashed', resetsAt: null, refusedByService: true }
+      : { class: 'crashed', resetsAt: null };
   }
 
   /**

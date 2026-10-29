@@ -89,6 +89,7 @@ import {
   CURSOR_ACP_CLIENT_META,
   CURSOR_ACP_CLIENT_NAME,
   CURSOR_ACP_SESSIONS_DIR_NAME,
+  CURSOR_AGENT_FAILURE_ACTION_SENTENCES,
   CURSOR_ALWAYS_ANSWER_SCOPE,
   CURSOR_API_HOST,
   CURSOR_ASK_QUESTION_METHOD,
@@ -937,6 +938,9 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         rateLimitPatterns: [],
         resetsAtPatterns: [],
+        // `Check your settings to continue` OBSERVED on run `2fc7014e`; the
+        // other three are the same catch arm's table.
+        serviceRefusalMarkers: CURSOR_AGENT_FAILURE_ACTION_SENTENCES,
         // Isolated so no other agent's child inherits the user's Cursor key.
         isolatedEnvKeys: [...CURSOR_CREDENTIAL_ENV_KEYS],
         /**

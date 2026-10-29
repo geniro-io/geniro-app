@@ -45,6 +45,14 @@ const NO_MESSAGE =
   'the callee turn ended without reporting why — this is geniro’s own side, not the callee';
 
 /**
+ * Said after a sentence the callee's CLI writes in place of its vendor's
+ * refusal: the sentence alone names no cause, and a caller reading it blamed
+ * its own `message_agent` (run `2fc7014e`).
+ */
+const SERVICE_REFUSAL_NOTE =
+  'the agent’s service refused the request (its account, plan, model or CLI version); nothing in the messages sent to it caused this';
+
+/**
  * Read a failed callee turn's message into the three facts an outcome carries.
  *
  * `diagnose` is the callee ADAPTER's `failureFrom`, passed in rather than
@@ -82,7 +90,11 @@ export function readCalleeFailure(
     failure = { class: 'crashed', resetsAt: null };
   }
   return {
-    error: redactSecrets(said),
+    error: redactSecrets(
+      failure.refusedByService === true
+        ? `${said} — ${SERVICE_REFUSAL_NOTE}`
+        : said,
+    ),
     failureClass: failure.class,
     resetsAt: failure.resetsAt,
   };

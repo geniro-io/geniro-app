@@ -45,7 +45,7 @@ export interface MemoryImportTriage {
   done: number;
   total: number;
   error: string | null;
-  start: (agentKind: AgentKind, rows: readonly MemoryImportRow[]) => void;
+  start: (rows: readonly MemoryImportRow[]) => void;
   cancel: () => void;
 }
 
@@ -350,7 +350,7 @@ function GroupHeader({
 
 function TriagePanel({
   triage,
-  agents,
+  settings,
   pending,
   kept,
   skipped,
@@ -359,17 +359,14 @@ function TriagePanel({
   onShow,
 }: {
   triage: MemoryImportTriage;
-  agents: readonly AgentKind[];
+  settings: React.ReactNode;
   pending: number;
   kept: number;
   skipped: number;
   disabled: boolean;
-  onStart: (agentKind: AgentKind) => void;
+  onStart: () => void;
   onShow: (filter: Filter) => void;
 }): React.JSX.Element {
-  const identities = useContext(AgentIdentityContext);
-  const [agent, setAgent] = useState<AgentKind>(agents[0]!);
-  const chosen = agents.includes(agent) ? agent : agents[0]!;
   const judged = kept + skipped;
   return (
     <section
@@ -413,34 +410,13 @@ function TriagePanel({
         </div>
       ) : (
         <div className="flex min-w-0 flex-wrap items-center gap-2 pl-6">
-          {agents.length > 1 ? (
-            <Select
-              variant="ghost"
-              aria-label="Agent that sorts"
-              groups={[
-                {
-                  items: agents.map((kind) => ({
-                    value: kind,
-                    label: agentShortName(identities, kind),
-                  })),
-                },
-              ]}
-              value={chosen}
-              onValueChange={(value) =>
-                setAgent(agents.find((kind) => kind === value) ?? chosen)
-              }
-            />
-          ) : (
-            <span className="text-xs text-muted-foreground">
-              with {agentShortName(identities, chosen)}
-            </span>
-          )}
+          {settings}
           <Button
             type="button"
             size="sm"
             variant={judged > 0 ? 'outline' : 'default'}
             disabled={disabled || pending === 0}
-            onClick={() => onStart(chosen)}>
+            onClick={onStart}>
             {pending === 0
               ? 'All ticked notes sorted'
               : `Sort ${noteCount(pending)}`}
@@ -536,6 +512,7 @@ export function MemoryImportDialog({
   projects,
   onImport,
   triage = null,
+  triageSettings = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -546,6 +523,8 @@ export function MemoryImportDialog({
   projects: readonly { id: string; name: string }[];
   onImport: (rows: MemoryImportChoice[]) => void;
   triage?: MemoryImportTriage | null;
+  /** The agent and model settings the sort runs with, drawn beside its button. */
+  triageSettings?: React.ReactNode;
 }): React.JSX.Element {
   const identities = useContext(AgentIdentityContext);
   const [seenPreview, setSeenPreview] = useState(preview);
@@ -744,12 +723,12 @@ export function MemoryImportDialog({
             {triage !== null && triageAgents.length > 0 ? (
               <TriagePanel
                 triage={triage}
-                agents={triageAgents}
+                settings={triageSettings}
                 pending={untriaged.length}
                 kept={counts.kept}
                 skipped={counts.skipped}
                 disabled={importing}
-                onStart={(agentKind) => triage.start(agentKind, untriaged)}
+                onStart={() => triage.start(untriaged)}
                 onShow={narrow}
               />
             ) : null}

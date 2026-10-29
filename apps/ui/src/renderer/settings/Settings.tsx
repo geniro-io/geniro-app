@@ -1424,6 +1424,9 @@ export function Settings({
               projects={projects}
               focus={memoryFocus}
               onFocusDone={onMemoryFocusDone}
+              agentsApi={apis?.agents ?? null}
+              capabilities={capabilities}
+              capabilitiesLoading={capabilitiesLoading}
             />
           ) : (
             <>

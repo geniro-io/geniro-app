@@ -435,14 +435,22 @@ describe('MemoryImportDialog', () => {
     expect(shownKeys(el)).toEqual(['row-1']);
   });
 
-  it('sorts only the default-ticked notes not judged yet, with the first agent offered', () => {
+  it('sorts only the default-ticked notes not judged yet, beside the settings it runs with', () => {
     const triage = triageWith({
       verdicts: new Map([['row-1', { keep: true, reason: '' }]]),
     });
-    const el = render({ triage });
+    const el = render({
+      triage,
+      triageSettings: <span data-slot="sort-settings">opus · high</span>,
+    });
+    expect(
+      el.querySelector(
+        '[data-slot="memory-import-triage"] [data-slot="sort-settings"]',
+      ),
+    ).not.toBeNull();
     const sort = button(el, 'Sort 2 notes');
     act(() => sort.click());
-    expect(triage.start).toHaveBeenCalledWith('claude', [
+    expect(triage.start).toHaveBeenCalledWith([
       expect.objectContaining({ key: 'row-2' }),
       expect.objectContaining({ key: 'row-5' }),
     ]);

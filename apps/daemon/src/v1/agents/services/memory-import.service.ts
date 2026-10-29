@@ -25,7 +25,10 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import type { AgentKind } from '../../runs/runs.types';
 import type { NativeMemoryNote } from '../adapters/adapter.types';
 import { readTriageAnswer, triagePrompt } from '../utils/memory-triage';
+import { sanitizeModelParameters } from '../utils/model-parameters';
+import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { EffortsService } from './efforts.service';
 
 /** Notes checked against the stored entries between two yields of the loop. */
 const PREVIEW_WINDOW = 20;
@@ -53,6 +56,7 @@ export class MemoryImportService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly memory: MemoryService,
     private readonly projects: ProjectDao,
+    private readonly efforts: EffortsService,
   ) {}
 
   async preview(
@@ -120,10 +124,32 @@ export class MemoryImportService {
         `${request.agentKind} cannot sort notes`,
       );
     }
-    const answer = await this.adapters.for(request.agentKind).askOnce({
+    const adapter = this.adapters.for(request.agentKind);
+    const model = request.model ?? null;
+    let configDir: string | null = null;
+    if (request.configDir !== undefined) {
+      const reason = adapter.getConfig().configDir.unavailableReason;
+      if (reason !== null) {
+        throw new BadRequestException('CONFIG_DIR_UNSUPPORTED', reason);
+      }
+      configDir = resolveValidConfigDir(request.configDir);
+    }
+    if (
+      request.effort !== undefined &&
+      !this.efforts.accepts(request.agentKind, request.effort, model, configDir)
+    ) {
+      throw new BadRequestException(
+        'EFFORT_UNSUPPORTED',
+        `${request.agentKind} does not accept the reasoning effort '${request.effort}'`,
+      );
+    }
+    const answer = await adapter.askOnce({
       prompt: triagePrompt(request.notes),
-      model: null,
-      configDir: null,
+      model,
+      configDir,
+      effort: request.effort ?? null,
+      contextWindow: request.contextWindow ?? null,
+      modelParameters: sanitizeModelParameters(request.modelParameters),
     });
     const verdicts =
       answer === null ? null : readTriageAnswer(answer, request.notes);

@@ -7,6 +7,8 @@ import {
   type Settings as AppSettings,
 } from '../../shared/contracts';
 import {
+  type AgentKind,
+  type CapabilitiesDto,
   type MemoriesApi,
   type MemoriesApiListMemoriesRequest,
   type MemoryEntry,
@@ -33,12 +35,18 @@ import { Select } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 import { useLatestCallback } from '../components/use-latest-callback';
 import {
+  type DaemonApis,
   daemonErrorCode,
   daemonErrorDetail,
   describeDaemonError,
 } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
+import {
+  type MemoryTriageChoice,
+  MemoryTriageSettings,
+  triageChoiceFor,
+} from './memory-triage-settings';
 import { useMemoryTriage } from './use-memory-triage';
 
 type MemoriesClient = Pick<
@@ -61,6 +69,8 @@ interface ProjectOption {
   id: string;
   name: string;
 }
+
+const NO_TRIAGE_AGENTS: readonly AgentKind[] = [];
 
 const LIVE = 'live';
 const ALL_SCOPES = 'all';
@@ -325,6 +335,9 @@ export function Memory({
   focus = null,
   onFocusDone,
   remote = isRemoteRuntime(),
+  agentsApi = null,
+  capabilities = null,
+  capabilitiesLoading = false,
 }: {
   api: MemoriesClient | null;
   client: Pick<DaemonClient, 'onMemoryChanged'> | null;
@@ -335,6 +348,10 @@ export function Memory({
   focus?: string | null;
   onFocusDone?: () => void;
   remote?: boolean;
+  /** What the AI sort's model settings are listed from, as a chat's are. */
+  agentsApi?: DaemonApis['agents'] | null;
+  capabilities?: CapabilitiesDto | null;
+  capabilitiesLoading?: boolean;
 }): React.JSX.Element {
   const [memory, setMemory] = useState<MemorySettings | null>(null);
   const [profiles, setProfiles] = useState<ImportProfile[]>([]);
@@ -358,7 +375,13 @@ export function Memory({
   const [importError, setImportError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const triage = useMemoryTriage(api);
+  const [triagePick, setTriagePick] = useState<MemoryTriageChoice | null>(null);
+  const [triageProfiles, setTriageProfiles] = useState<
+    Pick<AppSettings, 'recentConfigDirs' | 'configProfiles'>
+  >({ recentConfigDirs: {}, configProfiles: [] });
+  const triageAgents = preview?.triageAgents ?? NO_TRIAGE_AGENTS;
+  const triageChoice = triageChoiceFor(triageAgents, triagePick);
+  const triage = useMemoryTriage(api, triageChoice);
 
   const projectName = useLatestCallback(
     (projectId: string | null) =>
@@ -572,6 +595,10 @@ export function Memory({
       .then(([settings, library]) => {
         const found = importProfiles(settings, library);
         setProfiles(found);
+        setTriageProfiles({
+          recentConfigDirs: settings.recentConfigDirs,
+          configProfiles: settings.configProfiles,
+        });
         return api.previewMemoryImport({
           memoryImportPreviewRequestDto: { profiles: found },
         });
@@ -975,6 +1002,20 @@ export function Memory({
           projects={projects}
           onImport={(rows) => void runImport(rows)}
           triage={triage}
+          triageSettings={
+            triageChoice === null ? null : (
+              <MemoryTriageSettings
+                agents={triageAgents}
+                value={triageChoice}
+                onChange={setTriagePick}
+                agentsApi={agentsApi}
+                capabilities={capabilities}
+                capabilitiesLoading={capabilitiesLoading}
+                recentConfigDirs={triageProfiles.recentConfigDirs}
+                configProfiles={triageProfiles.configProfiles}
+              />
+            )
+          }
         />
       )}
     </div>

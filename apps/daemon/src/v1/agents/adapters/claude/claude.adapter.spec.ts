@@ -4514,6 +4514,26 @@ describe('ClaudeAdapter.askOnce', () => {
     });
   });
 
+  it('asks at the chosen model, effort and fast mode, as a chat turn would', async () => {
+    const { groupSpawnFn, captured } = fakeListing(
+      JSON.stringify({ subtype: 'success', result: '[]' }),
+    );
+    await new ClaudeAdapter({ groupSpawnFn }).askOnce({
+      prompt: 'Sort these',
+      model: 'opus',
+      configDir: null,
+      effort: 'high',
+      modelParameters: { [CLAUDE_FAST_MODE_PARAMETER_ID]: 'true' },
+    });
+    const args = captured.args!;
+    expect(args[args.indexOf('--model') + 1]).toBe('opus');
+    expect(args[args.indexOf('--effort') + 1]).toBe('high');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      [CLAUDE_FAST_MODE_PARAMETER_ID]: true,
+    });
+    expect(args.at(-1)).toBe('Sort these');
+  });
+
   it('answers null for a failed turn', async () => {
     const { groupSpawnFn } = fakeListing(
       JSON.stringify({ is_error: true, result: 'Not logged in' }),

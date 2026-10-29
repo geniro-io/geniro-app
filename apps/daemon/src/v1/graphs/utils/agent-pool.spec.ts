@@ -7,8 +7,8 @@ import type {
 } from '../graphs.types';
 import {
   callPoolHandOffPrompt,
+  conversationStartMember,
   fallsThroughPool,
-  nodeStartMember,
   poolAttemptOrder,
   poolAttempts,
   poolHandOffNotice,
@@ -141,13 +141,13 @@ describe('poolAttemptOrder', () => {
   });
 });
 
-describe('nodeStartMember', () => {
+describe('conversationStartMember', () => {
   const start = (
-    patch: Partial<Parameters<typeof nodeStartMember>[0]> & {
+    patch: Partial<Parameters<typeof conversationStartMember>[0]> & {
       standings: (PoolStanding | null)[];
     },
   ): number =>
-    nodeStartMember({
+    conversationStartMember({
       order: poolAttemptOrder(patch.standings),
       held: 1,
       hasSession: true,

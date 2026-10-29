@@ -1255,6 +1255,13 @@ export interface CalleePoolPlan {
    * pinned to a member the caller explicitly named.
    */
   fallbacks: readonly CalleePoolAttempt[];
+  /**
+   * The member whose CLI session the call's `resumeSessionId` is — the one a
+   * continued thread was left on — or null for a new conversation. Only an
+   * attempt as that member resumes it; any other starts a fresh session
+   * carrying the conversation's transcript.
+   */
+  sessionMember: number | null;
 }
 
 /** A {@link PoolSkip} as a caller's envelope states it. */
@@ -1955,6 +1962,12 @@ export interface RunCallCapability {
    * Absent for a capability with no monitor tools.
    */
   monitorsOwed?(caller: string): boolean;
+  /**
+   * Whether the kept process of call conversation `conversationId` still runs
+   * work of its own (a detached command, a parked card) that moving the
+   * conversation to another pool member would stop. Absent: it holds none.
+   */
+  conversationHoldsWork?(conversationId: string): boolean;
   /**
    * A conversation started or stopped being BLOCKED — inside a wait on its
    * own calls, on its own parked question, or on an approval card. A blocked

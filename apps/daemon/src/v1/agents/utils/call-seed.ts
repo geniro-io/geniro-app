@@ -173,7 +173,10 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
       const sessionId = readString(fields.sessionId);
       const member =
         typeof fields.member === 'number' && Number.isInteger(fields.member)
-          ? { member: fields.member }
+          ? {
+              member: fields.member,
+              ...(fields.memberPinned === true ? { memberPinned: true } : {}),
+            }
           : {};
       const cache = cacheFactsOf(fields, row.createdAt);
       const existing = records.get(callId);

@@ -8,6 +8,7 @@ import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { ItemKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
 import type {
+  CalleePoolPlan,
   CalleeTurnOutcome,
   RunCallCapability,
   WorkflowAgentNode,
@@ -76,6 +77,8 @@ function harness(options?: {
   cwd?: string;
   /** The daemon-wide record of spent pool members; default: an empty one. */
   poolCooldowns?: PoolCooldowns;
+  /** Whether a call conversation's process runs work; default: none does. */
+  conversationHoldsWork?: RunCallCapability['conversationHoldsWork'];
   /** Each conversation's unread team notes; default: no team-note tools. */
   unreadTeamNotes?: RunCallCapability['unreadTeamNotes'];
   currentStage?: RunCallCapability['currentStage'];
@@ -89,6 +92,7 @@ function harness(options?: {
     callId: string;
     resumeSessionId: string | null;
     conversationId: string;
+    pool?: CalleePoolPlan;
   }[];
   deferred: Deferred[];
   /** Call ids launched as WAKES, which skip the active-turn cap's queue. */
@@ -107,6 +111,7 @@ function harness(options?: {
     callId: string;
     resumeSessionId: string | null;
     conversationId: string;
+    pool?: CalleePoolPlan;
   }[] = [];
   const deferred: Deferred[] = [];
   const wakes: string[] = [];
@@ -134,6 +139,7 @@ function harness(options?: {
         callId,
         resumeSessionId,
         conversationId,
+        ...(launch.pool !== undefined ? { pool: launch.pool } : {}),
       });
       if (mode === 'throw') {
         return Promise.reject(new Error('spawn exploded'));
@@ -202,6 +208,9 @@ function harness(options?: {
     ...(options?.unreadTeamNotes === undefined
       ? {}
       : { unreadTeamNotes: options.unreadTeamNotes }),
+    ...(options?.conversationHoldsWork === undefined
+      ? {}
+      : { conversationHoldsWork: options.conversationHoldsWork }),
     ...(options?.currentStage === undefined
       ? {}
       : { currentStage: options.currentStage }),
@@ -5455,6 +5464,146 @@ describe('CallBroker — agent pool', () => {
       'codex',
       'claude',
     ]);
+  });
+
+  describe('a continued thread', () => {
+    const SITE = { cwd: null, runId: 'run-1', nodeId: 'helper' };
+    const spend = (broker: CallBroker, member: number): void => {
+      broker.poolCooldowns.record(
+        poolMemberNode(POOLED, member)!,
+        SITE,
+        { status: 'failed', failureClass: 'rate_limited', resetsAt: null },
+        true,
+      );
+    };
+    const reopen = (broker: CallBroker, member: number): void => {
+      broker.poolCooldowns.record(
+        poolMemberNode(POOLED, member)!,
+        SITE,
+        { status: 'completed', failureClass: null, resetsAt: null },
+        false,
+      );
+    };
+    /** call-1, opened while member 1 was spent, so on member 2. */
+    async function threadOnMemberTwo(
+      options: Parameters<typeof harness>[0] = {},
+    ) {
+      const h = harness({ calleesOf: pooledCallees(), ...options });
+      spend(h.broker, 1);
+      await h.broker.callAgent('run-1', 'orch', {
+        title: 'open',
+        agent: 'helper',
+        message: 'm',
+      });
+      expect(h.launches[0]!.callee.agent).toBe('codex');
+      return h;
+    }
+    const continueThread = (broker: CallBroker) =>
+      broker.callAgent('run-1', 'orch', {
+        title: 'more',
+        agent: 'helper',
+        message: 'more',
+        thread: 'call-1',
+      });
+
+    it('moves back to member 1 once member 1 is available again, handing over member 2’s session', async () => {
+      const { broker, launches, items } = await threadOnMemberTwo();
+      reopen(broker, 1);
+      await continueThread(broker);
+      expect(launches[1]!.callee.agent).toBe('claude');
+      expect(launches[1]!.resumeSessionId).toBe('sess-call-1');
+      expect(launches[1]!.pool).toMatchObject({
+        member: 1,
+        sessionMember: 2,
+      });
+      expect(launches[1]!.pool!.fallbacks.map((f) => f.member)).toEqual([2]);
+      expect(
+        items.find(
+          (item) =>
+            item.kind === 'call_started' && item.payload.callId === 'call-2',
+        )?.payload.member,
+      ).toBe(1);
+    });
+
+    it('stays on member 2 while member 1 is still spent', async () => {
+      const { broker, launches } = await threadOnMemberTwo();
+      await continueThread(broker);
+      expect(launches[1]!.callee.agent).toBe('codex');
+      expect(launches[1]!.pool).toMatchObject({
+        member: 2,
+        sessionMember: 2,
+      });
+    });
+
+    it('stays on member 2 while its process still runs work of its own', async () => {
+      const asked: string[] = [];
+      const { broker, launches } = await threadOnMemberTwo({
+        conversationHoldsWork: (conversationId) => {
+          asked.push(conversationId);
+          return true;
+        },
+      });
+      reopen(broker, 1);
+      await continueThread(broker);
+      expect(asked).toEqual(['call-1']);
+      expect(launches[1]!.callee.agent).toBe('codex');
+    });
+
+    it('moves off member 1 when a limit spent it and member 2 is free', async () => {
+      const { broker, launches } = harness({ calleesOf: pooledCallees() });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'open',
+        agent: 'helper',
+        message: 'm',
+      });
+      spend(broker, 1);
+      await continueThread(broker);
+      expect(launches[1]!.callee.agent).toBe('codex');
+      expect(launches[1]!.pool).toMatchObject({
+        member: 2,
+        sessionMember: 1,
+      });
+    });
+
+    it('keeps a thread the caller pinned to member 2 there, across a restart too', async () => {
+      const { broker, launches, items, capability } = harness({
+        calleesOf: pooledCallees(),
+      });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'open',
+        agent: 'helper',
+        message: 'm',
+        member: 2,
+      });
+      await continueThread(broker);
+      expect(launches[1]!.callee.agent).toBe('codex');
+      expect(
+        items.find(
+          (item) =>
+            item.kind === 'call_result' && item.payload.callId === 'call-2',
+        )?.payload.memberPinned,
+      ).toBe(true);
+
+      broker.registerRun(
+        'run-1',
+        capability,
+        readCallSeed(
+          items
+            .filter(
+              (item) =>
+                item.kind === 'call_started' || item.kind === 'call_result',
+            )
+            .map((item) => ({ kind: item.kind, payload: item.payload })),
+        ),
+      );
+      await broker.callAgent('run-1', 'orch', {
+        title: 'again',
+        agent: 'helper',
+        message: 'again',
+        thread: 'call-2',
+      });
+      expect(launches[2]!.callee.agent).toBe('codex');
+    });
   });
 
   it('reads a member as the account its run’s folder pins', async () => {

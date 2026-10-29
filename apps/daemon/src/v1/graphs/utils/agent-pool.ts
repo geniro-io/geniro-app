@@ -136,14 +136,15 @@ export function poolAttemptOrder(
 }
 
 /**
- * The member a pooled node's turn starts on. Its conversation's session stays
- * with the member it was opened on, so a node that has one moves only when it
- * gains something: off a member a limit spent (unless every other member is
- * limited too), or back to an earlier unspent member — never while the member
- * it is on still runs work of its own, which leaving would stop. A member
- * spent on an ordinary failure keeps the conversation it has.
+ * The member a pooled conversation's next turn starts on — a node's own, or a
+ * call thread being continued. Its session stays with the member it was
+ * opened on, so a conversation that has one moves only when it gains
+ * something: off a member a limit spent (unless every other member is limited
+ * too), or back to an earlier unspent member — never while the member it is
+ * on still runs work of its own, which leaving would stop. A member spent on
+ * an ordinary failure keeps the conversation it has.
  */
-export function nodeStartMember(input: {
+export function conversationStartMember(input: {
   standings: readonly (PoolStanding | null)[];
   order: readonly number[];
   held: number;

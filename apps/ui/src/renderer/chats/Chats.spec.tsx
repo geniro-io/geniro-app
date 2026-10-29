@@ -4959,7 +4959,7 @@ describe('Chats workflow runs', () => {
     });
 
     const chip = container.querySelector('[data-slot="running-calls"]');
-    expect(chip?.textContent).toBe('Agents1');
+    expect(chip?.textContent).toBe('1');
     // Opened by a CLICK — every shelf chip opens on a press alone.
     await act(async () => {
       chip!
@@ -5234,7 +5234,7 @@ describe('Chats workflow runs', () => {
     await clickRun(container, 'Review team');
 
     const chip = container.querySelector('[data-slot="running-calls"]');
-    expect(chip?.textContent).toBe('Agents1');
+    expect(chip?.textContent).toBe('1');
     await act(async () => {
       chip!
         .querySelector('button')!

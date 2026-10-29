@@ -8792,7 +8792,74 @@ export function Chats({
   // on the chip for the life of the chat, and the chip's whole point is that it
   // goes away.
   const renderComposerShelf = (inQueueHeader: boolean): React.JSX.Element => (
-    <ComposerShelf inline={inQueueHeader}>
+    <ComposerShelf
+      inline={inQueueHeader}
+      // The status counters, right-anchored, so they run VOLATILE → DURABLE:
+      // a command comes and goes many times a turn, a task list outlives it.
+      status={
+        <>
+          <RunningShellChips
+            shells={sidePanelLive.shells}
+            // Only a WORKFLOW's rows are labelled. A 1:1 chat
+            // has one agent, so the name would be the same word
+            // down every row — and the popover is 22rem, where
+            // a redundant column costs the command its width.
+            agentNameOf={
+              activeRun?.workflowId ? sidePanelLive.shellAgents : undefined
+            }
+            leftRunningOf={sidePanelLive.shellsLeftRunning}
+            onOpen={setOpenShell}
+            onKill={handleKillShell}
+          />
+          <RunningMonitorChips
+            monitors={runState.monitors}
+            agentNameOf={activeRun?.workflowId ? shelfAgentName : undefined}
+            onStop={handleStopMonitor}
+          />
+          <RunningSubagentChips
+            running={sidePanelLive.subagents}
+            threads={sidePanelLive.subagentThreads}
+            // Split into a block per agent in a WORKFLOW only
+            // — the task chip's gate, for the task chip's
+            // reason.
+            groups={
+              activeRun?.workflowId ? sidePanelLive.subagentGroups : undefined
+            }
+            // The same detail panel the agents panel's own
+            // delegate rows open — the shelf is the readier
+            // way to a delegate now, and a list that only
+            // looked clickable would be a step back from it.
+            onOpen={openSubagentById}
+          />
+          <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
+          <TeamNotesChip
+            notes={teamNotes}
+            agentName={shelfAgentName}
+            onOpen={(seq) => setNotesView({ selected: seq })}
+          />
+          <TaskListChip
+            done={sidePanelLive.tasks.done}
+            total={sidePanelLive.tasks.total}
+            tasks={sidePanelLive.taskRows}
+            // Only a WORKFLOW's lists are split into blocks,
+            // the same gate the terminals chip's labels take:
+            // a 1:1 chat has one agent, so a heading over its
+            // only list names nothing the reader could doubt.
+            groups={
+              activeRun?.workflowId ? sidePanelLive.taskGroups : undefined
+            }
+            // The RUN's own liveness, not the list's: an
+            // unfinished task on a settled thread is one
+            // nothing is advancing, and a spinner there would
+            // claim work that stopped.
+            // `running` alone, the agents panel's own reading:
+            // held or waiting on the user is not work moving
+            // through the list, and the two surfaces disagreed
+            // about the same task for as long as that lasted.
+            live={activeRunStatus === 'running'}
+          />
+        </>
+      }>
       {/* FIRST in the row, and the one chip here that is
             not about what the thread produced: the composer
             under it is disabled, so this is the only control
@@ -8826,9 +8893,8 @@ export function Chats({
             rule: a chip that comes and goes must never shift
             one that stays. The working TREE outlives every
             pull request opened from it, so it leads; pull
-            requests outlive the thread; the task list
-            outlives the turn; a workflow, a delegate and a
-            command each end within one.
+            requests outlive the thread; a workflow ends
+            within a turn. The counters live in `status`.
 
             Only where there is something to compare: a run
             without a folder, and one this app never stamped a
@@ -8846,30 +8912,6 @@ export function Chats({
         outcomes={activeRunOutcomes.newest}
       />
       <StageProgressChip progress={activeRun?.stages} />
-      <TaskListChip
-        done={sidePanelLive.tasks.done}
-        total={sidePanelLive.tasks.total}
-        tasks={sidePanelLive.taskRows}
-        // Only a WORKFLOW's lists are split into blocks,
-        // the same gate the terminals chip's labels take:
-        // a 1:1 chat has one agent, so a heading over its
-        // only list names nothing the reader could doubt.
-        groups={activeRun?.workflowId ? sidePanelLive.taskGroups : undefined}
-        // The RUN's own liveness, not the list's: an
-        // unfinished task on a settled thread is one
-        // nothing is advancing, and a spinner there would
-        // claim work that stopped.
-        // `running` alone, the agents panel's own reading:
-        // held or waiting on the user is not work moving
-        // through the list, and the two surfaces disagreed
-        // about the same task for as long as that lasted.
-        live={activeRunStatus === 'running'}
-      />
-      <TeamNotesChip
-        notes={teamNotes}
-        agentName={shelfAgentName}
-        onOpen={(seq) => setNotesView({ selected: seq })}
-      />
       {/* Mounted only while open and keyed by the run, so its search and
           filters start clean on every open and never carry to another thread,
           and closing it is the notes field's way out: its owed text is saved. */}
@@ -8890,10 +8932,9 @@ export function Chats({
         />
       ) : null}
       {/* An agent's buttons outlive the turn that made them,
-            so they sit after the task list and ahead of
-            everything that ends within a turn — behind their
-            own divider, since they are controls rather than
-            readings. */}
+            so they sit ahead of everything that ends within a
+            turn — behind their own divider, since they are
+            controls rather than readings. */}
       <ChatActionChips
         actions={chatActions.actions}
         phases={chatActions.phases}
@@ -8901,42 +8942,6 @@ export function Chats({
         onDismiss={chatActions.dismiss}
       />
       <ActiveWorkflowChips workflows={runWorkflows} onReveal={revealWorkflow} />
-      <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
-      <RunningSubagentChips
-        running={sidePanelLive.subagents}
-        threads={sidePanelLive.subagentThreads}
-        // Split into a block per agent in a WORKFLOW only
-        // — the task chip's gate, for the task chip's
-        // reason.
-        groups={
-          activeRun?.workflowId ? sidePanelLive.subagentGroups : undefined
-        }
-        // The same detail panel the agents panel's own
-        // delegate rows open — the shelf is the readier
-        // way to a delegate now, and a list that only
-        // looked clickable would be a step back from it.
-        onOpen={openSubagentById}
-      />
-      <RunningMonitorChips
-        monitors={runState.monitors}
-        agentNameOf={activeRun?.workflowId ? shelfAgentName : undefined}
-        onStop={handleStopMonitor}
-      />
-      {/* LAST on the row: a command an agent runs comes
-            and goes many times within a single turn. */}
-      <RunningShellChips
-        shells={sidePanelLive.shells}
-        // Only a WORKFLOW's rows are labelled. A 1:1 chat
-        // has one agent, so the name would be the same word
-        // down every row — and the popover is 22rem, where
-        // a redundant column costs the command its width.
-        agentNameOf={
-          activeRun?.workflowId ? sidePanelLive.shellAgents : undefined
-        }
-        leftRunningOf={sidePanelLive.shellsLeftRunning}
-        onOpen={setOpenShell}
-        onKill={handleKillShell}
-      />
     </ComposerShelf>
   );
 

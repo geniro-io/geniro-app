@@ -469,3 +469,48 @@ describe('a card entry reaches EntryCard from BOTH flows', () => {
     expect(container.textContent).toContain('src/b.ts');
   });
 });
+
+describe('TurnBlock reasoning', () => {
+  function renderReasoning(text: string): void {
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('reasoning', { text }, 'writer'),
+        item('message', { text: 'Done.' }, 'writer', 'assistant'),
+      ]),
+    );
+    act(() => {
+      root.render(
+        <>
+          {entries.map((entry, index) => (
+            <TranscriptEntryView key={index} entry={entry} nodes={NODES} />
+          ))}
+        </>,
+      );
+    });
+  }
+
+  it('draws a titles-only summary as status lines, not bold headings', () => {
+    renderReasoning(
+      '**Checking Sheet close propagation**\n\n**Evaluating Sheet event guards**',
+    );
+    const row = container.querySelector('[data-role="reasoning"]');
+    expect(
+      [...row!.querySelectorAll('[data-slot="reasoning-headings"] li')].map(
+        (line) => line.textContent,
+      ),
+    ).toEqual([
+      'Checking Sheet close propagation',
+      'Evaluating Sheet event guards',
+    ]);
+    expect(row!.querySelector('strong')).toBeNull();
+  });
+
+  it('keeps a summary with prose as markdown', () => {
+    renderReasoning('**Clarifying tool usage**\n\nI need to check it.');
+    const row = container.querySelector('[data-role="reasoning"]');
+    expect(row!.querySelector('[data-slot="reasoning-headings"]')).toBeNull();
+    expect(row!.querySelector('strong')?.textContent).toBe(
+      'Clarifying tool usage',
+    );
+  });
+});

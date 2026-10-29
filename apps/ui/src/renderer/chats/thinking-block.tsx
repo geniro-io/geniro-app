@@ -36,6 +36,48 @@ export const THINKING_MAX_HEIGHT_PX = 300;
  */
 const THINKING_FOLD_CHARS = 600;
 
+const HEADING = /^\*\*([^*\n]+)\*\*$/;
+const OPEN_HEADING = /^\*\*([^*\n]+)\*{0,2}$/;
+
+/** Some models send reasoning summaries as `**Title**` paragraphs with no body. */
+export function reasoningHeadings(text: string): string[] | null {
+  const parts = text
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+  if (parts.length === 0) {
+    return null;
+  }
+  const titles: string[] = [];
+  for (const [index, part] of parts.entries()) {
+    const match = (index === parts.length - 1 ? OPEN_HEADING : HEADING).exec(
+      part,
+    );
+    const title = match?.[1]?.trim();
+    if (!title) {
+      return null;
+    }
+    titles.push(title);
+  }
+  return titles;
+}
+
+export function ReasoningHeadings({
+  headings,
+}: {
+  headings: readonly string[];
+}): React.JSX.Element {
+  return (
+    <ul
+      data-slot="reasoning-headings"
+      className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-xs break-words italic">
+      {headings.map((heading, index) => (
+        <li key={index}>{heading}</li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * The reasoning text of a stretch that is STILL BEING WRITTEN — bounded, and
  * following its own tail.
@@ -66,6 +108,7 @@ export function ThinkingScroller({
   className?: string;
 }): React.JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null);
+  const headings = reasoningHeadings(text);
   // Refs rather than state: neither value is rendered, and following the tail
   // sixty times a second must not re-render the transcript row that holds it.
   const following = useRef(true);
@@ -100,7 +143,7 @@ export function ThinkingScroller({
         'overflow-y-auto break-words whitespace-pre-wrap italic',
         className,
       )}>
-      {text}
+      {headings === null ? text : <ReasoningHeadings headings={headings} />}
     </div>
   );
 }

@@ -159,6 +159,7 @@ export class CodexTurnDriver {
   private turnId: string | null = null;
   /** The newest agent message, carried as the turn's `finalText`. */
   private finalText: string | null = null;
+  private summaryPart: { itemId: string | null; index: number } | null = null;
   /** A failure codex reported without retrying, held for the turn's end. */
   private pendingError: string | null = null;
   /** The thread's running total before this turn, from its first reading. */
@@ -973,7 +974,17 @@ export class CodexTurnDriver {
           ? [...this.endWaitGap(), { type: 'text_delta', text: delta }]
           : [];
       }
-      case CODEX_NOTIFICATIONS.reasoningSummaryDelta:
+      case CODEX_NOTIFICATIONS.reasoningSummaryDelta: {
+        const delta = asString(record.delta);
+        return delta
+          ? [
+              {
+                type: 'reasoning_delta',
+                text: this.summaryPartBreak(record) + delta,
+              },
+            ]
+          : [];
+      }
       case CODEX_NOTIFICATIONS.reasoningTextDelta: {
         const delta = asString(record.delta);
         return delta ? [{ type: 'reasoning_delta', text: delta }] : [];
@@ -1001,6 +1012,19 @@ export class CodexTurnDriver {
       default:
         return [];
     }
+  }
+
+  /** codex streams a reasoning item's summary parts with no separator. */
+  private summaryPartBreak(record: Readonly<Record<string, unknown>>): string {
+    const itemId = asString(record.itemId);
+    const index = asNumber(record.summaryIndex) ?? 0;
+    const previous = this.summaryPart;
+    this.summaryPart = { itemId, index };
+    return previous !== null &&
+      previous.itemId === itemId &&
+      previous.index !== index
+      ? '\n\n'
+      : '';
   }
 
   private onItemStarted(item: CodexItem | null): AgentEvent[] {

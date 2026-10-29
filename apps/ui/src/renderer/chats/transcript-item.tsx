@@ -55,7 +55,11 @@ import {
 } from './system-payload';
 import { readTeamNotePayload } from './team-note-payload';
 import { TeamNoteRow } from './team-note-row';
-import { ThinkingDisclosure } from './thinking-block';
+import {
+  ReasoningHeadings,
+  reasoningHeadings,
+  ThinkingDisclosure,
+} from './thinking-block';
 import { ToolBodyView } from './tool-body-view';
 import { toolRowAccent } from './tool-icon';
 import {
@@ -296,6 +300,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       // to watch and become something to be able to check. See
       // `ThinkingDisclosure`; a short stretch is left alone.
       const reasoning = payloadString(item.payload, 'text') ?? '';
+      const headings = reasoningHeadings(reasoning);
       return (
         <MessageBubble
           variant="reasoning"
@@ -304,13 +309,17 @@ export const TranscriptItem = memo(function TranscriptItem({
               ? 'thinking'
               : tag('sub-agent thinking')
           }>
-          <ThinkingDisclosure
-            text={reasoning}
-            memoryKey={`thinking:${item.id}`}>
-            <div className="whitespace-pre-wrap italic break-words">
-              {reasoning}
-            </div>
-          </ThinkingDisclosure>
+          {headings === null ? (
+            <ThinkingDisclosure
+              text={reasoning}
+              memoryKey={`thinking:${item.id}`}>
+              <div className="whitespace-pre-wrap italic break-words">
+                {reasoning}
+              </div>
+            </ThinkingDisclosure>
+          ) : (
+            <ReasoningHeadings headings={headings} />
+          )}
         </MessageBubble>
       );
     }

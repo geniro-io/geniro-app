@@ -130,6 +130,16 @@ export const CLAUDE_SESSIONS_DIR_NAME = 'projects';
  * the first segment of a path to one file.
  */
 export const CLAUDE_DEFAULT_PROFILE_DIR = '.claude';
+/**
+ * Where a profile keeps a project's own memory notes:
+ * `<configDir>/projects/<flattened git root>/memory/*.md`, each with
+ * `name` / `description` (and sometimes `type`, top-level or under
+ * `metadata`) frontmatter, beside a `MEMORY.md` index of pointers to them.
+ * Read on claude 2.1.295 (`defaultPath` → `memory`, `MEMORY.md`).
+ */
+export const CLAUDE_MEMORY_DIR_NAME = 'memory';
+export const CLAUDE_MEMORY_INDEX_FILE = 'MEMORY.md';
+
 /** One session is one file, and the id is the file name without this. */
 export const CLAUDE_SESSION_FILE_SUFFIX = '.jsonl';
 /**

@@ -695,7 +695,7 @@ export async function findSessionFile(
  * The directory the CLI files a folder's sessions under: every character that
  * is not a letter or digit becomes `-` (`/Users/me/.x` → `-Users-me--x`).
  */
-function claudeProjectDirName(cwd: string): string {
+export function claudeProjectDirName(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
 

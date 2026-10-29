@@ -5393,3 +5393,25 @@ export type AdapterListPrice =
       /** Why, and what was checked — so the next reader knows what to re-check. */
       readonly reason: string;
     };
+
+/**
+ * One note a CLI keeps in its own memory, read for the user's import into the
+ * shared memory. `projectKey` is how the CLI files it under a project (what
+ * `AgentAdapter.nativeMemoryProjectKey` makes of a folder) or null for a note
+ * of no project; `importedFrom` is where it came from, as the entry's
+ * provenance shows it; `type` is the CLI's own word, unchecked.
+ */
+export interface NativeMemoryNote {
+  path: string;
+  importedFrom: string;
+  projectKey: string | null;
+  title: string;
+  body: string;
+  type: string | null;
+}
+
+/** What one profile of a CLI keeps in its own memory, and where it looked. */
+export interface NativeMemoryReading {
+  location: string;
+  notes: NativeMemoryNote[];
+}

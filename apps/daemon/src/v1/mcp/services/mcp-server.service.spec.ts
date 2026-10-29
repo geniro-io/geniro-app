@@ -107,11 +107,13 @@ import {
   ANSWERING_WITH_CALLS_OUT,
 } from '../../graphs/utils/callee-text';
 import { callerKey } from '../../graphs/utils/caller-key';
+import { memoryDb } from '../../memory/__tests__/memory-db';
 import type {
   MemoryActor,
   MemorySaveInput,
   MemorySaveOutcome,
 } from '../../memory/memory.types';
+import { DEFAULT_MEMORY_CONFIG } from '../../memory/memory.types';
 import type { MemoryService } from '../../memory/services/memory.service';
 import { AgentKind } from '../../runs/runs.types';
 import type { ShareService } from '../../shares/services/share.service';
@@ -740,6 +742,42 @@ describe('McpServerService', () => {
       expect(await names(fakeMemory(false).service)).not.toEqual(
         expect.arrayContaining([HOST_MEMORY_SEARCH_TOOL]),
       );
+    });
+
+    it('lists the memory tools byte for byte the same after an entry is saved and the review policy changes, so a live thread’s tool block never moves', async () => {
+      const db = await memoryDb();
+      try {
+        db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const target = memoryService(db.service);
+        const tools = async () => {
+          const { json } = await post(
+            target,
+            'run-1',
+            'agent',
+            rpc('tools/list', {}),
+          );
+          return JSON.stringify(
+            (json().result as { tools: ToolListing[] }).tools,
+          );
+        };
+        const before = await tools();
+
+        const saved = await db.service.save(
+          { kind: 'agent', runId: 'run-1', agentKind: 'claude', model: 'opus' },
+          { title: 'Use pnpm', body: 'Never npm here.', type: 'feedback' },
+          null,
+        );
+        db.service.setConfig({
+          ...DEFAULT_MEMORY_CONFIG,
+          agentWrites: 'pending',
+          nativeMemoryOff: true,
+        });
+
+        expect(saved.kind).toBe('created');
+        expect(await tools()).toBe(before);
+      } finally {
+        await db.orm.close();
+      }
     });
 
     it('refuses a memory call once the user has turned memory off', async () => {

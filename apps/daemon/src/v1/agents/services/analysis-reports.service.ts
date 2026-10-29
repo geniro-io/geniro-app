@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
+import { MemoryService } from '../../memory/services/memory.service';
 import type { ItemKind } from '../../runs/runs.types';
 import {
   type AnalysedThreadKind,
@@ -47,6 +48,7 @@ export class AnalysisReportsService {
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly timelines: ThreadTimelineService,
+    private readonly memory: MemoryService,
   ) {}
 
   sinkFor(turn: AnalysisTurn, write: AnalysisRowWriter): AnalysisSink {
@@ -71,7 +73,7 @@ export class AnalysisReportsService {
       }
       sourceKind = analysedThreadKindOf(source);
     }
-    const problem = checkItems(report, sourceKind);
+    const problem = checkItems(report, sourceKind, this.memory.enabled);
     if (problem !== null) {
       return refused(problem);
     }
@@ -177,6 +179,7 @@ export class AnalysisReportsService {
 export function checkItems(
   report: RecommendationsReport,
   sourceKind: AnalysedThreadKind,
+  memoryEnabled: boolean,
 ): string | null {
   const seen = new Set<string>();
   for (const item of report.items) {
@@ -188,8 +191,11 @@ export function checkItems(
     if (!item.id.startsWith(prefix)) {
       return `${item.id} is a ${item.target} item — its id starts with ${prefix}`;
     }
+    if (item.target === 'memory' && !memoryEnabled) {
+      return `${item.id}: the shared memory is off, so memory recommendations cannot apply`;
+    }
     if (item.target === 'workflow' && sourceKind === 'chat') {
-      return `${item.id}: the analysed thread is a plain chat, so only repo and user recommendations apply`;
+      return `${item.id}: the analysed thread is a plain chat, so only repo, user and memory recommendations apply`;
     }
   }
   for (const target of RECOMMENDATION_TARGETS) {

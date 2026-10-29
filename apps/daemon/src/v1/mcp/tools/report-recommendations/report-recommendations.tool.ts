@@ -1,5 +1,6 @@
 import { HOST_RECOMMENDATIONS_TOOL } from '../../../agents/chat.types';
 import type { AnalysisBroker } from '../../../agents/services/analysis.broker';
+import type { MemoryService } from '../../../memory/services/memory.service';
 import type {
   McpCallContext,
   McpListContext,
@@ -17,7 +18,10 @@ import { reportRecommendationsSchema } from './report-recommendations.schema';
 export class ReportRecommendationsTool extends BaseMcpTool {
   readonly name = HOST_RECOMMENDATIONS_TOOL;
 
-  constructor(private readonly analysis: AnalysisBroker) {
+  constructor(
+    private readonly analysis: AnalysisBroker,
+    private readonly memory: Pick<MemoryService, 'enabled'>,
+  ) {
     super();
   }
 
@@ -26,7 +30,7 @@ export class ReportRecommendationsTool extends BaseMcpTool {
   }
 
   protected instructions(): string {
-    return reportRecommendationsInstructions();
+    return reportRecommendationsInstructions(this.memory.enabled);
   }
 
   protected inputSchema(): Record<string, unknown> {

@@ -72,12 +72,16 @@ export class Memory extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   forgetReason: string | null = null;
 
+  /** What a forgotten entry was before it was forgotten; a restore returns it there. */
+  @Property({ type: 'string', nullable: true })
+  statusBeforeForget: MemoryStatus | null = null;
+
   @Property({ type: DateTimeType, nullable: true })
   lastUsedAt: Date | null = null;
 
   /**
-   * When the user last made this entry active by hand (approved or restored);
-   * any save since clears it. With a user's or an import's own entries, it is
+   * When the user approved this entry by hand; any save since clears it, and
+   * forgetting and restoring keep it. With a user's or an import's own entries, it is
    * what admits an entry to a run's memory index.
    */
   @Property({ type: DateTimeType, nullable: true })

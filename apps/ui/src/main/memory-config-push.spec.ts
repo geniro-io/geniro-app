@@ -26,6 +26,7 @@ describe('MemoryConfigPush', () => {
     await new MemoryConfigPush(() => undefined, http.fetchImpl).push(HANDLE, {
       enabled: false,
       agentWrites: 'pending',
+      nativeMemoryOff: false,
     });
 
     expect(http.calls).toHaveLength(1);
@@ -38,6 +39,7 @@ describe('MemoryConfigPush', () => {
     expect(JSON.parse(String(call?.init.body))).toEqual({
       enabled: false,
       agentWrites: 'pending',
+      nativeMemoryOff: false,
     });
   });
 
@@ -49,8 +51,16 @@ describe('MemoryConfigPush', () => {
       refusing.fetchImpl,
     );
 
-    await push.push(HANDLE, { enabled: true, agentWrites: 'active' });
-    await push.pushIfChanged(HANDLE, { enabled: true, agentWrites: 'active' });
+    await push.push(HANDLE, {
+      enabled: true,
+      agentWrites: 'active',
+      nativeMemoryOff: false,
+    });
+    await push.pushIfChanged(HANDLE, {
+      enabled: true,
+      agentWrites: 'active',
+      nativeMemoryOff: false,
+    });
 
     expect(reports[0]).toContain(
       'the daemon refused the memory settings (400)',

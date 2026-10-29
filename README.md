@@ -292,12 +292,25 @@ Finished a long run and wondering why it took 40 minutes? Press **Analyze thread
 
 1. Pick the agent, account, model and effort that should do the analysis.
 2. It reads a snapshot of the thread: timings, slow or failed tools, the critical path and every row.
-3. You get a **recommendations card** with evidence for each item, tagged by where the fix belongs: your workflow, your repo, or your own instruction files.
+3. You get a **recommendations card** with evidence for each item, tagged by where the fix belongs: your workflow, your repo, your own instruction files, or the shared memory.
 4. Tick what you want and press **Apply selected**. Workflow edits are saved only if the file has not changed in the meantime, and a backup is written first.
 
 The analysis lives in a popup over the thread it analyzed, so you can come back to it, ask follow-up questions, or start a fresh one.
 
 ![An analysis of a rate-limiter bug fix: the run took 59 seconds, and one repository recommendation, ticked, says to document the real check script and what ACME_ENV=test touches, with its evidence quoted from the thread and an Apply selected button](docs/screenshots/thread-analysis.png)
+
+## 🧠 Shared memory
+
+Every agent shares one memory, whatever its CLI. An agent searches it, reads an entry, saves a fact it learned, or forgets one that turned out wrong, all through Geniro's own tools. Once you import what the CLIs already remember, each CLI's own memory is switched off in new chats, so nothing is remembered twice. You can switch the CLIs' own memory back on in Settings → Memory.
+
+- **Settings → Memory** lists every entry with who wrote it, when, and for which project, or Global. You can search, filter, add, edit, forget, restore and **Forget all**. Forgotten entries can always be restored.
+- **Review.** Set agent notes to **Wait for my review**, and an agent's new note waits at the top of the pane until you approve it. Only the notes you wrote, imported or approved go into the short title index every new chat starts with. Agents reach the rest by searching. A forgotten note comes back in the state it had.
+- **Import.** Bring over what each CLI already remembers. Claude's notes come from every profile you use, Codex's from its memories handbook. You see each note first, tick the ones you want, and choose its type and project. Notes that look like an entry you already have start unticked. The CLIs' files are only read.
+- **Export** writes every active and waiting entry to one Markdown file.
+- In a chat, a memory tool call is one short line, such as "Saved memory · Use pnpm m12". Its handle opens the entry in Settings.
+- The thread analyzer can recommend memory changes too, and applying one saves or forgets the entry.
+
+The memory works from your phone as well: you can read, edit, forget and approve there. Import and export happen on the Mac.
 
 ## 📊 Stats, cost and CPU & RAM
 

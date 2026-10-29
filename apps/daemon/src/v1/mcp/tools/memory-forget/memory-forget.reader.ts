@@ -30,6 +30,12 @@ export function readMemoryForgetArgs(
   return readToolArgs(MemoryForgetArgsSchema, args);
 }
 
+/**
+ * What the agent reads back.
+ *
+ * TWIN PARSER: `memoryToolEntryOf` in `apps/ui/src/renderer/chats/memory-tool-row.tsx`
+ * reads this text for the transcript row; reword it there too.
+ */
 export function memoryForgetResultText(outcome: MemoryForgetOutcome): {
   text: string;
   isError: boolean;

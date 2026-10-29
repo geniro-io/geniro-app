@@ -81,6 +81,12 @@ export function readMemorySaveArgs(
   return { ok: true, query: id === undefined ? rest : { ...rest, handle: id } };
 }
 
+/**
+ * What the agent reads back.
+ *
+ * TWIN PARSER: `memoryToolEntryOf` in `apps/ui/src/renderer/chats/memory-tool-row.tsx`
+ * reads this text for the transcript row; reword it there too.
+ */
 export function memorySaveResultText(
   outcome: MemorySaveOutcome,
   fence: string,

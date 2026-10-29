@@ -233,6 +233,7 @@ export function App(): React.JSX.Element {
    * ("Manage fast actions") must land in the section, not on the list.
    */
   const [settingsSectionOpen, setSettingsSectionOpen] = useState(false);
+  const [memoryFocus, setMemoryFocus] = useState<string | null>(null);
   /** Leaves the section for the list — see `usePhoneBackEntry`. */
   const settingsBack = usePhoneBackEntry(
     'settings',
@@ -733,6 +734,12 @@ export function App(): React.JSX.Element {
                       setSettingsSectionOpen(true);
                       setView('settings');
                     }}
+                    onOpenMemory={(memoryHandle) => {
+                      setMemoryFocus(memoryHandle);
+                      setSettingsSection('memory');
+                      setSettingsSectionOpen(true);
+                      setView('settings');
+                    }}
                     onOpenWorkflow={(slug) => {
                       setWorkflowRequest(slug);
                       setView('workflows');
@@ -803,6 +810,11 @@ export function App(): React.JSX.Element {
                   <div className="min-h-0 flex-1">
                     <Settings
                       handle={handle}
+                      client={clientRef.current}
+                      memoryFocus={
+                        settingsSection === 'memory' ? memoryFocus : null
+                      }
+                      onMemoryFocusDone={() => setMemoryFocus(null)}
                       onOpenOnboarding={
                         isRemoteRuntime() ? undefined : () => setGuideOpen(true)
                       }

@@ -10,6 +10,7 @@ import { cn } from '../components/ui/utils';
 import { type BlockStatus } from './block-shell';
 import { jumpAnchorProps } from './jump-target';
 import { RunSettledContext } from './live-row';
+import { memoryToolEntryOf, MemoryToolRow } from './memory-tool-row';
 import { NestedThreadContext } from './subagent-context';
 import { useThreadOverride } from './thread-ui-memory';
 import { ToolBodyView } from './tool-body-view';
@@ -411,7 +412,13 @@ export const ToolGroup = memo(function ToolGroup({
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
 }): React.JSX.Element {
   const runSettled = useContext(RunSettledContext) !== null;
-  if (!group.pairs.some((pair) => agentActionOf(pair) !== null)) {
+  const lifted = group.pairs.map((pair) => ({
+    action: agentActionOf(pair),
+    memory: memoryToolEntryOf(pair),
+  }));
+  if (
+    lifted.every(({ action, memory }) => action === null && memory === null)
+  ) {
     return <GroupedTools group={group} />;
   }
   const rows: React.ReactNode[] = [];
@@ -424,23 +431,29 @@ export const ToolGroup = memo(function ToolGroup({
     rows.push(<GroupedTools key={id} group={{ ...group, id, pairs: run }} />);
     run = [];
   };
-  for (const pair of group.pairs) {
-    const action = agentActionOf(pair);
-    if (action === null) {
+  group.pairs.forEach((pair, index) => {
+    const { action, memory } = lifted[index]!;
+    const status = toolPairStatus(pair, group.closed || runSettled);
+    if (action !== null) {
+      flush();
+      rows.push(
+        <AgentActionBlock
+          key={pair.call.id}
+          pair={pair}
+          action={action}
+          status={status}
+          nodes={nodes}
+        />,
+      );
+    } else if (memory !== null) {
+      flush();
+      rows.push(
+        <MemoryToolRow key={pair.call.id} entry={memory} status={status} />,
+      );
+    } else {
       run.push(pair);
-      continue;
     }
-    flush();
-    rows.push(
-      <AgentActionBlock
-        key={pair.call.id}
-        pair={pair}
-        action={action}
-        status={toolPairStatus(pair, group.closed || runSettled)}
-        nodes={nodes}
-      />,
-    );
-  }
+  });
   flush();
   return <div className="flex min-w-0 flex-col gap-3">{rows}</div>;
 });

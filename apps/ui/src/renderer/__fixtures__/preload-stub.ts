@@ -361,6 +361,10 @@ export function createPreloadStub(
       // The cancel outcome, for `saveChatExport`'s reason.
       return Promise.resolve({ saved: false, path: null });
     },
+    saveMemoryExport: (): Promise<FileSaveResult> => {
+      note('saveMemoryExport');
+      return Promise.resolve({ saved: false, path: null });
+    },
     revealPath: () => {
       note('revealPath');
       return Promise.resolve({

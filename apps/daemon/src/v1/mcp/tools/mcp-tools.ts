@@ -160,7 +160,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
       deps.threads,
       deps.workflowChanges,
     ),
-    new ReportRecommendationsTool(deps.analysis),
+    new ReportRecommendationsTool(deps.analysis, deps.memory),
     new MarkRecommendationsTool(deps.analysis),
     new SaveWorkflowChangeTool(
       deps.analysis,

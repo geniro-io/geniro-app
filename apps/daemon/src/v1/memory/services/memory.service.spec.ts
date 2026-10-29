@@ -1,8 +1,3 @@
-import {
-  defineConfig,
-  MikroORM,
-  UnderscoreNamingStrategy,
-} from '@mikro-orm/sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -10,18 +5,12 @@ import {
   MEMORY_TEXT_VERSION,
   retiredMemoryTriggerDrops,
 } from '../../../db/memory-text-index.ddl';
-import mikroOrmConfig from '../../../db/mikro-orm.config';
-import { NodeStateDao } from '../../agents/dao/node-state.dao';
-import { RunDao } from '../../agents/dao/run.dao';
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
-import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
-import type { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
-import { TaskDao } from '../../tasks/dao/task.dao';
 import { Task } from '../../tasks/entity/task.entity';
-import { MemoryDao } from '../dao/memory.dao';
+import { make, memoryDb } from '../__tests__/memory-db';
 import { Memory } from '../entity/memory.entity';
 import {
   DEFAULT_MEMORY_CONFIG,
@@ -29,11 +18,10 @@ import {
   type MemoryActor,
   type MemoryChangedEvent,
   type MemorySaveOutcome,
+  type MemoryStatusOutcome,
   type MemoryTextDatabase,
 } from '../memory.types';
-import { MemoryService } from './memory.service';
-import { MemoryEventBus } from './memory-events.bus';
-import { MemoryTextIndexService } from './memory-text-index.service';
+import type { MemoryService } from './memory.service';
 
 const USER: MemoryActor = { kind: 'user' };
 
@@ -44,49 +32,15 @@ const AGENT: MemoryActor = {
   model: 'opus',
 };
 
-/** The repository a task worktree resolves to, as `ProjectRootsService` would. */
-const ROOTS = new Map([['/wt/task-1', '/repo/app']]);
-
-async function memoryDb() {
-  const orm = await MikroORM.init(
-    defineConfig({
-      dbName: ':memory:',
-      entities: [Memory, Run, NodeState, Task, Project],
-      allowGlobalContext: true,
-      namingStrategy: UnderscoreNamingStrategy,
-      discovery: { checkDuplicateFieldNames: false },
-      schemaGenerator: mikroOrmConfig.schemaGenerator,
-    }),
-  );
-  await orm.schema.update({ safe: true });
-  const em = orm.em;
-  const index = () => new MemoryTextIndexService(new MemoryDao(em.fork()));
-  await index().ensure();
-  const events = new MemoryEventBus();
-  const roots = {
-    rootsOf: async (cwds: Iterable<string | null>) =>
-      new Map(
-        [...cwds]
-          .filter((cwd): cwd is string => cwd !== null)
-          .map((cwd) => [cwd, ROOTS.get(cwd) ?? cwd]),
-      ),
-  } as unknown as ProjectRootsService;
-  const service = new MemoryService(
-    em,
-    new MemoryDao(em),
-    new RunDao(em),
-    new NodeStateDao(em),
-    new TaskDao(em),
-    new ProjectDao(em),
-    roots,
-    events,
-  );
-  return { orm, em, service, events, index };
-}
-
-/** An entity with its defaults, as a row the app itself would write. */
-function make<T extends object>(entity: new () => T, data: Partial<T>): T {
-  return Object.assign(new entity(), data);
+function savedOf(outcome: MemorySaveOutcome | MemoryStatusOutcome) {
+  if (
+    outcome.kind !== 'created' &&
+    outcome.kind !== 'updated' &&
+    outcome.kind !== 'changed'
+  ) {
+    throw new Error(`expected a saved entry, got ${JSON.stringify(outcome)}`);
+  }
+  return outcome.entry;
 }
 
 function created(outcome: MemorySaveOutcome) {
@@ -153,15 +107,15 @@ describe('MemoryService', () => {
     ]);
   });
 
-  it('refuses a body over 2048 bytes and takes one of exactly 2048', async () => {
+  it('refuses a body over 8192 bytes and takes one of exactly 8192', async () => {
     const outcome = await db.service.save(
       AGENT,
-      { title: 'Long', body: 'я'.repeat(1025) },
+      { title: 'Long', body: 'я'.repeat(4097) },
       null,
     );
     const atLimit = await db.service.save(
       AGENT,
-      { title: 'Full', body: 'я'.repeat(1024) },
+      { title: 'Full', body: 'я'.repeat(4096) },
       null,
     );
 
@@ -278,7 +232,11 @@ describe('MemoryService', () => {
   });
 
   it('lands agent writes as pending when agentWrites is pending', async () => {
-    db.service.setConfig({ enabled: true, agentWrites: 'pending' });
+    db.service.setConfig({
+      enabled: true,
+      agentWrites: 'pending',
+      nativeMemoryOff: false,
+    });
 
     const agentEntry = created(
       await db.service.save(AGENT, { title: 'Pending', body: 'x' }, null),
@@ -297,7 +255,11 @@ describe('MemoryService', () => {
 
   describe('while the user reviews agent writes', () => {
     beforeEach(() => {
-      db.service.setConfig({ enabled: true, agentWrites: 'pending' });
+      db.service.setConfig({
+        enabled: true,
+        agentWrites: 'pending',
+        nativeMemoryOff: false,
+      });
     });
 
     async function approved() {
@@ -399,7 +361,11 @@ describe('MemoryService', () => {
         await db.service.save(AGENT, { title: 'Gone kiwi', body: 'x' }, null),
       );
       await db.service.forget(AGENT, gone.handle, 'obsolete', null);
-      db.service.setConfig({ enabled: true, agentWrites: 'pending' });
+      db.service.setConfig({
+        enabled: true,
+        agentWrites: 'pending',
+        nativeMemoryOff: false,
+      });
       const waiting = created(
         await db.service.save(
           AGENT,
@@ -407,7 +373,11 @@ describe('MemoryService', () => {
           null,
         ),
       );
-      db.service.setConfig({ enabled: true, agentWrites: 'active' });
+      db.service.setConfig({
+        enabled: true,
+        agentWrites: 'active',
+        nativeMemoryOff: false,
+      });
       return { global, p1, gone, waiting };
     }
 
@@ -525,11 +495,19 @@ describe('MemoryService', () => {
         await db.service.save(AGENT, { title: 'Gone', body: 'g' }, 'p1'),
       );
       await db.service.forget(AGENT, gone.handle, 'obsolete', 'p1');
-      db.service.setConfig({ enabled: true, agentWrites: 'pending' });
+      db.service.setConfig({
+        enabled: true,
+        agentWrites: 'pending',
+        nativeMemoryOff: false,
+      });
       const waiting = created(
         await db.service.save(AGENT, { title: 'Waiting', body: 'w' }, 'p1'),
       );
-      db.service.setConfig({ enabled: true, agentWrites: 'active' });
+      db.service.setConfig({
+        enabled: true,
+        agentWrites: 'active',
+        nativeMemoryOff: false,
+      });
 
       for (const entry of [other, gone, waiting]) {
         expect(
@@ -742,7 +720,11 @@ describe('MemoryService', () => {
         await db.service.save(USER, { title: 'Gone', body: 'x' }, null),
       );
       await db.service.forget(AGENT, gone.handle, 'wrong', null);
-      db.service.setConfig({ enabled: true, agentWrites: 'pending' });
+      db.service.setConfig({
+        enabled: true,
+        agentWrites: 'pending',
+        nativeMemoryOff: false,
+      });
       await db.service.save(AGENT, { title: 'Waiting', body: 'x' }, null);
 
       const { memoryIndex } = await db.service.runSnapshot(FACTS);
@@ -772,7 +754,11 @@ describe('MemoryService', () => {
       await db.service.save(USER, { title: 'Theirs', body: 'x' }, 'p2');
 
       const empty = await db.service.runSnapshot(FACTS);
-      db.service.setConfig({ enabled: false, agentWrites: 'active' });
+      db.service.setConfig({
+        enabled: false,
+        agentWrites: 'active',
+        nativeMemoryOff: false,
+      });
       const off = await db.service.runSnapshot(FACTS);
 
       expect(empty).toEqual({ nativeMemoryOff: false, memoryIndex: null });
@@ -873,7 +859,6 @@ describe('MemoryService', () => {
         indexLines((await db.service.runSnapshot(FACTS)).memoryIndex).slice(1);
 
       const before = await listed();
-      await db.service.setStatus(USER, theirs.id, 'forgotten');
       await db.service.setStatus(USER, theirs.id, 'active');
       const approved = await listed();
       const current = await db.service.read([theirs.handle], null);
@@ -898,7 +883,8 @@ describe('MemoryService', () => {
       ]);
     });
 
-    it('starts the run without an index when the read fails', async () => {
+    it('starts the run without an index when the read fails, the CLIs’ own memory as the user set it', async () => {
+      db.service.setConfig({ ...DEFAULT_MEMORY_CONFIG, nativeMemoryOff: true });
       await db.service.save(USER, { title: 'Kept', body: 'x' }, null);
       vi.spyOn(db.service, 'listVisible').mockRejectedValueOnce(
         new Error('disk gone'),
@@ -906,12 +892,30 @@ describe('MemoryService', () => {
 
       const snapshot = await db.service.runSnapshot(FACTS);
 
-      expect(snapshot).toEqual({ nativeMemoryOff: false, memoryIndex: null });
+      expect(snapshot).toEqual({ nativeMemoryOff: true, memoryIndex: null });
+    });
+
+    it('switches each CLI’s own memory off only while the shared memory is on and the user asked', async () => {
+      db.service.setConfig({ ...DEFAULT_MEMORY_CONFIG, nativeMemoryOff: true });
+      const asked = await db.service.runSnapshot(FACTS);
+      db.service.setConfig({
+        enabled: false,
+        agentWrites: 'active',
+        nativeMemoryOff: true,
+      });
+      const memoryOff = await db.service.runSnapshot(FACTS);
+
+      expect(asked.nativeMemoryOff).toBe(true);
+      expect(memoryOff.nativeMemoryOff).toBe(false);
     });
   });
 
   it('refuses an agent write while memory is off', async () => {
-    db.service.setConfig({ enabled: false, agentWrites: 'active' });
+    db.service.setConfig({
+      enabled: false,
+      agentWrites: 'active',
+      nativeMemoryOff: false,
+    });
 
     const outcome = await db.service.save(
       AGENT,
@@ -955,7 +959,11 @@ describe('MemoryService', () => {
       ),
     );
     await db.service.forget(AGENT, forgotten.handle, 'wrong', null);
-    db.service.setConfig({ enabled: true, agentWrites: 'pending' });
+    db.service.setConfig({
+      enabled: true,
+      agentWrites: 'pending',
+      nativeMemoryOff: false,
+    });
     await db.service.save(
       AGENT,
       { title: 'Unreviewed fact', body: 'zebra herd' },
@@ -1113,6 +1121,301 @@ describe('MemoryService', () => {
         agentKind: 'claude',
         model: 'opus',
       });
+    });
+  });
+
+  describe('the user’s own view', () => {
+    async function seedRows(rows: Partial<Memory>[]) {
+      const em = db.em.fork();
+      em.persist(make(Project, { id: 'p1', name: 'App', folder: '/repo/app' }));
+      rows.forEach((row, n) =>
+        em.persist(
+          make(Memory, {
+            handle: n + 1,
+            title: `Note ${n + 1}`,
+            body: `body ${n + 1}`,
+            type: 'project',
+            status: 'active',
+            sourceActor: 'user',
+            ...row,
+          }),
+        ),
+      );
+      await em.flush();
+    }
+
+    const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 12, minute));
+
+    it('lists newest edit first and pages on without repeating or skipping a row, ties included', async () => {
+      await seedRows([
+        { updatedAt: at(1) },
+        { updatedAt: at(3) },
+        { updatedAt: at(3) },
+        { updatedAt: at(2) },
+        { updatedAt: at(5) },
+      ]);
+
+      const seen: string[] = [];
+      let page = await db.service.list({ limit: 2 });
+      for (;;) {
+        seen.push(...page.memories.map((entry) => entry.title));
+        if (page.next === null) {
+          break;
+        }
+        page = await db.service.list({ limit: 2, ...page.next });
+      }
+
+      expect(seen).toHaveLength(5);
+      expect(new Set(seen).size).toBe(5);
+      expect(seen[0]).toBe('Note 5');
+      expect(seen.slice(1, 3).sort()).toEqual(['Note 2', 'Note 3']);
+      expect(seen.slice(3)).toEqual(['Note 4', 'Note 1']);
+    });
+
+    it('lists active and pending by default, and each filter narrows to what it names', async () => {
+      await seedRows([
+        { status: 'active', title: 'Global fact' },
+        { status: 'pending', title: 'Waiting fact', projectId: 'p1' },
+        { status: 'forgotten', title: 'Old fact' },
+        { status: 'active', title: 'Feedback fact', type: 'feedback' },
+      ]);
+      const titles = async (query: Parameters<MemoryService['list']>[0]) =>
+        (await db.service.list(query)).memories.map((e) => e.title).sort();
+
+      expect(await titles({})).toEqual([
+        'Feedback fact',
+        'Global fact',
+        'Waiting fact',
+      ]);
+      expect(await titles({ status: 'forgotten' })).toEqual(['Old fact']);
+      expect(await titles({ scope: 'project', projectId: 'p1' })).toEqual([
+        'Waiting fact',
+      ]);
+      expect(await titles({ scope: 'global' })).toEqual([
+        'Feedback fact',
+        'Global fact',
+      ]);
+      expect(await titles({ type: 'feedback' })).toEqual(['Feedback fact']);
+      expect(await titles({ q: 'waiting' })).toEqual(['Waiting fact']);
+      expect(await titles({ handle: 'm3' })).toEqual(['Old fact']);
+      expect(await titles({ handle: 'M2', status: 'active' })).toEqual([]);
+    });
+
+    it('creates the user’s entry where the user filed it, and refuses a project that does not exist', async () => {
+      await seedRows([]);
+
+      const entry = savedOf(
+        await db.service.create({
+          title: 'Ship on Fridays',
+          body: 'never',
+          type: 'feedback',
+          projectId: 'p1',
+        }),
+      );
+      const missing = await db.service.create({
+        title: 'Elsewhere',
+        body: 'x',
+        type: 'project',
+        projectId: 'nope',
+      });
+
+      expect(entry).toMatchObject({
+        projectId: 'p1',
+        status: 'active',
+        type: 'feedback',
+        source: { actor: 'user' },
+      });
+      expect(missing).toMatchObject({ kind: 'refused', code: 'NO_PROJECT' });
+    });
+
+    it('refuses the user a near-duplicate title until the user vouches past it', async () => {
+      await seedRows([{ title: 'Use pnpm for installs' }]);
+      const input = {
+        title: 'Use pnpm for installs',
+        body: 'again',
+        type: 'project' as const,
+        projectId: null,
+      };
+
+      const refusedCopy = await db.service.create(input);
+      const vouched = await db.service.create({
+        ...input,
+        notDuplicateOf: ['m1'],
+      });
+
+      expect(refusedCopy).toMatchObject({ kind: 'near_duplicate' });
+      expect(vouched).toMatchObject({ kind: 'created' });
+    });
+
+    it('edits at the read rev only, and an edit of a pending agent entry makes it the user’s own and active', async () => {
+      await seedRows([
+        {
+          status: 'pending',
+          sourceActor: 'agent',
+          sourceAgentKind: 'claude',
+          sourceRunId: 'run-a',
+        },
+      ]);
+      const [pending] = (await db.service.list({})).memories;
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+      const edit = {
+        title: 'Reworded',
+        body: 'by the user',
+        type: 'reference' as const,
+        projectId: 'p1',
+      };
+
+      const stale = await db.service.change(pending!.id, {
+        ...edit,
+        rev: pending!.rev + 1,
+      });
+      const saved = savedOf(
+        await db.service.change(pending!.id, { ...edit, rev: pending!.rev }),
+      );
+
+      expect(stale).toMatchObject({ kind: 'stale' });
+      expect(saved).toMatchObject({
+        title: 'Reworded',
+        status: 'active',
+        projectId: 'p1',
+        type: 'reference',
+        rev: pending!.rev + 1,
+        source: { actor: 'user', agentKind: null, runId: null },
+      });
+      expect(published).toEqual([
+        {
+          memoryId: pending!.id,
+          change: 'updated',
+          status: 'active',
+          projectId: 'p1',
+        },
+      ]);
+    });
+
+    it('refuses to edit a forgotten entry until it is restored', async () => {
+      await seedRows([{ status: 'forgotten' }]);
+      const [gone] = (await db.service.list({ status: 'forgotten' })).memories;
+
+      const outcome = await db.service.change(gone!.id, {
+        rev: gone!.rev,
+        title: 't',
+        body: 'b',
+        type: 'project',
+        projectId: null,
+      });
+
+      expect(outcome).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
+    });
+
+    it('names each status change by what it did: approved, forgotten, restored', async () => {
+      await seedRows([{ status: 'pending', sourceActor: 'agent' }]);
+      const [entry] = (await db.service.list({})).memories;
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      await db.service.change(entry!.id, { status: 'active' });
+      await db.service.change(entry!.id, { status: 'forgotten' });
+      await db.service.change(entry!.id, { status: 'active' });
+
+      expect(published.map((event) => event.change)).toEqual([
+        'approved',
+        'forgotten',
+        'restored',
+      ]);
+    });
+
+    it('restores a forgotten entry to the status it had, approving nothing', async () => {
+      await seedRows([
+        { status: 'pending', sourceActor: 'agent' },
+        { status: 'active', sourceActor: 'agent', approvedAt: at(1) },
+      ]);
+      const [waiting, approvedOne] = (
+        await db.em.fork().find(Memory, {}, { orderBy: { handle: 'asc' } })
+      ).map((row) => row.id);
+
+      await db.service.forgetAll();
+      await db.service.change(waiting!, { status: 'active' });
+      await db.service.change(approvedOne!, { status: 'forgotten' });
+      await db.service.change(approvedOne!, { status: 'active' });
+      const rows = await db.em
+        .fork()
+        .find(Memory, {}, { orderBy: { handle: 'asc' } });
+
+      expect(rows.map((row) => [row.status, row.approvedAt])).toEqual([
+        ['pending', null],
+        ['active', at(1)],
+      ]);
+    });
+
+    it('forgets only active and pending entries, in one bulk change, each still restorable', async () => {
+      await seedRows([
+        { status: 'active' },
+        { status: 'pending' },
+        { status: 'forgotten', rev: 4 },
+      ]);
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      const result = await db.service.forgetAll();
+      const announced = [...published];
+      const rows = await db.em
+        .fork()
+        .find(Memory, {}, { orderBy: { handle: 'asc' } });
+      const restored = await db.service.setStatus(USER, rows[0]!.id, 'active');
+
+      expect(result).toEqual({ forgotten: 2 });
+      expect(rows.map((row) => [row.status, row.rev])).toEqual([
+        ['forgotten', 2],
+        ['forgotten', 2],
+        ['forgotten', 4],
+      ]);
+      expect(announced).toEqual([
+        {
+          memoryId: null,
+          change: 'bulk',
+          status: 'forgotten',
+          projectId: null,
+        },
+      ]);
+      expect(restored).toMatchObject({
+        kind: 'changed',
+        entry: { status: 'active' },
+      });
+    });
+
+    it('exports every active and pending entry with its type, scope and source, and leaves forgotten ones out', async () => {
+      await seedRows([
+        { title: 'Global note', type: 'user', sourceActor: 'user' },
+        {
+          title: 'App note',
+          projectId: 'p1',
+          status: 'pending',
+          sourceActor: 'agent',
+          sourceAgentKind: 'codex',
+          sourceModel: 'gpt-5',
+        },
+        { title: 'Gone note', status: 'forgotten' },
+        {
+          title: 'Imported note',
+          sourceActor: 'import',
+          sourceImportedFrom: '/home/me/.claude/projects/x/memory/a.md',
+        },
+      ]);
+
+      const { markdown, count } = await db.service.exportMarkdown();
+
+      expect(count).toBe(3);
+      expect(markdown).not.toContain('Gone note');
+      expect(markdown).toMatch(
+        /## Global[\s\S]*### m1 · Global note\n\n- Type: user\n- Status: active\n- Scope: Global\n- Source: user/,
+      );
+      expect(markdown).toMatch(
+        /## Project: App[\s\S]*### m2 · App note\n\n- Type: project\n- Status: pending\n- Scope: Project: App\n- Source: agent \(codex · gpt-5\)/,
+      );
+      expect(markdown).toContain(
+        '- Source: imported from /home/me/.claude/projects/x/memory/a.md',
+      );
     });
   });
 });

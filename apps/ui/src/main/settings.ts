@@ -268,6 +268,9 @@ function salvageMemory(value: unknown): MemorySettings {
     agentWrites: memorySchema.shape.agentWrites
       .catch(DEFAULT_MEMORY.agentWrites)
       .parse(record.agentWrites),
+    nativeMemoryOff: memorySchema.shape.nativeMemoryOff
+      .catch(DEFAULT_MEMORY.nativeMemoryOff)
+      .parse(record.nativeMemoryOff),
   };
 }
 

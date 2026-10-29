@@ -121,14 +121,52 @@ const GENIRO_TOOL_NAMES = Object.keys(GENIRO_TOOLS);
  * because that server also publishes tools that draw nothing.
  */
 export function geniroToolOf(name: string, runId: string): string | null {
+  return (
+    GENIRO_TOOL_NAMES.find((tool) => namesToolOnRunServer(name, runId, tool)) ??
+    null
+  );
+}
+
+function namesToolOnRunServer(
+  name: string,
+  runId: string,
+  tool: string,
+): boolean {
   const server = `geniro-${runId.slice(0, 8)}`;
   return (
-    GENIRO_TOOL_NAMES.find(
-      (tool) =>
-        name === `mcp__${server}__${tool}` ||
-        (!name.startsWith('mcp__') &&
-          name.includes(server) &&
-          namesWord(name, tool)),
+    name === `mcp__${server}__${tool}` ||
+    (!name.startsWith('mcp__') &&
+      name.includes(server) &&
+      namesWord(name, tool))
+  );
+}
+
+/**
+ * The shared-memory tools, which tell their story as one compact row inside the
+ * tool group (`MemoryToolRow`) and so are kept OUT of {@link GENIRO_TOOLS}: a
+ * key there hides a tool's raw rows, and the memory row is drawn from exactly
+ * those pairs. Matched on their own, in the spellings {@link geniroToolOf}
+ * reads; codex's bare `mcp__<server>` pins no tool and stays an ordinary row.
+ *
+ * TWIN PARSER: `HOST_MEMORY_TOOLS` in `apps/daemon/src/v1/agents/chat.types.ts`.
+ */
+export const GENIRO_MEMORY_TOOLS = [
+  'memory_search',
+  'memory_read',
+  'memory_save',
+  'memory_forget',
+] as const;
+
+export type GeniroMemoryTool = (typeof GENIRO_MEMORY_TOOLS)[number];
+
+/** The memory tool a call NAMES on this run's own geniro server, else null. */
+export function geniroMemoryToolOf(
+  name: string,
+  runId: string,
+): GeniroMemoryTool | null {
+  return (
+    GENIRO_MEMORY_TOOLS.find((tool) =>
+      namesToolOnRunServer(name, runId, tool),
     ) ?? null
   );
 }

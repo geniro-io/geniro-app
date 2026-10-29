@@ -6,6 +6,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { MemoryService } from '../../memory/services/memory.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { RunWire } from '../chat.types';
 import { HOST_WORKFLOW_CHANGE_TOOL } from '../chat.types';
@@ -31,6 +32,7 @@ describe('ThreadAnalysisService.start', () => {
     source: Partial<Run> | null,
     maxSeq = 41,
     earlier: string[] = [],
+    memoryOn = true,
   ) {
     // What the thread holds besides `earlier`: the new chat once created, and
     // whatever a racing start made meanwhile.
@@ -86,6 +88,7 @@ describe('ThreadAnalysisService.start', () => {
         findAnalysis,
       } as unknown as ChatService,
       { allDeleted: () => deleted.asObservable() } as unknown as AgentEventBus,
+      { enabled: memoryOn } as MemoryService,
     );
     return {
       service,
@@ -286,6 +289,19 @@ describe('ThreadAnalysisService.start', () => {
     expect(guide).toContain('why so many re-reads?');
   });
 
+  it('briefs an analysis without the memory target while the shared memory is off', async () => {
+    const off = build({}, 41, [], false);
+    const on = build({});
+
+    await off.service.start('source', { agentKind: 'codex' });
+    await on.service.start('source', { agentKind: 'codex' });
+
+    expect(on.createChat.mock.calls[0]![0].taskInstructions).toContain('M-1');
+    expect(off.createChat.mock.calls[0]![0].taskInstructions).not.toContain(
+      'M-1',
+    );
+  });
+
   it("refuses with ANALYSIS_FOLDER_GONE when the source's folder is gone, and runs in a folder sent instead", async () => {
     const { service, createChat } = build({ cwd: join(folder, 'deleted') });
 
@@ -452,6 +468,7 @@ describe('ThreadAnalysisService.startWorkflow', () => {
       {
         allDeleted: () => new Subject<string>().asObservable(),
       } as unknown as AgentEventBus,
+      { enabled: true } as MemoryService,
     );
     return { service, createChat, sendMessage, remove, runDao };
   }

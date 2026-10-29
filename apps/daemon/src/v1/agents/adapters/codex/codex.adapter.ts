@@ -42,6 +42,7 @@ import type {
   CarrySessionResult,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
+  NativeMemoryReading,
   RecoveredSubagentOutcome,
   SubagentRecoveryRef,
   TurnDriver,
@@ -115,6 +116,10 @@ import {
   codexMcpToggleRefusal,
   readCodexUserMcpLayer,
 } from './utils/codex-mcp.utils';
+import {
+  codexMemoryHandbookPath,
+  readCodexMemoryNotes,
+} from './utils/codex-memory.utils';
 import {
   type CodexModelEntry,
   readCodexModels,
@@ -422,6 +427,25 @@ export class CodexAdapter extends AgentAdapter {
 
   constructor(private readonly codexOptions: CodexAdapterOptions = {}) {
     super(codexOptions);
+  }
+
+  /** The codex home a run without a `configDir` uses. */
+  private defaultHome(): string {
+    return join(
+      this.codexOptions.homeDir ?? homedir(),
+      CODEX_DEFAULT_HOME_DIR_NAME,
+    );
+  }
+
+  /** The memories handbook's task groups (`codex-memory.utils.ts`). */
+  override async readNativeMemory(
+    configDir: string | null,
+  ): Promise<NativeMemoryReading> {
+    const home = configDir ?? this.defaultHome();
+    return {
+      location: codexMemoryHandbookPath(home),
+      notes: await readCodexMemoryNotes(home),
+    };
   }
 
   /** This adapter as the daemon builds it. */
@@ -793,10 +817,7 @@ export class CodexAdapter extends AgentAdapter {
     if (wanted === '') {
       return Promise.resolve(codexContextWindowListing(null, null));
     }
-    const defaultHome = join(
-      this.codexOptions.homeDir ?? homedir(),
-      CODEX_DEFAULT_HOME_DIR_NAME,
-    );
+    const defaultHome = this.defaultHome();
     const homes = [options.configDir ?? null, defaultHome].filter(
       (home): home is string => home !== null,
     );
@@ -1264,10 +1285,7 @@ export class CodexAdapter extends AgentAdapter {
   override async carrySessionToConfigDir(
     input: CarrySessionInput,
   ): Promise<CarrySessionResult> {
-    const defaultHome = join(
-      this.codexOptions.homeDir ?? homedir(),
-      CODEX_DEFAULT_HOME_DIR_NAME,
-    );
+    const defaultHome = this.defaultHome();
     const fromHome = input.from ?? defaultHome;
     const toHome = input.to ?? defaultHome;
     if (fromHome === toHome) {

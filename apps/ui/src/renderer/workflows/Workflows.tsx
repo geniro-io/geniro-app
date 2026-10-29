@@ -1507,12 +1507,17 @@ export function Workflows({
   >({});
   /**
    * The user's named agent configurations, on the same terms as the recents
-   * above — read once, and filtered to a node's own agent at the point of use.
+   * above — re-read each time the screen comes into view, since this screen
+   * stays mounted while Settings adds profiles, and filtered to a node's own
+   * agent at the point of use.
    */
   const [configProfiles, setConfigProfiles] = useState<
     readonly ConfigProfile[]
   >([]);
   useEffect(() => {
+    if (!active) {
+      return;
+    }
     void window.geniro
       .getSettings()
       .then((settings) => {
@@ -1522,7 +1527,7 @@ export function Workflows({
       // A settings read that fails costs the recents list and nothing else —
       // the picker still browses, and the builder is not a screen to fail.
       .catch(() => undefined);
-  }, []);
+  }, [active]);
 
   /**
    * Browse for this node's config directory.

@@ -152,7 +152,8 @@ export function Tasks({
   }, []);
   /**
    * The user's NAMED agent profiles, and the config directories they have
-   * reached for before — read once, on the same terms as the probe above.
+   * reached for before — re-read each time the board comes into view, since it
+   * stays mounted while Settings adds profiles.
    *
    * Both run-config panels draw their Profile row from these. Without them the
    * picker offers the native chooser and nothing else, so a board could only
@@ -167,20 +168,20 @@ export function Tasks({
     Partial<Record<CliKind, readonly string[]>>
   >({});
   useEffect(() => {
+    if (!active) {
+      return;
+    }
     void window.geniro
       .getSettings()
       .then((settings) => {
         setConfigProfiles(settings.configProfiles ?? []);
         setRecentConfigDirs(settings.recentConfigDirs ?? {});
       })
-      .catch(() => {
-        // The empty defaults ARE the degrade: the picker keeps its native
-        // chooser, so a profile is still reachable by path. Nothing here can
-        // act on the failure, and the settings read is the debug log's own.
-        setConfigProfiles([]);
-        setRecentConfigDirs({});
-      });
-  }, []);
+      // A failed read keeps the lists already shown: the picker keeps its
+      // native chooser, so a profile is still reachable by path, and the
+      // settings read is the debug log's own.
+      .catch(() => undefined);
+  }, [active]);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   /** The card a drag would land ahead of in `dropTarget`; null = its end. */

@@ -206,6 +206,10 @@ export interface TurnInstructionParts {
  * It names every English source in the window on purpose: a model surrounded
  * by English briefs, skills and tool output drifts into English without a rule
  * that says those do not decide the reply's language.
+ *
+ * It names the text an agent hands a tool for the user to read, too: a model
+ * reads "reply" as its own messages only, and leaves a question card's labels
+ * and the terms it quotes in the language of the material it worked from.
  */
 export function replyLanguageInstruction(
   language: string | null | undefined,
@@ -214,7 +218,7 @@ export function replyLanguageInstruction(
   if (!name) {
     return null;
   }
-  return `Reply to the user in ${name}, whatever language these instructions, the files, the tools and your earlier replies are in. What you write into the project — code, comments in code, identifiers, file paths, commands, commit messages — stays in the language the project already uses.`;
+  return `Reply to the user in ${name}, whatever language these instructions, the files, the tools and your earlier replies are in. That is every word the user reads: your messages, and the text you give a tool that shows it to them — a question and its options, a plan, a card, a task report, a note — even when what you pass on was written in another language. What you write into the project — code, comments in code, identifiers, file paths, commands, commit messages — stays in the language the project already uses.`;
 }
 
 /**

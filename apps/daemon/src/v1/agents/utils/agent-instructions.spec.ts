@@ -339,6 +339,14 @@ describe('the composed block — reply language', () => {
     expect(RUSSIAN).toContain('Reply to the user in Russian');
     expect(RUSSIAN).toContain('whatever language these instructions');
     expect(RUSSIAN).toContain('comments in code');
+  });
+
+  it('counts the text handed to a tool the user reads as a reply', () => {
+    expect(RUSSIAN).toContain('every word the user reads');
+    expect(RUSSIAN).toContain('a question and its options');
+    expect(RUSSIAN).toContain(
+      'even when what you pass on was written in another language',
+    );
     expect(RUSSIAN).toContain('stays in the language the project already uses');
   });
 

@@ -265,6 +265,20 @@ export interface AnalysisConfig {
 }
 
 /**
+ * Who sorts a memory import with AI, and everything it runs with — a chat's
+ * model settings; see `Settings.lastMemoryTriage`.
+ */
+export interface MemoryTriageConfig {
+  agent: CliKind;
+  /** The profile (config directory), or null for the CLI's own. */
+  configDir: string | null;
+  model: string | null;
+  effort: string | null;
+  contextWindow: string | null;
+  modelParameters: Record<string, string>;
+}
+
+/**
  * One place encrypted share links are uploaded to, reached through the user's
  * own CLI and login (`gcloud`, `aws`, or a program of their own as argv).
  *
@@ -441,6 +455,11 @@ export interface Settings {
    * composer's setup).
    */
   lastAnalysisConfig: AnalysisConfig | null;
+  /**
+   * The memory import's "Sort with AI" last choice, so the next sort opens on
+   * it; null until one has been made.
+   */
+  lastMemoryTriage: MemoryTriageConfig | null;
   /**
    * The OTHER model settings for the next chat on each CLI, as
    * `{parameterId: value}` — `{optimize_for: 'balanced'}`.
@@ -741,6 +760,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastContextWindows: {},
   lastAutoCompactPercent: null,
   lastAnalysisConfig: null,
+  lastMemoryTriage: null,
   lastModelParameters: {},
   cliPaths: {},
   checkForUpdates: true,

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import type { MemoryTriageConfig } from '../../shared/contracts';
 import type {
   MemoriesApi,
   MemoryImportRow,
@@ -11,7 +12,6 @@ import type {
 } from '../components/memory-import-dialog';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { describeDaemonError, MEMORY_TRIAGE_TIMEOUT_MS } from '../daemon-api';
-import type { MemoryTriageChoice } from './memory-triage-settings';
 
 /** TWIN: `MEMORY_TRIAGE_NOTES_MAX` in `apps/daemon/src/v1/memory/memory.types.ts`. */
 export const TRIAGE_BATCH = 100;
@@ -26,7 +26,7 @@ type TriageClient = Pick<MemoriesApi, 'triageMemoryImport'>;
  */
 export function useMemoryTriage(
   api: TriageClient | null,
-  choice: MemoryTriageChoice | null,
+  choice: MemoryTriageConfig | null,
 ): MemoryImportTriage {
   const [verdicts, setVerdicts] = useState<
     ReadonlyMap<string, MemoryImportVerdict>
@@ -51,7 +51,7 @@ export function useMemoryTriage(
         return;
       }
       const settings = {
-        agentKind: choice.agentKind,
+        agentKind: choice.agent,
         ...(choice.model === null ? {} : { model: choice.model }),
         ...(choice.effort === null ? {} : { effort: choice.effort }),
         ...(choice.contextWindow === null

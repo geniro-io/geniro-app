@@ -129,6 +129,29 @@ describe('readSettings', () => {
     expect(readSettings().lastAnalysisConfig?.approval).toBe('ask');
   });
 
+  it('a memory sort’s choice survives a read, and a malformed one costs only that key', () => {
+    const choice = {
+      agent: 'codex',
+      configDir: null,
+      model: 'gpt-5.4',
+      effort: 'high',
+      contextWindow: '272k',
+      modelParameters: { fast: 'on' },
+    };
+    writeRaw({ lastMemoryTriage: choice });
+
+    expect(readSettings().lastMemoryTriage).toEqual(choice);
+
+    writeRaw({
+      lastMemoryTriage: { ...choice, agent: 'gemini' },
+      onboardingComplete: true,
+    });
+
+    const settings = readSettings();
+    expect(settings.lastMemoryTriage).toBeNull();
+    expect(settings.onboardingComplete).toBe(true);
+  });
+
   it('keeps a run’s CLI for an hour by default, and a stored window survives a read', () => {
     expect(readSettings().keptSessionIdleMinutes).toBe(60);
 

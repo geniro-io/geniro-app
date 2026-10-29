@@ -17,7 +17,15 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import { tempDir } from '../../__tests__/temp-dir';
@@ -334,6 +342,10 @@ describe('ClaudeAdapter', () => {
   });
 
   it('switches the CLI’s own auto memory off only for a run that switches native memory off', () => {
+    vi.stubEnv(CLAUDE_DISABLE_AUTO_MEMORY_ENV, undefined);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const off = fakeSpawn();
     new ClaudeAdapter({ spawn: off.spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj' },

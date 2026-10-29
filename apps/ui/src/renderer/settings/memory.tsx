@@ -4,6 +4,7 @@ import {
   CLI_KINDS,
   DEFAULT_MEMORY,
   type MemorySettings,
+  type MemoryTriageConfig,
   type Settings as AppSettings,
 } from '../../shared/contracts';
 import {
@@ -43,7 +44,6 @@ import {
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
 import {
-  type MemoryTriageChoice,
   MemoryTriageSettings,
   triageChoiceFor,
 } from './memory-triage-settings';
@@ -375,7 +375,7 @@ export function Memory({
   const [importError, setImportError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [triagePick, setTriagePick] = useState<MemoryTriageChoice | null>(null);
+  const [triagePick, setTriagePick] = useState<MemoryTriageConfig | null>(null);
   const [triageProfiles, setTriageProfiles] = useState<
     Pick<AppSettings, 'recentConfigDirs' | 'configProfiles'>
   >({ recentConfigDirs: {}, configProfiles: [] });
@@ -474,6 +474,13 @@ export function Memory({
         setMemory(before);
         setError(String(err));
       });
+  };
+
+  const pickTriage = (next: MemoryTriageConfig): void => {
+    setTriagePick(next);
+    void window.geniro
+      .updateSettings({ lastMemoryTriage: next })
+      .catch(() => undefined);
   };
 
   const loadMore = (): void => {
@@ -599,6 +606,7 @@ export function Memory({
           recentConfigDirs: settings.recentConfigDirs,
           configProfiles: settings.configProfiles,
         });
+        setTriagePick((current) => current ?? settings.lastMemoryTriage);
         return api.previewMemoryImport({
           memoryImportPreviewRequestDto: { profiles: found },
         });
@@ -1007,7 +1015,7 @@ export function Memory({
               <MemoryTriageSettings
                 agents={triageAgents}
                 value={triageChoice}
-                onChange={setTriagePick}
+                onChange={pickTriage}
                 agentsApi={agentsApi}
                 capabilities={capabilities}
                 capabilitiesLoading={capabilitiesLoading}

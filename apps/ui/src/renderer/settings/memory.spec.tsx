@@ -525,6 +525,48 @@ describe('Memory', () => {
         effort: 'high',
       },
     });
+    expect(writes.at(-1)).toEqual({
+      lastMemoryTriage: {
+        agent: 'codex',
+        model: 'gpt-5.4',
+        effort: 'high',
+        contextWindow: null,
+        modelParameters: {},
+        configDir: null,
+      },
+    });
+  });
+
+  it('opens the AI sort on the choice it last ran with', async () => {
+    stored = {
+      ...stored,
+      lastMemoryTriage: {
+        agent: 'codex',
+        model: 'gpt-5.4',
+        effort: 'high',
+        contextWindow: '272k',
+        modelParameters: {},
+        configDir: null,
+      },
+    };
+    const api = fakeApi();
+    api.previewMemoryImport.mockResolvedValue({
+      rows: [importableRow('k')],
+      sources: [],
+      triageAgents: ['claude', 'codex'],
+    });
+    await render({ api });
+    await press(button(container, 'Import…'));
+    await press(button(document.body, 'Sort 1 note'));
+
+    expect(api.triageMemoryImport.mock.calls[0]![0]).toMatchObject({
+      memoryImportTriageRequestDto: {
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        effort: 'high',
+        contextWindow: '272k',
+      },
+    });
   });
 
   it('keeps what earlier batches imported when a later one fails', async () => {

@@ -15,6 +15,7 @@ import {
   useTransformComponent,
 } from 'react-zoom-pan-pinch';
 
+import { useLatestCallback } from '../use-latest-callback';
 import { Button } from './button';
 import { Dialog } from './dialog';
 import { cn } from './utils';
@@ -346,7 +347,7 @@ function useFullscreen(ref: React.RefObject<HTMLElement | null>): {
     document.addEventListener('fullscreenchange', sync);
     return () => document.removeEventListener('fullscreenchange', sync);
   }, [ref]);
-  const toggle = React.useCallback(() => {
+  const toggle = useLatestCallback(() => {
     const element = ref.current;
     if (element === null) {
       return;

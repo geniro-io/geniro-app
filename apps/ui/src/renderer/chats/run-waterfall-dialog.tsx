@@ -1,5 +1,5 @@
 import { HelpCircle, Route } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -17,6 +17,7 @@ import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { usePersistedFlag } from '../components/use-persisted-flag';
 import {
   AXIS,
@@ -250,7 +251,10 @@ export function RunWaterfallDialog({
     return to - from < 1 ? full : { from, to };
   }, [zoom, full]);
   const zoomed = view.from > full.from || view.to < full.to;
-  const zoomTo = useCallback((window: ClockWindow) => setZoom(window), []);
+  const zoomTo = useLatestCallback(
+    (window: ClockWindow) => setZoom(window),
+    [],
+  );
 
   // Escape lets go of a selection or a focus before it closes the dialog: the
   // dialog's own Escape handler stands down for a key already handled. On the

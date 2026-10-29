@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+
+import { useLatestCallback } from './use-latest-callback';
 
 /**
  * Whether the nav rail is collapsed, remembered across launches.
@@ -50,7 +52,7 @@ export function useSidebarCollapsed(): SidebarCollapsed {
     };
   }, []);
 
-  const toggle = useCallback((): void => {
+  const toggle = useLatestCallback((): void => {
     setCollapsed((prev) => {
       const next = !prev;
       // Fire-and-forget: the rail has already moved, and a settings write that

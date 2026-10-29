@@ -1,4 +1,6 @@
-import { useCallback, useRef } from 'react';
+import { useRef } from 'react';
+
+import { useLatestCallback } from '../components/use-latest-callback';
 
 /** One chat's context figures, as the meter draws them. */
 export interface ContextReading {
@@ -52,7 +54,7 @@ export function useContextReadings(): {
 } {
   const readings = useRef(new Map<string, ContextReading>());
 
-  const remember = useCallback(
+  const remember = useLatestCallback(
     (runId: string, reading: ContextReading | null): void => {
       // A null is "nothing measured right now", which is exactly the state this
       // exists to paper over — so it never OVERWRITES a reading. The entry is
@@ -65,13 +67,13 @@ export function useContextReadings(): {
     [],
   );
 
-  const recall = useCallback(
+  const recall = useLatestCallback(
     (runId: string | null): ContextReading | null =>
       runId === null ? null : (readings.current.get(runId) ?? null),
     [],
   );
 
-  const forget = useCallback((runId: string): void => {
+  const forget = useLatestCallback((runId: string): void => {
     readings.current.delete(runId);
   }, []);
 

@@ -1,5 +1,5 @@
 import { Plus, Tag } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
   CliDetection,
@@ -13,6 +13,7 @@ import type { WaitState } from '../chats/waiting';
 import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
 import { Button } from '../components/ui/button';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { createDaemonApis, type DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { AutopilotControl, isBreakerOpen } from './autopilot-control';
@@ -90,7 +91,7 @@ export function Tasks({
   useEffect(() => {
     setVisibleCountByStatus({});
   }, [board.selectedProjectId]);
-  const showTaskAt = useCallback((status: string, index: number) => {
+  const showTaskAt = useLatestCallback((status: string, index: number) => {
     setVisibleCountByStatus((current) => ({
       ...current,
       [status]: Math.max(
@@ -233,7 +234,7 @@ export function Tasks({
     node?.focus();
   }, [board.tasks, focusNonce]);
 
-  const placeKeyboardTask = useCallback(
+  const placeKeyboardTask = useLatestCallback(
     (taskId: string, status: string, before: string | null) => {
       const moveId = ++keyboardMoveId.current;
       refocusTaskId.current = taskId;
@@ -254,7 +255,7 @@ export function Tasks({
     [board.placeTask],
   );
 
-  const onCardKeyDown = useCallback(
+  const onCardKeyDown = useLatestCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>, taskId: string) => {
       // Alt rather than a bare arrow: the cards are buttons in a scrolling
       // pane, and a bare arrow has to stay available for moving THROUGH them.
@@ -359,7 +360,7 @@ export function Tasks({
    * (apps/daemon/src/v1/tasks/dao/label-instruction.dao.ts), which decides
    * what actually attaches; a change there is mirrored here.
    */
-  const labelsFor = useCallback(
+  const labelsFor = useLatestCallback(
     (scope: string | null): string[] =>
       [
         ...new Set([
@@ -412,7 +413,7 @@ export function Tasks({
   );
   // Read off the card's THREAD, so it holds after the run settles: an unread
   // reply on a card in review is exactly what the mark is for.
-  const waitOf = useCallback(
+  const waitOf = useLatestCallback(
     (task: TaskDto): WaitState | null =>
       task.runId === null ? null : (waitingByRun?.get(task.runId) ?? null),
     [waitingByRun],

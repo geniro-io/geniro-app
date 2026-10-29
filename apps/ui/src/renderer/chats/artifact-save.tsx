@@ -1,8 +1,9 @@
 import { Download } from 'lucide-react';
-import { useCallback, useContext, useState } from 'react';
+import { useContext, useState } from 'react';
 
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { artifactFileName, buildArtifactFile } from './artifact-export';
 import {
   ArtifactUrlContext,
@@ -36,7 +37,7 @@ export function useArtifactSaver(): ArtifactSaver {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const save = useCallback(
+  const save = useLatestCallback(
     (artifact: PublishedArtifact) => {
       if (urlFor === null) {
         return;

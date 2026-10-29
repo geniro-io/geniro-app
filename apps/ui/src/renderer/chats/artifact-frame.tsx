@@ -1,7 +1,8 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 
 import { EXTERNAL_LINK_SCHEMES } from '../../shared/link-schemes';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { useThemeAppearance } from '../theme/apply-theme';
 import { themeVars } from './artifact-theme';
 import {
@@ -95,7 +96,7 @@ export function ArtifactFrame({
   // without this an artifact stays in the palette it was opened under.
   const appearance = useThemeAppearance();
 
-  const postTheme = useCallback(() => {
+  const postTheme = useLatestCallback(() => {
     frame.current?.contentWindow?.postMessage(
       { source: HOST_SOURCE, type: 'theme', vars: themeVars() },
       // The frame is an opaque origin, which has no origin string to target.

@@ -1,12 +1,5 @@
 import { Check, ChevronRight } from 'lucide-react';
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { DaemonHandle } from '../../shared/contracts';
 import {
@@ -60,6 +53,7 @@ import { Stepper } from '../components/ui/stepper';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { useDebouncedPersist } from '../components/use-debounced-persist';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis, daemonErrorDetail } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
@@ -457,7 +451,7 @@ export function Settings({
     };
   }, [apis]);
 
-  const deleteProject = useCallback(
+  const deleteProject = useLatestCallback(
     (projectId: string) => {
       if (!apis) {
         return;
@@ -482,7 +476,7 @@ export function Settings({
     [apis],
   );
 
-  const createProject = useCallback(
+  const createProject = useLatestCallback(
     (input: CreateProjectDto) => {
       if (!apis) {
         return;
@@ -628,7 +622,7 @@ export function Settings({
     });
   }, [clis]);
 
-  const flashSaved = useCallback((): void => {
+  const flashSaved = useLatestCallback((): void => {
     if (!mountedRef.current) {
       return;
     }
@@ -639,7 +633,7 @@ export function Settings({
     flashTimer.current = setTimeout(() => setSavedFlash(false), 1500);
   }, []);
 
-  const persist = useCallback(
+  const persist = useLatestCallback(
     async (patch: Partial<SettingsShape>): Promise<void> => {
       const domain =
         patch.cliPaths !== undefined
@@ -680,7 +674,7 @@ export function Settings({
    * action settings.json does not have — which the user would find out about
    * on the next launch.
    */
-  const persistFastActions = useCallback(
+  const persistFastActions = useLatestCallback(
     (next: FastAction[], previous: FastAction[]): void => {
       setFastActions(next);
       setError(null);
@@ -711,7 +705,7 @@ export function Settings({
    * value — three arguments to save four lines, at the cost of a call site
    * where the key being written is no longer visible.
    */
-  const persistConfigProfiles = useCallback(
+  const persistConfigProfiles = useLatestCallback(
     (next: ConfigProfile[], previous: ConfigProfile[]): void => {
       setConfigProfiles(next);
       setError(null);
@@ -732,7 +726,7 @@ export function Settings({
    * random rather than name-derived — the name is the field most likely to
    * change, and two actions may share one.
    */
-  const saveFastAction = useCallback(
+  const saveFastAction = useLatestCallback(
     (draft: FastActionDraft, id: string | null): void => {
       persistFastActions(
         id === null
@@ -744,7 +738,7 @@ export function Settings({
     [fastActions, persistFastActions],
   );
 
-  const deleteFastAction = useCallback(
+  const deleteFastAction = useLatestCallback(
     (id: string): void => {
       persistFastActions(
         fastActions.filter((a) => a.id !== id),
@@ -764,7 +758,7 @@ export function Settings({
    * the two into one feature is what deleted the configurations once, taking
    * the user's saved setups with them.
    */
-  const persistRunConfigs = useCallback(
+  const persistRunConfigs = useLatestCallback(
     (next: RunConfig[], previous: RunConfig[]): void => {
       setRunConfigs(next);
       setError(null);
@@ -779,7 +773,7 @@ export function Settings({
     [flashSaved],
   );
 
-  const saveRunConfig = useCallback(
+  const saveRunConfig = useLatestCallback(
     (draft: RunConfigDraft, id: string | null): void => {
       persistRunConfigs(
         id === null
@@ -791,7 +785,7 @@ export function Settings({
     [runConfigs, persistRunConfigs],
   );
 
-  const deleteRunConfig = useCallback(
+  const deleteRunConfig = useLatestCallback(
     (id: string): void => {
       persistRunConfigs(
         runConfigs.filter((c) => c.id !== id),
@@ -801,13 +795,13 @@ export function Settings({
     [runConfigs, persistRunConfigs],
   );
 
-  const reorderRunConfigs = useCallback(
+  const reorderRunConfigs = useLatestCallback(
     (next: RunConfig[]): void => persistRunConfigs(next, runConfigs),
     [runConfigs, persistRunConfigs],
   );
 
   /** Debounced auto-save of the binary-path overrides (reads the latest ref). */
-  const schedulePathPersist = useCallback((): void => {
+  const schedulePathPersist = useLatestCallback((): void => {
     if (pathTimer.current) {
       clearTimeout(pathTimer.current);
     }
@@ -832,7 +826,7 @@ export function Settings({
     (value: string) => persist({ customInstructions: value }),
     savableInstructions,
   );
-  const onCustomInstructionsChange = useCallback(
+  const onCustomInstructionsChange = useLatestCallback(
     (next: string): void => {
       setCustomInstructions(next);
       instructions.schedule(next);
@@ -845,7 +839,7 @@ export function Settings({
     (value: string) => persist({ replyLanguage: value.trim() }),
     isReplyLanguage,
   );
-  const onReplyLanguageChange = useCallback(
+  const onReplyLanguageChange = useLatestCallback(
     (next: string): void => {
       setReplyLanguage(next);
       language.schedule(next);
@@ -863,32 +857,33 @@ export function Settings({
    * (a chat keeps what it started with), and an edit the user is halfway
    * through must not silently destroy it.
    */
-  const forgetExistingInstructions = useCallback(async (): Promise<void> => {
-    if (!apis) {
-      return;
-    }
-    setForgetting(true);
-    setForgetResult(null);
-    setError(null);
-    try {
-      const { cleared } = await apis.chats.forgetCustomInstructions();
-      setForgetResult(
-        cleared === 0
-          ? 'No existing chat was carrying custom instructions.'
-          : `Removed from ${cleared} existing ${cleared === 1 ? 'run' : 'runs'}.`,
-      );
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setForgetting(false);
-    }
-  }, [apis]);
+  const forgetExistingInstructions =
+    useLatestCallback(async (): Promise<void> => {
+      if (!apis) {
+        return;
+      }
+      setForgetting(true);
+      setForgetResult(null);
+      setError(null);
+      try {
+        const { cleared } = await apis.chats.forgetCustomInstructions();
+        setForgetResult(
+          cleared === 0
+            ? 'No existing chat was carrying custom instructions.'
+            : `Removed from ${cleared} existing ${cleared === 1 ? 'run' : 'runs'}.`,
+        );
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setForgetting(false);
+      }
+    }, [apis]);
 
-  const toggle = useCallback((kind: CliKind): void => {
+  const toggle = useLatestCallback((kind: CliKind): void => {
     setOpen((prev) => ({ ...prev, [kind]: !prev[kind] }));
   }, []);
 
-  const refreshClis = useCallback(async (): Promise<void> => {
+  const refreshClis = useLatestCallback(async (): Promise<void> => {
     setClis(null);
     // The press asks for a fresh reading, and a kept outcome would sit on top
     // of it: `Updated to 2.1.255` outranks the probe in the card, so leaving it
@@ -907,7 +902,7 @@ export function Settings({
    * against: the outcome outranks the check, so a fresh `Up to date` cannot
    * erase the sentence naming what just happened.
    */
-  const updateCli = useCallback(async (kind: CliKind): Promise<void> => {
+  const updateCli = useLatestCallback(async (kind: CliKind): Promise<void> => {
     setUpdatingCli(kind);
     try {
       const result = await window.geniro.updateCli(kind);
@@ -952,7 +947,7 @@ export function Settings({
     return () => window.removeEventListener('focus', onFocus);
   }, []);
 
-  const browse = useCallback(
+  const browse = useLatestCallback(
     async (kind: CliKind): Promise<void> => {
       const chosen = await window.geniro.pickAgentBinary();
       if (chosen) {
@@ -1026,7 +1021,7 @@ export function Settings({
       new Map((capabilities?.approvals ?? []).map((row) => [row.agent, row])),
     [capabilities],
   );
-  const approvalCapabilityFor = useCallback(
+  const approvalCapabilityFor = useLatestCallback(
     (kind: CliKind): AgentApprovalCapability | undefined =>
       approvalCapabilityByAgent.get(kind),
     [approvalCapabilityByAgent],
@@ -1059,7 +1054,7 @@ export function Settings({
    * credentials live in the directory, so a lapsed second account could not be
    * repaired from this app at all. The Configurations rows below pass theirs.
    */
-  const signInToCli = useCallback(
+  const signInToCli = useLatestCallback(
     async (kind: CliKind, configDir?: string): Promise<void> => {
       await login.start(kind, configDir ?? null);
     },
@@ -1075,7 +1070,7 @@ export function Settings({
    * which is the answer they actually wanted — and it comes from re-probing the
    * CLI rather than from trusting the exit code.
    */
-  const signOutFromCli = useCallback(
+  const signOutFromCli = useLatestCallback(
     async (kind: CliKind, configDir?: string): Promise<void> => {
       if (!apis) {
         return;
@@ -1099,7 +1094,7 @@ export function Settings({
     [apis, refreshClis],
   );
 
-  const onToggleUpdates = useCallback(
+  const onToggleUpdates = useLatestCallback(
     (next: boolean): void => {
       checkForUpdatesDirtyRef.current = true;
       setCheckForUpdates(next);
@@ -1108,7 +1103,7 @@ export function Settings({
     [persist],
   );
 
-  const onToggleNotifications = useCallback(
+  const onToggleNotifications = useLatestCallback(
     (next: boolean): void => {
       notificationsDirtyRef.current = true;
       setNotificationsEnabled(next);
@@ -1130,7 +1125,7 @@ export function Settings({
    * chat screen performs the sweep on its own schedule, so the first one lands
    * within the minute either way.
    */
-  const onArchiveRetentionChange = useCallback(
+  const onArchiveRetentionChange = useLatestCallback(
     (next: string): void => {
       const days = next === KEEP_ARCHIVE_FOR_EVER ? null : Number(next);
       if (days !== null && !Number.isInteger(days)) {
@@ -1143,7 +1138,7 @@ export function Settings({
     [persist],
   );
 
-  const onHistoryPageSizeChange = useCallback(
+  const onHistoryPageSizeChange = useLatestCallback(
     (next: string): void => {
       const size = HISTORY_PAGE_SIZES.find((each) => String(each) === next);
       if (size === undefined) {
@@ -1156,7 +1151,7 @@ export function Settings({
     [persist],
   );
 
-  const onKeptSessionIdleChange = useCallback(
+  const onKeptSessionIdleChange = useLatestCallback(
     (minutes: number): void => {
       keptSessionIdleDirtyRef.current = true;
       setKeptSessionIdleMinutes(minutes);
@@ -1165,7 +1160,7 @@ export function Settings({
     [persist],
   );
 
-  const onThemeChange = useCallback(
+  const onThemeChange = useLatestCallback(
     (next: ThemePreference): void => {
       const previous = theme;
       themeDirtyRef.current = true;
@@ -1194,7 +1189,7 @@ export function Settings({
     [flashSaved, theme],
   );
 
-  const onToggleCollapseToolSteps = useCallback(
+  const onToggleCollapseToolSteps = useLatestCallback(
     (next: boolean): void => {
       setCollapseToolSteps(next);
       // Nothing to restart: the transcript re-reads this whenever the chat tab
@@ -1214,7 +1209,7 @@ export function Settings({
    * nothing was reported at all, which is not a failure and must not be
    * announced as one — the banner may be sitting in Notification Centre.
    */
-  const onTestNotification = useCallback((): void => {
+  const onTestNotification = useLatestCallback((): void => {
     setNotificationTest('testing');
     void window.geniro
       .testNotification()
@@ -1235,7 +1230,7 @@ export function Settings({
       });
   }, []);
 
-  const onToggleInspect = useCallback(
+  const onToggleInspect = useLatestCallback(
     (next: boolean): void => {
       daemonInspectDirtyRef.current = true;
       // Flipping the switch always writes an EXPLICIT boolean, never back to
@@ -1256,7 +1251,7 @@ export function Settings({
    * (or, for one that rides the daemon's own env, applied the next time the
    * daemon restarts), so this reaches only the NEXT run.
    */
-  const onToggleAgentOption = useCallback(
+  const onToggleAgentOption = useLatestCallback(
     (kind: CliKind, id: string, next: boolean): void => {
       setAgentOptions((prev) => {
         const updated: Partial<Record<CliKind, Record<string, boolean>>> = {
@@ -1407,7 +1402,7 @@ export function Settings({
               approvalCapabilityFor={approvalCapabilityFor}
               // Passed straight through: `configDirCapabilityFrom` is a plain
               // call rather than a hook, so it builds a fresh object every
-              // render and a `useCallback` over it would memoize nothing.
+              // render and a `useLatestCallback` over it would memoize nothing.
               configDirReasonFor={configDirCapability.unavailableReasonFor}
               // Settings has no composer to read, so a new configuration starts
               // from the blank draft rather than from chips that are not on

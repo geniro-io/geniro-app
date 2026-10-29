@@ -13,6 +13,7 @@ import { ExpandableTextarea } from '../components/expandable-textarea';
 import { SettingsList, SettingsPanel } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { useLatestCallback } from '../components/use-latest-callback';
 
 /** Everything about an action except its identity. */
 export type FastActionDraft = Omit<FastAction, 'id'>;
@@ -58,7 +59,7 @@ export function FastActionsPane({
   );
   const [error, setError] = React.useState<string | null>(null);
 
-  const commit = React.useCallback((): void => {
+  const commit = useLatestCallback((): void => {
     if (!editing) {
       return;
     }

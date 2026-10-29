@@ -283,7 +283,7 @@ export function ChatChangesDialog({
     if (open) {
       onRefresh();
     }
-    // `onRefresh` is in the deps and belongs there: it is a `useCallback` keyed
+    // `onRefresh` is in the deps and belongs there: it is a `useLatestCallback` keyed
     // on the run's folder and starting commit, so within one open thread its
     // identity is stable and this fires once — and if the thread DID change
     // underneath an open dialog, re-reading is the correct answer rather than a

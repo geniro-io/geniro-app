@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
+import { useLatestCallback } from './components/use-latest-callback';
 import type { DaemonClient } from './daemon-client';
 
 /**
@@ -43,8 +44,8 @@ export function useLiveDaemonRead<S extends object, T>(
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
-  const reload = useCallback(() => setNonce((value) => value + 1), []);
-  const dismiss = useCallback(() => setError(null), []);
+  const reload = useLatestCallback(() => setNonce((value) => value + 1), []);
+  const dismiss = useLatestCallback(() => setError(null), []);
 
   const [shownKey, setShownKey] = useState(key);
   if (shownKey !== key) {

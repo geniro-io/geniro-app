@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { randomId } from '../random-id';
+import { useLatestCallback } from './use-latest-callback';
 
 /** Marks, in `history.state`, the page's own entry (`PAGE`) and the one under it (`UNDER`). */
 const PAGE = 'geniroPhonePage';
@@ -113,7 +114,7 @@ export function usePhoneBackEntry(
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  return useCallback((): void => {
+  return useLatestCallback((): void => {
     if (pushedRef.current) {
       pushedRef.current = false;
       poppingRef.current = true;

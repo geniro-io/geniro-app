@@ -28,6 +28,7 @@ import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonApis } from '../daemon-api';
 import { ApprovalModeSelect } from './approval-mode-select';
 import { BranchValueSelect } from './branch-select';
@@ -197,7 +198,7 @@ export function RunConfigPicker({
 
   // Seeded from the composer so "new configuration" is a naming step rather
   // than six pickers.
-  const freshDraft = React.useCallback(
+  const freshDraft = useLatestCallback(
     (): RunConfigDraft => captureRef.current('') ?? EMPTY_DRAFT,
     [],
   );
@@ -215,12 +216,12 @@ export function RunConfigPicker({
     }
   }, [open, openTo, freshDraft]);
 
-  const startNew = React.useCallback((): void => {
+  const startNew = useLatestCallback((): void => {
     setError(null);
     setEditing({ id: null, draft: freshDraft() });
   }, [freshDraft]);
 
-  const commit = React.useCallback((): void => {
+  const commit = useLatestCallback((): void => {
     if (!editing) {
       return;
     }
@@ -718,12 +719,12 @@ function RunConfigEditor({
   // Branches of the folder the DRAFT points at, not the composer's.
   const git = useGitInfo(draft.cwd === '' ? null : draft.cwd);
 
-  const set = React.useCallback(
+  const set = useLatestCallback(
     (patch: Partial<RunConfigDraft>): void => onChange({ ...draft, ...patch }),
     [draft, onChange],
   );
 
-  const browseFolder = React.useCallback((): void => {
+  const browseFolder = useLatestCallback((): void => {
     void window.geniro.pickProjectFolder().then((chosen) => {
       if (chosen) {
         // A new folder is a new repository, so a branch recorded against the
@@ -733,7 +734,7 @@ function RunConfigEditor({
     });
   }, [draft, onChange]);
 
-  const browseConfigDir = React.useCallback((): void => {
+  const browseConfigDir = useLatestCallback((): void => {
     void window.geniro.pickProjectFolder().then((chosen) => {
       if (chosen) {
         onChange({ ...draft, configDir: chosen });

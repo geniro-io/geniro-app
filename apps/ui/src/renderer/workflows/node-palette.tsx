@@ -1,5 +1,5 @@
 import { Bot, ChevronLeft, ChevronRight, ScrollText, Zap } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 
 import type { CliKind } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
@@ -13,6 +13,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { usePersistedFlag } from '../components/use-persisted-flag';
 import type { NodeKind } from './node-schema';
@@ -390,7 +391,7 @@ export function NodePalette({
   });
   const [infoItem, setInfoItem] = useState<PaletteItem | null>(null);
 
-  const closeInfo = useCallback(() => setInfoItem(null), []);
+  const closeInfo = useLatestCallback(() => setInfoItem(null), []);
 
   const infoMeta = infoItem ? metaOf(infoItem, agents) : null;
   const infoRules = infoItem ? NODE_CONNECTION_RULES[infoItem.kind] : null;

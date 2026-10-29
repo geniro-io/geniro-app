@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { GitChange, GitChanges } from '../../shared/contracts';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { type ChangesSummary, summarizeChanges } from './changes-tree';
 
 /**
@@ -105,7 +106,7 @@ export function useChatChanges(
   const generation = useRef(0);
   const lastReadAt = useRef(0);
 
-  const refresh = useCallback(
+  const refresh = useLatestCallback(
     (force = false): void => {
       if (cwd === null || startSha === null) {
         return;

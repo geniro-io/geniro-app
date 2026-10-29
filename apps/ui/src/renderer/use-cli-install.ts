@@ -1,10 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 
 import type {
   CliDetection,
   CliInstallResult,
   CliKind,
 } from '../shared/contracts';
+import { useLatestCallback } from './components/use-latest-callback';
 import { type CliLoginController, isLoginOver } from './use-cli-login';
 
 /**
@@ -66,7 +67,7 @@ export function useCliInstall(
   const installedRef = useRef(onInstalled);
   installedRef.current = onInstalled;
 
-  const install = useCallback(async (kind: CliKind): Promise<void> => {
+  const install = useLatestCallback(async (kind: CliKind): Promise<void> => {
     setInstalling((prev) => new Set(prev).add(kind));
     // A retry clears the failure it is retrying, so the card does not go on
     // saying why the LAST attempt failed under a spinner for this one.

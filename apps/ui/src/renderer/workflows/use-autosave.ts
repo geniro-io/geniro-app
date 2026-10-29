@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+import { useLatestCallback } from '../components/use-latest-callback';
 
 /**
  * Debounced autosave for the workflow builder, and the save state its status
@@ -78,29 +80,32 @@ export function useAutosave({
   latest.current = { enabled, snapshot, savedSnapshot, save };
   const dirty = savedSnapshot !== null && snapshot !== savedSnapshot;
 
-  const write = useCallback(async (target: string): Promise<WriteResult> => {
-    const job = (async (): Promise<WriteResult> => {
-      setState('saving');
+  const write = useLatestCallback(
+    async (target: string): Promise<WriteResult> => {
+      const job = (async (): Promise<WriteResult> => {
+        setState('saving');
+        try {
+          const ok = await latest.current.save();
+          setState(ok ? 'saved' : 'failed');
+          return { snapshot: target, ok };
+        } catch {
+          // `save` owns error reporting; this only keeps the indicator from
+          // claiming "Saved" when the write never landed.
+          setState('failed');
+          return { snapshot: target, ok: false };
+        }
+      })();
+      inFlight.current = job;
       try {
-        const ok = await latest.current.save();
-        setState(ok ? 'saved' : 'failed');
-        return { snapshot: target, ok };
-      } catch {
-        // `save` owns error reporting; this only keeps the indicator from
-        // claiming "Saved" when the write never landed.
-        setState('failed');
-        return { snapshot: target, ok: false };
+        return await job;
+      } finally {
+        if (inFlight.current === job) {
+          inFlight.current = null;
+        }
       }
-    })();
-    inFlight.current = job;
-    try {
-      return await job;
-    } finally {
-      if (inFlight.current === job) {
-        inFlight.current = null;
-      }
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!enabled || !dirty) {
@@ -116,7 +121,7 @@ export function useAutosave({
     return () => window.clearTimeout(timer);
   }, [enabled, dirty, snapshot, savedSnapshot, delayMs, write]);
 
-  const flush = useCallback(async (): Promise<boolean> => {
+  const flush = useLatestCallback(async (): Promise<boolean> => {
     const target = latest.current.snapshot;
     let baseline = latest.current.savedSnapshot;
     const pending = inFlight.current;

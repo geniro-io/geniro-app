@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   CLI_KINDS,
@@ -31,6 +31,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
+import { useLatestCallback } from '../components/use-latest-callback';
 import {
   daemonErrorCode,
   daemonErrorDetail,
@@ -356,7 +357,7 @@ export function Memory({
   const [importing, setImporting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  const projectName = useCallback(
+  const projectName = useLatestCallback(
     (projectId: string | null) =>
       projectId === null
         ? null
@@ -368,7 +369,7 @@ export function Memory({
   const cursorGeneration = useRef(0);
   const depth = useRef(0);
   const [loadingMore, setLoadingMore] = useState(false);
-  const read = useCallback(() => {
+  const read = useLatestCallback(() => {
     if (api === null) {
       return;
     }

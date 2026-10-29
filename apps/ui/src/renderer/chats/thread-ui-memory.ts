@@ -2,11 +2,12 @@ import {
   createContext,
   type Dispatch,
   type SetStateAction,
-  useCallback,
   useContext,
   useState,
   useSyncExternalStore,
 } from 'react';
+
+import { useLatestCallback } from '../components/use-latest-callback';
 
 /**
  * The thread whose UI state the components below are remembering — the open
@@ -198,7 +199,7 @@ export function useThreadOverride(
   const runId = useContext(ThreadUiMemoryContext);
   const [local, setLocal] = useState<boolean | null>(null);
   const scopedRun = key === undefined ? null : runId;
-  const subscribeToRun = useCallback(
+  const subscribeToRun = useLatestCallback(
     (notify: () => void) =>
       scopedRun === null ? noSubscription() : subscribe(scopedRun, notify),
     [scopedRun],
@@ -208,7 +209,7 @@ export function useThreadOverride(
       ? null
       : readThreadFlag(scopedRun, key),
   );
-  const set = useCallback(
+  const set = useLatestCallback(
     (value: boolean) => {
       if (scopedRun === null || key === undefined) {
         setLocal(value);
@@ -231,7 +232,7 @@ export function useThreadFlag(
 ): [boolean, Dispatch<SetStateAction<boolean>>] {
   const [override, setOverride] = useThreadOverride(key);
   const value = override ?? fallback;
-  const set = useCallback<Dispatch<SetStateAction<boolean>>>(
+  const set = useLatestCallback<Dispatch<SetStateAction<boolean>>>(
     (next) => setOverride(typeof next === 'function' ? next(value) : next),
     [setOverride, value],
   );
@@ -250,7 +251,7 @@ export function useThreadFlags(): {
 } {
   const runId = useContext(ThreadUiMemoryContext);
   const [local, setLocal] = useState<ReadonlyMap<string, boolean>>(new Map());
-  const subscribeToRun = useCallback(
+  const subscribeToRun = useLatestCallback(
     (notify: () => void) =>
       runId === null ? noSubscription() : subscribe(runId, notify),
     [runId],

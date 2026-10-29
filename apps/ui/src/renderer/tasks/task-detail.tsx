@@ -1,5 +1,5 @@
 import { Maximize2, MessagesSquare, PanelRight, Play, X } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 
 import type {
   CliDetection,
@@ -20,6 +20,7 @@ import { Input } from '../components/ui/input';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { usePersistedFlag } from '../components/use-persisted-flag';
 import type { DaemonApis } from '../daemon-api';
@@ -267,7 +268,7 @@ export function TaskDetail({
    * without a provider it says "no loader" over every picture the user just
    * pasted in.
    */
-  const loadImage = useCallback(
+  const loadImage = useLatestCallback(
     async (path: string): Promise<string> => {
       if (tasksApi === null) {
         throw new Error('not connected to the daemon');

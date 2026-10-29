@@ -14,14 +14,7 @@ import {
   Sparkles,
   Terminal as TerminalIcon,
 } from 'lucide-react';
-import {
-  Fragment,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
+import { Fragment, useContext, useEffect, useRef, useState } from 'react';
 
 import type { CliKind, PullRequestRefResult } from '../../shared/contracts';
 import {
@@ -48,6 +41,7 @@ import { Dialog } from '../components/ui/dialog';
 import { Popover } from '../components/ui/popover';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { useSecondTick } from '../components/use-second-tick';
 import {
   type AgentDisplay,
@@ -2151,7 +2145,7 @@ export function AgentsPanel({
 }): React.JSX.Element {
   // Stable per agent list, so the stages section's names are not recomputed
   // on every panel render.
-  const teamNoteAgentName = useCallback(
+  const teamNoteAgentName = useLatestCallback(
     (nodeId: string): string => agentNameOf(agents, nodeId),
     [agents],
   );

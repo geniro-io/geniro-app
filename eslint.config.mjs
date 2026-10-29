@@ -127,6 +127,12 @@ const config = defineConfig([
           message:
             'No hardcoded hex colours in the renderer — add/reuse a token in styles/global.css and reference it via a utility or var(--token).',
         },
+        {
+          selector:
+            "ImportDeclaration[source.value='react'] > ImportSpecifier[imported.name='useCallback']",
+          message:
+            'A kept useCallback function holds its whole render scope, and those scopes chain every earlier render into memory — use useLatestCallback from renderer/components/use-latest-callback.ts.',
+        },
       ],
       // The phone reaches the renderer over the LAN gateway's plain http,
       // which is not a secure context, so `crypto.randomUUID` does not exist
@@ -144,6 +150,12 @@ const config = defineConfig([
           property: 'clipboard',
           message:
             'navigator.clipboard is missing on the phone’s plain-http page — use writeClipboard() from renderer/clipboard.ts.',
+        },
+        {
+          object: 'React',
+          property: 'useCallback',
+          message:
+            'A kept useCallback function holds its whole render scope, and those scopes chain every earlier render into memory — use useLatestCallback from renderer/components/use-latest-callback.ts.',
         },
       ],
     },

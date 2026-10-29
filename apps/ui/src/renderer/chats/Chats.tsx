@@ -12,7 +12,6 @@ import {
   Zap,
 } from 'lucide-react';
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -70,6 +69,7 @@ import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { usePhoneBackEntry } from '../components/use-phone-back-entry';
 import {
@@ -1133,7 +1133,7 @@ export function Chats({
    * switch commits, since it reads what is still on screen. `null` is the
    * landing card, which has no run id to key its draft by.
    */
-  const swapDraft = useCallback(
+  const swapDraft = useLatestCallback(
     (from: string | null, to: string | null): void => {
       const text = inputRef.current;
       const images = attachmentsRef.current;
@@ -1162,7 +1162,7 @@ export function Chats({
    * Never over what was written since, the rule every send path follows: text
    * comes back only into an empty box, images only onto an empty stage.
    */
-  const restoreUnsent = useCallback(
+  const restoreUnsent = useLatestCallback(
     (runId: string, text: string, staged: StagedAttachment[]): void => {
       const restored = { text, staged };
       if (composerOwnerRef.current === runId) {
@@ -1379,7 +1379,7 @@ export function Chats({
   }, [workflowsLoaded, workflowSlug, workflows]);
 
   /** Composer target change — remembered as the default for next time. */
-  const changeTarget = useCallback((value: string): void => {
+  const changeTarget = useLatestCallback((value: string): void => {
     setTarget(value);
     void window.geniro.updateSettings({ lastChatTarget: value });
   }, []);
@@ -1391,13 +1391,16 @@ export function Chats({
    * setting, and changing an existing run's mode is not a statement about what
    * the next one should start as.
    */
-  const changeApprovalMode = useCallback((value: ChatApprovalMode): void => {
-    setApprovalMode(value);
-    void window.geniro.updateSettings({ lastApprovalMode: value });
-  }, []);
+  const changeApprovalMode = useLatestCallback(
+    (value: ChatApprovalMode): void => {
+      setApprovalMode(value);
+      void window.geniro.updateSettings({ lastApprovalMode: value });
+    },
+    [],
+  );
 
   /** New-run model for one CLI — remembered per CLI, like the mode above. */
-  const changeModel = useCallback(
+  const changeModel = useLatestCallback(
     (kind: CliKind, model: string | null): void => {
       setModels((current) => {
         const next = { ...current };
@@ -1446,7 +1449,7 @@ export function Chats({
   );
 
   /** New-run reasoning effort for one CLI — remembered per CLI, like the model. */
-  const changeEffort = useCallback(
+  const changeEffort = useLatestCallback(
     (kind: CliKind, effort: string | null): void => {
       setEfforts((current) => {
         const next = { ...current };
@@ -1464,10 +1467,13 @@ export function Chats({
   );
 
   /** New-run auto-compact threshold — one for every CLI, remembered. */
-  const changeAutoCompact = useCallback((percent: number | null): void => {
-    setAutoCompactPercent(percent);
-    void window.geniro.updateSettings({ lastAutoCompactPercent: percent });
-  }, []);
+  const changeAutoCompact = useLatestCallback(
+    (percent: number | null): void => {
+      setAutoCompactPercent(percent);
+      void window.geniro.updateSettings({ lastAutoCompactPercent: percent });
+    },
+    [],
+  );
 
   /**
    * New-run context-window size for one CLI — remembered per CLI, like the
@@ -1477,7 +1483,7 @@ export function Chats({
    * wants it on the next chat too, and a size the next model does not offer is
    * drawn as unavailable by the chip rather than sent.
    */
-  const changeContextWindow = useCallback(
+  const changeContextWindow = useLatestCallback(
     (kind: CliKind, contextWindow: string | null): void => {
       setContextWindows((current) => {
         const next = { ...current };
@@ -1501,7 +1507,7 @@ export function Chats({
    * chip press is — the row holds several, each its own control, and replacing
    * the map from one of them would drop the others.
    */
-  const changeModelParameter = useCallback(
+  const changeModelParameter = useLatestCallback(
     (kind: CliKind, parameterId: string, value: string | null): void => {
       setModelParameters((current) => {
         const forKind = { ...(current[kind] ?? {}) };
@@ -1546,7 +1552,7 @@ export function Chats({
   // memo equality). Its activate sibling lives below activateRun. The row owns
   // the edit state and its busy/error display; this only performs the write,
   // and REJECTS on failure so the row can keep the typed name on screen.
-  const handleRenameRun = useCallback(
+  const handleRenameRun = useLatestCallback(
     async (runId: string, title: string): Promise<void> => {
       const updated = await chatApi.renameRun({
         runId,
@@ -1573,7 +1579,7 @@ export function Chats({
   // Per run, the newest write sent: a slower, older reply landing after a newer
   // one must not put the older text back on the row.
   const notesWriteSeq = useRef(new Map<string, number>());
-  const handleSetRunNotes = useCallback(
+  const handleSetRunNotes = useLatestCallback(
     async (runId: string, notes: string): Promise<void> => {
       const seq = (notesWriteSeq.current.get(runId) ?? 0) + 1;
       notesWriteSeq.current.set(runId, seq);
@@ -1657,7 +1663,7 @@ export function Chats({
   const dragRef = useRef<{ kind: 'group' | 'run'; id: string } | null>(null);
   dragRef.current = drag;
 
-  const refreshGroups = useCallback((): void => {
+  const refreshGroups = useLatestCallback((): void => {
     void groupApi
       .listRunGroups()
       .then(setGroups)
@@ -1672,12 +1678,12 @@ export function Chats({
    * daemon is told once, at the end (`handleDragEnd`), because the intermediate
    * arrangements are not decisions.
    */
-  const handleGroupDragStart = useCallback(
+  const handleGroupDragStart = useLatestCallback(
     (groupId: string): void => setDrag({ kind: 'group', id: groupId }),
     [],
   );
 
-  const handleRunDragStart = useCallback(
+  const handleRunDragStart = useLatestCallback(
     (runId: string): void => setDrag({ kind: 'run', id: runId }),
     [],
   );
@@ -1689,7 +1695,7 @@ export function Chats({
    * rearranges the list under the cursor, a CHAT lights the header up as the
    * place it would land.
    */
-  const handleGroupDragOver = useCallback((overGroupId: string): void => {
+  const handleGroupDragOver = useLatestCallback((overGroupId: string): void => {
     const dragging = dragRef.current;
     if (dragging === null) {
       return;
@@ -1718,11 +1724,14 @@ export function Chats({
   }, []);
 
   /** The pointer is over a SECTION — a chat row, or the loose list's label. */
-  const handleSectionDragOver = useCallback((groupId: string | null): void => {
-    if (dragRef.current?.kind === 'run') {
-      setDropSectionId(groupId);
-    }
-  }, []);
+  const handleSectionDragOver = useLatestCallback(
+    (groupId: string | null): void => {
+      if (dragRef.current?.kind === 'run') {
+        setDropSectionId(groupId);
+      }
+    },
+    [],
+  );
 
   /**
    * The scope whose band a live reorder has actually MOVED, and `undefined`
@@ -1751,7 +1760,7 @@ export function Chats({
    * told once at `dragend`, because the arrangements the cursor passes through
    * are not decisions.
    */
-  const handleRunDragOver = useCallback((overRunId: string): void => {
+  const handleRunDragOver = useLatestCallback((overRunId: string): void => {
     const dragging = dragRef.current;
     if (dragging?.kind !== 'run' || dragging.id === overRunId) {
       return;
@@ -1797,28 +1806,31 @@ export function Chats({
   }, []);
 
   /** A chat was dropped into a section. A drop in its own section is a no-op. */
-  const handleDropInSection = useCallback((groupId: string | null): void => {
-    const dragging = dragRef.current;
-    // A GROUP drop is `dragend`'s to finish, so it must leave the drag standing.
-    // Every section accepts the drop (its `dragover` prevents the default for
-    // either gesture), and `drop` fires BEFORE `dragend`: clearing here
-    // re-rendered `dragRef` to null in between, `handleDragEnd` then read no
-    // group, and the arrangement the list had just been dragged into was never
-    // saved — the next rename, recolour or fold answered with the daemon's old
-    // positions and the rows jumped back.
-    if (dragging?.kind !== 'run') {
-      return;
-    }
-    setDropSectionId(undefined);
-    setDrag(null);
-    const run = runsRef.current.find((r) => r.id === dragging.id);
-    if (run === undefined || run.groupId === groupId) {
-      return;
-    }
-    handleSetRunGroupRef.current(dragging.id, groupId);
-  }, []);
+  const handleDropInSection = useLatestCallback(
+    (groupId: string | null): void => {
+      const dragging = dragRef.current;
+      // A GROUP drop is `dragend`'s to finish, so it must leave the drag standing.
+      // Every section accepts the drop (its `dragover` prevents the default for
+      // either gesture), and `drop` fires BEFORE `dragend`: clearing here
+      // re-rendered `dragRef` to null in between, `handleDragEnd` then read no
+      // group, and the arrangement the list had just been dragged into was never
+      // saved — the next rename, recolour or fold answered with the daemon's old
+      // positions and the rows jumped back.
+      if (dragging?.kind !== 'run') {
+        return;
+      }
+      setDropSectionId(undefined);
+      setDrag(null);
+      const run = runsRef.current.find((r) => r.id === dragging.id);
+      if (run === undefined || run.groupId === groupId) {
+        return;
+      }
+      handleSetRunGroupRef.current(dragging.id, groupId);
+    },
+    [],
+  );
 
-  const handleDragEnd = useCallback((): void => {
+  const handleDragEnd = useLatestCallback((): void => {
     const dragging = dragRef.current;
     setDrag(null);
     setDropSectionId(undefined);
@@ -1869,7 +1881,7 @@ export function Chats({
       .catch((err: unknown) => setError(String(err)));
   }, [groupApi, chatApi]);
 
-  const handleToggleGroup = useCallback(
+  const handleToggleGroup = useLatestCallback(
     (groupId: string, collapsed: boolean): void => {
       // Optimistic: folding is the one group action a user does repeatedly, and
       // waiting a round trip to see a chevron move reads as a dropped click.
@@ -1889,7 +1901,7 @@ export function Chats({
   );
 
   /** Rejects on failure, so the header keeps the typed name and shows why. */
-  const handleRenameGroup = useCallback(
+  const handleRenameGroup = useLatestCallback(
     async (groupId: string, name: string): Promise<void> => {
       const updated = await groupApi.updateRunGroup({
         groupId,
@@ -1902,7 +1914,7 @@ export function Chats({
     [groupApi],
   );
 
-  const handleGroupCommand = useCallback(
+  const handleGroupCommand = useLatestCallback(
     (groupId: string, command: GroupCommand): void => {
       const fail = (err: unknown): void => setError(String(err));
       if (command.kind === 'color') {
@@ -1981,7 +1993,7 @@ export function Chats({
   const [deleteGroupBusy, setDeleteGroupBusy] = useState(false);
   const [deleteGroupError, setDeleteGroupError] = useState<string | null>(null);
 
-  const confirmDeleteGroup = useCallback(async (): Promise<void> => {
+  const confirmDeleteGroup = useLatestCallback(async (): Promise<void> => {
     const group = deletingGroup;
     if (group === null) {
       return;
@@ -2006,7 +2018,7 @@ export function Chats({
     }
   }, [deletingGroup, groupApi]);
 
-  const handleSetRunGroup = useCallback(
+  const handleSetRunGroup = useLatestCallback(
     (runId: string, groupId: string | null): void => {
       void chatApi
         // On the RUN's route — and so on the CHATS client: the run is what
@@ -2027,7 +2039,7 @@ export function Chats({
     [chatApi],
   );
 
-  const handleSetRunPinned = useCallback(
+  const handleSetRunPinned = useLatestCallback(
     (runId: string, pinned: boolean): void => {
       void chatApi
         .setRunPinned({ runId, setRunPinnedDto: { pinned } })
@@ -2056,7 +2068,7 @@ export function Chats({
   // Stable and id-keyed like its pin sibling, so the memoized rows keep their
   // equality. Patches only the colour: the reply is a snapshot, and a WS item
   // may already have fresher status in state.
-  const handleSetRunColor = useCallback(
+  const handleSetRunColor = useLatestCallback(
     (runId: string, color: RunGroupColor | null): void => {
       void chatApi
         .setRunColor({ runId, setRunColorDto: { color } })
@@ -2084,7 +2096,7 @@ export function Chats({
    * folder would be a modal for a two-word answer. Chats are dragged in
    * afterwards; nothing files itself here.
    */
-  const handleNewGroup = useCallback((): void => {
+  const handleNewGroup = useLatestCallback((): void => {
     void groupApi
       .createRunGroup({ createRunGroupDto: { name: 'New group' } })
       .then((created) => {
@@ -2095,7 +2107,7 @@ export function Chats({
   }, [groupApi]);
 
   /** Stable, so the memoized headers do not re-render on every keystroke. */
-  const clearNamingGroup = useCallback(() => setNamingGroupId(null), []);
+  const clearNamingGroup = useLatestCallback(() => setNamingGroupId(null), []);
 
   /**
    * Write one thread to a file — the whole transcript with every tool call, the
@@ -2111,7 +2123,7 @@ export function Chats({
    * chose where the file went — a strip afterwards saying so would report back
    * the one fact they just supplied. Only a failure has anything to say.
    */
-  const handleExportRun = useCallback(
+  const handleExportRun = useLatestCallback(
     (runId: string): void => {
       const run = runsRef.current.find((r) => r.id === runId);
       if (!run) {
@@ -2142,7 +2154,7 @@ export function Chats({
   );
 
   /** A recommendations card's Apply, for `RecommendationsApplyContext`. */
-  const applyRecommendations = useCallback<RecommendationsApplier>(
+  const applyRecommendations = useLatestCallback<RecommendationsApplier>(
     async (runId, cardSeq, ids) => {
       await chatApi.applyRecommendations({
         runId,
@@ -2153,7 +2165,7 @@ export function Chats({
   );
 
   /** An analysis chat's header chip: the thread it reads, one press away. */
-  const analysisSourceOf = useCallback(
+  const analysisSourceOf = useLatestCallback(
     (run: ChatRun): { label: string; onOpen: () => void } | null => {
       const workflowSlug = run.analysisWorkflowSlug;
       if (workflowSlug != null) {
@@ -2188,7 +2200,7 @@ export function Chats({
    * Analyze on a thread: its analysis's popup when it has one, else the setup
    * dialog. The analysis is never on the sidebar — the popup is where it is.
    */
-  const handleAnalyzeRun = useCallback(
+  const handleAnalyzeRun = useLatestCallback(
     (runId: string): void => {
       const run = runsRef.current.find((r) => r.id === runId);
       if (!run) {
@@ -2214,7 +2226,7 @@ export function Chats({
   const [deleting, setDeleting] = useState<ChatRun | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const handleDeleteRun = useCallback((runId: string): void => {
+  const handleDeleteRun = useLatestCallback((runId: string): void => {
     const run = runsRef.current.find((r) => r.id === runId);
     if (run) {
       setDeleteError(null);
@@ -2333,7 +2345,7 @@ export function Chats({
    * Asked about an arbitrary agent — the saved run configurations, and the
    * open thread's own CLI, which need not be the composer's.
    */
-  const approvalCapabilityFor = useCallback(
+  const approvalCapabilityFor = useLatestCallback(
     (agent: CliKind): AgentApprovalCapability | undefined =>
       approvalCapabilityByAgent.get(agent),
     [approvalCapabilityByAgent],
@@ -2357,7 +2369,7 @@ export function Chats({
    * session picker's, which is its own. Answering the second with the first is
    * how a claude profile came to be sent to cursor.
    */
-  const configDirReasonFor = useCallback(
+  const configDirReasonFor = useLatestCallback(
     (agent: CliKind): string | null | undefined =>
       capabilities
         ? capabilities.configDirs.find((row) => row.agent === agent)
@@ -2636,7 +2648,7 @@ export function Chats({
    * It anchors on a ROW rather than the total height (`holdReadingPlace`), so
    * growth BELOW the reader — a streaming reply — is not paid back as well.
    */
-  const pageOlder = useCallback(
+  const pageOlder = useLatestCallback(
     async (scroller: HTMLElement): Promise<boolean> => {
       const load = loadOlderRef.current;
       if (load === null) {
@@ -2680,7 +2692,7 @@ export function Chats({
    * it: a press is a person waiting, and a conversation whose every page folds
    * away is one where paging further is not what they need either.
    */
-  const pageOlderUntilVisible = useCallback(
+  const pageOlderUntilVisible = useLatestCallback(
     async (scroller: HTMLElement): Promise<void> => {
       for (let page = 0; page < OLDER_PAGES_PER_PRESS; page += 1) {
         const before = topEntryKey(drawnEntriesRef.current);
@@ -2914,7 +2926,7 @@ export function Chats({
     },
     [],
   );
-  const revealInTranscript = useCallback((selector: string): void => {
+  const revealInTranscript = useLatestCallback((selector: string): void => {
     const scroller = transcriptEndRef.current?.parentElement;
     const card = scroller?.querySelector<HTMLElement>(selector);
     if (!scroller || !card) {
@@ -2941,7 +2953,7 @@ export function Chats({
       24;
     setAboveTail(!isScrolledToBottom(scroller));
   }, []);
-  const revealWorkflow = useCallback(
+  const revealWorkflow = useLatestCallback(
     (workflowId: string): void =>
       revealInTranscript(
         `[data-slot="workflow-card"][data-workflow="${CSS.escape(workflowId)}"]`,
@@ -2953,7 +2965,7 @@ export function Chats({
    * conversation leaves behind (`CallContinuedRow`), which is the only way
    * that row can say where the work went.
    */
-  const revealCallBlock = useCallback(
+  const revealCallBlock = useLatestCallback(
     (cardId: string): void =>
       revealInTranscript(
         `[data-role="call-block"][data-call-block="${CSS.escape(cardId)}"]`,
@@ -3003,7 +3015,7 @@ export function Chats({
   const activeWorkflowId =
     runs.find((run) => run.id === activeRunId)?.workflowId ?? null;
   /** Open a call's card, as the reader's own press on its header would. */
-  const openCallCard = useCallback(
+  const openCallCard = useLatestCallback(
     (blockId: string): void => {
       const runId = activeRunIdRef.current;
       if (runId !== null) {
@@ -3055,7 +3067,7 @@ export function Chats({
     [activeWorkflowId, activeRunIdRef, chatApi, openCallCard],
   );
   /** The folds a row is drawn inside, from what the transcript holds now. */
-  const foldsOfRow = useCallback(
+  const foldsOfRow = useLatestCallback(
     (seq: number) => foldsHolding(callJumpRef.current.entries, seq),
     [],
   );
@@ -3091,7 +3103,7 @@ export function Chats({
     return () => window.removeEventListener('keydown', onKey);
   }, [active]);
 
-  const openGlobalSearchHit = useCallback(
+  const openGlobalSearchHit = useLatestCallback(
     (hit: GlobalChatSearchHit): void => {
       setGlobalSearchOpen(false);
       setGlobalSearchTarget({
@@ -3134,9 +3146,15 @@ export function Chats({
     setGlobalSearchTarget(null);
   }, [globalSearchTarget, activeRunId, loadingHistory, jumpToSeq]);
 
-  const openChatSearch = useCallback((): void => setSearchOpen(true), []);
-  const openChatChanges = useCallback((): void => setChangesOpen(true), []);
-  const closeChatChanges = useCallback((): void => setChangesOpen(false), []);
+  const openChatSearch = useLatestCallback((): void => setSearchOpen(true), []);
+  const openChatChanges = useLatestCallback(
+    (): void => setChangesOpen(true),
+    [],
+  );
+  const closeChatChanges = useLatestCallback(
+    (): void => setChangesOpen(false),
+    [],
+  );
 
   /**
    * Close the search and forget what it found.
@@ -3147,13 +3165,13 @@ export function Chats({
    * user has to clear before the surface means anything.
    */
   const resetChatSearch = chatSearch.reset;
-  const closeChatSearch = useCallback((): void => {
+  const closeChatSearch = useLatestCallback((): void => {
     setSearchOpen(false);
     resetChatSearch();
   }, [resetChatSearch]);
 
   /** Land on the hit, then get out of the way — the answer is the place. */
-  const jumpToHit = useCallback(
+  const jumpToHit = useLatestCallback(
     (seq: number): void => {
       closeChatSearch();
       jumpToSeq(seq);
@@ -3163,7 +3181,7 @@ export function Chats({
 
   // Persist a chosen folder as the last-used default for the next new chat,
   // and remember it among the recent-folder suggestions (most recent first).
-  const chooseFolder = useCallback(
+  const chooseFolder = useLatestCallback(
     (chosen: string): void => {
       setFolder(chosen);
       const next = [chosen, ...recentFolders.filter((f) => f !== chosen)].slice(
@@ -3179,7 +3197,7 @@ export function Chats({
     [recentFolders],
   );
 
-  const pickFolder = useCallback(async (): Promise<void> => {
+  const pickFolder = useLatestCallback(async (): Promise<void> => {
     const chosen = await window.geniro.pickProjectFolder();
     if (chosen) {
       chooseFolder(chosen);
@@ -3188,7 +3206,7 @@ export function Chats({
 
   // Resolve the working directory for a new chat: reuse the default, else
   // prompt. Returns null when the user cancels the picker.
-  const ensureFolder = useCallback(async (): Promise<string | null> => {
+  const ensureFolder = useLatestCallback(async (): Promise<string | null> => {
     if (folder) {
       return folder;
     }
@@ -3221,7 +3239,7 @@ export function Chats({
    * close over a `recentConfigDirsByAgent` snapshot that a sibling call in the
    * same tick has already moved past.
    */
-  const rememberConfigDir = useCallback(
+  const rememberConfigDir = useLatestCallback(
     (agent: CliKind, chosen: string): void => {
       setRecentConfigDirsByAgent((prev) => {
         const current = prev[agent] ?? [];
@@ -3252,7 +3270,7 @@ export function Chats({
    * Takes `agent` explicitly — see {@link rememberConfigDir} for why a
    * closure over the composer's own `agentKind` is not safe here.
    */
-  const chooseConfigDir = useCallback(
+  const chooseConfigDir = useLatestCallback(
     (agent: CliKind, chosen: string | null): void => {
       setConfigDirs((prev) => {
         const next = { ...prev };
@@ -3274,61 +3292,51 @@ export function Chats({
   // The native dialog is the same directory picker the folder chip opens —
   // there is no profile-specific browse in the main process, and a second IPC
   // channel would only be a second name for `showOpenDialog({openDirectory})`.
-  const pickConfigDir = useCallback(async (): Promise<void> => {
+  const pickConfigDir = useLatestCallback(async (): Promise<void> => {
     const chosen = await window.geniro.pickProjectFolder();
     if (chosen) {
       chooseConfigDir(agentKind, chosen);
     }
   }, [chooseConfigDir, agentKind]);
 
-  const createChatRun = useCallback(
-    async (cwd: string) =>
-      chatApi.createChat({
-        createChatDto: {
-          agentKind,
-          cwd,
-          // Read at the MOMENT of creation rather than from mount-time state:
-          // the value is snapshotted onto the run, and the user may have
-          // edited it in Settings since this screen mounted. Caching it would
-          // start the chat on instructions the settings screen no longer
-          // shows. Omitted when empty so the daemon stores null.
-          ...(await currentRunSettings()),
-          ...(await chatGitStamp(cwd)),
-          // Omitted entirely when the composer is on the CLI default — the
-          // daemon only passes `--model` when a run names one.
-          ...(models[agentKind] ? { model: models[agentKind] } : {}),
-          // Same rule as the model: omitted entirely on the CLI default. A CLI
-          // with no effort control never has an entry, since its chip is absent.
-          ...(efforts[agentKind] ? { effort: efforts[agentKind] } : {}),
-          // Same rule again. Held true by `changeModel`, which clears the
-          // remembered size whenever the model changes — the chip's own
-          // rendering does not, since it draws the default sentinel for a size
-          // the new model does not list while the stored word is still what
-          // would be sent.
-          ...(modelParameters[agentKind]
-            ? { modelParameters: modelParameters[agentKind] }
-            : {}),
-          ...(contextWindows[agentKind]
-            ? { contextWindow: contextWindows[agentKind] }
-            : {}),
-          ...(autoCompactPercent !== null ? { autoCompactPercent } : {}),
-          // Sent only when this CLI honours the composer's pick; otherwise
-          // omitted so the daemon applies its own default for that agent —
-          // which is also what happens while capabilities are still loading.
-          ...(composerApprovalCapability?.modes.includes(approvalMode)
-            ? { approval: approvalMode }
-            : {}),
-          // Sent only when this CLI can actually load one — the daemon REFUSES
-          // a config directory on a CLI without the mechanism (it is an
-          // interactive choice, not something to silently drop), so sending a
-          // directory left over from a claude chat would 400 every cursor run
-          // the user started next. The chip is hidden in exactly that case, so
-          // this guard and the chip read the same answer.
-          ...(configDir !== null && composerConfigDirUnavailableReason === null
-            ? { configDir }
-            : {}),
-        },
-      }),
+  /** The composer's chips as a new chat takes them, read when Send is pressed. */
+  const composerChatFields = useLatestCallback(
+    () => ({
+      agentKind,
+      // Omitted entirely when the composer is on the CLI default — the
+      // daemon only passes `--model` when a run names one.
+      ...(models[agentKind] ? { model: models[agentKind] } : {}),
+      // Same rule as the model: omitted entirely on the CLI default. A CLI
+      // with no effort control never has an entry, since its chip is absent.
+      ...(efforts[agentKind] ? { effort: efforts[agentKind] } : {}),
+      // Same rule again. Held true by `changeModel`, which clears the
+      // remembered size whenever the model changes — the chip's own
+      // rendering does not, since it draws the default sentinel for a size
+      // the new model does not list while the stored word is still what
+      // would be sent.
+      ...(modelParameters[agentKind]
+        ? { modelParameters: modelParameters[agentKind] }
+        : {}),
+      ...(contextWindows[agentKind]
+        ? { contextWindow: contextWindows[agentKind] }
+        : {}),
+      ...(autoCompactPercent !== null ? { autoCompactPercent } : {}),
+      // Sent only when this CLI honours the composer's pick; otherwise
+      // omitted so the daemon applies its own default for that agent —
+      // which is also what happens while capabilities are still loading.
+      ...(composerApprovalCapability?.modes.includes(approvalMode)
+        ? { approval: approvalMode }
+        : {}),
+      // Sent only when this CLI can actually load one — the daemon REFUSES
+      // a config directory on a CLI without the mechanism (it is an
+      // interactive choice, not something to silently drop), so sending a
+      // directory left over from a claude chat would 400 every cursor run
+      // the user started next. The chip is hidden in exactly that case, so
+      // this guard and the chip read the same answer.
+      ...(configDir !== null && composerConfigDirUnavailableReason === null
+        ? { configDir }
+        : {}),
+    }),
     // `composerApprovalCapability` belongs here: it starts undefined and only
     // fills in once capabilities load, so a callback that captured the first
     // render's value silently omitted the approval from every new run and
@@ -3352,8 +3360,24 @@ export function Chats({
       autoCompactPercent,
       modelParameters,
       configDir,
-      chatApi,
     ],
+  );
+  const createChatRun = useLatestCallback(
+    async (cwd: string, composer: ReturnType<typeof composerChatFields>) =>
+      chatApi.createChat({
+        createChatDto: {
+          ...composer,
+          cwd,
+          // Read at the MOMENT of creation rather than from mount-time state:
+          // the value is snapshotted onto the run, and the user may have
+          // edited it in Settings since this screen mounted. Caching it would
+          // start the chat on instructions the settings screen no longer
+          // shows. Omitted when empty so the daemon stores null.
+          ...(await currentRunSettings()),
+          ...(await chatGitStamp(cwd)),
+        },
+      }),
+    [chatApi],
   );
 
   /**
@@ -3361,17 +3385,19 @@ export function Chats({
    * chip: the model, the approval mode and the reasoning effort are the same
    * kind of choice — what the NEXT turn runs as.
    */
-  const changeRunSettings = useCallback(
-    async (patch: {
-      approval?: ChatApprovalMode;
-      model?: string | null;
-      effort?: string | null;
-      contextWindow?: string | null;
-      autoCompactPercent?: number | null;
-      modelParameters?: Record<string, string>;
-      configDir?: string | null;
-    }): Promise<void> => {
-      const runId = activeRunIdRef.current;
+  const changeRunSettings = useLatestCallback(
+    async (
+      patch: {
+        approval?: ChatApprovalMode;
+        model?: string | null;
+        effort?: string | null;
+        contextWindow?: string | null;
+        autoCompactPercent?: number | null;
+        modelParameters?: Record<string, string>;
+        configDir?: string | null;
+      },
+      runId: string | null = activeRunIdRef.current,
+    ): Promise<void> => {
       if (!runId) {
         return;
       }
@@ -3416,27 +3442,29 @@ export function Chats({
    * — so nothing here has to explain the consequence: the answer lands in the
    * thread the user is looking at.
    */
-  const changeRunConfigDir = useCallback(
-    (chosen: string | null): void => {
-      // Reads `runs`/`activeRunIdRef` rather than closing over `activeRun`
-      // (declared later in this component) — the run's OWN agent, since the
-      // profile chip belongs to whichever CLI this chat is already running.
-      const agent = runs.find(
-        (run) => run.id === activeRunIdRef.current,
-      )?.agentKind;
+  const changeRunConfigDir = useLatestCallback(
+    (
+      chosen: string | null,
+      runId: string | null = activeRunIdRef.current,
+    ): void => {
+      // Reads `runs` rather than closing over `activeRun` (declared later in
+      // this component) — the run's OWN agent, since the profile chip belongs
+      // to whichever CLI this chat is already running.
+      const agent = runs.find((run) => run.id === runId)?.agentKind;
       if (chosen !== null && agent) {
         rememberConfigDir(agent, chosen);
       }
-      void changeRunSettings({ configDir: chosen });
+      void changeRunSettings({ configDir: chosen }, runId);
     },
     [rememberConfigDir, changeRunSettings, runs],
   );
 
   /** The native dialog behind that chip, applied to the open chat. */
-  const pickRunConfigDir = useCallback(async (): Promise<void> => {
+  const pickRunConfigDir = useLatestCallback(async (): Promise<void> => {
+    const runId = activeRunIdRef.current;
     const chosen = await window.geniro.pickProjectFolder();
     if (chosen) {
-      changeRunConfigDir(chosen);
+      changeRunConfigDir(chosen, runId);
     }
   }, [changeRunConfigDir]);
 
@@ -3444,7 +3472,7 @@ export function Chats({
    * Read one message attachment's bytes for the transcript. Stable per launch
    * handle, so the memoized rows below it never re-render for a new identity.
    */
-  const loadAttachment = useCallback(
+  const loadAttachment = useLatestCallback(
     async (runId: string, attachmentId: string): Promise<string> => {
       const attachment = await chatApi.readChatAttachment({
         runId,
@@ -3471,7 +3499,7 @@ export function Chats({
    * CLI itself named in this run's transcript rather than a file-read channel
    * with a validated argument.
    */
-  const loadShellOutput = useCallback(
+  const loadShellOutput = useLatestCallback(
     (callId: string) => {
       const runId = activeRunIdRef.current;
       if (!runId) {
@@ -3492,7 +3520,7 @@ export function Chats({
    * the base. Returns a ready `data:` URL — the CSP is `img-src 'self' data:`,
    * which is the other half of why an `<img src="file://…">` never rendered.
    */
-  const loadMarkdownImage = useCallback(
+  const loadMarkdownImage = useLatestCallback(
     async (path: string): Promise<string> => {
       const runId = activeRunIdRef.current;
       if (!runId) {
@@ -3598,7 +3626,7 @@ export function Chats({
    * the row spinning rather than closing optimistically: a thread that opens
    * empty and fills in later is indistinguishable from one that failed.
    */
-  const resumeSession = useCallback(
+  const resumeSession = useLatestCallback(
     async ({ session, configDir: profile }: ProfiledSession): Promise<void> => {
       if (session.cwd === null) {
         return;
@@ -3679,27 +3707,28 @@ export function Chats({
    * mirror a commit behind that. `null` for a run that already exists — the
    * list has held that one all along.
    */
-  const ensureRun = useCallback(async (): Promise<{
+  const ensureRun = useLatestCallback(async (): Promise<{
     runId: string;
     created: ChatRun | null;
   } | null> => {
     if (activeRunIdRef.current) {
       return { runId: activeRunIdRef.current, created: null };
     }
+    const composer = composerChatFields();
     const cwd = await ensureFolder();
     if (!cwd) {
       setError('Choose a folder for this chat first.');
       return null;
     }
-    const run = await createChatRun(cwd);
+    const run = await createChatRun(cwd, composer);
     addRun(run);
     await activateRun(run.id);
     return { runId: run.id, created: run };
-  }, [ensureFolder, createChatRun, activateRun, addRun]);
+  }, [ensureFolder, composerChatFields, createChatRun, activateRun, addRun]);
 
   /** The sidebar's + : back to the new-run composer. Nothing is created —
    *  the run (chat or workflow) is only seeded when the composer sends. */
-  const newChat = useCallback((): void => {
+  const newChat = useLatestCallback((): void => {
     deactivateRun();
     refreshRuns();
   }, [deactivateRun, refreshRuns]);
@@ -3720,7 +3749,7 @@ export function Chats({
    * Below `newChat` for the reason `confirmDelete` is: it hands the window
    * back to the composer when the thread being filed away is the open one.
    */
-  const archiveRun = useCallback(
+  const archiveRun = useLatestCallback(
     async (runId: string): Promise<void> => {
       const archived = await chatApi.archiveChat({ runId });
       // Re-filed rather than dropped: under `Show all` the row stays and only
@@ -3744,7 +3773,7 @@ export function Chats({
    * sidebar. The dialog still says which of the two it is asking about — only
    * the running arm loses anything, and only it is drawn destructive.
    */
-  const handleArchiveRun = useCallback(
+  const handleArchiveRun = useLatestCallback(
     (runId: string): void => {
       const run = runsRef.current.find((r) => r.id === runId);
       if (!run) {
@@ -3756,7 +3785,7 @@ export function Chats({
     [runsRef],
   );
 
-  const confirmArchive = useCallback(async (): Promise<void> => {
+  const confirmArchive = useLatestCallback(async (): Promise<void> => {
     if (!archiving) {
       return;
     }
@@ -3779,7 +3808,7 @@ export function Chats({
    * an archived row is activatable, so the thread being put back can be the
    * one on screen.
    */
-  const handleUnarchiveRun = useCallback(
+  const handleUnarchiveRun = useLatestCallback(
     (runId: string): void => {
       void chatApi
         .unarchiveChat({ runId })
@@ -3799,7 +3828,7 @@ export function Chats({
    * open, rather than taking the hand-back branch and landing the user on the
    * landing composer, which is the opposite of what the button says.
    */
-  const handleUnarchiveOpenRun = useCallback(
+  const handleUnarchiveOpenRun = useLatestCallback(
     (runId: string): void => {
       void chatApi
         .unarchiveChat({ runId })
@@ -3831,7 +3860,7 @@ export function Chats({
    * Stop) disappears, and the archived-composer gate reads `undefined` and
    * re-ENABLES a composer whose next send the daemon refuses.
    */
-  const handleShowScope = useCallback(
+  const handleShowScope = useLatestCallback(
     (next: ChatListScope): void => {
       const open = runsRef.current.find((run) => run.id === activeRunId);
       const kept = open !== undefined && inScope(open, next);
@@ -3843,7 +3872,7 @@ export function Chats({
     [activeRunId, runsRef, deactivateRun, showScope],
   );
 
-  const confirmDelete = useCallback(async (): Promise<void> => {
+  const confirmDelete = useLatestCallback(async (): Promise<void> => {
     if (!deleting) {
       return;
     }
@@ -3951,7 +3980,7 @@ export function Chats({
    * `task-worktree.ts`. Every send path goes through `startTurn`, and Retry
    * through its own call, so those are the two places that use it.
    */
-  const restoreWorktree = useCallback(
+  const restoreWorktree = useLatestCallback(
     (taskId: string) => restoreTaskWorktree(apis, taskId),
     [apis],
   );
@@ -3972,7 +4001,7 @@ export function Chats({
    * Rethrows: every caller has its own way of putting the message back in front
    * of the user, and swallowing here would lose it.
    */
-  const startTurn = useCallback(
+  const startTurn = useLatestCallback(
     async (
       runId: string,
       text: string,
@@ -4070,7 +4099,7 @@ export function Chats({
    * transport catches it. True means the send was stopped and the composer is
    * showing why, with the text still in the box to be corrected.
    */
-  const refuseUnknownCommand = useCallback((text: string): boolean => {
+  const refuseUnknownCommand = useLatestCallback((text: string): boolean => {
     const unknown = unknownSlashCommand(text, skillsRef.current);
     if (unknown === null) {
       return false;
@@ -4083,7 +4112,7 @@ export function Chats({
 
   /** The new-run composer's start: seed a fresh workflow run (fired from its
    *  trigger) or create a chat run and send its first message. */
-  const send = useCallback(async (): Promise<void> => {
+  const send = useLatestCallback(async (): Promise<void> => {
     // Spelled the way THIS agent spells it — see `withAgentSlashSpelling`. It
     // wraps the trim rather than sitting beside the refusal below, so every
     // use of `text` downstream (the send body, the optimistic row) is the one
@@ -4248,7 +4277,7 @@ export function Chats({
    * settling. Every one of those disagreements used to surface a raw 409 as a
    * red banner.
    */
-  const sendFollowUp = useCallback(async (): Promise<void> => {
+  const sendFollowUp = useLatestCallback(async (): Promise<void> => {
     // Rewritten before anything reads it, for the reason `send` states — and it
     // matters more here, where the text may sit in the queue for the length of
     // a turn before it is handed over.
@@ -4420,7 +4449,7 @@ export function Chats({
     restoreUnsent,
   ]);
 
-  const cancel = useCallback(async (): Promise<void> => {
+  const cancel = useLatestCallback(async (): Promise<void> => {
     const runId = activeRunIdRef.current;
     if (!runId) {
       return;
@@ -4448,7 +4477,7 @@ export function Chats({
    * the announce is what every other window sees too.
    */
   const [cancellingResetWakes, setCancellingResetWakes] = useState(false);
-  const cancelResetWakes = useCallback(
+  const cancelResetWakes = useLatestCallback(
     (runId: string): void => {
       setCancellingResetWakes(true);
       void workflowApi
@@ -4459,7 +4488,7 @@ export function Chats({
     [workflowApi, setError],
   );
 
-  const respondApproval = useCallback(
+  const respondApproval = useLatestCallback(
     (
       item: ChatItem,
       allow: boolean,
@@ -4537,7 +4566,7 @@ export function Chats({
    * re-derived, so a card that shows as answered can never still count as
    * waiting here.
    */
-  const openRequestId = useCallback(
+  const openRequestId = useLatestCallback(
     (item: ChatItem): string | null => {
       if (item.kind !== 'approval_request') {
         return null;
@@ -4646,7 +4675,7 @@ export function Chats({
    * of this JSX is how the pinned card would come to accept an answer the
    * transcript row could not show.
    */
-  const approvalCardFor = useCallback(
+  const approvalCardFor = useLatestCallback(
     (item: ChatItem): React.JSX.Element => {
       const requestId = payloadString(item.payload, 'id');
       const settled = requestId ? (verdicts.get(requestId) ?? null) : null;
@@ -4775,7 +4804,7 @@ export function Chats({
     () => ownToolCallSeqsByCall(transcriptRows),
     [transcriptRows],
   );
-  const resolveCallReading = useCallback(
+  const resolveCallReading = useLatestCallback(
     (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
       ...resolveConversationContext(
         liveText,
@@ -4801,7 +4830,7 @@ export function Chats({
    */
   const activeWorkflowRunId =
     activeRun?.workflowId != null ? activeRun.id : null;
-  const sendCallMessage = useCallback(
+  const sendCallMessage = useLatestCallback(
     async (
       target: CallTarget,
       text: string,
@@ -4856,11 +4885,11 @@ export function Chats({
   const foldItemsRef = useRef(foldItems);
   foldItemsRef.current = foldItems;
   /** A dropped message's words and pictures, read back from its own row. */
-  const unsentContent = useCallback(
+  const unsentContent = useLatestCallback(
     (item: ChatItem) => unsentMessageContent(item, loadAttachment),
     [loadAttachment],
   );
-  const resendNotSent = useCallback(
+  const resendNotSent = useLatestCallback(
     (item: ChatItem): void => {
       const runId = item.runId;
       void unsentContent(item)
@@ -5005,7 +5034,7 @@ export function Chats({
   // What the DIALOG asks for when it opens: past the freshness floor, because
   // the reader is looking at it now — which is exactly the distinction the floor
   // exists to draw against the ambient turn-settle refresh below.
-  const readChangesNow = useCallback(
+  const readChangesNow = useLatestCallback(
     (): void => refreshChatChanges(true),
     [refreshChatChanges],
   );
@@ -5283,7 +5312,7 @@ export function Chats({
    * nobody presses twice. A blank line between them, so two actions pressed in
    * a row read as two instructions rather than one run-on sentence.
    */
-  const insertFastAction = useCallback((action: FastAction): void => {
+  const insertFastAction = useLatestCallback((action: FastAction): void => {
     setInput((current) => appendDraft(current, action.description));
     // A COUNTER rather than a direct focus call: the caret belongs at the end
     // of the text this press just added, and the textarea's DOM value is still
@@ -5317,7 +5346,7 @@ export function Chats({
    * kept showing an entry settings.json does not have would then fail every
    * later save on that same entry.
    */
-  const persistRunConfigs = useCallback(
+  const persistRunConfigs = useLatestCallback(
     (next: RunConfig[], previous: RunConfig[]): void => {
       setRunConfigs(next);
       void window.geniro.updateSettings({ runConfigs: next }).catch(() => {
@@ -5330,7 +5359,7 @@ export function Chats({
     [setError],
   );
 
-  const saveRunConfig = useCallback(
+  const saveRunConfig = useLatestCallback(
     (draft: RunConfigDraft, id: string | null): void => {
       persistRunConfigs(
         id === null
@@ -5342,7 +5371,7 @@ export function Chats({
     [runConfigs, persistRunConfigs],
   );
 
-  const deleteRunConfig = useCallback(
+  const deleteRunConfig = useLatestCallback(
     (id: string): void => {
       persistRunConfigs(
         runConfigs.filter((c) => c.id !== id),
@@ -5352,7 +5381,7 @@ export function Chats({
     [runConfigs, persistRunConfigs],
   );
 
-  const reorderRunConfigs = useCallback(
+  const reorderRunConfigs = useLatestCallback(
     (next: RunConfig[]): void => persistRunConfigs(next, runConfigs),
     [runConfigs, persistRunConfigs],
   );
@@ -5362,7 +5391,7 @@ export function Chats({
    * the user is already looking at rather than on a blank form. Null without a
    * folder: a configuration with no cwd is not one this app can start.
    */
-  const captureCurrentRunConfig = useCallback(
+  const captureCurrentRunConfig = useLatestCallback(
     (name: string): RunConfigDraft | null =>
       folder === null
         ? null
@@ -5401,7 +5430,7 @@ export function Chats({
    * say" and leaves the setup alone. Neither is the other, and folding them
    * together is what deleted this feature once already.
    */
-  const applyRunConfigToComposer = useCallback(
+  const applyRunConfigToComposer = useLatestCallback(
     async (config: RunConfig): Promise<void> => {
       const applied = applyRunConfig(config);
       if (applied === null) {
@@ -5588,7 +5617,7 @@ export function Chats({
     skillMatches.length > 0;
   // Narrowing the query can shrink the list under the highlight — clamp.
   const highlightedIndex = Math.min(skillHighlight, skillMatches.length - 1);
-  const pickSkill = useCallback((skill: AgentSkill): void => {
+  const pickSkill = useLatestCallback((skill: AgentSkill): void => {
     // `/name ` no longer parses as a bare slash token, so picking closes
     // the menu by construction; the caret lands ready for arguments.
     setInput(applySkill(skill));
@@ -6213,7 +6242,7 @@ export function Chats({
     };
   }, [durableEntries, runState.calls, transcriptRows, callConversations]);
   /** For the wake divider: how to open a call's card, or null when it is not loaded. */
-  const revealCall = useCallback(
+  const revealCall = useLatestCallback(
     (callId: string): (() => void) | null => {
       const block = callBlockIndex.get(callId);
       return block === undefined ? null : () => revealCallBlock(block.id);
@@ -6305,7 +6334,7 @@ export function Chats({
       revealCallBlock(block.id);
     }
   }, [pagedToCall, callBlockIndex, revealCallBlock]);
-  const revealOpenCall = useCallback(
+  const revealOpenCall = useLatestCallback(
     (blockId: string): void => {
       if (!blockId.startsWith(OFF_WINDOW_CALL_PREFIX)) {
         revealCallBlock(blockId);
@@ -6371,7 +6400,7 @@ export function Chats({
   // opened. A card the window does not draw — off the page, or inside a card
   // whose conversation is not read yet — is reached by the jump machine,
   // which pages and opens its way to the call's start row first.
-  const openCall = useCallback(
+  const openCall = useLatestCallback(
     (callId: string): void => {
       setCallToOpen(callId);
       if (callBlockIndex.has(callId)) {
@@ -6553,7 +6582,7 @@ export function Chats({
   useEffect(() => {
     setNotesView(null);
   }, [activeRunId]);
-  const openTeamNote = useCallback((seq: number) => {
+  const openTeamNote = useLatestCallback((seq: number) => {
     setNotesView({ selected: seq });
   }, []);
   /** The run's team notes, read from the daemon — a workflow run's only. */
@@ -6604,7 +6633,7 @@ export function Chats({
    * command left over from a conversation whose CLI is long gone, where that
    * count is already zero and nothing would ever fetch again.
    */
-  const handleKillShell = useCallback(
+  const handleKillShell = useLatestCallback(
     async (shell: ShellRun): Promise<void> => {
       if (activeRunId === null) {
         return;
@@ -6628,7 +6657,7 @@ export function Chats({
   );
 
   /** Stop one monitor from the shelf, as the processes popup's Stop does. */
-  const handleStopMonitor = useCallback(
+  const handleStopMonitor = useLatestCallback(
     async (monitor: OpenMonitor): Promise<void> => {
       if (activeRunId === null) {
         return;
@@ -7395,7 +7424,7 @@ export function Chats({
     threadTotals.cacheTokens,
   ]);
   /** A node's agent by name, for the shelf's team-note and monitor chips — the panel has its own. */
-  const shelfAgentName = useCallback(
+  const shelfAgentName = useLatestCallback(
     (nodeId: string): string => agentNameOf(agents, nodeId),
     [agents],
   );
@@ -7852,7 +7881,7 @@ export function Chats({
           ) ?? null),
     [detailSubagentId, transcriptEntries],
   );
-  const openSubagentDetail = useCallback(
+  const openSubagentDetail = useLatestCallback(
     (block: SubagentBlockEntry) => setDetailSubagentId(block.id),
     [],
   );
@@ -7861,7 +7890,7 @@ export function Chats({
    * cards, the shelf's chip. A delegate launched before the loaded page has no
    * block to open, so the window first moves to its launch, where the block is.
    */
-  const openSubagentById = useCallback(
+  const openSubagentById = useLatestCallback(
     (id: string): void => {
       setDetailSubagentId(id);
       if (collectSubagentBlocks(durableEntries).some((b) => b.id === id)) {
@@ -7881,7 +7910,7 @@ export function Chats({
    * by the hint it shows on hover, so the command a user copies is exactly the
    * one the button would run.
    */
-  const resolveHandoff = useCallback(
+  const resolveHandoff = useLatestCallback(
     (agent: AgentDisplay, thread: AgentThread) =>
       handoffApi.resolveHandoff({
         runId: activeRunIdRef.current ?? '',
@@ -7894,7 +7923,7 @@ export function Chats({
   );
 
   /** Binds this screen's error slot to the shared handoff opener. */
-  const openResolvedTarget = useCallback(
+  const openResolvedTarget = useLatestCallback(
     (
       resolve: () => Promise<HandoffTargetDto>,
       fallback: string,
@@ -7909,7 +7938,7 @@ export function Chats({
    * The daemon resolves the invocation, the Electron main process opens it —
    * nothing is mirrored, so nothing can fall behind.
    */
-  const openThreadTerminal = useCallback(
+  const openThreadTerminal = useLatestCallback(
     async (agent: AgentDisplay, thread: AgentThread) => {
       if (!activeRunIdRef.current) {
         return;
@@ -7929,7 +7958,7 @@ export function Chats({
    * conversation in the user's own terminal app, while this is a plain shell in
    * the directory the run already carries.
    */
-  const openFolderTerminal = useCallback(() => {
+  const openFolderTerminal = useLatestCallback(() => {
     const cwd = activeRun?.cwd ?? null;
     if (cwd !== null) {
       onOpenTerminal?.(cwd);
@@ -8211,7 +8240,7 @@ export function Chats({
    * consent page is still open would ask before there was anything to ask
    * about.
    */
-  const signInToMcpServer = useCallback(
+  const signInToMcpServer = useLatestCallback(
     async (scope: AgentMcpScope, server: string) => {
       // The RUN's folder, exactly as the listing beside it was taken in — never
       // the composer's `folder`, which is where the NEXT chat would start. A
@@ -8284,7 +8313,7 @@ export function Chats({
    * their default account and watches the same turn fail again — which is
    * exactly the failure this control exists to end.
    */
-  const signInToCli = useCallback(
+  const signInToCli = useLatestCallback(
     async (kind: CliKind, configDir: string | null) => {
       await login.start(kind, configDir);
     },
@@ -8389,7 +8418,7 @@ export function Chats({
    * `needs-input` is the one state that must never be missed. Both can only
    * ever say MORE than the row, never contradict it into looking finished.
    */
-  const rowRunStatus = useCallback(
+  const rowRunStatus = useLatestCallback(
     (run: ChatRun, liveTurn: boolean): RunStatusKind =>
       displayRunStatus({
         status: run.status,
@@ -8422,11 +8451,11 @@ export function Chats({
    * `sortRunsForSidebar`): every input to the sort must mean the same thing for
    * every run, or focusing a thread moves it.
    */
-  const unfocusedRunStatus = useCallback(
+  const unfocusedRunStatus = useLatestCallback(
     (run: ChatRun): RunStatusKind => rowRunStatus(run, false),
     [rowRunStatus],
   );
-  const sidebarRunStatus = useCallback(
+  const sidebarRunStatus = useLatestCallback(
     (run: ChatRun): RunStatusKind =>
       run.id === activeRunId ? activeRunStatus : unfocusedRunStatus(run),
     [activeRunId, activeRunStatus, unfocusedRunStatus],
@@ -8454,7 +8483,7 @@ export function Chats({
    * still running" was being read as "the agent is still working". The two
    * statements are compatible, and now each has its own reading.
    */
-  const unfocusedAgentStoppedStatus = useCallback(
+  const unfocusedAgentStoppedStatus = useLatestCallback(
     (run: ChatRun): RunStatusKind =>
       displayRunStatus({
         status: run.status,
@@ -8471,7 +8500,7 @@ export function Chats({
    * The same per-run reading for the two consumers that ask "has this thread
    * stopped" rather than "what is it doing" — see {@link agentRunStatus}.
    */
-  const agentStoppedRunStatus = useCallback(
+  const agentStoppedRunStatus = useLatestCallback(
     (run: ChatRun): RunStatusKind =>
       run.id === activeRunId
         ? agentRunStatus
@@ -8489,18 +8518,18 @@ export function Chats({
    * nothing, answering two questions off one fact — "something this thread
    * started is running" and "so this ending may not be the agent finishing".
    */
-  const runShellsOpen = useCallback(
+  const runShellsOpen = useLatestCallback(
     (run: ChatRun): number => run.shellsOpen,
     [],
   );
 
-  const notificationLabel = useCallback(
+  const notificationLabel = useLatestCallback(
     (run: ChatRun): string => runLabel(run, workflowNames),
     [workflowNames],
   );
 
   /** What this run said as it settled, from the live channel — see the map. */
-  const settleSummaryOf = useCallback(
+  const settleSummaryOf = useLatestCallback(
     (run: ChatRun): string | null => settleSummaries.get(run.id) ?? null,
     [settleSummaries],
   );
@@ -8661,7 +8690,7 @@ export function Chats({
   );
 
   /** Show this section in full, or fold it back to its working set. */
-  const handleToggleSectionAll = useCallback((sectionKey: string) => {
+  const handleToggleSectionAll = useLatestCallback((sectionKey: string) => {
     setExpandedSections((current) => {
       const next = new Set(current);
       if (!next.delete(sectionKey)) {

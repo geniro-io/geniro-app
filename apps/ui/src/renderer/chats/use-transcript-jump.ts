@@ -1,12 +1,12 @@
 import {
   createContext,
   type RefObject,
-  useCallback,
   useEffect,
   useRef,
   useState,
 } from 'react';
 
+import { useLatestCallback } from '../components/use-latest-callback';
 import { jumpToBottom } from '../scroll-to-bottom';
 import { isScrolledToBottom } from './scroll-follow';
 import { writeThreadFlag } from './thread-ui-memory';
@@ -262,7 +262,7 @@ export function useTranscriptJump({
    * scroller itself, never `scrollIntoView`, and the tail-follow switched off
    * so a running turn's next token does not drag the reader back down.
    */
-  const revealAnchor = useCallback(
+  const revealAnchor = useLatestCallback(
     (scroller: HTMLElement, target: HTMLElement): void => {
       followingRef.current = false;
       /** How far the target still is from where it should be parked. */
@@ -305,7 +305,7 @@ export function useTranscriptJump({
    * card's own rows, never those of a card open inside it. Matched on the
    * dataset rather than through a selector built from an id.
    */
-  const anchorsIn = useCallback(
+  const anchorsIn = useLatestCallback(
     (
       cardId: string | null,
     ): {
@@ -437,7 +437,14 @@ export function useTranscriptJump({
    */
   /** Moves with every jump and thread, so a jump superseded mid-way never lands. */
   const jumpGenerationRef = useRef(0);
-  const jumpInFlow = useCallback(
+  const jumpThreadRef = useRef(threadId);
+  // In the render that switches threads, so an answer landing before the
+  // commit's effects run is already stale.
+  if (jumpThreadRef.current !== threadId) {
+    jumpThreadRef.current = threadId;
+    jumpGenerationRef.current += 1;
+  }
+  const jumpInFlow = useLatestCallback(
     (seq: number): void => {
       const generation = jumpGenerationRef.current;
       const loaded =
@@ -465,7 +472,6 @@ export function useTranscriptJump({
   const [pendingCall, setPendingCall] = useState<PendingCallJump | null>(null);
   useEffect(() => {
     // Another thread: whatever was on its way belonged to the one before.
-    jumpGenerationRef.current += 1;
     setPendingCall(null);
     setLanding(null);
   }, [threadId]);
@@ -519,7 +525,7 @@ export function useTranscriptJump({
     });
   }, [pendingCall, calls, loadAround, jumpInFlow]);
 
-  const jumpToSeq = useCallback(
+  const jumpToSeq = useLatestCallback(
     (seq: number): void => {
       jumpGenerationRef.current += 1;
       setPendingCall(null);
@@ -545,7 +551,7 @@ export function useTranscriptJump({
     [calls, jumpInFlow],
   );
 
-  const jumpToLatest = useCallback((): void => {
+  const jumpToLatest = useLatestCallback((): void => {
     const scroller = endRef.current?.parentElement;
     if (!scroller) {
       return;
@@ -566,7 +572,7 @@ export function useTranscriptJump({
    * failed leaves the reader exactly where they were rather than at a bottom
    * that is not the bottom.
    */
-  const backToTail = useCallback((): void => {
+  const backToTail = useLatestCallback((): void => {
     void returnToTail().then((ok) => {
       if (ok) {
         jumpToLatest();

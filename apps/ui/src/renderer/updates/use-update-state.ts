@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { UpdateState } from '../../shared/contracts';
+import { useLatestCallback } from '../components/use-latest-callback';
 
 /**
  * The renderer half of the update module.
@@ -56,7 +57,7 @@ export function useUpdateState(): UpdateController {
    * reached. Without it that surfaces as an unhandled rejection and a button
    * that visibly does nothing.
    */
-  const run = useCallback(
+  const run = useLatestCallback(
     async (call: () => Promise<UpdateState>): Promise<void> => {
       try {
         setState(await call());
@@ -82,17 +83,17 @@ export function useUpdateState(): UpdateController {
     [],
   );
 
-  const check = useCallback(
+  const check = useLatestCallback(
     () => run(() => window.geniro.checkForUpdates()),
     [run],
   );
 
-  const install = useCallback(
+  const install = useLatestCallback(
     () => run(() => window.geniro.installUpdate()),
     [run],
   );
 
-  const relaunch = useCallback(
+  const relaunch = useLatestCallback(
     () => run(() => window.geniro.relaunchForUpdate()),
     [run],
   );

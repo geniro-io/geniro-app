@@ -333,11 +333,18 @@ export interface MemorySettings {
   /** Off gives agents no memory tools. */
   enabled: boolean;
   agentWrites: MemoryAgentWrites;
+  /**
+   * Each CLI's own memory off in new runs while the shared memory is on. Off
+   * by default, so the CLIs' notes are never hidden before the user imports
+   * them; a successful import turns it on.
+   */
+  nativeMemoryOff: boolean;
 }
 
 export const DEFAULT_MEMORY: MemorySettings = {
   enabled: true,
   agentWrites: 'active',
+  nativeMemoryOff: false,
 };
 
 export interface Settings {
@@ -1798,6 +1805,13 @@ export interface GeniroApi {
     html: string;
   }): Promise<FileSaveResult>;
   /**
+   * Ask where to keep the shared-memory export, and write the given Markdown
+   * there as `geniro-memory-<YYYY-MM-DD>.md` (main composes the name). The
+   * renderer fetched the text from the daemon; a cancelled dialog resolves
+   * `saved: false`, which is an outcome and not an error.
+   */
+  saveMemoryExport(markdown: string): Promise<FileSaveResult>;
+  /**
    * Make the worktree and branch a task's agent will work in.
    *
    * Here rather than in the daemon because every git call this app makes
@@ -2061,6 +2075,7 @@ export const IPC = {
   onTerminalExit: 'geniro:onTerminalExit',
   saveChatExport: 'geniro:saveChatExport',
   saveArtifact: 'geniro:saveArtifact',
+  saveMemoryExport: 'geniro:saveMemoryExport',
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',
   carryChangesToBranch: 'geniro:carryChangesToBranch',

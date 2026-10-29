@@ -108,3 +108,8 @@ export function excerptOf(body: string): string {
     ? flat
     : `${flat.slice(0, EXCERPT_CHARS - 1)}…`;
 }
+
+/** A note's text as the import compares it: trimmed title and body. */
+export function importedText(title: string, body: string): string {
+  return `${title.trim()}\0${body.trim()}`;
+}

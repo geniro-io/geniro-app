@@ -30,18 +30,29 @@ export function recommendation(
   over: Partial<RecommendationView> = {},
 ): RecommendationView {
   const workflow = id.startsWith('W');
+  const memory = id.startsWith('M');
   return {
     id,
-    target: workflow ? 'workflow' : id.startsWith('U') ? 'user' : 'repo',
-    territory: 'process',
-    kind: workflow ? 'parallelize' : 'check',
-    location: workflow ? 'reviewer' : 'AGENTS.md:42',
+    target: workflow
+      ? 'workflow'
+      : id.startsWith('U')
+        ? 'user'
+        : memory
+          ? 'memory'
+          : 'repo',
+    territory: memory ? 'domain' : 'process',
+    kind: workflow ? 'parallelize' : memory ? 'add' : 'check',
+    location: workflow ? 'reviewer' : memory ? 'new' : 'AGENTS.md:42',
     title: workflow
       ? 'Run the two reviewers in parallel'
-      : 'Say which test command to run before review',
+      : memory
+        ? 'Remember that a sent invoice is never edited'
+        : 'Say which test command to run before review',
     change: workflow
       ? 'edges:\n  - from: builder\n    to: reviewer-a\n  - from: builder\n    to: reviewer-b'
-      : 'WHEN a change touches apps/daemon → run `pnpm --filter @geniro/daemon test:unit` before asking for review',
+      : memory
+        ? 'A sent invoice is never edited; issue a credit note instead.'
+        : 'WHEN a change touches apps/daemon → run `pnpm --filter @geniro/daemon test:unit` before asking for review',
     evidence: [
       {
         seq: 1204,

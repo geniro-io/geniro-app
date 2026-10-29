@@ -687,6 +687,7 @@ export function Chats({
   onActiveRunChange,
   onTitleChange,
   onOpenSettings,
+  onOpenMemory,
   onOpenWorkflow,
   onOpenTerminal,
   onFolderChange,
@@ -709,6 +710,11 @@ export function Chats({
    * callback rather than a dialog of its own.
    */
   onOpenSettings?: (section: SettingsSection) => void;
+  /**
+   * Take the app to Settings → Memory with this entry (`m12`) open — a memory
+   * tool row's handle. Absent, the handle is plain text.
+   */
+  onOpenMemory?: (handle: string) => void;
   /**
    * Take the app to the Workflows screen with this library workflow open — a
    * saved proposal card's "Open in canvas". Absent, the card offers none.
@@ -9834,6 +9840,7 @@ export function Chats({
                       openTeamNote={
                         activeRun?.workflowId != null ? openTeamNote : null
                       }
+                      openMemory={onOpenMemory ?? null}
                       collapseToolSteps={collapseToolSteps}
                       runActivity={activeActivity}
                       turnDurations={turnDurations}

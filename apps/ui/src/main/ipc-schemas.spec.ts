@@ -4,6 +4,7 @@ import {
   branchNameSchema,
   commitShaSchema,
   gitDirSchema,
+  memoryExportSaveSchema,
   settingsPatchSchema,
   taskIdSchema,
   taskWorktreeSchema,
@@ -188,6 +189,20 @@ describe('terminal schemas', () => {
       terminalCreateSchema.safeParse({ id, cols: 80, rows: 24, env: {} })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('memoryExportSaveSchema', () => {
+  it('takes a Markdown string of any length, as large memories export too', () => {
+    expect(
+      memoryExportSaveSchema.safeParse('x'.repeat(6_000_000)).success,
+    ).toBe(true);
+  });
+
+  it('refuses anything that is not a bare string', () => {
+    expect(memoryExportSaveSchema.safeParse({ markdown: '# a' }).success).toBe(
+      false,
+    );
   });
 });
 

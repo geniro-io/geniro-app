@@ -10,6 +10,7 @@ import type { RunDao } from '../../../agents/dao/run.dao';
 import { AnalysisBroker } from '../../../agents/services/analysis.broker';
 import { AnalysisReportsService } from '../../../agents/services/analysis-reports.service';
 import type { ThreadTimelineService } from '../../../agents/services/thread-timeline.service';
+import type { MemoryService } from '../../../memory/services/memory.service';
 import type { Run } from '../../../runs/entity/run.entity';
 import type { McpCallContext } from '../../mcp.types';
 import { ReportRecommendationsTool } from './report-recommendations.tool';
@@ -29,10 +30,20 @@ function item(id: string, seq = 3): RecommendationItem {
       ? 'workflow'
       : id.startsWith('U')
         ? 'user'
-        : 'repo',
+        : id.startsWith('M')
+          ? 'memory'
+          : 'repo',
     territory: 'process',
-    kind: id.startsWith('W') ? 'parallelize' : 'check',
-    location: id.startsWith('W') ? 'reviewer' : 'AGENTS.md:12',
+    kind: id.startsWith('W')
+      ? 'parallelize'
+      : id.startsWith('M')
+        ? 'update'
+        : 'check',
+    location: id.startsWith('W')
+      ? 'reviewer'
+      : id.startsWith('M')
+        ? 'm12'
+        : 'AGENTS.md:12',
     title: `Item ${id}`,
     change: 'the exact change',
     evidence: [{ seq, quote: 'waited for the reviewer' }],
@@ -45,7 +56,9 @@ function item(id: string, seq = 3): RecommendationItem {
 function setup(
   workflowId: string | null,
   workflow: AnalysedWorkflow | null = null,
+  memoryOn = true,
 ) {
+  const memory = { enabled: memoryOn } as MemoryService;
   const written: { kind: string; payload: unknown }[] = [];
   const checked: { runId: string; maxSeq: number }[] = [];
   const reports = new AnalysisReportsService(
@@ -78,6 +91,7 @@ function setup(
           },
         }),
     } as unknown as ThreadTimelineService,
+    memory,
   );
   const analysis = new AnalysisBroker();
   analysis.register(
@@ -97,13 +111,11 @@ function setup(
       },
     ),
   );
+  const tool = new ReportRecommendationsTool(analysis, memory);
   const report = (args: Record<string, unknown>) =>
-    new ReportRecommendationsTool(analysis).call(
-      'report_recommendations',
-      args,
-      CONTEXT,
-    );
-  return { report, written, checked };
+    tool.call('report_recommendations', args, CONTEXT);
+  const description = () => tool.list(CONTEXT)[0]?.description ?? '';
+  return { report, description, written, checked };
 }
 
 describe('ReportRecommendationsTool', () => {
@@ -190,7 +202,7 @@ describe('ReportRecommendationsTool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain(
-      'only repo and user recommendations',
+      'only repo, user and memory recommendations',
     );
     expect(written).toEqual([]);
   });
@@ -202,6 +214,33 @@ describe('ReportRecommendationsTool', () => {
 
     expect(result.isError).toBe(false);
     expect(written).toHaveLength(1);
+  });
+
+  it('takes a memory item on a plain chat, and keeps its handle and kind', async () => {
+    const { report, written } = setup(null);
+
+    const result = await report({ items: [item('R-1'), item('M-1')] });
+
+    expect(result.isError).toBe(false);
+    expect(written[0]!.payload).toMatchObject({
+      items: [
+        { id: 'R-1', target: 'repo' },
+        { id: 'M-1', target: 'memory', kind: 'update', location: 'm12' },
+      ],
+    });
+  });
+
+  it('offers and takes no memory item while the shared memory is off', async () => {
+    const off = setup(null, null, false);
+    const on = setup(null);
+
+    const refused = await off.report({ items: [item('R-1'), item('M-1')] });
+
+    expect(on.description()).toContain('M-1');
+    expect(off.description()).not.toContain('M-1');
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0]!.text).toContain('the shared memory is off');
+    expect(off.written).toEqual([]);
   });
 
   it('refuses duplicate ids and an id whose prefix lies about its target', async () => {
@@ -218,6 +257,14 @@ describe('ReportRecommendationsTool', () => {
       (await report({ items: [{ ...item('R-3'), target: 'user' }] }))
         .content[0]!.text,
     ).toContain('starts with U-');
+    expect(
+      (await report({ items: [{ ...item('M-1'), target: 'repo' }] }))
+        .content[0]!.text,
+    ).toContain('starts with R-');
+    expect(
+      (await report({ items: [{ ...item('R-4'), target: 'memory' }] }))
+        .content[0]!.text,
+    ).toContain('starts with M-');
   });
 
   it('keeps each item to one territory: process or domain, named on the row', async () => {
@@ -275,6 +322,11 @@ describe('ReportRecommendationsTool', () => {
       'U-3',
       'U-4',
       'U-5',
+      'M-1',
+      'M-2',
+      'M-3',
+      'M-4',
+      'M-5',
     ];
 
     const result = await report({ items: ids.map((id) => item(id)) });

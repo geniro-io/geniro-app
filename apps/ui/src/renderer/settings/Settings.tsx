@@ -62,6 +62,7 @@ import { cn } from '../components/ui/utils';
 import { useDebouncedPersist } from '../components/use-debounced-persist';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis, daemonErrorDetail } from '../daemon-api';
+import type { DaemonClient } from '../daemon-client';
 import { randomId } from '../random-id';
 import { setThemePreference } from '../theme/apply-theme';
 import { updateStatusText } from '../updates/update-status';
@@ -72,6 +73,7 @@ import { isLoginOver, useCliLogin } from '../use-cli-login';
 import { configDirCapabilityFrom } from '../workflows/use-config-dir-capability';
 import { ConfigProfileList } from './config-profiles';
 import { type FastActionDraft, FastActionsPane } from './fast-actions';
+import { Memory } from './memory';
 import { ProjectsPane } from './projects';
 import { RemoteAccess } from './remote-access';
 import { Sharing } from './sharing';
@@ -206,7 +208,8 @@ export type SettingsSection =
   | 'fast-actions'
   | 'projects'
   | 'remote-access'
-  | 'sharing';
+  | 'sharing'
+  | 'memory';
 
 const SECTION_LABEL: Record<SettingsSection, string> = {
   general: 'General',
@@ -215,6 +218,7 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
   projects: 'Projects',
   'remote-access': 'Remote access',
   sharing: 'Sharing',
+  memory: 'Memory',
 };
 
 /**
@@ -233,6 +237,8 @@ const SECTION_NOTE: Record<SettingsSection, string> = {
     'Your own buttons under the composer. Each one is a name and a piece of text; pressing it writes that text into the message box, whatever agent and folder you happen to be set to.',
   'remote-access':
     'Serve this app to your Wi-Fi so a phone can open the same live chats — a device pairs with a code shown here.',
+  memory:
+    'The notes every agent shares, whatever its CLI — saved by agents as they work, or by you. New chats list the ones you wrote, imported or approved.',
   sharing:
     'Share a page as an encrypted link anyone holding it can open — uploaded through your own gcloud, aws or command, never a Geniro server.',
 };
@@ -245,6 +251,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'projects',
   'remote-access',
   'sharing',
+  'memory',
 ];
 
 export function Settings({
@@ -254,8 +261,16 @@ export function Settings({
   sectionOpen = false,
   onSectionOpenChange,
   onOpenOnboarding,
+  client = null,
+  memoryFocus = null,
+  onMemoryFocusDone,
 }: {
   handle: DaemonHandle | null;
+  /** The live socket, for the panes that follow the daemon's announcements. */
+  client?: DaemonClient | null;
+  /** An entry's handle Settings → Memory opens on, as a transcript row asks. */
+  memoryFocus?: string | null;
+  onMemoryFocusDone?: () => void;
   /**
    * The pane to show. Owned by the app shell rather than by this screen so
    * another screen can open Settings AT a section — which is how the composer's
@@ -1406,6 +1421,15 @@ export function Settings({
             <RemoteAccess />
           ) : section === 'sharing' ? (
             <Sharing api={apis?.shares ?? null} />
+          ) : section === 'memory' ? (
+            <Memory
+              api={apis?.memories ?? null}
+              client={client}
+              workflows={apis?.workflows ?? null}
+              projects={projects}
+              focus={memoryFocus}
+              onFocusDone={onMemoryFocusDone}
+            />
           ) : (
             <>
               {/* The sign-in's own error lives in its progress panel — but a sign-in that

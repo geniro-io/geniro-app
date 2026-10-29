@@ -262,7 +262,7 @@ export class NotificationsGateway
           server.emit('memory_changed', change);
         } catch (err) {
           this.logger.error(
-            `failed to broadcast memory_changed for ${change.memoryId}: ${err instanceof Error ? err.message : String(err)}`,
+            `failed to broadcast memory_changed (${change.change} ${change.memoryId ?? 'many'}): ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       },

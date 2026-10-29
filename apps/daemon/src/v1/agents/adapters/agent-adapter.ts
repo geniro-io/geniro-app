@@ -92,6 +92,7 @@ import type {
   HandoffInput,
   HandoffResult,
   InstalledApprovalSupport,
+  NativeMemoryReading,
   NO_PLAN_LIMITS,
   RecoveredSubagentOutcome,
   SessionPullRequest,
@@ -269,6 +270,25 @@ export abstract class AgentAdapter {
     return {
       path: join(configDir ?? join(homedir(), where.homeDir), where.fileName),
     };
+  }
+
+  /**
+   * The notes this CLI keeps in its own memory under `configDir` (null = its
+   * default profile), read only, for the user's import into the shared
+   * memory; null for a CLI that keeps none. Never writes, never throws.
+   */
+  readNativeMemory(
+    _configDir: string | null,
+  ): Promise<NativeMemoryReading | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
+   * The {@link NativeMemoryNote.projectKey} this CLI files a folder's notes
+   * under, or null when it files none by project.
+   */
+  nativeMemoryProjectKey(_folder: string): string | null {
+    return null;
   }
 
   /**

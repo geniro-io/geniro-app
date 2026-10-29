@@ -5,6 +5,7 @@ import { NodeStateDao } from '../agents/dao/node-state.dao';
 import { RunDao } from '../agents/dao/run.dao';
 import { ProjectsModule } from '../projects/projects.module';
 import { TaskDao } from '../tasks/dao/task.dao';
+import { MemoriesController } from './controllers/memories.controller';
 import { MemoryConfigController } from './controllers/memory-config.controller';
 import { MemoryDao } from './dao/memory.dao';
 import { MemoryService } from './services/memory.service';
@@ -23,7 +24,7 @@ import { MemoryTextIndexService } from './services/memory-text-index.service';
  */
 @Module({
   imports: [ProjectsModule],
-  controllers: [MemoryConfigController],
+  controllers: [MemoryConfigController, MemoriesController],
   providers: [
     DesktopOnlyGuard,
     MemoryDao,

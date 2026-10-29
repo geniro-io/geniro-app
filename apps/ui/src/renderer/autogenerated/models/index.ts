@@ -3199,6 +3199,56 @@ export interface CreateLabelInstructionDto {
 /**
  * 
  * @export
+ * @interface CreateMemoryDto
+ */
+export interface CreateMemoryDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateMemoryDto
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateMemoryDto
+     */
+    body: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateMemoryDto
+     */
+    type: CreateMemoryDtoTypeEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateMemoryDto
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof CreateMemoryDto
+     */
+    notDuplicateOf?: Array<string>;
+}
+
+
+/**
+ * @export
+ */
+export const CreateMemoryDtoTypeEnum = {
+    User: 'user',
+    Feedback: 'feedback',
+    Project: 'project',
+    Reference: 'reference'
+} as const;
+export type CreateMemoryDtoTypeEnum = typeof CreateMemoryDtoTypeEnum[keyof typeof CreateMemoryDtoTypeEnum];
+
+/**
+ * 
+ * @export
  * @interface CreateProjectDto
  */
 export interface CreateProjectDto {
@@ -3900,6 +3950,19 @@ export interface FinishedTasksDto {
 /**
  * 
  * @export
+ * @interface ForgetAllMemoriesDto
+ */
+export interface ForgetAllMemoriesDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof ForgetAllMemoriesDto
+     */
+    forgotten: number;
+}
+/**
+ * 
+ * @export
  * @interface ForgottenInstructionsDto
  */
 export interface ForgottenInstructionsDto {
@@ -4069,6 +4132,63 @@ export const HandoffTargetDtoKindEnum = {
     Unavailable: 'unavailable'
 } as const;
 export type HandoffTargetDtoKindEnum = typeof HandoffTargetDtoKindEnum[keyof typeof HandoffTargetDtoKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface ImportMemoriesDto
+ */
+export interface ImportMemoriesDto {
+    /**
+     * 
+     * @type {Array<MemoryImportPreviewRequestDtoProfilesInner>}
+     * @memberof ImportMemoriesDto
+     */
+    profiles: Array<MemoryImportPreviewRequestDtoProfilesInner>;
+    /**
+     * 
+     * @type {Array<ImportMemoriesDtoRowsInner>}
+     * @memberof ImportMemoriesDto
+     */
+    rows: Array<ImportMemoriesDtoRowsInner>;
+}
+/**
+ * 
+ * @export
+ * @interface ImportMemoriesDtoRowsInner
+ */
+export interface ImportMemoriesDtoRowsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof ImportMemoriesDtoRowsInner
+     */
+    key: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ImportMemoriesDtoRowsInner
+     */
+    type: ImportMemoriesDtoRowsInnerTypeEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof ImportMemoriesDtoRowsInner
+     */
+    projectId: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const ImportMemoriesDtoRowsInnerTypeEnum = {
+    User: 'user',
+    Feedback: 'feedback',
+    Project: 'project',
+    Reference: 'reference'
+} as const;
+export type ImportMemoriesDtoRowsInnerTypeEnum = typeof ImportMemoriesDtoRowsInnerTypeEnum[keyof typeof ImportMemoriesDtoRowsInnerTypeEnum];
 
 /**
  * 
@@ -4696,6 +4816,12 @@ export interface MemoryConfigAckDto {
      * @memberof MemoryConfigAckDto
      */
     agentWrites: MemoryConfigAckDtoAgentWritesEnum;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemoryConfigAckDto
+     */
+    nativeMemoryOff: boolean;
 }
 
 
@@ -4726,6 +4852,12 @@ export interface MemoryConfigDto {
      * @memberof MemoryConfigDto
      */
     agentWrites: MemoryConfigDtoAgentWritesEnum;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemoryConfigDto
+     */
+    nativeMemoryOff: boolean;
 }
 
 
@@ -4738,6 +4870,478 @@ export const MemoryConfigDtoAgentWritesEnum = {
 } as const;
 export type MemoryConfigDtoAgentWritesEnum = typeof MemoryConfigDtoAgentWritesEnum[keyof typeof MemoryConfigDtoAgentWritesEnum];
 
+/**
+ * 
+ * @export
+ * @interface MemoryEntry
+ */
+export interface MemoryEntry {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    handle: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    body: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    type: MemoryEntryTypeEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    status: MemoryEntryStatusEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryEntry
+     */
+    rev: number;
+    /**
+     * 
+     * @type {MemoryEntrySource}
+     * @memberof MemoryEntry
+     */
+    source: MemoryEntrySource;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    updatedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    lastUsedAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    approvedAt: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const MemoryEntryTypeEnum = {
+    User: 'user',
+    Feedback: 'feedback',
+    Project: 'project',
+    Reference: 'reference'
+} as const;
+export type MemoryEntryTypeEnum = typeof MemoryEntryTypeEnum[keyof typeof MemoryEntryTypeEnum];
+
+/**
+ * @export
+ */
+export const MemoryEntryStatusEnum = {
+    Active: 'active',
+    Pending: 'pending',
+    Forgotten: 'forgotten'
+} as const;
+export type MemoryEntryStatusEnum = typeof MemoryEntryStatusEnum[keyof typeof MemoryEntryStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemoryEntrySource
+ */
+export interface MemoryEntrySource {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntrySource
+     */
+    actor: MemoryEntrySourceActorEnum;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof MemoryEntrySource
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntrySource
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntrySource
+     */
+    runId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntrySource
+     */
+    importedFrom: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const MemoryEntrySourceActorEnum = {
+    Agent: 'agent',
+    User: 'user',
+    Import: 'import',
+    Analysis: 'analysis'
+} as const;
+export type MemoryEntrySourceActorEnum = typeof MemoryEntrySourceActorEnum[keyof typeof MemoryEntrySourceActorEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemoryExportDto
+ */
+export interface MemoryExportDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryExportDto
+     */
+    markdown: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryExportDto
+     */
+    count: number;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryImportPreviewDto
+ */
+export interface MemoryImportPreviewDto {
+    /**
+     * 
+     * @type {Array<MemoryImportRow>}
+     * @memberof MemoryImportPreviewDto
+     */
+    rows: Array<MemoryImportRow>;
+    /**
+     * 
+     * @type {Array<MemoryImportPreviewDtoSourcesInner>}
+     * @memberof MemoryImportPreviewDto
+     */
+    sources: Array<MemoryImportPreviewDtoSourcesInner>;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryImportPreviewDtoSourcesInner
+ */
+export interface MemoryImportPreviewDtoSourcesInner {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof MemoryImportPreviewDtoSourcesInner
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportPreviewDtoSourcesInner
+     */
+    path: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryImportPreviewDtoSourcesInner
+     */
+    found: number;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface MemoryImportPreviewRequestDto
+ */
+export interface MemoryImportPreviewRequestDto {
+    /**
+     * 
+     * @type {Array<MemoryImportPreviewRequestDtoProfilesInner>}
+     * @memberof MemoryImportPreviewRequestDto
+     */
+    profiles: Array<MemoryImportPreviewRequestDtoProfilesInner>;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryImportPreviewRequestDtoProfilesInner
+ */
+export interface MemoryImportPreviewRequestDtoProfilesInner {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof MemoryImportPreviewRequestDtoProfilesInner
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportPreviewRequestDtoProfilesInner
+     */
+    dir: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface MemoryImportResultDto
+ */
+export interface MemoryImportResultDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryImportResultDto
+     */
+    imported: number;
+    /**
+     * 
+     * @type {Array<MemoryImportResultDtoSkippedInner>}
+     * @memberof MemoryImportResultDto
+     */
+    skipped: Array<MemoryImportResultDtoSkippedInner>;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryImportResultDtoSkippedInner
+ */
+export interface MemoryImportResultDtoSkippedInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportResultDtoSkippedInner
+     */
+    key: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportResultDtoSkippedInner
+     */
+    reason: string;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryImportRow
+ */
+export interface MemoryImportRow {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    key: string;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof MemoryImportRow
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    sourcePath: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    body: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    type: MemoryImportRowTypeEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    projectMatch: MemoryImportRowProjectMatchEnum;
+    /**
+     * 
+     * @type {Array<MemoryImportRowSimilarToInner>}
+     * @memberof MemoryImportRow
+     */
+    similarTo: Array<MemoryImportRowSimilarToInner>;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    sameAs: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemoryImportRow
+     */
+    alreadyImported: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    problem: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const MemoryImportRowTypeEnum = {
+    User: 'user',
+    Feedback: 'feedback',
+    Project: 'project',
+    Reference: 'reference'
+} as const;
+export type MemoryImportRowTypeEnum = typeof MemoryImportRowTypeEnum[keyof typeof MemoryImportRowTypeEnum];
+
+/**
+ * @export
+ */
+export const MemoryImportRowProjectMatchEnum = {
+    Matched: 'matched',
+    None: 'none',
+    Ambiguous: 'ambiguous'
+} as const;
+export type MemoryImportRowProjectMatchEnum = typeof MemoryImportRowProjectMatchEnum[keyof typeof MemoryImportRowProjectMatchEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemoryImportRowSimilarToInner
+ */
+export interface MemoryImportRowSimilarToInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRowSimilarToInner
+     */
+    handle: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRowSimilarToInner
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRowSimilarToInner
+     */
+    status: MemoryImportRowSimilarToInnerStatusEnum;
+}
+
+
+/**
+ * @export
+ */
+export const MemoryImportRowSimilarToInnerStatusEnum = {
+    Active: 'active',
+    Pending: 'pending',
+    Forgotten: 'forgotten'
+} as const;
+export type MemoryImportRowSimilarToInnerStatusEnum = typeof MemoryImportRowSimilarToInnerStatusEnum[keyof typeof MemoryImportRowSimilarToInnerStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemoryListDto
+ */
+export interface MemoryListDto {
+    /**
+     * 
+     * @type {Array<MemoryEntry>}
+     * @memberof MemoryListDto
+     */
+    memories: Array<MemoryEntry>;
+    /**
+     * 
+     * @type {MemoryListDtoNext}
+     * @memberof MemoryListDto
+     */
+    next: MemoryListDtoNext | null;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryListDtoNext
+ */
+export interface MemoryListDtoNext {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryListDtoNext
+     */
+    beforeUpdatedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryListDtoNext
+     */
+    beforeId: string;
+}
 /**
  * 
  * @export
@@ -9936,6 +10540,77 @@ export interface UpdateLabelInstructionDto {
      */
     instructions?: string;
 }
+/**
+ * 
+ * @export
+ * @interface UpdateMemoryDto
+ */
+export interface UpdateMemoryDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateMemoryDto
+     */
+    status?: UpdateMemoryDtoStatusEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof UpdateMemoryDto
+     */
+    rev?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateMemoryDto
+     */
+    title?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateMemoryDto
+     */
+    body?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateMemoryDto
+     */
+    type?: UpdateMemoryDtoTypeEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateMemoryDto
+     */
+    projectId?: string | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof UpdateMemoryDto
+     */
+    notDuplicateOf?: Array<string>;
+}
+
+
+/**
+ * @export
+ */
+export const UpdateMemoryDtoStatusEnum = {
+    Active: 'active',
+    Forgotten: 'forgotten'
+} as const;
+export type UpdateMemoryDtoStatusEnum = typeof UpdateMemoryDtoStatusEnum[keyof typeof UpdateMemoryDtoStatusEnum];
+
+/**
+ * @export
+ */
+export const UpdateMemoryDtoTypeEnum = {
+    User: 'user',
+    Feedback: 'feedback',
+    Project: 'project',
+    Reference: 'reference'
+} as const;
+export type UpdateMemoryDtoTypeEnum = typeof UpdateMemoryDtoTypeEnum[keyof typeof UpdateMemoryDtoTypeEnum];
+
 /**
  * 
  * @export

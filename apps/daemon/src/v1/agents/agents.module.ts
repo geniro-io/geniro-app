@@ -18,6 +18,7 @@ import { ChatController } from './controllers/chat.controller';
 import { ChatSearchController } from './controllers/chat-search.controller';
 import { KeptSessionsController } from './controllers/kept-sessions.controller';
 import { McpController } from './controllers/mcp.controller';
+import { MemoryImportController } from './controllers/memory-import.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
 import { CallContextDao } from './dao/call-context.dao';
@@ -82,6 +83,7 @@ import { ItemCallIndexService } from './services/item-call-index.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
+import { MemoryImportService } from './services/memory-import.service';
 import { MessageSendService } from './services/message-send.service';
 import { MetricsBroker } from './services/metrics.broker';
 import { ModelParametersService } from './services/model-parameters.service';
@@ -165,6 +167,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatSearchController,
     KeptSessionsController,
     McpController,
+    MemoryImportController,
     RunGroupsController,
     SkillsController,
   ],
@@ -500,6 +503,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunDao,
     RunGroupDao,
     ProjectDao,
+    MemoryImportService,
     {
       // Every CLI the daemon drives, each built by its own `forDaemon` — which
       // is where that CLI decides its directories, its stores and its probes.

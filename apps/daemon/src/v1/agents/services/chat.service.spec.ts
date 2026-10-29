@@ -8073,15 +8073,23 @@ describe('ChatService', () => {
     index = 'INDEX AFTER A SAVE';
 
     await service.sendMessage(run.id, 'go');
+    claude.finish();
+    await drain();
+    index = 'INDEX AFTER AN APPROVE';
+    await service.sendMessage(run.id, 'again');
+
     expect(asked).toEqual([{ taskId: 'task-7', cwd: run.cwd }]);
     expect(runDao.runs.get(run.id)).toMatchObject({
       memoryIndex: 'INDEX AT CREATION',
       nativeMemoryOff: true,
     });
-    expect(claude.start.mock.calls[0]?.[0]).toMatchObject({
-      memoryIndex: 'INDEX AT CREATION',
-      nativeMemoryOff: true,
-    });
+    expect(claude.start).toHaveBeenCalledTimes(2);
+    for (const [input] of claude.start.mock.calls) {
+      expect(input).toMatchObject({
+        memoryIndex: 'INDEX AT CREATION',
+        nativeMemoryOff: true,
+      });
+    }
   });
 
   it('leaves a run created while memory is off with no index and the CLI’s own memory alone', async () => {

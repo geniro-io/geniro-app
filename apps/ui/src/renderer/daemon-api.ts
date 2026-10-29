@@ -9,6 +9,7 @@ import {
   GroupsApi,
   HandoffApi,
   LabelInstructionsApi,
+  MemoriesApi,
   type Middleware,
   ProjectsApi,
   SharesApi,
@@ -246,6 +247,8 @@ export interface DaemonApis {
   labelInstructions: LabelInstructionsApi;
   /** Encrypted share links for artifacts (`/v1/shares`) — desktop only. */
   shares: SharesApi;
+  /** The shared memory every agent reads (`/v1/memories`); its import is desktop only. */
+  memories: MemoriesApi;
 }
 
 /**
@@ -302,5 +305,6 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     tasks: new TasksApi(config),
     labelInstructions: new LabelInstructionsApi(config),
     shares: new SharesApi(config),
+    memories: new MemoriesApi(config),
   };
 }

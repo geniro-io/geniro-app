@@ -268,6 +268,7 @@ export const sharingSchema = z.strictObject({
 export const memorySchema = z.strictObject({
   enabled: z.boolean(),
   agentWrites: z.enum(['active', 'pending']),
+  nativeMemoryOff: z.boolean(),
 });
 
 /**
@@ -641,6 +642,14 @@ export const artifactSaveSchema = z.strictObject({
   suggestedName: saveFileNameSchema,
   html: z.string(),
 });
+
+/**
+ * The shared-memory export on its way to disk: the Markdown the daemon
+ * rendered. No name field — main composes the suggested name itself, so nothing
+ * the renderer sends reaches the dialog's path. Unbounded, like the artifact
+ * save: the memory holds as many entries as were saved or imported.
+ */
+export const memoryExportSaveSchema = z.string();
 
 /**
  * One system notification the renderer asks main to post.

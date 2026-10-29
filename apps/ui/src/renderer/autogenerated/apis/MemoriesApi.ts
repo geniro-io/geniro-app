@@ -15,18 +15,394 @@
 
 import * as runtime from '../runtime';
 import type {
+  CreateMemoryDto,
+  ForgetAllMemoriesDto,
+  ImportMemoriesDto,
   MemoryConfigAckDto,
   MemoryConfigDto,
+  MemoryEntry,
+  MemoryExportDto,
+  MemoryImportPreviewDto,
+  MemoryImportPreviewRequestDto,
+  MemoryImportResultDto,
+  MemoryListDto,
+  UpdateMemoryDto,
 } from '../models/index';
+
+export interface MemoriesApiCreateMemoryRequest {
+    createMemoryDto: CreateMemoryDto;
+}
+
+export interface MemoriesApiImportMemoriesRequest {
+    importMemoriesDto: ImportMemoriesDto;
+}
+
+export interface MemoriesApiListMemoriesRequest {
+    scope?: ListMemoriesScopeEnum;
+    projectId?: string;
+    status?: ListMemoriesStatusEnum;
+    type?: ListMemoriesTypeEnum;
+    q?: string;
+    handle?: string;
+    limit?: number;
+    beforeUpdatedAt?: string;
+    beforeId?: string;
+}
+
+export interface MemoriesApiPreviewMemoryImportRequest {
+    memoryImportPreviewRequestDto: MemoryImportPreviewRequestDto;
+}
+
+export interface MemoriesApiReadMemoryRequest {
+    memoryId: string;
+}
 
 export interface MemoriesApiSetMemoryConfigRequest {
     memoryConfigDto: MemoryConfigDto;
+}
+
+export interface MemoriesApiUpdateMemoryRequest {
+    memoryId: string;
+    updateMemoryDto: UpdateMemoryDto;
 }
 
 /**
  * 
  */
 export class MemoriesApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async createMemoryRaw(requestParameters: MemoriesApiCreateMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryEntry>> {
+        if (requestParameters['createMemoryDto'] == null) {
+            throw new runtime.RequiredError(
+                'createMemoryDto',
+                'Required parameter "createMemoryDto" was null or undefined when calling createMemory().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['createMemoryDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async createMemory(requestParameters: MemoriesApiCreateMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryEntry> {
+        const response = await this.createMemoryRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async exportMemoriesRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryExportDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/export`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async exportMemories(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryExportDto> {
+        const response = await this.exportMemoriesRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async forgetAllMemoriesRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ForgetAllMemoriesDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/forget-all`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async forgetAllMemories(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ForgetAllMemoriesDto> {
+        const response = await this.forgetAllMemoriesRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async importMemoriesRaw(requestParameters: MemoriesApiImportMemoriesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryImportResultDto>> {
+        if (requestParameters['importMemoriesDto'] == null) {
+            throw new runtime.RequiredError(
+                'importMemoriesDto',
+                'Required parameter "importMemoriesDto" was null or undefined when calling importMemories().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/import`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['importMemoriesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async importMemories(requestParameters: MemoriesApiImportMemoriesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryImportResultDto> {
+        const response = await this.importMemoriesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listMemoriesRaw(requestParameters: MemoriesApiListMemoriesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryListDto>> {
+        const queryParameters: any = {};
+
+        if (requestParameters['scope'] != null) {
+            queryParameters['scope'] = requestParameters['scope'];
+        }
+
+        if (requestParameters['projectId'] != null) {
+            queryParameters['projectId'] = requestParameters['projectId'];
+        }
+
+        if (requestParameters['status'] != null) {
+            queryParameters['status'] = requestParameters['status'];
+        }
+
+        if (requestParameters['type'] != null) {
+            queryParameters['type'] = requestParameters['type'];
+        }
+
+        if (requestParameters['q'] != null) {
+            queryParameters['q'] = requestParameters['q'];
+        }
+
+        if (requestParameters['handle'] != null) {
+            queryParameters['handle'] = requestParameters['handle'];
+        }
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        if (requestParameters['beforeUpdatedAt'] != null) {
+            queryParameters['beforeUpdatedAt'] = requestParameters['beforeUpdatedAt'];
+        }
+
+        if (requestParameters['beforeId'] != null) {
+            queryParameters['beforeId'] = requestParameters['beforeId'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listMemories(requestParameters: MemoriesApiListMemoriesRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryListDto> {
+        const response = await this.listMemoriesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async previewMemoryImportRaw(requestParameters: MemoriesApiPreviewMemoryImportRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryImportPreviewDto>> {
+        if (requestParameters['memoryImportPreviewRequestDto'] == null) {
+            throw new runtime.RequiredError(
+                'memoryImportPreviewRequestDto',
+                'Required parameter "memoryImportPreviewRequestDto" was null or undefined when calling previewMemoryImport().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/import/preview`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['memoryImportPreviewRequestDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async previewMemoryImport(requestParameters: MemoriesApiPreviewMemoryImportRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryImportPreviewDto> {
+        const response = await this.previewMemoryImportRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readMemoryRaw(requestParameters: MemoriesApiReadMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryEntry>> {
+        if (requestParameters['memoryId'] == null) {
+            throw new runtime.RequiredError(
+                'memoryId',
+                'Required parameter "memoryId" was null or undefined when calling readMemory().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/{memoryId}`;
+        urlPath = urlPath.replace(`{${"memoryId"}}`, encodeURIComponent(String(requestParameters['memoryId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readMemory(requestParameters: MemoriesApiReadMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryEntry> {
+        const response = await this.readMemoryRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -75,4 +451,88 @@ export class MemoriesApi extends runtime.BaseAPI {
         return await response.value();
     }
 
+    /**
+     * 
+     */
+    async updateMemoryRaw(requestParameters: MemoriesApiUpdateMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryEntry>> {
+        if (requestParameters['memoryId'] == null) {
+            throw new runtime.RequiredError(
+                'memoryId',
+                'Required parameter "memoryId" was null or undefined when calling updateMemory().'
+            );
+        }
+
+        if (requestParameters['updateMemoryDto'] == null) {
+            throw new runtime.RequiredError(
+                'updateMemoryDto',
+                'Required parameter "updateMemoryDto" was null or undefined when calling updateMemory().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/{memoryId}`;
+        urlPath = urlPath.replace(`{${"memoryId"}}`, encodeURIComponent(String(requestParameters['memoryId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PATCH',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['updateMemoryDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async updateMemory(requestParameters: MemoriesApiUpdateMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryEntry> {
+        const response = await this.updateMemoryRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
 }
+
+/**
+ * @export
+ */
+export const ListMemoriesScopeEnum = {
+    All: 'all',
+    Global: 'global',
+    Project: 'project'
+} as const;
+export type ListMemoriesScopeEnum = typeof ListMemoriesScopeEnum[keyof typeof ListMemoriesScopeEnum];
+/**
+ * @export
+ */
+export const ListMemoriesStatusEnum = {
+    Active: 'active',
+    Pending: 'pending',
+    Forgotten: 'forgotten'
+} as const;
+export type ListMemoriesStatusEnum = typeof ListMemoriesStatusEnum[keyof typeof ListMemoriesStatusEnum];
+/**
+ * @export
+ */
+export const ListMemoriesTypeEnum = {
+    User: 'user',
+    Feedback: 'feedback',
+    Project: 'project',
+    Reference: 'reference'
+} as const;
+export type ListMemoriesTypeEnum = typeof ListMemoriesTypeEnum[keyof typeof ListMemoriesTypeEnum];

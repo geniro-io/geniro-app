@@ -50,6 +50,7 @@ import {
   epochMsSchema,
   gitDirSchema,
   lineFlushRequestIdSchema,
+  memoryExportSaveSchema,
   notificationSchema,
   onboardingInputSchema,
   openTerminalSchema,
@@ -81,6 +82,7 @@ import type { RemoteAccess } from './remote/remote-access';
 import { revealPath } from './reveal-path';
 import { saveArtifact } from './save-artifact';
 import { saveChatExport } from './save-chat-export';
+import { saveMemoryExport } from './save-memory-export';
 import { readSettings, updateSettings } from './settings';
 import type { TerminalSessions } from './terminal-sessions';
 import type { UpdateService } from './update-service';
@@ -599,6 +601,13 @@ export function registerIpc(
     IPC.saveArtifact,
     denyRemotely('opens a native save dialog on the computer running geniro'),
     (_event, input: unknown) => saveArtifact(artifactSaveSchema.parse(input)),
+  );
+
+  handle(
+    IPC.saveMemoryExport,
+    denyRemotely('opens a native save dialog on the computer running geniro'),
+    (_event, markdown: unknown) =>
+      saveMemoryExport(memoryExportSaveSchema.parse(markdown)),
   );
 
   // ALLOW_REMOTELY here and on `settleTaskWorktree` below, unlike

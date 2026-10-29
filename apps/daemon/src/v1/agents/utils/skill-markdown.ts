@@ -26,7 +26,7 @@ export interface SkillMeta {
 }
 
 /** Split a leading `--- … ---` YAML frontmatter block off the body. */
-function splitFrontmatter(content: string): {
+export function splitFrontmatter(content: string): {
   frontmatter: Record<string, unknown>;
   body: string;
 } {

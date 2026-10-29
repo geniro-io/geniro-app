@@ -484,9 +484,18 @@ describe('NotificationsGateway', () => {
     expect(emit).toHaveBeenCalledWith('memory_changed', change);
     expect(to).not.toHaveBeenCalled();
 
+    const bulk = {
+      memoryId: null,
+      change: 'bulk' as const,
+      status: 'forgotten' as const,
+      projectId: null,
+    };
+    memories.publish(bulk);
+    expect(emit).toHaveBeenLastCalledWith('memory_changed', bulk);
+
     gw.onModuleDestroy();
     memories.publish({ ...change, memoryId: 'm-2' });
-    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledTimes(2);
   });
 
   it('puts the Mac’s own sockets in the desktop room and a paired device’s outside it', () => {

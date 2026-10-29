@@ -187,6 +187,35 @@ describe('RecommendationsCard', () => {
     ).not.toBeNull();
   });
 
+  it('draws memory items in a Memory group of their own, after the others', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflow={false}
+        items={[
+          recommendation('M-1'),
+          recommendation('R-1'),
+          recommendation('U-1'),
+        ]}
+        applied={null}
+        outcomes={{}}
+        onApply={vi.fn()}
+      />,
+    );
+
+    const headings = [...el.querySelectorAll('h4')].map((h) => h.textContent);
+    expect(headings).toEqual([
+      'Repository',
+      'Your agent instructions',
+      'Memory',
+    ]);
+    expect(
+      el.querySelector('section:last-of-type [data-id="M-1"]'),
+    ).not.toBeNull();
+  });
+
   it('tags each row with its territory, and says what the territory means', () => {
     const el = render(
       <RecommendationsCard

@@ -2870,6 +2870,24 @@ describe('AgentAdapter — how a failed turn is classified for a CALLER', () => 
     ).toBe('auth_expired');
   });
 
+  it('reads cursor’s action-required sentence as its service refusing the request', () => {
+    // VERBATIM out of run `2fc7014e`: Cursor's backend refused every new request
+    // for ~37 minutes and the CLI replaced the refusal with this sentence. The
+    // caller, handed only the sentence, blamed its own `message_agent` and
+    // recorded that as a pitfall for the whole run.
+    const adapter = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    });
+    expect(adapter.failureFrom('Check your settings to continue')).toEqual({
+      class: 'crashed',
+      resetsAt: null,
+      refusedByService: true,
+    });
+    expect(
+      adapter.failureFrom('Error: RetriableError: Connection stalled'),
+    ).toEqual({ class: 'crashed', resetsAt: null });
+  });
+
   it('ranks a spent usage window ABOVE an auth marker', () => {
     // A CLI is free to mention signing in inside a limit message, and waiting is
     // the only move that helps there — so the order in `failureFrom` is load

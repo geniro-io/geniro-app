@@ -77,6 +77,21 @@ describe('readCalleeFailure', () => {
     }
   });
 
+  it('tells the caller a refusal by the agent’s service did not come from its messages', () => {
+    // Run `2fc7014e`: a Manager handed only `Check your settings to continue`
+    // blamed its own `message_agent`, wrote that up as a pitfall for every agent
+    // of the run, and re-dispatched while the vendor kept refusing every request.
+    const read = readCalleeFailure(
+      'Check your settings to continue',
+      diagnoseAs({ class: 'crashed', resetsAt: null, refusedByService: true }),
+    );
+
+    expect(read.error).toContain('Check your settings to continue');
+    expect(read.error).toContain('service refused the request');
+    expect(read.error).toContain('nothing in the messages sent to it');
+    expect(read.failureClass).toBe('crashed');
+  });
+
   it('falls back to `crashed` when the adapter’s diagnosis THROWS', () => {
     // The defensive branch, entered deliberately. It runs inside the executor's
     // settle `try`, whose `finally` resolves the caller either way — so a throw

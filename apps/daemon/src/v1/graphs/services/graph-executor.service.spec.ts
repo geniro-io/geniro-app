@@ -10054,7 +10054,9 @@ describe('GraphExecutorService — agent calls', () => {
     });
 
     /** call-1 fell through to member 2 on member 1's usage limit and answered there. */
-    async function callOnBackup() {
+    async function callOnBackup(
+      limit = "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+    ) {
       const harness = await startPoolRun();
       const { claude, cursor, callBroker, run } = harness;
       const opened = callBroker.callAgent(run.id, 'orch', {
@@ -10063,10 +10065,7 @@ describe('GraphExecutorService — agent calls', () => {
         message: 'Build the letters in /tmp/letter-worktree',
       });
       await drain();
-      claude.starts[1]!.emit({
-        type: 'error',
-        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
-      });
+      claude.starts[1]!.emit({ type: 'error', message: limit });
       claude.starts[1]!.finish();
       await drain();
       cursor.starts[0]!.emit({ type: 'session', sessionId: 'sess-cursor' });
@@ -10130,6 +10129,29 @@ describe('GraphExecutorService — agent calls', () => {
       expect(claude.starts[3]!.input.resumeSessionId).toBe('sess-claude-back');
       completeTurn(claude.starts[3]!, 'Summary.');
       await next;
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('keeps a continued call on member 2 when member 1’s limit named no reset, rather than trying it on every message', async () => {
+      const { claude, cursor, callBroker, run } = await callOnBackup(
+        "You've hit your session limit",
+      );
+      for (const [index, message] of ['first', 'second'].entries()) {
+        const continued = callBroker.callAgent(run.id, 'orch', {
+          title: message,
+          agent: 'helper',
+          message,
+          thread: 'call-1',
+        });
+        await drain();
+        expect(claude.starts).toHaveLength(2);
+        expect(cursor.starts[index + 1]!.input.resumeSessionId).toBe(
+          'sess-cursor',
+        );
+        completeTurn(cursor.starts[index + 1]!, `${message} done`);
+        await continued;
+      }
       completeTurn(claude.starts[0]!, 'done');
       await drain();
     });

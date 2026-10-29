@@ -4134,7 +4134,7 @@ export class CallBroker implements OnModuleInit {
         },
       };
     }
-    const { standings, order } = this.poolCooldowns.order(callee, site);
+    const { standings, proven, order } = this.poolCooldowns.order(callee, site);
     const first =
       threadMember === null
         ? order[0]!
@@ -4142,6 +4142,7 @@ export class CallBroker implements OnModuleInit {
           ? threadMember
           : conversationStartMember({
               standings,
+              proven,
               order,
               held: threadMember,
               hasSession: true,

@@ -149,6 +149,7 @@ describe('conversationStartMember', () => {
   ): number =>
     conversationStartMember({
       order: poolAttemptOrder(patch.standings),
+      proven: patch.standings.map((standing) => standing === null),
       held: 1,
       hasSession: true,
       holdsWork: false,
@@ -180,6 +181,12 @@ describe('conversationStartMember', () => {
       2,
     );
     expect(start({ standings: ['unavailable', null], held: 2 })).toBe(2);
+  });
+
+  it('never moves it back to an earlier member not proven to work again', () => {
+    expect(
+      start({ standings: [null, null], proven: [false, true], held: 2 }),
+    ).toBe(2);
   });
 });
 

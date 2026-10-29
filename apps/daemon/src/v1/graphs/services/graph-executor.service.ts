@@ -5744,9 +5744,10 @@ export class GraphExecutorService
       const heldWindow = nodeWindows.get(node.id);
       const heldBaseline = this.compactionBaselines.get(sessionKey);
       const site = { cwd, runId, nodeId: node.id };
-      const { standings, order } = cooldowns.order(node, site);
+      const { standings, proven, order } = cooldowns.order(node, site);
       const start = conversationStartMember({
         standings,
+        proven,
         order,
         held,
         hasSession: heldSessionId !== null,

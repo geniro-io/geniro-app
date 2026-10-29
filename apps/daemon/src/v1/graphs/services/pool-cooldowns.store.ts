@@ -44,18 +44,29 @@ export interface PoolAttemptResult {
  * every run sees it. Any other failure is filed only for the run and node that
  * met it.
  *
- * Held in memory only: after a daemon restart the first attempt on a spent
- * member fails again and records its window anew.
+ * A member is PROVEN available (`proven`) only on evidence: its account
+ * answered since the daemon started, or its limit ran out at the instant its
+ * CLI named. A cooldown that was a guess lapsing proves nothing, and neither
+ * does knowing nothing — so a conversation is moved back to an earlier member
+ * only on proof, while a new conversation still tries it first.
+ *
+ * Held in memory only: after a daemon restart nothing is spent and nothing is
+ * proven, so the first attempt on a spent member fails again and records its
+ * window anew.
  */
 export class PoolCooldowns {
   /** `limit` records, by account: a usage window belongs to every run on it. */
-  private readonly limits = new Map<string, number>();
+  private readonly limits = new Map<string, LimitRecord>();
   /**
    * `unavailable` records, by the site that met them and the account: an
    * ordinary failure may be that node's own (its prompt, its MCP config), so it
    * reorders only the node it happened to.
    */
   private readonly failures = new Map<string, number>();
+  /** Accounts that answered, or whose named reset passed, since their last limit. */
+  private readonly reopened = new Set<string>();
+  /** Sites whose guessed cooldown lapsed with no answer from the member since. */
+  private readonly doubted = new Set<string>();
 
   /**
    * @param pinnedConfigDir The profile `cwd` pins for `agent`, or null — the
@@ -72,12 +83,21 @@ export class PoolCooldowns {
   /** Whether `member` is spent now, as seen from `site`, and why; null when it is not. */
   standing(member: PoolCooldownMember, site: PoolSite): PoolStanding | null {
     const account = this.accountOf(member, site.cwd);
-    if (this.live(this.limits, account)) {
+    if (this.liveLimit(account)) {
       return 'limit';
     }
-    return this.live(this.failures, siteKey(site, account))
-      ? 'unavailable'
-      : null;
+    return this.liveFailure(siteKey(site, account)) ? 'unavailable' : null;
+  }
+
+  /** Whether `member` is known to work again, as seen from `site`. */
+  proven(member: PoolCooldownMember, site: PoolSite): boolean {
+    const account = this.accountOf(member, site.cwd);
+    const key = siteKey(site, account);
+    return (
+      this.standing(member, site) === null &&
+      this.reopened.has(account) &&
+      !this.doubted.has(key)
+    );
   }
 
   /**
@@ -88,11 +108,17 @@ export class PoolCooldowns {
   order(
     node: WorkflowAgentNode,
     site: PoolSite,
-  ): { standings: (PoolStanding | null)[]; order: number[] } {
-    const standings = Array.from({ length: poolSize(node) }, (_, i) =>
-      this.standing(poolMemberNode(node, i + 1)!, site),
+  ): {
+    standings: (PoolStanding | null)[];
+    proven: boolean[];
+    order: number[];
+  } {
+    const members = Array.from({ length: poolSize(node) }, (_, i) =>
+      poolMemberNode(node, i + 1)!,
     );
-    return { standings, order: poolAttemptOrder(standings) };
+    const standings = members.map((member) => this.standing(member, site));
+    const proven = members.map((member) => this.proven(member, site));
+    return { standings, proven, order: poolAttemptOrder(standings) };
   }
 
   /**
@@ -112,6 +138,8 @@ export class PoolCooldowns {
     if (result.status === 'completed') {
       this.limits.delete(account);
       this.failures.delete(siteKey(site, account));
+      this.doubted.delete(siteKey(site, account));
+      this.reopened.add(account);
       return;
     }
     if (result.status !== 'failed') {
@@ -129,26 +157,44 @@ export class PoolCooldowns {
       this.limits.set(
         account,
         reopens !== null && reopens > now
-          ? reopens
-          : now + POOL_COOLDOWN_FALLBACK_MS,
+          ? { until: reopens, exact: true }
+          : { until: now + POOL_COOLDOWN_FALLBACK_MS, exact: false },
       );
+      this.reopened.delete(account);
     } else if (handedPast) {
       this.failures.set(
         siteKey(site, account),
         now + POOL_COOLDOWN_FALLBACK_MS,
       );
+      this.doubted.delete(siteKey(site, account));
     }
   }
 
-  private live(records: Map<string, number>, key: string): boolean {
-    const until = records.get(key);
+  private liveLimit(account: string): boolean {
+    const record = this.limits.get(account);
+    if (record === undefined) {
+      return false;
+    }
+    if (record.until > this.now()) {
+      return true;
+    }
+    this.limits.delete(account);
+    if (record.exact) {
+      this.reopened.add(account);
+    }
+    return false;
+  }
+
+  private liveFailure(key: string): boolean {
+    const until = this.failures.get(key);
     if (until === undefined) {
       return false;
     }
     if (until > this.now()) {
       return true;
     }
-    records.delete(key);
+    this.failures.delete(key);
+    this.doubted.add(key);
     return false;
   }
 
@@ -160,6 +206,12 @@ export class PoolCooldowns {
       member.model ?? '',
     ].join('\u0000');
   }
+}
+
+/** A `limit` record: until when, and whether the CLI named that instant. */
+interface LimitRecord {
+  until: number;
+  exact: boolean;
 }
 
 /** Where an attempt ran: the run's folder (for its account pin) and the node. */

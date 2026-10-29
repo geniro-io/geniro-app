@@ -140,18 +140,21 @@ export function poolAttemptOrder(
  * call thread being continued. Its session stays with the member it was
  * opened on, so a conversation that has one moves only when it gains
  * something: off a member a limit spent (unless every other member is limited
- * too), or back to an earlier unspent member — never while the member it is
- * on still runs work of its own, which leaving would stop. A member spent on
- * an ordinary failure keeps the conversation it has.
+ * too), or back to an earlier member PROVEN to work again (`proven`: its
+ * account answered, or the reset its CLI named has passed — never a guessed
+ * cooldown lapsing, which would only meet the same limit again) — never while
+ * the member it is on still runs work of its own, which leaving would stop. A
+ * member spent on an ordinary failure keeps the conversation it has.
  */
 export function conversationStartMember(input: {
   standings: readonly (PoolStanding | null)[];
+  proven: readonly boolean[];
   order: readonly number[];
   held: number;
   hasSession: boolean;
   holdsWork: boolean;
 }): number {
-  const { standings, order, held, hasSession, holdsWork } = input;
+  const { standings, proven, order, held, hasSession, holdsWork } = input;
   const first = order[0]!;
   if (!hasSession) {
     return first;
@@ -159,7 +162,7 @@ export function conversationStartMember(input: {
   if (standings[held - 1] === 'limit') {
     return standings[first - 1] === 'limit' ? held : first;
   }
-  return first < held && standings[first - 1] === null && !holdsWork
+  return first < held && proven[first - 1] === true && !holdsWork
     ? first
     : held;
 }

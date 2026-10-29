@@ -3380,16 +3380,18 @@ export function Chats({
    * kind of choice — what the NEXT turn runs as.
    */
   const changeRunSettings = useLatestCallback(
-    async (patch: {
-      approval?: ChatApprovalMode;
-      model?: string | null;
-      effort?: string | null;
-      contextWindow?: string | null;
-      autoCompactPercent?: number | null;
-      modelParameters?: Record<string, string>;
-      configDir?: string | null;
-    }): Promise<void> => {
-      const runId = activeRunIdRef.current;
+    async (
+      patch: {
+        approval?: ChatApprovalMode;
+        model?: string | null;
+        effort?: string | null;
+        contextWindow?: string | null;
+        autoCompactPercent?: number | null;
+        modelParameters?: Record<string, string>;
+        configDir?: string | null;
+      },
+      runId: string | null = activeRunIdRef.current,
+    ): Promise<void> => {
       if (!runId) {
         return;
       }
@@ -3435,26 +3437,28 @@ export function Chats({
    * thread the user is looking at.
    */
   const changeRunConfigDir = useLatestCallback(
-    (chosen: string | null): void => {
-      // Reads `runs`/`activeRunIdRef` rather than closing over `activeRun`
-      // (declared later in this component) — the run's OWN agent, since the
-      // profile chip belongs to whichever CLI this chat is already running.
-      const agent = runs.find(
-        (run) => run.id === activeRunIdRef.current,
-      )?.agentKind;
+    (
+      chosen: string | null,
+      runId: string | null = activeRunIdRef.current,
+    ): void => {
+      // Reads `runs` rather than closing over `activeRun` (declared later in
+      // this component) — the run's OWN agent, since the profile chip belongs
+      // to whichever CLI this chat is already running.
+      const agent = runs.find((run) => run.id === runId)?.agentKind;
       if (chosen !== null && agent) {
         rememberConfigDir(agent, chosen);
       }
-      void changeRunSettings({ configDir: chosen });
+      void changeRunSettings({ configDir: chosen }, runId);
     },
     [rememberConfigDir, changeRunSettings, runs],
   );
 
   /** The native dialog behind that chip, applied to the open chat. */
   const pickRunConfigDir = useLatestCallback(async (): Promise<void> => {
+    const runId = activeRunIdRef.current;
     const chosen = await window.geniro.pickProjectFolder();
     if (chosen) {
-      changeRunConfigDir(chosen);
+      changeRunConfigDir(chosen, runId);
     }
   }, [changeRunConfigDir]);
 

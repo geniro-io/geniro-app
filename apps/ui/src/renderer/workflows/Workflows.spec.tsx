@@ -1645,6 +1645,70 @@ describe('Workflows — a workflow another screen asked to open', () => {
     expect(onHandled).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a requested workflow open when a restore of the previous one answers afterwards', async () => {
+    readWorkflowVersions.mockImplementation(async () => DEV_TEAM_VERSIONS);
+    let answerRestore: () => void = () => {};
+    restoreWorkflowVersion.mockReset().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answerRestore = () =>
+            resolve({
+              slug: 'dev-team',
+              version: '5d06e8b741aa90c3',
+              hash: 'restored-1',
+              backup: '.backups/dev-team.2026-10-27T10-00-00.yaml',
+            });
+        }),
+    );
+    await openBuilder();
+    await menuRow('Versions…');
+    await press('Show version 5d06e8b7');
+    await press('Restore this version');
+    await press('Restore #1?');
+    expect(restoreWorkflowVersion).toHaveBeenCalled();
+    listWorkflows.mockImplementation(async () => [
+      summary('dev-team', 'Dev Team'),
+      SAVED,
+    ]);
+    await paint(true, undefined, undefined, {
+      request: 'review-pair',
+      onHandled: vi.fn(),
+    });
+    expect(getWorkflow).toHaveBeenLastCalledWith({ slug: 'review-pair' });
+
+    await act(async () => {
+      answerRestore();
+    });
+
+    expect(getWorkflow).toHaveBeenLastCalledWith({ slug: 'review-pair' });
+  });
+
+  it('keeps a requested workflow open when a delete of the previous one answers afterwards', async () => {
+    let answerDelete: () => void = () => {};
+    deleteWorkflow.mockReset().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answerDelete = () => resolve({ deleted: true });
+        }),
+    );
+    await openBuilder();
+    await menuRow('Delete workflow');
+    await press('Delete');
+    expect(deleteWorkflow).toHaveBeenCalledWith({ slug: 'dev-team' });
+    listWorkflows.mockImplementation(async () => [SAVED]);
+    await paint(true, undefined, undefined, {
+      request: 'review-pair',
+      onHandled: vi.fn(),
+    });
+    expect(getWorkflow).toHaveBeenLastCalledWith({ slug: 'review-pair' });
+
+    await act(async () => {
+      answerDelete();
+    });
+
+    expect(inBuilder()).toBe(true);
+  });
+
   it('says a request is gone when it was deleted while the leave question was open', async () => {
     saveWorkflow.mockImplementation(async () => {
       throw new Error(

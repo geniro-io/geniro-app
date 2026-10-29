@@ -738,6 +738,7 @@ export function Workflows({
       if (!apis || activeSlug === null || row.version === null) {
         return;
       }
+      const generation = openGeneration.current;
       if (!(await autosave.flush())) {
         throw new Error(
           'The canvas edits could not be saved, so nothing was restored.',
@@ -760,12 +761,15 @@ export function Workflows({
         }
         throw new Error(describeDaemonError(err), { cause: err });
       }
+      void refreshList();
+      if (openGeneration.current !== generation) {
+        return;
+      }
       await openWorkflow(activeSlug);
       setNotice(
         `Restored version #${row.ordinal}. The graph it replaced is backed up at ${backup}.`,
       );
       reloadVersions();
-      void refreshList();
     },
     [apis, activeSlug, autosave, openWorkflow, reloadVersions, refreshList],
   );
@@ -887,8 +891,12 @@ export function Workflows({
     // Suspends autosave for the duration: a debounced write firing after the
     // DELETE would recreate the YAML the user just deleted.
     setDeleting(true);
+    const generation = openGeneration.current;
     try {
       if (await deleteWorkflow(activeSlug)) {
+        if (openGeneration.current !== generation) {
+          return true;
+        }
         // The WHOLE leave, not a hand-picked part of it: clearing only the
         // canvas left the chat dock open and its working flag standing, so the
         // next workflow opened with the dock drawn — starting a conversation

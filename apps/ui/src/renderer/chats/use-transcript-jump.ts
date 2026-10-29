@@ -437,6 +437,13 @@ export function useTranscriptJump({
    */
   /** Moves with every jump and thread, so a jump superseded mid-way never lands. */
   const jumpGenerationRef = useRef(0);
+  const jumpThreadRef = useRef(threadId);
+  // In the render that switches threads, so an answer landing before the
+  // commit's effects run is already stale.
+  if (jumpThreadRef.current !== threadId) {
+    jumpThreadRef.current = threadId;
+    jumpGenerationRef.current += 1;
+  }
   const jumpInFlow = useLatestCallback(
     (seq: number): void => {
       const generation = jumpGenerationRef.current;
@@ -465,7 +472,6 @@ export function useTranscriptJump({
   const [pendingCall, setPendingCall] = useState<PendingCallJump | null>(null);
   useEffect(() => {
     // Another thread: whatever was on its way belonged to the one before.
-    jumpGenerationRef.current += 1;
     setPendingCall(null);
     setLanding(null);
   }, [threadId]);

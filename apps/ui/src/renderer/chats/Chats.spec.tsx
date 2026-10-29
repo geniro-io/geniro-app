@@ -13590,6 +13590,48 @@ describe('Chats — signing a server in', () => {
     expect((row as HTMLButtonElement | null)?.disabled).toBeFalsy();
   });
 
+  it('switches the profile of the chat it was browsed from, though another was opened meanwhile', async () => {
+    api.listChats.mockResolvedValue([
+      chatIn('r1', 'First chat', '/proj-a'),
+      chatIn('r2', 'Second chat', '/proj-b'),
+    ]);
+    api.updateChatSettings.mockImplementation(
+      async ({ runId }: { runId: string }) => ({
+        ...chatIn(runId, 'First chat', '/proj-a'),
+        configDir: '/profiles/picked',
+      }),
+    );
+    let pickFolder: (path: string) => void = () => {};
+    (
+      window as unknown as {
+        geniro: { pickProjectFolder: ReturnType<typeof vi.fn> };
+      }
+    ).geniro.pickProjectFolder = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          pickFolder = resolve;
+        }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    await pickSetting(container, 'Profile', 'Choose config directory…');
+    expect(window.geniro.pickProjectFolder).toHaveBeenCalled();
+
+    await clickRun(container, 'Second chat');
+    await act(async () => {
+      pickFolder('/profiles/picked');
+    });
+
+    expect(api.updateChatSettings).toHaveBeenCalledWith({
+      runId: 'r1',
+      updateChatSettingsDto: { configDir: '/profiles/picked' },
+    });
+    expect(api.updateChatSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2' }),
+    );
+  });
+
   it('asks for the MCP list under the profile the CHAT runs as, not a folder pin', async () => {
     // REPORTED as "Chat cn see datadog, but i cant see it in the list", 15
     // servers against 50 — and the cause was the HARVEST STORE having been

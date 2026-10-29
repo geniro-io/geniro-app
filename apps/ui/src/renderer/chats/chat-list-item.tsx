@@ -473,7 +473,7 @@ export const ChatListItem = memo(function ChatListItem({
    * is in its temporal dead zone until its own line, and naming it in a hook's
    * dependency array (which evaluates on every render) throws rather than
    * merely re-creating the callback. Plain rather than memoized for the same
-   * reason: `startEditing` is re-made each render, so a `useCallback` over it
+   * reason: `startEditing` is re-made each render, so a `useLatestCallback` over it
    * would be re-made each render too, and the menu it feeds exists only while
    * it is open.
    */

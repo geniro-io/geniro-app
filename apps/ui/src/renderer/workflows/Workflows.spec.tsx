@@ -974,6 +974,73 @@ describe('Workflows — an agent node’s CLI', () => {
   });
 });
 
+describe('Workflows — an agent node’s profile', () => {
+  beforeEach(() => {
+    getCapabilities.mockImplementation(async () => ({
+      agents: [],
+      approvals: [],
+      configDirs: [{ agent: 'claude', unavailableReason: null }],
+      interactiveTerminals: [],
+      modelEfforts: [],
+      options: [],
+      followUps: [],
+    }));
+    getWorkflow.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      workflow: {
+        ...EMPTY,
+        nodes: [
+          { id: 'eng', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'qa', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        layout: { eng: { x: 0, y: 0 }, qa: { x: 400, y: 0 } },
+      },
+    }));
+  });
+
+  const clickNode = async (id: string): Promise<void> => {
+    const node = container.querySelector<HTMLElement>(
+      `.react-flow__node[data-id="${id}"]`,
+    );
+    await act(async () => {
+      node?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  };
+
+  it('lands a browsed profile on the node it was chosen for, though another was selected meanwhile', async () => {
+    let pickFolder: (path: string) => void = () => {};
+    window.geniro = createPreloadStub({
+      pickProjectFolder: () =>
+        new Promise<string>((resolve) => {
+          pickFolder = resolve;
+        }),
+    });
+    await openBuilder();
+    await clickNode('eng');
+    await press('Agent config directory for this node');
+    const browse = [
+      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((option) => option.textContent?.includes('Choose config directory'));
+    if (browse === undefined) {
+      throw new Error('no browse row');
+    }
+    await act(async () => {
+      browse.click();
+    });
+    await clickNode('qa');
+    await act(async () => {
+      pickFolder('/profiles/picked');
+    });
+    await wait(900);
+
+    const saved = savedRequests().at(-1)?.saveWorkflowDto.workflow.nodes;
+    expect(saved?.find((n) => n.id === 'eng')).toMatchObject({
+      configDir: '/profiles/picked',
+    });
+    expect(saved?.find((n) => n.id === 'qa')).not.toHaveProperty('configDir');
+  });
+});
+
 describe('Workflows — an agent node’s MCP switches', () => {
   /** One listing row as the daemon answers it for a profile. */
   const mcpRow = (name: string, turnReason: string | null = null): unknown => ({

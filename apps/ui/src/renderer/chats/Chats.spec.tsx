@@ -7141,6 +7141,43 @@ describe('Chats composer memory & suggestions', () => {
     });
   });
 
+  it('starts the chat on the chips as they were at Send, not as changed while the folder picker was open', async () => {
+    stubSettings({
+      projectFolder: null,
+      recentConfigDirs: { claude: ['/profiles/other', '/profiles/work'] },
+    });
+    let pickFolder: (path: string) => void = () => {};
+    (
+      window as unknown as {
+        geniro: { pickProjectFolder: ReturnType<typeof vi.fn> };
+      }
+    ).geniro.pickProjectFolder = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          pickFolder = resolve;
+        }),
+    );
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(container, configDirTrigger(container)!, 'work');
+    await sendTask(container);
+    expect(window.geniro.pickProjectFolder).toHaveBeenCalled();
+    await pickMenuRow(container, configDirTrigger(container)!, 'other');
+    await act(async () => {
+      pickFolder('/picked');
+    });
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({
+        cwd: '/picked',
+        configDir: '/profiles/work',
+      }),
+    });
+  });
+
   it('omits the config directory entirely when the composer names none', async () => {
     api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
     api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));

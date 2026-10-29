@@ -1,5 +1,5 @@
 import { Check, CircleDashed, Loader2, TriangleAlert } from 'lucide-react';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import {
   DEFAULT_SHARING,
@@ -29,6 +29,7 @@ import { Select, type SelectGroup } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { BULK_REVOKE_TIMEOUT_MS, describeDaemonError } from '../daemon-api';
 import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
@@ -212,7 +213,7 @@ export function Sharing({
   const [links, setLinks] = useState<Record<string, string>>({});
   const [savingPlace, setSavingPlace] = useState(false);
 
-  const readShares = useCallback(() => {
+  const readShares = useLatestCallback(() => {
     if (api === null || remote) {
       return;
     }

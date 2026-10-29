@@ -1,5 +1,5 @@
 import { Globe, Loader2, RefreshCw, Smartphone, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { RemoteAccessState } from '../../shared/remote';
 import { formatRelativeTime } from '../chats/relative-time';
@@ -9,6 +9,7 @@ import { QrCode } from '../components/qr-code';
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { Switch } from '../components/ui/switch';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { isRemoteRuntime } from '../remote/remote-session';
 
 /**
@@ -273,7 +274,7 @@ export function RemoteAccess({
    */
   const pressEpochRef = useRef(0);
 
-  const refresh = useCallback((): void => {
+  const refresh = useLatestCallback((): void => {
     const epoch = pressEpochRef.current;
     void window.geniro
       .getRemoteAccess()
@@ -356,7 +357,7 @@ export function RemoteAccess({
     return () => clearTimeout(timer);
   }, [codeExpiresAt, refresh]);
 
-  const onToggle = useCallback(
+  const onToggle = useLatestCallback(
     (next: boolean): void => {
       pressEpochRef.current += 1;
       setError(null);
@@ -392,7 +393,7 @@ export function RemoteAccess({
     [refresh],
   );
 
-  const onRegenerate = useCallback((): void => {
+  const onRegenerate = useLatestCallback((): void => {
     pressEpochRef.current += 1;
     setError(null);
     setRegenerating(true);
@@ -421,7 +422,7 @@ export function RemoteAccess({
   // two states, so a second flag could only ever describe a press that is not
   // the one on screen.
   const [tunnelPending, setTunnelPending] = useState(false);
-  const runTunnel = useCallback(
+  const runTunnel = useLatestCallback(
     (call: () => Promise<RemoteAccessState>): void => {
       pressEpochRef.current += 1;
       setError(null);
@@ -446,7 +447,7 @@ export function RemoteAccess({
     [],
   );
 
-  const onRevoke = useCallback((deviceId: string): void => {
+  const onRevoke = useLatestCallback((deviceId: string): void => {
     pressEpochRef.current += 1;
     setError(null);
     setRevokingId(deviceId);

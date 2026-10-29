@@ -4,6 +4,7 @@ import * as React from 'react';
 import type { RunConfig } from '../../shared/contracts';
 import { Button } from '../components/ui/button';
 import { Menu } from '../components/ui/menu';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { workflowSlugOf } from './composer-values';
 import { shortenPath } from './directory-select';
 
@@ -61,7 +62,7 @@ export function NewChatButton({
   /** Whether the menu was open when the bookmark was pressed. */
   const openAtPress = React.useRef(false);
 
-  const cancelClose = React.useCallback((): void => {
+  const cancelClose = useLatestCallback((): void => {
     if (closeTimer.current !== null) {
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
@@ -71,7 +72,7 @@ export function NewChatButton({
   // The panel hangs 6px below the button, and that gap belongs to neither — a
   // pointer travelling from one to the other passes through it and would close
   // the menu on the way in. The delay is what makes the trip survivable.
-  const scheduleClose = React.useCallback((): void => {
+  const scheduleClose = useLatestCallback((): void => {
     cancelClose();
     closeTimer.current = setTimeout(() => setOpen(false), CLOSE_DELAY_MS);
   }, [cancelClose]);

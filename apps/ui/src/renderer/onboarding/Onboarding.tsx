@@ -9,14 +9,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
-import {
-  createElement,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { createElement, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   CLI_KINDS,
@@ -45,6 +38,7 @@ import { ProgressBar } from '../components/ui/progress-bar';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { createDaemonApis } from '../daemon-api';
 import { ConfigProfileList } from '../settings/config-profiles';
 import { useSharedCapabilities } from '../use-capabilities';
@@ -137,7 +131,7 @@ export function Onboarding({
   const heading = useRef<HTMLHeadingElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
-  const loadSettings = useCallback(async (): Promise<void> => {
+  const loadSettings = useLatestCallback(async (): Promise<void> => {
     try {
       const settings = await window.geniro.getSettings();
       setProgress(settings.onboardingProgress ?? INITIAL);
@@ -154,7 +148,7 @@ export function Onboarding({
     void loadSettings();
   }, [loadSettings]);
 
-  const save = useCallback(
+  const save = useLatestCallback(
     (
       patch: Parameters<typeof window.geniro.updateSettings>[0],
     ): Promise<unknown> => {
@@ -198,7 +192,7 @@ export function Onboarding({
     heading.current?.focus();
   }, [progress.step]);
 
-  const refreshClis = useCallback(async (): Promise<void> => {
+  const refreshClis = useLatestCallback(async (): Promise<void> => {
     setClis(null);
     try {
       setClis(await window.geniro.detectClis());

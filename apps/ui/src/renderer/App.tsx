@@ -1,12 +1,4 @@
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { CliKind } from '../shared/contracts';
 import type { DaemonHandle } from '../shared/contracts';
@@ -23,6 +15,7 @@ import { type AppView, NavRail } from './components/nav-rail';
 import { StartupScreen } from './components/startup-screen';
 import { TitleBar } from './components/title-bar';
 import { cn } from './components/ui/utils';
+import { useLatestCallback } from './components/use-latest-callback';
 import { useNarrowViewport } from './components/use-narrow-viewport';
 import { usePhoneBackEntry } from './components/use-phone-back-entry';
 import { useSidebarCollapsed } from './components/use-sidebar-collapsed';
@@ -285,7 +278,7 @@ export function App(): React.JSX.Element {
    * looks like it worked. A failure goes to the daemon's log instead, which is
    * where every other renderer failure goes.
    */
-  const clearAgentCaches = useCallback((): void => {
+  const clearAgentCaches = useLatestCallback((): void => {
     if (!apis) {
       // No daemon, so no cache to clear — and the connection banner is already
       // on screen saying so.
@@ -317,7 +310,7 @@ export function App(): React.JSX.Element {
   // nothing to post answers at once rather than waiting out main's bound.
   useEffect(() => window.geniro.onFlushLineMeasurements(answerLineFlush), []);
 
-  const attachDaemon = useCallback((daemonHandle: DaemonHandle): void => {
+  const attachDaemon = useLatestCallback((daemonHandle: DaemonHandle): void => {
     // The launch's start answers twice — the `onDaemonRestarted` push and the
     // mount's own `ensureDaemon`, which joins that same start — and a second
     // attach of one handle would only drop a socket that is already opening.
@@ -366,7 +359,7 @@ export function App(): React.JSX.Element {
     setHandle(daemonHandle);
   }, []);
 
-  const connectDaemon = useCallback(async (): Promise<void> => {
+  const connectDaemon = useLatestCallback(async (): Promise<void> => {
     setReconnecting(true);
     try {
       // Always ENSURES, on mount as on a Retry. On mount the launch's own start
@@ -413,7 +406,7 @@ export function App(): React.JSX.Element {
     };
   }, [attachDaemon, connectDaemon]);
 
-  const handleOnboardingDone = useCallback(
+  const handleOnboardingDone = useLatestCallback(
     (destination?: FirstLaunch): void => {
       setGuideOpen(false);
       setPhase('ready');
@@ -472,7 +465,7 @@ export function App(): React.JSX.Element {
 
   const { toggle: toggleTerminal } = terminals;
   useTerminalShortcut(
-    useCallback(
+    useLatestCallback(
       () => toggleTerminal(view === 'chats' ? chatFolder : null),
       [toggleTerminal, chatFolder, view],
     ),
@@ -480,7 +473,7 @@ export function App(): React.JSX.Element {
 
   /** The reading the last jump went to — where the cycle continues from. */
   const lastJumpRef = useRef<WaitReading | null>(null);
-  const jumpToNextWaiting = useCallback(() => {
+  const jumpToNextWaiting = useLatestCallback(() => {
     // The cycle continues only from the thread on show: from the board, or
     // after the user wandered to another thread, it starts at the longest wait.
     const onShow = view === 'chats' ? openRunId : null;

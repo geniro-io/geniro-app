@@ -6,7 +6,9 @@ import {
   ERR_ABORTED,
   flushMainLogs,
   isRealLoadFailure,
+  RENDERER_RELOAD_WINDOW_MS,
   reportMainLog,
+  shouldReloadAfterRendererGone,
 } from './window-diagnostics';
 
 const HANDLE: DaemonHandle = {
@@ -39,6 +41,37 @@ describe('isRealLoadFailure', () => {
 
   it('ignores a sub-resource, which is not the app failing to open', () => {
     expect(isRealLoadFailure(failure({ isMainFrame: false }))).toBe(false);
+  });
+});
+
+describe('shouldReloadAfterRendererGone', () => {
+  it('reloads a renderer that crashed or ran out of memory', () => {
+    expect(shouldReloadAfterRendererGone('crashed', null, 1_000)).toBe(true);
+    expect(shouldReloadAfterRendererGone('oom', null, 1_000)).toBe(true);
+  });
+
+  it('leaves a renderer that exited on purpose alone', () => {
+    expect(shouldReloadAfterRendererGone('clean-exit', null, 1_000)).toBe(
+      false,
+    );
+  });
+
+  it('leaves a renderer down that died again inside the reload window', () => {
+    const reloadedAt = 1_000;
+    expect(
+      shouldReloadAfterRendererGone(
+        'crashed',
+        reloadedAt,
+        reloadedAt + RENDERER_RELOAD_WINDOW_MS - 1,
+      ),
+    ).toBe(false);
+    expect(
+      shouldReloadAfterRendererGone(
+        'crashed',
+        reloadedAt,
+        reloadedAt + RENDERER_RELOAD_WINDOW_MS,
+      ),
+    ).toBe(true);
   });
 });
 

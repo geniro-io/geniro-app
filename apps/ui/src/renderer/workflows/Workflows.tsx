@@ -29,7 +29,7 @@ import {
   Workflow as WorkflowIcon,
   Zap,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
   CliDetection,
@@ -79,6 +79,7 @@ import { Input } from '../components/ui/input';
 import { Menu, type MenuGroup } from '../components/ui/menu';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Select } from '../components/ui/select';
+import { useLatestCallback } from '../components/use-latest-callback';
 import {
   createDaemonApis,
   daemonErrorCode,
@@ -193,6 +194,13 @@ const CHANGE_STAGES_DRAFT = 'Change the stages: ';
  * canvas is a static builder (no live-run animation in M3); runs start from
  * the Chats page.
  */
+/** An inspector edit: fields of the node's own kind, never `kind` itself. */
+type NodePatch = Partial<
+  Omit<WorkflowAgentNode, 'kind'> &
+    Omit<WorkflowTriggerNode, 'kind'> &
+    Omit<WorkflowInstructionNode, 'kind'>
+>;
+
 export function Workflows({
   handle,
   client,
@@ -376,7 +384,7 @@ export function Workflows({
     handleEdge: 'left',
   });
 
-  const refreshList = useCallback(async (): Promise<void> => {
+  const refreshList = useLatestCallback(async (): Promise<void> => {
     if (!api) {
       return;
     }
@@ -418,7 +426,7 @@ export function Workflows({
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const openWorkflow = useCallback(
+  const openWorkflow = useLatestCallback(
     async (slug: string): Promise<void> => {
       if (!api) {
         return;
@@ -463,7 +471,7 @@ export function Workflows({
   );
 
   /** "New workflow" opens the create dialog — nothing exists until Create. */
-  const newWorkflow = useCallback((): void => {
+  const newWorkflow = useLatestCallback((): void => {
     setError(null);
     setCreateOpen(true);
   }, []);
@@ -474,7 +482,7 @@ export function Workflows({
    * redirect into the builder for it. On failure the dialog stays open
    * showing the error.
    */
-  const createWorkflow = useCallback(
+  const createWorkflow = useLatestCallback(
     async (meta: WorkflowMeta): Promise<void> => {
       if (!api) {
         return;
@@ -499,7 +507,7 @@ export function Workflows({
   /** Clear the builder and return to the library grid (refreshing the list so
    *  a just-saved workflow's card reflects its new node count / mtime). Callers
    *  flush pending autosave work first — see `leaveToLibrary`. */
-  const backToLibrary = useCallback((): void => {
+  const backToLibrary = useLatestCallback((): void => {
     openGeneration.current += 1;
     setStarted(false);
     setActiveSlug(null);
@@ -536,7 +544,7 @@ export function Workflows({
     [nodes],
   );
 
-  const askChat = useCallback((text: string) => {
+  const askChat = useLatestCallback((text: string) => {
     setChatMounted(true);
     setChatOpen(true);
     chatDraftCount.current += 1;
@@ -544,7 +552,7 @@ export function Workflows({
   }, []);
 
   /** Persist the canvas under the given meta; true on success. */
-  const persist = useCallback(
+  const persist = useLatestCallback(
     async (meta: WorkflowMeta): Promise<boolean> => {
       if (!api) {
         return false;
@@ -603,7 +611,7 @@ export function Workflows({
   /** One autosave write of the open workflow under its current meta. The
    *  normalization matches `canvasSnapshot`'s exactly — a mismatch would leave
    *  the canvas permanently "dirty" and autosave writing in a loop. */
-  const saveNow = useCallback((): Promise<boolean> => {
+  const saveNow = useLatestCallback((): Promise<boolean> => {
     const trimmedDescription = description.trim();
     return persist({
       name: name.trim() || 'workflow',
@@ -652,7 +660,7 @@ export function Workflows({
    * edits, they are gone, and the notice says so rather than letting the graph
    * change under the user unannounced.
    */
-  const reloadAfterAgentEdit = useCallback(async (): Promise<void> => {
+  const reloadAfterAgentEdit = useLatestCallback(async (): Promise<void> => {
     if (!api || activeSlug === null) {
       return;
     }
@@ -725,7 +733,7 @@ export function Workflows({
    * dialog as the daemon's own sentence; a `WORKFLOW_CHANGED` one also raises the
    * stale-copy banner, whose Reload is the way out.
    */
-  const restoreVersion = useCallback(
+  const restoreVersion = useLatestCallback(
     async (row: WorkflowVersionRow): Promise<void> => {
       if (!apis || activeSlug === null || row.version === null) {
         return;
@@ -773,7 +781,7 @@ export function Workflows({
    * dialog offers to leave anyway: a daemon that is down must not trap the
    * user in the builder.
    */
-  const leaveToLibrary = useCallback(async (): Promise<boolean> => {
+  const leaveToLibrary = useLatestCallback(async (): Promise<boolean> => {
     if (await autosave.flush()) {
       backToLibrary();
       return true;
@@ -786,7 +794,7 @@ export function Workflows({
    * Open a workflow another screen asked for, read against a fresh library:
    * it was written moments ago, or deleted since.
    */
-  const openRequested = useCallback(
+  const openRequested = useLatestCallback(
     async (slug: string): Promise<void> => {
       if (!api) {
         return;
@@ -808,7 +816,7 @@ export function Workflows({
 
   /** Change-popup submit: adopt the new meta and persist it immediately —
    *  the popup only closes once the library file actually carries it. */
-  const renameWorkflow = useCallback(
+  const renameWorkflow = useLatestCallback(
     async (meta: WorkflowMeta): Promise<void> => {
       setRenaming(true);
       try {
@@ -829,7 +837,7 @@ export function Workflows({
   /** Delete one workflow from the library (its saved viewport goes with it);
    *  true on success. The ONE delete path — the library grid's per-card
    *  confirm and the builder's toolbar both go through it. */
-  const deleteWorkflow = useCallback(
+  const deleteWorkflow = useLatestCallback(
     async (slug: string): Promise<boolean> => {
       if (!api) {
         return false;
@@ -850,7 +858,7 @@ export function Workflows({
 
   /** The library grid's delete, once the modal is confirmed. A failure keeps
    *  the dialog open carrying the error rather than closing on a no-op. */
-  const confirmDelete = useCallback(async (): Promise<void> => {
+  const confirmDelete = useLatestCallback(async (): Promise<void> => {
     if (!pendingDelete) {
       return;
     }
@@ -872,7 +880,7 @@ export function Workflows({
    * library card's own `confirmDelete` does. It used to return void because its
    * caller was a two-step button that closed itself either way.
    */
-  const remove = useCallback(async (): Promise<boolean> => {
+  const remove = useLatestCallback(async (): Promise<boolean> => {
     if (!activeSlug) {
       return false;
     }
@@ -906,7 +914,7 @@ export function Workflows({
    * "Analyze & improve": the workflow's analysis in its popup when it has
    * one, else the setup dialog — the analysis is never a sidebar chat.
    */
-  const openAnalysis = useCallback(async (): Promise<void> => {
+  const openAnalysis = useLatestCallback(async (): Promise<void> => {
     if (!api || activeSlug === null) {
       return;
     }
@@ -929,7 +937,7 @@ export function Workflows({
   }, [api, activeSlug]);
 
   /** A recommendations card's Apply in the analysis popup. */
-  const applyRecommendations = useCallback(
+  const applyRecommendations = useLatestCallback(
     async (runId: string, cardSeq: number, ids: string[]): Promise<void> => {
       if (!apis) {
         throw new Error('daemon unavailable');
@@ -1004,7 +1012,7 @@ export function Workflows({
     ];
   }, [activeSlug]);
 
-  const importWorkflow = useCallback(async (): Promise<void> => {
+  const importWorkflow = useLatestCallback(async (): Promise<void> => {
     if (!api) {
       return;
     }
@@ -1116,7 +1124,7 @@ export function Workflows({
     onOpenRequestHandled,
   ]);
 
-  const exportWorkflow = useCallback(async (): Promise<void> => {
+  const exportWorkflow = useLatestCallback(async (): Promise<void> => {
     if (!api || !activeSlug) {
       return;
     }
@@ -1138,7 +1146,7 @@ export function Workflows({
     }
   }, [api, activeSlug]);
 
-  const addNode = useCallback(
+  const addNode = useLatestCallback(
     (item: PaletteItem, position?: { x: number; y: number }): void => {
       const id = nextNodeId(new Set(nodes.map((n) => n.id)), item.kind);
       const maxX = nodes.reduce((max, n) => Math.max(max, n.position.x), -260);
@@ -1172,12 +1180,12 @@ export function Workflows({
     [nodes, setNodes, rfInstance, capabilities],
   );
 
-  const onCanvasDragOver = useCallback((event: React.DragEvent): void => {
+  const onCanvasDragOver = useLatestCallback((event: React.DragEvent): void => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
   }, []);
 
-  const onCanvasDrop = useCallback(
+  const onCanvasDrop = useLatestCallback(
     (event: React.DragEvent): void => {
       event.preventDefault();
       const item = parsePaletteItem(event.dataTransfer.getData(NODE_DND_MIME));
@@ -1193,7 +1201,7 @@ export function Workflows({
     [rfInstance, addNode],
   );
 
-  const layout = useCallback(async (): Promise<void> => {
+  const layout = useLatestCallback(async (): Promise<void> => {
     try {
       const workflow = fromFlow(
         { name: name.trim() || 'workflow' },
@@ -1221,7 +1229,7 @@ export function Workflows({
     }
   }, [name, nodes, edges, setNodes]);
 
-  const onConnect = useCallback(
+  const onConnect = useLatestCallback(
     (connection: Connection): void => {
       if (!connection.source || !connection.target) {
         return;
@@ -1276,7 +1284,7 @@ export function Workflows({
    * self-loop, and no DATA wire that closes a loop (one the daemon would
    * refuse on every save).
    */
-  const isValidConnection = useCallback(
+  const isValidConnection = useLatestCallback(
     (connection: Connection | Edge): boolean =>
       canvasAcceptsConnection(connection, {
         kindOf: (id) => nodes.find((n) => n.id === id)?.data.node.kind,
@@ -1291,20 +1299,11 @@ export function Workflows({
    * `kind` itself, so the spread stays within the node's union branch — the
    * cast just tells TS what the per-kind field editors guarantee.
    */
-  const patchSelected = useCallback(
-    (
-      patch: Partial<
-        Omit<WorkflowAgentNode, 'kind'> &
-          Omit<WorkflowTriggerNode, 'kind'> &
-          Omit<WorkflowInstructionNode, 'kind'>
-      >,
-    ): void => {
-      if (!selectedNodeId) {
-        return;
-      }
+  const patchNode = useLatestCallback(
+    (nodeId: string, patch: NodePatch): void => {
       setNodes((prev) =>
         prev.map((n) =>
-          n.id === selectedNodeId
+          n.id === nodeId
             ? ({
                 ...n,
                 data: { node: { ...n.data.node, ...patch } as WorkflowNode },
@@ -1313,7 +1312,15 @@ export function Workflows({
         ),
       );
     },
-    [selectedNodeId, setNodes],
+    [setNodes],
+  );
+  const patchSelected = useLatestCallback(
+    (patch: NodePatch): void => {
+      if (selectedNodeId) {
+        patchNode(selectedNodeId, patch);
+      }
+    },
+    [selectedNodeId, patchNode],
   );
 
   const selected =
@@ -1517,16 +1524,21 @@ export function Workflows({
    * account the user's next CHAT should run as. Scoped to the SELECTED node's
    * own agent — each CLI keeps a different layout in its directory.
    */
-  const chooseNodeConfigDir = useCallback(async (): Promise<void> => {
+  const chooseNodeConfigDir = useLatestCallback(async (): Promise<void> => {
     if (selected?.kind !== 'agent') {
       return;
     }
     const agent = selected.agent;
+    const generation = openGeneration.current;
     const chosen = await window.geniro.pickProjectFolder();
-    if (chosen === null) {
+    if (
+      chosen === null ||
+      selectedNodeId === null ||
+      openGeneration.current !== generation
+    ) {
       return;
     }
-    patchSelected({ configDir: chosen });
+    patchNode(selectedNodeId, { configDir: chosen });
     // Merged into the list as it stands NOW, not the copy this screen read when
     // it first mounted: the builder stays mounted once opened, so a profile the
     // chat composer added since would otherwise be written out of the shared
@@ -1545,7 +1557,7 @@ export function Workflows({
     };
     setRecentConfigDirs(next);
     void window.geniro.updateSettings({ recentConfigDirs: next });
-  }, [selected, patchSelected, recentConfigDirs]);
+  }, [selected, selectedNodeId, patchNode, recentConfigDirs]);
 
   // Read-only "Agent calls" summary for the inspector: who this agent may
   // invoke and who may invoke it (the amber call edges touching the node),
@@ -1579,7 +1591,7 @@ export function Workflows({
     liveSnapshot,
     selected?.kind === 'agent' && active,
   );
-  const instructionName = useCallback(
+  const instructionName = useLatestCallback(
     (nodeId: string): string => {
       const node = nodes.find((n) => n.id === nodeId)?.data.node;
       return node?.name ?? nodeId;
@@ -1594,14 +1606,14 @@ export function Workflows({
     [activeSlug],
   );
 
-  const onSelectionChange = useCallback(
+  const onSelectionChange = useLatestCallback(
     ({ nodes: sel }: { nodes: GraphFlowNode[] }): void =>
       setSelectedNodeId(sel[0]?.id ?? null),
     [],
   );
 
   // Every finished pan/zoom gesture persists (per workflow).
-  const onMoveEnd = useCallback(
+  const onMoveEnd = useLatestCallback(
     (_event: unknown, viewport: Viewport): void => {
       if (activeSlug) {
         saveViewport(activeSlug, viewport);

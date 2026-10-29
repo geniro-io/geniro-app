@@ -1,3 +1,5 @@
+import type { RenderProcessGoneDetails } from 'electron';
+
 import type { DaemonHandle } from '../shared/contracts';
 
 /**
@@ -49,6 +51,27 @@ export interface LoadFailure {
 /** Whether this `did-fail-load` is a real failure of the app's own document. */
 export function isRealLoadFailure(failure: LoadFailure): boolean {
   return failure.isMainFrame && failure.errorCode !== ERR_ABORTED;
+}
+
+/** A renderer that dies again this soon after its reload is left down. */
+export const RENDERER_RELOAD_WINDOW_MS = 30_000;
+
+/**
+ * Whether a window whose renderer just died is reloaded: always, unless it
+ * exited on purpose or died again within {@link RENDERER_RELOAD_WINDOW_MS} of
+ * the last reload, so a renderer that cannot stay up does not reload forever.
+ */
+export function shouldReloadAfterRendererGone(
+  reason: RenderProcessGoneDetails['reason'],
+  lastReloadAt: number | null,
+  now: number,
+): boolean {
+  if (reason === 'clean-exit') {
+    return false;
+  }
+  return (
+    lastReloadAt === null || now - lastReloadAt >= RENDERER_RELOAD_WINDOW_MS
+  );
 }
 
 /**

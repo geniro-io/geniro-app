@@ -35,7 +35,7 @@ function readFailure(prefix: string, err: unknown): string {
  * names WHAT is being read: when it changes, the previous subject's reading is
  * dropped at once, so it is never shown under the next one's name.
  *
- * `read` must be stable for as long as the subject is (a `useCallback`), or
+ * `read` must be stable for as long as the subject is (a `useLatestCallback`), or
  * every render restarts the loop.
  */
 export function usePolledRead<T>(

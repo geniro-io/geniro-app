@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
+
+import { useLatestCallback } from './use-latest-callback';
 
 /** How long a field waits after the last keystroke before it is written. */
 const DEBOUNCE_MS = 600;
@@ -84,7 +86,7 @@ export function useDebouncedPersist<T>(
     };
   }, []);
 
-  const schedule = useCallback(
+  const schedule = useLatestCallback(
     (value: T): void => {
       dirtyRef.current = true;
       latest.current = value;

@@ -1,6 +1,7 @@
-import { useCallback, useReducer } from 'react';
+import { useReducer } from 'react';
 
 import type { ProfileColor } from '../../shared/contracts';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { randomId } from '../random-id';
 
 /** Longer names are cut: a tab is a label in a strip, not a place to write. */
@@ -142,28 +143,31 @@ export function useTerminalTabs(): TerminalTabs {
     terminalTabsReducer,
     INITIAL_TERMINAL_TABS,
   );
-  const openTab = useCallback((cwd: string | null) => {
+  const openTab = useLatestCallback((cwd: string | null) => {
     dispatch({ type: 'open-tab', key: randomId(), cwd });
   }, []);
-  const closeTab = useCallback((key: string) => {
+  const closeTab = useLatestCallback((key: string) => {
     dispatch({ type: 'close-tab', key });
   }, []);
-  const selectTab = useCallback((key: string) => {
+  const selectTab = useLatestCallback((key: string) => {
     dispatch({ type: 'select', key });
   }, []);
-  const markExited = useCallback((key: string, exitCode: number) => {
+  const markExited = useLatestCallback((key: string, exitCode: number) => {
     dispatch({ type: 'exited', key, exitCode });
   }, []);
-  const renameTab = useCallback((key: string, name: string) => {
+  const renameTab = useLatestCallback((key: string, name: string) => {
     dispatch({ type: 'rename', key, name });
   }, []);
-  const setTabColor = useCallback((key: string, color: ProfileColor | null) => {
-    dispatch({ type: 'recolor', key, color });
-  }, []);
-  const toggle = useCallback((cwd: string | null) => {
+  const setTabColor = useLatestCallback(
+    (key: string, color: ProfileColor | null) => {
+      dispatch({ type: 'recolor', key, color });
+    },
+    [],
+  );
+  const toggle = useLatestCallback((cwd: string | null) => {
     dispatch({ type: 'toggle', key: randomId(), cwd });
   }, []);
-  const hide = useCallback(() => {
+  const hide = useLatestCallback(() => {
     dispatch({ type: 'hide' });
   }, []);
   return {

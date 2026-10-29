@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import { useLatestCallback } from '../use-latest-callback';
 import { Menu, type MenuGroup } from './menu';
 
 /** Where a context menu was raised, in viewport coordinates. */
@@ -102,14 +103,14 @@ export function useContextMenu(): {
   close: () => void;
 } {
   const [point, setPoint] = React.useState<ContextMenuPoint | null>(null);
-  const onContextMenu = React.useCallback((event: React.MouseEvent): void => {
+  const onContextMenu = useLatestCallback((event: React.MouseEvent): void => {
     event.preventDefault();
     setPoint({ x: event.clientX, y: event.clientY });
   }, []);
-  const openBelow = React.useCallback((trigger: Element): void => {
+  const openBelow = useLatestCallback((trigger: Element): void => {
     const rect = trigger.getBoundingClientRect();
     setPoint({ x: rect.left, y: rect.bottom });
   }, []);
-  const close = React.useCallback(() => setPoint(null), []);
+  const close = useLatestCallback(() => setPoint(null), []);
   return { point, onContextMenu, openBelow, close };
 }

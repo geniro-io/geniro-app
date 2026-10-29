@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { GitInfo } from '../../shared/contracts';
 import type { BannerTone } from '../components/error-banner';
+import { useLatestCallback } from '../components/use-latest-callback';
 
 const NOT_A_REPO: GitInfo = {
   isRepo: false,
@@ -99,7 +100,7 @@ export function useGitInfo(dir: string | null): {
     };
   }, [dir]);
 
-  const switchTo = useCallback(
+  const switchTo = useLatestCallback(
     async (branch: string): Promise<void> => {
       if (dir === null) {
         return;
@@ -151,7 +152,7 @@ export function useGitInfo(dir: string | null): {
    * this button once looked like it did nothing at all. The strip instead says
    * what the pull did, and keeps the offer that does reach the picked branch.
    */
-  const pull = useCallback(async (): Promise<void> => {
+  const pull = useLatestCallback(async (): Promise<void> => {
     if (dir === null) {
       return;
     }
@@ -188,7 +189,7 @@ export function useGitInfo(dir: string | null): {
     }
   }, [dir]);
 
-  const carry = useCallback(async (): Promise<void> => {
+  const carry = useLatestCallback(async (): Promise<void> => {
     const target = pendingSwitchTarget.current;
     if (dir === null || target === null) {
       return;
@@ -228,7 +229,7 @@ export function useGitInfo(dir: string | null): {
    * after a `git switch` round trip) land after the effect's read for the new
    * one, overwriting the correct answer with the previous repository's.
    */
-  const refresh = useCallback(
+  const refresh = useLatestCallback(
     async (target?: string): Promise<void> => {
       const at = target ?? dir;
       if (at === null) {
@@ -249,7 +250,7 @@ export function useGitInfo(dir: string | null): {
     pull,
     carry,
     refresh,
-    clearError: useCallback(() => {
+    clearError: useLatestCallback(() => {
       // A dismissed notice must not leave a stale target for a later pull to
       // retry against — the user dismissed the guard, not just the sentence.
       pendingSwitchTarget.current = null;

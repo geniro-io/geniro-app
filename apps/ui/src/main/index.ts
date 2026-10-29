@@ -47,6 +47,7 @@ import {
   flushMainLogs,
   isRealLoadFailure,
   reportMainLog,
+  shouldReloadAfterRendererGone,
 } from './window-diagnostics';
 import {
   prepareWorktree,
@@ -528,13 +529,29 @@ function createWindow(): void {
       }
     },
   );
+  let lastRendererReloadAt: number | null = null;
   win.webContents.on('render-process-gone', (_event, details) => {
+    const reloading =
+      !isQuitting &&
+      shouldReloadAfterRendererGone(
+        details.reason,
+        lastRendererReloadAt,
+        Date.now(),
+      );
     void reportMainLog(
       supervisor.getHandle(),
       'error',
       `the renderer process is gone: ${details.reason}`,
-      { kind: 'render-process-gone', exitCode: String(details.exitCode) },
+      {
+        kind: 'render-process-gone',
+        exitCode: String(details.exitCode),
+        reloading: String(reloading),
+      },
     );
+    if (reloading) {
+      lastRendererReloadAt = Date.now();
+      win.webContents.reload();
+    }
   });
   win.webContents.on('did-finish-load', () => {
     // Worded off the failure count rather than reported as a plain success,

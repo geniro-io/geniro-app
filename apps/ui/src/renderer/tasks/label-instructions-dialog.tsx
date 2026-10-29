@@ -1,5 +1,5 @@
 import { Pencil, Plus, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type {
   LabelInstructionDto,
@@ -12,6 +12,7 @@ import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { Select } from '../components/ui/select';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { describeDaemonError } from '../daemon-api';
 import { LabelEditor } from './label-editor';
 import { TaskLabel } from './task-chip';
@@ -58,7 +59,7 @@ export function LabelInstructionsDialog({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useLatestCallback(async (): Promise<void> => {
     if (api === null) {
       return;
     }

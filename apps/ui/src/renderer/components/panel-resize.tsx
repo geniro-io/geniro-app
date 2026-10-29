@@ -1,6 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 
 import { cn } from './ui/utils';
+import { useLatestCallback } from './use-latest-callback';
 
 /**
  * Shared drag-to-resize behavior for the app's resizable panels: a size
@@ -64,7 +65,7 @@ export function usePanelWidth({
 
   // The keyboard path (arrow keys on the handle): clamp and persist per step —
   // discrete key presses, unlike the per-frame mousemove stream.
-  const resizeTo = useCallback(
+  const resizeTo = useLatestCallback(
     (next: number): void => {
       const clamped = Math.min(maxWidth, Math.max(minWidth, next));
       setWidth(clamped);
@@ -73,7 +74,7 @@ export function usePanelWidth({
     [minWidth, maxWidth, storageKey],
   );
 
-  const startResize = useCallback(
+  const startResize = useLatestCallback(
     (event: React.MouseEvent): void => {
       event.preventDefault();
       const axis = axisOf(handleEdge);

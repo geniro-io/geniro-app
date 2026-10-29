@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Popover } from './ui/popover';
 import { cn } from './ui/utils';
+import { useLatestCallback } from './use-latest-callback';
 
 /**
  * How long a pointer must REST on the trigger before the panel opens.
@@ -106,7 +107,7 @@ export function HoverPopover({
    * on it. The context meter fetches its breakdown on open and never polls,
    * which is only expressible if the open state reaches it.
    *
-   * Must be stable (a `useCallback`, or a setter): it is a dependency of the
+   * Must be stable (a `useLatestCallback`, or a setter): it is a dependency of the
    * effect that reports the change.
    */
   onOpenChange?: (open: boolean) => void;
@@ -152,13 +153,13 @@ export function HoverPopover({
   // Every path OUT of the open state cancels the pending hover, including the
   // two that close an already-open panel: a timer left running fires after the
   // close and reopens the panel the user just dismissed.
-  const cancelHoverOpen = useCallback(() => {
+  const cancelHoverOpen = useLatestCallback(() => {
     if (hoverTimer.current !== null) {
       clearTimeout(hoverTimer.current);
       hoverTimer.current = null;
     }
   }, []);
-  const cancelHoverClose = useCallback(() => {
+  const cancelHoverClose = useLatestCallback(() => {
     if (closeTimer.current !== null) {
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
@@ -174,7 +175,7 @@ export function HoverPopover({
   useEffect(() => {
     onOpenChange?.(open);
   }, [open, onOpenChange]);
-  const close = useCallback(() => {
+  const close = useLatestCallback(() => {
     cancelHoverOpen();
     cancelHoverClose();
     setPinned(false);

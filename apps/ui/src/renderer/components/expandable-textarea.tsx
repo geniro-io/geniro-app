@@ -1,10 +1,11 @@
 import { Maximize2 } from 'lucide-react';
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 import { MarkdownEditorDialog } from './markdown-editor-dialog';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { cn } from './ui/utils';
+import { useLatestCallback } from './use-latest-callback';
 
 /**
  * When a computed `line-height` cannot be read as a number — jsdom answers
@@ -86,7 +87,7 @@ export function ExpandableTextarea({
   const [expanded, setExpanded] = useState(false);
   const fieldRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const fit = useCallback((): void => {
+  const fit = useLatestCallback((): void => {
     const el = fieldRef.current;
     if (el === null) {
       return;

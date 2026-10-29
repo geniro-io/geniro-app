@@ -1,4 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
+
+import { useLatestCallback } from '../components/use-latest-callback';
 
 /**
  * TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts CHAT_UPLOAD_MAX_BYTES.
@@ -89,7 +91,7 @@ export function useFileAttach(target: FileAttachTarget): {
   const targetRef = useRef(target);
   targetRef.current = target;
 
-  const attach = useCallback((files: readonly File[]): void => {
+  const attach = useLatestCallback((files: readonly File[]): void => {
     const current = targetRef.current;
     setError(null);
     const rest = current.stageImages(files);
@@ -143,7 +145,7 @@ export function useFileAttach(target: FileAttachTarget): {
     });
   }, []);
 
-  const clearError = useCallback((): void => setError(null), []);
+  const clearError = useLatestCallback((): void => setError(null), []);
 
   const onScreen = target.currentOwner();
   const uploading = pending.some((entry) => entry.owner === onScreen);

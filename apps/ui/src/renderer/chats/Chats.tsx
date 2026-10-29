@@ -201,6 +201,7 @@ import {
   readLocalImageDataUrl,
 } from './local-image-loader';
 import { mcpConfigActions } from './mcp-config-actions';
+import { readMemoryByHandle } from './memory-tool-row';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { MessageComposer } from './message-composer';
@@ -3529,6 +3530,11 @@ export function Chats({
       return readLocalImageDataUrl(chatApi, runId, path);
     },
     [chatApi],
+  );
+
+  const loadMemory = useLatestCallback(
+    (handle: string) => readMemoryByHandle(apis.memories, handle),
+    [apis],
   );
 
   /**
@@ -8996,7 +9002,8 @@ export function Chats({
         callConversations={callConversations}
         applyRecommendations={applyRecommendations}
         notSent={notSent}
-        chatActions={chatActions}>
+        chatActions={chatActions}
+        loadMemory={loadMemory}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

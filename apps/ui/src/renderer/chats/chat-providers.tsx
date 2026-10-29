@@ -24,7 +24,11 @@ import {
   type LocalImageLoader,
   LocalImageLoaderContext,
 } from './local-image-loader';
-import { MemoryOpenContext } from './memory-tool-row';
+import {
+  type MemoryLoader,
+  MemoryLoaderContext,
+  MemoryOpenContext,
+} from './memory-tool-row';
 import {
   type AttachmentLoader,
   AttachmentLoaderContext,
@@ -127,6 +131,7 @@ export function ChatProviders({
   applyRecommendations = null,
   notSent = null,
   chatActions = null,
+  loadMemory = null,
   children,
 }: {
   /**
@@ -198,6 +203,12 @@ export function ChatProviders({
   notSent?: NotSentMessages | null;
   /** The open chat's buttons and their press — see `ChatActionsContext`. */
   chatActions?: ChatActions | null;
+  /**
+   * How a memory row reads the entries it names — see `MemoryLoaderContext`.
+   * Here for `callContext`'s reason: memory rows are drawn in the transcript,
+   * the sub-agent detail dialog and call cards alike.
+   */
+  loadMemory?: MemoryLoader | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -216,27 +227,31 @@ export function ChatProviders({
                             value={applyRecommendations}>
                             <NotSentMessagesContext.Provider value={notSent}>
                               <ChatActionsContext.Provider value={chatActions}>
-                                {transcript === undefined ? (
-                                  children
-                                ) : (
-                                  <SurfaceContexts {...transcript}>
-                                    {children}
-                                  </SurfaceContexts>
-                                )}
-                                {chatActions === null ? null : (
-                                  <CommandConfirmDialog
-                                    action={chatActions.confirming}
-                                    changed={
-                                      chatActions.confirming !== null &&
-                                      !chatActions.actions.some(
-                                        (a) =>
-                                          a.seq === chatActions.confirming?.seq,
-                                      )
-                                    }
-                                    onCancel={chatActions.cancelCommand}
-                                    onConfirm={chatActions.confirmCommand}
-                                  />
-                                )}
+                                <MemoryLoaderContext.Provider
+                                  value={loadMemory}>
+                                  {transcript === undefined ? (
+                                    children
+                                  ) : (
+                                    <SurfaceContexts {...transcript}>
+                                      {children}
+                                    </SurfaceContexts>
+                                  )}
+                                  {chatActions === null ? null : (
+                                    <CommandConfirmDialog
+                                      action={chatActions.confirming}
+                                      changed={
+                                        chatActions.confirming !== null &&
+                                        !chatActions.actions.some(
+                                          (a) =>
+                                            a.seq ===
+                                            chatActions.confirming?.seq,
+                                        )
+                                      }
+                                      onCancel={chatActions.cancelCommand}
+                                      onConfirm={chatActions.confirmCommand}
+                                    />
+                                  )}
+                                </MemoryLoaderContext.Provider>
                               </ChatActionsContext.Provider>
                             </NotSentMessagesContext.Provider>
                           </RecommendationsApplyContext.Provider>

@@ -108,10 +108,28 @@ const usage = (lastTotal: number, total: number) => ({
   },
 });
 
+/**
+ * Answer the `hooks/list` a turn with an approval mode sends before it opens
+ * its thread, as codex does for a user with no hooks; a no-op without one.
+ */
+function answerHooksList(session: CodexSession): void {
+  const list = frames().find((frame) => frame.method === 'hooks/list');
+  if (list === undefined) {
+    return;
+  }
+  emitted.push(
+    ...feed(session, {
+      id: list.id,
+      result: { data: [{ cwd: '/repo', errors: [], warnings: [], hooks: [] }] },
+    }),
+  );
+}
+
 /** Open a session through the handshake and the thread, up to its turn/start. */
 function openSession(first: AgentTurnInput = turnInput()): CodexSession {
   const session = newSession(first);
   session.onStdinReady(io());
+  answerHooksList(session);
   const start = frames().find(
     (frame) =>
       frame.method === 'thread/start' || frame.method === 'thread/resume',
@@ -176,22 +194,30 @@ function commandUnit(
 }
 
 describe('opening a conversation', () => {
-  it('pipelines the handshake and the thread, carrying the instruction block', () => {
+  it('pipelines the handshake and the hook listing, then opens the thread carrying the instruction block', () => {
     const session = newSession(
       turnInput({ model: 'gpt-5.5', approvalMode: 'ask' }),
     );
     session.onStdinReady(io());
+    expect(frames().map((frame) => frame.method)).toEqual([
+      'initialize',
+      'initialized',
+      'hooks/list',
+    ]);
+    answerHooksList(session);
     const sent = frames();
     expect(sent.map((frame) => frame.method)).toEqual([
       'initialize',
       'initialized',
+      'hooks/list',
       'thread/start',
     ]);
     expect(sent[0]!.params).toMatchObject({
       clientInfo: { name: 'geniro', version: '9.9.9' },
       capabilities: { experimentalApi: true },
     });
-    expect(sent[2]!.params).toMatchObject({
+    expect(sent[3]!.params).not.toHaveProperty('config');
+    expect(sent[3]!.params).toMatchObject({
       cwd: '/repo',
       model: 'gpt-5.5',
       approvalPolicy: 'untrusted',
@@ -205,6 +231,7 @@ describe('opening a conversation', () => {
       turnInput({ model: 'gpt-5.5', effort: 'high', approvalMode: 'auto' }),
     );
     session.onStdinReady(io());
+    answerHooksList(session);
     const start = frameFor('thread/start');
     const events = feed(session, {
       id: start.id,
@@ -1697,6 +1724,7 @@ describe('later turns on the kept process', () => {
       let alive = true;
       const session = newSession(turnInput({ approvalMode: 'ask' }));
       session.onStdinReady({ ...io(), processAlive: () => alive });
+      answerHooksList(session);
       feed(session, {
         id: frames().find((frame) => frame.method === 'thread/start')!.id,
         result: { thread: { id: THREAD }, model: 'gpt-5.5' },
@@ -2580,6 +2608,7 @@ describe('later turns on the kept process', () => {
       turnInput({ resumeSessionId: THREAD, approvalMode: 'auto' }),
     );
     session.onStdinReady(io());
+    answerHooksList(session);
     feed(session, {
       id: frameFor('thread/resume').id,
       result: {

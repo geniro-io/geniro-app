@@ -202,9 +202,10 @@ export class CodexSession implements TurnDriver {
   }
 
   /**
-   * The FIRST turn's opening: the handshake, then the thread, then — once the
-   * thread's id is back — the prompt. Written back to back without waiting:
-   * codex reads one ordered stream.
+   * The FIRST turn's opening: the handshake, then the thread — after the
+   * `config/read` and `hooks/list` replies it waits on, when it asks them —
+   * then, once the thread's id is back, the prompt. The handshake and the first
+   * request go back to back: codex reads one ordered stream.
    */
   onStdinReady(io: TurnIo): void {
     this.io = io;

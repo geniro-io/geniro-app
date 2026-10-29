@@ -50,6 +50,7 @@ import {
   encodeCodexReply,
   fileChangeStaysIn,
 } from './utils/codex-approval.utils';
+import { codexPermissionHookOverrides } from './utils/codex-hooks.utils';
 import {
   codexUserInput,
   finishedAgentsOf,
@@ -81,6 +82,7 @@ import {
 export type CodexPendingKind =
   | 'initialize'
   | 'config_read'
+  | 'hooks_list'
   | 'thread_start'
   | 'thread_resume'
   | 'turn_start'
@@ -231,6 +233,11 @@ export class CodexTurnDriver {
    * turn that switches nothing off, which never reads it).
    */
   private mcpOverrides: Record<string, unknown> | null = null;
+  /**
+   * The thread config that switches off the user's own permission-request
+   * hooks, once codex has listed its hooks — null until then.
+   */
+  private hookOverrides: Record<string, unknown> | null = null;
 
   constructor(
     private readonly session: CodexSession,
@@ -275,6 +282,17 @@ export class CodexTurnDriver {
         CODEX_METHODS.configRead,
         { cwd: this.input.cwd },
         'config_read',
+        events,
+      );
+      return;
+    }
+    if (this.input.approvalMode !== undefined && this.hookOverrides === null) {
+      // In every mode, `auto` included: a live process is re-moded, never
+      // respawned, so a thread opened unattended can ask later.
+      this.session.request(
+        CODEX_METHODS.hooksList,
+        { cwds: [this.input.cwd] },
+        'hooks_list',
         events,
       );
       return;
@@ -399,6 +417,10 @@ export class CodexTurnDriver {
         this.openThread(events);
         break;
       }
+      case 'hooks_list':
+        this.hookOverrides = codexPermissionHookOverrides(result);
+        this.openThread(events);
+        break;
       case 'thread_start':
       case 'thread_resume': {
         const record = asRecord(result);
@@ -601,6 +623,17 @@ export class CodexTurnDriver {
         this.openThread(events);
         return events;
       }
+      case 'hooks_list': {
+        this.hookOverrides = {};
+        const events: AgentEvent[] = [
+          {
+            type: 'notice',
+            message: `codex could not list its hooks (${message}), so your own PermissionRequest hooks stay on in this conversation and run before each approval it asks for.`,
+          },
+        ];
+        this.openThread(events);
+        return events;
+      }
       case 'thread_resume': {
         if (message.includes(CODEX_ACTIVE_WRITER_MARKER)) {
           // A process geniro itself just replaced may take a moment to let go
@@ -692,9 +725,13 @@ export class CodexTurnDriver {
   /** What `thread/start` and `thread/resume` both carry about this turn. */
   private threadParams(): Record<string, unknown> {
     const { policy, config, developerInstructions } = this.options;
-    // geniro's endpoint and the node's switched-off servers are both dotted
-    // keys, so they merge without either replacing a table of the other's.
-    const merged = { ...(config ?? {}), ...(this.mcpOverrides ?? {}) };
+    // Each source sets keys of its own (dotted, or one `hooks.state` table),
+    // so they merge without either replacing a table of another's.
+    const merged = {
+      ...(config ?? {}),
+      ...(this.mcpOverrides ?? {}),
+      ...(this.hookOverrides ?? {}),
+    };
     return {
       cwd: this.input.cwd,
       ...(this.input.model
@@ -716,6 +753,8 @@ export class CodexTurnDriver {
         return 'the handshake';
       case 'config_read':
         return 'reading its config';
+      case 'hooks_list':
+        return 'listing its hooks';
       case 'thread_start':
         return 'starting the conversation';
       case 'thread_resume':

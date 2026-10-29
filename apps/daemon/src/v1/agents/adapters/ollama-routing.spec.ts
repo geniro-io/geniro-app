@@ -193,6 +193,10 @@ describe('Ollama through the existing agent harnesses', () => {
     child.stdout.emitData(
       JSON.stringify({ id: initialize.id, result: {} }) + '\n',
     );
+    const hooks = frames().find((frame) => frame.method === 'hooks/list')!;
+    child.stdout.emitData(
+      JSON.stringify({ id: hooks.id, result: { data: [] } }) + '\n',
+    );
     const start = frames().find((frame) => frame.method === 'thread/start')!;
     expect(start.params).toMatchObject({
       model: 'coder:latest',

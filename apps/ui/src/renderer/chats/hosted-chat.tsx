@@ -55,6 +55,7 @@ import {
 } from './follow-up-delivery';
 import { CHAT_LIVE_KEY } from './live-text';
 import { readLocalImageDataUrl } from './local-image-loader';
+import { readMemoryByHandle } from './memory-tool-row';
 import { MessageComposer } from './message-composer';
 import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
@@ -435,6 +436,16 @@ export function HostedChat({
       return readLocalImageDataUrl(apis.chats, runId, path);
     },
     [apis, runId],
+  );
+
+  const loadMemory = useLatestCallback(
+    async (handle: string) => {
+      if (apis === null) {
+        throw new Error('no daemon to read memory from');
+      }
+      return readMemoryByHandle(apis.memories, handle);
+    },
+    [apis],
   );
 
   // The approvals the transcript already draws as cards, which its verdict rows
@@ -987,7 +998,8 @@ export function HostedChat({
       loadAttachment={loadAttachment}
       applyRecommendations={applyRecommendations}
       notSent={notSent}
-      chatActions={chatActions}>
+      chatActions={chatActions}
+      loadMemory={loadMemory}>
       {header({ run, status })}
 
       <div

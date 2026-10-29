@@ -729,7 +729,10 @@ export class ClaudeAdapter extends AgentAdapter {
          * the same sentence for `hit your limit`, `hit your usage limit`, `hit
          * your monthly limit`, `hit your monthly spend limit` and `hit your fast
          * limit` — none of them `session`. So the noun in the middle changes
-         * with the vendor's plan vocabulary and the frame does not.
+         * with the vendor's plan vocabulary and the frame does not. 2.1.312
+         * fills it from the window's label (`hit your ${c} limit`, `c` being
+         * `5-hour` among others) and also says `hit your channel's monthly
+         * spend limit`, so a word may carry digits, a hyphen or an apostrophe.
          *
          * `Usage limit reached` is the second family in that table (`… ·
          * continuing automatically`, `… — grace window active`), matched on its
@@ -740,7 +743,7 @@ export class ClaudeAdapter extends AgentAdapter {
          * incident this exists for, not a cosmetic loss.
          */
         rateLimitPatterns: [
-          /hit your (?:[a-z]+ )*limit/i,
+          /hit your (?:[a-z0-9'-]+ )*limit/i,
           /usage limit reached/i,
         ],
         /**

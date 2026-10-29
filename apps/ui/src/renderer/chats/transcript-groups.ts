@@ -2507,11 +2507,6 @@ interface CallShell {
   started: ChatItem;
   calleeNodeId: string | null;
   bucket: ChatItem[];
-  /**
-   * Pool hand-off rows that arrived as ANCHORS — above the loaded window, so
-   * read for the member they name and never drawn.
-   */
-  handOffs: ChatItem[];
 }
 
 /** One thread's task list as folded so far, mid-scan. */
@@ -2626,7 +2621,6 @@ export function groupTranscript(
         started: item,
         calleeNodeId: payloadString(item.payload, 'calleeNodeId'),
         bucket: [],
-        handOffs: [],
       });
     }
   }
@@ -2732,13 +2726,7 @@ export function groupTranscript(
         (item.nodeId !== null && item.nodeId === shell.calleeNodeId)
       ) {
         claimed.add(item.id);
-        // An ANCHORED hand-off row is here for the member it names alone: the
-        // reader did not scroll to it, so it is never drawn inside the card.
-        if (anchorIds?.has(item.id) && isPoolHandOff(item)) {
-          shell.handOffs.push(item);
-        } else {
-          shell.bucket.push(item);
-        }
+        shell.bucket.push(item);
       }
     }
   }
@@ -3518,7 +3506,7 @@ function callMemberOf(
 
 function latestPoolHandOff(shell: CallShell): ChatItem | null {
   let handOff: ChatItem | null = null;
-  for (const item of [...shell.handOffs, ...shell.bucket]) {
+  for (const item of shell.bucket) {
     if (isPoolHandOff(item) && (handOff === null || item.seq > handOff.seq)) {
       handOff = item;
     }

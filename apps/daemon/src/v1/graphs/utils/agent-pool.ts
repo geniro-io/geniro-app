@@ -197,7 +197,7 @@ export function fallsThroughPool(
 export function poolHandOffNotice(
   calleeName: string,
   from: number,
-  to: number,
+  to: CalleePoolAttempt,
   outcome: CalleeTurnOutcome,
   scope: 'call' | 'turn' = 'call',
 ): string {
@@ -207,7 +207,7 @@ export function poolHandOffNotice(
       : outcome.failureClass === 'auth_expired'
         ? 'is signed out'
         : 'failed before doing any work';
-  return `${calleeName}: pool member ${from} ${why} — handing the ${scope} to member ${to}.`;
+  return `${calleeName}: pool member ${from} ${why} — handing the ${scope} to ${namedMember(to)}.`;
 }
 
 /**
@@ -218,11 +218,16 @@ export function poolHandOffNotice(
 export function poolMoveNotice(
   nodeName: string,
   from: number,
-  to: number,
+  to: CalleePoolAttempt,
 ): string {
-  return to < from
-    ? `${nodeName}: pool member ${to} is available again — moving the conversation back to it from member ${from}.`
-    : `${nodeName}: pool member ${from} is unavailable — starting the turn on member ${to}.`;
+  return to.member < from
+    ? `${nodeName}: pool ${namedMember(to)} is available again — moving the conversation back to it from member ${from}.`
+    : `${nodeName}: pool member ${from} is unavailable — starting the turn on ${namedMember(to)}.`;
+}
+
+/** `member 2 (codex · gpt-5.5)`: the member a reader is told now answers. */
+function namedMember({ member, node }: CalleePoolAttempt): string {
+  return `member ${member} (${poolMemberLabel(node)})`;
 }
 
 /**

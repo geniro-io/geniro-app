@@ -2848,6 +2848,17 @@ describe('AgentAdapter — how a failed turn is classified for a CALLER', () => 
     ).toEqual({ class: 'rate_limited', resetsAt: '7:30pm (Asia/Almaty)' });
   });
 
+  it('reads claude’s 5-hour window sentence, with the reset it named', () => {
+    // VERBATIM out of a workflow run's `error` row (claude 2.1.312, HTTP 429),
+    // which was handed to the next pool member as "failed before doing any
+    // work" and never filed as a spent account.
+    expect(
+      new ClaudeAdapter().failureFrom(
+        "You've hit your 5-hour limit · resets 8pm (Asia/Dubai)",
+      ),
+    ).toEqual({ class: 'rate_limited', resetsAt: '8pm (Asia/Dubai)' });
+  });
+
   it('reads the other nouns that CLI puts in the same sentence', () => {
     // Measured in the 2.1.276 string table: `hit your limit`, `hit your usage
     // limit`, `hit your monthly limit`, `hit your monthly spend limit` and `hit
@@ -2860,6 +2871,8 @@ describe('AgentAdapter — how a failed turn is classified for a CALLER', () => 
       "You've hit your monthly limit",
       "You've hit your monthly spend limit",
       "You've hit your fast limit",
+      "You've hit your weekly limit",
+      "You've hit your channel's monthly spend limit",
       'Usage limit reached · continuing automatically',
     ]) {
       expect(adapter.failureFrom(message).class).toBe('rate_limited');

@@ -5828,7 +5828,7 @@ export class GraphExecutorService
           poolHandOffNotice(
             node.name ?? node.id,
             from.member,
-            next.member,
+            next,
             outcome,
             'turn',
           ),
@@ -5904,7 +5904,7 @@ export class GraphExecutorService
           held,
           start,
           heldSessionId,
-          poolMoveNotice(node.name ?? node.id, held, start),
+          poolMoveNotice(node.name ?? node.id, held, attempts[0]!),
           'its conversation moved to another pool member',
         );
         if (heldSessionId !== null) {
@@ -6846,7 +6846,7 @@ export class GraphExecutorService
                 message: poolHandOffNotice(
                   callee.name ?? callee.id,
                   attempt.member,
-                  next.member,
+                  next,
                   outcome,
                 ),
               }).catch(() => {});

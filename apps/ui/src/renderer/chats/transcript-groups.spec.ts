@@ -455,14 +455,14 @@ describe('groupTranscript', () => {
         ),
       ]).member,
     ).toBe(1);
-    // A hand-off ABOVE the loaded window arrives as an anchor: it still names
-    // the member, and is never drawn inside the card.
+    // A workflow run's call rows all reach the fold as anchors (`structure`),
+    // so an anchored hand-off still names the member AND stays in the card's
+    // entries, where the card's own page window decides whether it is drawn.
     const anchored = groupTranscript([started, handOff], {
       anchorIds: new Set([handOff.id]),
     })[0] as CallBlockEntry;
     expect(anchored.member).toBe(2);
-    expect(JSON.stringify(anchored.entries)).not.toContain(handOff.id);
-    // …while the same row INSIDE the window is drawn where it landed.
+    expect(JSON.stringify(anchored.entries)).toContain(handOff.id);
     expect(JSON.stringify(block([started, handOff]).entries)).toContain(
       handOff.id,
     );
@@ -510,7 +510,6 @@ describe('groupTranscript', () => {
     const anchored = fold([started, earlier, handOff], new Set([handOff.id]));
     expect(callBlockSummary(anchored)).toBe(message);
     expect(anchored.poolHandOff).toEqual({ message, seq: handOff.seq });
-    expect(JSON.stringify(anchored.entries)).not.toContain(handOff.id);
 
     const spoken = item(
       'message',

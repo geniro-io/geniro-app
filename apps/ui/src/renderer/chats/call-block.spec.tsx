@@ -2365,6 +2365,49 @@ describe("a call card's own conversation", () => {
     expect(container.textContent).toContain('An early line');
   });
 
+  it('draws a pool hand-off read on its pages where it happened, though every call row reaches the fold as an anchor', () => {
+    const limit = 'You’ve hit your 5-hour limit · resets 8pm (Asia/Dubai)';
+    const reason =
+      'Poet: pool member 1 hit a usage limit (resets 8pm (Asia/Dubai)) — handing the call to member 2 (codex · gpt-5.5).';
+    const rows = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write.' },
+        'orch',
+      ),
+      item('message', { text: 'An early line', callId: 'call-1' }, 'poet'),
+      item('error', { message: limit, callId: 'call-1' }, 'poet'),
+      item(
+        'system',
+        { callId: 'call-1', severity: 'info', member: 2, message: reason },
+        'poet',
+      ),
+      item('message', { text: 'Member two speaks', callId: 'call-1' }, 'poet'),
+    ];
+    const [block] = groupTranscript(rows, {
+      anchorIds: new Set(rows.slice(1).map((row) => row.id)),
+    });
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    renderBlock(
+      block,
+      loader({
+        loading: false,
+        failed: false,
+        hasOlder: false,
+        oldestSeq: rows[1]!.seq,
+      }),
+    );
+    expand();
+    const text = container.textContent ?? '';
+    expect(text.split(reason)).toHaveLength(2);
+    expect(text.indexOf(reason)).toBeGreaterThan(text.indexOf('5-hour limit'));
+    expect(text.indexOf(reason)).toBeLessThan(
+      text.indexOf('Member two speaks'),
+    );
+  });
+
   it('offers a retry after a failed read, and asks nothing by itself', () => {
     const value = loader({
       loading: false,

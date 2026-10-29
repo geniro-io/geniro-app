@@ -13,6 +13,7 @@ import {
   CLAUDE_MEMORY_INDEX_FILE,
   CLAUDE_SESSIONS_DIR_NAME,
 } from '../claude.const';
+import { readClaudeProjectFolder } from './claude-sessions.utils';
 
 /** A note file larger than this is not a note; it is skipped unread. */
 const CLAUDE_MEMORY_FILE_MAX_BYTES = 256 * 1024;
@@ -35,10 +36,12 @@ export async function readClaudeMemoryNotes(
     if (!project.isDirectory()) {
       continue;
     }
-    const memoryDir = join(projectsDir, project.name, CLAUDE_MEMORY_DIR_NAME);
+    const projectDir = join(projectsDir, project.name);
+    const memoryDir = join(projectDir, CLAUDE_MEMORY_DIR_NAME);
     if (!(await isRealDirectory(memoryDir))) {
       continue;
     }
+    let folder: Promise<string | null> | null = null;
     for (const file of await directoryEntries(memoryDir)) {
       if (
         !file.isFile() ||
@@ -50,10 +53,12 @@ export async function readClaudeMemoryNotes(
       const path = join(memoryDir, file.name);
       const text = await readRegularFile(path, CLAUDE_MEMORY_FILE_MAX_BYTES);
       if (text !== null) {
+        folder ??= readClaudeProjectFolder(projectDir);
         notes.push({
           path,
           importedFrom: path,
           projectKey: project.name,
+          folder: await folder,
           ...parseClaudeMemoryNote(text, path),
         });
       }

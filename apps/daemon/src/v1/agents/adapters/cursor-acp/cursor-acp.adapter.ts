@@ -528,6 +528,8 @@ export class CursorAcpAdapter extends AgentAdapter {
       ],
       /** Null: the list above is non-empty, so there is nothing to explain. */
       effortsUnavailableReason: null,
+      oneShotAskUnavailableReason:
+        'geniro drives cursor-agent through ACP sessions only and keeps no one-off print-mode turn for it, as it asks cursor for no chat titles either.',
       options: [
         {
           id: CURSOR_MAX_MODE_OPTION,

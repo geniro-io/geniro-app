@@ -44,6 +44,7 @@ import type {
   AdapterQuestion,
   AgentApprovalMode,
   AgentApprovalProbeState,
+  AgentAskInput,
   AgentCommandOptions,
   AgentContextUsage,
   AgentContextWindowListing,
@@ -2709,6 +2710,19 @@ export abstract class AgentAdapter {
    */
   generateTitle(
     _input: AgentTitleInput,
+    _options: AgentCommandOptions = {},
+  ): Promise<string | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
+   * Put one question to this CLI on a throwaway turn of its own, apart from
+   * every conversation, and answer its reply text; null for a CLI that cannot
+   * (`AdapterConfig.oneShotAskUnavailableReason`), a failed turn or an
+   * unreadable reply. Billed to the profile asked under. Never throws.
+   */
+  askOnce(
+    _input: AgentAskInput,
     _options: AgentCommandOptions = {},
   ): Promise<string | null> {
     return Promise.resolve(null);

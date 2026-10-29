@@ -4492,3 +4492,38 @@ describe('ClaudeAdapter — what a model name resolves to', () => {
     expect(adapter.catalogWindow('claude-opus-5[1m]')).toBeNull();
   });
 });
+
+describe('ClaudeAdapter.askOnce', () => {
+  it('asks a throwaway `-p` turn on the cheap model outside any project, and answers its result', async () => {
+    const { groupSpawnFn, captured } = fakeListing(
+      JSON.stringify({ subtype: 'success', result: '[{"id":"n1"}]' }),
+    );
+    const answer = await new ClaudeAdapter({ groupSpawnFn }).askOnce({
+      prompt: 'Sort these',
+      model: null,
+      configDir: '/Users/x/.claude-work',
+    });
+    expect(answer).toBe('[{"id":"n1"}]');
+    expect(captured.args).toEqual(
+      expect.arrayContaining(['-p', '--strict-mcp-config', 'Sort these']),
+    );
+    expect(captured.args![captured.args!.indexOf('--model') + 1]).toBe('haiku');
+    expect(String(captured.options?.cwd)).toContain('geniro-ask-');
+    expect(captured.options?.env).toMatchObject({
+      CLAUDE_CONFIG_DIR: '/Users/x/.claude-work',
+    });
+  });
+
+  it('answers null for a failed turn', async () => {
+    const { groupSpawnFn } = fakeListing(
+      JSON.stringify({ is_error: true, result: 'Not logged in' }),
+    );
+    await expect(
+      new ClaudeAdapter({ groupSpawnFn }).askOnce({
+        prompt: 'Sort these',
+        model: null,
+        configDir: null,
+      }),
+    ).resolves.toBeNull();
+  });
+});

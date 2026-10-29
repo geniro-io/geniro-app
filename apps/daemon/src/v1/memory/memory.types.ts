@@ -283,6 +283,10 @@ export const MemoryImportRowSchema = z
     key: z.string(),
     agentKind: AgentKindSchema,
     sourcePath: z.string(),
+    /** Where the CLI keeps the note: its profile, home shown as `~`. */
+    profile: z.string(),
+    /** The folder the note was written for, home shown as `~`; null when unknown. */
+    folder: z.string().nullable(),
     title: z.string(),
     body: z.string(),
     type: z.enum(MEMORY_TYPES),
@@ -306,6 +310,8 @@ export type MemoryImportRow = z.infer<typeof MemoryImportRowSchema>;
 
 export const MemoryImportPreviewSchema = z.object({
   rows: z.array(MemoryImportRowSchema),
+  /** The CLIs that can sort the notes (`POST /v1/memories/import/triage`). */
+  triageAgents: z.array(AgentKindSchema),
   /** Every place read, and how many notes each held. */
   sources: z.array(
     z.object({
@@ -351,6 +357,43 @@ export interface MemoryImportNote {
   projectId: string | null;
   importedFrom: string;
 }
+
+/** TWIN: `TRIAGE_BATCH` in `apps/ui/src/renderer/settings/use-memory-triage.ts`. */
+export const MEMORY_TRIAGE_NOTES_MAX = 100;
+
+/**
+ * Notes for one CLI to sort into worth keeping in the shared memory or not.
+ * The verdict is advice the user reviews, so the text comes from the client.
+ */
+export const MemoryImportTriageRequestSchema = z.object({
+  agentKind: AgentKindSchema,
+  notes: z
+    .array(
+      z.object({
+        key: z.string().min(1).max(8192),
+        title: z.string().max(1000),
+        body: z.string().max(65536),
+        folder: z.string().max(4096).nullable(),
+      }),
+    )
+    .min(1)
+    .max(MEMORY_TRIAGE_NOTES_MAX),
+});
+export type MemoryImportTriageRequest = z.infer<
+  typeof MemoryImportTriageRequestSchema
+>;
+
+/** One verdict per note the CLI answered for; a note it skipped has none. */
+export const MemoryImportTriageSchema = z.object({
+  verdicts: z.array(
+    z.object({
+      key: z.string(),
+      keep: z.boolean(),
+      reason: z.string(),
+    }),
+  ),
+});
+export type MemoryImportTriage = z.infer<typeof MemoryImportTriageSchema>;
 
 export const MemoryExportSchema = z.object({
   markdown: z.string(),

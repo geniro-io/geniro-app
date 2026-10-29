@@ -25,6 +25,8 @@ import type {
   MemoryImportPreviewDto,
   MemoryImportPreviewRequestDto,
   MemoryImportResultDto,
+  MemoryImportTriageDto,
+  MemoryImportTriageRequestDto,
   MemoryListDto,
   UpdateMemoryDto,
 } from '../models/index';
@@ -59,6 +61,10 @@ export interface MemoriesApiReadMemoryRequest {
 
 export interface MemoriesApiSetMemoryConfigRequest {
     memoryConfigDto: MemoryConfigDto;
+}
+
+export interface MemoriesApiTriageMemoryImportRequest {
+    memoryImportTriageRequestDto: MemoryImportTriageRequestDto;
 }
 
 export interface MemoriesApiUpdateMemoryRequest {
@@ -448,6 +454,53 @@ export class MemoriesApi extends runtime.BaseAPI {
      */
     async setMemoryConfig(requestParameters: MemoriesApiSetMemoryConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryConfigAckDto> {
         const response = await this.setMemoryConfigRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async triageMemoryImportRaw(requestParameters: MemoriesApiTriageMemoryImportRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryImportTriageDto>> {
+        if (requestParameters['memoryImportTriageRequestDto'] == null) {
+            throw new runtime.RequiredError(
+                'memoryImportTriageRequestDto',
+                'Required parameter "memoryImportTriageRequestDto" was null or undefined when calling triageMemoryImport().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/import/triage`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['memoryImportTriageRequestDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async triageMemoryImport(requestParameters: MemoriesApiTriageMemoryImportRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryImportTriageDto> {
+        const response = await this.triageMemoryImportRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

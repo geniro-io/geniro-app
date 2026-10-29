@@ -48,6 +48,7 @@ describe('parseCodexMemoryHandbook', () => {
       path: '/h/MEMORY.md',
       importedFrom: '/h/MEMORY.md · Release checklist',
       projectKey: null,
+      folder: null,
       title: 'Release checklist',
       body: '## Task 1: cut 1.4\nTag, then publish.',
       type: null,

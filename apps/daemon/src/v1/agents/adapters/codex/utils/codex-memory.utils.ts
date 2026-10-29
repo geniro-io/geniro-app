@@ -49,6 +49,7 @@ export function parseCodexMemoryHandbook(
         path,
         importedFrom: `${path} · ${current.title}`,
         projectKey: null,
+        folder: null,
         title: current.title,
         body: current.lines.join('\n').trim(),
         type: null,

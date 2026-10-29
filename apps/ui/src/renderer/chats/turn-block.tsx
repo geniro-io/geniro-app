@@ -10,7 +10,11 @@ import { MarkdownContent } from './markdown-content';
 import { formatClockTime } from './relative-time';
 import { SubagentBlock } from './subagent-block';
 import { NestedThreadContext } from './subagent-context';
-import { ThinkingDisclosure } from './thinking-block';
+import {
+  ReasoningHeadings,
+  reasoningHeadings,
+  ThinkingDisclosure,
+} from './thinking-block';
 import { ToolGroup } from './tool-group';
 import {
   entryStartSeq,
@@ -154,16 +158,21 @@ export const TurnBlock = memo(function TurnBlock({
       // bubble prints it verbatim. Sharing the body instead would make one of
       // them change how it draws prose.
       const reasoning = payloadString(item.payload, 'text') ?? '';
+      const headings = reasoningHeadings(reasoning);
       return (
         <div key={item.id} data-role="reasoning">
-          <ThinkingDisclosure
-            text={reasoning}
-            memoryKey={`thinking:${item.id}`}>
-            <MarkdownContent
-              content={reasoning}
-              className="text-muted-foreground italic"
-            />
-          </ThinkingDisclosure>
+          {headings === null ? (
+            <ThinkingDisclosure
+              text={reasoning}
+              memoryKey={`thinking:${item.id}`}>
+              <MarkdownContent
+                content={reasoning}
+                className="text-muted-foreground italic"
+              />
+            </ThinkingDisclosure>
+          ) : (
+            <ReasoningHeadings headings={headings} />
+          )}
         </div>
       );
     }

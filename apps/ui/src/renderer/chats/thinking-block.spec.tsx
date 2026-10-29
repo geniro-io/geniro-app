@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  reasoningHeadings,
   THINKING_MAX_HEIGHT_PX,
   ThinkingDisclosure,
   ThinkingScroller,
@@ -192,5 +193,44 @@ describe('ThinkingDisclosure', () => {
 
     expect(el.querySelector('[data-testid="body"]')).not.toBeNull();
     expect(el.querySelector('button')).toBeNull();
+  });
+});
+
+describe('reasoningHeadings', () => {
+  it('reads a summary of titles alone as its titles', () => {
+    expect(
+      reasoningHeadings(
+        '**Checking Sheet close propagation**\n\n**Evaluating Sheet event guards**',
+      ),
+    ).toEqual([
+      'Checking Sheet close propagation',
+      'Evaluating Sheet event guards',
+    ]);
+  });
+
+  it('reads a title still being streamed', () => {
+    expect(reasoningHeadings('**Done**\n\n**Inspecting Radix')).toEqual([
+      'Done',
+      'Inspecting Radix',
+    ]);
+  });
+
+  it('leaves a summary that has prose to the markdown body', () => {
+    expect(
+      reasoningHeadings('**Clarifying tool usage**\n\nI need to check it.'),
+    ).toBeNull();
+    expect(reasoningHeadings('Plain thinking.')).toBeNull();
+    expect(reasoningHeadings('')).toBeNull();
+  });
+});
+
+describe('ThinkingScroller with a titles-only stretch', () => {
+  it('draws one line per title, without the bold markers', () => {
+    const el = render(<ThinkingScroller text={'**One**\n\n**Two**'} />);
+    const lines = [
+      ...el.querySelectorAll('[data-slot="reasoning-headings"] li'),
+    ].map((line) => line.textContent);
+    expect(lines).toEqual(['One', 'Two']);
+    expect(el.textContent).not.toContain('**');
   });
 });

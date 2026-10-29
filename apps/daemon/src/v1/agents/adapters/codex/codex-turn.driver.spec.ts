@@ -349,3 +349,50 @@ describe("the user's own codex PermissionRequest hooks", () => {
     expect(configOf(sent('thread/start'))).toBeUndefined();
   });
 });
+
+describe('streamed reasoning summary parts', () => {
+  function summaryDelta(
+    session: CodexSession,
+    itemId: string,
+    summaryIndex: number,
+    delta: string,
+  ) {
+    return session.onMessage({
+      method: 'item/reasoning/summaryTextDelta',
+      params: { threadId: THREAD, turnId: TURN, itemId, summaryIndex, delta },
+    });
+  }
+
+  function streamed(events: AgentEvent[]) {
+    return events
+      .flatMap((event) =>
+        event.type === 'reasoning_delta' ? [event.text] : [],
+      )
+      .join('');
+  }
+
+  it('separates the parts of one item the way its completed summary does', () => {
+    const { session } = conversation();
+    const events = [
+      ...summaryDelta(session, 'rs-1', 0, '**Checking Sheet'),
+      ...summaryDelta(session, 'rs-1', 0, ' close propagation**'),
+      ...summaryDelta(session, 'rs-1', 1, '**Evaluating Sheet event guards**'),
+      ...summaryDelta(session, 'rs-1', 2, '**Inspecting Radix dependencies**'),
+    ];
+    expect(streamed(events)).toBe(
+      '**Checking Sheet close propagation**\n\n' +
+        '**Evaluating Sheet event guards**\n\n' +
+        '**Inspecting Radix dependencies**',
+    );
+  });
+
+  it('adds no break inside a part or at the first part of the next item', () => {
+    const { session } = conversation();
+    const events = [
+      ...summaryDelta(session, 'rs-1', 0, '**A**'),
+      ...summaryDelta(session, 'rs-1', 0, ' body'),
+      ...summaryDelta(session, 'rs-2', 0, '**B**'),
+    ];
+    expect(streamed(events)).toBe('**A** body**B**');
+  });
+});

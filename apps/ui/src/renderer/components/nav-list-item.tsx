@@ -92,7 +92,8 @@ export function NavListItem({
       onContextMenu={onContextMenu}
       className={cn(
         'relative flex cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-2 hover:bg-accent/50',
-        active && 'bg-accent shadow-[inset_0_0_0_1px_var(--border)]',
+        active &&
+          'bg-accent shadow-[inset_0_0_0_1px_var(--border)] before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-foreground/70',
         className,
       )}>
       {suspendActivation ? null : (

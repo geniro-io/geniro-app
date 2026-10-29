@@ -486,13 +486,32 @@ describe('ChatListItem', () => {
       expect(container.querySelector('li')!.className).not.toMatch(/bg-group-/);
     });
 
-    it('yields the tint to the ACTIVE highlight', async () => {
+    it('keeps the tint on the ACTIVE row, a step stronger, with a bar in its hue', async () => {
       const container = await mount(
         <ChatListItem {...props({ color: 'teal', active: true })} />,
       );
       const classes = container.querySelector('li')!.className.split(/\s+/);
-      expect(classes).toContain('bg-accent');
+      expect(classes).toContain('bg-group-teal/30');
+      expect(classes).toContain('hover:bg-group-teal/35');
+      expect(classes).toContain('before:bg-group-teal');
+      expect(classes).not.toContain('bg-accent');
       expect(classes).not.toContain('bg-group-teal/15');
+      expect(classes).not.toContain('before:bg-foreground/70');
+    });
+
+    it('marks the ACTIVE uncoloured row with a bar as well as the highlight', async () => {
+      const container = await mount(
+        <ChatListItem {...props({ active: true })} />,
+      );
+      const classes = container.querySelector('li')!.className.split(/\s+/);
+      expect(classes).toContain('bg-accent');
+      expect(classes).toContain('before:w-[3px]');
+      expect(classes).toContain('before:bg-foreground/70');
+    });
+
+    it('draws no bar on an inactive seen row', async () => {
+      const container = await mount(<ChatListItem {...props()} />);
+      expect(container.querySelector('li')!.className).not.toContain('before:');
     });
 
     it('outranks the unseen wash, keeping the unread bar', async () => {

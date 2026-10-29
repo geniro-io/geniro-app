@@ -33,7 +33,11 @@ import { cn } from '../components/ui/utils';
 import { plainPreview } from './brief-text';
 import { PullRequestBadge } from './pull-request-row';
 import { formatRelativeTime, runDatesTitle } from './relative-time';
-import { GROUP_COLOR_LABEL, GROUP_ROW_TINT_CLASS } from './run-group';
+import {
+  GROUP_COLOR_LABEL,
+  GROUP_ROW_ACTIVE_TINT_CLASS,
+  GROUP_ROW_TINT_CLASS,
+} from './run-group';
 import {
   awaitingPhrase,
   HELD_ACTIVITY,
@@ -548,9 +552,13 @@ export const ChatListItem = memo(function ChatListItem({
         // state. Moot in practice — opening a thread is what marks it seen —
         // but the frame in between is exactly when the eye is on it.
         // A chosen colour outranks the unseen wash (the bar still marks the
-        // row unread) and yields to the active row for the same reason.
+        // row unread). The open row keeps its colour a step stronger rather
+        // than trading it for the neutral highlight.
         unseen && !active && color === null && 'bg-primary/10',
-        color !== null && !active && GROUP_ROW_TINT_CLASS[color],
+        color !== null &&
+          (active
+            ? GROUP_ROW_ACTIVE_TINT_CLASS[color]
+            : GROUP_ROW_TINT_CLASS[color]),
         dragging && 'opacity-40',
       )}
       activateLabel={label}

@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { NavListItem } from './nav-list-item';
 import { StatusDot } from './status-dot';
+import { PALETTE_ROW_ACTIVE_CLASS, PALETTE_ROW_CLASS } from './ui/palette';
 
 const meta = {
   title: 'Components/NavListItem',
@@ -26,6 +27,26 @@ export const Playground: Story = {};
 
 export const Active: Story = {
   args: { active: true },
+};
+
+export const TintedRows: Story = {
+  render: (args) => (
+    <>
+      <NavListItem {...args} title="Plain" />
+      <NavListItem {...args} active title="Plain, open" />
+      <NavListItem
+        {...args}
+        title="Tinted"
+        className={PALETTE_ROW_CLASS.orange}
+      />
+      <NavListItem
+        {...args}
+        active
+        title="Tinted, open"
+        className={PALETTE_ROW_ACTIVE_CLASS.orange}
+      />
+    </>
+  ),
 };
 
 export const LongTitleTruncates: Story = {

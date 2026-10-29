@@ -17,6 +17,7 @@ import {
   type DraftRequest,
   HostedChat,
 } from '../chats/hosted-chat';
+import type { RecommendationsApplier } from '../chats/recommendations-apply-context';
 import { RunStatusBadge } from '../chats/run-status';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
@@ -102,6 +103,7 @@ export function WorkflowChatPanel({
   onWorkingChange,
   onAwaitingChange,
   onTurnSettled,
+  applyRecommendations,
 }: {
   slug: string;
   workflowName: string;
@@ -142,6 +144,8 @@ export function WorkflowChatPanel({
   onAwaitingChange?: (awaiting: RunAwaiting | null) => void;
   /** A turn ended — the builder re-reads the workflow the agent may have edited. */
   onTurnSettled: () => void | Promise<void>;
+  /** A recommendations card's Apply — the agent posts one when asked to analyse the workflow's runs. */
+  applyRecommendations: RecommendationsApplier;
 }): React.JSX.Element {
   const {
     width: height,
@@ -195,10 +199,11 @@ export function WorkflowChatPanel({
         initialDraft={initialDraft}
         draftRequest={draftRequest}
         active={active}
+        applyRecommendations={applyRecommendations}
         transcriptSlot="workflow-chat-transcript"
-        emptyText="Ask for a change — agents, wiring or the stages every run walks. The agent edits this workflow's file and the canvas reloads when it is done."
+        emptyText="Ask for a change — agents, wiring or the stages every run walks — or for an analysis of its latest runs. The agent edits this workflow's file and the canvas reloads when it is done."
         composerLabel="Ask for a workflow change"
-        composerPlaceholder="Describe the change — add a reviewer, wire it to the coder, add a review stage…"
+        composerPlaceholder="Describe the change, or ask what its latest runs suggest…"
         onBeforeSend={onBeforeSend}
         onWorkingChange={onWorkingChange}
         onAwaitingChange={onAwaitingChange}

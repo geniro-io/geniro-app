@@ -49,10 +49,10 @@ export class RecommendationsApplyService {
     if (run === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    if (!isAnalysisRun(run)) {
+    if (!isAnalysisRun(run) && run.editsWorkflowSlug === null) {
       throw new ConflictException(
         'NOT_AN_ANALYSIS',
-        'recommendations are applied only in an analysis chat',
+        "recommendations are applied only in an analysis chat or a workflow's builder chat",
       );
     }
     const card = await readCard(this.itemDao, runId, input.cardSeq, em);

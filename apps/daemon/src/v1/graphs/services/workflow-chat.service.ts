@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import type { RunWire } from '../../agents/chat.types';
 import { ChatService } from '../../agents/services/chat.service';
 import { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
+import { MemoryService } from '../../memory/services/memory.service';
 import type { StartWorkflowChatInput } from '../graphs.types';
 import { composeWorkflowChatInstructions } from '../utils/workflow-chat-instructions';
 import { WorkflowStoreService } from './workflow-store.service';
@@ -51,6 +52,7 @@ export class WorkflowChatService {
     private readonly store: WorkflowStoreService,
     private readonly chats: ChatService,
     private readonly analyses: ThreadAnalysisService,
+    private readonly memory: MemoryService,
   ) {}
 
   /**
@@ -89,6 +91,7 @@ export class WorkflowChatService {
       slug,
       name: workflow.name,
       schemaPath: await this.store.writeSchemaReference(),
+      memory: this.memory.enabled,
     });
     const existing = await this.chats.findWorkflowChat(slug);
     if (existing !== null) {

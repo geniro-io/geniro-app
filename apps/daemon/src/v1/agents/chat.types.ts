@@ -877,6 +877,13 @@ export interface ThreadTimeline {
 /** What kind of thread an analysis reads — it decides what may be recommended. */
 export type AnalysedThreadKind = 'workflow' | 'chat';
 
+/**
+ * How many of its workflow's newest runs a builder chat's turn reads — the
+ * "Analyze & improve" dialog's default (`DEFAULT_ANALYSED_RUNS` in the
+ * renderer).
+ */
+export const BUILDER_CHAT_ANALYSED_RUNS = 10;
+
 /** One run a workflow analysis reads, and where its snapshot ends. */
 export interface AnalysedRun {
   runId: string;

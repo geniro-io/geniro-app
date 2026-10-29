@@ -1,9 +1,11 @@
 import {
+  BUILDER_CHAT_ANALYSED_RUNS,
   HOST_BACKUP_WORKFLOW_TOOL,
   HOST_PROPOSE_WORKFLOW_TOOL,
   HOST_READ_WORKFLOWS_TOOL,
   HOST_WORKFLOW_CHANGE_TOOL,
 } from '../../agents/chat.types';
+import { builderChatAnalysisGuide } from '../../agents/utils/thread-analysis-guide';
 import {
   type ApprovalMode,
   ApprovalModeSchema,
@@ -104,6 +106,8 @@ export function composeWorkflowChatInstructions(input: {
   name: string;
   /** Absolute path of the library's generated JSON Schema. */
   schemaPath: string;
+  /** Whether the shared memory is on — it decides the memory recommendations. */
+  memory: boolean;
 }): string {
   return `<workflow-editing>
 You are editing one geniro workflow through the chat panel docked under the
@@ -257,5 +261,9 @@ LAYOUT
 \`layout\` maps each node id to its \`{x, y}\` on the canvas. Give every node
 you add a position: left to right in run order, about 260 apart horizontally
 and 120 vertically, clear of the existing nodes.
-</workflow-editing>`;
+</workflow-editing>
+
+<workflow-analysis>
+${builderChatAnalysisGuide(input.memory, BUILDER_CHAT_ANALYSED_RUNS)}
+</workflow-analysis>`;
 }

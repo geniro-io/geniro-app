@@ -42,7 +42,9 @@ import type {
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import {
   type AnalysedWorkflow,
+  type AnalysisTurn,
   type AttachmentDataWire,
+  BUILDER_CHAT_ANALYSED_RUNS,
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
   type ChatListScope,
@@ -100,6 +102,7 @@ import {
 import {
   analysisTurnOf,
   isAnalysisRun,
+  workflowAnalysisTurn,
   writeAnalysedRuns,
 } from '../utils/analysed-runs';
 import {
@@ -184,6 +187,7 @@ import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
+import { workflowRunSnapshots } from '../utils/run-snapshots';
 import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { StandingQuestions } from '../utils/standing-questions';
@@ -5236,6 +5240,31 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     );
   }
 
+  /**
+   * What a builder chat's turn reads of its workflow's history: its newest
+   * runs, each at its snapshot as the turn begins, so the turn reads the same
+   * rows throughout. Null when the workflow has no run yet, or the read failed
+   * — the turn then goes on without the run tools.
+   */
+  private async builderAnalysisTurn(
+    runId: string,
+    slug: string,
+  ): Promise<AnalysisTurn | null> {
+    try {
+      const runs = await workflowRunSnapshots(
+        { em: this.em, runDao: this.runDao, itemDao: this.itemDao },
+        slug,
+        BUILDER_CHAT_ANALYSED_RUNS,
+      );
+      return workflowAnalysisTurn(runId, slug, runs);
+    } catch (err) {
+      this.logger.warn(
+        `builder chat ${runId} goes without the runs of ${slug}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
   private async sendMessageOnce(
     em: EntityManager,
     run: Run,
@@ -6671,6 +6700,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // The token is REUSED across a run's turns where one was already minted:
       // it is the run's credential for its own route, and re-minting per turn
       // would leave the previous turn's endpoint refused for no reason.
+      // Read before any host tool is registered: a failure past this point
+      // must find every registration covered by `disposeHostTools`.
+      const builderAnalysisTurn =
+        this.runtime.port !== null && run.editsWorkflowSlug !== null
+          ? await this.builderAnalysisTurn(runId, run.editsWorkflowSlug)
+          : null;
       const questionServer = hostQuestionServer();
       // Only where there is a port to reach: a token nobody can present is a
       // credential registered as a redaction secret and held to run teardown
@@ -6784,8 +6819,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               acceptsAnyVersion: false,
             })
           : null;
-      // Only an analysis chat reads another thread — see `AnalysisBroker`.
-      const analysisTurn = analysisTurnOf(runId, run);
+      // An analysis chat reads what it was started on; a builder chat its
+      // workflow's newest runs — see `AnalysisBroker`.
+      const analysisTurn = analysisTurnOf(runId, run) ?? builderAnalysisTurn;
       const disposeAnalysis =
         mcpEndpoint && analysisTurn !== null
           ? this.analyses.register(

@@ -52,6 +52,7 @@ function build(
   options: {
     analysis?: boolean;
     workflowAnalysis?: boolean;
+    builder?: boolean;
     card?: Partial<Item> | null;
     appliedCards?: number[];
   } = {},
@@ -68,6 +69,7 @@ function build(
               ? null
               : 'source',
           analysisWorkflowSlug: options.workflowAnalysis ? 'team' : null,
+          editsWorkflowSlug: options.builder ? 'team' : null,
         } as Run),
     } as unknown as RunDao,
     {
@@ -231,5 +233,18 @@ describe('RecommendationsApplyService.apply', () => {
         clientMessageId: 'press-1',
       }),
     ).resolves.toEqual({ seq: 9 });
+  });
+
+  it("applies the card a workflow's builder chat posted", async () => {
+    const { service, sendMessage } = build({ analysis: false, builder: true });
+
+    await expect(
+      service.apply('analysis', {
+        cardSeq: 5,
+        ids: ['W-1'],
+        clientMessageId: 'press-1',
+      }),
+    ).resolves.toEqual({ seq: 9 });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });

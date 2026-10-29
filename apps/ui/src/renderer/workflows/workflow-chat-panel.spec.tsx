@@ -133,6 +133,9 @@ describe('WorkflowChatPanel', () => {
   let onBeforeSend: Mock<() => Promise<void>>;
   let onWorkingChange: Mock<(working: boolean) => void>;
   let onTurnSettled: Mock<() => void>;
+  let applyRecommendations: Mock<
+    (runId: string, cardSeq: number, ids: string[]) => Promise<void>
+  >;
 
   beforeEach(() => {
     stubResizeObserver();
@@ -143,6 +146,9 @@ describe('WorkflowChatPanel', () => {
     onBeforeSend = vi.fn(async (): Promise<void> => {});
     onWorkingChange = vi.fn<(working: boolean) => void>();
     onTurnSettled = vi.fn<() => void>();
+    applyRecommendations = vi.fn<
+      (runId: string, cardSeq: number, ids: string[]) => Promise<void>
+    >(async () => {});
     chat.current = chatState({});
   });
 
@@ -189,6 +195,7 @@ describe('WorkflowChatPanel', () => {
           onBeforeSend={onBeforeSend}
           onWorkingChange={onWorkingChange}
           onTurnSettled={onTurnSettled}
+          applyRecommendations={applyRecommendations}
         />,
       );
     });
@@ -393,6 +400,74 @@ describe('WorkflowChatPanel', () => {
     expect(chat.current?.markWorking).toHaveBeenNthCalledWith(2, false);
     delete (APIS.chats as unknown as { pressChatAction?: unknown })
       .pressChatAction;
+  });
+
+  it("applies the selection on a recommendations card the agent posted, for the builder's own run", async () => {
+    chat.current = chatState({
+      run: {
+        id: 'run-1',
+        status: 'completed',
+        holdingFor: 0,
+        shellsOpen: 0,
+        subagentsOut: 0,
+        monitorsOpen: 0,
+      } as WorkflowChatState['run'],
+      items: [
+        {
+          id: 'i7',
+          runId: 'run-1',
+          seq: 7,
+          kind: 'recommendations',
+          role: null,
+          nodeId: null,
+          payload: {
+            sourceRunId: 'newest-run',
+            sourceKind: 'workflow',
+            summary: null,
+            timing: null,
+            items: [
+              {
+                id: 'W-1',
+                target: 'workflow',
+                territory: 'process',
+                kind: 'add',
+                location: 'stages',
+                title: 'Add a review stage',
+                change: 'stages: [{ id: review }]',
+                evidence: [{ runId: 'newest-run', seq: 2, quote: 'merged' }],
+                rootCause: 'no review step',
+                impact: {
+                  minutesSaved: 5,
+                  basis: 'one fix loop',
+                  confidence: 3,
+                },
+                risk: { level: 'low', note: 'one more stage' },
+              },
+            ],
+          },
+          createdAt: '2026-10-29T00:00:07.000Z',
+        } as unknown as WorkflowChatState['items'][number],
+      ],
+    });
+    await paint();
+
+    const buttons = (): HTMLButtonElement[] => [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-slot="workflow-chat-transcript"] button',
+      ),
+    ];
+    await act(async () => {
+      buttons()
+        .find((b) => b.textContent?.includes('W-1'))!
+        .click();
+    });
+    await act(async () => {
+      buttons()
+        .find((b) => b.textContent?.includes('Apply selected'))!
+        .click();
+    });
+
+    expect(applyRecommendations).toHaveBeenCalledWith('run-1', 7, ['W-1']);
   });
 
   it('sends nothing at all when the box is empty', async () => {
@@ -664,6 +739,7 @@ describe('WorkflowChatPanel — the transcript is the chat screen’s own', () =
           onBeforeSend={vi.fn(async () => {})}
           onWorkingChange={vi.fn()}
           onTurnSettled={vi.fn()}
+          applyRecommendations={vi.fn(async () => {})}
         />,
       );
     });
@@ -1192,6 +1268,7 @@ describe('WorkflowChatPanel — the transcript follows its tail only while the r
           onBeforeSend={vi.fn(async () => {})}
           onWorkingChange={vi.fn()}
           onTurnSettled={vi.fn()}
+          applyRecommendations={vi.fn(async () => {})}
         />,
       );
     });

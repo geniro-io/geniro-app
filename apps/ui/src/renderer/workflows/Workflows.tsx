@@ -944,7 +944,7 @@ export function Workflows({
     }
   }, [api, activeSlug]);
 
-  /** A recommendations card's Apply in the analysis popup. */
+  /** A recommendations card's Apply, in the analysis popup or the chat dock. */
   const applyRecommendations = useLatestCallback(
     async (runId: string, cardSeq: number, ids: string[]): Promise<void> => {
       if (!apis) {
@@ -2457,6 +2457,7 @@ export function Workflows({
           onWorkingChange={setChatWorking}
           onAwaitingChange={setChatAwaiting}
           onTurnSettled={reloadAfterAgentEdit}
+          applyRecommendations={applyRecommendations}
         />
       ) : null}
 

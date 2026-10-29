@@ -5374,6 +5374,36 @@ export interface MemoryImportTriageRequestDto {
     agentKind: AgentKind;
     /**
      * 
+     * @type {string}
+     * @memberof MemoryImportTriageRequestDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportTriageRequestDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportTriageRequestDto
+     */
+    contextWindow?: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof MemoryImportTriageRequestDto
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportTriageRequestDto
+     */
+    configDir?: string;
+    /**
+     * 
      * @type {Array<MemoryImportTriageRequestDtoNotesInner>}
      * @memberof MemoryImportTriageRequestDto
      */

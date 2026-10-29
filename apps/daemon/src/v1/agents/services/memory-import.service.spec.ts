@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -26,7 +27,10 @@ import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CodexAdapter } from '../adapters/codex/codex.adapter';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
+import type { AgentVersionService } from './agent-version.service';
+import { EffortsService } from './efforts.service';
 import { MemoryImportService } from './memory-import.service';
+import type { ProcessRegistry } from './process-registry';
 
 describe('MemoryImportService', () => {
   let db: Awaited<ReturnType<typeof memoryDb>>;
@@ -42,14 +46,20 @@ describe('MemoryImportService', () => {
       [AgentKind.Claude, new ClaudeAdapter({ homeDir: home })],
       [AgentKind.Codex, new CodexAdapter({ homeDir: home })],
     ]);
+    const registry = {
+      all: () => adapters,
+      for: (kind: AgentKind) => adapters.get(kind),
+    } as unknown as AgentAdapterRegistry;
     imports = new MemoryImportService(
       db.em,
-      {
-        all: () => adapters,
-        for: (kind: AgentKind) => adapters.get(kind),
-      } as unknown as AgentAdapterRegistry,
+      registry,
       db.service,
       new ProjectDao(db.em),
+      new EffortsService(
+        registry,
+        {} as ProcessRegistry,
+        {} as AgentVersionService,
+      ),
     );
     const em = db.em.fork();
     em.persist(make(Project, { id: 'app', name: 'App', folder: '/repo/app' }));
@@ -543,6 +553,41 @@ describe('MemoryImportService', () => {
       configDir: null,
       prompt: expect.stringContaining('[n2] PR 12 state'),
     });
+  });
+
+  it('asks with the model settings chosen, as a chat would run them', async () => {
+    const ask = vi
+      .spyOn(adapters.get(AgentKind.Claude)!, 'askOnce')
+      .mockResolvedValue('[{"id":"n1","keep":true,"reason":"r"}]');
+    const notes = [{ key: 'k', title: 't', body: 'b', folder: null }];
+
+    await imports.triage({
+      agentKind: AgentKind.Claude,
+      model: 'opus',
+      effort: 'high',
+      modelParameters: { fastMode: 'true', ' ': 'x' },
+      configDir: home,
+      notes,
+    });
+
+    expect(ask.mock.calls[0]![0]).toMatchObject({
+      model: 'opus',
+      effort: 'high',
+      contextWindow: null,
+      modelParameters: { fastMode: 'true' },
+      configDir: realpathSync(home),
+    });
+    await expect(
+      imports.triage({ agentKind: AgentKind.Claude, effort: 'ultra', notes }),
+    ).rejects.toThrow("does not accept the reasoning effort 'ultra'");
+    await expect(
+      imports.triage({
+        agentKind: AgentKind.Claude,
+        configDir: join(home, 'missing'),
+        notes,
+      }),
+    ).rejects.toThrow();
+    expect(ask).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a sort the CLI did not answer, or answered unreadably', async () => {

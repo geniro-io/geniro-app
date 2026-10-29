@@ -364,9 +364,16 @@ export const MEMORY_TRIAGE_NOTES_MAX = 100;
 /**
  * Notes for one CLI to sort into worth keeping in the shared memory or not.
  * The verdict is advice the user reviews, so the text comes from the client.
+ * The model settings are a chat's (`createChatSchema`); omitted = the CLI's
+ * own default.
  */
 export const MemoryImportTriageRequestSchema = z.object({
   agentKind: AgentKindSchema,
+  model: z.string().min(1).optional(),
+  effort: z.string().min(1).optional(),
+  contextWindow: z.string().min(1).optional(),
+  modelParameters: z.record(z.string(), z.string()).optional(),
+  configDir: z.string().min(1).optional(),
   notes: z
     .array(
       z.object({

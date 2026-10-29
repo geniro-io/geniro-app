@@ -66,6 +66,8 @@ import {
   CODEX_CONTEXT_WINDOW_KEY,
   CODEX_CREDENTIAL_ENV_KEYS,
   CODEX_DEFAULT_HOME_DIR_NAME,
+  CODEX_EXEC_ONCE_ARGS,
+  CODEX_EXEC_ONCE_EFFORT,
   CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC,
   CODEX_HOME_ENV,
   CODEX_MCP_ADD_ARGS,
@@ -87,6 +89,7 @@ import {
   CODEX_ONESHOT_TIMEOUT_MS,
   CODEX_PLAN_LIMITS_TIMEOUT_MS,
   CODEX_QUESTION_TOOL_NAME,
+  CODEX_REASONING_EFFORT_KEY,
   CODEX_SESSION_SEARCH_PAGE,
   CODEX_THREAD_FACTS_MAX,
   CODEX_THREAD_ID_PATTERN,
@@ -485,7 +488,9 @@ export class CodexAdapter extends AgentAdapter {
    * PROCESS, like the auto-compaction threshold beside it. codex clamps a
    * value above the model's maximum itself, so nothing is refused here.
    */
-  private contextWindowArgs(input: AgentTurnInput): string[] {
+  private contextWindowArgs(
+    input: Pick<AgentTurnInput, 'contextWindow'>,
+  ): string[] {
     const tokens = codexWindowTokens(input.contextWindow);
     return tokens === null
       ? []
@@ -760,7 +765,10 @@ export class CodexAdapter extends AgentAdapter {
       cwd = this.makeProbeRoot('ask');
       const stdout = await this.runCommand(
         [
-          ...CODEX_TITLE_ARGS,
+          ...CODEX_EXEC_ONCE_ARGS,
+          CODEX_CONFIG_FLAG,
+          `${CODEX_REASONING_EFFORT_KEY}=${JSON.stringify(input.effort ?? CODEX_EXEC_ONCE_EFFORT)}`,
+          ...this.contextWindowArgs(input),
           ...local.args,
           ...(model ? [CODEX_TITLE_MODEL_FLAG, model] : []),
           input.prompt,

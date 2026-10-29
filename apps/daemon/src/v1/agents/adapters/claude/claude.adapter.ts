@@ -1880,7 +1880,12 @@ export class ClaudeAdapter extends AgentAdapter {
           local.args.length
             ? local.model!
             : (input.model ?? CLAUDE_TITLE_MODEL),
+          ...(input.effort ? [CLAUDE_EFFORT_FLAG, input.effort] : []),
           ...local.args,
+          ...claudeSettingsArgs({
+            modelParameters: input.modelParameters,
+            env: local.env,
+          }),
           input.prompt,
         ],
         {

@@ -2596,6 +2596,10 @@ export interface AgentAskInput {
   model: string | null;
   /** The profile to ask under; null = the CLI's default. */
   configDir: string | null;
+  /** As on {@link AgentTurnInput}; absent = the ask's own default. */
+  effort?: string | null;
+  contextWindow?: string | null;
+  modelParameters?: Record<string, string> | null;
 }
 
 export interface AgentSessionImportInput {

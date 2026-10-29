@@ -17,7 +17,15 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import { tempDir } from '../../__tests__/temp-dir';
@@ -334,6 +342,10 @@ describe('ClaudeAdapter', () => {
   });
 
   it('switches the CLI’s own auto memory off only for a run that switches native memory off', () => {
+    vi.stubEnv(CLAUDE_DISABLE_AUTO_MEMORY_ENV, undefined);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const off = fakeSpawn();
     new ClaudeAdapter({ spawn: off.spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj' },
@@ -4512,6 +4524,26 @@ describe('ClaudeAdapter.askOnce', () => {
     expect(captured.options?.env).toMatchObject({
       CLAUDE_CONFIG_DIR: '/Users/x/.claude-work',
     });
+  });
+
+  it('asks at the chosen model, effort and fast mode, as a chat turn would', async () => {
+    const { groupSpawnFn, captured } = fakeListing(
+      JSON.stringify({ subtype: 'success', result: '[]' }),
+    );
+    await new ClaudeAdapter({ groupSpawnFn }).askOnce({
+      prompt: 'Sort these',
+      model: 'opus',
+      configDir: null,
+      effort: 'high',
+      modelParameters: { [CLAUDE_FAST_MODE_PARAMETER_ID]: 'true' },
+    });
+    const args = captured.args!;
+    expect(args[args.indexOf('--model') + 1]).toBe('opus');
+    expect(args[args.indexOf('--effort') + 1]).toBe('high');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      [CLAUDE_FAST_MODE_PARAMETER_ID]: true,
+    });
+    expect(args.at(-1)).toBe('Sort these');
   });
 
   it('answers null for a failed turn', async () => {

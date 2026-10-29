@@ -1378,6 +1378,34 @@ describe('a one-off question', () => {
     expect(calls[0]?.stdinEnded()).toBe(true);
   });
 
+  it('asks at the chosen effort and context window, low effort when none is chosen', async () => {
+    const chosen = oneshotSpawn('[]');
+    await adapterWith({ groupSpawnFn: chosen.groupSpawnFn }).askOnce({
+      prompt: 'Sort these',
+      model: 'gpt-5.4',
+      configDir: null,
+      effort: 'high',
+      contextWindow: '272k',
+    });
+    const args = chosen.calls[0]!.args;
+    expect(args).toContain('model_reasoning_effort="high"');
+    expect(args).not.toContain('model_reasoning_effort="low"');
+    expect(args).toContain('model_context_window=272000');
+
+    const unchosen = oneshotSpawn('[]');
+    await adapterWith({ groupSpawnFn: unchosen.groupSpawnFn }).askOnce({
+      prompt: 'Sort these',
+      model: null,
+      configDir: null,
+    });
+    expect(unchosen.calls[0]!.args).toContain('model_reasoning_effort="low"');
+    expect(
+      unchosen.calls[0]!.args.some((arg) =>
+        arg.startsWith('model_context_window='),
+      ),
+    ).toBe(false);
+  });
+
   it('answers null for an empty reply', async () => {
     const { groupSpawnFn } = oneshotSpawn('\n');
     await expect(

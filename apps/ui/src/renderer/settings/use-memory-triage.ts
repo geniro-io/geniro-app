@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
+import type { MemoryTriageConfig } from '../../shared/contracts';
 import type {
-  AgentKind,
   MemoriesApi,
   MemoryImportRow,
   MemoryImportTriageRequestDtoNotesInner,
@@ -20,11 +20,14 @@ const TRIAGE_CONCURRENCY = 3;
 type TriageClient = Pick<MemoriesApi, 'triageMemoryImport'>;
 
 /**
- * Asks one CLI, in batches, which import rows are worth keeping. Verdicts are
- * kept by note key across previews, so a second run asks only about notes
- * not judged yet.
+ * Asks one CLI, in batches, which import rows are worth keeping, run with the
+ * model settings chosen (null = no agent can sort). Verdicts are kept by note
+ * key across previews, so a second run asks only about notes not judged yet.
  */
-export function useMemoryTriage(api: TriageClient | null): MemoryImportTriage {
+export function useMemoryTriage(
+  api: TriageClient | null,
+  choice: MemoryTriageConfig | null,
+): MemoryImportTriage {
   const [verdicts, setVerdicts] = useState<
     ReadonlyMap<string, MemoryImportVerdict>
   >(() => new Map());
@@ -43,10 +46,22 @@ export function useMemoryTriage(api: TriageClient | null): MemoryImportTriage {
   }, []);
 
   const start = useLatestCallback(
-    (agentKind: AgentKind, rows: readonly MemoryImportRow[]) => {
-      if (api === null || controllerRef.current !== null) {
+    (rows: readonly MemoryImportRow[]) => {
+      if (api === null || choice === null || controllerRef.current !== null) {
         return;
       }
+      const settings = {
+        agentKind: choice.agent,
+        ...(choice.model === null ? {} : { model: choice.model }),
+        ...(choice.effort === null ? {} : { effort: choice.effort }),
+        ...(choice.contextWindow === null
+          ? {}
+          : { contextWindow: choice.contextWindow }),
+        ...(Object.keys(choice.modelParameters).length === 0
+          ? {}
+          : { modelParameters: choice.modelParameters }),
+        ...(choice.configDir === null ? {} : { configDir: choice.configDir }),
+      };
       const notes: MemoryImportTriageRequestDtoNotesInner[] = rows
         .filter((row) => !verdictsRef.current.has(row.key))
         .map((row) => ({
@@ -73,7 +88,7 @@ export function useMemoryTriage(api: TriageClient | null): MemoryImportTriage {
         while (next < batches.length && !controller.signal.aborted) {
           const batch = batches[next++]!;
           const answer = await api.triageMemoryImport(
-            { memoryImportTriageRequestDto: { agentKind, notes: batch } },
+            { memoryImportTriageRequestDto: { ...settings, notes: batch } },
             {
               signal: AbortSignal.any([
                 controller.signal,
@@ -114,7 +129,7 @@ export function useMemoryTriage(api: TriageClient | null): MemoryImportTriage {
           setRunning(false);
         });
     },
-    [api],
+    [api, choice],
   );
 
   return { verdicts, running, done, total, error, start, cancel };

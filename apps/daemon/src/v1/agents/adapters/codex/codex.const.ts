@@ -532,21 +532,32 @@ export const CODEX_MCP_LOGIN_FAILURE_MARKERS = [
 ] as const;
 
 /**
- * The throwaway turn that names a chat: `codex exec` prints only the final
- * message on stdout (measured on 0.157.1), keeps no session (`--ephemeral`),
- * may touch nothing (`read-only`), and thinks as little as it can. It skips the
- * profile's `config.toml` (auth still comes from `CODEX_HOME`), so the quoted
- * transcript meets no MCP server in a turn nobody is watching.
+ * A throwaway `codex exec` turn: it prints only the final message on stdout
+ * (measured on 0.157.1), keeps no session (`--ephemeral`) and may touch
+ * nothing (`read-only`). It skips the profile's `config.toml` (auth still
+ * comes from `CODEX_HOME`), so the quoted text meets no MCP server in a turn
+ * nobody is watching.
  */
-export const CODEX_TITLE_ARGS = [
+export const CODEX_EXEC_ONCE_ARGS = [
   'exec',
   '--ephemeral',
   '--skip-git-repo-check',
   '--ignore-user-config',
   '-s',
   'read-only',
+] as const;
+
+/** The config key a `-c` override sets the reasoning effort through. */
+export const CODEX_REASONING_EFFORT_KEY = 'model_reasoning_effort';
+
+/** How hard a throwaway turn thinks when nobody chose: as little as it can. */
+export const CODEX_EXEC_ONCE_EFFORT = 'low';
+
+/** The turn that names a chat. */
+export const CODEX_TITLE_ARGS = [
+  ...CODEX_EXEC_ONCE_ARGS,
   CODEX_CONFIG_FLAG,
-  'model_reasoning_effort="low"',
+  `${CODEX_REASONING_EFFORT_KEY}="${CODEX_EXEC_ONCE_EFFORT}"`,
 ] as const;
 
 /** How long the naming turn may take. */

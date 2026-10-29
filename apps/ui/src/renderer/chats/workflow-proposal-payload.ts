@@ -408,6 +408,20 @@ export function previewMarks(
   return marks;
 }
 
+/** Each stage a replacement adds or changes; nothing on a new workflow. */
+export function stageMarksOf(
+  diff: ProposalDiff | null,
+): ReadonlyMap<string, PreviewMark> {
+  const marks = new Map<string, PreviewMark>();
+  for (const { id } of diff?.changedStages ?? []) {
+    marks.set(id, 'changed');
+  }
+  for (const id of diff?.addedStages ?? []) {
+    marks.set(id, 'added');
+  }
+  return marks;
+}
+
 /** One agent of the proposal, as a roster row. */
 export interface RosterRow {
   node: WorkflowAgentNode;

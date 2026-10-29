@@ -12,6 +12,7 @@ import {
   readProposalOutcome,
   readWorkflowProposal,
   rosterOf,
+  stageMarksOf,
 } from './workflow-proposal-payload';
 
 function parsed(input: unknown) {
@@ -157,6 +158,16 @@ describe('rosterOf', () => {
       ),
     });
     expect(roster[0]!.instructions).toEqual(['style']);
+  });
+});
+
+describe('stageMarksOf', () => {
+  it('marks the stages a replacement adds and changes, and nothing on a new workflow', () => {
+    expect([...stageMarksOf(parsed(STAGES_PROPOSAL).diff)]).toEqual([
+      ['build', 'changed'],
+      ['review', 'added'],
+    ]);
+    expect(stageMarksOf(parsed(RECORDED_NEW_PROPOSAL).diff).size).toBe(0);
   });
 });
 

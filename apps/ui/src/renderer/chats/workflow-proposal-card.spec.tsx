@@ -382,6 +382,11 @@ describe('WorkflowProposalCard', () => {
       },
     };
     const el = render(card({ input: created }));
+    click(
+      el.querySelector<HTMLButtonElement>(
+        '[data-slot="workflow-proposal-stage-fold"] > button',
+      )!,
+    );
     const items = [
       ...el.querySelectorAll('[data-slot="workflow-proposal-stage-text"] > li'),
     ].map((item) => item.textContent);
@@ -427,23 +432,41 @@ describe('WorkflowProposalCard', () => {
     expect(buttonNamed(el, 'Approve')!.disabled).toBe(true);
   });
 
-  it('folds the agents of a replacement and marks the ones it adds or changes', () => {
-    const el = render(card());
+  it('folds the agents, still showing the ones a replacement changes', () => {
+    const el = render(card({ input: RECORDED_REPLACE_PROPOSAL }));
     const fold = el.querySelector<HTMLButtonElement>(
       '[data-slot="workflow-proposal-agents"] > button',
     )!;
-    expect(fold.textContent).toBe('3 agents');
     expect(fold.getAttribute('aria-expanded')).toBe('false');
-    expect(el.querySelector('[data-agent]')).toBeNull();
+    expect(fold.textContent).toBe('2 agents · 1 changed, 1 more');
+    const shown = () =>
+      [...el.querySelectorAll<HTMLElement>('[data-agent]')].map(
+        (row) => row.dataset.agent,
+      );
+    expect(shown()).toEqual(['reviewer']);
+    expect(rosterRow(el, 'reviewer').textContent).toContain('Changed');
+
     click(fold);
+    expect(fold.textContent).toBe('2 agents');
+    expect(shown()).toEqual(['coder', 'reviewer']);
+  });
+
+  it('marks the agents a replacement adds and names their instruction blocks', () => {
+    const el = render(card());
+    openAgents(el);
     expect(rosterRow(el, 'coder').textContent).toContain('Changed');
     expect(rosterRow(el, 'tester').textContent).toContain('New');
     expect(rosterRow(el, 'coder').textContent).toContain('Instructions: Style');
   });
 
-  it('shows the agents of a new workflow unfolded, none of them marked', () => {
+  it('folds the agents of a new workflow too, none of them marked', () => {
     const created = render(card({ input: RECORDED_NEW_PROPOSAL }));
-    expect(created.querySelector('[data-agent="coder"]')).not.toBeNull();
+    const fold = created.querySelector<HTMLButtonElement>(
+      '[data-slot="workflow-proposal-agents"] > button',
+    )!;
+    expect(fold.textContent).toBe('2 agents');
+    expect(created.querySelector('[data-agent]')).toBeNull();
+    click(fold);
     expect(
       created.querySelector('[data-agent="coder"]')?.textContent,
     ).not.toMatch(/Changed|New/);
@@ -492,6 +515,29 @@ describe('WorkflowProposalCard', () => {
     expect(row.textContent).not.toContain('→');
   });
 
+  it('folds the stage text, still showing the stages a replacement adds or changes', () => {
+    const el = render(card({ input: STAGES_PROPOSAL }));
+    const fold = el.querySelector<HTMLButtonElement>(
+      '[data-slot="workflow-proposal-stage-fold"] > button',
+    )!;
+    expect(fold.textContent).toBe('3 stages · 2 changed, 1 more');
+    const shown = () =>
+      [...el.querySelectorAll<HTMLElement>('[data-stage]')].map((item) => [
+        item.dataset.stage,
+        item.querySelector('[data-slot="badge"]')?.textContent ?? null,
+      ]);
+    expect(shown()).toEqual([
+      ['build', 'Changed'],
+      ['review', 'New'],
+    ]);
+    click(fold);
+    expect(shown()).toEqual([
+      ['plan', null],
+      ['build', 'Changed'],
+      ['review', 'New'],
+    ]);
+  });
+
   it('folds the stage text of a replacement that leaves the stages as they were', () => {
     const input = STAGES_PROPOSAL as { diff: Record<string, unknown> };
     const el = render(
@@ -511,7 +557,7 @@ describe('WorkflowProposalCard', () => {
     const fold = el.querySelector<HTMLButtonElement>(
       '[data-slot="workflow-proposal-stage-fold"] > button',
     )!;
-    expect(fold.textContent).toBe('What each stage asks (unchanged)');
+    expect(fold.textContent).toBe('3 stages, unchanged');
     expect(
       el.querySelector('[data-slot="workflow-proposal-stage-text"]'),
     ).toBeNull();

@@ -10053,6 +10053,160 @@ describe('GraphExecutorService — agent calls', () => {
       await drain();
     });
 
+    /** call-1 fell through to member 2 on member 1's usage limit and answered there. */
+    async function callOnBackup(
+      limit = "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+    ) {
+      const harness = await startPoolRun();
+      const { claude, cursor, callBroker, run } = harness;
+      const opened = callBroker.callAgent(run.id, 'orch', {
+        title: 'open',
+        agent: 'helper',
+        message: 'Build the letters in /tmp/letter-worktree',
+      });
+      await drain();
+      claude.starts[1]!.emit({ type: 'error', message: limit });
+      claude.starts[1]!.finish();
+      await drain();
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'sess-cursor' });
+      completeTurn(cursor.starts[0]!, 'The letters are committed as abc123.');
+      await opened;
+      const clock = vi
+        .spyOn(Date, 'now')
+        .mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
+      onTestFinished(() => clock.mockRestore());
+      return harness;
+    }
+
+    it('moves a continued call back to member 1 once its limit has reset', async () => {
+      const { claude, cursor, callBroker, itemDao, run } = await callOnBackup();
+
+      const continued = callBroker.callAgent(run.id, 'orch', {
+        title: 'more',
+        agent: 'helper',
+        message: 'Finish the checks and report.',
+        thread: 'call-1',
+      });
+      await drain();
+      expect(cursor.starts).toHaveLength(1);
+      const back = claude.starts[2]!;
+      // Member 2's session belongs to its own account: member 1 opens a fresh
+      // one, carrying the conversation.
+      expect(back.input.resumeSessionId ?? null).toBeNull();
+      expect(back.input.prompt).toContain('/tmp/letter-worktree');
+      expect(back.input.prompt).toContain('abc123');
+      expect(back.input.prompt).toContain('Finish the checks and report.');
+      const rows = [...itemDao.items.values()].flat();
+      expect(
+        rows.some((row) => {
+          if (row.kind !== 'system') {
+            return false;
+          }
+          const payload = JSON.parse(row.payload) as Record<string, unknown>;
+          return (
+            payload.callId === 'call-2' &&
+            payload.member === 1 &&
+            String(payload.message).includes(
+              'is available again — moving the conversation back to it from member 2',
+            )
+          );
+        }),
+      ).toBe(true);
+      back.emit({ type: 'session', sessionId: 'sess-claude-back' });
+      completeTurn(back, 'Checks pass.');
+      await expect(continued).resolves.toMatchObject({
+        status: 'ok',
+        result: { member: 1, text: 'Checks pass.' },
+      });
+
+      const next = callBroker.callAgent(run.id, 'orch', {
+        title: 'summary',
+        agent: 'helper',
+        message: 'Summarize.',
+        thread: 'call-2',
+      });
+      await drain();
+      expect(claude.starts[3]!.input.resumeSessionId).toBe('sess-claude-back');
+      completeTurn(claude.starts[3]!, 'Summary.');
+      await next;
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('keeps a continued call on member 2 when member 1’s limit named no reset, rather than trying it on every message', async () => {
+      const { claude, cursor, callBroker, run } = await callOnBackup(
+        "You've hit your session limit",
+      );
+      for (const [index, message] of ['first', 'second'].entries()) {
+        const continued = callBroker.callAgent(run.id, 'orch', {
+          title: message,
+          agent: 'helper',
+          message,
+          thread: 'call-1',
+        });
+        await drain();
+        expect(claude.starts).toHaveLength(2);
+        expect(cursor.starts[index + 1]!.input.resumeSessionId).toBe(
+          'sess-cursor',
+        );
+        completeTurn(cursor.starts[index + 1]!, `${message} done`);
+        await continued;
+      }
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('resumes member 2’s session when member 1 refuses the moved call before any work', async () => {
+      const { claude, cursor, callBroker, run } = await callOnBackup();
+
+      const continued = callBroker.callAgent(run.id, 'orch', {
+        title: 'more',
+        agent: 'helper',
+        message: 'Finish the checks and report.',
+        thread: 'call-1',
+      });
+      await drain();
+      claude.starts[2]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[2]!.finish();
+      await drain();
+      expect(cursor.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('sess-cursor');
+      expect(cursor.starts[1]!.input.prompt).toBe(
+        'Finish the checks and report.',
+      );
+      completeTurn(cursor.starts[1]!, 'Checks pass.');
+      await expect(continued).resolves.toMatchObject({
+        status: 'ok',
+        result: { member: 2, text: 'Checks pass.' },
+      });
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('keeps a continued call on its member while that member’s process still runs work', async () => {
+      const { claude, cursor, callBroker, sessions, run } =
+        await callOnBackup();
+      const busy = vi.spyOn(sessions, 'holdsWorkFor').mockReturnValue(true);
+      onTestFinished(() => busy.mockRestore());
+
+      const continued = callBroker.callAgent(run.id, 'orch', {
+        title: 'more',
+        agent: 'helper',
+        message: 'Finish the checks and report.',
+        thread: 'call-1',
+      });
+      await drain();
+      expect(claude.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('sess-cursor');
+      completeTurn(cursor.starts[1]!, 'Checks pass.');
+      await continued;
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
     it('hands the next member what was said into the call while member 1 ran', async () => {
       const { claude, cursor, callBroker, run } = await startPoolRun();
 

@@ -6637,6 +6637,8 @@ export interface CallSeedRecord {
    * written before pools existed.
    */
   member?: number;
+  /** Whether the caller named that member for the conversation. */
+  memberPinned?: boolean;
   /**
    * What the settled call left behind about its conversation's prompt cache —
    * when its turn ended (the result row's time), the cache lifetime its CLI
@@ -6739,6 +6741,11 @@ export interface CallResultPayload {
   sessionId: string | null;
   /** The callee pool member that session belongs to; absent without a pool. */
   member?: number;
+  /**
+   * Set when the caller named that member (`member`) for the conversation,
+   * which then stays on it; absent otherwise.
+   */
+  memberPinned?: true;
   /** The prompt-cache lifetime the callee's CLI reported; absent when none. */
   promptCacheTtlMs?: number;
   /** The callee's last context reading; absent when it reported none. */

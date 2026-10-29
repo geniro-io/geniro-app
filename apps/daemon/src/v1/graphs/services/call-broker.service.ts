@@ -28,7 +28,12 @@ import type {
   RunCallCapability,
   WorkflowAgentNode,
 } from '../graphs.types';
-import { poolAttempts, poolMemberNode, poolSize } from '../utils/agent-pool';
+import {
+  conversationStartMember,
+  poolAttempts,
+  poolMemberNode,
+  poolSize,
+} from '../utils/agent-pool';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
 import {
   PUBLISHED_ACTIONS_NOTE,
@@ -419,6 +424,12 @@ interface ThreadRecord {
    * to another CLI or account.
    */
   member: number;
+  /**
+   * Whether the caller chose that member by name (`member`), for this call or
+   * the one it continued — a thread it pinned is never moved back to an
+   * earlier member.
+   */
+  memberPinned: boolean;
   /**
    * The call its owner was answering when it made this one
    * (`ActiveCall.madeIn`) — what a cancel of that call silences once this one
@@ -855,6 +866,7 @@ export class CallBroker implements OnModuleInit {
             ? null
             : threads.get(record.thread)?.conversationId) ?? record.callId,
         member: record.member ?? 1,
+        memberPinned: record.memberPinned === true,
         cache: {
           endedAt: record.endedAt ?? null,
           promptCacheTtlMs: record.promptCacheTtlMs ?? null,
@@ -1397,6 +1409,7 @@ export class CallBroker implements OnModuleInit {
     let resumeSessionId: string | null = null;
     let conversationId: string | null = null;
     let continuedMember: number | null = null;
+    let memberPinned = args.member !== undefined;
     if (args.thread !== undefined) {
       let thread = state.threads.get(args.thread);
       if (!thread || thread.owner !== caller) {
@@ -1445,12 +1458,17 @@ export class CallBroker implements OnModuleInit {
       resumeSessionId = thread.sessionId;
       conversationId = thread.conversationId;
       continuedMember = thread.member;
+      memberPinned ||= thread.memberPinned;
     }
     const selected = this.selectPoolMember(
       { cwd: state.capability.cwd ?? null, runId, nodeId: callee.id },
       callee,
       args.member ?? null,
       continuedMember,
+      memberPinned,
+      () =>
+        conversationId !== null &&
+        state.capability.conversationHoldsWork?.(conversationId) === true,
     );
     if ('refused' in selected) {
       return selected;
@@ -1547,6 +1565,7 @@ export class CallBroker implements OnModuleInit {
           sessionId: outcome.sessionId,
           conversationId: call.conversationId,
           member,
+          memberPinned,
           madeIn: call.madeIn,
           cache,
         });
@@ -1615,6 +1634,9 @@ export class CallBroker implements OnModuleInit {
           mode,
           sessionId: threadSessionId,
           ...(threadMember !== null ? { member: threadMember } : {}),
+          ...(threadMember !== null && memberPinned
+            ? { memberPinned: true }
+            : {}),
           ...cacheResultFields(threadCache),
           ...final,
         } satisfies CallResultPayload);
@@ -4048,8 +4070,11 @@ export class CallBroker implements OnModuleInit {
   /**
    * Which pool member a call runs on, and the members it may be handed to.
    *
-   * A continued thread starts on the member holding its session; a fallback
-   * carries its history into a fresh session. An explicitly named member is
+   * A continued thread starts on the member holding its session, unless
+   * `conversationStartMember` moves it — back to an earlier member whose limit
+   * has reset, or off one a limit spent, unless the caller pinned the thread
+   * to its member by name; a move or a fallback carries its history into a
+   * fresh session. An explicitly named member is
    * pinned, since handing it on would overrule the caller. A new
    * conversation starts with the first available member in pool order, with
    * members that recently failed on a limit or a sign-in moved to the back,
@@ -4061,6 +4086,8 @@ export class CallBroker implements OnModuleInit {
     callee: WorkflowAgentNode,
     requested: number | null,
     threadMember: number | null,
+    memberPinned: boolean,
+    holdsWork: () => boolean,
   ):
     | { refused: CallEnvelope }
     | { node: WorkflowAgentNode; plan: CalleePoolPlan | null } {
@@ -4100,11 +4127,27 @@ export class CallBroker implements OnModuleInit {
     if (requested !== null) {
       return {
         node: poolMemberNode(callee, requested)!,
-        plan: { member: requested, fallbacks: [] },
+        plan: {
+          member: requested,
+          fallbacks: [],
+          sessionMember: threadMember,
+        },
       };
     }
-    const { order } = this.poolCooldowns.order(callee, site);
-    const first = threadMember ?? order[0]!;
+    const { standings, proven, order } = this.poolCooldowns.order(callee, site);
+    const first =
+      threadMember === null
+        ? order[0]!
+        : memberPinned
+          ? threadMember
+          : conversationStartMember({
+              standings,
+              proven,
+              order,
+              held: threadMember,
+              hasSession: true,
+              holdsWork: holdsWork(),
+            });
     return {
       node: poolMemberNode(callee, first)!,
       plan: {
@@ -4113,6 +4156,7 @@ export class CallBroker implements OnModuleInit {
           callee,
           order.filter((member) => member !== first),
         ),
+        sessionMember: threadMember,
       },
     };
   }

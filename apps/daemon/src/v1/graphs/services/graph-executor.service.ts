@@ -202,9 +202,9 @@ import type {
 import { CALL_START_BRIEF_MAX } from '../graphs.types';
 import {
   callPoolHandOffPrompt,
+  conversationStartMember,
   fallsThroughPool,
   nodePoolHandOffPrompt,
-  nodeStartMember,
   poolAttempts,
   poolHandOffNotice,
   poolHandOffPrompt,
@@ -5744,9 +5744,10 @@ export class GraphExecutorService
       const heldWindow = nodeWindows.get(node.id);
       const heldBaseline = this.compactionBaselines.get(sessionKey);
       const site = { cwd, runId, nodeId: node.id };
-      const { standings, order } = cooldowns.order(node, site);
-      const start = nodeStartMember({
+      const { standings, proven, order } = cooldowns.order(node, site);
+      const start = conversationStartMember({
         standings,
+        proven,
         order,
         held,
         hasSession: heldSessionId !== null,
@@ -6756,7 +6757,79 @@ export class GraphExecutorService
               );
             }
           };
+          /** The member whose CLI session `resumeSessionId` is. */
+          const sessionMember =
+            pool === undefined ? attempts[0]!.member : pool.sessionMember;
+          /** Whether an attempt of this call handed on had made a tool call. */
+          let callDidWork = false;
+          /**
+           * The task a member that holds none of this conversation is opened
+           * with: the call's message, what was said into it since, and the
+           * conversation's recent history.
+           */
+          const transcriptPrompt = async (): Promise<string> => {
+            await drained();
+            const calls = [
+              callId,
+              ...this.callBroker.recordedCallsOf(runId, conversationId),
+            ];
+            const [recent, briefs] = await Promise.all([
+              this.itemDao.getByRun(
+                runId,
+                -1,
+                em,
+                { limit: 200, take: 'newest' },
+                calls,
+              ),
+              this.itemDao.callRowsOf(runId, calls, em),
+            ]);
+            return callPoolHandOffPrompt(
+              poolHandOffPrompt(currentMessage, callMessages.get(callId) ?? []),
+              [
+                ...new Map(
+                  [...briefs, ...recent].map((row) => [row.id, row]),
+                ).values(),
+              ].sort((a, b) => a.seq - b.seq),
+            );
+          };
+          /** The member's own process must not serve another member's turn. */
+          const retireConversationProcess = (reason: string): void => {
+            this.sessions.retire(callSessionKey(runId, conversationId), reason);
+          };
+          const noteMember = (to: number, text: string): void => {
+            enqueue(async () => {
+              await persistItem(callee.id, 'system', null, {
+                callId,
+                severity: 'info',
+                // The member now running the call, for the reader to name it
+                // before the call settles — `call_started` names the first
+                // member and only the settle names the one that answered.
+                member: to,
+                message: text,
+              }).catch(() => {});
+            });
+          };
           let attemptPrompt = message;
+          let attemptSession =
+            sessionMember === attempts[0]!.member ? resumeSessionId : null;
+          if (
+            sessionMember !== null &&
+            resumeSessionId !== null &&
+            sessionMember !== attempts[0]!.member
+          ) {
+            retireConversationProcess(
+              'its conversation moved to another pool member',
+            );
+            noteMember(
+              attempts[0]!.member,
+              poolMoveNotice(
+                callee.name ?? callee.id,
+                sessionMember,
+                attempts[0]!,
+              ),
+            );
+            attemptPrompt = await transcriptPrompt();
+          }
           for (let index = 0; ; index += 1) {
             const attempt = attempts[index]!;
             const isLast = index === attempts.length - 1;
@@ -6773,16 +6846,18 @@ export class GraphExecutorService
                   };
             const handsOn: Parameters<typeof runAttempt>[5] = isLast
               ? null
-              : (result, madeToolCalls) =>
-                  !callStopped() && fallsThroughPool(result, madeToolCalls);
+              : (result, madeToolCalls) => {
+                  const handing =
+                    !callStopped() && fallsThroughPool(result, madeToolCalls);
+                  callDidWork ||= handing && madeToolCalls;
+                  return handing;
+                };
             const attempted = await runAttempt(
               attempt.node,
               member,
               index === 0,
               attemptPrompt,
-              // Only the first attempt continues a session: a fallback is
-              // another account, which holds none of this conversation.
-              index === 0 ? resumeSessionId : null,
+              attemptSession,
               handsOn,
               callWakes < MAX_CALL_WAKES,
             );
@@ -6799,9 +6874,7 @@ export class GraphExecutorService
                     ? outcome
                     : {
                         ...outcome,
-                        sessionId:
-                          outcome.sessionId ??
-                          (index === 0 ? resumeSessionId : null),
+                        sessionId: outcome.sessionId ?? attemptSession,
                       },
                 ),
                 hold,
@@ -6831,49 +6904,35 @@ export class GraphExecutorService
             // process this member left there must not serve it: a session
             // judges whether it fits a turn by its OWN CLI's key, which another
             // CLI's turn can match field for field.
-            this.sessions.retire(
-              callSessionKey(runId, conversationId),
+            retireConversationProcess(
               'its call was handed to another pool member',
             );
-            enqueue(async () => {
-              await persistItem(callee.id, 'system', null, {
-                callId,
-                severity: 'info',
-                // The member now running the call, for the reader to name it
-                // before the call settles — `call_started` names the first
-                // member and only the settle names the one that answered.
-                member: next.member,
-                message: poolHandOffNotice(
-                  callee.name ?? callee.id,
-                  attempt.member,
-                  next,
-                  outcome,
-                ),
-              }).catch(() => {});
-            });
-            await drained();
-            const calls = [
-              callId,
-              ...this.callBroker.recordedCallsOf(runId, conversationId),
-            ];
-            const [recent, briefs] = await Promise.all([
-              this.itemDao.getByRun(
-                runId,
-                -1,
-                em,
-                { limit: 200, take: 'newest' },
-                calls,
+            noteMember(
+              next.member,
+              poolHandOffNotice(
+                callee.name ?? callee.id,
+                attempt.member,
+                next,
+                outcome,
               ),
-              this.itemDao.callRowsOf(runId, calls, em),
-            ]);
-            attemptPrompt = callPoolHandOffPrompt(
-              poolHandOffPrompt(currentMessage, callMessages.get(callId) ?? []),
-              [
-                ...new Map(
-                  [...briefs, ...recent].map((row) => [row.id, row]),
-                ).values(),
-              ].sort((a, b) => a.seq - b.seq),
             );
+            // Back on the member holding the conversation's session: it
+            // resumes rather than starts over from a transcript excerpt —
+            // unless an attempt of this call already did work it never saw.
+            if (
+              next.member === sessionMember &&
+              resumeSessionId !== null &&
+              !callDidWork
+            ) {
+              attemptSession = resumeSessionId;
+              attemptPrompt = poolHandOffPrompt(
+                currentMessage,
+                callMessages.get(callId) ?? [],
+              );
+              continue;
+            }
+            attemptSession = null;
+            attemptPrompt = await transcriptPrompt();
           }
         } finally {
           if (slot !== null) {
@@ -7556,6 +7615,8 @@ export class GraphExecutorService
           },
           isCancelled: () => cancelRequested,
           isSuperseded: supersededByNextPass,
+          conversationHoldsWork: (conversationId) =>
+            this.sessions.holdsWorkFor(callSessionKey(runId, conversationId)),
           monitorsOwed: (caller) =>
             this.monitors?.isRunningFor(runId, caller) === true ||
             this.monitorOutputHeld(runId, caller),

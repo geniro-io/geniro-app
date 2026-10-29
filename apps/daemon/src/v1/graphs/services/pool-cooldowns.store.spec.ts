@@ -75,6 +75,60 @@ describe('PoolCooldowns', () => {
     expect(cooldowns.standing(OPUS, FOLDER)).toBeNull();
   });
 
+  describe('proven', () => {
+    const ANSWERED: PoolAttemptResult = {
+      status: 'completed',
+      failureClass: null,
+      resetsAt: null,
+    };
+
+    it('proves nothing about a member it has never heard from', () => {
+      const { cooldowns } = clocked(0);
+      expect(cooldowns.standing(OPUS, FOLDER)).toBeNull();
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(false);
+    });
+
+    it('proves a member once the reset its limit named has passed', () => {
+      const { cooldowns, advance } = clocked(
+        Date.parse('2026-10-21T10:00:00Z'),
+      );
+      cooldowns.record(OPUS, FOLDER, failed({ resetsAt: '3pm (UTC)' }), true);
+      advance(4 * 60 * 60 * 1000 + 59 * 60 * 1000);
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(false);
+      advance(2 * 60 * 1000);
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(true);
+    });
+
+    it('does not prove a member whose guessed cooldown merely lapsed, until it answers', () => {
+      const { cooldowns, advance } = clocked(0);
+      cooldowns.record(OPUS, FOLDER, failed({ resetsAt: 'soon' }), true);
+      advance(POOL_COOLDOWN_FALLBACK_MS);
+      expect(cooldowns.standing(OPUS, FOLDER)).toBeNull();
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(false);
+      cooldowns.record(OPUS, at('/work/app', 'other'), ANSWERED, false);
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(true);
+    });
+
+    it('does not prove a member an ordinary failure was handed past, until it answers there', () => {
+      const { cooldowns, advance } = clocked(0);
+      cooldowns.record(OPUS, FOLDER, ANSWERED, false);
+      cooldowns.record(OPUS, FOLDER, failed({ failureClass: 'crashed' }), true);
+      advance(POOL_COOLDOWN_FALLBACK_MS);
+      expect(cooldowns.standing(OPUS, FOLDER)).toBeNull();
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(false);
+      cooldowns.record(OPUS, FOLDER, ANSWERED, false);
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(true);
+    });
+
+    it('withdraws the proof when the member meets a limit again', () => {
+      const { cooldowns, advance } = clocked(0);
+      cooldowns.record(OPUS, FOLDER, ANSWERED, false);
+      cooldowns.record(OPUS, FOLDER, failed(), true);
+      advance(POOL_COOLDOWN_FALLBACK_MS);
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(false);
+    });
+  });
+
   it.each([
     {
       failureClass: 'rate_limited' as const,

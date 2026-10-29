@@ -1,4 +1,4 @@
-import { memo, useCallback, useContext, useMemo, useState } from 'react';
+import { memo, useContext, useMemo, useState } from 'react';
 
 import { AgentIdentityContext, agentShortName } from '../agent-identity';
 import type {
@@ -21,6 +21,7 @@ import { OptionIndicator } from './ui/option-list';
 import { Select } from './ui/select';
 import { Spinner } from './ui/spinner';
 import { cn } from './ui/utils';
+import { useLatestCallback } from './use-latest-callback';
 
 export interface MemoryImportChoice {
   key: string;
@@ -214,7 +215,7 @@ export function MemoryImportDialog({
   const chosen = rows.filter((row) => importable(row) && ticked.has(row.key));
   const scopeGroups = useMemo(() => memoryScopeGroups(projects), [projects]);
 
-  const toggle = useCallback(
+  const toggle = useLatestCallback(
     (key: string): void =>
       setTicked((current) => {
         const next = new Set(current);
@@ -225,7 +226,7 @@ export function MemoryImportDialog({
       }),
     [],
   );
-  const choose = useCallback(
+  const choose = useLatestCallback(
     (key: string, next: RowChoice): void =>
       setChoices((current) => ({ ...current, [key]: next })),
     [],

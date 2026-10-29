@@ -57,7 +57,7 @@ function pooledBlock(completed = false): CallBlockEntry {
       callId: 'call-1',
       member: 2,
       message:
-        'Engineer: pool member 1 hit a usage limit — handing the call to member 2.',
+        'Engineer: pool member 1 hit a usage limit (resets 8pm (Asia/Dubai)) — handing the call to member 2 (codex · gpt-5.5).',
     }),
   ];
   if (completed) {

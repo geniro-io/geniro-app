@@ -11,9 +11,11 @@ import {
   nodeStartMember,
   poolAttemptOrder,
   poolAttempts,
+  poolHandOffNotice,
   poolHandOffPrompt,
   poolMemberLabel,
   poolMemberNode,
+  poolMoveNotice,
   poolSize,
 } from './agent-pool';
 
@@ -233,6 +235,37 @@ describe('poolMemberLabel', () => {
       }),
     ).toBe('claude · opus · effort high · separate profile');
     expect(poolMemberLabel({ agent: 'codex' })).toBe('codex');
+  });
+});
+
+describe('poolHandOffNotice', () => {
+  it('names the CLI and model of the member the work moves to, and why', () => {
+    const [, , third] = poolAttempts(pooled(), [1, 2, 3]);
+    expect(
+      poolHandOffNotice(
+        'Senior Engineer',
+        1,
+        third!,
+        failed({
+          failureClass: 'rate_limited',
+          resetsAt: '8pm (Asia/Dubai)',
+        }),
+      ),
+    ).toBe(
+      'Senior Engineer: pool member 1 hit a usage limit (resets 8pm (Asia/Dubai)) — handing the call to member 3 (codex · gpt-5.5).',
+    );
+  });
+});
+
+describe('poolMoveNotice', () => {
+  it('names the member a node turn moves to, back or on', () => {
+    const [first, , third] = poolAttempts(pooled(), [1, 2, 3]);
+    expect(poolMoveNotice('Engineer', 3, first!)).toBe(
+      'Engineer: pool member 1 (claude · opus · effort high · separate profile) is available again — moving the conversation back to it from member 3.',
+    );
+    expect(poolMoveNotice('Engineer', 1, third!)).toBe(
+      'Engineer: pool member 1 is unavailable — starting the turn on member 3 (codex · gpt-5.5).',
+    );
   });
 });
 

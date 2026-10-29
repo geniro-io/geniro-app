@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   initialized: false,
   measured: new Map<string, { width: number; height: number }>(),
   fitView: vi.fn(),
+  zoomIn: vi.fn(),
+  zoomOut: vi.fn(),
   autoLayout: vi.fn(),
   flowProps: null as Record<string, unknown> | null,
 }));
@@ -25,6 +27,8 @@ vi.mock('@xyflow/react', async (importOriginal) => ({
     getNodes: () =>
       [...mocks.measured].map(([id, size]) => ({ id, measured: size })),
     fitView: mocks.fitView,
+    zoomIn: mocks.zoomIn,
+    zoomOut: mocks.zoomOut,
   }),
   ReactFlow: (props: Record<string, unknown>) => {
     mocks.flowProps = props;
@@ -56,6 +60,8 @@ beforeEach(() => {
     ['reviewer', { width: 240, height: 231 }],
   ]);
   mocks.fitView.mockReset();
+  mocks.zoomIn.mockReset();
+  mocks.zoomOut.mockReset();
   mocks.autoLayout.mockReset();
   mocks.flowProps = null;
   container = document.createElement('div');
@@ -138,12 +144,78 @@ describe('WorkflowPreview', () => {
       deleteKeyCode: null,
       panOnDrag: false,
       zoomOnScroll: false,
+      zoomOnPinch: false,
     });
 
-    paint(<WorkflowPreview workflow={WORKFLOW} interactive />);
+    paint(<WorkflowPreview workflow={WORKFLOW} interaction="full" />);
     expect(mocks.flowProps).toMatchObject({
       panOnDrag: true,
       zoomOnScroll: true,
+      zoomOnPinch: true,
+      preventScrolling: true,
     });
+  });
+
+  it('leaves the wheel to the page it is embedded in, zooming on a pinch only', () => {
+    paint(<WorkflowPreview workflow={WORKFLOW} interaction="embedded" />);
+    expect(mocks.flowProps).toMatchObject({
+      panOnDrag: true,
+      zoomOnScroll: false,
+      zoomOnPinch: true,
+      preventScrolling: false,
+    });
+  });
+
+  it('zooms and fits from its buttons once laid out, and offers none when it cannot move', async () => {
+    mocks.initialized = true;
+    mocks.autoLayout.mockResolvedValue({});
+    await act(async () => {
+      root.render(<WorkflowPreview workflow={WORKFLOW} />);
+    });
+    expect(
+      container.querySelector('[data-slot="workflow-preview-zoom"]'),
+    ).toBeNull();
+
+    await act(async () => {
+      root.render(
+        <WorkflowPreview workflow={WORKFLOW} interaction="embedded" />,
+      );
+    });
+    const button = (label: string) =>
+      container.querySelector<HTMLButtonElement>(
+        `[data-slot="workflow-preview-zoom"] button[aria-label="${label}"]`,
+      )!;
+    act(() => button('Zoom in').click());
+    act(() => button('Zoom out').click());
+    mocks.fitView.mockReset();
+    act(() => button('Fit the whole graph').click());
+    expect(mocks.zoomIn).toHaveBeenCalledTimes(1);
+    expect(mocks.zoomOut).toHaveBeenCalledTimes(1);
+    expect(mocks.fitView).toHaveBeenCalledTimes(1);
+    expect(
+      container.querySelector('[data-slot="workflow-preview-zoom"]')
+        ?.textContent,
+    ).not.toContain('Expand');
+  });
+
+  it('offers a larger view beside the zoom buttons when given one', async () => {
+    mocks.initialized = true;
+    mocks.autoLayout.mockResolvedValue({});
+    const onExpand = vi.fn();
+    await act(async () => {
+      root.render(
+        <WorkflowPreview
+          workflow={WORKFLOW}
+          interaction="embedded"
+          onExpand={onExpand}
+          expandLabel="Open a larger view of Review Pair"
+        />,
+      );
+    });
+    const expand = container.querySelector<HTMLButtonElement>(
+      '[data-slot="workflow-preview-zoom"] button[aria-label="Open a larger view of Review Pair"]',
+    )!;
+    act(() => expand.click());
+    expect(onExpand).toHaveBeenCalledTimes(1);
   });
 });

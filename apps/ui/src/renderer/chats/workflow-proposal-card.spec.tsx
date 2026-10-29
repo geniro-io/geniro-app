@@ -13,7 +13,19 @@ import {
 // React Flow measures through ResizeObserver, which jsdom has none of; the
 // graph's own drawing is the preview's business, and the card is under test.
 vi.mock('../workflows/workflow-preview', () => ({
-  default: () => <div data-testid="workflow-preview" />,
+  default: ({
+    onExpand,
+    expandLabel,
+  }: {
+    onExpand?: () => void;
+    expandLabel?: string;
+  }) => (
+    <div data-testid="workflow-preview">
+      {onExpand ? (
+        <button type="button" aria-label={expandLabel} onClick={onExpand} />
+      ) : null}
+    </div>
+  ),
 }));
 
 import { ApprovalCard } from './approval-card';
@@ -91,7 +103,16 @@ const proposalCard = (el: HTMLElement): HTMLElement | null =>
   el.querySelector('[data-slot="workflow-proposal-card"]');
 
 const rosterRow = (el: HTMLElement, id: string): HTMLElement =>
-  el.querySelector(`tr[data-agent="${id}"]`)!;
+  el.querySelector(`[data-agent="${id}"]`)!;
+
+const openAgents = (el: HTMLElement): void => {
+  const fold = el.querySelector<HTMLButtonElement>(
+    '[data-slot="workflow-proposal-agents"] > button',
+  )!;
+  if (fold.getAttribute('aria-expanded') !== 'true') {
+    click(fold);
+  }
+};
 
 describe('WorkflowProposalCard', () => {
   it('names every auto agent in the strip and marks its roster row', () => {
@@ -102,6 +123,7 @@ describe('WorkflowProposalCard', () => {
     expect(strip?.textContent).toContain('Coder (coder)');
     expect(strip?.textContent).toContain('Tester (tester) — pool member 2');
 
+    openAgents(el);
     expect(rosterRow(el, 'coder').textContent).toContain('Runs without asking');
     // The tester asks by its own setting; its second member does not.
     expect(rosterRow(el, 'tester').textContent).toContain(
@@ -405,6 +427,100 @@ describe('WorkflowProposalCard', () => {
     expect(buttonNamed(el, 'Approve')!.disabled).toBe(true);
   });
 
+  it('folds the agents of a replacement and marks the ones it adds or changes', () => {
+    const el = render(card());
+    const fold = el.querySelector<HTMLButtonElement>(
+      '[data-slot="workflow-proposal-agents"] > button',
+    )!;
+    expect(fold.textContent).toBe('3 agents');
+    expect(fold.getAttribute('aria-expanded')).toBe('false');
+    expect(el.querySelector('[data-agent]')).toBeNull();
+    click(fold);
+    expect(rosterRow(el, 'coder').textContent).toContain('Changed');
+    expect(rosterRow(el, 'tester').textContent).toContain('New');
+    expect(rosterRow(el, 'coder').textContent).toContain('Instructions: Style');
+  });
+
+  it('shows the agents of a new workflow unfolded, none of them marked', () => {
+    const created = render(card({ input: RECORDED_NEW_PROPOSAL }));
+    expect(created.querySelector('[data-agent="coder"]')).not.toBeNull();
+    expect(
+      created.querySelector('[data-agent="coder"]')?.textContent,
+    ).not.toMatch(/Changed|New/);
+  });
+
+  it('puts what changes above the graph', () => {
+    const el = render(card());
+    const diff = el.querySelector('[data-slot="workflow-diff"]')!;
+    const graph = el.querySelector('[data-slot="workflow-proposal-graph"]')!;
+    expect(
+      diff.compareDocumentPosition(graph) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('draws a long changed value as its two sides, one under the other', () => {
+    const input = REPLACE_TO_AUTO_PROPOSAL as { diff: Record<string, unknown> };
+    const before = `…report the result. ${'Never push to main. '.repeat(4)}…`;
+    const after = `…report the result. ${'Save verified notes. '.repeat(4)}…`;
+    const el = render(
+      card({
+        input: {
+          ...input,
+          diff: {
+            ...input.diff,
+            changedNodes: [
+              {
+                id: 'reviewer',
+                fields: [
+                  {
+                    field: 'role',
+                    before: JSON.stringify(before),
+                    after: JSON.stringify(after),
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const row = [
+      ...el.querySelectorAll<HTMLElement>('[data-slot="workflow-diff"] li'),
+    ].find((item) => item.textContent?.includes('reviewer · role'))!;
+    const value = row.querySelector('[data-slot="workflow-diff-value"]')!;
+    expect(value.textContent).toBe(`−before: ${before}+after: ${after}`);
+    expect(row.textContent).not.toContain('→');
+  });
+
+  it('folds the stage text of a replacement that leaves the stages as they were', () => {
+    const input = STAGES_PROPOSAL as { diff: Record<string, unknown> };
+    const el = render(
+      card({
+        input: {
+          ...input,
+          diff: {
+            ...input.diff,
+            addedStages: [],
+            removedStages: [],
+            changedStages: [],
+            workflowFields: [],
+          },
+        },
+      }),
+    );
+    const fold = el.querySelector<HTMLButtonElement>(
+      '[data-slot="workflow-proposal-stage-fold"] > button',
+    )!;
+    expect(fold.textContent).toBe('What each stage asks (unchanged)');
+    expect(
+      el.querySelector('[data-slot="workflow-proposal-stage-text"]'),
+    ).toBeNull();
+    click(fold);
+    expect(
+      el.querySelector('[data-slot="workflow-proposal-stage-text"]'),
+    ).not.toBeNull();
+  });
+
   it('falls back to the permission body for an unparseable payload', () => {
     const el = render(
       card({ input: { mode: 'replace', slug: 'team', workflow: 'oops' } }),
@@ -479,6 +595,7 @@ describe('WorkflowProposalCard', () => {
       click(buttonNamed(el, 'Open in canvas')!);
       expect(onOpenWorkflow).toHaveBeenCalledWith('review-pair');
       // The roster and the changes stay; the graph folds away.
+      openAgents(el);
       expect(rosterRow(el, 'coder')).not.toBeNull();
       expect(el.querySelector('[data-slot="workflow-diff"]')).not.toBeNull();
       expect(el.querySelector('[data-testid="workflow-preview"]')).toBeNull();

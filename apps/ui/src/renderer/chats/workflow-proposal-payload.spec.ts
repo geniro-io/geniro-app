@@ -139,13 +139,24 @@ describe('readProposalOutcome', () => {
 });
 
 describe('rosterOf', () => {
-  it('lists the agents with the instruction blocks wired into each', () => {
+  it('lists the agents with the names of the instruction blocks wired into each', () => {
     const roster = rosterOf(parsed(REPLACE_TO_AUTO_PROPOSAL).workflow);
     expect(roster.map((row) => [row.node.id, row.instructions])).toEqual([
-      ['coder', ['Follow the repository conventions in AGENTS.md.']],
+      ['coder', ['Style']],
       ['tester', []],
       ['reviewer', []],
     ]);
+  });
+
+  it('names an unnamed instruction block by its id', () => {
+    const { workflow } = parsed(REPLACE_TO_AUTO_PROPOSAL);
+    const roster = rosterOf({
+      ...workflow,
+      nodes: workflow.nodes.map((node) =>
+        node.kind === 'instruction' ? { ...node, name: undefined } : node,
+      ),
+    });
+    expect(roster[0]!.instructions).toEqual(['style']);
   });
 });
 

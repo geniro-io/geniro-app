@@ -411,7 +411,7 @@ export function previewMarks(
 /** One agent of the proposal, as a roster row. */
 export interface RosterRow {
   node: WorkflowAgentNode;
-  /** The text of every instruction block wired into this agent. */
+  /** The name of every instruction block wired into this agent. */
   instructions: string[];
 }
 
@@ -420,7 +420,7 @@ export function rosterOf(workflow: Workflow): RosterRow[] {
   const blocks = new Map<string, string>();
   for (const node of workflow.nodes) {
     if (node.kind === 'instruction') {
-      blocks.set(node.id, node.instructions.trim() || (node.name ?? node.id));
+      blocks.set(node.id, node.name?.trim() || node.id);
     }
   }
   return workflow.nodes

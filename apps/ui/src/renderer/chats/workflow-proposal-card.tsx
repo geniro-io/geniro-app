@@ -1,4 +1,8 @@
-import { ShieldAlert, Workflow as WorkflowIcon } from 'lucide-react';
+import {
+  ChevronRight,
+  ShieldAlert,
+  Workflow as WorkflowIcon,
+} from 'lucide-react';
 import { lazy, Suspense, useContext, useId, useMemo, useState } from 'react';
 
 import { AgentIdentityContext, agentShortName } from '../agent-identity';
@@ -14,6 +18,7 @@ import { Card } from '../components/ui/card';
 import { Dialog } from '../components/ui/dialog';
 import { cn } from '../components/ui/utils';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
+import type { PreviewMark } from '../workflows/graph-preview-context';
 import { RUNS_UNASKED_LABEL } from '../workflows/node-schema';
 import { HazardAck, HazardWarning, useHazardGate } from './text-hazard-gate';
 import { useThreadFlag } from './thread-ui-memory';
@@ -91,78 +96,124 @@ function ApprovalText({ mode }: { mode: ApprovalMode }): React.JSX.Element {
   );
 }
 
+const MARK_LABEL: Record<PreviewMark, string> = {
+  added: 'New',
+  changed: 'Changed',
+};
+
 /**
- * The proposal's agents as a real table: who each is, what runs it, and
- * whether it asks — a pool member's line under its node, an instruction
- * block's under the agent it is wired into. Stacked rows on a phone.
+ * The proposal's agents, one row each: who it is, what runs it (every pool
+ * member too) and whether it asks, then its role and the instruction blocks
+ * wired into it. The run settings wrap as chips, so a long role never
+ * squeezes them.
  */
-function Roster({ rows }: { rows: readonly RosterRow[] }): React.JSX.Element {
+function Roster({
+  rows,
+  marks,
+}: {
+  rows: readonly RosterRow[];
+  marks: ReadonlyMap<string, PreviewMark>;
+}): React.JSX.Element {
   const identities = useContext(AgentIdentityContext);
-  const cell = 'py-1.5 pr-2 align-top max-sm:block max-sm:py-0.5 max-sm:pr-0';
   return (
-    <table className="w-full border-collapse text-xs max-sm:block">
-      <caption className="sr-only">Agents in this workflow</caption>
-      <thead className="text-left text-muted-foreground max-sm:hidden">
-        <tr>
-          <th scope="col" className="pr-2 pb-1 font-medium">
-            Agent
-          </th>
-          <th scope="col" className="pr-2 pb-1 font-medium">
-            CLI · model · effort
-          </th>
-          <th scope="col" className="pb-1 font-medium">
-            Approval
-          </th>
-        </tr>
-      </thead>
-      <tbody className="max-sm:block">
-        {rows.map(({ node, instructions }) => (
-          <tr
+    <ul
+      aria-label="Agents in this workflow"
+      data-slot="workflow-roster"
+      className="m-0 flex list-none flex-col p-0 text-xs">
+      {rows.map(({ node, instructions }) => {
+        const mark = marks.get(node.id);
+        return (
+          <li
             key={node.id}
             data-agent={node.id}
-            className="border-t border-border/60 max-sm:block max-sm:py-1.5">
-            <td className={cell}>
-              <div className="font-medium break-words">
+            className="flex min-w-0 flex-col gap-1 border-t border-border/60 py-2 first:border-t-0 first:pt-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="min-w-0 font-medium break-words">
                 {node.name ?? node.id}
-              </div>
-              {node.role ? (
-                <p className="m-0 line-clamp-2 text-muted-foreground break-words">
-                  {node.role}
-                </p>
-              ) : null}
-              {instructions.map((text, index) => (
-                <p
-                  key={index}
-                  className="m-0 line-clamp-1 text-muted-foreground break-words">
-                  + instruction: {text}
-                </p>
-              ))}
-            </td>
-            <td className={cn(cell, 'text-muted-foreground')}>
-              <div>{agentLine(identities, node)}</div>
-              {(node.pool ?? []).map((member, index) => (
-                <div key={index}>
-                  member {index + 2}: {agentLine(identities, member)}
-                </div>
-              ))}
-            </td>
-            <td className={cell}>
-              <div>
-                <ApprovalText mode={node.approval} />
-              </div>
-              {(node.pool ?? []).map((member, index) =>
-                (member.approval ?? node.approval) === node.approval ? null : (
-                  <div key={index}>
-                    member {index + 2}:{' '}
-                    <ApprovalText mode={member.approval ?? node.approval} />
-                  </div>
-                ),
+              </span>
+              {mark === undefined ? null : (
+                <Badge variant="outline" className="px-1.5 py-0 font-normal">
+                  {MARK_LABEL[mark]}
+                </Badge>
               )}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+              <span className="ml-auto flex flex-col items-end gap-0.5 text-right">
+                <ApprovalText mode={node.approval} />
+                {(node.pool ?? []).map((member, index) =>
+                  (member.approval ?? node.approval) ===
+                  node.approval ? null : (
+                    <span key={index}>
+                      member {index + 2}:{' '}
+                      <ApprovalText mode={member.approval ?? node.approval} />
+                    </span>
+                  ),
+                )}
+              </span>
+            </div>
+            <div className="flex min-w-0 flex-wrap gap-1">
+              <Chip>{agentLine(identities, node)}</Chip>
+              {(node.pool ?? []).map((member, index) => (
+                <Chip key={index}>
+                  member {index + 2}: {agentLine(identities, member)}
+                </Chip>
+              ))}
+            </div>
+            {node.role ? (
+              <p className="m-0 line-clamp-2 break-words text-muted-foreground">
+                {node.role}
+              </p>
+            ) : null}
+            {instructions.length > 0 ? (
+              <p className="m-0 break-words text-muted-foreground">
+                <span className="text-foreground">Instructions:</span>{' '}
+                {instructions.join(', ')}
+              </p>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function Chip({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <span className="max-w-full rounded-sm bg-muted px-1.5 py-0.5 break-words text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+/** A section of the card its reader can fold, remembered per thread. */
+function Fold({
+  label,
+  open,
+  onToggle,
+  slot,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  slot: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div data-slot={slot} className="flex flex-col gap-1.5">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-auto gap-1 self-start px-0 py-0 text-xs font-medium hover:bg-transparent max-sm:min-h-11"
+        aria-expanded={open}
+        onClick={onToggle}>
+        <ChevronRight
+          aria-hidden="true"
+          className={cn('size-3.5 transition-transform', open && 'rotate-90')}
+        />
+        {label}
+      </Button>
+      {open ? children : null}
+    </div>
   );
 }
 
@@ -216,9 +267,25 @@ export function WorkflowProposalCard({
   const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
   const narrow = useNarrowViewport();
   const settled = verdict !== null || expired;
+  const remembered = (name: string) =>
+    memoryKey === undefined ? undefined : `${name}:${memoryKey}`;
   const [graphShown, setGraphShown] = useThreadFlag(
-    memoryKey === undefined ? undefined : `workflow-graph:${memoryKey}`,
+    remembered('workflow-graph'),
     !narrow && !settled,
+  );
+  const stagesTouched =
+    proposal.mode === 'create' ||
+    diff === null ||
+    diff.addedStages.length > 0 ||
+    diff.changedStages.length > 0 ||
+    diff.workflowFields.includes('stages');
+  const [stageTextShown, setStageTextShown] = useThreadFlag(
+    remembered('workflow-stage-text'),
+    stagesTouched,
+  );
+  const [rosterShown, setRosterShown] = useThreadFlag(
+    remembered('workflow-roster'),
+    proposal.mode === 'create',
   );
   const [enlarged, setEnlarged] = useState(false);
   const { draft, setDraft, tooLong, send } = useVerdictNote(respond);
@@ -243,7 +310,7 @@ export function WorkflowProposalCard({
       role="group"
       aria-labelledby={titleId}
       data-slot="workflow-proposal-card"
-      className="flex flex-col gap-2.5 border-primary/40 p-3">
+      className="flex min-w-0 flex-col gap-3 border-primary/40 p-3">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <WorkflowIcon
           aria-hidden="true"
@@ -267,18 +334,24 @@ export function WorkflowProposalCard({
             : null}
         </span>
       </div>
-      {proposal.summary !== null ? (
-        <p className="m-0 text-xs text-muted-foreground break-words">
-          {proposal.summary}
-        </p>
-      ) : null}
-      {proposal.reason !== null ? (
-        <p
-          data-slot="workflow-proposal-reason"
-          className="m-0 text-xs break-words whitespace-pre-line">
-          <span className="font-medium">Why: </span>
-          <span className="text-muted-foreground">{proposal.reason}</span>
-        </p>
+      {proposal.summary !== null || proposal.reason !== null ? (
+        <div className="flex flex-col gap-1.5">
+          {proposal.summary !== null ? (
+            <p
+              data-slot="workflow-proposal-summary"
+              className="m-0 text-sm break-words">
+              {proposal.summary}
+            </p>
+          ) : null}
+          {proposal.reason !== null ? (
+            <p
+              data-slot="workflow-proposal-reason"
+              className="m-0 text-xs break-words whitespace-pre-line">
+              <span className="font-medium">Why: </span>
+              <span className="text-muted-foreground">{proposal.reason}</span>
+            </p>
+          ) : null}
+        </div>
       ) : null}
       {autoAgents.length > 0 ? (
         <div
@@ -293,6 +366,12 @@ export function WorkflowProposalCard({
         </div>
       ) : null}
       <HazardWarning hazards={gate.hazards} subject="this proposal" />
+      {changes !== null ? (
+        <WorkflowDiffList
+          rows={changes}
+          memoryKey={remembered('workflow-diff')}
+        />
+      ) : null}
       {narrow || settled || !graphShown ? (
         <Button
           type="button"
@@ -304,83 +383,82 @@ export function WorkflowProposalCard({
         </Button>
       ) : null}
       {graphShown ? (
-        narrow ? (
-          // On a phone the graph is the enlarged view itself: pannable in place.
-          <div className="h-[260px] w-full overflow-hidden rounded-md border border-border">
-            <p className="sr-only">{graphSummary}</p>
-            <div aria-hidden="true" className="h-full w-full">
-              <Suspense fallback={<GraphSkeleton />}>
-                <WorkflowPreview
-                  workflow={workflow}
-                  marks={marks}
-                  interactive
-                />
-              </Suspense>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setEnlarged(true)}
-            aria-label={`Open a larger view of ${workflow.name}. ${graphSummary}`}
-            className="block h-[200px] w-full overflow-hidden rounded-md border border-border text-left focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
-            <div
-              aria-hidden="true"
-              className="pointer-events-none h-full w-full">
-              <Suspense fallback={<GraphSkeleton />}>
-                <WorkflowPreview workflow={workflow} marks={marks} />
-              </Suspense>
-            </div>
-          </button>
-        )
+        <div
+          data-slot="workflow-proposal-graph"
+          className={cn(
+            'relative w-full overflow-hidden rounded-md border border-border',
+            narrow ? 'h-[300px]' : 'h-[360px]',
+          )}>
+          <p className="sr-only">{graphSummary}</p>
+          <Suspense fallback={<GraphSkeleton />}>
+            <WorkflowPreview
+              workflow={workflow}
+              marks={marks}
+              interaction={narrow ? 'full' : 'embedded'}
+              onExpand={narrow ? undefined : () => setEnlarged(true)}
+              expandLabel={`Open a larger view of ${workflow.name}. ${graphSummary}`}
+            />
+          </Suspense>
+        </div>
       ) : null}
       <Dialog
         open={enlarged}
         onClose={() => setEnlarged(false)}
         title={workflow.name}
-        className="w-[min(960px,95vw)]">
-        <div aria-hidden="true" className="h-[70vh]">
+        className="w-[min(1400px,95vw)]">
+        <div className="h-[80vh]">
           <Suspense fallback={<GraphSkeleton />}>
-            <WorkflowPreview workflow={workflow} marks={marks} interactive />
+            <WorkflowPreview
+              workflow={workflow}
+              marks={marks}
+              interaction="full"
+            />
           </Suspense>
         </div>
       </Dialog>
       {stages.length > 0 ? (
         <div
           data-slot="workflow-proposal-stages"
-          className="flex flex-col gap-1 rounded-md border border-border p-2">
+          className="flex flex-col gap-1.5 rounded-md border border-border p-2">
           <span className="text-xs font-medium">Stages every run walks</span>
           <StageGraph stages={stages} />
-          {/* Every agent of a run is given this text, so it is read before Approve. */}
-          <ol
-            data-slot="workflow-proposal-stage-text"
-            className="m-0 flex max-h-48 list-none flex-col gap-1.5 overflow-auto p-0 text-xs">
-            {stages.map((stage) => (
-              <li key={stage.id} className="break-words">
-                <span className="font-medium">{stage.title}</span>
-                {stage.instructions?.trim() ? (
-                  <p className="m-0 whitespace-pre-line text-muted-foreground">
-                    {stage.instructions}
+          <Fold
+            slot="workflow-proposal-stage-fold"
+            label={
+              stagesTouched
+                ? 'What each stage asks'
+                : 'What each stage asks (unchanged)'
+            }
+            open={stageTextShown}
+            onToggle={() => setStageTextShown((current) => !current)}>
+            <ol
+              data-slot="workflow-proposal-stage-text"
+              className="m-0 flex max-h-72 list-none flex-col gap-2 overflow-auto p-0 text-xs">
+              {stages.map((stage) => (
+                <li key={stage.id} className="break-words">
+                  <span className="font-medium">{stage.title}</span>
+                  {stage.instructions?.trim() ? (
+                    <p className="m-0 whitespace-pre-line text-muted-foreground">
+                      {stage.instructions}
+                    </p>
+                  ) : null}
+                  <p className="m-0 text-muted-foreground">
+                    <span className="text-foreground">Done when</span>{' '}
+                    {stage.doneWhen}
                   </p>
-                ) : null}
-                <p className="m-0 text-muted-foreground">
-                  <span className="text-foreground">Done when</span>{' '}
-                  {stage.doneWhen}
-                </p>
-              </li>
-            ))}
-          </ol>
+                </li>
+              ))}
+            </ol>
+          </Fold>
         </div>
       ) : null}
-      <Roster rows={roster} />
-      {changes !== null ? (
-        <WorkflowDiffList
-          rows={changes}
-          memoryKey={
-            memoryKey === undefined ? undefined : `workflow-diff:${memoryKey}`
-          }
-        />
-      ) : null}
+      <Fold
+        slot="workflow-proposal-agents"
+        label={plural(roster.length, 'agent', 'agents')}
+        open={rosterShown}
+        onToggle={() => setRosterShown((current) => !current)}>
+        <Roster rows={roster} marks={marks} />
+      </Fold>
       {expired && verdict === null ? (
         <p className="m-0 text-xs text-muted-foreground">
           ⏱ expired — a newer proposal replaced it, or the chat was archived

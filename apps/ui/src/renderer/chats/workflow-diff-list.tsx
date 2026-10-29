@@ -13,22 +13,61 @@ const MARKER: Record<DiffMarker, { glyph: string; word: string }> = {
   removed: { glyph: '−', word: 'removed' },
 };
 
-/** One change, in words — the marker glyph is decoration beside them. */
-function rowText(row: DiffRow): string {
+/** A value short enough to read inline, `before → after`. */
+const INLINE_VALUE_CHARS = 60;
+
+function inline(detail: NonNullable<DiffRow['detail']>): boolean {
+  return [detail.before, detail.after].every(
+    (value) => value.length <= INLINE_VALUE_CHARS && !value.includes('\n'),
+  );
+}
+
+function subjectText(row: DiffRow): string {
   switch (row.scope) {
     case 'workflow':
-      return `workflow ${row.subject} changed`;
+      return `workflow ${row.subject}`;
     case 'wire':
-      return `wire ${row.subject} ${MARKER[row.marker].word}`;
+      return `wire ${row.subject}`;
     case 'node':
-      return row.detail === null
-        ? `${row.subject} ${MARKER[row.marker].word}`
-        : `${row.subject} · ${row.detail.field}: ${row.detail.before} → ${row.detail.after}`;
+      return row.subject;
     case 'stage':
-      return row.detail === null
-        ? `stage ${row.subject} ${MARKER[row.marker].word}`
-        : `stage ${row.subject} · ${row.detail.field}: ${row.detail.before} → ${row.detail.after}`;
+      return `stage ${row.subject}`;
   }
+}
+
+/** One change, in words — the marker glyph is decoration beside them. */
+function rowText(row: DiffRow): string {
+  if (row.detail === null) {
+    return `${subjectText(row)} ${MARKER[row.marker].word}`;
+  }
+  const head = `${subjectText(row)} · ${row.detail.field}`;
+  return inline(row.detail)
+    ? `${head}: ${row.detail.before} → ${row.detail.after}`
+    : head;
+}
+
+/** A long value's two sides, one under the other, as a diff draws them. */
+function ValueChange({
+  detail,
+}: {
+  detail: NonNullable<DiffRow['detail']>;
+}): React.JSX.Element {
+  return (
+    <span
+      data-slot="workflow-diff-value"
+      className="mt-1 flex flex-col gap-0.5 font-mono text-[11px] leading-snug">
+      <span className="flex gap-1.5 rounded-sm bg-destructive/10 px-1.5 py-0.5 text-destructive">
+        <span aria-hidden="true">−</span>
+        <span className="sr-only">before: </span>
+        <span className="min-w-0 whitespace-pre-wrap">{detail.before}</span>
+      </span>
+      <span className="flex gap-1.5 rounded-sm bg-success/10 px-1.5 py-0.5 text-success">
+        <span aria-hidden="true">+</span>
+        <span className="sr-only">after: </span>
+        <span className="min-w-0 whitespace-pre-wrap">{detail.after}</span>
+      </span>
+    </span>
+  );
 }
 
 /**
@@ -70,7 +109,7 @@ export const WorkflowDiffList = memo(function WorkflowDiffList({
       {open ? (
         <ul
           aria-label={label}
-          className="m-0 flex max-h-48 w-full list-none flex-col gap-0.5 overflow-auto p-0">
+          className="m-0 flex max-h-96 w-full list-none flex-col gap-0.5 overflow-auto p-0">
           {rows.map((row) => (
             <li
               key={row.key}
@@ -86,6 +125,9 @@ export const WorkflowDiffList = memo(function WorkflowDiffList({
               </span>
               <span className="min-w-0 flex-1">
                 {rowText(row)}
+                {row.detail !== null && !inline(row.detail) ? (
+                  <ValueChange detail={row.detail} />
+                ) : null}
                 {row.toAuto ? (
                   <span className="ml-1 inline-flex items-center gap-0.5 font-medium text-warning">
                     <ShieldAlert aria-hidden="true" className="size-3" />

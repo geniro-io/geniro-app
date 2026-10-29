@@ -40,7 +40,12 @@ export const Replacement: Story = {
   },
 };
 
-/** The enlarged dialog's reading: pan and zoom allowed. */
+/** A chat card's reading: drag to pan, pinch or the buttons to zoom. */
+export const Embedded: Story = {
+  args: { workflow: replaced.workflow, interaction: 'embedded' },
+};
+
+/** The enlarged dialog's reading: the wheel zooms too. */
 export const Interactive: Story = {
-  args: { workflow: replaced.workflow, interactive: true },
+  args: { workflow: replaced.workflow, interaction: 'full' },
 };

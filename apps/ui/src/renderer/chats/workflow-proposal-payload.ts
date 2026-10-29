@@ -408,10 +408,24 @@ export function previewMarks(
   return marks;
 }
 
+/** Each stage a replacement adds or changes; nothing on a new workflow. */
+export function stageMarksOf(
+  diff: ProposalDiff | null,
+): ReadonlyMap<string, PreviewMark> {
+  const marks = new Map<string, PreviewMark>();
+  for (const { id } of diff?.changedStages ?? []) {
+    marks.set(id, 'changed');
+  }
+  for (const id of diff?.addedStages ?? []) {
+    marks.set(id, 'added');
+  }
+  return marks;
+}
+
 /** One agent of the proposal, as a roster row. */
 export interface RosterRow {
   node: WorkflowAgentNode;
-  /** The text of every instruction block wired into this agent. */
+  /** The name of every instruction block wired into this agent. */
   instructions: string[];
 }
 
@@ -420,7 +434,7 @@ export function rosterOf(workflow: Workflow): RosterRow[] {
   const blocks = new Map<string, string>();
   for (const node of workflow.nodes) {
     if (node.kind === 'instruction') {
-      blocks.set(node.id, node.instructions.trim() || (node.name ?? node.id));
+      blocks.set(node.id, node.name?.trim() || node.id);
     }
   }
   return workflow.nodes

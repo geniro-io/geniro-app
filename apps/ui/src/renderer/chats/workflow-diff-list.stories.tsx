@@ -37,3 +37,25 @@ export const Stages: Story = {
 };
 
 export const Identical: Story = { args: { rows: [] } };
+
+/** A rewritten role: the two sides are quoted from where they differ, one under the other. */
+export const LongText: Story = {
+  args: {
+    rows: [
+      {
+        key: 'changed:manager:role',
+        marker: 'changed',
+        scope: 'node',
+        subject: 'manager',
+        detail: {
+          field: 'role',
+          before:
+            '…route it, keep it moving until it is DONE, and report the result. Never push to main; every change goes through a pull request the user reviews…',
+          after:
+            '…route it, keep it moving until it is DONE, and report the result. Before you report, save at most three verified notes to the team memory, then…',
+        },
+        toAuto: false,
+      },
+    ],
+  },
+};

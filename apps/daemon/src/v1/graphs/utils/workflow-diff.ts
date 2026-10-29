@@ -2,6 +2,8 @@ import type { Workflow } from '../graphs.types';
 
 /** How much of one changed value a diff quotes. */
 const MAX_QUOTED_CHARS = 400;
+/** How much unchanged text a quoted excerpt keeps on each side of a change. */
+const EXCERPT_CONTEXT_CHARS = 80;
 
 /** One node or stage whose definition differs, and which of its fields did. */
 export interface ChangedEntry {
@@ -39,6 +41,59 @@ function quote(value: unknown): string {
     : `${text.slice(0, MAX_QUOTED_CHARS)}… [+${text.length - MAX_QUOTED_CHARS} chars]`;
 }
 
+/**
+ * Two versions of a long text, each quoted from just before where they first
+ * differ to just after where they last do — a role rewritten in its middle
+ * reads as that middle, not as two identical openings. A JSON string, so a
+ * reader unquotes it like any short value; `…` marks each cut.
+ */
+function quoteTextChange(
+  before: string,
+  after: string,
+): { before: string; after: string } {
+  let prefix = 0;
+  const shorter = Math.min(before.length, after.length);
+  while (prefix < shorter && before[prefix] === after[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < shorter - prefix &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  const start = Math.max(0, prefix - EXCERPT_CONTEXT_CHARS);
+  const excerpt = (text: string): string => {
+    const end = Math.min(
+      text.length,
+      text.length - suffix + EXCERPT_CONTEXT_CHARS,
+    );
+    const cut = text.slice(start, end);
+    const body =
+      cut.length > MAX_QUOTED_CHARS
+        ? `${cut.slice(0, MAX_QUOTED_CHARS)}…`
+        : `${cut}${end < text.length ? '…' : ''}`;
+    return JSON.stringify(`${start > 0 ? '…' : ''}${body}`);
+  };
+  return { before: excerpt(before), after: excerpt(after) };
+}
+
+function quoteChange(
+  before: unknown,
+  after: unknown,
+): { before: string; after: string } {
+  if (
+    typeof before === 'string' &&
+    typeof after === 'string' &&
+    JSON.stringify(before).length + JSON.stringify(after).length >
+      2 * MAX_QUOTED_CHARS
+  ) {
+    return quoteTextChange(before, after);
+  }
+  return { before: quote(before), after: quote(after) };
+}
+
 function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -70,8 +125,10 @@ function diffById<T extends { id: string }>(
       )
       .map((field) => ({
         field,
-        before: quote((previous as Record<string, unknown>)[field]),
-        after: quote((next as Record<string, unknown>)[field]),
+        ...quoteChange(
+          (previous as Record<string, unknown>)[field],
+          (next as Record<string, unknown>)[field],
+        ),
       }));
     if (fields.length > 0) {
       changed.push({ id, fields });

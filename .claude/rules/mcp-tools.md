@@ -38,9 +38,11 @@ Instructions and schemas are `.ts`, never `.md` or `.json` — swc copies nothin
 4. Auto-approval (only when calling it is not itself a decision): an `isHost<Name>Call` predicate in `agents/utils/host-<name>.ts` over `isHostToolCall`, used by `ChatService`'s `autoApproves`. Predicates and any reader `v1/agents` needs stay in `agents/utils`, because `v1/agents` may not import `v1/mcp`.
 5. Renderer: a tool whose call row the transcript hides goes in `GENIRO_TOOLS` (`apps/ui/src/renderer/chats/geniro-tool.ts`) — an unchecked map, easy to miss. A call tool also goes in `GENIRO_MCP_CALL_TOOLS` (`agents/adapters/adapter.types.ts`).
 6. Description audit (`mcp-server.service.spec.ts`): a tool overlapping another names it in its instructions and is named back; every tool says when to use it; every card tool says when not to.
+7. The system instructions: name the tool in `GENIRO_UI_PREAMBLE`'s "Geniro's own tools" section (`agents/utils/agent-instructions.ts`) by the situation it is for, in the same change — claude lists MCP tools by name only, so the preamble is where an agent learns when a tool is the move. Add its `HOST_*` constant to the wire-name list in `agent-instructions.spec.ts`. Only a tool something else already explains (a companion named in another tool's description, or one offered only where a brief names it) is exempted instead, in `PREAMBLE_EXEMPT` (`mcp-server.service.spec.ts`) with that reason; that spec fails on a listed tool that is neither.
 
 ## Changing a tool
 
 - Instructions and schema are what every model reads: change wording deliberately and re-run the description audit.
+- A tool whose purpose changes, or that is renamed or removed, changes its preamble line in the same change.
 - A refactor meant to change nothing must leave `tools/list` and call results byte-identical — prove it by capturing them before and after.
 - Reader tests live in `<tool>.reader.spec.ts`; cross-tool behaviour (listing, dispatch, cancellation) in `mcp-server.service.spec.ts`.

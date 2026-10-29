@@ -552,6 +552,9 @@ export const CODEX_TITLE_ARGS = [
 /** How long the naming turn may take. */
 export const CODEX_TITLE_TIMEOUT_MS = 60_000;
 
+/** How long a one-off question (`askOnce`) may take: a long prompt, a long answer. */
+export const CODEX_ASK_TIMEOUT_MS = 180_000;
+
 /**
  * A codex thread id: a UUID (v7 today). What `codex resume <id>` accepts, and
  * what a stored session id must look like before one is built.

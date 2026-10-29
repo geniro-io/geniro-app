@@ -5061,6 +5061,12 @@ export interface MemoryImportPreviewDto {
     rows: Array<MemoryImportRow>;
     /**
      * 
+     * @type {Array<AgentKind>}
+     * @memberof MemoryImportPreviewDto
+     */
+    triageAgents: Array<AgentKind>;
+    /**
+     * 
      * @type {Array<MemoryImportPreviewDtoSourcesInner>}
      * @memberof MemoryImportPreviewDto
      */
@@ -5194,6 +5200,18 @@ export interface MemoryImportRow {
      * @type {string}
      * @memberof MemoryImportRow
      */
+    profile: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
+    folder: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportRow
+     */
     title: string;
     /**
      * 
@@ -5304,6 +5322,96 @@ export const MemoryImportRowSimilarToInnerStatusEnum = {
 } as const;
 export type MemoryImportRowSimilarToInnerStatusEnum = typeof MemoryImportRowSimilarToInnerStatusEnum[keyof typeof MemoryImportRowSimilarToInnerStatusEnum];
 
+/**
+ * 
+ * @export
+ * @interface MemoryImportTriageDto
+ */
+export interface MemoryImportTriageDto {
+    /**
+     * 
+     * @type {Array<MemoryImportTriageDtoVerdictsInner>}
+     * @memberof MemoryImportTriageDto
+     */
+    verdicts: Array<MemoryImportTriageDtoVerdictsInner>;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryImportTriageDtoVerdictsInner
+ */
+export interface MemoryImportTriageDtoVerdictsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportTriageDtoVerdictsInner
+     */
+    key: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemoryImportTriageDtoVerdictsInner
+     */
+    keep: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportTriageDtoVerdictsInner
+     */
+    reason: string;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryImportTriageRequestDto
+ */
+export interface MemoryImportTriageRequestDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof MemoryImportTriageRequestDto
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {Array<MemoryImportTriageRequestDtoNotesInner>}
+     * @memberof MemoryImportTriageRequestDto
+     */
+    notes: Array<MemoryImportTriageRequestDtoNotesInner>;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface MemoryImportTriageRequestDtoNotesInner
+ */
+export interface MemoryImportTriageRequestDtoNotesInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportTriageRequestDtoNotesInner
+     */
+    key: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportTriageRequestDtoNotesInner
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportTriageRequestDtoNotesInner
+     */
+    body: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryImportTriageRequestDtoNotesInner
+     */
+    folder: string | null;
+}
 /**
  * 
  * @export

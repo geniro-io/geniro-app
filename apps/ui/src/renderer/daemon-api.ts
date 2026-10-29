@@ -62,6 +62,13 @@ export const MCP_ROUTE_TIMEOUT_MS = 60_000;
  */
 export const BULK_REVOKE_TIMEOUT_MS = 10 * 60_000;
 
+/**
+ * The budget for one batch of the memory import's AI sort: the daemon gives
+ * the CLI's one-off turn three minutes (`CLAUDE_ASK_TIMEOUT_MS`,
+ * `CODEX_ASK_TIMEOUT_MS`), so the request outlives it.
+ */
+export const MEMORY_TRIAGE_TIMEOUT_MS = 4 * 60_000;
+
 /** `/v1/chats/r1/items?afterSeq=3` — what the uniform error names. */
 const routeOf = (url: string): string => {
   try {

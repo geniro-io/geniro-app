@@ -39,6 +39,7 @@ import {
 } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
+import { useMemoryTriage } from './use-memory-triage';
 
 type MemoriesClient = Pick<
   MemoriesApi,
@@ -49,6 +50,7 @@ type MemoriesClient = Pick<
   | 'exportMemories'
   | 'previewMemoryImport'
   | 'importMemories'
+  | 'triageMemoryImport'
 >;
 
 type WorkflowsClient = Pick<WorkflowsApi, 'listWorkflows' | 'getWorkflow'>;
@@ -356,6 +358,7 @@ export function Memory({
   const [importError, setImportError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const triage = useMemoryTriage(api);
 
   const projectName = useLatestCallback(
     (projectId: string | null) =>
@@ -971,6 +974,7 @@ export function Memory({
           importing={importing}
           projects={projects}
           onImport={(rows) => void runImport(rows)}
+          triage={triage}
         />
       )}
     </div>

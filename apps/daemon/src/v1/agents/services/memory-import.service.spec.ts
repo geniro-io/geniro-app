@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { make, memoryDb } from '../../memory/__tests__/memory-db';
 import { Memory } from '../../memory/entity/memory.entity';
@@ -32,18 +32,22 @@ describe('MemoryImportService', () => {
   let db: Awaited<ReturnType<typeof memoryDb>>;
   let home: string;
   let imports: MemoryImportService;
+  let adapters: Map<AgentKind, AgentAdapter>;
 
   beforeEach(async () => {
     db = await memoryDb();
     db.service.setConfig(DEFAULT_MEMORY_CONFIG);
     home = mkdtempSync(join(tmpdir(), 'geniro-import-home-'));
-    const adapters = new Map<AgentKind, AgentAdapter>([
+    adapters = new Map<AgentKind, AgentAdapter>([
       [AgentKind.Claude, new ClaudeAdapter({ homeDir: home })],
       [AgentKind.Codex, new CodexAdapter({ homeDir: home })],
     ]);
     imports = new MemoryImportService(
       db.em,
-      { all: () => adapters } as unknown as AgentAdapterRegistry,
+      {
+        all: () => adapters,
+        for: (kind: AgentKind) => adapters.get(kind),
+      } as unknown as AgentAdapterRegistry,
       db.service,
       new ProjectDao(db.em),
     );
@@ -467,5 +471,90 @@ describe('MemoryImportService', () => {
 
     expect(rows).toHaveLength(2);
     expect(tree(home)).toEqual(before);
+  });
+
+  it('names the profile each note came from and the folder its sessions say it was written for', async () => {
+    claudeNote(defaultProfile(), '-repo-app', 'a.md', '---\nname: a\n---\nA');
+    writeFileSync(
+      join(defaultProfile(), 'projects', '-repo-app', 's1.jsonl'),
+      `${JSON.stringify({ type: 'system', cwd: '/repo/app' })}\n`,
+    );
+    claudeNote(defaultProfile(), '-repo-b', 'b.md', '---\nname: b\n---\nB');
+    writeFileSync(
+      join(defaultProfile(), 'projects', '-repo-b', 's1.jsonl'),
+      `${JSON.stringify({ type: 'system', cwd: '/elsewhere' })}\n`,
+    );
+    claudeNote(defaultProfile(), '-repo-c', 'c.md', '---\nname: c\n---\nC');
+    codexHandbook('# Task Group: g\nbody\n');
+
+    const byTitle = new Map(
+      (await preview()).rows.map((row) => [row.title, row]),
+    );
+
+    expect(byTitle.get('a')).toMatchObject({
+      profile: defaultProfile(),
+      folder: '/repo/app',
+    });
+    expect(byTitle.get('b')!.folder).toBeNull();
+    expect(byTitle.get('c')!.folder).toBeNull();
+    expect(byTitle.get('g')).toMatchObject({
+      profile: join(home, '.codex', 'memories', 'MEMORY.md'),
+      folder: null,
+    });
+  });
+
+  it('offers to sort the notes with every CLI that can answer a one-off question', async () => {
+    adapters.set(AgentKind.CursorAgent, {
+      getConfig: () => ({ oneShotAskUnavailableReason: 'no print mode' }),
+      readNativeMemory: () => Promise.resolve(null),
+      nativeMemoryProjectKey: () => null,
+    } as unknown as AgentAdapter);
+
+    expect((await preview()).triageAgents).toEqual(['claude', 'codex']);
+    await expect(
+      imports.triage({
+        agentKind: AgentKind.CursorAgent,
+        notes: [{ key: 'k', title: 't', body: 'b', folder: null }],
+      }),
+    ).rejects.toThrow('cannot sort notes');
+  });
+
+  it('sorts notes through the CLI asked, keyed back to each note', async () => {
+    const ask = vi
+      .spyOn(adapters.get(AgentKind.Claude)!, 'askOnce')
+      .mockResolvedValue(
+        'Sure:\n[{"id":"n2","keep":false,"reason":"task status"},{"id":"n1","keep":true,"reason":"a convention"}]',
+      );
+
+    const result = await imports.triage({
+      agentKind: AgentKind.Claude,
+      notes: [
+        { key: 'k1', title: 'use pnpm', body: 'Never npm.', folder: '/repo' },
+        { key: 'k2', title: 'PR 12 state', body: 'waiting', folder: null },
+      ],
+    });
+
+    expect(result.verdicts).toEqual([
+      { key: 'k2', keep: false, reason: 'task status' },
+      { key: 'k1', keep: true, reason: 'a convention' },
+    ]);
+    expect(ask.mock.calls[0]![0]).toMatchObject({
+      model: null,
+      configDir: null,
+      prompt: expect.stringContaining('[n2] PR 12 state'),
+    });
+  });
+
+  it('refuses a sort the CLI did not answer, or answered unreadably', async () => {
+    const ask = vi.spyOn(adapters.get(AgentKind.Codex)!, 'askOnce');
+    const request = {
+      agentKind: AgentKind.Codex,
+      notes: [{ key: 'k', title: 't', body: 'b', folder: null }],
+    };
+
+    ask.mockResolvedValueOnce(null);
+    await expect(imports.triage(request)).rejects.toThrow('did not answer');
+    ask.mockResolvedValueOnce('I would keep it.');
+    await expect(imports.triage(request)).rejects.toThrow('could not be read');
   });
 });

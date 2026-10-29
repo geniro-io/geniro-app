@@ -15,6 +15,7 @@ import type {
   AdapterConfig,
   AdapterDaemonDeps,
   AdapterQuestion,
+  AgentAskInput,
   AgentCommandOptions,
   AgentContextUsage,
   AgentContextWindowListing,
@@ -57,6 +58,7 @@ import { readTitleAnswer, titlePrompt } from '../utils/title-prompt.utils';
 import {
   CODEX_ACCOUNT_ENV_KEYS,
   CODEX_APP_SERVER_ARGS,
+  CODEX_ASK_TIMEOUT_MS,
   CODEX_AUTO_COMPACT_KEY,
   CODEX_COMPACT_PROMPT,
   CODEX_CONFIG_FLAG,
@@ -256,6 +258,7 @@ export class CodexAdapter extends AgentAdapter {
         { id: 'ultra', label: 'ultra' },
       ],
       effortsUnavailableReason: null,
+      oneShotAskUnavailableReason: null,
       options: [],
       resumeOnlyUnavailableReason: null,
       effortsAreExhaustive: false,
@@ -734,6 +737,48 @@ export class CodexAdapter extends AgentAdapter {
         },
       );
       return stdout === null ? null : readTitleAnswer(stdout);
+    } catch {
+      return null;
+    } finally {
+      if (cwd !== '') {
+        this.removeProbeRoot(cwd);
+      }
+    }
+  }
+
+  /** An ephemeral `codex exec` isolated like {@link generateTitle}'s. */
+  override async askOnce(
+    input: AgentAskInput,
+    options: AgentCommandOptions = {},
+  ): Promise<string | null> {
+    let cwd = '';
+    try {
+      await this.validateModel(input.model);
+      const local = this.modelConfiguration(input.model);
+      const model = local.args.length ? local.model : input.model;
+      cwd = this.makeProbeRoot('ask');
+      const stdout = await this.runCommand(
+        [
+          ...CODEX_TITLE_ARGS,
+          ...local.args,
+          ...(model ? [CODEX_TITLE_MODEL_FLAG, model] : []),
+          input.prompt,
+        ],
+        {
+          ...options,
+          cwd,
+          processGroup: true,
+          endStdin: true,
+          env: {
+            ...options.env,
+            ...this.configDirEnv(input.configDir),
+            ...local.env,
+          },
+          timeoutMs: options.timeoutMs ?? CODEX_ASK_TIMEOUT_MS,
+        },
+      );
+      const answer = stdout?.trim() ?? '';
+      return answer === '' ? null : answer;
     } catch {
       return null;
     } finally {

@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { resolve, sep } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
+import { BadRequestException } from '@packages/common';
 
 import {
   MEMORY_TYPES,
@@ -13,6 +15,8 @@ import {
   type MemoryImportRequest,
   type MemoryImportResult,
   type MemoryImportRow,
+  type MemoryImportTriage,
+  type MemoryImportTriageRequest,
   type MemoryType,
 } from '../../memory/memory.types';
 import { MemoryService } from '../../memory/services/memory.service';
@@ -20,6 +24,7 @@ import { importedText } from '../../memory/utils/memory-text';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { AgentKind } from '../../runs/runs.types';
 import type { NativeMemoryNote } from '../adapters/adapter.types';
+import { readTriageAnswer, triagePrompt } from '../utils/memory-triage';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 
 /** Notes checked against the stored entries between two yields of the loop. */
@@ -28,6 +33,8 @@ const PREVIEW_WINDOW = 20;
 interface SourcedNote extends NativeMemoryNote {
   key: string;
   agentKind: AgentKind;
+  /** The profile location the note was read from. */
+  location: string;
   /** Title and body together, so the same note read twice is known as one. */
   textHash: string;
 }
@@ -73,6 +80,8 @@ export class MemoryImportService {
         key: note.key,
         agentKind: note.agentKind,
         sourcePath: note.path,
+        profile: displayPath(note.location),
+        folder: note.folder === null ? null : displayPath(note.folder),
         title: note.title,
         body: note.body,
         type: typeOf(note.type, projectId),
@@ -95,7 +104,47 @@ export class MemoryImportService {
         problem: this.memory.problemOf(note),
       });
     }
-    return { rows, sources };
+    return { rows, sources, triageAgents: this.triageAgents() };
+  }
+
+  /**
+   * Ask one CLI which of these notes are worth keeping. Advice only: nothing
+   * is written, and the user still ticks what lands.
+   */
+  async triage(
+    request: MemoryImportTriageRequest,
+  ): Promise<MemoryImportTriage> {
+    if (!this.triageAgents().includes(request.agentKind)) {
+      throw new BadRequestException(
+        'MEMORY_TRIAGE_UNAVAILABLE',
+        `${request.agentKind} cannot sort notes`,
+      );
+    }
+    const answer = await this.adapters.for(request.agentKind).askOnce({
+      prompt: triagePrompt(request.notes),
+      model: null,
+      configDir: null,
+    });
+    const verdicts =
+      answer === null ? null : readTriageAnswer(answer, request.notes);
+    if (verdicts === null) {
+      throw new BadRequestException(
+        'MEMORY_TRIAGE_FAILED',
+        answer === null
+          ? `${request.agentKind} did not answer — check that it is installed and signed in`
+          : `${request.agentKind} answered in a shape that could not be read`,
+      );
+    }
+    return { verdicts };
+  }
+
+  private triageAgents(): AgentKind[] {
+    return [...this.adapters.all()]
+      .filter(
+        ([, adapter]) =>
+          adapter.getConfig().oneShotAskUnavailableReason === null,
+      )
+      .map(([agentKind]) => agentKind);
   }
 
   /**
@@ -181,7 +230,13 @@ export class MemoryImportService {
             continue;
           }
           seenKeys.add(key);
-          notes.push({ ...note, key, agentKind, textHash });
+          notes.push({
+            ...note,
+            key,
+            agentKind,
+            location: reading.location,
+            textHash,
+          });
         }
       }
     }
@@ -207,6 +262,13 @@ export class MemoryImportService {
     }
     return byKey;
   }
+}
+
+function displayPath(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}${sep}`)
+    ? `~${path.slice(home.length)}`
+    : path;
 }
 
 function hashOf(text: string): string {

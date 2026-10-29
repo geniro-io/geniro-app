@@ -46,6 +46,10 @@ describe('readClaudeMemoryNotes', () => {
       '# Memory Index\n- [Use pnpm](use-pnpm.md)\n',
     );
     note('-repo-app', 'notes.txt', 'not a note');
+    writeFileSync(
+      join(profile, 'projects', '-repo-app', 'session.jsonl'),
+      `${JSON.stringify({ type: 'user', cwd: '/repo/app' })}\n`,
+    );
 
     const notes = await readClaudeMemoryNotes(profile);
 
@@ -54,6 +58,7 @@ describe('readClaudeMemoryNotes', () => {
         path: fact,
         importedFrom: fact,
         projectKey: '-repo-app',
+        folder: '/repo/app',
         title: 'use-pnpm',
         body: 'Installs go through pnpm.\n\nNever npm here.',
         type: 'feedback',

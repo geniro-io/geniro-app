@@ -768,6 +768,14 @@ export const CLAUDE_TITLE_TIMEOUT_MS = 60_000;
  */
 export const CLAUDE_TITLE_DIR_PREFIX = 'geniro-title-';
 
+/**
+ * A one-off question (`askOnce`): the naming turn's argv, model and kind of
+ * scratch folder, for the same reasons, with a deadline sized for a long
+ * prompt answered at length.
+ */
+export const CLAUDE_ASK_TIMEOUT_MS = 180_000;
+export const CLAUDE_ASK_DIR_PREFIX = 'geniro-ask-';
+
 // ── Agent-to-agent calls (MCP) ────────────────────────────────────────────
 
 /**

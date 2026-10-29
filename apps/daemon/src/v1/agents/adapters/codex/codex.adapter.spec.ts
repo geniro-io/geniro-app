@@ -1341,6 +1341,39 @@ describe('naming a chat', () => {
   });
 });
 
+describe('a one-off question', () => {
+  it('asks a throwaway `codex exec` turn and answers its whole reply', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(
+      '[{"id":"n1"}]\nsecond line\n',
+    );
+    const answer = await adapterWith({ groupSpawnFn }).askOnce({
+      prompt: 'Sort these',
+      model: 'gpt-5.4-mini',
+      configDir: '/Users/x/.codex-work',
+    });
+    expect(answer).toBe('[{"id":"n1"}]\nsecond line');
+    expect(calls[0]?.args).toContain('--ignore-user-config');
+    expect(calls[0]?.args.slice(-3)).toEqual([
+      '-m',
+      'gpt-5.4-mini',
+      'Sort these',
+    ]);
+    expect(calls[0]?.env.CODEX_HOME).toBe('/Users/x/.codex-work');
+    expect(calls[0]?.stdinEnded()).toBe(true);
+  });
+
+  it('answers null for an empty reply', async () => {
+    const { groupSpawnFn } = oneshotSpawn('\n');
+    await expect(
+      adapterWith({ groupSpawnFn }).askOnce({
+        prompt: 'Sort these',
+        model: null,
+        configDir: null,
+      }),
+    ).resolves.toBeNull();
+  });
+});
+
 describe('questions', () => {
   it('carries the card’s answer into the reply', () => {
     const adapter = adapterWith();

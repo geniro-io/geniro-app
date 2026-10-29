@@ -41,6 +41,8 @@ export function memoryImportRow(
     key: 'row-1',
     agentKind: 'claude',
     sourcePath: '/Users/me/.claude/projects/billing/memory/invoices.md',
+    profile: '~/.claude',
+    folder: '~/code/billing',
     title: 'Invoices are immutable once sent',
     body: 'Issue a credit note instead of editing a sent invoice.',
     type: 'feedback',
@@ -59,8 +61,10 @@ export const MEMORY_IMPORT_PREVIEW: MemoryImportPreviewDto = {
     memoryImportRow(),
     memoryImportRow({
       key: 'row-2',
-      agentKind: 'cursor-agent',
-      sourcePath: '/Users/me/.cursor/projects/website/memory/deploys.md',
+      agentKind: 'codex',
+      sourcePath: '/Users/me/.codex/memories/MEMORY.md',
+      profile: '~/.codex/memories/MEMORY.md',
+      folder: null,
       title: 'Deploys go out on Tuesdays',
       body: 'Never deploy on a Friday.\nThe release train leaves on Tuesday morning.\nHotfixes go through the on-call lead.',
       type: 'project',
@@ -90,6 +94,7 @@ export const MEMORY_IMPORT_PREVIEW: MemoryImportPreviewDto = {
       problem: 'The file is larger than 8192 bytes',
     }),
   ],
+  triageAgents: ['claude', 'codex'],
   sources: [
     {
       agentKind: 'claude',
@@ -97,8 +102,8 @@ export const MEMORY_IMPORT_PREVIEW: MemoryImportPreviewDto = {
       found: 4,
     },
     {
-      agentKind: 'cursor-agent',
-      path: '/Users/me/.cursor/projects',
+      agentKind: 'codex',
+      path: '/Users/me/.codex/memories/MEMORY.md',
       found: 2,
     },
   ],

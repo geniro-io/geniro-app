@@ -10,6 +10,8 @@ import {
   MemoryImportPreviewSchema,
   MemoryImportRequestSchema,
   MemoryImportResultSchema,
+  MemoryImportTriageRequestSchema,
+  MemoryImportTriageSchema,
   MemoryListQuerySchema,
   MemoryListSchema,
   MemoryPatchSchema,
@@ -47,4 +49,12 @@ export class ImportMemoriesDto extends createZodDto(
 
 export class MemoryImportResultDto extends createZodDto(
   MemoryImportResultSchema,
+) {}
+
+export class MemoryImportTriageRequestDto extends createZodDto(
+  MemoryImportTriageRequestSchema,
+) {}
+
+export class MemoryImportTriageDto extends createZodDto(
+  MemoryImportTriageSchema,
 ) {}

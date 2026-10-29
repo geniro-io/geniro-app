@@ -1,7 +1,9 @@
-import { memo, useContext, useMemo, useState } from 'react';
+import { ChevronLeft, ChevronRight, Search, Sparkles } from 'lucide-react';
+import { memo, useContext, useMemo, useRef, useState } from 'react';
 
 import { AgentIdentityContext, agentShortName } from '../agent-identity';
 import type {
+  AgentKind,
   MemoryEntry,
   MemoryImportPreviewDto,
   MemoryImportRow,
@@ -17,8 +19,10 @@ import {
 import { ClampedBody } from './memory-row';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
+import { Input } from './ui/input';
 import { OptionIndicator } from './ui/option-list';
-import { Select } from './ui/select';
+import { ProgressBar } from './ui/progress-bar';
+import { Select, type SelectGroup } from './ui/select';
 import { Spinner } from './ui/spinner';
 import { cn } from './ui/utils';
 import { useLatestCallback } from './use-latest-callback';
@@ -29,10 +33,40 @@ export interface MemoryImportChoice {
   projectId: string | null;
 }
 
+export interface MemoryImportVerdict {
+  keep: boolean;
+  reason: string;
+}
+
+/** The AI sort the dialog drives; its verdicts are keyed by row key. */
+export interface MemoryImportTriage {
+  verdicts: ReadonlyMap<string, MemoryImportVerdict>;
+  running: boolean;
+  done: number;
+  total: number;
+  error: string | null;
+  start: (agentKind: AgentKind, rows: readonly MemoryImportRow[]) => void;
+  cancel: () => void;
+}
+
+export const IMPORT_PAGE_SIZE = 30;
+
 interface RowChoice {
   type: MemoryEntry['type'];
   projectId: string | null;
 }
+
+const FILTERS = [
+  'all',
+  'ticked',
+  'unticked',
+  'keep',
+  'skip',
+  'blocked',
+] as const;
+type Filter = (typeof FILTERS)[number];
+
+const NO_VERDICTS: ReadonlyMap<string, MemoryImportVerdict> = new Map();
 
 function importable(row: MemoryImportRow): boolean {
   return row.problem === null;
@@ -47,14 +81,62 @@ function tickedByDefault(row: MemoryImportRow): boolean {
   );
 }
 
-function defaultTicks(preview: MemoryImportPreviewDto | null): Set<string> {
-  return new Set(
-    (preview?.rows ?? []).filter(tickedByDefault).map((row) => row.key),
-  );
+function plural(count: number, one: string, many: string): string {
+  return `${count.toLocaleString('en-US')} ${count === 1 ? one : many}`;
 }
 
 function noteCount(count: number): string {
-  return count === 1 ? '1 note' : `${count} notes`;
+  return plural(count, 'note', 'notes');
+}
+
+function lastSegment(path: string): string {
+  const parts = path.split('/').filter(Boolean);
+  return parts.at(-1) ?? path;
+}
+
+function matches(row: MemoryImportRow, query: string): boolean {
+  return [row.title, row.body, row.folder ?? '', row.profile].some((text) =>
+    text.toLowerCase().includes(query),
+  );
+}
+
+interface Group {
+  key: string;
+  name: string;
+  folder: string | null;
+  agentKind: AgentKind;
+  profile: string;
+  rows: MemoryImportRow[];
+}
+
+function groupKeyOf(row: MemoryImportRow): string {
+  return `${row.agentKind}\n${row.profile}\n${row.folder ?? ''}`;
+}
+
+function groupRows(rows: readonly MemoryImportRow[]): Group[] {
+  const groups = new Map<string, Group>();
+  for (const row of rows) {
+    const key = groupKeyOf(row);
+    const group = groups.get(key);
+    if (group) {
+      group.rows.push(row);
+    } else {
+      groups.set(key, {
+        key,
+        name: row.folder === null ? 'No folder' : lastSegment(row.folder),
+        folder: row.folder,
+        agentKind: row.agentKind,
+        profile: row.profile,
+        rows: [row],
+      });
+    }
+  }
+  return [...groups.values()].sort(
+    (a, b) =>
+      Number(a.folder === null) - Number(b.folder === null) ||
+      a.name.localeCompare(b.name) ||
+      a.profile.localeCompare(b.profile),
+  );
 }
 
 function Mark({
@@ -83,10 +165,35 @@ function choiceOf(
   return chosen ?? { type: row.type, projectId: row.projectId };
 }
 
+function VerdictLine({
+  verdict,
+}: {
+  verdict: MemoryImportVerdict;
+}): React.JSX.Element {
+  return (
+    <p
+      data-slot="memory-import-verdict"
+      data-keep={verdict.keep}
+      className={cn(
+        'm-0 flex min-w-0 items-start gap-1.5 text-xs',
+        verdict.keep ? 'text-success' : 'text-muted-foreground',
+      )}>
+      <Sparkles aria-hidden="true" className="mt-px size-3 shrink-0" />
+      <span className="min-w-0 break-words">
+        <span className="font-medium">
+          {verdict.keep ? 'AI: keep' : 'AI: skip'}
+        </span>
+        {verdict.reason === '' ? null : ` — ${verdict.reason}`}
+      </span>
+    </p>
+  );
+}
+
 const ImportRow = memo(function ImportRow({
   row,
   ticked,
   chosen,
+  verdict,
   scopeGroups,
   onToggle,
   onChoice,
@@ -94,11 +201,11 @@ const ImportRow = memo(function ImportRow({
   row: MemoryImportRow;
   ticked: boolean;
   chosen: RowChoice | undefined;
-  scopeGroups: ReturnType<typeof memoryScopeGroups>;
+  verdict: MemoryImportVerdict | undefined;
+  scopeGroups: SelectGroup[];
   onToggle: (key: string) => void;
   onChoice: (key: string, next: RowChoice) => void;
 }): React.JSX.Element {
-  const identities = useContext(AgentIdentityContext);
   const choice = choiceOf(row, chosen);
   const blocked = !importable(row);
   const hasMarks =
@@ -111,74 +218,313 @@ const ImportRow = memo(function ImportRow({
     <li
       data-slot="memory-import-row"
       data-key={row.key}
-      className="flex min-w-0 flex-col gap-1.5 rounded-md border border-border p-2.5">
+      className={cn(
+        'flex min-w-0 flex-col gap-1.5 px-3 py-2.5',
+        !ticked && 'bg-muted/30',
+      )}>
       <button
         type="button"
         aria-pressed={ticked}
         aria-label={`Import ${row.title}`}
+        title={row.sourcePath}
         disabled={blocked}
         onClick={() => onToggle(row.key)}
         className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md text-left text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60">
         <OptionIndicator arity="many" chosen={ticked} />
-        <span className="min-w-0 font-medium break-words">{row.title}</span>
+        <span
+          className={cn(
+            'min-w-0 font-medium break-words',
+            !ticked && 'text-muted-foreground',
+          )}>
+          {row.title}
+        </span>
       </button>
-      <p className="m-0 flex min-w-0 gap-1 pl-6 text-xs text-muted-foreground">
-        <span className="shrink-0">
-          {agentShortName(identities, row.agentKind)}
-        </span>
-        <span aria-hidden="true">·</span>
-        <span className="truncate" title={row.sourcePath}>
-          {row.sourcePath}
-        </span>
-      </p>
-      <div className="min-w-0 pl-6">
-        <ClampedBody text={row.body} lines={2} />
+      <div className="flex min-w-0 flex-col gap-1.5 pl-6">
+        <div className="text-muted-foreground">
+          <ClampedBody text={row.body} lines={2} />
+        </div>
+        {verdict === undefined ? null : <VerdictLine verdict={verdict} />}
+        <div className="-ml-2 flex min-w-0 flex-wrap items-center gap-1">
+          <Select
+            variant="ghost"
+            aria-label={`Type for ${row.title}`}
+            groups={MEMORY_TYPE_GROUPS}
+            value={choice.type}
+            disabled={blocked}
+            onValueChange={(type) =>
+              onChoice(row.key, { ...choice, type: memoryTypeOf(type) })
+            }
+          />
+          <Select
+            variant="ghost"
+            flexible
+            aria-label={`Scope for ${row.title}`}
+            groups={scopeGroups}
+            value={scopeSelectValue(choice.projectId)}
+            disabled={blocked}
+            onValueChange={(scope) =>
+              onChoice(row.key, {
+                ...choice,
+                projectId: projectIdOfScope(scope),
+              })
+            }
+          />
+        </div>
+        {hasMarks ? (
+          <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+            {row.similarTo.map((similar) => (
+              <Mark key={similar.handle}>
+                Similar entry exists: {similar.handle} {similar.title}
+              </Mark>
+            ))}
+            {row.sameAs !== null ? (
+              <Mark>The same note as another row here</Mark>
+            ) : null}
+            {row.alreadyImported ? <Mark>Already imported</Mark> : null}
+            {row.projectMatch === 'ambiguous' ? (
+              <Mark>Several projects share this folder — filed as Global</Mark>
+            ) : null}
+            {row.problem === null ? null : (
+              <Mark tone="destructive">{row.problem}</Mark>
+            )}
+          </ul>
+        ) : null}
       </div>
-      <div className="grid gap-2 pl-6 sm:grid-cols-2">
-        <Select
-          aria-label={`Type for ${row.title}`}
-          groups={MEMORY_TYPE_GROUPS}
-          value={choice.type}
-          disabled={blocked}
-          onValueChange={(type) =>
-            onChoice(row.key, { ...choice, type: memoryTypeOf(type) })
-          }
-        />
-        <Select
-          aria-label={`Scope for ${row.title}`}
-          groups={scopeGroups}
-          value={scopeSelectValue(choice.projectId)}
-          disabled={blocked}
-          onValueChange={(scope) =>
-            onChoice(row.key, {
-              ...choice,
-              projectId: projectIdOfScope(scope),
-            })
-          }
-        />
-      </div>
-      {hasMarks ? (
-        <ul className="m-0 flex list-none flex-col gap-0.5 p-0 pl-6">
-          {row.similarTo.map((similar) => (
-            <Mark key={similar.handle}>
-              Similar entry exists: {similar.handle} {similar.title}
-            </Mark>
-          ))}
-          {row.sameAs !== null ? (
-            <Mark>The same note as another row here</Mark>
-          ) : null}
-          {row.alreadyImported ? <Mark>Already imported</Mark> : null}
-          {row.projectMatch === 'ambiguous' ? (
-            <Mark>Several projects share this folder — filed as Global</Mark>
-          ) : null}
-          {row.problem === null ? null : (
-            <Mark tone="destructive">{row.problem}</Mark>
-          )}
-        </ul>
-      ) : null}
     </li>
   );
 });
+
+function GroupHeader({
+  group,
+  tickedCount,
+  tickable,
+  onToggleAll,
+}: {
+  group: Group;
+  tickedCount: number;
+  tickable: number;
+  onToggleAll: (tick: boolean) => void;
+}): React.JSX.Element {
+  const identities = useContext(AgentIdentityContext);
+  const all = tickable > 0 && tickedCount === tickable;
+  return (
+    <div
+      data-slot="memory-import-group"
+      className="flex min-w-0 items-start gap-2 border-b border-border bg-muted/60 px-3 py-2">
+      <button
+        type="button"
+        aria-pressed={all}
+        aria-label={`${all ? 'Untick' : 'Tick'} every note from ${group.name}`}
+        disabled={tickable === 0}
+        onClick={() => onToggleAll(!all)}
+        className="flex cursor-pointer rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60">
+        <OptionIndicator arity="many" chosen={all} />
+      </button>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span
+            data-slot="memory-import-group-name"
+            className="truncate text-sm font-semibold">
+            {group.name}
+          </span>
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
+            {tickedCount.toLocaleString('en-US')} of{' '}
+            {noteCount(group.rows.length)}
+          </span>
+        </div>
+        <span
+          data-slot="memory-import-group-origin"
+          className="truncate text-xs text-muted-foreground"
+          title={[group.folder, group.profile].filter(Boolean).join('\n')}>
+          {[
+            group.folder,
+            `${agentShortName(identities, group.agentKind)} · ${group.profile}`,
+          ]
+            .filter(Boolean)
+            .join(' — ')}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TriagePanel({
+  triage,
+  agents,
+  pending,
+  kept,
+  skipped,
+  disabled,
+  onStart,
+  onShow,
+}: {
+  triage: MemoryImportTriage;
+  agents: readonly AgentKind[];
+  pending: number;
+  kept: number;
+  skipped: number;
+  disabled: boolean;
+  onStart: (agentKind: AgentKind) => void;
+  onShow: (filter: Filter) => void;
+}): React.JSX.Element {
+  const identities = useContext(AgentIdentityContext);
+  const [agent, setAgent] = useState<AgentKind>(agents[0]!);
+  const chosen = agents.includes(agent) ? agent : agents[0]!;
+  const judged = kept + skipped;
+  return (
+    <section
+      data-slot="memory-import-triage"
+      aria-label="Sort with AI"
+      className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
+      <div className="flex min-w-0 items-start gap-2">
+        <Sparkles
+          aria-hidden="true"
+          className="mt-0.5 size-4 shrink-0 text-primary"
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-sm font-medium">Sort with AI</span>
+          <span className="text-xs text-muted-foreground">
+            An agent reads each ticked note and unticks task status, session
+            logs and one-off details. You review the result before anything is
+            imported. Runs on your agent’s account.
+          </span>
+        </div>
+      </div>
+      {triage.running ? (
+        <div className="flex min-w-0 items-center gap-3 pl-6">
+          <ProgressBar
+            label="Sorting notes"
+            fraction={triage.total === 0 ? null : triage.done / triage.total}
+            className="flex-1"
+          />
+          <span
+            role="status"
+            className="shrink-0 text-xs text-muted-foreground tabular-nums">
+            {triage.done.toLocaleString('en-US')} /{' '}
+            {triage.total.toLocaleString('en-US')}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={triage.cancel}>
+            Stop
+          </Button>
+        </div>
+      ) : (
+        <div className="flex min-w-0 flex-wrap items-center gap-2 pl-6">
+          {agents.length > 1 ? (
+            <Select
+              variant="ghost"
+              aria-label="Agent that sorts"
+              groups={[
+                {
+                  items: agents.map((kind) => ({
+                    value: kind,
+                    label: agentShortName(identities, kind),
+                  })),
+                },
+              ]}
+              value={chosen}
+              onValueChange={(value) =>
+                setAgent(agents.find((kind) => kind === value) ?? chosen)
+              }
+            />
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              with {agentShortName(identities, chosen)}
+            </span>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            variant={judged > 0 ? 'outline' : 'default'}
+            disabled={disabled || pending === 0}
+            onClick={() => onStart(chosen)}>
+            {pending === 0
+              ? 'All ticked notes sorted'
+              : `Sort ${noteCount(pending)}`}
+          </Button>
+          {judged > 0 ? (
+            <span
+              data-slot="memory-import-triage-summary"
+              className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+              <button
+                type="button"
+                className="cursor-pointer rounded-sm text-xs text-success underline-offset-2 hover:underline"
+                onClick={() => onShow('keep')}>
+                {kept.toLocaleString('en-US')} worth keeping
+              </button>
+              ·
+              <button
+                type="button"
+                className="cursor-pointer rounded-sm text-xs underline-offset-2 hover:underline"
+                onClick={() => onShow('skip')}>
+                {skipped.toLocaleString('en-US')} left out
+              </button>
+            </span>
+          ) : null}
+        </div>
+      )}
+      {triage.error === null ? null : (
+        <ErrorText className="pl-6 text-xs">{triage.error}</ErrorText>
+      )}
+    </section>
+  );
+}
+
+function Pager({
+  page,
+  pages,
+  from,
+  to,
+  total,
+  onPage,
+}: {
+  page: number;
+  pages: number;
+  from: number;
+  to: number;
+  total: number;
+  onPage: (page: number) => void;
+}): React.JSX.Element {
+  return (
+    <nav
+      data-slot="memory-import-pager"
+      aria-label="Pages"
+      className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+      <span className="tabular-nums">
+        {from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of{' '}
+        {total.toLocaleString('en-US')}
+      </span>
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8"
+          aria-label="Previous page"
+          disabled={page === 0}
+          onClick={() => onPage(page - 1)}>
+          <ChevronLeft />
+        </Button>
+        <span className="tabular-nums">
+          Page {page + 1} of {pages}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8"
+          aria-label="Next page"
+          disabled={page >= pages - 1}
+          onClick={() => onPage(page + 1)}>
+          <ChevronRight />
+        </Button>
+      </div>
+    </nav>
+  );
+}
 
 export function MemoryImportDialog({
   open,
@@ -189,6 +535,7 @@ export function MemoryImportDialog({
   importing,
   projects,
   onImport,
+  triage = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -198,46 +545,167 @@ export function MemoryImportDialog({
   importing: boolean;
   projects: readonly { id: string; name: string }[];
   onImport: (rows: MemoryImportChoice[]) => void;
+  triage?: MemoryImportTriage | null;
 }): React.JSX.Element {
   const identities = useContext(AgentIdentityContext);
   const [seenPreview, setSeenPreview] = useState(preview);
-  const [ticked, setTicked] = useState(() => defaultTicks(preview));
+  const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
+  );
   const [choices, setChoices] = useState<Readonly<Record<string, RowChoice>>>(
     {},
   );
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [page, setPage] = useState(0);
+  const listRef = useRef<HTMLDivElement | null>(null);
   if (seenPreview !== preview) {
     setSeenPreview(preview);
-    setTicked(defaultTicks(preview));
+    setOverrides(new Map());
     setChoices({});
+    setPage(0);
   }
 
-  const rows = preview?.rows ?? [];
-  const chosen = rows.filter((row) => importable(row) && ticked.has(row.key));
+  const rows = useMemo(() => preview?.rows ?? [], [preview]);
+  const verdicts = triage?.verdicts ?? NO_VERDICTS;
+  const isTicked = useLatestCallback(
+    (row: MemoryImportRow): boolean =>
+      importable(row) &&
+      (overrides.get(row.key) ??
+        (tickedByDefault(row) && (verdicts.get(row.key)?.keep ?? true))),
+    [overrides, verdicts],
+  );
+  const chosen = rows.filter(isTicked);
   const scopeGroups = useMemo(() => memoryScopeGroups(projects), [projects]);
 
-  const toggle = useLatestCallback(
-    (key: string): void =>
-      setTicked((current) => {
-        const next = new Set(current);
-        if (!next.delete(key)) {
-          next.add(key);
+  const counts = useMemo(() => {
+    let kept = 0;
+    let skipped = 0;
+    for (const row of rows) {
+      const verdict = verdicts.get(row.key);
+      if (verdict) {
+        if (verdict.keep) {
+          kept++;
+        } else {
+          skipped++;
+        }
+      }
+    }
+    return {
+      kept,
+      skipped,
+      blocked: rows.filter((row) => !importable(row)).length,
+    };
+  }, [rows, verdicts]);
+
+  const needle = query.trim().toLowerCase();
+  const shown = useMemo(
+    () =>
+      rows.filter((row) => {
+        if (needle !== '' && !matches(row, needle)) {
+          return false;
+        }
+        switch (filter) {
+          case 'ticked':
+            return isTicked(row);
+          case 'unticked':
+            return importable(row) && !isTicked(row);
+          case 'keep':
+            return verdicts.get(row.key)?.keep === true;
+          case 'skip':
+            return verdicts.get(row.key)?.keep === false;
+          case 'blocked':
+            return !importable(row);
+          default:
+            return true;
+        }
+      }),
+    [rows, needle, filter, isTicked, verdicts],
+  );
+  const groups = useMemo(() => groupRows(shown), [shown]);
+  const ordered = useMemo(
+    () => groups.flatMap((group) => group.rows),
+    [groups],
+  );
+  const pages = Math.max(1, Math.ceil(ordered.length / IMPORT_PAGE_SIZE));
+  const current = Math.min(page, pages - 1);
+  const pageRows = ordered.slice(
+    current * IMPORT_PAGE_SIZE,
+    (current + 1) * IMPORT_PAGE_SIZE,
+  );
+  const onPage = new Set(pageRows.map((row) => row.key));
+  const pageGroups = groups
+    .map((group) => ({
+      group,
+      rows: group.rows.filter((row) => onPage.has(row.key)),
+    }))
+    .filter((entry) => entry.rows.length > 0);
+
+  const setTicks = useLatestCallback(
+    (targets: readonly MemoryImportRow[], tick: boolean): void =>
+      setOverrides((before) => {
+        const next = new Map(before);
+        for (const row of targets) {
+          if (importable(row)) {
+            next.set(row.key, tick);
+          }
         }
         return next;
       }),
     [],
   );
+  const toggle = useLatestCallback(
+    (key: string): void => {
+      const row = rows.find((candidate) => candidate.key === key);
+      if (row) {
+        setTicks([row], !isTicked(row));
+      }
+    },
+    [rows, isTicked, setTicks],
+  );
   const choose = useLatestCallback(
     (key: string, next: RowChoice): void =>
-      setChoices((current) => ({ ...current, [key]: next })),
+      setChoices((before) => ({ ...before, [key]: next })),
     [],
   );
+  const narrow = (next: Filter): void => {
+    setFilter(next);
+    setPage(0);
+  };
+
+  const triageAgents = preview?.triageAgents ?? [];
+  const untriaged = rows.filter(
+    (row) => tickedByDefault(row) && !verdicts.has(row.key),
+  );
+
+  const filterGroups: SelectGroup[] = [
+    {
+      items: [
+        { value: 'all', label: `All notes (${rows.length})` },
+        { value: 'ticked', label: `Ticked (${chosen.length})` },
+        {
+          value: 'unticked',
+          label: `Not ticked (${rows.length - chosen.length - counts.blocked})`,
+        },
+        ...(counts.kept + counts.skipped > 0
+          ? [
+              { value: 'keep', label: `AI: keep (${counts.kept})` },
+              { value: 'skip', label: `AI: skip (${counts.skipped})` },
+            ]
+          : []),
+        ...(counts.blocked > 0
+          ? [{ value: 'blocked', label: `Can’t import (${counts.blocked})` }]
+          : []),
+      ],
+    },
+  ];
 
   return (
     <Dialog
       open={open}
       onClose={() => onOpenChange(false)}
       title="Import notes from your agents"
-      className="max-w-2xl">
+      className="max-w-3xl">
       <div data-slot="memory-import" className="flex min-w-0 flex-col gap-3">
         {loading ? (
           <p
@@ -267,49 +735,125 @@ export function MemoryImportDialog({
         ) : null}
         {rows.length === 0 ? null : (
           <>
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                data-slot="memory-import-summary"
-                className="mr-auto text-xs text-muted-foreground">
-                {noteCount(rows.length)} found · {chosen.length} ticked
-              </span>
+            <p
+              data-slot="memory-import-summary"
+              className="m-0 text-xs text-muted-foreground">
+              {noteCount(rows.length)} found ·{' '}
+              {chosen.length.toLocaleString('en-US')} ticked
+            </p>
+            {triage !== null && triageAgents.length > 0 ? (
+              <TriagePanel
+                triage={triage}
+                agents={triageAgents}
+                pending={untriaged.length}
+                kept={counts.kept}
+                skipped={counts.skipped}
+                disabled={importing}
+                onStart={(agentKind) => triage.start(agentKind, untriaged)}
+                onShow={narrow}
+              />
+            ) : null}
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <div className="relative min-w-40 flex-1">
+                <Search
+                  aria-hidden="true"
+                  className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+                />
+                <Input
+                  type="search"
+                  aria-label="Search notes"
+                  placeholder="Search titles, text and folders"
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setPage(0);
+                  }}
+                  className="pl-8"
+                />
+              </div>
+              <Select
+                variant="ghost"
+                aria-label="Show"
+                groups={filterGroups}
+                value={filter}
+                onValueChange={(value) =>
+                  narrow(
+                    FILTERS.find((candidate) => candidate === value) ?? 'all',
+                  )
+                }
+              />
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                disabled={importing}
-                onClick={() =>
-                  setTicked(
-                    new Set(rows.filter(importable).map((row) => row.key)),
-                  )
-                }>
-                Tick all
+                disabled={importing || shown.length === 0}
+                onClick={() => setTicks(shown, true)}>
+                {shown.length === rows.length ? 'Tick all' : 'Tick shown'}
               </Button>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                disabled={importing}
-                onClick={() => setTicked(new Set())}>
-                Untick all
+                disabled={importing || shown.length === 0}
+                onClick={() => setTicks(shown, false)}>
+                {shown.length === rows.length ? 'Untick all' : 'Untick shown'}
               </Button>
             </div>
-            <ul className="m-0 flex list-none flex-col gap-2 p-0">
-              {rows.map((row) => (
-                <ImportRow
-                  key={row.key}
-                  row={row}
-                  ticked={ticked.has(row.key)}
-                  chosen={choices[row.key]}
-                  scopeGroups={scopeGroups}
-                  onToggle={toggle}
-                  onChoice={choose}
-                />
-              ))}
-            </ul>
+            {shown.length === 0 ? (
+              <p className="m-0 py-6 text-center text-sm text-muted-foreground">
+                No notes match.
+              </p>
+            ) : (
+              <>
+                <div ref={listRef} className="flex min-w-0 flex-col gap-3">
+                  {pageGroups.map(({ group, rows: visible }) => {
+                    const tickable = group.rows.filter(importable);
+                    return (
+                      <section
+                        key={group.key}
+                        className="min-w-0 overflow-hidden rounded-lg border border-border">
+                        <GroupHeader
+                          group={group}
+                          tickedCount={tickable.filter(isTicked).length}
+                          tickable={tickable.length}
+                          onToggleAll={(tick) => setTicks(group.rows, tick)}
+                        />
+                        <ul className="m-0 flex list-none flex-col divide-y divide-border p-0">
+                          {visible.map((row) => (
+                            <ImportRow
+                              key={row.key}
+                              row={row}
+                              ticked={isTicked(row)}
+                              chosen={choices[row.key]}
+                              verdict={verdicts.get(row.key)}
+                              scopeGroups={scopeGroups}
+                              onToggle={toggle}
+                              onChoice={choose}
+                            />
+                          ))}
+                        </ul>
+                      </section>
+                    );
+                  })}
+                </div>
+                {pages > 1 ? (
+                  <Pager
+                    page={current}
+                    pages={pages}
+                    from={current * IMPORT_PAGE_SIZE + 1}
+                    to={current * IMPORT_PAGE_SIZE + pageRows.length}
+                    total={ordered.length}
+                    onPage={(next) => {
+                      setPage(next);
+                      listRef.current?.scrollIntoView?.({ block: 'start' });
+                    }}
+                  />
+                ) : null}
+              </>
+            )}
           </>
         )}
-        <div className="sticky bottom-0 -mx-5 -mb-4 flex justify-end gap-2 border-t border-border bg-card px-5 py-3">
+        <div className="sticky -bottom-4 -mx-5 -mb-4 flex justify-end gap-2 border-t border-border bg-card px-5 py-3">
           <Button
             type="button"
             variant="ghost"

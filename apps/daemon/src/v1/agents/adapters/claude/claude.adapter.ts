@@ -20,6 +20,7 @@ import type {
   AdapterQuestion,
   AgentApprovalMode,
   AgentApprovalProbeState,
+  AgentAskInput,
   AgentCommandOptions,
   AgentContextUsage,
   AgentEvent,
@@ -74,6 +75,8 @@ import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG,
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_ARTIFACT_ENV,
+  CLAUDE_ASK_DIR_PREFIX,
+  CLAUDE_ASK_TIMEOUT_MS,
   CLAUDE_AUTH_EXPIRED_MARKERS,
   CLAUDE_AUTH_LOGIN_ARGS,
   CLAUDE_AUTH_LOGOUT_ARGS,
@@ -228,7 +231,10 @@ import {
   sweepStaleTurnSystemPrompts,
   writeTurnSystemPrompt,
 } from './utils/claude-system-prompt.utils';
-import { readClaudeTitleReply } from './utils/claude-title.utils';
+import {
+  readClaudeResultText,
+  readClaudeTitleReply,
+} from './utils/claude-title.utils';
 import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
 
 /**
@@ -470,6 +476,7 @@ export class ClaudeAdapter extends AgentAdapter {
       ],
       /** Null: the list above is non-empty, so there is nothing to explain. */
       effortsUnavailableReason: null,
+      oneShotAskUnavailableReason: null,
       options: [
         {
           id: CLAUDE_BROWSER_TOOLS_OPTION,
@@ -1852,6 +1859,45 @@ export class ClaudeAdapter extends AgentAdapter {
       // Best-effort, like every other scratch removal here: a directory left
       // behind costs a few bytes in the system temp dir, and a throw would turn
       // a title that WORKED into a logged failure.
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  /** A throwaway `-p` turn isolated like {@link generateTitle}'s. */
+  override async askOnce(
+    input: AgentAskInput,
+    options: AgentCommandOptions = {},
+  ): Promise<string | null> {
+    const dir = await mkdtemp(join(tmpdir(), CLAUDE_ASK_DIR_PREFIX));
+    try {
+      await this.validateModel(input.model);
+      const local = this.modelConfiguration(input.model);
+      const stdout = await this.runCommand(
+        [
+          ...CLAUDE_TITLE_ARGS,
+          CLAUDE_MODEL_FLAG,
+          local.args.length
+            ? local.model!
+            : (input.model ?? CLAUDE_TITLE_MODEL),
+          ...local.args,
+          input.prompt,
+        ],
+        {
+          ...options,
+          cwd: dir,
+          timeoutMs: options.timeoutMs ?? CLAUDE_ASK_TIMEOUT_MS,
+          endStdin: true,
+          env: {
+            ...options.env,
+            ...this.configDirEnv(input.configDir),
+            ...local.env,
+          },
+        },
+      );
+      return readClaudeResultText(stdout);
+    } catch {
+      return null;
+    } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   }

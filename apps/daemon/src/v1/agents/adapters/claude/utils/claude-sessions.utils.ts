@@ -699,6 +699,37 @@ export function claudeProjectDirName(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
+/** Session files read at most when {@link readClaudeProjectFolder} looks for a folder. */
+const PROJECT_FOLDER_SESSIONS_READ = 3;
+
+/**
+ * The folder a project directory stands for, read from a session filed in it,
+ * or null when none of its sessions names one that flattens back to it.
+ */
+export async function readClaudeProjectFolder(
+  projectDir: string,
+): Promise<string | null> {
+  let names: string[];
+  try {
+    names = (await readdir(projectDir, { withFileTypes: true }))
+      .filter(
+        (entry) =>
+          entry.isFile() && entry.name.endsWith(CLAUDE_SESSION_FILE_SUFFIX),
+      )
+      .map((entry) => entry.name);
+  } catch {
+    return null;
+  }
+  const dirName = basename(projectDir);
+  for (const name of names.slice(0, PROJECT_FOLDER_SESSIONS_READ)) {
+    const head = await readSessionHead(join(projectDir, name));
+    if (head?.cwd && claudeProjectDirName(head.cwd) === dirName) {
+      return head.cwd;
+    }
+  }
+  return null;
+}
+
 /**
  * Read a file's opening lines for its folder and its first user message,
  * stopping as soon as both are known.

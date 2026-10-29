@@ -12,6 +12,18 @@ import { readTitleAnswer } from '../../utils/title-prompt.utils';
  * better title and nothing else.
  */
 export function readClaudeTitleReply(stdout: string | null): string | null {
+  const result = readClaudeResultText(stdout);
+  // What counts as an ANSWER is the shared prompt's business, not this CLI's:
+  // the two are one contract, and a model that explains itself instead of
+  // naming the chat does it on every transport.
+  return result === null ? null : readTitleAnswer(result);
+}
+
+/**
+ * The model's answer in a `--output-format json` reply, or null for a failed
+ * turn, an empty answer or an unreadable reply.
+ */
+export function readClaudeResultText(stdout: string | null): string | null {
   if (stdout === null) {
     return null;
   }
@@ -31,8 +43,5 @@ export function readClaudeTitleReply(stdout: string | null): string | null {
     return null;
   }
   const result = typeof row.result === 'string' ? row.result : '';
-  // What counts as an ANSWER is the shared prompt's business, not this CLI's:
-  // the two are one contract, and a model that explains itself instead of
-  // naming the chat does it on every transport.
-  return result.trim() === '' ? null : readTitleAnswer(result);
+  return result.trim() === '' ? null : result;
 }

@@ -2577,6 +2577,17 @@ export interface AgentTitleInput {
   configDir: string | null;
 }
 
+/**
+ * A one-off question put to a CLI outside any conversation, answered in plain
+ * text. `model` null takes the adapter's own cheap default.
+ */
+export interface AgentAskInput {
+  prompt: string;
+  model: string | null;
+  /** The profile to ask under; null = the CLI's default. */
+  configDir: string | null;
+}
+
 export interface AgentSessionImportInput {
   /** The id, as {@link AgentSessionRecord.id} spelled it. */
   sessionId: string;
@@ -4480,6 +4491,12 @@ export interface AdapterConfig {
    */
   readonly effortsUnavailableReason: string | null;
   /**
+   * Why `AgentAdapter.askOnce` cannot put a one-off question to this CLI, or
+   * null when it can. MUST agree with the method: null here means the adapter
+   * overrides it.
+   */
+  readonly oneShotAskUnavailableReason: string | null;
+  /**
    * The switches this CLI offers that geniro has no generic axis for, in the
    * order the Settings card draws them. Published on `GET /v1/capabilities`,
    * so a switch added here reaches the UI with no per-CLI code there; read per
@@ -5405,6 +5422,8 @@ export interface NativeMemoryNote {
   path: string;
   importedFrom: string;
   projectKey: string | null;
+  /** The folder the CLI wrote the note for, when it can tell; else null. */
+  folder: string | null;
   title: string;
   body: string;
   type: string | null;

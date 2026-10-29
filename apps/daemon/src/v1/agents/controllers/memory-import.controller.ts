@@ -8,10 +8,13 @@ import {
   MemoryImportPreviewDto,
   MemoryImportPreviewRequestDto,
   MemoryImportResultDto,
+  MemoryImportTriageDto,
+  MemoryImportTriageRequestDto,
 } from '../../memory/dto/memories.dto';
 import type {
   MemoryImportPreview,
   MemoryImportResult,
+  MemoryImportTriage,
 } from '../../memory/memory.types';
 import { MemoryImportService } from '../services/memory-import.service';
 
@@ -34,6 +37,15 @@ export class MemoryImportController {
     @Body() body: MemoryImportPreviewRequestDto,
   ): Promise<MemoryImportPreview> {
     return this.imports.preview(body);
+  }
+
+  @Post('triage')
+  @ApiOperation({ operationId: 'triageMemoryImport' })
+  @ZodResponse({ status: 201, type: MemoryImportTriageDto })
+  triage(
+    @Body() body: MemoryImportTriageRequestDto,
+  ): Promise<MemoryImportTriage> {
+    return this.imports.triage(body);
   }
 
   @Post()

@@ -489,11 +489,19 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     const session = claude.startSession({ prompt: 'p', cwd: '/proj' });
 
     expect(
-      await claude.readContextUsage({ live: null, sessionId: 'sess-1' }),
+      await claude.readContextUsage({
+        live: null,
+        sessionId: 'sess-1',
+        configDir: null,
+      }),
     ).toBeNull();
     expect(child.stdin.written).not.toContain('get_context_usage');
 
-    void claude.readContextUsage({ live: session, sessionId: null });
+    void claude.readContextUsage({
+      live: session,
+      sessionId: null,
+      configDir: null,
+    });
     expect(child.stdin.written).toContain('get_context_usage');
 
     session.close();
@@ -512,28 +520,19 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     ).resolves.toBeNull();
   });
 
-  it('claude declares no plan-limits reason, and cursor declares one', () => {
-    // The same two-halves rule as the breakdown above, on the third channel.
-    // Not a loop like that one, because the two adapters genuinely differ here:
-    // claude answers `get_usage` on its stdin dialogue, and cursor has no
-    // mechanism at all — so a shared assertion would have to be "null or a
-    // string", which pins nothing.
+  it('claude reads plan limits from its process, and cursor from the account', () => {
     const { spawn } = fakeSpawn();
 
     expect(new ClaudeAdapter({ spawn }).getConfig().usage.planLimits).toEqual({
       kind: 'reads',
       channel: 'live-process',
     });
-    const cursorLimits = new CursorAcpAdapter({
-      vocabularyStore: freshVocabularyStore(),
-      spawn,
-    }).getConfig().usage.planLimits;
-    const cursorReason =
-      cursorLimits.kind === 'unavailable' ? cursorLimits.reason : null;
-    expect(cursorReason).not.toBeNull();
-    // A SENTENCE, not a marker: it is rendered verbatim where the limits would
-    // have been, so an empty string or a code would reach the user as one.
-    expect(cursorReason).toMatch(/cursor-agent/);
+    expect(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).getConfig().usage.planLimits,
+    ).toEqual({ kind: 'reads', channel: 'account' });
   });
 
   it('claude asks its LIVE process for plan limits, and answers null with none', async () => {
@@ -545,11 +544,19 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     const session = claude.startSession({ prompt: 'p', cwd: '/proj' });
 
     expect(
-      await claude.readPlanLimits({ live: null, sessionId: 'sess-1' }),
+      await claude.readPlanLimits({
+        live: null,
+        sessionId: 'sess-1',
+        configDir: null,
+      }),
     ).toBeNull();
     expect(child.stdin.written).not.toContain('get_usage');
 
-    void claude.readPlanLimits({ live: session, sessionId: null });
+    void claude.readPlanLimits({
+      live: session,
+      sessionId: null,
+      configDir: null,
+    });
     expect(child.stdin.written).toContain('get_usage');
     // Without it the CLI scans seven days of the profile's transcripts before
     // answering, and the reading timed out behind that scan on busy runs.
@@ -558,12 +565,16 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     session.close();
   });
 
-  it('cursor answers null for plan limits without writing to its process', async () => {
-    // It declares a reason, so the base default stands — and the point of the
-    // pin is that it stays a pure null: an ACP process asked a claude control
-    // question would answer an error frame mid-session.
+  it('cursor answers plan limits without writing to its process', async () => {
+    // An ACP process asked a claude control question would answer an error
+    // frame mid-session; cursor's limits come from the account instead.
+    class SignedOutCursor extends CursorAcpAdapter {
+      protected override readAccessToken(): Promise<string | null> {
+        return Promise.resolve(null);
+      }
+    }
     const { spawn, child } = fakeSpawn();
-    const cursor = new CursorAcpAdapter({
+    const cursor = new SignedOutCursor({
       vocabularyStore: freshVocabularyStore(),
       spawn,
     });
@@ -571,7 +582,11 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     const before = child.stdin.written;
 
     expect(
-      await cursor.readPlanLimits({ live: session, sessionId: 'sess-1' }),
+      await cursor.readPlanLimits({
+        live: session,
+        sessionId: 'sess-1',
+        configDir: null,
+      }),
     ).toBeNull();
     expect(child.stdin.written).toBe(before);
 
@@ -593,11 +608,19 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
 
     // No session id: nothing to look up, and nothing asked of the process.
     expect(
-      await cursor.readContextUsage({ live: session, sessionId: null }),
+      await cursor.readContextUsage({
+        live: session,
+        sessionId: null,
+        configDir: null,
+      }),
     ).toBeNull();
     // A session id with no store behind it: the same null, still no write.
     expect(
-      await cursor.readContextUsage({ live: session, sessionId: 'missing' }),
+      await cursor.readContextUsage({
+        live: session,
+        sessionId: 'missing',
+        configDir: null,
+      }),
     ).toBeNull();
     expect(child.stdin.written).toBe(before);
 

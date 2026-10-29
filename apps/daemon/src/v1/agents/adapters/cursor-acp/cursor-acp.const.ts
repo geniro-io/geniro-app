@@ -1533,6 +1533,27 @@ export const CURSOR_SESSION_STORE_WAL_NAME = 'store.db-wal';
 /** How long each page of the poll may take. */
 export const CURSOR_USAGE_REQUEST_TIMEOUT_MS = 20_000;
 
+// ── What the account is allowed (plan limits) ─────────────────────────────
+//
+// The two methods the CLI's own `/usage` asks (2026.10.22-27dcf5f), on the
+// same host, under the same login; `utils/cursor-plan-limits.utils.ts` reads
+// the replies.
+
+export const CURSOR_PERIOD_USAGE_METHOD =
+  '/aiserver.v1.DashboardService/GetCurrentPeriodUsage';
+export const CURSOR_PLAN_INFO_METHOD =
+  '/aiserver.v1.DashboardService/GetPlanInfo';
+
+/** How long one plan-limits request may take; the readout waits on it. */
+export const CURSOR_PLAN_LIMITS_REQUEST_TIMEOUT_MS = 8_000;
+
+/**
+ * How long one account's answer is served before the account is asked again.
+ * Every turn's prewarm and every readout open ask, so a busy workflow would
+ * otherwise put two requests per turn to the user's account.
+ */
+export const CURSOR_PLAN_LIMITS_MIN_INTERVAL_MS = 30_000;
+
 /**
  * The Keychain item cursor-agent stores its own login under. Read, never
  * written and never kept: the value goes straight into one request header and

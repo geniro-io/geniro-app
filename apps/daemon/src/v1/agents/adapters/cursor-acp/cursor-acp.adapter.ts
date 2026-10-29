@@ -61,6 +61,7 @@ import type {
   AgentModel,
   AgentModelParameterListing,
   AgentModelsInput,
+  AgentPlanLimits,
   AgentSessionHistory,
   AgentSessionImportInput,
   AgentSessionListing,
@@ -69,6 +70,7 @@ import type {
   AgentTurnInput,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
+  NO_PLAN_LIMITS,
   RecoveredSubagentOutcome,
   SubagentRecoveryRef,
   TurnDriver,
@@ -119,6 +121,10 @@ import {
   CURSOR_MCP_USER_DISABLED_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
   CURSOR_OWNED_PARAMETER_IDS,
+  CURSOR_PERIOD_USAGE_METHOD,
+  CURSOR_PLAN_INFO_METHOD,
+  CURSOR_PLAN_LIMITS_MIN_INTERVAL_MS,
+  CURSOR_PLAN_LIMITS_REQUEST_TIMEOUT_MS,
   CURSOR_PLUGIN_MANIFEST_PATHS,
   CURSOR_PLUGIN_NOTE,
   CURSOR_PLUGIN_ROOT_VARIABLES,
@@ -169,6 +175,7 @@ import {
   cursorEffortOption,
   cursorModelSelection,
 } from './utils/cursor-model.utils';
+import { readCursorPlanLimits } from './utils/cursor-plan-limits.utils';
 import {
   buildPluginServerEntry,
   pluginVariableValues,
@@ -1139,20 +1146,11 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         breakdown: { kind: 'reads', channel: 'session-store' },
         /**
-         * Nothing on this transport says anything about the ACCOUNT. ACP has
-         * no such method, cursor advertises no vendor extension for one, and
-         * the session store this adapter already reads for the window holds a
-         * per-conversation token accounting — not a subscription's remaining
-         * allowance. There is no `cursor-agent` subcommand for it either
-         * (`status --format json` answers `isAuthenticated` and the account,
-         * and nothing about limits), so the honest answer is a sentence rather
-         * than an empty section a user would read as "no limits".
+         * Nothing on the ACP transport says anything about the ACCOUNT, so the
+         * limits are asked of the account itself, the way the CLI's own
+         * `/usage` asks them — see {@link readPlanLimits}.
          */
-        planLimits: {
-          kind: 'unavailable',
-          reason:
-            'cursor-agent does not report your plan limits, so there is no remaining allowance to show here',
-        },
+        planLimits: { kind: 'reads', channel: 'account' },
         // No cost crosses the ACP wire, so a conversation's price is read from
         // the account — see `utils/cursor-usage.utils.ts` for the evidence.
         polledSpend: true,
@@ -2217,6 +2215,18 @@ export class CursorAcpAdapter extends AgentAdapter {
     { stamp: string; children: string[] }
   >();
 
+  /**
+   * Each account's last plan-limits answer and when it was asked, keyed by
+   * profile ('' for the default login) — see {@link readPlanLimits}.
+   */
+  private readonly planLimitReads = new Map<
+    string,
+    {
+      at: number;
+      limits: Promise<AgentPlanLimits | typeof NO_PLAN_LIMITS | null>;
+    }
+  >();
+
   /** Each folder's plugin scan and when it began — see {@link scanPlugins}. */
   private readonly pluginScans = new Map<
     string,
@@ -2517,6 +2527,93 @@ export class CursorAcpAdapter extends AgentAdapter {
         resolve(null);
       }
     });
+  }
+
+  /**
+   * What the account behind this run is allowed, asked of Cursor under the
+   * run's own profile login with the two requests the CLI's `/usage` makes.
+   *
+   * An answer is shared for {@link CURSOR_PLAN_LIMITS_MIN_INTERVAL_MS} per
+   * account; a failure is not, so the next ask tries again. Fails closed like
+   * {@link fetchAccountSpend}: no login, a refused or unreadable reply all
+   * answer null, and the token is used for these requests only.
+   */
+  override readPlanLimits(
+    input: AgentSessionReadInput,
+  ): Promise<AgentPlanLimits | typeof NO_PLAN_LIMITS | null> {
+    const key = input.configDir?.trim() ?? '';
+    const now = Date.now();
+    const held = this.planLimitReads.get(key);
+    if (
+      held !== undefined &&
+      now - held.at < CURSOR_PLAN_LIMITS_MIN_INTERVAL_MS
+    ) {
+      return held.limits;
+    }
+    const limits = this.fetchPlanLimits(key);
+    this.planLimitReads.set(key, { at: now, limits });
+    void limits.then((answer) => {
+      if (answer === null && this.planLimitReads.get(key)?.limits === limits) {
+        this.planLimitReads.delete(key);
+      }
+    });
+    return limits;
+  }
+
+  private async fetchPlanLimits(
+    configDir: string,
+  ): Promise<AgentPlanLimits | typeof NO_PLAN_LIMITS | null> {
+    const token = await this.readProfileAccessToken(configDir);
+    if (token === null) {
+      return null;
+    }
+    const ask = async (method: string): Promise<unknown> => {
+      const reply = await fetch(`${CURSOR_API_HOST}${method}`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+          'connect-protocol-version': '1',
+        },
+        body: '{}',
+        signal: AbortSignal.timeout(CURSOR_PLAN_LIMITS_REQUEST_TIMEOUT_MS),
+      });
+      if (!reply.ok) {
+        throw new Error(`${method} answered ${reply.status}`);
+      }
+      return reply.json();
+    };
+    const [period, plan] = await Promise.allSettled([
+      ask(CURSOR_PERIOD_USAGE_METHOD),
+      ask(CURSOR_PLAN_INFO_METHOD),
+    ]);
+    if (period.status === 'rejected') {
+      this.options.logger?.warn(
+        `cursor plan limits: ${
+          period.reason instanceof Error
+            ? period.reason.message
+            : String(period.reason)
+        }`,
+      );
+      return null;
+    }
+    return readCursorPlanLimits(
+      period.value,
+      plan.status === 'fulfilled' ? plan.value : null,
+    );
+  }
+
+  /**
+   * The login a profile runs under: its own file store for a named
+   * configuration, the Keychain item for the default one.
+   */
+  protected readProfileAccessToken(configDir: string): Promise<string | null> {
+    if (configDir === '') {
+      return this.readAccessToken();
+    }
+    const token = readCursorProfileToken(configDir);
+    registerSecret(token, 'cursor profile token');
+    return Promise.resolve(token);
   }
 
   /**

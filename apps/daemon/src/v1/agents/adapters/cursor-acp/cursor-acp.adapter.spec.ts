@@ -43,19 +43,24 @@ import {
   QUEUED_FOR_SUBAGENTS_NOTICE,
   REFUSED_TOOL_RESULT,
 } from '../acp/acp-driver';
-import type {
-  AccountSpendQuery,
-  AdapterConfig,
-  AgentEvent,
-  AgentTurnHandle,
-  AgentTurnInput,
+import {
+  type AccountSpendQuery,
+  type AdapterConfig,
+  type AgentEvent,
+  type AgentTurnHandle,
+  type AgentTurnInput,
+  NO_PLAN_LIMITS,
 } from '../adapter.types';
 import { ClaudeAdapter } from '../claude/claude.adapter';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
 import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
+  CURSOR_API_HOST,
   CURSOR_HOME_DIR_NAME,
   CURSOR_MAX_MODE_OPTION,
+  CURSOR_PERIOD_USAGE_METHOD,
+  CURSOR_PLAN_INFO_METHOD,
+  CURSOR_PLAN_LIMITS_MIN_INTERVAL_MS,
   CURSOR_PLUGIN_NOTE,
   CURSOR_PLUGIN_SCAN_TTL_MS,
   CURSOR_SESSION_MISSING_MESSAGE,
@@ -5735,6 +5740,193 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
 
     expect(pagesAsked(fetchMock)).toEqual([1]);
     expect(spend).toEqual({ complete: true, events: [read('a', 5, 1_001)] });
+  });
+});
+
+describe('CursorAcpAdapter.readPlanLimits — the account ask', () => {
+  /** The default login stood in for, like the spend walk's machine above. */
+  class LoggedInCursor extends CursorAcpAdapter {
+    constructor() {
+      super({ vocabularyStore: freshVocabularyStore() });
+    }
+
+    protected override readAccessToken(): Promise<string | null> {
+      return Promise.resolve('default-token');
+    }
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** Transcribed from a real Grok-unified Premium account on 2026-10-29. */
+  const PERIOD = {
+    billingCycleStart: '1793121329683',
+    billingCycleEnd: '1793726129683',
+    planUsage: {
+      autoPercentUsed: 6.218851570964247,
+      apiPercentUsed: 0,
+      totalPercentUsed: 6.218851570964247,
+    },
+    displayThreshold: 200,
+    enabled: true,
+  };
+  const PLAN = {
+    planInfo: {
+      planName: 'Premium',
+      billingCycleEnd: '1793491200000',
+      includedUsagePeriod: 'INCLUDED_USAGE_PERIOD_WEEKLY',
+    },
+    isMerged: true,
+  };
+
+  /** `fetch`, answering each method with what `replies` maps it to. */
+  function serve(replies: Record<string, () => Response>): Mock<typeof fetch> {
+    const fetchMock = vi.fn<typeof fetch>((input) => {
+      const method = String(input).slice(CURSOR_API_HOST.length);
+      const reply = replies[method];
+      return Promise.resolve(
+        reply ? reply() : new Response('', { status: 404 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  const json = (body: unknown) => () => new Response(JSON.stringify(body));
+
+  function authOf(fetchMock: Mock<typeof fetch>): string[] {
+    return fetchMock.mock.calls.map(
+      ([, init]) => new Headers(init?.headers).get('authorization') ?? '',
+    );
+  }
+
+  const ask = (adapter: CursorAcpAdapter, configDir: string | null = null) =>
+    adapter.readPlanLimits({ live: null, sessionId: null, configDir });
+
+  it('reads the included, auto and API windows under the default login', async () => {
+    const fetchMock = serve({
+      [CURSOR_PERIOD_USAGE_METHOD]: json(PERIOD),
+      [CURSOR_PLAN_INFO_METHOD]: json(PLAN),
+    });
+
+    const resetsAt = new Date(1793726129683).toISOString();
+    expect(await ask(new LoggedInCursor())).toEqual({
+      plan: 'Premium',
+      estimated: false,
+      windows: [
+        {
+          key: 'included',
+          label: 'Included',
+          percent: 6.218851570964247,
+          resetsAt,
+        },
+        {
+          key: 'auto',
+          label: 'Auto',
+          percent: 6.218851570964247,
+          resetsAt,
+        },
+        { key: 'api', label: 'API', percent: 0, resetsAt },
+      ],
+    });
+    expect(authOf(fetchMock)).toEqual([
+      'Bearer default-token',
+      'Bearer default-token',
+    ]);
+  });
+
+  it('asks under a named configuration’s own login, not the default one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cursor-plan-'));
+    mkdirSync(join(dir, CURSOR_HOME_DIR_NAME));
+    writeFileSync(
+      join(dir, CURSOR_HOME_DIR_NAME, 'auth.json'),
+      JSON.stringify({ accessToken: 'profile-token' }),
+    );
+    const fetchMock = serve({
+      [CURSOR_PERIOD_USAGE_METHOD]: json(PERIOD),
+      [CURSOR_PLAN_INFO_METHOD]: json(PLAN),
+    });
+
+    const limits = await ask(new LoggedInCursor(), dir);
+
+    expect(limits).not.toBeNull();
+    expect(authOf(fetchMock)).toEqual([
+      'Bearer profile-token',
+      'Bearer profile-token',
+    ]);
+  });
+
+  it('says the account has no limits when its period carries no plan usage', async () => {
+    serve({
+      [CURSOR_PERIOD_USAGE_METHOD]: json({
+        billingCycleStart: '1793264620061',
+        billingCycleEnd: '1793264620061',
+        displayThreshold: 100,
+      }),
+      [CURSOR_PLAN_INFO_METHOD]: json({
+        planInfo: { planName: 'Enterprise', price: 'Custom' },
+      }),
+    });
+
+    expect(await ask(new LoggedInCursor())).toBe(NO_PLAN_LIMITS);
+  });
+
+  it('keeps the windows with no plan name when the plan request fails', async () => {
+    serve({ [CURSOR_PERIOD_USAGE_METHOD]: json(PERIOD) });
+
+    const limits = await ask(new LoggedInCursor());
+
+    expect(limits).toMatchObject({ plan: null });
+    expect(limits === NO_PLAN_LIMITS ? [] : limits?.windows).toHaveLength(3);
+  });
+
+  it('serves one answer per account for the interval, then asks again', async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const fetchMock = serve({
+      [CURSOR_PERIOD_USAGE_METHOD]: json(PERIOD),
+      [CURSOR_PLAN_INFO_METHOD]: json(PLAN),
+    });
+    const adapter = new LoggedInCursor();
+
+    await ask(adapter);
+    await ask(adapter);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.setSystemTime(1_000_000 + CURSOR_PLAN_LIMITS_MIN_INTERVAL_MS);
+    await ask(adapter);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('answers null for a refused reply and does not hold on to it', async () => {
+    const fetchMock = serve({
+      [CURSOR_PERIOD_USAGE_METHOD]: () => new Response('', { status: 401 }),
+    });
+    const adapter = new LoggedInCursor();
+
+    expect(await ask(adapter)).toBeNull();
+    await Promise.resolve();
+    expect(await ask(adapter)).toBeNull();
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).endsWith(CURSOR_PERIOD_USAGE_METHOD),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it('answers null with no login, and asks nothing', async () => {
+    class SignedOut extends CursorAcpAdapter {
+      protected override readAccessToken(): Promise<string | null> {
+        return Promise.resolve(null);
+      }
+    }
+    const fetchMock = serve({});
+
+    expect(
+      await ask(new SignedOut({ vocabularyStore: freshVocabularyStore() })),
+    ).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

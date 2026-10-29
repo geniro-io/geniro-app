@@ -232,6 +232,7 @@ pnpm commit             # conventional commit via commitizen
    - `main/github-prs.ts` runs the user's `gh` CLI; geniro holds no token and degrades to silence without login or network.
    - cursor's account-spend poll (`CursorAcpAdapter.fetchAccountSpend` via `v1/agents/services/polled-spend.service.ts`) reads the user's `cursor-access-token` from the Keychain and requests one fixed host itself. The token is used for that poll only and never stored. Every failure ends as "no cost reported".
    - The poll runs at most every 60 s while a cursor run is producing items and every 10 min otherwise, at most `CURSOR_USAGE_MAX_PAGES` pages per poll, and never when idle.
+   - cursor's plan limits (`CursorAcpAdapter.readPlanLimits`) ask the same host the two methods the CLI's own `/usage` asks, under the run's profile login (a named configuration's `auth.json`, else that Keychain item), only when a readout is opened or a turn's reading is taken, at most once per account every `CURSOR_PLAN_LIMITS_MIN_INTERVAL_MS`. The token is used for those requests only and never stored; every failure ends as "no reading".
 2. **geniro's own public release metadata and artifacts**, anonymous, one fixed host: `main/updater.ts`, `main/update-installer.ts`.
 3. **An artifact page loading public libraries** from cdnjs, jsDelivr `/npm/` (not `/gh/`), unpkg and Google Fonts (`ARTIFACT_PAGE_CSP` in `apps/daemon/src/v1/agents/utils/artifact-page.ts`).
    - Scripts, stylesheets and fonts only. `connect-src` stays shut and `img-src` is `data:` only.

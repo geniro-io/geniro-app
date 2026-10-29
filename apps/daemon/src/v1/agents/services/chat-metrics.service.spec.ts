@@ -488,6 +488,7 @@ describe('ChatMetricsService — one workflow node', () => {
     expect(built.readContextUsage).toHaveBeenCalledWith({
       live: null,
       sessionId: 'sess-manager',
+      configDir: null,
     });
     expect(metrics.totals.inputTokens).toBe(10);
     expect(metrics.context).toEqual(BREAKDOWN);
@@ -715,7 +716,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
 
     // Keyed by the FIRST call of the lineage, as the executor keys the process.
     expect(built.peek).toHaveBeenCalledWith('run-1::call:call-1');
-    const input = { live, sessionId: 'sess-b' };
+    const input = { live, sessionId: 'sess-b', configDir: null };
     expect(built.readContextUsage).toHaveBeenCalledWith(input);
     expect(built.readPlanLimits).toHaveBeenCalledWith(input);
     expect(metrics.context).toEqual(BREAKDOWN);
@@ -1162,6 +1163,33 @@ describe('ChatMetricsService', () => {
       expect(readContextUsage).toHaveBeenCalledTimes(1);
       expect(readPlanLimits).toHaveBeenCalledTimes(1);
       expect(metrics.plan?.plan).toBe('max');
+    });
+
+    it('asks an ACCOUNT channel with no process and no session, under the run’s profile', async () => {
+      const readPlanLimits = vi.fn().mockResolvedValue({
+        plan: 'Premium',
+        windows: [
+          { key: 'included', label: 'Included', percent: 6, resetsAt: null },
+        ],
+        estimated: false,
+      });
+      const { service } = build({
+        agentKind: AgentKind.CursorAgent,
+        planReading: { kind: 'reads', channel: 'account' },
+        agentSessionId: null,
+        configDir: '/Users/me/.cursor-pf',
+        readPlanLimits,
+      });
+
+      const metrics = await service.read('run-1');
+
+      expect(readPlanLimits).toHaveBeenCalledWith({
+        live: null,
+        sessionId: null,
+        configDir: '/Users/me/.cursor-pf',
+      });
+      expect(metrics.plan?.plan).toBe('Premium');
+      expect(metrics.planReason).toBeNull();
     });
 
     it('refuses to date an allowance whose stamp will not parse', async () => {

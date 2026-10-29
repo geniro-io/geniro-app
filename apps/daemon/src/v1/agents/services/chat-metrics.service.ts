@@ -846,8 +846,16 @@ export class ChatMetricsService implements OnModuleInit {
     // Reproduced from the author's own daemon log: session for run 2262b385
     // closed as unused at 13:18:49, the readout opened at 13:37:07, and not one
     // warning in between because nothing was attempted.
-    const available = (channel: UsageReadChannel): boolean =>
-      channel === 'live-process' ? live !== null : sessionId !== null;
+    const available = (channel: UsageReadChannel): boolean => {
+      switch (channel) {
+        case 'live-process':
+          return live !== null;
+        case 'session-store':
+          return sessionId !== null;
+        case 'account':
+          return true;
+      }
+    };
     const askedContext =
       usage.breakdown.kind === 'reads' && available(usage.breakdown.channel);
     const askedPlan =
@@ -856,7 +864,7 @@ export class ChatMetricsService implements OnModuleInit {
       return nothing;
     }
     const adapter = this.adapters.for(agentKind);
-    const input = { live, sessionId };
+    const input = { live, sessionId, configDir: target.configDir };
     const [context, planAnswer] = await Promise.all([
       askedContext
         ? this.attempt(runId, 'context breakdown', () =>

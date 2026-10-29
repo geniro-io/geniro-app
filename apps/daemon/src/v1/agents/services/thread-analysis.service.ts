@@ -10,7 +10,6 @@ import { ConflictException, NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
 import { MemoryService } from '../../memory/services/memory.service';
-import { isTerminalRunStatus } from '../../runs/runs.types';
 import {
   type AnalysedRun,
   ANALYSIS_DEFAULT_APPROVAL,
@@ -22,6 +21,11 @@ import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { isAnalysisRun } from '../utils/analysed-runs';
 import { resolveValidDirectory } from '../utils/resolve-directory';
+import {
+  runSnapshotOf,
+  type RunSnapshotReaders,
+  workflowRunSnapshots,
+} from '../utils/run-snapshots';
 import {
   analysedThreadKindOf,
   threadAnalysisBrief,
@@ -165,7 +169,10 @@ export class ThreadAnalysisService
         "the thread's folder no longer exists — pick a folder to run the analysis in",
       );
     }
-    const { snapshotSeq, working } = await this.snapshotOf(sourceRunId, em);
+    const { snapshotSeq, working } = await runSnapshotOf(
+      this.snapshotReaders(),
+      sourceRunId,
+    );
     if (snapshotSeq < 0) {
       throw new ConflictException(
         'ANALYSIS_SOURCE_EMPTY',
@@ -238,25 +245,21 @@ export class ThreadAnalysisService
     input: StartWorkflowAnalysis,
   ): Promise<RunWire> {
     const em = this.em.fork();
-    const candidates = await this.runDao.newestWorkflowRuns(
+    const snapshots = await workflowRunSnapshots(
+      this.snapshotReaders(),
       target.slug,
       input.runs,
-      em,
     );
-    const runs: AnalysedRun[] = [];
-    for (const candidate of candidates) {
-      const { snapshotSeq, working } = await this.snapshotOf(candidate.id, em);
-      if (snapshotSeq >= 0) {
-        runs.push({ runId: candidate.id, snapshotSeq, working });
-      }
-    }
-    if (runs.length === 0) {
+    if (snapshots.length === 0) {
       throw new ConflictException(
         'ANALYSIS_NO_RUNS',
         'the workflow has no runs to analyse yet — run it first',
       );
     }
-    const newest = candidates.find((run) => run.id === runs[0]!.runId);
+    const runs: AnalysedRun[] = snapshots.map(
+      ({ runId, snapshotSeq, working }) => ({ runId, snapshotSeq, working }),
+    );
+    const newest = snapshots[0];
     const cwd =
       input.cwd !== undefined
         ? resolveValidDirectory(input.cwd, {
@@ -351,29 +354,7 @@ export class ThreadAnalysisService
     }
   }
 
-  /**
-   * The source's newest seq and whether it was working at it, read so the two
-   * belong together: a turn starting or settling between two separate reads
-   * would pair a snapshot with the wrong flag, and the flag is kept for good.
-   * Re-read until no row landed in between.
-   */
-  private async snapshotOf(
-    sourceRunId: string,
-    em: EntityManager,
-  ): Promise<{ snapshotSeq: number; working: boolean }> {
-    let before = await this.itemDao.maxSeq(sourceRunId, em);
-    for (let attempt = 0; ; attempt += 1) {
-      // A fresh fork each pass: the one above already holds the run, and its
-      // identity map would answer with the status read before the loop.
-      const run = await this.runDao.getById(sourceRunId, this.em.fork());
-      const after = await this.itemDao.maxSeq(sourceRunId, em);
-      if (after === before || attempt >= 4) {
-        return {
-          snapshotSeq: after,
-          working: run !== null && !isTerminalRunStatus(run.status),
-        };
-      }
-      before = after;
-    }
+  private snapshotReaders(): RunSnapshotReaders {
+    return { em: this.em, runDao: this.runDao, itemDao: this.itemDao };
   }
 }

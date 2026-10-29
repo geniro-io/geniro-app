@@ -65,7 +65,9 @@ describe('threadAnalysisGuide', () => {
     for (const kind of ['chat', 'workflow'] as const) {
       const guide = threadAnalysisGuide(kind, null, true);
 
-      expect(guide).toContain("Read the working folder's package.json scripts");
+      expect(guide).toContain(
+        'Read the package.json scripts (lint, typecheck, test, check), the CI workflow and the git hooks of the working folder yourself',
+      );
       expect(guide).toContain('## Where a fix belongs');
       expect(guide).toContain('1. A deterministic check');
     }

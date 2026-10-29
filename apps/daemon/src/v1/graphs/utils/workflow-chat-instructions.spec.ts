@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BUILDER_CHAT_ANALYSED_RUNS,
+  HOST_ANALYZED_THREAD_TOOL,
   HOST_BACKUP_WORKFLOW_TOOL,
   HOST_PROPOSE_WORKFLOW_TOOL,
   HOST_READ_WORKFLOWS_TOOL,
+  HOST_RECOMMENDATIONS_TOOL,
   HOST_WORKFLOW_CHANGE_TOOL,
 } from '../../agents/chat.types';
 import {
@@ -21,6 +24,7 @@ const BRIEF = composeWorkflowChatInstructions({
   slug: 'dev-team',
   name: 'Dev Team',
   schemaPath: `${LIBRARY}/.workflow.schema.json`,
+  memory: true,
 });
 
 describe('composeWorkflowChatInstructions', () => {
@@ -158,5 +162,42 @@ describe('composeWorkflowChatInstructions', () => {
     expect(BRIEF).toMatch(
       /the walk ends when the last stage is completed, so add no closing "Done" or\s+"Finished" stage/,
     );
+  });
+
+  it("carries the workflow analysis's method over the workflow's newest runs", () => {
+    expect(BRIEF).toContain('<workflow-analysis>');
+    expect(BRIEF).toContain(
+      `You read its ${BUILDER_CHAT_ANALYSED_RUNS} newest runs through \`${HOST_ANALYZED_THREAD_TOOL}\``,
+    );
+    expect(BRIEF).toMatch(/Read view=runs first/);
+    expect(BRIEF).toContain(`call \`${HOST_RECOMMENDATIONS_TOOL}\` ONCE`);
+  });
+
+  it('applies a selected workflow item on a proposal card, never a save', () => {
+    const analysis = BRIEF.slice(BRIEF.indexOf('<workflow-analysis>'));
+    expect(analysis).toContain(
+      `- Workflow items: put every selected workflow item on ONE \`${HOST_PROPOSE_WORKFLOW_TOOL}\` card`,
+    );
+    expect(analysis).not.toContain(HOST_WORKFLOW_CHANGE_TOOL);
+  });
+
+  it("points repo items at the runs' own repository, not the library it works in", () => {
+    const analysis = BRIEF.slice(BRIEF.indexOf('<workflow-analysis>'));
+    expect(analysis).toContain(
+      "edit the files in the repository the runs worked in (each run's `cwd` in view=overview)",
+    );
+    expect(analysis).not.toContain('working folder');
+  });
+
+  it('names the memory target only while the shared memory is on', () => {
+    const off = composeWorkflowChatInstructions({
+      path: `${LIBRARY}/dev-team.geniro.yaml`,
+      slug: 'dev-team',
+      name: 'Dev Team',
+      schemaPath: `${LIBRARY}/.workflow.schema.json`,
+      memory: false,
+    });
+    expect(BRIEF).toContain('target "memory"');
+    expect(off).not.toContain('target "memory"');
   });
 });

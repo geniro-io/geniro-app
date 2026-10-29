@@ -294,6 +294,13 @@ class FakeRunDao {
       .filter((run) => run.analysisSourceRunId === sourceRunId)
       .reverse();
   }
+  /** Newest first, as the real one orders by `createdAt` (insertion here). */
+  async newestWorkflowRuns(slug: string, limit: number): Promise<Run[]> {
+    return [...this.runs.values()]
+      .filter((run) => run.workflowId === slug && run.archivedAt === null)
+      .reverse()
+      .slice(0, limit);
+  }
   async listWorkflowAnalyses(slug: string): Promise<Run[]> {
     return [...this.runs.values()]
       .filter((run) => run.analysisWorkflowSlug === slug)
@@ -1028,6 +1035,22 @@ function fakeAdapter(
 }
 
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
+/** End the harness agent's running turn and let the settle land. */
+async function finishTurn(agent: {
+  emit: (e: AgentEvent) => void;
+  finish: () => void;
+}): Promise<void> {
+  agent.emit({
+    type: 'turn_complete',
+    usage: null,
+    stopReason: 'end_turn',
+    finalText: null,
+  });
+  agent.finish();
+  await drain();
+  await drain();
+}
+
 async function drain(): Promise<void> {
   for (let i = 0; i < 5; i += 1) {
     await tick();
@@ -6742,6 +6765,67 @@ describe('ChatService', () => {
     ]);
     claude.finish();
     await drain();
+  });
+
+  it("installs the analysis tools on a builder chat's turn, over its workflow's newest runs as the turn began", async () => {
+    const turns: unknown[] = [];
+    const { service, analyses, claude, runDao, itemDao } = setup({
+      analysisSink: (turn) => {
+        turns.push(turn);
+        return { turn } as never;
+      },
+    });
+    const older = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(older.id, 'first');
+    await finishTurn(claude);
+    const empty = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const other = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(other.id, 'elsewhere');
+    await finishTurn(claude);
+    Object.assign(runDao.runs.get(older.id)!, { workflowId: 'team' });
+    Object.assign(runDao.runs.get(empty.id)!, { workflowId: 'team' });
+    Object.assign(runDao.runs.get(other.id)!, { workflowId: 'other' });
+    const builder = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      editsWorkflowSlug: 'team',
+    });
+
+    await service.sendMessage(builder.id, 'which stages should we add?');
+
+    expect(analyses.canAnalyse(builder.id, SINGLE_AGENT_NODE)).toBe(true);
+    const olderSeq = await itemDao.maxSeq(older.id);
+    expect(olderSeq).toBeGreaterThanOrEqual(0);
+    expect(turns).toEqual([
+      {
+        analysisRunId: builder.id,
+        sourceRunId: older.id,
+        snapshotSeq: olderSeq,
+        sourceWorking: false,
+        workflow: {
+          slug: 'team',
+          runs: [{ runId: older.id, snapshotSeq: olderSeq, working: false }],
+        },
+      },
+    ]);
+    await finishTurn(claude);
+    expect(analyses.canAnalyse(builder.id, SINGLE_AGENT_NODE)).toBe(false);
+  });
+
+  it('offers a builder chat no analysis tools while its workflow has no run', async () => {
+    const { service, analyses, claude } = setup({
+      analysisSink: (turn) => ({ turn }) as never,
+    });
+    const builder = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      editsWorkflowSlug: 'team',
+    });
+
+    await service.sendMessage(builder.id, 'hello');
+
+    expect(analyses.canAnalyse(builder.id, SINGLE_AGENT_NODE)).toBe(false);
+    await finishTurn(claude);
   });
 
   it('refuses an Apply while a turn runs, and writes nothing into it', async () => {

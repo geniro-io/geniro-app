@@ -77,7 +77,23 @@ export function analysisTurnOf(
   if (run.analysisWorkflowSlug === null) {
     return null;
   }
-  const runs = readAnalysedRuns(run.analysisRuns);
+  return workflowAnalysisTurn(
+    analysisRunId,
+    run.analysisWorkflowSlug,
+    readAnalysedRuns(run.analysisRuns),
+  );
+}
+
+/**
+ * A turn reading a workflow's runs, newest first — a workflow analysis's, or
+ * a builder chat's over the runs snapshotted when its turn began. Null with no
+ * run to read.
+ */
+export function workflowAnalysisTurn(
+  analysisRunId: string,
+  slug: string,
+  runs: readonly AnalysedRun[],
+): AnalysisTurn | null {
   const newest = runs[0];
   if (newest === undefined) {
     return null;
@@ -87,7 +103,14 @@ export function analysisTurnOf(
     sourceRunId: newest.runId,
     snapshotSeq: newest.snapshotSeq,
     sourceWorking: newest.working,
-    workflow: { slug: run.analysisWorkflowSlug, runs },
+    workflow: {
+      slug,
+      runs: runs.map(({ runId, snapshotSeq, working }) => ({
+        runId,
+        snapshotSeq,
+        working,
+      })),
+    },
   };
 }
 

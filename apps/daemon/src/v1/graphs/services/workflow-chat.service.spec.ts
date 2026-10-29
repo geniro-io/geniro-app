@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunWire } from '../../agents/chat.types';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
+import type { MemoryService } from '../../memory/services/memory.service';
 import type { StartWorkflowChatInput, Workflow } from '../graphs.types';
 import { workflowJsonSchema } from '../utils/workflow-json-schema';
 import { WorkflowChatService } from './workflow-chat.service';
@@ -59,6 +60,7 @@ describe('WorkflowChatService', () => {
       store,
       chats as unknown as ChatService,
       analyses as unknown as ThreadAnalysisService,
+      { enabled: true } as MemoryService,
     );
   });
 

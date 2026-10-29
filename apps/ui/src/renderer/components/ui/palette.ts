@@ -81,3 +81,18 @@ export const PALETTE_ROW_CLASS: Record<ProfileColor, string> = {
   teal: 'bg-group-teal/15 hover:bg-group-teal/25',
   red: 'bg-group-red/15 hover:bg-group-red/25',
 };
+
+/**
+ * The row wash of the OPEN row: the same hue a step stronger, and the row's
+ * current-row bar in that hue, so selecting a tinted row keeps its colour.
+ */
+export const PALETTE_ROW_ACTIVE_CLASS: Record<ProfileColor, string> = {
+  blue: 'bg-group-blue/30 hover:bg-group-blue/35 before:bg-group-blue',
+  purple: 'bg-group-purple/30 hover:bg-group-purple/35 before:bg-group-purple',
+  green: 'bg-group-green/30 hover:bg-group-green/35 before:bg-group-green',
+  orange: 'bg-group-orange/30 hover:bg-group-orange/35 before:bg-group-orange',
+  pink: 'bg-group-pink/30 hover:bg-group-pink/35 before:bg-group-pink',
+  indigo: 'bg-group-indigo/30 hover:bg-group-indigo/35 before:bg-group-indigo',
+  teal: 'bg-group-teal/30 hover:bg-group-teal/35 before:bg-group-teal',
+  red: 'bg-group-red/30 hover:bg-group-red/35 before:bg-group-red',
+};

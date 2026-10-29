@@ -113,6 +113,7 @@ export const CODEX_METHODS = {
   skillsList: 'skills/list',
   rateLimitsRead: 'account/rateLimits/read',
   configRead: 'config/read',
+  hooksList: 'hooks/list',
   configValueWrite: 'config/value/write',
   configBatchWrite: 'config/batchWrite',
   mcpServerStatusList: 'mcpServerStatus/list',
@@ -484,6 +485,23 @@ export const CODEX_APPS_FEATURE_KEY = 'features.apps';
  * a user who turned memories on.
  */
 export const CODEX_MEMORIES_FEATURE_KEY = 'features.memories';
+
+/**
+ * Switches off, in one thread, each of the user's own hooks that runs when
+ * codex asks for a permission (`hooks/list` names them by `key` and
+ * `eventName`). geniro's card is the approval, and codex runs those hooks
+ * BEFORE it raises the request, however long they take.
+ *
+ * MEASURED on 0.165.0 with a user `PermissionRequest` hook that blocks (the
+ * GitKraken CLI's `gk ai hook run --host codex --blocking`, no client
+ * attached): an MCP call under `untrusted` raised its elicitation 65 s after
+ * `item/started`, `hook/started` → `hook/completed` spanning the wait. With
+ * `hooks.state.<key>.enabled = false` in the thread config it was raised in
+ * the same millisecond, the user's other hooks still ran, and the user's
+ * `config.toml` was not written.
+ */
+export const CODEX_HOOKS_STATE_KEY = 'hooks.state';
+export const CODEX_PERMISSION_REQUEST_HOOK_EVENT = 'permissionRequest';
 
 /**
  * The memories feature's handbook, `<CODEX_HOME>/memories/MEMORY.md`: one
